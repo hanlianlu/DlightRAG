@@ -23,6 +23,7 @@
   max-height: 92vh;
   object-fit: contain;
   background: var(--color-text-primary);
+  border-radius: var(--radius-content);
   box-shadow: var(--shadow-lightbox-image);
 }
 
@@ -46,12 +47,12 @@
 
 .imageLightboxPrev {
   left: 0;
-  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  border-radius: var(--radius-docked) var(--radius-control) var(--radius-control) var(--radius-docked);
 }
 
 .imageLightboxNext {
   right: 0;
-  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  border-radius: var(--radius-control) var(--radius-docked) var(--radius-docked) var(--radius-control);
 }
 
 .imageLightboxPrev:hover,

@@ -7,6 +7,7 @@
 
 :global(#chat-sidebar) {
     background: color-mix(in srgb, var(--color-bg-surface) 92%, var(--color-bg-base));
+    border-radius: var(--radius-docked);
     border-right: 1px solid var(--color-border-subtle);
     color: var(--color-text-secondary);
     display: flex;
@@ -32,7 +33,7 @@
     align-items: center;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: var(--color-text-secondary);
     cursor: pointer;
     display: inline-flex;
@@ -69,7 +70,7 @@
     align-items: center;
     background: transparent;
     border: 0;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: var(--color-text-subtle);
     cursor: pointer;
     display: inline-flex;
@@ -103,7 +104,7 @@
 
 :global(.conversation-row) {
     align-items: center;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     min-height: calc(var(--size-button) + var(--space-tight));
@@ -156,7 +157,7 @@
 :global(.conversation-actions-menu) {
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-popover);
     box-shadow: var(--shadow-menu);
     display: flex;
     flex-direction: column;
@@ -171,7 +172,7 @@
 :global(.conversation-actions-menu button) {
     background: transparent;
     border: 0;
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-control);
     color: var(--color-text-secondary);
     cursor: pointer;
     font: inherit;
@@ -192,7 +193,7 @@
 :global(.conversation-row input) {
     background: var(--color-bg-subtle);
     border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: var(--color-text-primary);
     font: inherit;
     font-size: var(--font-size-detail);
@@ -230,7 +231,7 @@
 :global(.conversation-skeleton) {
     animation: conversation-pulse 1.5s ease-in-out infinite;
     background: var(--color-bg-hover);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     height: calc(var(--size-button) + var(--space-tight));
 }
 
@@ -294,7 +295,7 @@
 :global(#discard-draft-dialog) {
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-dialog);
     box-shadow: var(--shadow-overlay);
     color: var(--color-text-secondary);
     margin: auto;

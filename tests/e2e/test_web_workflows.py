@@ -100,3 +100,55 @@ def test_mobile_shell_tracks_viewport_height(page: Page) -> None:
             })"""
         )
         assert dimensions == {"viewport": height, "app": height, "panel": height}
+
+
+def test_soft_shell_keeps_all_structural_chrome_square_on_desktop(page: Page) -> None:
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _open_ready_chat(page)
+
+    radii = page.evaluate(
+        """() => {
+            const style = selector => getComputedStyle(document.querySelector(selector));
+            const radius = selector => style(selector).borderRadius;
+            document.body.classList.add('sources-panel-open');
+            document.querySelector('#report-panel').classList.add('open');
+            return {
+                app: radius('.app'),
+                appClip: style('.app').clipPath,
+                conversations: radius('#chat-sidebar'),
+                outerPanel: radius('#panel'),
+                internalReport: radius('#report-panel'),
+            };
+        }"""
+    )
+    assert radii == {
+        "app": "0px",
+        "appClip": "none",
+        "conversations": "0px",
+        "outerPanel": "0px",
+        "internalReport": "0px",
+    }
+
+
+def test_soft_shell_stays_full_bleed_on_mobile(page: Page) -> None:
+    page.set_viewport_size({"width": 390, "height": 700})
+    _open_ready_chat(page)
+
+    radii = page.evaluate(
+        """() => {
+            const style = selector => getComputedStyle(document.querySelector(selector));
+            const radius = selector => style(selector).borderRadius;
+            return {
+                app: radius('.app'),
+                appClip: style('.app').clipPath,
+                conversations: radius('#chat-sidebar'),
+                panel: radius('#panel'),
+            };
+        }"""
+    )
+    assert radii == {
+        "app": "0px",
+        "appClip": "none",
+        "conversations": "0px",
+        "panel": "0px",
+    }

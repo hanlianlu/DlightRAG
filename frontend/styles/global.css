@@ -75,7 +75,7 @@ body.conversation-drawer-open {
     width: 2px;
     height: clamp(32px, 3.6vw, 44px);
     background: var(--color-control-ring-soft);
-    border-radius: 1px;
+    border-radius: var(--radius-pill);
     transition: background 0.15s, height 0.15s;
 }
 .panel-resize-handle:hover,
@@ -109,7 +109,7 @@ body.conversation-drawer-open {
     align-items: center;
     background: var(--color-action-bg);
     border: 1px solid var(--color-action-border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: var(--color-on-action);
     cursor: pointer;
     display: inline-flex;
@@ -132,7 +132,7 @@ body.conversation-drawer-open {
 .ui-popover {
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-popover);
     box-shadow: var(--shadow-popover);
     display: flex;
     flex-direction: column;
@@ -156,7 +156,7 @@ body.conversation-drawer-open {
 
 .ui-popover-item {
     align-items: center;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: var(--color-text-secondary);
     cursor: pointer;
     display: flex;
@@ -184,7 +184,7 @@ body.conversation-drawer-open {
 .ui-popover-input {
     background: var(--color-bg-subtle);
     border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: var(--color-text-primary);
     flex: 1;
     font-size: var(--font-size-detail);
@@ -205,7 +205,7 @@ body.conversation-drawer-open {
     align-items: center;
     background: var(--color-action-bg-subtle);
     border: 1px solid var(--color-action-border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: var(--color-accent-action);
     cursor: pointer;
     display: flex;
@@ -243,7 +243,7 @@ mjx-container {
     background: var(--color-bg-elevated);
     color: var(--color-text-tertiary);
     padding: var(--space-component) var(--space-section);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-popover);
     font-size: var(--font-size-detail);
     z-index: 200;
     opacity: 0;
@@ -269,7 +269,7 @@ mjx-container {
     background: var(--color-bg-elevated);
     color: var(--color-text-secondary);
     padding: var(--space-component) var(--space-section);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-popover);
     font-size: var(--font-size-detail);
     z-index: 200;
     box-shadow: var(--shadow-toast);
@@ -307,7 +307,7 @@ mjx-container {
     align-items: center;
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-popover);
     box-shadow: var(--shadow-overlay);
     color: var(--color-text-secondary);
     display: flex;
@@ -322,6 +322,10 @@ mjx-container {
 
 .bootstrap-status--error {
     color: var(--color-danger-text);
+}
+
+.bootstrap-status button {
+    border-radius: var(--radius-control);
 }
 
 /* === Resizing body class (instant tracking during drag-resize) === */
@@ -346,7 +350,7 @@ body.resizing.panel-open .composer {
 .ui-btn {
     background: transparent;
     border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: var(--color-text-secondary);
     cursor: pointer;
     font: inherit;

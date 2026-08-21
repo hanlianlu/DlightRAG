@@ -41,14 +41,6 @@
     /* space-l: 32.0px → 38.0px */
     --space-l: clamp(2.00000rem, 0.00571429vi + 1.860714rem, 2.37500rem);
 
-    /* ── Radius scale ── */
-    /* Fixed to preserve component character across viewport sizes. */
-    --radius-xs: 0.375rem;
-    --radius-sm: 0.5rem;
-    --radius-md: 0.625rem;
-    --radius-lg: 0.75rem;
-    --radius-xl: 0.875rem;
-
     /* ═══════════════════════════════════════════════════════════════════
        LAYER 2: Semantic Tokens
        Components reference these — never raw values, never Layer 1 directly.
@@ -200,10 +192,20 @@
     --layout-content-width: clamp(340px, 55vw, 880px);
     --layout-panel-width: var(--panel-width);
     --layout-panel-min: 320px;
-    /* ── Radius semantics ── */
-    --radius-surface: var(--radius-md);
-    --radius-composer: var(--radius-xl);
-    --radius-message: var(--radius-xl);
+    /* ── Radius semantics: B — Soft ── */
+    /* Geometry follows surface role; components do not select radii by size. */
+    --radius-control: 0.625rem;    /* 10px: buttons, inputs, rows */
+    --radius-card: 1rem;           /* 16px: cards and rich-content containers */
+    --radius-popover: 1.125rem;    /* 18px: floating menus and notices */
+    --radius-dialog: 1.375rem;     /* 22px: native dialogs */
+    --radius-composer: 1.5rem;     /* 24px: primary composer */
+    --radius-content: var(--radius-card);
+    --radius-message: var(--radius-card);
+    --radius-surface: var(--radius-card);
+    --radius-docked: 0;
+    --radius-pill: 999px;
+    --radius-circle: 50%;
+    --radius-highlight: 0.125rem;
 
     /* ── Interactive sizing ── */
     --size-button: clamp(28px, 2.8vw, 34px);  /* custom: between space-m and space-l for touch safety */

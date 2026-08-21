@@ -25,7 +25,7 @@
     align-items: center;
     background: var(--color-accent-hover);
     border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-pill);
     color: var(--color-accent-action);
     cursor: pointer;
     display: flex;
@@ -45,7 +45,7 @@
 
 .ingest-target-dot {
     background: var(--color-accent-action);
-    border-radius: 50%;
+    border-radius: var(--radius-circle);
     flex-shrink: 0;
     height: calc(var(--size-icon-sm) * 0.45);
     width: calc(var(--size-icon-sm) * 0.45);
@@ -64,7 +64,7 @@
 /* Radio circle */
 .ingest-target-popover-radio {
     border: 1.5px solid var(--color-text-subtle);
-    border-radius: 50%;
+    border-radius: var(--radius-circle);
     flex-shrink: 0;
     height: var(--size-icon-sm);
     transition: all 0.15s;
@@ -84,7 +84,7 @@
 
 .file-item {
     align-items: center;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     display: flex;
     gap: var(--space-tight);
     justify-content: space-between;
@@ -113,7 +113,7 @@
     align-items: center;
     background: transparent;
     border: none;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-control);
     color: var(--color-text-dim);
     cursor: pointer;
     display: flex;
@@ -158,16 +158,14 @@
     margin: var(--space-tight) var(--space-related);
     height: var(--space-inline);
     background: var(--color-border-subtle);
-    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-    border-radius: 2px;
+    border-radius: var(--radius-highlight);
     overflow: hidden;
 }
 
 .progress-bar-fill {
     height: 100%;
     background: var(--color-progress-fill);
-    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-    border-radius: 2px;
+    border-radius: var(--radius-highlight);
     transition: width 0.5s ease;
 }
 
@@ -222,7 +220,7 @@
     height: calc(var(--size-icon-sm) * 0.75);
     border: 1.5px solid var(--color-border-subtle);
     border-top-color: var(--color-progress-fill);
-    border-radius: 50%;
+    border-radius: var(--radius-circle);
     flex-shrink: 0;
     animation: spin 0.7s linear infinite;
 }
@@ -235,7 +233,7 @@
 
 .upload-zone {
     border: 1.5px dashed var(--color-border-strong);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-content);
     padding: var(--space-related);
     text-align: center;
     color: var(--color-text-dim);

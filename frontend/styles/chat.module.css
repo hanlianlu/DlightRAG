@@ -88,7 +88,7 @@
   width: var(--space-tight);
   height: var(--space-tight);
   background: var(--color-progress-fill);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   animation: pulse 1.2s ease-in-out infinite;
 }
 
@@ -96,7 +96,7 @@
   width: auto;
   height: auto;
   background: none;
-  border-radius: 0;
+  border-radius: var(--radius-docked);
   animation: none;
   font-size: 0.85rem;
   color: var(--color-text-muted);
@@ -112,7 +112,7 @@
   width: 5px;
   height: 5px;
   background: var(--color-progress-fill);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   margin-left: var(--space-tight);
   vertical-align: middle;
   animation: pulse 1.2s ease-in-out infinite;
@@ -135,7 +135,7 @@
 .thumbnailImg {
   width: clamp(48px, 5vw, 64px);
   height: clamp(48px, 5vw, 64px);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-content);
   object-fit: cover;
   border: 1px solid var(--color-border-subtle);
 }
@@ -146,7 +146,7 @@
   right: -5px;
   width: var(--size-icon-sm);
   height: var(--size-icon-sm);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border-strong);
   display: flex;
@@ -178,7 +178,7 @@
   max-width: clamp(160px, 18vw, 240px);
   padding: var(--space-tight) var(--space-inline);
   border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-card);
   background: var(--color-bg-elevated);
   flex-shrink: 0;
 }
@@ -211,7 +211,7 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--color-border-strong);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   background: var(--color-bg-surface);
   color: var(--color-text-muted);
   cursor: pointer;
@@ -259,7 +259,7 @@
 .messageImg {
   width: clamp(60px, 6vw, 80px);
   height: clamp(44px, 4.5vw, 60px);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-content);
   object-fit: cover;
   border: 1px solid var(--color-border-subtle);
 }
@@ -274,7 +274,7 @@
 .historyImageButton {
   background: transparent;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-content);
   color: var(--color-text-muted);
   cursor: pointer;
   padding: 0;
@@ -355,17 +355,32 @@
 }
 
 .aiMessageContent table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 1em 0;
+  border: 1px solid var(--color-border-subtle);
+  border-collapse: separate;
+  border-radius: var(--radius-content);
+  border-spacing: 0;
   font-size: var(--font-size-detail);
+  margin: 1em 0;
+  overflow: hidden;
+  width: 100%;
 }
 
 .aiMessageContent th,
 .aiMessageContent td {
-  border: 1px solid var(--color-border-subtle);
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-inline-end: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-docked);
   padding: var(--space-tight) var(--space-component);
   text-align: left;
+}
+
+.aiMessageContent tr > :last-child {
+  border-inline-end: 0;
+}
+
+.aiMessageContent table > :last-child > tr:last-child > * {
+  border-bottom: 0;
 }
 
 .aiMessageContent th {
@@ -383,7 +398,7 @@
 
 .aiMessageContent pre {
   background: var(--color-bg-elevated);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-content);
   padding: var(--space-related) var(--space-related);
   overflow-x: auto;
   margin: 1em 0;
@@ -408,7 +423,7 @@
 .aiMessageContent :not(pre) > code {
   background: var(--color-bg-elevated);
   padding: var(--space-inline) var(--space-tight);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-control);
   color: var(--color-accent-action);
 }
 
@@ -442,7 +457,7 @@
 .aiMessageContent img {
   max-width: 100%;
   height: auto;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-content);
   margin: 0.5em 0;
 }
 
@@ -460,7 +475,7 @@
    not be scoped/hashed by the CSS Module. */
 .aiMessageContent :global(.highlight) {
   background: var(--color-bg-elevated);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-content);
   margin: 1em 0;
   overflow-x: auto;
 }

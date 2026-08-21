@@ -14,7 +14,7 @@
 .workspacePopoverCheck {
   align-items: center;
   border: 1.5px solid var(--color-text-subtle);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-control);
   display: flex;
   flex-shrink: 0;
   height: var(--size-icon-sm);
@@ -53,7 +53,7 @@
   align-items: center;
   background: transparent;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-control);
   color: var(--color-text-dim);
   cursor: pointer;
   display: flex;
