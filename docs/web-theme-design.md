@@ -1,13 +1,14 @@
 # Web Theme Design
 
-**Status:** Implemented
+**Status:** Implemented — Mineral themes, Soft geometry, and token-bridged Split Panels
 **Date:** 2026-07-23
+**Updated:** 2026-08-21
 
 ## Purpose
 
-The DlightRAG Web UI provides a polished `System / Light / Dark` appearance preference. It keeps the dark theme's identity, adds the warm-neutral **Mineral Light** palette, and makes the correct theme visible on the first painted frame.
+The DlightRAG Web UI provides a polished `System / Light / Dark` appearance preference. It keeps the dark theme's identity, adds the warm-neutral **Mineral Light** palette, and makes the correct theme visible on the first painted frame. Its current appearance also includes role-based Soft geometry and token-bridged split panels.
 
-This work is limited to appearance. It does not add internationalization, custom palettes, account-level preferences, or server-side preference storage.
+This design does not add internationalization, custom palettes, account-level preferences, or server-side preference storage.
 
 ## Product Decisions
 
@@ -22,10 +23,11 @@ This work is limited to appearance. It does not add internationalization, custom
 
 ## Architecture Constraints
 
-- Keep the implementation small and dependency-free. Do not add a theme framework, state-management layer, or icon runtime for this feature.
+- Keep theme state dependency-free. Do not add a theme framework, state-management layer, or icon runtime.
 - Prefer semantic CSS tokens over component-specific light-mode overrides.
 - Reuse the existing popover dismissal and keyboard-navigation infrastructure.
-- Avoid unrelated layout, typography, or component refactors.
+- DlightRAG tokens remain authoritative for third-party components; never load a full external default theme.
+- Web Awesome adoption is limited to Split Panel. Native Drawer/Dialog behavior remains product-owned.
 
 ## State Model
 
@@ -130,11 +132,11 @@ conversation always holds the strongest contrast against its text: lighter in
 dark, darker in light. `frontend/tokens/ramp.test.ts` asserts that direction and
 rejects any colour that is not a member of a declared ramp.
 
-Full-height drawers are edges rather than floating cards, so they are separated
-by that tone step plus a hairline border. Neither theme casts a drawer shadow:
-in light the surface sits below the canvas, and in dark a black shadow over
-`#0c0a09` resolves to `rgb(8,7,6)`. Only elements that overlap the conversation
-— popovers, menus, dialogs, toasts — carry one.
+Full-height docked panels are edges rather than floating cards, so they are
+separated by that tone step plus a hairline border. Neither theme casts a panel
+shadow: in light the surface sits below the canvas, and in dark a black shadow
+over `#0c0a09` resolves to `rgb(8,7,6)`. Only floating elements that overlap the
+conversation — popovers, menus, dialogs, toasts — carry one.
 
 The token layer defines the complete light values needed by existing semantic roles, including hover, active, border, source surface, overlays, selection, shadow, and on-accent text.
 
@@ -142,7 +144,30 @@ Components consume purpose-based aliases such as action accent, strong accent,
 muted accent, and on-accent text. Primitive palette values remain internal to
 the token file.
 
-This is a color-boundary cleanup, not a general CSS rewrite. Existing spacing, typography, geometry, layout, and motion remain unchanged.
+Spacing and typography remain unchanged by the theme. Geometry and panel behavior follow the separate role rules below.
+
+## Geometry And Panels
+
+Geometry follows surface role rather than component size. Controls use 10px,
+cards and rich-content containers 16px, popovers 18px, dialogs 22px, and the
+composer 24px. Pills remain `999px` and circles remain 50%. Full-viewport app
+shells, docked sidebars/panels/reports, structural sections, and internal seams
+stay square at every viewport. This keeps Soft contained surfaces from rounding
+the application silhouette or opening dark corner wedges.
+
+Files/Sources and Report use nested Web Awesome Split Panel components on wide
+screens. DlightRAG imports that component directly, without Web Awesome's
+default theme, and bridges divider, focus-ring, border, width, and state through
+its own semantic tokens and adapter. Files/Sources and Report persist separate
+preferred pixel widths; clamping for the conversation sidebar and minimum chat
+width never overwrites those preferences. Mouse, touch, and keyboard resizing
+share the component's accessible separator.
+
+Below 1200px resizing is disabled and the panel is an overlay: the primary app
+remains full viewport width under the scrim, while modal focus, inert state,
+Escape, and focus restoration remain native DlightRAG behavior. At phone widths
+the active panel becomes full bleed. Web Awesome Drawer and Dialog were
+explicitly rejected; existing native overlays keep these geometry rules.
 
 ## Rich Content
 

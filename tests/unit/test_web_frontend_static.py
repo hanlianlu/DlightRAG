@@ -292,14 +292,15 @@ def test_history_images_are_lazy_async_thumbnails_with_on_demand_originals() -> 
     assert "imageButton.setAttribute('data-full-src', fullSrc)" in images_source
 
 
-def test_panel_resize_uses_pointer_capture_and_cancel_cleanup() -> None:
-    resize_js = (FRONTEND_UI / "resize.ts").read_text(encoding="utf-8")
+def test_split_panel_adapter_preserves_cancel_and_compact_guards() -> None:
+    split_panel = (FRONTEND_UI / "split_panel.ts").read_text(encoding="utf-8")
 
-    assert ".setPointerCapture(event.pointerId)" in resize_js
-    assert ".releasePointerCapture(activePointerId)" in resize_js
-    assert "'pointerId' in e" in resize_js
-    assert "pointercancel" in resize_js
-    assert "window.addEventListener('blur', finishDrag)" in resize_js
+    assert not (FRONTEND_UI / "resize.ts").exists()
+    assert "document.dispatchEvent(new Event('pointerup'))" in split_panel
+    assert "['pointercancel', 'touchcancel', 'blur']" in split_panel
+    assert "['pointerup', 'mouseup', 'touchend']" in split_panel
+    assert "if (state.split.disabled) return" in split_panel
+    assert "event.stopImmediatePropagation()" in split_panel
 
 
 def _css_blocks() -> list[tuple[str, str]]:
@@ -328,6 +329,45 @@ def _declarations(body: str) -> dict[str, str]:
 
 def test_jinja_template_tree_is_deleted() -> None:
     assert not (ROOT / "src/dlightrag/web/templates").exists()
+
+
+def test_production_web_sources_have_no_htmx_contract() -> None:
+    sources = [
+        *FRONTEND.rglob("*.ts"),
+        *FRONTEND.rglob("*.html"),
+        *(ROOT / "src/dlightrag/web").rglob("*.py"),
+    ]
+    for path in sources:
+        if "node_modules" in path.parts:
+            continue
+        source = path.read_text(encoding="utf-8").lower()
+        assert "htmx" not in source
+        assert not re.search(r"\bhx-[a-z]", source)
+
+
+def test_webawesome_adoption_is_limited_to_split_panel_without_default_theme() -> None:
+    imports = [
+        (path.relative_to(FRONTEND), line.strip())
+        for path in FRONTEND.rglob("*.ts")
+        if "node_modules" not in path.parts
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if "@awesome.me/webawesome" in line
+    ]
+    assert imports == [
+        (
+            Path("ui/split_panel.ts"),
+            "import WaSplitPanel from "
+            "'@awesome.me/webawesome/dist/components/split-panel/split-panel.js';",
+        )
+    ]
+
+    production_css = "\n".join(
+        path.read_text(encoding="utf-8")
+        for root in (FRONTEND_STYLES, FRONTEND / "tokens")
+        for path in root.glob("*.css")
+    )
+    assert "@awesome.me/webawesome" not in production_css
+    assert "webawesome/dist/styles" not in production_css
 
 
 def test_button_hover_rules_change_something() -> None:

@@ -38,8 +38,12 @@ jobs:
       - run: make architecture-check
       - run: make shellcheck-all
       - run: make frontend-install
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
       - run: make frontend-typecheck
       - run: make frontend-lint
+      - run: make frontend-test
+      - run: make frontend-browser-test
       - run: make workspace-wheels
       - run: make frontend-audit
       - run: make test-unit

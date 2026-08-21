@@ -5,7 +5,8 @@ This product includes software developed by Hanlian Lyu.
 
 This project builds on the following open-source projects:
 - LightRAG (https://github.com/HKUDS/LightRAG) - MIT License
-- Lucide Icons (https://lucide.dev) - ISC License (embedded Sun, Moon, and Monitor SVG path geometry in web templates)
+- Lucide Icons (https://lucide.dev) - ISC License (embedded Sun, Moon, and Monitor SVG path geometry in the Vite/Lit Web shell)
+- Web Awesome (https://webawesome.com/) - MIT License (Split Panel component)
 - MinerU (https://github.com/opendatalab/MinerU) -
   MinerU Open Source License (Apache License 2.0 with additional terms);
   used as a separately installed sidecar service.

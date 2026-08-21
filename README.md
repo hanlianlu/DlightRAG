@@ -224,9 +224,13 @@ native Docling deployment likewise sets its active block endpoint to
 
 ### Web
 
-The Web UI is served by the REST API at `/web/`. It supports workspace
-selection, file/folder upload, durable principal-scoped conversations and
-answer attachments, citations, source panels, and semantic highlights. The
+The Web UI is served by the REST API at `/web/`. Vite owns its static document
+and hashed assets, while light-DOM Lit components own browser presentation and
+route-driven state. It supports workspace selection, file/folder upload,
+durable principal-scoped conversations and answer attachments, citations,
+source/report panels, and semantic highlights. Desktop panel resizing uses the
+Web Awesome Split Panel component behind DlightRAG tokens and persisted-width
+state; compact layouts retain the native modal overlay behavior. The
 Web-only conversation lifecycle provides New chat, select, rename, delete, and
 reload persistence with 30-day inactivity retention. `Search in: All authorized
 workspaces` is the answer default; the independent `Files in` selector remains a
@@ -458,15 +462,14 @@ make ci-e2e      # above + E2E smoke
 Frontend checks after editing `frontend/`:
 
 ```bash
-cd frontend
-npm run typecheck
-npm test
-npm run test:browser
-npm run build
-npm run lint:css
+make frontend-ci  # install, typecheck, CSS lint, Node + browser tests, build, audit
 ```
 
-`npm run build` writes Vite-owned HTML and hashed browser assets to `src/dlightrag/web/static/app/`. For HMR, run `npm run dev`; the Vite server proxies authenticated browser APIs and support assets to FastAPI on `127.0.0.1:8100`.
+For an individual check, run its script under `frontend/` (`typecheck`, `test`,
+`test:browser`, `build`, or `lint:css`). `npm run build` writes Vite-owned HTML
+and hashed browser assets to `src/dlightrag/web/static/app/`. For HMR, run
+`npm run dev`; the Vite server proxies authenticated browser APIs and support
+assets to FastAPI on `127.0.0.1:8100`.
 That directory is gitignored and rebuilt by `make ci`; the wheel and source
 distribution include it through their Hatch artifact settings.
 
@@ -484,7 +487,7 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 - [docs/durable-answer-runs.md](docs/durable-answer-runs.md) - the durable Answer run contract.
 - [docs/operations.md](docs/operations.md) - maintenance commands and recovery workflows.
 - [docs/evaluation.md](docs/evaluation.md) - RAGAS evaluation workflow.
-- [docs/web-theme-design.md](docs/web-theme-design.md) - current Web appearance state, tokens, interaction, and accessibility design.
+- [docs/web-theme-design.md](docs/web-theme-design.md) - current Web appearance, semantic geometry, panel, interaction, and accessibility design.
 - [LightRAG API Server docs](https://github.com/HKUDS/LightRAG/blob/main/docs/LightRAG-API-Server.md) - upstream parser routing and external parser contracts.
 - [MinerU Docker deployment docs](https://opendatalab.github.io/MinerU/quick_start/docker_deployment/) - Linux/WSL2 Docker support and macOS warning.
 - [Docling Serve](https://github.com/docling-project/docling-serve) - official Docling HTTP service and container images.
