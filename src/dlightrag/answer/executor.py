@@ -90,7 +90,7 @@ from dlightrag.answer.errors import (
 from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import answer_images_from_sources
-from dlightrag.answer.memory import render_auto_recall, select_auto_recall
+from dlightrag.answer.memory import render_auto_recall
 from dlightrag.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.answer.model_runtime import AnswerModelRuntime
 from dlightrag.answer.publication import is_empty_answer
@@ -669,13 +669,8 @@ class AnswerExecutor:
                 or await self._memory_recall_enabled(owner_id=session.owner_id)
             )
             if recall_allowed:
-                run.orchestrator.bind_recall(
-                    render_auto_recall(
-                        select_auto_recall(
-                            await self._memory.list_active(owner_id=session.owner_id)
-                        )
-                    )
-                )
+                recalled = await self._memory.recall(owner_id=session.owner_id, query=request.query)
+                run.orchestrator.bind_recall(render_auto_recall(recalled.records))
         stream: AsyncIterator[str] | None = None
         try:
             journal = session.execution.session_store

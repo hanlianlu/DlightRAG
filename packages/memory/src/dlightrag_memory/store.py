@@ -9,15 +9,18 @@ from uuid import uuid4
 
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.models import MemoryRecord, MemoryWrite
+from dlightrag_memory.normalize import normalized_body
 from dlightrag_memory.policy import MEMORY_SUPERSEDE_RETENTION_DAYS, evaluate_memory_write
+from dlightrag_memory.ports import SearchCandidate
 from dlightrag_memory.recall import recall_recency
 
 
 class MemoryStore(Protocol):
-    """Persist Memory Records. Callers enforce eligibility.
+    """Persist and search Memory Records. Callers enforce eligibility.
 
-    Row methods are owner-scoped; purge and clear-all are fleet/owner
-    retention operations.
+    ``search_candidates`` returns leg-tagged candidates in per-leg rank order
+    (no cross-leg dedupe): the façade fuses the rankings with RRF. Row methods
+    are owner-scoped; purge and clear-all are fleet/owner retention operations.
     """
 
     async def insert(self, record: MemoryRecord) -> None: ...
@@ -33,6 +36,10 @@ class MemoryStore(Protocol):
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None: ...
 
     async def list_active(self, *, owner_id: str) -> tuple[MemoryRecord, ...]: ...
+
+    async def search_candidates(
+        self, *, owner_id: str, query: str, limit: int
+    ) -> tuple[SearchCandidate, ...]: ...
 
     async def list_active_page(
         self,
@@ -106,6 +113,43 @@ class InMemoryMemoryStore:
         ]
         rows.sort(key=recall_recency, reverse=True)
         return tuple(rows)
+
+    async def search_candidates(
+        self, *, owner_id: str, query: str, limit: int
+    ) -> tuple[SearchCandidate, ...]:
+        """Naive two-leg rankings: exact equality, then token-overlap."""
+        cap = max(1, min(int(limit), 100))
+        active = [
+            record
+            for record in self._rows.values()
+            if record.owner_id == owner_id and record.status == "active"
+        ]
+        key = normalized_body(query)
+        exact = sorted(
+            (record for record in active if normalized_body(record.body) == key),
+            key=recall_recency,
+            reverse=True,
+        )
+        query_terms = set(key.split())
+        scored: list[tuple[float, MemoryRecord]] = []
+        for record in active:
+            if normalized_body(record.body) == key:
+                continue
+            terms = set(normalized_body(record.body).split())
+            overlap = len(query_terms & terms) / max(1, len(query_terms))
+            substring = 0.25 if key and key in normalized_body(record.body) else 0.0
+            score = overlap + substring
+            if score > 0:
+                scored.append((score, record))
+        scored.sort(key=lambda item: (item[0], recall_recency(item[1])), reverse=True)
+        candidates = [
+            SearchCandidate(record=record, leg="exact", score=2.0) for record in exact[:cap]
+        ]
+        candidates.extend(
+            SearchCandidate(record=record, leg="sparse", score=score)
+            for score, record in scored[: max(0, cap - len(candidates))]
+        )
+        return tuple(candidates)
 
     async def list_active_page(
         self,

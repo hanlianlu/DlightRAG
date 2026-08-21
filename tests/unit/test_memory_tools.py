@@ -82,6 +82,36 @@ async def test_remember_then_forget() -> None:
     assert await store.get(owner_id="o", memory_id=memory_id) is None
 
 
+async def test_recall_tool_returns_relevant_records() -> None:
+    from dlightrag_memory import InMemoryMemoryStore, Memory
+
+    store = InMemoryMemoryStore()
+    host = MemoryHost(
+        owner_id="o",
+        auth_mode="jwt",
+        run_id="11111111-1111-1111-1111-111111111111",
+        session_id="22222222-2222-2222-2222-222222222222",
+        memory=Memory(store),
+    )
+    memory = host.memory
+    assert memory is not None
+    await memory.remember(
+        owner_id="o",
+        kind="preference",
+        body="No email.",
+        confidence=0.9,
+        provenance=MemoryProvenance(run_id="r", session_id="s"),
+    )
+
+    result = await recall_memory_tool(host=host).execute(RecallInput(query="email"))
+
+    assert "No email." in result.content
+    assert "Relevant memories" in result.content
+
+    miss = await recall_memory_tool(host=host).execute(RecallInput(query="zzz-nothing"))
+    assert miss.content == "No relevant memories."
+
+
 async def test_disabled_memory_rejects_model_tools() -> None:
     """Disabled stops model writes and recall; the rejection is explicit."""
     from dlightrag_memory import InMemoryMemoryStore, Memory
@@ -105,7 +135,7 @@ async def test_disabled_memory_rejects_model_tools() -> None:
     )
     assert "disabled" in forgotten.content
 
-    recalled = await recall_memory_tool(host=host).execute(RecallInput())
+    recalled = await recall_memory_tool(host=host).execute(RecallInput(query="anything"))
     assert "disabled" in recalled.content
 
 

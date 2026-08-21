@@ -520,3 +520,32 @@ async def test_embed_texts_rejects_wrong_vector_count() -> None:
 
     with pytest.raises(ValueError, match="Expected 2 embedding vectors"):
         await embedder.embed_texts(["hello", "world"])
+
+
+async def test_native_text_port_methods() -> None:
+    """embed_documents/embed_query expose the raw-text port surface."""
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=3,
+        provider=VoyageEmbedProvider(),
+    )
+    contexts: list[str] = []
+
+    async def fake_request(payload: Any, *, expected_count: int, context: str, modality: str):
+        del payload, modality
+        contexts.append(context)
+        return [[0.1] * 3 for _ in range(expected_count)]
+
+    embedder._request_vectors = fake_request  # pyright: ignore[reportPrivateUsage]
+    try:
+        documents = await embedder.embed_documents(["alpha", "beta"])
+        query = await embedder.embed_query("gamma")
+    finally:
+        await embedder.aclose()
+
+    assert len(documents) == 2
+    assert len(query) == 3
+    assert contexts[0] == "document"
+    assert contexts[-1] == "query"

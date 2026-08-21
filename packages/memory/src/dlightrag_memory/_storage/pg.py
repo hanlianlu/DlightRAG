@@ -7,7 +7,8 @@ implemented here behind the neutral ports:
 
 - exact:  ``normalized_body`` btree equality (Python-side NFKC normalization)
 - sparse: pg_textsearch BM25 with the corpus-tuned k1/b and both textsearch
-  configs (``simple`` + ``public.jiebacfg``), merged by best score
+  configs (``simple`` + ``public.jiebacfg``), merged by best score into one
+  ranking so a record never double-counts in fusion
 - dense:  optional ``halfvec`` column + HNSW index when a TextEmbedder is bound
 
 Dense is opt-in: with the NullEmbedder the adapter runs exact + sparse only.
@@ -305,7 +306,12 @@ class PostgresMemoryStore:
     async def search_candidates(
         self, *, owner_id: str, query: str, limit: int
     ) -> tuple[SearchCandidate, ...]:
-        """Generate candidates from the exact, sparse, and dense legs."""
+        """Return leg-tagged candidates in per-leg rank order, no cross-leg merge.
+
+        The sparse leg merges both BM25 configs by best score into ONE ranking
+        (a record matching both configs must not double-count in RRF); the
+        façade fuses exact/sparse/dense with RRF.
+        """
         cap = max(1, min(int(limit), 100))
         key = normalized_body(query)
 
@@ -315,6 +321,7 @@ class PostgresMemoryStore:
             candidates.extend(
                 SearchCandidate(record=_row(row), leg="exact", score=2.0) for row in exact_rows
             )
+            sparse_by_id: dict[str, SearchCandidate] = {}
             for bm25_index in self._bm25_indexes:
                 rows = await conn.fetch(
                     build_bm25_sql(index_name=bm25_index, limit=cap), query, owner_id
@@ -322,17 +329,20 @@ class PostgresMemoryStore:
                 for row in rows:
                     record = _row(row)
                     score = float(row["score"])
-                    existing = next(
-                        (c for c in candidates if c.record.memory_id == record.memory_id), None
-                    )
-                    if existing is not None:
-                        if score > existing.score:
-                            existing.score = score
-                            existing.leg = "sparse"
-                        continue
-                    candidates.append(SearchCandidate(record=record, leg="sparse", score=score))
+                    existing = sparse_by_id.get(record.memory_id)
+                    if existing is None or score > existing.score:
+                        sparse_by_id[record.memory_id] = SearchCandidate(
+                            record=record, leg="sparse", score=score
+                        )
+            candidates.extend(
+                sorted(
+                    sparse_by_id.values(),
+                    key=lambda candidate: candidate.score,
+                    reverse=True,
+                )[:cap]
+            )
             if self._dense:
-                vector = await self._embedding(query)
+                vector = await self._query_embedding(query)
                 dense_rows = await conn.fetch(
                     _SEARCH_DENSE,
                     owner_id,
@@ -340,26 +350,21 @@ class PostgresMemoryStore:
                     _vector_text(vector),
                     cap,
                 )
-                for row in dense_rows:
-                    record = _row(row)
-                    score = float(row["score"])
-                    existing = next(
-                        (c for c in candidates if c.record.memory_id == record.memory_id), None
-                    )
-                    if existing is not None:
-                        if score > existing.score:
-                            existing.score = score
-                            existing.leg = "dense"
-                        continue
-                    candidates.append(SearchCandidate(record=record, leg="dense", score=score))
-            candidates.sort(key=lambda candidate: candidate.score, reverse=True)
-            return tuple(candidates[:cap])
+                candidates.extend(
+                    SearchCandidate(record=_row(row), leg="dense", score=float(row["score"]))
+                    for row in dense_rows
+                )
+            return tuple(candidates)
 
         return await self._read(operation)
 
     async def _embedding(self, text: str) -> Vector:
         (vector,) = await self._embedder.embed_documents((text,))
         return vector
+
+    async def _query_embedding(self, text: str) -> Vector:
+        """Embed one query with the port's query context (asymmetric-aware)."""
+        return await self._embedder.embed_query(text)
 
     async def _write(self, operation: Any) -> Any:
         async with await self._acquire_context() as conn:

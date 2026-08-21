@@ -1,11 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Storage-neutral ports: text embedding and recall candidate search.
+"""Storage-neutral ports: text embedding and recall candidate shapes.
 
 These ports are the P4 substrate. ``TextEmbedder`` keeps dense recall optional
 and backend-independent; ``NullEmbedder`` is the zero-configuration default
-for standalone hosts (sparse + exact legs only). ``MemorySearch`` is the
-optional search surface a storage adapter implements when it can generate
-relevance candidates; adapters without it fall back to the recency window.
+for standalone hosts (sparse + exact legs only). ``SearchCandidate`` is the
+leg-tagged candidate a storage adapter returns in per-leg rank order.
 PostgreSQL-specific connection and migration shapes live in ``_storage.pg``,
 not here.
 """
@@ -63,16 +62,7 @@ class SearchCandidate:
         self.score = score
 
 
-class MemorySearch(Protocol):
-    """Relevance candidate generation over one owner's active records."""
-
-    async def search_candidates(
-        self, *, owner_id: str, query: str, limit: int
-    ) -> tuple[SearchCandidate, ...]: ...
-
-
 __all__ = [
-    "MemorySearch",
     "NullEmbedder",
     "SearchCandidate",
     "SearchLeg",

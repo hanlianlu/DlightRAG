@@ -93,8 +93,8 @@ The only durable create, supersede, or forget of a Memory Record: a named rememb
 _Avoid_: Silent promotion, transcript scan, model aside, journal side effect
 
 **Memory Record Lifecycle**:
-`active → superseded → purged`, plus hard-delete by `forget` or `clear`. Active records never expire on a timer; superseded history is purged after the shared retention floor. Growth is bounded by supersede folding, explicit forget, and deployment storage quota — not by auto-decay.
-_Avoid_: TTL on active records, confidence decay, automatic consolidation
+`active → superseded → purged`, plus hard-delete by `forget` or `clear`. Active records never expire on a timer; superseded history is purged after the shared retention floor. Growth is absorbed by supersede folding, explicit forget/clear, natural write rates (every write costs model inference), and cheap storage — no fixed record ceiling, no quota (Pi, Kimi, MemMachine bound nothing).
+_Avoid_: TTL on active records, confidence decay, automatic consolidation, storage quota
 
 **Retention Floor**:
 The single deployment clock (`runtime.answer_run_retention_days`, default 365) that bounds how long terminal Answer runs, their event logs, and superseded Memory history stay durable. The sweep is best-effort: it may reclaim later, never earlier.

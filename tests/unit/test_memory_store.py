@@ -170,7 +170,7 @@ async def test_forget_all_selectors_are_exclusive_and_complete() -> None:
     assert await memory.list_active(owner_id="alpha") == ()
 
 
-async def test_recall_falls_back_to_the_recency_window_without_search() -> None:
+async def test_recall_searches_with_query_and_orders_chronologically() -> None:
     from dlightrag_memory import Memory
 
     store = InMemoryMemoryStore()
@@ -182,13 +182,23 @@ async def test_recall_falls_back_to_the_recency_window_without_search() -> None:
         confidence=0.9,
         provenance=MemoryProvenance(run_id="r", session_id="s"),
     )
+    await memory.remember(
+        owner_id="alpha",
+        kind="fact",
+        body="Unrelated fact about trains.",
+        confidence=0.9,
+        provenance=MemoryProvenance(run_id="r", session_id="s"),
+    )
 
-    result = await memory.recall(owner_id="alpha", query="anything", limit=5)
+    result = await memory.recall(owner_id="alpha", query="email", top_k=5)
 
-    assert result.strategy == "recency_window"
-    assert result.candidates == ()
+    assert result.strategy == "query_search"
     assert [record.body for record in result.records] == ["No email."]
     assert result.content_chars == len("No email.")
+
+    empty = await memory.recall(owner_id="alpha", query="zzz-nothing-matches")
+    assert empty.records == ()
+    assert empty.candidates == ()
 
 
 async def test_memory_service_settings_and_clear() -> None:

@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import math
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -114,6 +115,21 @@ class MultimodalEmbedder:
             context=context,
             modality="text",
         )
+
+    async def embed_text(self, text: str) -> list[float]:
+        """Embed one text input as a query-side vector."""
+        (vector,) = await self.embed_texts([text], context="query")
+        return vector
+
+    # Plain-text vector entry points: document and query batches over raw
+    # strings, so a host that owns this embedder can hand it to any text
+    # vector consumer (e.g. a storage adapter's dense leg) with no wrapper
+    # class — the consumer only needs the two methods plus dim.
+    async def embed_documents(self, texts: Sequence[str]) -> Sequence[list[float]]:
+        return await self.embed_texts(list(texts), context="document")
+
+    async def embed_query(self, text: str) -> list[float]:
+        return await self.embed_text(text)
 
     def _fused_input(self, description: str, image: Image.Image) -> MultimodalEmbeddingInput:
         data_uri = bounded_embedding_image_data_uri(image)

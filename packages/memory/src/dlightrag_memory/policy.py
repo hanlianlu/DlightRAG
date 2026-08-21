@@ -1,11 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Closed Memory Write checklist and the product's fixed safety bounds.
 
-The 500-character atomic-record bound and the recall caps bound the standing
-block reserved at acceptance and are coupled: changing either requires
-updating the acceptance reservation math. There is no fixed record-count
-ceiling — growth is bounded by supersede folding, explicit forget/clear, and
-the deployment storage quota the host composes in.
+The 500-character atomic-record bound caps one assertion; recall packing is
+bounded by ``RECALL_TOP_K`` (count) plus ``RECALL_CHAR_BUDGET`` (block size),
+matching the industry shape (MemMachine counts, MemoraX chars). Growth is
+absorbed by supersede folding, explicit forget/clear, natural write rates,
+and cheap storage — no fixed record ceiling, no quota (Pi/Kimi/MemMachine
+bound nothing; see the retention ADR).
 """
 
 from __future__ import annotations
@@ -16,8 +17,8 @@ from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.models import MemoryWrite
 
 MEMORY_BODY_LIMIT = 500
-MEMORY_RECALL_LIMIT = 12
-MEMORY_RECALL_KIND_LIMIT = 8
+RECALL_TOP_K = 10
+RECALL_CHAR_BUDGET = 4000
 #: Superseded profile history lives at least this long before purge. The
 #: deployment retention clock (e.g. DlightRAG RuntimeConfig's
 #: answer_run_retention_days) overrides it in composed applications.
@@ -52,8 +53,8 @@ def evaluate_memory_write(write: MemoryWrite) -> None:
 
 __all__ = [
     "MEMORY_BODY_LIMIT",
-    "MEMORY_RECALL_KIND_LIMIT",
-    "MEMORY_RECALL_LIMIT",
     "MEMORY_SUPERSEDE_RETENTION_DAYS",
+    "RECALL_CHAR_BUDGET",
+    "RECALL_TOP_K",
     "evaluate_memory_write",
 ]

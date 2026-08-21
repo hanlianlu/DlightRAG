@@ -37,7 +37,9 @@ class ForgetInput(BaseModel):
 
 
 class RecallInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str = Field(min_length=1, description="What to recall memories for.")
 
 
 @dataclass
@@ -114,22 +116,23 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
 
 
 def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
-    async def execute(_raw: BaseModel) -> ToolResult:
+    async def execute(raw: BaseModel) -> ToolResult:
+        args = raw if isinstance(raw, RecallInput) else RecallInput.model_validate(raw)
         if host.memory is None:
             return ToolResult(content="Memory store is not bound.")
         if not memory_owner_allowed(host.auth_mode):
             return ToolResult(content="Long-term memory requires a JWT owner.")
         if not host.enabled:
             return ToolResult(content="Memory is disabled for this owner.")
-        rows = await host.memory.list_active(owner_id=host.owner_id)
-        if not rows:
-            return ToolResult(content="No stored memories.")
-        lines = [f"- {row.memory_id} ({row.kind}) {row.body}" for row in rows[:50]]
-        return ToolResult(content="Stored memories:\n" + "\n".join(lines))
+        result = await host.memory.recall(owner_id=host.owner_id, query=args.query)
+        if not result.records:
+            return ToolResult(content="No relevant memories.")
+        lines = [f"- ({row.kind}) {row.body}" for row in result.records]
+        return ToolResult(content="Relevant memories:\n" + "\n".join(lines))
 
     return AgentTool(
         "recall_memory",
-        "List stored memories beyond the automatic recent set. Not evidence.",
+        "Recall remembered preferences and facts relevant to a query. Not evidence.",
         RecallInput,
         execute,
         replay_policy="safe",
