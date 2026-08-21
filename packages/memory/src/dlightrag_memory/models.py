@@ -37,10 +37,13 @@ class MemoryRecord:
 
 @dataclass(frozen=True, slots=True)
 class MemoryWrite:
-    """One remember or forget attempt before the store sees it."""
+    """One remember or forget attempt before the store sees it.
+
+    The package never judges caller identity: eligibility is host policy and
+    the host raises its own unavailable error before reaching the façade.
+    """
 
     owner_id: str
-    auth_mode: str
     kind: MemoryKind
     body: str
     confidence: float

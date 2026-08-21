@@ -3,7 +3,7 @@
 
 import pytest
 
-from dlightrag.answer.errors import MemoryUnavailableError, MemoryWriteRejectedError
+from dlightrag.answer.errors import MemoryWriteRejectedError
 from dlightrag.answer.memory import (
     MEMORY_BODY_LIMIT,
     MEMORY_RECALL_LIMIT,
@@ -21,7 +21,6 @@ from dlightrag.answer.memory import (
 def _write(**overrides: object) -> MemoryWrite:
     payload: dict[str, object] = {
         "owner_id": "owner",
-        "auth_mode": "jwt",
         "kind": "preference",
         "body": "Do not use email.",
         "confidence": 0.9,
@@ -31,18 +30,17 @@ def _write(**overrides: object) -> MemoryWrite:
     return MemoryWrite(**payload)  # type: ignore[arg-type]
 
 
-def test_jwt_remember_passes() -> None:
+def test_remember_passes() -> None:
     evaluate_memory_write(_write())
 
 
-def test_none_owner_cannot_write() -> None:
-    with pytest.raises(MemoryUnavailableError):
-        evaluate_memory_write(_write(auth_mode="none"))
+def test_owner_eligibility_is_root_policy() -> None:
+    """The package never judges auth_mode; the root gate does."""
+    from dlightrag.answer.memory import memory_owner_allowed
 
-
-def test_simple_owner_cannot_write() -> None:
-    with pytest.raises(MemoryUnavailableError):
-        evaluate_memory_write(_write(auth_mode="simple"))
+    assert memory_owner_allowed("jwt")
+    assert not memory_owner_allowed("none")
+    assert not memory_owner_allowed("simple")
 
 
 def test_empty_body_and_citation_markers_are_rejected() -> None:

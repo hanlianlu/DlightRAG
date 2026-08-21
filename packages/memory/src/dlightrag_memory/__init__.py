@@ -8,7 +8,7 @@ records are never Evidence and never citable.
 """
 
 from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
-from dlightrag_memory.memory import Memory
+from dlightrag_memory.memory import Memory, RecallResult
 from dlightrag_memory.models import (
     MemoryKind,
     MemoryProvenance,
@@ -23,7 +23,6 @@ from dlightrag_memory.policy import (
     MEMORY_RECALL_LIMIT,
     MEMORY_SUPERSEDE_RETENTION_DAYS,
     evaluate_memory_write,
-    memory_owner_allowed,
 )
 from dlightrag_memory.ports import (
     MemorySearch,
@@ -33,12 +32,7 @@ from dlightrag_memory.ports import (
     TextEmbedder,
     Vector,
 )
-from dlightrag_memory.recall import (
-    render_auto_recall,
-    reserved_auto_recall_text,
-    select_auto_recall,
-    standing_memory_for_acceptance,
-)
+from dlightrag_memory.recall import recall_recency, select_auto_recall
 from dlightrag_memory.store import (
     InMemoryMemoryStore,
     MemoryStore,
@@ -63,6 +57,7 @@ __all__ = [
     "MemoryWrite",
     "MemoryWriteRejectedError",
     "NullEmbedder",
+    "RecallResult",
     "SearchCandidate",
     "SearchLeg",
     "TextEmbedder",
@@ -70,10 +65,7 @@ __all__ = [
     "commit_memory_write",
     "default_purge_cutoff",
     "evaluate_memory_write",
-    "memory_owner_allowed",
     "normalized_body",
-    "render_auto_recall",
-    "reserved_auto_recall_text",
+    "recall_recency",
     "select_auto_recall",
-    "standing_memory_for_acceptance",
 ]

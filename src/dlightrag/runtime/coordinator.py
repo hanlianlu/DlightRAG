@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 SWEEP_SECONDS = 1.0
 #: Cadence for renewing an owned run's storage lease.
 RUN_HEARTBEAT_SECONDS = 20.0
-#: How often each process runs the 30-day event trim and run/artifact prune.
+#: How often each process runs the retention-floor event trim and run/artifact prune.
 #: Every pass is bounded, ``SKIP LOCKED``, and idempotent, so running it on every
 #: run-owning process needs no leader election and exposes no operator knob.
 MAINTENANCE_SECONDS = 3600.0
@@ -405,7 +405,7 @@ class RunCoordinator:
             await asyncio.sleep(self._sweep_seconds)
 
     async def _maintain_forever(self) -> None:
-        """Apply 30-day retention without reserving an execution slot.
+        """Apply the configured retention floor without reserving an execution slot.
 
         The first pass is deferred by a bounded share of the cadence so a fleet
         that restarts together spreads its trims out instead of aligning them.

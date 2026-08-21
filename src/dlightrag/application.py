@@ -452,7 +452,9 @@ class Application:
         try:
             await components.run_store.initialize(validate_only=validate_only)
             await components.web_store.initialize(validate_only=validate_only)
-            if not validate_only:
+            if validate_only:
+                await components.memory_store.verify()
+            else:
                 await components.memory_store.initialize()
         except RunSchemaError, WebConversationSchemaError:
             raise

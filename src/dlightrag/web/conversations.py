@@ -88,7 +88,7 @@ class WebConversationStore(Protocol):
         principal_id: str,
         conversation_id: str,
         *,
-        max_turns: int = 100,
+        window_turns: int = 100,
     ) -> ConversationSnapshot | None: ...
 
     async def find_turn_by_run(self, principal_id: str, run_id: str) -> LinkedTurn | None: ...
@@ -449,7 +449,7 @@ class WebConversationService:
             self._store.snapshot(
                 principal_id,
                 conversation_id,
-                max_turns=_HISTORY_WINDOW_TURNS,
+                window_turns=_HISTORY_WINDOW_TURNS,
             )
         )
 

@@ -9,24 +9,15 @@ from uuid import uuid4
 
 from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.models import MemoryRecord, MemoryWrite
-from dlightrag_memory.policy import (
-    MEMORY_SUPERSEDE_RETENTION_DAYS,
-    evaluate_memory_write,
-)
-
-
-def _recency(record: MemoryRecord) -> datetime:
-    if record.updated_at is not None:
-        return record.updated_at
-    if record.created_at is not None:
-        return record.created_at
-    return datetime.min.replace(tzinfo=UTC)
+from dlightrag_memory.policy import MEMORY_SUPERSEDE_RETENTION_DAYS, evaluate_memory_write
+from dlightrag_memory.recall import recall_recency
 
 
 class MemoryStore(Protocol):
-    """Persist Memory Records. Callers enforce JWT.
+    """Persist Memory Records. Callers enforce eligibility.
 
-    Row methods are owner-scoped; purge is fleet-wide retention.
+    Row methods are owner-scoped; purge and clear-all are fleet/owner
+    retention operations.
     """
 
     async def insert(self, record: MemoryRecord) -> None: ...
@@ -36,6 +27,8 @@ class MemoryStore(Protocol):
     async def forget(self, *, owner_id: str, memory_id: str) -> bool: ...
 
     async def forget_matching(self, *, owner_id: str, body: str) -> int: ...
+
+    async def forget_all(self, *, owner_id: str) -> int: ...
 
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None: ...
 
@@ -96,6 +89,12 @@ class InMemoryMemoryStore:
             del self._rows[key]
         return len(victims)
 
+    async def forget_all(self, *, owner_id: str) -> int:
+        victims = [key for key, record in self._rows.items() if record.owner_id == owner_id]
+        for key in victims:
+            del self._rows[key]
+        return len(victims)
+
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None:
         return self._rows.get((owner_id, memory_id))
 
@@ -105,7 +104,7 @@ class InMemoryMemoryStore:
             for record in self._rows.values()
             if record.owner_id == owner_id and record.status == "active"
         ]
-        rows.sort(key=_recency, reverse=True)
+        rows.sort(key=recall_recency, reverse=True)
         return tuple(rows)
 
     async def list_active_page(
@@ -150,17 +149,7 @@ class InMemoryMemoryStore:
 
 async def commit_memory_write(store: MemoryStore, write: MemoryWrite) -> MemoryRecord | None:
     """Run the checklist, then insert, supersede, or hard-delete."""
-    filled = MemoryWrite(
-        owner_id=write.owner_id,
-        auth_mode=write.auth_mode,
-        kind=write.kind,
-        body=write.body,
-        confidence=write.confidence,
-        provenance=write.provenance,
-        action=write.action,
-        supersedes_id=write.supersedes_id,
-    )
-    evaluate_memory_write(filled)
+    evaluate_memory_write(write)
     if write.action == "forget":
         if (write.supersedes_id or "").strip():
             removed = await store.forget(

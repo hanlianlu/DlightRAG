@@ -6,12 +6,14 @@ and backend-independent; ``NullEmbedder`` is the zero-configuration default
 for standalone hosts (sparse + exact legs only). ``MemorySearch`` is the
 optional search surface a storage adapter implements when it can generate
 relevance candidates; adapters without it fall back to the recency window.
+PostgreSQL-specific connection and migration shapes live in ``_storage.pg``,
+not here.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from dlightrag_memory.models import MemoryRecord
 
@@ -69,45 +71,9 @@ class MemorySearch(Protocol):
     ) -> tuple[SearchCandidate, ...]: ...
 
 
-class PGConnection(Protocol):
-    """The duck-typed asyncpg surface the PostgreSQL adapter consumes."""
-
-    async def fetch(
-        self, query: str, *args: Any
-    ) -> list[Any]: ...  # pragma: no cover - protocol shape
-
-    async def fetchrow(self, query: str, *args: Any) -> Any: ...
-
-    async def fetchval(self, query: str, *args: Any) -> Any: ...
-
-    async def execute(self, query: str, *args: Any) -> Any: ...
-
-    def transaction(self) -> Any: ...
-
-
-class PGPool(Protocol):
-    """A pool whose ``acquire()`` yields one connection context.
-
-    Duck-typed: both a bound asyncpg pool and a lazy pool holder satisfy it.
-    """
-
-    def acquire(self) -> Any: ...
-
-
-class Migration(Protocol):
-    """One named, once-only adapter migration step."""
-
-    id: str
-
-    async def apply(self, conn: PGConnection) -> None: ...
-
-
 __all__ = [
-    "Migration",
-    "NullEmbedder",
-    "PGConnection",
-    "PGPool",
     "MemorySearch",
+    "NullEmbedder",
     "SearchCandidate",
     "SearchLeg",
     "TextEmbedder",

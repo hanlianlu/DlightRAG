@@ -523,7 +523,7 @@ async def test_a_snapshot_projects_each_turn_from_its_run(
     assert pending is not None and done is not None
     await _finish(pool, done.turn.answer_run_id, status="succeeded")
 
-    snapshot = await store.snapshot(_OWNER, conversation_id, max_turns=_MAX_TURNS)
+    snapshot = await store.snapshot(_OWNER, conversation_id, window_turns=_MAX_TURNS)
 
     assert snapshot is not None
     assert [turn.turn_number for turn in snapshot.turns] == [1, 2]
@@ -888,7 +888,7 @@ async def test_turns_beyond_the_read_window_stay_durable(
     assert await _count(pool, "web_conversation_turns") == 3
     assert await _count(pool, "dlightrag_answer_runs") == 3
 
-    snapshot = await store.snapshot(_OWNER, conversation_id, max_turns=2)
+    snapshot = await store.snapshot(_OWNER, conversation_id, window_turns=2)
     assert snapshot is not None
     assert [turn.turn_number for turn in snapshot.turns] == [2, 3]
 

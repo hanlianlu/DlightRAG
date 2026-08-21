@@ -86,7 +86,6 @@ async def test_supersede_rejects_other_owner() -> None:
         store,
         MemoryWrite(
             owner_id="alpha",
-            auth_mode="jwt",
             kind="fact",
             body="Alpha fact.",
             confidence=1.0,

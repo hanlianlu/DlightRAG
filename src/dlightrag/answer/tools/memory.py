@@ -7,10 +7,15 @@ from dataclasses import dataclass
 from typing import Literal
 
 from dlightrag_agent.tools import AgentTool, ToolResult
-from dlightrag_memory import Memory, MemoryProvenance
+from dlightrag_memory import (
+    Memory,
+    MemoryProvenance,
+    MemoryUnavailableError,
+    MemoryWriteRejectedError,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.answer.errors import MemoryUnavailableError, MemoryWriteRejectedError
+from dlightrag.answer.memory import memory_owner_allowed
 
 MemoryKindInput = Literal["preference", "fact"]
 
@@ -49,17 +54,18 @@ class MemoryHost:
 def remember_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel) -> ToolResult:
         args = raw if isinstance(raw, RememberInput) else RememberInput.model_validate(raw)
+        if not memory_owner_allowed(host.auth_mode):
+            return ToolResult(content="Long-term memory requires a JWT owner.")
         try:
             written = await _memory(host).remember(
                 owner_id=host.owner_id,
-                auth_mode=host.auth_mode,
                 kind=args.kind,
                 body=args.body,
                 confidence=args.confidence,
                 provenance=MemoryProvenance(run_id=host.run_id, session_id=host.session_id),
                 supersedes_id=args.supersedes_id,
             )
-        except (MemoryUnavailableError, MemoryWriteRejectedError) as exc:
+        except MemoryWriteRejectedError as exc:
             return ToolResult(content=str(exc.public_message))
         if written is None:
             return ToolResult(content="Memory was not stored.")
@@ -80,15 +86,16 @@ def remember_tool(*, host: MemoryHost) -> AgentTool:
 def forget_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel) -> ToolResult:
         args = raw if isinstance(raw, ForgetInput) else ForgetInput.model_validate(raw)
+        if not memory_owner_allowed(host.auth_mode):
+            return ToolResult(content="Long-term memory requires a JWT owner.")
         try:
             await _memory(host).forget(
                 owner_id=host.owner_id,
-                auth_mode=host.auth_mode,
                 memory_id=args.memory_id,
                 body=args.body,
                 provenance=MemoryProvenance(run_id=host.run_id, session_id=host.session_id),
             )
-        except (MemoryUnavailableError, MemoryWriteRejectedError) as exc:
+        except MemoryWriteRejectedError as exc:
             return ToolResult(content=str(exc.public_message))
         return ToolResult(content="Forgotten.")
 
@@ -105,7 +112,7 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(_raw: BaseModel) -> ToolResult:
         if host.memory is None:
             return ToolResult(content="Memory store is not bound.")
-        if host.auth_mode != "jwt":
+        if not memory_owner_allowed(host.auth_mode):
             return ToolResult(content="Long-term memory requires a JWT owner.")
         rows = await host.memory.list_active(owner_id=host.owner_id)
         if not rows:
@@ -124,7 +131,7 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
 
 def _memory(host: MemoryHost) -> Memory:
     if host.memory is None:
-        raise MemoryWriteRejectedError("Memory store is not bound.")
+        raise MemoryUnavailableError()
     return host.memory
 
 

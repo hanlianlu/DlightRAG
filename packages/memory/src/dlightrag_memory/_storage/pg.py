@@ -18,9 +18,9 @@ sparse still reach them); automatic re-embedding is a P4 decision.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from dlightrag_memory._storage.pg_bm25 import (
     build_bm25_sql,
@@ -31,21 +31,35 @@ from dlightrag_memory._storage.pg_bm25 import (
 from dlightrag_memory.models import MemoryProvenance, MemoryRecord
 from dlightrag_memory.normalize import normalized_body
 from dlightrag_memory.ports import (
-    Migration,
     NullEmbedder,
-    PGConnection,
-    PGPool,
     SearchCandidate,
     TextEmbedder,
     Vector,
 )
 
-_MIGRATION_TABLE = """
-CREATE TABLE IF NOT EXISTS dlightrag_memory_migrations (
-    migration_id TEXT PRIMARY KEY,
-    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)
-"""
+
+class PGConnection(Protocol):
+    """The duck-typed asyncpg surface the PostgreSQL adapter consumes."""
+
+    async def fetch(self, query: str, *args: Any) -> list[Any]: ...
+
+    async def fetchrow(self, query: str, *args: Any) -> Any: ...
+
+    async def fetchval(self, query: str, *args: Any) -> Any: ...
+
+    async def execute(self, query: str, *args: Any) -> Any: ...
+
+    def transaction(self) -> Any: ...
+
+
+class PGPool(Protocol):
+    """A pool whose ``acquire()`` yields one connection context.
+
+    Duck-typed: both a bound asyncpg pool and a lazy pool holder satisfy it.
+    """
+
+    def acquire(self) -> Any: ...
+
 
 _RECORDS_TABLE = """
 CREATE TABLE IF NOT EXISTS dlightrag_memory_records (
@@ -104,7 +118,6 @@ class PostgresMemoryStore:
         dsn: str | None = None,
         pool_factory: Callable[[], Awaitable[Any]] | None = None,
         embedder: TextEmbedder = NullEmbedder(),
-        migrations: Sequence[Migration] = (),
     ) -> None:
         if pool is None and not dsn and pool_factory is None:
             raise ValueError("PostgresMemoryStore needs a pool, a dsn, or a pool factory")
@@ -113,7 +126,6 @@ class PostgresMemoryStore:
         self._pool_factory = pool_factory
         self._owned_pool: Any = None
         self._embedder = embedder
-        self._migrations = tuple(migrations)
         self._dense = not isinstance(embedder, NullEmbedder)
         self._bm25_indexes: tuple[str, ...] = ()
         self._operation_pool = pool  # test hook: backdate rows directly
@@ -141,7 +153,6 @@ class PostgresMemoryStore:
 
     async def initialize(self) -> None:
         async def operation(conn: PGConnection) -> None:
-            await conn.execute(_MIGRATION_TABLE)
             await conn.execute(_RECORDS_TABLE)
             for statement in _RECORD_INDEXES:
                 await conn.execute(statement)
@@ -155,19 +166,25 @@ class PostgresMemoryStore:
                     raise ValueError("embedder dim must be positive for the dense leg")
                 await conn.execute(_embedding_column_sql(dim))
                 await conn.execute(_embedding_index_sql())
-            applied = {
-                row["migration_id"]
-                for row in await conn.fetch("SELECT migration_id FROM dlightrag_memory_migrations")
-            }
-            for migration in self._migrations:
-                if migration.id in applied:
-                    continue
-                async with conn.transaction():
-                    await migration.apply(conn)
-                    await conn.execute(
-                        "INSERT INTO dlightrag_memory_migrations (migration_id) VALUES ($1)",
-                        migration.id,
-                    )
+
+        acquire = await self._acquire_context()
+        async with acquire as conn:
+            await operation(conn)
+        self._initialized = True
+
+    async def verify(self) -> None:
+        """Validate the writer's schema and load search-index facts, no DDL."""
+
+        async def operation(conn: PGConnection) -> None:
+            exists = await conn.fetchval(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'dlightrag_memory_records' LIMIT 1"
+            )
+            if not exists:
+                raise RuntimeError(
+                    "dlightrag_memory_records is missing; initialize it on the writer first"
+                )
+            self._bm25_indexes = await ensure_bm25_indexes(conn, verify_only=True)
 
         acquire = await self._acquire_context()
         async with acquire as conn:
@@ -225,6 +242,14 @@ class PostgresMemoryStore:
         async def operation(conn: PGConnection) -> int:
             async with conn.transaction():
                 result = await conn.execute(_DELETE_BODY, owner_id, body.strip())
+                return int(str(result).rsplit(" ", 1)[-1])
+
+        return await self._write(operation)
+
+    async def forget_all(self, *, owner_id: str) -> int:
+        async def operation(conn: PGConnection) -> int:
+            async with conn.transaction():
+                result = await conn.execute(_DELETE_ALL, owner_id)
                 return int(str(result).rsplit(" ", 1)[-1])
 
         return await self._write(operation)
@@ -363,7 +388,7 @@ def _insert_params(store: PostgresMemoryStore, *, record: MemoryRecord) -> tuple
     )
 
 
-def _embedding_column_sql(dim: int) -> str:
+def _embedding_column_sql(dim: int) -> str:  # noqa: S608 - dim is a validated int
     return f"ALTER TABLE dlightrag_memory_records ADD COLUMN IF NOT EXISTS embedding halfvec({dim})"
 
 
@@ -404,6 +429,11 @@ WHERE owner_id = $1 AND memory_id = $2
 _DELETE_BODY = """
 DELETE FROM dlightrag_memory_records
 WHERE owner_id = $1 AND body = $2
+"""
+
+_DELETE_ALL = """
+DELETE FROM dlightrag_memory_records
+WHERE owner_id = $1
 """
 
 _SELECT_ONE = f"""
@@ -493,16 +523,4 @@ def _row(row: Any) -> MemoryRecord:
     )
 
 
-class SqlMigration(Migration):
-    """One named SQL migration for the package-owned migration registry."""
-
-    def __init__(self, migration_id: str, statements: Sequence[str]) -> None:
-        self.id = migration_id
-        self._statements = tuple(statements)
-
-    async def apply(self, conn: PGConnection) -> None:
-        for statement in self._statements:
-            await conn.execute(statement)
-
-
-__all__ = ["PostgresMemoryStore", "SqlMigration"]
+__all__ = ["PostgresMemoryStore"]

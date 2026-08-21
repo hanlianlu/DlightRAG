@@ -119,7 +119,7 @@ export class DlApp extends LightElement {
           <conversation-list id="conversation-list" role="list" aria-live="polite"></conversation-list>
           <button id="delete-all-conversations-btn" type="button"
                   aria-label="Delete all conversations">
-            <span class="conversation-retention-note">Inactive conversations expire after 30 days.</span>
+            <span class="conversation-retention-note">Conversation turns stay until run retention (default 365 days) reclaims them.</span>
             <span class="conversation-delete-all-label" aria-hidden="true">Delete all conversations</span>
           </button>
         </nav>

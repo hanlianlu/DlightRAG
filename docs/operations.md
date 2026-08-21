@@ -63,8 +63,9 @@ concern rather than a request concern.
   lease to expire, after which any worker reclaims the run from the journal or
   Fast stages. Four consecutive reclaims without durable progress fail the
   run with `run_abandoned`.
-- **Retention.** Every run-owning process trims 30-day-old event logs and prunes
-  30-day-old terminal runs hourly in bounded `SKIP LOCKED` batches. There is no
+- **Retention.** Every run-owning process trims event logs and prunes terminal
+  runs past the `runtime.answer_run_retention_days` floor (default 365) hourly in
+  bounded `SKIP LOCKED` batches. There is no
   knob and no separate cron job. A succeeded run a Web conversation still
   references survives until that conversation is deleted or expires; its event log
   is trimmed on schedule regardless, after which its events endpoint returns 410

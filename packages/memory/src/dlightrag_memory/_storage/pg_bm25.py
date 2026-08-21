@@ -78,7 +78,13 @@ class BM25IndexOptions:
 
 
 def index_name(suffix: str) -> str:
-    return f"{_INDEX_PREFIX}_{suffix}"
+    return _validate_index_name(f"{_INDEX_PREFIX}_{suffix}")
+
+
+def _validate_index_name(name: str) -> str:
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+        raise ValueError(f"unsafe index name: {name!r}")
+    return name
 
 
 def extension_bootstrap_sql() -> tuple[str, ...]:
@@ -116,7 +122,7 @@ def desired_indexes(available: tuple[str, ...]) -> tuple[BM25IndexOptions, ...]:
 
 
 def build_bm25_sql(*, index_name: str, limit: int) -> str:
-    safe_index = index_name
+    safe_index = _validate_index_name(index_name)
     limit_value = int(limit)
     if limit_value < 1:
         raise ValueError("BM25 limit must be positive")
@@ -136,10 +142,13 @@ async def ensure_bm25_indexes(
     conn: Any,
     *,
     available: tuple[str, ...] | None = None,
+    verify_only: bool = False,
 ) -> tuple[str, ...]:
-    """Provision the memory-table BM25 indexes, matching corpus parameters.
+    """Provision or validate the memory-table BM25 indexes.
 
-    Returns the index names currently served so the sparse search can fan out.
+    With ``verify_only`` this performs no DDL: readers load the served index
+    names and fail when a configured index is missing, matching the corpus
+    verify path.
     """
     installed = available if available is not None else await text_configs_available(conn)
     options = desired_indexes(installed)
@@ -149,12 +158,18 @@ async def ensure_bm25_indexes(
         )
         if option.matches_indexdef(indexdef):
             continue
+        if verify_only:
+            raise RuntimeError(
+                f"BM25 index {option.index_name} is missing or does not match configured "
+                "options; initialize it on the writer first"
+            )
         if indexdef:
             await conn.execute(f"DROP INDEX IF EXISTS {option.index_name}")
         await conn.execute(option.create_index_sql())
-    for suffix in _INDEX_SUFFIXES:
-        if not any(option.index_name == index_name(suffix) for option in options):
-            await conn.execute(f"DROP INDEX IF EXISTS {index_name(suffix)}")
+    if not verify_only:
+        for suffix in _INDEX_SUFFIXES:
+            if not any(option.index_name == index_name(suffix) for option in options):
+                await conn.execute(f"DROP INDEX IF EXISTS {index_name(suffix)}")
     return tuple(option.index_name for option in options)
 
 

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from dlightrag_memory import InMemoryMemoryStore, commit_memory_write
 
-from dlightrag.answer.errors import MemoryUnavailableError, MemoryWriteRejectedError
+from dlightrag.answer.errors import MemoryWriteRejectedError
 from dlightrag.answer.memory import (
     MEMORY_SUPERSEDE_RETENTION_DAYS,
     MemoryProvenance,
@@ -34,7 +34,6 @@ def _record(
 def _remember(**overrides: object) -> MemoryWrite:
     payload: dict[str, object] = {
         "owner_id": "alpha",
-        "auth_mode": "jwt",
         "kind": "preference",
         "body": "No email.",
         "confidence": 0.8,
@@ -68,13 +67,11 @@ async def test_supersede_hides_old_and_forget_hard_deletes() -> None:
     assert await store.get(owner_id="alpha", memory_id="new") is None
 
 
-async def test_commit_remember_and_reject_none_owner() -> None:
+async def test_commit_remember() -> None:
     store = InMemoryMemoryStore()
     written = await commit_memory_write(store, _remember())
     assert written is not None
     assert written.body == "No email."
-    with pytest.raises(MemoryUnavailableError):
-        await commit_memory_write(store, _remember(auth_mode="none"))
 
 
 async def test_supersede_missing_id_is_a_public_reject() -> None:
@@ -84,7 +81,6 @@ async def test_supersede_missing_id_is_a_public_reject() -> None:
             store,
             MemoryWrite(
                 owner_id="alpha",
-                auth_mode="jwt",
                 kind="fact",
                 body="Replacement.",
                 confidence=1.0,
@@ -141,3 +137,55 @@ async def test_purge_only_old_superseded_rows() -> None:
     assert removed == 1
     assert await store.get(owner_id="alpha", memory_id="old") is None
     assert await store.get(owner_id="alpha", memory_id="new") is not None
+
+
+async def test_forget_all_selectors_are_exclusive_and_complete() -> None:
+    from dlightrag_memory import Memory
+
+    store = InMemoryMemoryStore()
+    memory = Memory(store)
+    await memory.remember(
+        owner_id="alpha",
+        kind="fact",
+        body="First.",
+        confidence=1.0,
+        provenance=MemoryProvenance(run_id="r", session_id="s"),
+    )
+    await memory.remember(
+        owner_id="alpha",
+        kind="fact",
+        body="Second.",
+        confidence=1.0,
+        provenance=MemoryProvenance(run_id="r", session_id="s"),
+    )
+
+    try:
+        await memory.forget(owner_id="alpha")
+    except ValueError as exc:
+        assert "exactly one" in str(exc)
+    else:
+        raise AssertionError("forget without a selector must be rejected")
+
+    await memory.forget(owner_id="alpha", all=True)
+    assert await memory.list_active(owner_id="alpha") == ()
+
+
+async def test_recall_falls_back_to_the_recency_window_without_search() -> None:
+    from dlightrag_memory import Memory
+
+    store = InMemoryMemoryStore()
+    memory = Memory(store)
+    await memory.remember(
+        owner_id="alpha",
+        kind="preference",
+        body="No email.",
+        confidence=0.9,
+        provenance=MemoryProvenance(run_id="r", session_id="s"),
+    )
+
+    result = await memory.recall(owner_id="alpha", query="anything", limit=5)
+
+    assert result.strategy == "recency_window"
+    assert result.candidates == ()
+    assert [record.body for record in result.records] == ["No email."]
+    assert result.content_chars == len("No email.")

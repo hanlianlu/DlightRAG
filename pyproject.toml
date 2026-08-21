@@ -134,7 +134,7 @@ include_external_packages = true
 
 [[tool.importlinter.contracts]]
 id = "memory-package-independence"
-name = "Memory package must remain host-neutral with no product, storage, or transport imports"
+name = "Memory package stays host-neutral: no product, Agent, RAG, or transport imports"
 type = "forbidden"
 source_modules = ["dlightrag_memory"]
 forbidden_modules = [

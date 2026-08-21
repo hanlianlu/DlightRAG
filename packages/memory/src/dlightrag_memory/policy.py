@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
+from dlightrag_memory.errors import MemoryWriteRejectedError
 from dlightrag_memory.models import MemoryWrite
 
 MEMORY_BODY_LIMIT = 500
@@ -26,15 +26,11 @@ MEMORY_SUPERSEDE_RETENTION_DAYS = 365
 _CITATION_MARK = re.compile(r"\[\d+(?:-\d+)?\]")
 
 
-def memory_owner_allowed(auth_mode: str) -> bool:
-    """JWT principals may write and auto-recall; deployment buckets may not."""
-    return auth_mode == "jwt"
-
-
 def evaluate_memory_write(write: MemoryWrite) -> None:
-    """Accept one Memory Write or raise a public checklist error."""
-    if not memory_owner_allowed(write.auth_mode):
-        raise MemoryUnavailableError()
+    """Accept one Memory Write or raise a public checklist error.
+
+    Caller eligibility is host policy; the package never judges identity.
+    """
     body = write.body.strip()
     if write.action == "forget":
         if not (write.supersedes_id or "").strip() and not body:
@@ -60,5 +56,4 @@ __all__ = [
     "MEMORY_RECALL_LIMIT",
     "MEMORY_SUPERSEDE_RETENTION_DAYS",
     "evaluate_memory_write",
-    "memory_owner_allowed",
 ]

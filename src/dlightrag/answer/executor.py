@@ -90,6 +90,7 @@ from dlightrag.answer.errors import (
 from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import answer_images_from_sources
+from dlightrag.answer.memory import render_auto_recall, select_auto_recall
 from dlightrag.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.answer.model_runtime import AnswerModelRuntime
 from dlightrag.answer.publication import is_empty_answer
@@ -661,7 +662,9 @@ class AnswerExecutor:
         auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
         if self._memory is not None and auth_mode == "jwt":
             run.orchestrator.bind_recall(
-                await self._memory.standing_text(owner_id=session.owner_id)
+                render_auto_recall(
+                    select_auto_recall(await self._memory.list_active(owner_id=session.owner_id))
+                )
             )
         stream: AsyncIterator[str] | None = None
         try:

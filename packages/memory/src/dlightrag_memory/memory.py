@@ -3,19 +3,42 @@
 
 One interface for every cross-conversation Profile operation. The host owns
 identity, eligibility, and context placement; this module owns the checklist,
-atomic write commit, standing recall, and lifecycle policy.
+atomic write commit, structured recall, and lifecycle policy. Every method
+returns structured records — never prompt fragments.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from dlightrag_memory.models import MemoryProvenance, MemoryRecord, MemoryWrite
-from dlightrag_memory.ports import MemorySearch
-from dlightrag_memory.recall import render_auto_recall, select_auto_recall
+from dlightrag_memory.ports import MemorySearch, SearchCandidate
+from dlightrag_memory.recall import select_auto_recall
 from dlightrag_memory.store import MemoryStore, commit_memory_write
 
 _MANAGEMENT_PROVENANCE = MemoryProvenance(run_id="management", session_id="management")
+
+
+@dataclass(frozen=True, slots=True)
+class RecallResult:
+    """Structured recall outcome: selected records plus provenance of choice.
+
+    ``strategy`` names the path that produced the records (query search or the
+    recency window); ``candidates`` carries score/leg provenance when search
+    ran; ``degraded`` is set when a configured leg was unavailable.
+    """
+
+    records: tuple[MemoryRecord, ...]
+    strategy: str
+    candidates: tuple[SearchCandidate, ...] = ()
+    degraded: tuple[str, ...] = ()
+    content_chars: int = 0
+
+    @property
+    def skipped(self) -> bool:
+        """True when recall degraded below a full result set."""
+        return bool(self.degraded)
 
 
 class Memory:
@@ -39,7 +62,6 @@ class Memory:
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         kind: str,
         body: str,
         confidence: float,
@@ -51,7 +73,6 @@ class Memory:
             self._store,
             MemoryWrite(
                 owner_id=owner_id,
-                auth_mode=auth_mode,
                 kind=kind,  # type: ignore[arg-type]
                 body=body,
                 confidence=confidence,
@@ -65,17 +86,28 @@ class Memory:
         self,
         *,
         owner_id: str,
-        auth_mode: str,
         memory_id: str | None = None,
         body: str | None = None,
+        all: bool = False,
         provenance: MemoryProvenance | None = None,
     ) -> None:
-        """Hard-delete one record by id, or every record with an exact body."""
+        """Hard-delete one record by id, every record with an exact body, or all.
+
+        The three selectors are mutually exclusive: one of ``memory_id``,
+        ``body``, or ``all`` must be given.
+        """
+        selectors = sum(1 for value in (memory_id, body, all) if value)
+        if selectors != 1:
+            raise ValueError("forget needs exactly one of memory_id, body, or all")
+        if all:
+            removed = await self._store.forget_all(owner_id=owner_id)
+            if removed == 0:
+                return
+            return
         await commit_memory_write(
             self._store,
             MemoryWrite(
                 owner_id=owner_id,
-                auth_mode=auth_mode,
                 kind="preference",
                 body=body or "",
                 confidence=1.0,
@@ -99,9 +131,7 @@ class Memory:
         """Page one owner's active records; returns the next keyset cursor."""
         return await self._store.list_active_page(owner_id=owner_id, after=cursor, limit=limit)
 
-    async def recall(
-        self, *, owner_id: str, query: str, limit: int = 12
-    ) -> tuple[MemoryRecord, ...]:
+    async def recall(self, *, owner_id: str, query: str, limit: int = 12) -> RecallResult:
         """Query-aware recall when the store can search; recency fallback otherwise.
 
         Candidates are deduplicated by record id keeping the best score. P4
@@ -112,17 +142,23 @@ class Memory:
             candidates = await self._search.search_candidates(
                 owner_id=owner_id, query=query, limit=cap
             )
-            return tuple(candidate.record for candidate in candidates[:cap])
-        active = await self.list_active(owner_id=owner_id)
-        return select_auto_recall(active)[:cap]
-
-    async def standing_text(self, *, owner_id: str) -> str:
-        """Render the bounded non-citable standing block for one owner."""
-        return render_auto_recall(select_auto_recall(await self.list_active(owner_id=owner_id)))
+            records = tuple(candidate.record for candidate in candidates[:cap])
+            return RecallResult(
+                records=records,
+                strategy="query_search",
+                candidates=tuple(candidates[:cap]),
+                content_chars=sum(len(record.body) for record in records),
+            )
+        records = select_auto_recall(await self.list_active(owner_id=owner_id))[:cap]
+        return RecallResult(
+            records=records,
+            strategy="recency_window",
+            content_chars=sum(len(record.body) for record in records),
+        )
 
     async def purge_superseded(self, *, older_than: datetime) -> int:
         """Delete superseded history past the retention floor."""
         return await self._store.purge_superseded(older_than=older_than)
 
 
-__all__ = ["Memory"]
+__all__ = ["Memory", "RecallResult"]

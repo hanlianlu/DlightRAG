@@ -590,7 +590,7 @@ class PGWebConversationStore(PostgresOperationRunner):
         principal_id: str,
         conversation_id: str,
         *,
-        max_turns: int = 100,
+        window_turns: int = 100,
     ) -> ConversationSnapshot | None:
         """Load one conversation and its run-linked recent turns."""
         await self._ensure_initialized()
@@ -608,7 +608,7 @@ class PGWebConversationStore(PostgresOperationRunner):
                     _GET_TURNS,
                     principal_id,
                     conversation_id,
-                    max_turns,
+                    window_turns,
                 )
                 return ConversationSnapshot(
                     principal_id=str(row["principal_id"]),

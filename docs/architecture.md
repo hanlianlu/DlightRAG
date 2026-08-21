@@ -242,9 +242,10 @@ parsed-chunk table, and no vector cache. Historical attachments are re-registere
 lazily as request-local resources on every follow-up, newest first up to the
 available attachment-count limit. An attachment-bearing conversation therefore
 remains on the research path. Browser thumbnails are derived on demand. Manual
-deletion, conversation TTL pruning, and 30-day run retention all delete the
-linked runs, cascade their events and references, and release blobs no surviving
-run references.
+deletion and the shared `runtime.answer_run_retention_days` floor (default 365,
+counted from `finished_at`) delete the linked runs, cascade their events and
+references, and release blobs no surviving run references; a conversation row
+whose last turn aged out is reclaimed by the empty-conversation sweep.
 
 ## Retrieval And Answer Flow
 
@@ -294,7 +295,7 @@ complete role, migration-order, and shared-artifact contract.
 
 ## Code Layering
 
-The repository is one UV workspace with four lockstep distributions. Distinct
+The repository is one UV workspace with five lockstep distributions. Distinct
 top-level Python packages make their import directions observable in source and
 in built wheels:
 
@@ -307,17 +308,25 @@ dlightrag-agent-core  generic tool contracts and deterministic turn execution
 dlightrag-rag-core    LightRAG chat/embedding adapters, rerank orchestration,
                       storage-neutral metadata records and score fusion
 
-dlightrag             product composition, PostgreSQL, REST/Web/MCP/SDK
+dlightrag-memory      cross-conversation Owner Profile Memory: the closed write
+                      checklist, structured recall, storage-neutral ports, and
+                      the package-owned PostgreSQL adapter with its own schema
+
+dlightrag             product composition, root PostgreSQL composition,
+                      REST/Web/MCP/SDK
 ```
 
-Agent and RAG core depend on AI; RAG core also owns its direct LightRAG API
-dependency. The root product depends on all three cores and maps Pydantic input
-configuration into immutable AI settings before composition. RAG imports
-neither the root product nor Agent and never imports concrete PostgreSQL
-adapters. Concrete provider SDKs are lazy AI extras, so importing
-`dlightrag_ai` does not load OpenAI, Anthropic, or Gemini clients. Root
-`LangfuseTelemetry` is injected into core model operations; standalone cores use
-the explicit no-op adapter.
+Agent, RAG, and Memory cores depend on AI; Memory is additionally PG-first and
+declares `asyncpg` directly, while its PostgreSQL adapter owns a schema
+(`dlightrag_memory_records`) and migration path independent of the root
+product's. RAG core also owns its direct LightRAG API dependency. The root
+product depends on all four cores and maps Pydantic input configuration into
+immutable AI settings before composition. RAG imports neither the root product
+nor Agent and never imports concrete PostgreSQL adapters. Memory imports no
+product, Agent, or RAG module. Concrete provider SDKs are lazy AI extras, so
+importing `dlightrag_ai` does not load OpenAI, Anthropic, or Gemini clients.
+Root `LangfuseTelemetry` is injected into core model operations; standalone
+cores use the explicit no-op adapter.
 
 Inside the root product, modules still sit on a decreasing dependency stack: a
 module at a higher layer may import from lower layers, but lower layers must not

@@ -181,14 +181,13 @@ Retention is fixed internal maintenance with no operator knob. Every run-owning
 process runs it hourly in bounded `SKIP LOCKED` batches, so it is safe on every
 host at once and needs no leader election:
 
-- **Event logs** are deleted 30 days after `finished_at` for every terminal run,
+- **Event logs** are deleted after the `runtime.answer_run_retention_days` floor (default 365) counted from `finished_at` for every terminal run,
   even one a conversation still shows. That transaction sets `events_trimmed_at`,
   after which the run's event endpoint returns HTTP 410 and clients read the
   canonical result from the status endpoint instead.
-- **Terminal run rows** are pruned 30 days after `finished_at`, except a
-  `succeeded` run a committed Web turn still references — its lifetime belongs to
-  that conversation. Failed and cancelled linked runs prune normally and their
-  visible terminal turn cascades away with them.
+- **Terminal run rows** are pruned after the same floor counted from `finished_at`,
+  conversation-linked or not; the turn cascade empties the conversation and an
+  hourly sweep reclaims conversation rows with no turns left.
 - **Blobs** are released in the same transaction once no run-artifact row
   references the digest for that owner. A digest a concurrent run adopted is left
   alone and released when that run is itself deleted.
