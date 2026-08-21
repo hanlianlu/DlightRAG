@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.9.0"
+version = "1.9.2"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -54,7 +54,7 @@ dependencies = [
     "charset-normalizer>=3.4.0",
     # Deterministic binary answer-resource readers (selected extras only).
     "markitdown[docx,pdf,pptx,xlsx]>=0.1.4",
-    "pypdfium2>=4.30.0",
+    "pypdfium2>=5.13.0",
     "openpyxl>=3.1.5",
 ]
 

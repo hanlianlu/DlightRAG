@@ -2,14 +2,14 @@
 
 [project]
 name = "dlightrag-agent-core"
-version = "1.9.0"
+version = "1.9.2"
 description = "Reusable agent mechanics for DlightRAG"
 requires-python = ">=3.14,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
-    "dlightrag-ai==1.9.0",
+    "dlightrag-ai==1.9.2",
     "pydantic>=2.11.0",
 ]
 
