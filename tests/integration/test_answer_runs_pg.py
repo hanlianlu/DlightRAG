@@ -1075,7 +1075,7 @@ class TestRetention:
         )
         assert await store.trim_expired_event_logs() == 0
 
-        await _backdate_finish(pool, creation.run.run_id, days=31)
+        await _backdate_finish(pool, creation.run.run_id, days=370)
         assert await store.trim_expired_event_logs() == 1
         assert await store.trim_expired_event_logs() == 0
 
@@ -1105,7 +1105,7 @@ class TestRetention:
         assert fresh.runs == 0
         assert fresh.artifacts == 0
 
-        await _backdate_finish(pool, creation.run.run_id, days=31)
+        await _backdate_finish(pool, creation.run.run_id, days=370)
         outcome = await store.prune_expired_runs()
         assert outcome.runs == 1
         assert outcome.artifacts == 1
@@ -1171,7 +1171,7 @@ async def _succeed_and_expire(store: PGAnswerRunStore, pool: Any, run_id: str) -
         fencing_epoch=claim.run.fencing_epoch,
         result={"answer": run_id},
     )
-    await _backdate_finish(pool, run_id, days=31)
+    await _backdate_finish(pool, run_id, days=370)
 
 
 class TestBlobCleanupFailureIsolation:

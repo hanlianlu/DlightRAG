@@ -203,8 +203,6 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
     service = WebConversationService(
         store=store,
         answers=answers,
-        max_turns=100,
-        ttl_days=30,
         max_attachments=6,
     )
 
@@ -236,8 +234,6 @@ async def test_first_submission_uses_one_stable_server_conversation_and_atomic_s
     service = WebConversationService(
         store=store,
         answers=answers,
-        max_turns=100,
-        ttl_days=30,
         max_attachments=6,
     )
 
@@ -275,8 +271,6 @@ async def test_replaying_first_submission_returns_its_created_conversation_befor
     service = WebConversationService(
         store=store,
         answers=answers,
-        max_turns=100,
-        ttl_days=30,
         max_attachments=6,
     )
 
@@ -447,8 +441,6 @@ async def scoped_client(application_double: AsyncMock, test_config):
     application_double.web_conversations = WebConversationService(
         store=store,
         answers=FakeAnswers(),
-        max_turns=100,
-        ttl_days=30,
         max_attachments=6,
     )
     application.state.application = application_double
@@ -773,8 +765,6 @@ async def test_terminal_attachment_is_read_through_the_answer_service() -> None:
     service = WebConversationService(
         store=store,
         answers=answers,
-        max_turns=100,
-        ttl_days=30,
         max_attachments=6,
     )
 
@@ -792,8 +782,6 @@ async def test_an_unowned_run_never_reads_an_input_artifact() -> None:
     service = WebConversationService(
         store=store,
         answers=answers,
-        max_turns=100,
-        ttl_days=30,
         max_attachments=6,
     )
 
@@ -849,8 +837,6 @@ async def test_history_attachments_load_from_the_run_that_accepted_them() -> Non
     service = WebConversationService(
         store=store,
         answers=answers,
-        max_turns=100,
-        ttl_days=30,
         max_attachments=6,
     )
 

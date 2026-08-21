@@ -198,8 +198,8 @@ async def commit_memory_write(store: AnswerMemoryStore, write: MemoryWrite) -> M
     return record
 
 
-def default_purge_cutoff() -> datetime:
-    return datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS)
+def default_purge_cutoff(days: int = MEMORY_SUPERSEDE_RETENTION_DAYS) -> datetime:
+    return datetime.now(UTC) - timedelta(days=days)
 
 
 def write_log_cutoff() -> datetime:

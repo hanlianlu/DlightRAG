@@ -168,6 +168,7 @@ workspace: default
 max_async: 16                 # process-wide AI provider request concurrency
 runtime:
   answer_worker_concurrency: 16  # durable Answer runs executed per process
+  answer_run_retention_days: 365  # floor for terminal runs, event logs, and superseded memory history
 rag_pipeline_max_async: 16    # LightRAG workspace pipeline LLM concurrency
 embedding_func_max_async: 16  # LightRAG default 8
 embedding_batch_num: 64       # texts per embedding request (provider cap varies: Voyage<=1000, OpenAI<=2048)
@@ -188,10 +189,6 @@ answer:
   max_attachments: 6
   max_attachment_bytes: 104857600      # 100 MiB per answer attachment.
   max_total_attachment_bytes: 134217728  # 128 MiB total across answer attachments.
-
-web_conversations:
-  max_turns: 100
-  ttl_days: 30
 
 # ─────────────────────────────────────────────────────────────────
 # Security and Observability

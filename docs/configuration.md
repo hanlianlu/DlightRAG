@@ -833,23 +833,20 @@ model. Public REST, MCP, CLI, and Python answer/retrieve calls remain stateless;
 durable conversation attachments belong only to the Web conversation store:
 
 ```yaml
-web_conversations:
-  max_turns: 100
-  ttl_days: 30
-
 visual_assets:
   thumb_max_px: 300
   thumb_cache_size: 256
 ```
 
-`web_conversations` applies only to the principal-scoped Web-only conversation
-lifecycle. It keeps at most 100 complete turns and uses 30-day inactivity
-retention; expired conversations are hidden immediately and reclaimed in
-skip-locked batches by a lightweight hourly task. Listing conversations also
-removes expired rows for the active principal. Cleanup deletes the linked answer
-runs, which cascades their events and artifact references and releases blobs no
-surviving run references, without touching ingest documents, chunks, vectors,
-graph data, source files, visual assets, or jobs.
+Web conversations have no retention knobs of their own. Every terminal Answer
+run — conversation-linked or not — is reclaimed once after the shared
+`runtime.answer_run_retention_days` floor (default 365 days) counted from
+`finished_at`; the turn cascade empties the conversation, and a lightweight
+hourly task then reclaims conversations that have no turns left. The snapshot
+and history endpoint return the most recent turns as a read window; older turns
+stay durable until retention reclaims them. Cleanup releases blobs no surviving
+run references, without touching ingest documents, chunks, vectors, graph data,
+source files, visual assets, or jobs.
 
 Uploaded answer attachments are stored once as owner-scoped content-addressed
 blobs owned by the durable run, not by a Web-owned table, and the newest
@@ -860,11 +857,12 @@ controls browser thumbnails derived on demand from those attachments. There is n
 answer-time parse cache, no attachment chunk table, and no vector cache; the
 research path reads every resource fresh from its stored bytes.
 
-Durable Answer run state has no operator knobs. Terminal run rows and every
-terminal run's event log expire 30 days after the run finished, except a
-succeeded run a committed Web turn still references. Lease duration, heartbeat
-and sweep cadence, retention cadence, batch sizes, token coalescing, and the
-crash-recovery bound are fixed internal constants.
+Durable Answer run state has one operator knob: `runtime.answer_run_retention_days`
+(default 365) is the retention floor for terminal run rows, their event logs,
+and superseded profile-memory history. The sweep is a best-effort hourly task
+and may reclaim later, never earlier. Lease duration, heartbeat and sweep
+cadence, batch sizes, token coalescing, and the crash-recovery bound are fixed
+internal constants.
 
 ## Web Search (optional)
 
@@ -1043,9 +1041,9 @@ unchanged.
 Transport and retention limits answer different questions.
 `MAX_HISTORY_MESSAGES` and `MAX_HISTORY_CONTENT_CHARS` are transport contracts
 that also size the JSON body limit, so they are a security bound rather than a
-memory policy. `web_conversations.max_turns` decides how many turns are retained
-in PostgreSQL. The pinned model profiles and context policy decide how much
-reaches a model.
+memory policy. How many turns stay durable in PostgreSQL is decided by the
+shared retention floor, not a per-conversation window. The pinned model profiles
+and context policy decide how much reaches a model.
 
 `max_upload_bytes` is the per-file cap for REST multipart ingest and Web
 workspace/folder uploads. It also supplies the tighter receive-layer cap for

@@ -139,7 +139,7 @@ async def test_purge_only_old_superseded_rows() -> None:
         created_at=stale.created_at,
         updated_at=datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS + 10),
     )
-    assert MEMORY_SUPERSEDE_RETENTION_DAYS == 30
+    assert MEMORY_SUPERSEDE_RETENTION_DAYS == 365
     removed = await store.purge_superseded(
         older_than=datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS)
     )

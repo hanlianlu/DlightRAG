@@ -406,7 +406,7 @@ async def test_a_trimmed_event_log_is_gone_but_the_result_remains(
     )
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE dlightrag_answer_runs SET finished_at = NOW() - INTERVAL '31 days' "
+            "UPDATE dlightrag_answer_runs SET finished_at = NOW() - INTERVAL '370 days' "
             "WHERE run_id = $1",
             uuid.UUID(run_id),
         )

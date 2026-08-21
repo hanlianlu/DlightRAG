@@ -18,7 +18,10 @@ MEMORY_ACTIVE_LIMIT = 200
 MEMORY_WRITES_PER_HOUR = 20
 MEMORY_RECALL_LIMIT = 12
 MEMORY_RECALL_KIND_LIMIT = 8
-MEMORY_SUPERSEDE_RETENTION_DAYS = 30
+#: Superseded profile history lives at least this long before purge. The
+#: deployment retention clock (RuntimeConfig.answer_run_retention_days)
+#: overrides it in composed applications.
+MEMORY_SUPERSEDE_RETENTION_DAYS = 365
 
 _CITATION_MARK = re.compile(r"\[\d+(?:-\d+)?\]")
 

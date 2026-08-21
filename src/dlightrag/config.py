@@ -529,6 +529,17 @@ class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     answer_worker_concurrency: int = Field(default=16, ge=1)
+    answer_run_retention_days: int = Field(
+        default=365,
+        ge=1,
+        description=(
+            "Retention floor for terminal Answer runs and their event logs, "
+            "counted from finished_at. Also the retention clock for memory: "
+            "superseded profile history is purged after the same span. A "
+            "conversation whose last turn's run ages out becomes empty and is "
+            "then reclaimed."
+        ),
+    )
 
 
 class AgentExecutionConfig(BaseModel):
@@ -548,12 +559,9 @@ class AgentExecutionConfig(BaseModel):
 
 
 class WebConversationsConfig(BaseModel):
-    """Durable Web conversation retention controls."""
+    """Browser conversation surface; retention follows RuntimeConfig."""
 
     model_config = ConfigDict(extra="forbid")
-
-    max_turns: int = Field(default=100, ge=1)
-    ttl_days: int = Field(default=30, ge=1)
 
 
 class WebSearchConfig(BaseModel):

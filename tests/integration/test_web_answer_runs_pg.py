@@ -53,7 +53,6 @@ _PG_CONN_KWARGS: dict[str, Any] = dict(
 
 _OWNER = "principal-alpha"
 _OTHER_OWNER = "principal-beta"
-_TTL_DAYS = 30
 _MAX_TURNS = 100
 
 
@@ -156,8 +155,6 @@ async def _submit(
         artifacts=artifacts or [],
         references=references or [],
         title_hint="why",
-        max_turns=_MAX_TURNS,
-        ttl_days=_TTL_DAYS,
         create_conversation=create_conversation,
     )
 
@@ -526,9 +523,7 @@ async def test_a_snapshot_projects_each_turn_from_its_run(
     assert pending is not None and done is not None
     await _finish(pool, done.turn.answer_run_id, status="succeeded")
 
-    snapshot = await store.snapshot(
-        _OWNER, conversation_id, ttl_days=_TTL_DAYS, max_turns=_MAX_TURNS
-    )
+    snapshot = await store.snapshot(_OWNER, conversation_id, max_turns=_MAX_TURNS)
 
     assert snapshot is not None
     assert [turn.turn_number for turn in snapshot.turns] == [1, 2]
@@ -594,9 +589,7 @@ async def test_deleting_a_conversation_never_orphans_a_turn_committed_behind_it(
 
     async with pool.acquire() as holder:
         transaction = await _hold_conversation_lock(holder, conversation_id)
-        deletion = asyncio.create_task(
-            store.delete_conversation(_OWNER, conversation_id, ttl_days=_TTL_DAYS)
-        )
+        deletion = asyncio.create_task(store.delete_conversation(_OWNER, conversation_id))
         await asyncio.sleep(0.2)
         await _link_turn(holder, runs, conversation_id)
         await transaction.commit()
@@ -647,7 +640,7 @@ async def test_deleting_a_conversation_deletes_its_runs_and_frees_its_bytes(
     assert creation is not None
     await _finish(pool, creation.turn.answer_run_id, status="succeeded")
 
-    assert await store.delete_conversation(_OWNER, conversation_id, ttl_days=_TTL_DAYS) is True
+    assert await store.delete_conversation(_OWNER, conversation_id) is True
 
     assert await _count(pool, "dlightrag_answer_runs") == 0
     assert await _count(pool, "dlightrag_answer_run_artifacts") == 0
@@ -675,7 +668,7 @@ async def test_deletion_keeps_bytes_another_run_still_references(
     )
     await _submit(store, kept, artifacts=[PendingArtifact(content=content)], references=[reference])
 
-    await store.delete_conversation(_OWNER, doomed, ttl_days=_TTL_DAYS)
+    await store.delete_conversation(_OWNER, doomed)
 
     assert await _count(pool, "dlightrag_blobs", owner_id=_OWNER, digest=digest) == 1
     assert await _count(pool, "dlightrag_answer_runs") == 1
@@ -695,30 +688,32 @@ async def test_deleting_every_conversation_deletes_every_linked_run(
     assert await _count(pool, "dlightrag_answer_runs", owner_id=_OTHER_OWNER) == 1
 
 
-async def test_a_successful_linked_run_outlives_the_thirty_day_bound(
+async def test_a_successful_linked_run_prunes_after_the_retention_floor(
     store: PGWebConversationStore, runs: PGAnswerRunStore, pool: Any
 ) -> None:
+    """The unified retention clock applies to conversation-linked runs too."""
     conversation_id = await _conversation(store)
     creation = await _submit(store, conversation_id)
     assert creation is not None
     await _finish(pool, creation.turn.answer_run_id, status="succeeded")
-    await _backdate_finish(pool, creation.turn.answer_run_id, days=45)
+    await _backdate_finish(pool, creation.turn.answer_run_id, days=370)
 
     deletion = await runs.prune_expired_runs()
 
-    assert deletion.runs == 0
-    assert await _count(pool, "web_conversation_turns") == 1
+    assert deletion.runs == 1
+    assert await _count(pool, "web_conversation_turns") == 0
+    assert await _count(pool, "web_conversations") == 1
 
 
 async def test_an_expired_event_log_is_still_trimmed_for_a_linked_run(
     store: PGWebConversationStore, runs: PGAnswerRunStore, pool: Any
 ) -> None:
-    """Retention exempts the run row, not its event log."""
+    """Event trim uses the same retention clock, not a separate exemption."""
     conversation_id = await _conversation(store)
     creation = await _submit(store, conversation_id)
     assert creation is not None
     await _finish(pool, creation.turn.answer_run_id, status="succeeded")
-    await _backdate_finish(pool, creation.turn.answer_run_id, days=45)
+    await _backdate_finish(pool, creation.turn.answer_run_id, days=370)
 
     assert await runs.trim_expired_event_logs() == 1
 
@@ -741,7 +736,7 @@ async def test_a_failed_or_cancelled_linked_run_prunes_and_cascades_its_turn(
         status=status,
         error="answer_stream_failed" if status == "failed" else None,
     )
-    await _backdate_finish(pool, creation.turn.answer_run_id, days=45)
+    await _backdate_finish(pool, creation.turn.answer_run_id, days=370)
 
     deletion = await runs.prune_expired_runs()
 
@@ -760,7 +755,7 @@ async def test_an_unlinked_successful_run_still_prunes(
         idempotency_fingerprint=answer_run_request_fingerprint(request),
     )
     await _finish(pool, creation.run.run_id, status="succeeded")
-    await _backdate_finish(pool, creation.run.run_id, days=45)
+    await _backdate_finish(pool, creation.run.run_id, days=370)
 
     assert (await runs.prune_expired_runs()).runs == 1
 
@@ -804,23 +799,37 @@ async def test_a_turn_cannot_reference_a_run_another_principal_owns(
             )
 
 
-async def test_expired_conversations_prune_with_their_runs(
+async def test_an_empty_conversation_is_reclaimed_after_its_turns_age_out(
+    store: PGWebConversationStore, runs: PGAnswerRunStore, pool: Any
+) -> None:
+    """Turns live and die with their runs; the empty row is then reclaimed."""
+    conversation_id = await _conversation(store)
+    creation = await _submit(store, conversation_id)
+    assert creation is not None
+    await _finish(pool, creation.turn.answer_run_id, status="succeeded")
+    await _backdate_finish(pool, creation.turn.answer_run_id, days=370)
+
+    assert (await runs.prune_expired_runs()).runs == 1
+    assert await store.prune_empty_conversations() == 1
+
+    assert await _count(pool, "web_conversations") == 0
+    assert await _count(pool, "web_conversation_turns") == 0
+
+
+async def test_a_conversation_with_live_turns_is_never_reclaimed(
     store: PGWebConversationStore, pool: Any
 ) -> None:
     conversation_id = await _conversation(store)
     await _submit(store, conversation_id)
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE web_conversations SET updated_at = NOW() - INTERVAL '90 days'")
 
-    assert await store.prune_expired(ttl_days=_TTL_DAYS) == 1
-
-    assert await _count(pool, "dlightrag_answer_runs") == 0
-    assert await _count(pool, "web_conversation_turns") == 0
+    assert await store.prune_empty_conversations() == 0
+    assert await _count(pool, "web_conversations") == 1
 
 
-async def test_trimming_the_conversation_window_removes_the_oldest_runs(
+async def test_turns_beyond_the_read_window_stay_durable(
     store: PGWebConversationStore, pool: Any
 ) -> None:
+    """The snapshot window is a read bound; it never deletes older turns."""
     conversation_id = await _conversation(store)
     for index in range(3):
         await store.create_answer_turn(
@@ -830,12 +839,14 @@ async def test_trimming_the_conversation_window_removes_the_oldest_runs(
             request=_request(f"question {index}"),
             idempotency_fingerprint=answer_run_request_fingerprint(_request(f"question {index}")),
             title_hint="why",
-            max_turns=2,
-            ttl_days=_TTL_DAYS,
         )
 
-    assert await _count(pool, "web_conversation_turns") == 2
-    assert await _count(pool, "dlightrag_answer_runs") == 2
+    assert await _count(pool, "web_conversation_turns") == 3
+    assert await _count(pool, "dlightrag_answer_runs") == 3
+
+    snapshot = await store.snapshot(_OWNER, conversation_id, max_turns=2)
+    assert snapshot is not None
+    assert [turn.turn_number for turn in snapshot.turns] == [2, 3]
 
 
 # ---------------------------------------------------------------------------
@@ -871,9 +882,7 @@ async def test_conversation_deletion_takes_the_same_lock_order_as_run_retention(
             run_uuid,
         )
 
-        deleting = asyncio.create_task(
-            store.delete_conversation(_OWNER, conversation_id, ttl_days=_TTL_DAYS)
-        )
+        deleting = asyncio.create_task(store.delete_conversation(_OWNER, conversation_id))
         await asyncio.sleep(0.3)
         assert not deleting.done()
 

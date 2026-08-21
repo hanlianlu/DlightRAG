@@ -61,13 +61,11 @@ T = TypeVar("T")
 
 
 class WebConversationStore(Protocol):
-    async def prune_expired(self, *, ttl_days: int, batch_size: int = 500) -> int: ...
+    async def prune_empty_conversations(self, *, batch_size: int = 500) -> int: ...
 
     async def create_conversation(self, principal_id: str) -> dict[str, Any]: ...
 
-    async def list_conversations(
-        self, principal_id: str, *, ttl_days: int
-    ) -> list[dict[str, Any]]: ...
+    async def list_conversations(self, principal_id: str) -> list[dict[str, Any]]: ...
 
     async def rename_conversation(
         self,
@@ -75,15 +73,12 @@ class WebConversationStore(Protocol):
         conversation_id: str,
         *,
         title: str,
-        ttl_days: int,
     ) -> dict[str, Any] | None: ...
 
     async def delete_conversation(
         self,
         principal_id: str,
         conversation_id: str,
-        *,
-        ttl_days: int,
     ) -> bool: ...
 
     async def delete_all_conversations(self, principal_id: str) -> int: ...
@@ -93,7 +88,6 @@ class WebConversationStore(Protocol):
         principal_id: str,
         conversation_id: str,
         *,
-        ttl_days: int,
         max_turns: int = 100,
     ) -> ConversationSnapshot | None: ...
 
@@ -119,8 +113,6 @@ class WebConversationStore(Protocol):
         artifacts: Sequence[PendingArtifact],
         references: Sequence[PendingArtifactReference],
         title_hint: str | None,
-        max_turns: int,
-        ttl_days: int,
         routing: RoutingAcceptance | None = None,
         create_conversation: bool = False,
     ) -> AnswerTurnCreation | None: ...
@@ -133,6 +125,11 @@ _HISTORY_THUMBNAIL_MIN_QUALITY = 50
 _HISTORY_THUMBNAIL_MIN_PX = 64
 _PRUNE_INTERVAL_SECONDS = 60 * 60
 _PRUNE_BATCH_SIZE = 500
+#: How many recent turns a snapshot and the history endpoint return. This is a
+#: read window for UI and history payloads, not retention: older turns stay
+#: durable until run retention reclaims them. Keyset pagination replaces this
+#: bound when the history endpoint grows a "load older" surface.
+_HISTORY_WINDOW_TURNS = 100
 _NEW_CONVERSATION_NAMESPACE = UUID("9c0e62a5-a12c-45b2-8aeb-474fc2237cdf")
 
 #: Browser answer sources and images are served through Web-scoped routes.
@@ -168,8 +165,6 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
     store: WebConversationStore
     conversation_id: str
     title_hint: str | None
-    max_turns: int
-    ttl_days: int
     create_conversation: bool = False
 
     async def replay_run(
@@ -210,8 +205,6 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
             artifacts=artifacts,
             references=references,
             title_hint=self.title_hint,
-            max_turns=self.max_turns,
-            ttl_days=self.ttl_days,
             routing=routing,
             create_conversation=self.create_conversation,
         )
@@ -226,37 +219,30 @@ class WebConversationService:
         *,
         store: WebConversationStore,
         answers: AnswerService,
-        max_turns: int,
-        ttl_days: int,
         max_attachments: int,
     ) -> None:
         self._store = store
         self._answers = answers
-        self._max_turns = max_turns
-        self._ttl_days = ttl_days
         self._max_attachments = max_attachments
         self._prune_task: asyncio.Task[None] | None = None
 
     async def start_retention(self) -> None:
-        """Start retention after composition has already established the schema."""
-        await self._prune_expired_batch()
+        """Start the empty-conversation sweep after schema composition."""
+        await self._prune_empty_batch()
         if self._prune_task is None:
-            self._prune_task = asyncio.create_task(self._prune_expired_loop())
+            self._prune_task = asyncio.create_task(self._prune_empty_loop())
 
-    async def _prune_expired_batch(self) -> int:
+    async def _prune_empty_batch(self) -> int:
         try:
-            return await self._store.prune_expired(
-                ttl_days=self._ttl_days,
-                batch_size=_PRUNE_BATCH_SIZE,
-            )
+            return await self._store.prune_empty_conversations(batch_size=_PRUNE_BATCH_SIZE)
         except Exception:
-            logger.exception("Failed to prune expired Web conversations")
+            logger.exception("Failed to prune empty Web conversations")
             return 0
 
-    async def _prune_expired_loop(self) -> None:
+    async def _prune_empty_loop(self) -> None:
         while True:
             await asyncio.sleep(_PRUNE_INTERVAL_SECONDS)
-            while await self._prune_expired_batch() >= _PRUNE_BATCH_SIZE:
+            while await self._prune_empty_batch() >= _PRUNE_BATCH_SIZE:
                 await asyncio.sleep(0)
 
     async def aclose(self) -> None:
@@ -280,12 +266,7 @@ class WebConversationService:
 
     async def list(self, user: UserContext | None) -> list[ConversationSummary]:
         principal_id = owner_id_from_user(user)
-        rows = await self._store_call(
-            self._store.list_conversations(
-                principal_id,
-                ttl_days=self._ttl_days,
-            )
-        )
+        rows = await self._store_call(self._store.list_conversations(principal_id))
         return [_conversation_summary(row) for row in rows]
 
     async def rename(
@@ -300,7 +281,6 @@ class WebConversationService:
                 principal_id,
                 conversation_id,
                 title=title,
-                ttl_days=self._ttl_days,
             )
         )
         return _conversation_summary(row) if row is not None else None
@@ -308,11 +288,7 @@ class WebConversationService:
     async def delete(self, user: UserContext | None, conversation_id: str) -> bool:
         principal_id = owner_id_from_user(user)
         return await self._store_call(
-            self._store.delete_conversation(
-                principal_id,
-                conversation_id,
-                ttl_days=self._ttl_days,
-            )
+            self._store.delete_conversation(principal_id, conversation_id)
         )
 
     async def delete_all(self, user: UserContext | None) -> int:
@@ -460,8 +436,6 @@ class WebConversationService:
                 store=self._store,
                 conversation_id=conversation_id,
                 title_hint=_auto_title(query),
-                max_turns=self._max_turns,
-                ttl_days=self._ttl_days,
                 create_conversation=create_conversation,
             ),
         )
@@ -475,8 +449,7 @@ class WebConversationService:
             self._store.snapshot(
                 principal_id,
                 conversation_id,
-                ttl_days=self._ttl_days,
-                max_turns=self._max_turns,
+                max_turns=_HISTORY_WINDOW_TURNS,
             )
         )
 

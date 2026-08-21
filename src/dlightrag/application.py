@@ -232,7 +232,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         telemetry=telemetry,
     )
 
-    run_store = PGAnswerRunStore()
+    run_store = PGAnswerRunStore(
+        retention_seconds=config.runtime.answer_run_retention_days * 24 * 3600
+    )
     memory_store = PGAnswerMemoryStore()
     coordinator = RunCoordinator(
         store=run_store,
@@ -273,7 +275,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             model_settings_for_role(config, role)
         ),
     )
-    memory = MemoryService(memory_store)
+    memory = MemoryService(
+        memory_store,
+        superseded_retention_days=config.runtime.answer_run_retention_days,
+    )
     web_store = PGWebConversationStore(run_store=run_store)
     return _ApplicationComponents(
         health=health,
@@ -292,8 +297,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         web_conversations=WebConversationService(
             store=web_store,
             answers=answers,
-            max_turns=config.web_conversations.max_turns,
-            ttl_days=config.web_conversations.ttl_days,
             max_attachments=config.answer.max_attachments,
         ),
     )
@@ -431,8 +434,8 @@ class Application:
         Answer runs are startup state, not first-request state: a process whose
         run schema is absent must fail before readiness rather than accept runs
         it cannot durably record. The Web conversation link table is part of the
-        same schema because run retention exempts conversation-linked runs, so
-        every process that owns runs also establishes that table.
+        same schema because run retention cascades turns through it, so every
+        process that owns runs also establishes that table.
         """
         from dlightrag.runtime import RunSchemaError
         from dlightrag.web.conversation_models import WebConversationSchemaError

@@ -41,9 +41,9 @@ from dlightrag.runtime.contracts import AnswerRunPhase
 from dlightrag.runtime.errors import RunSchemaError
 from dlightrag.runtime.policy import (
     ANSWER_RUN_LEASE_SECONDS,
+    DEFAULT_RUN_RETENTION_SECONDS,
     MAX_RECLAIMS_WITHOUT_PROGRESS,
     RUN_ABANDONED_ERROR_KIND,
-    RUN_RETENTION_SECONDS,
 )
 from dlightrag.runtime.records import (
     AnswerRunEvent,
@@ -1369,15 +1369,6 @@ SELECT runs.owner_id, runs.run_id
 FROM dlightrag_answer_runs AS runs
 WHERE runs.status IN ('succeeded', 'failed', 'cancelled')
   AND runs.finished_at < NOW() - ($1 * INTERVAL '1 second')
-  AND (
-      runs.status <> 'succeeded'
-      OR NOT EXISTS (
-          SELECT 1
-          FROM web_conversation_turns AS turns
-          WHERE turns.principal_id = runs.owner_id
-            AND turns.answer_run_id = runs.run_id
-      )
-  )
 ORDER BY runs.finished_at
 LIMIT $2
 FOR UPDATE OF runs SKIP LOCKED
@@ -1538,8 +1529,14 @@ def _reference_record(row: Any) -> RunArtifactReference:
 class PGAnswerRunStore(PostgresOperationRunner):
     """Owner-scoped durable Answer run state backed by PostgreSQL."""
 
-    def __init__(self, *, pool: ConnectionPool | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        pool: ConnectionPool | None = None,
+        retention_seconds: int = DEFAULT_RUN_RETENTION_SECONDS,
+    ) -> None:
         super().__init__(pool=pool)
+        self._retention_seconds = retention_seconds
         self._initialized = False
 
     async def _run_read[T](self, operation: Callable[[Any], Awaitable[T]]) -> T:
@@ -2718,7 +2715,9 @@ class PGAnswerRunStore(PostgresOperationRunner):
     async def trim_expired_event_logs(self) -> int:
         async def _operation(conn: Any) -> int:
             async with conn.transaction():
-                rows = await conn.fetch(_SELECT_TRIMMABLE_RUNS, RUN_RETENTION_SECONDS, _BATCH_LIMIT)
+                rows = await conn.fetch(
+                    _SELECT_TRIMMABLE_RUNS, self._retention_seconds, _BATCH_LIMIT
+                )
                 if not rows:
                     return 0
                 owners = [row["owner_id"] for row in rows]
@@ -2734,7 +2733,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
 
         async def _operation(conn: Any) -> RunDeletion:
             async with conn.transaction():
-                rows = await conn.fetch(_SELECT_EXPIRED_RUNS, RUN_RETENTION_SECONDS, _BATCH_LIMIT)
+                rows = await conn.fetch(_SELECT_EXPIRED_RUNS, self._retention_seconds, _BATCH_LIMIT)
                 if not rows:
                     return RunDeletion(runs=0, artifacts=0)
                 owners = [row["owner_id"] for row in rows]

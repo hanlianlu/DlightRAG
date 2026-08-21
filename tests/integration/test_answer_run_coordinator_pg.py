@@ -250,7 +250,7 @@ async def test_the_coordinator_applies_retention_without_an_execution_slot(
     assert pool is not None
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE dlightrag_answer_runs SET finished_at = NOW() - INTERVAL '31 days' "
+            "UPDATE dlightrag_answer_runs SET finished_at = NOW() - INTERVAL '370 days' "
             "WHERE run_id = $1",
             uuid.UUID(expired.run.run_id),
         )

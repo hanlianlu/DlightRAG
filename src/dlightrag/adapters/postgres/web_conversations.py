@@ -38,7 +38,6 @@ from dlightrag.answer.routing import RoutingAcceptance
 from dlightrag.runtime import (
     PendingArtifact,
     PendingArtifactReference,
-    RunDeletion,
     RunSchemaError,
 )
 from dlightrag.web.conversation_models import (
@@ -192,7 +191,6 @@ _LIST_CONVERSATIONS = f"""
 SELECT {_SUMMARY_COLUMNS}
 FROM web_conversations
 WHERE principal_id = $1
-  AND updated_at >= NOW() - ($2 * INTERVAL '1 day')
 ORDER BY updated_at DESC, conversation_id DESC
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
@@ -202,7 +200,6 @@ SET title = $3,
     updated_at = NOW()
 WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
-  AND updated_at >= NOW() - ($4 * INTERVAL '1 day')
 RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
@@ -211,7 +208,6 @@ SELECT {_SUMMARY_COLUMNS}
 FROM web_conversations
 WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
-  AND updated_at >= NOW() - ($3 * INTERVAL '1 day')
 FOR UPDATE
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
@@ -266,7 +262,6 @@ SELECT
 FROM web_conversations
 WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
-  AND updated_at >= NOW() - ($3 * INTERVAL '1 day')
 """
 
 _TURN_COLUMNS = """
@@ -299,9 +294,8 @@ JOIN web_conversations AS c
  AND c.conversation_id = t.conversation_id
 WHERE t.principal_id = $1
   AND t.conversation_id = $2::text::uuid
-  AND c.updated_at >= NOW() - ($3 * INTERVAL '1 day')
 ORDER BY t.turn_number DESC
-LIMIT $4
+LIMIT $3
 """  # noqa: S608 - interpolates only trusted column-projection constants
 
 _GET_TURN_BY_SUBMISSION = f"""
@@ -368,28 +362,18 @@ VALUES (
 RETURNING turn_id::text AS turn_id, turn_number
 """
 
-_SELECT_TRIMMABLE_RUNS = """
-SELECT answer_run_id::text AS answer_run_id
-FROM web_conversation_turns
-WHERE principal_id = $1
-  AND conversation_id = $2::text::uuid
-  AND turn_number <= $3
-"""
-
-_SELECT_EXPIRED_CONVERSATIONS = """
+_SELECT_EMPTY_CONVERSATIONS = """
 SELECT principal_id, conversation_id
-FROM web_conversations
-WHERE updated_at < NOW() - ($1 * INTERVAL '1 day')
+FROM web_conversations AS conversations
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM web_conversation_turns AS turns
+    WHERE turns.principal_id = conversations.principal_id
+      AND turns.conversation_id = conversations.conversation_id
+)
 ORDER BY updated_at, principal_id, conversation_id
-LIMIT $2
+LIMIT $1
 FOR UPDATE SKIP LOCKED
-"""
-
-_SELECT_RUNS_FOR_CONVERSATIONS = """
-SELECT t.principal_id, t.answer_run_id::text AS answer_run_id
-FROM web_conversation_turns AS t
-WHERE (t.principal_id, t.conversation_id)
-      IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
 """
 
 _DELETE_CONVERSATIONS = """
@@ -515,14 +499,12 @@ class PGWebConversationStore(PostgresOperationRunner):
     async def list_conversations(
         self,
         principal_id: str,
-        *,
-        ttl_days: int,
     ) -> list[dict[str, Any]]:
-        """List one principal's unexpired conversations."""
+        """List one principal's conversations."""
         await self._ensure_initialized()
 
         async def _select(conn: Any) -> list[dict[str, Any]]:
-            rows = await conn.fetch(_LIST_CONVERSATIONS, principal_id, ttl_days)
+            rows = await conn.fetch(_LIST_CONVERSATIONS, principal_id)
             return [_row_dict(row) for row in rows]
 
         return await self._run_read(_select)
@@ -533,9 +515,8 @@ class PGWebConversationStore(PostgresOperationRunner):
         conversation_id: str,
         *,
         title: str,
-        ttl_days: int,
     ) -> dict[str, Any] | None:
-        """Rename an unexpired owned conversation."""
+        """Rename an owned conversation."""
         await self._ensure_initialized()
         normalized_title = title.strip()
         if not normalized_title or len(normalized_title) > 120:
@@ -547,7 +528,6 @@ class PGWebConversationStore(PostgresOperationRunner):
                 principal_id,
                 conversation_id,
                 normalized_title,
-                ttl_days,
             )
             return _row_dict(row) if row is not None else None
 
@@ -557,8 +537,6 @@ class PGWebConversationStore(PostgresOperationRunner):
         self,
         principal_id: str,
         conversation_id: str,
-        *,
-        ttl_days: int,
     ) -> bool:
         """Delete one owned conversation, its turns, and the runs they linked.
 
@@ -576,10 +554,7 @@ class PGWebConversationStore(PostgresOperationRunner):
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
-                if (
-                    await conn.fetchrow(_LOCK_CONVERSATION, principal_id, conversation_id, ttl_days)
-                    is None
-                ):
+                if await conn.fetchrow(_LOCK_CONVERSATION, principal_id, conversation_id) is None:
                     return False
                 run_ids = [
                     str(row["answer_run_id"])
@@ -615,10 +590,9 @@ class PGWebConversationStore(PostgresOperationRunner):
         principal_id: str,
         conversation_id: str,
         *,
-        ttl_days: int,
         max_turns: int = 100,
     ) -> ConversationSnapshot | None:
-        """Load one unexpired conversation and its run-linked recent turns."""
+        """Load one conversation and its run-linked recent turns."""
         await self._ensure_initialized()
 
         async def _operation(conn: Any) -> ConversationSnapshot | None:
@@ -627,7 +601,6 @@ class PGWebConversationStore(PostgresOperationRunner):
                     _GET_CONVERSATION,
                     principal_id,
                     conversation_id,
-                    ttl_days,
                 )
                 if row is None:
                     return None
@@ -635,7 +608,6 @@ class PGWebConversationStore(PostgresOperationRunner):
                     _GET_TURNS,
                     principal_id,
                     conversation_id,
-                    ttl_days,
                     max_turns,
                 )
                 return ConversationSnapshot(
@@ -671,8 +643,6 @@ class PGWebConversationStore(PostgresOperationRunner):
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         title_hint: str | None,
-        max_turns: int,
-        ttl_days: int,
         routing: RoutingAcceptance | None = None,
         create_conversation: bool = False,
     ) -> AnswerTurnCreation | None:
@@ -683,7 +653,7 @@ class PGWebConversationStore(PostgresOperationRunner):
         that same transaction. Replaying the same submission returns the
         authoritative run and turn; reusing it for a different conversation or
         different normalized input is a conflict. ``None`` means a required
-        existing conversation does not exist for this principal or has expired.
+        existing conversation does not exist for this principal.
         """
         await self._ensure_initialized()
         turn_id = str(uuid4())
@@ -691,9 +661,7 @@ class PGWebConversationStore(PostgresOperationRunner):
 
         async def _operation(conn: Any) -> AnswerTurnCreation | None:
             async with conn.transaction():
-                summary_row = await conn.fetchrow(
-                    _LOCK_CONVERSATION, principal_id, conversation_id, ttl_days
-                )
+                summary_row = await conn.fetchrow(_LOCK_CONVERSATION, principal_id, conversation_id)
                 if summary_row is None and create_conversation:
                     summary_row = await conn.fetchrow(
                         _CREATE_CONVERSATION_IF_MISSING,
@@ -705,7 +673,6 @@ class PGWebConversationStore(PostgresOperationRunner):
                             _LOCK_CONVERSATION,
                             principal_id,
                             conversation_id,
-                            ttl_days,
                         )
                 if summary_row is None:
                     return None
@@ -759,12 +726,6 @@ class PGWebConversationStore(PostgresOperationRunner):
                     _TOUCH_CONVERSATION, principal_id, conversation_id, title_hint
                 )
                 turn_number = int(turn_row["turn_number"])
-                await self._trim_turns(
-                    conn,
-                    principal_id=principal_id,
-                    conversation_id=conversation_id,
-                    before_or_at=turn_number - max_turns,
-                )
                 return AnswerTurnCreation(
                     turn=LinkedTurn(
                         turn_id=str(turn_row["turn_id"]),
@@ -810,57 +771,29 @@ class PGWebConversationStore(PostgresOperationRunner):
 
         return await self._run_read(_operation)
 
-    async def _trim_turns(
-        self,
-        conn: Any,
-        *,
-        principal_id: str,
-        conversation_id: str,
-        before_or_at: int,
-    ) -> None:
-        """Drop turns beyond the conversation window along with their runs."""
-        if before_or_at <= 0:
-            return
-        rows = await conn.fetch(_SELECT_TRIMMABLE_RUNS, principal_id, conversation_id, before_or_at)
-        await self._run_store.delete_runs_in(
-            conn,
-            owner_id=principal_id,
-            run_ids=[str(row["answer_run_id"]) for row in rows],
-        )
+    async def prune_empty_conversations(self, *, batch_size: int = 500) -> int:
+        """Delete one skip-locked batch of conversations with no turns left.
 
-    async def prune_expired(self, *, ttl_days: int, batch_size: int = 500) -> int:
-        """Delete one skip-locked batch of expired conversations and their runs."""
+        Turns live and die with their Answer runs: run retention deletes a
+        terminal run after its retention floor and the turn cascade empties the
+        conversation. A conversation row with no turns carries no content, so
+        this sweep reclaims it.
+        """
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         await self._ensure_initialized()
 
         async def _operation(conn: Any) -> int:
             async with conn.transaction():
-                rows = await conn.fetch(_SELECT_EXPIRED_CONVERSATIONS, ttl_days, batch_size)
+                rows = await conn.fetch(_SELECT_EMPTY_CONVERSATIONS, batch_size)
                 if not rows:
                     return 0
                 principals = [str(row["principal_id"]) for row in rows]
                 conversation_ids = [row["conversation_id"] for row in rows]
-                run_rows = await conn.fetch(
-                    _SELECT_RUNS_FOR_CONVERSATIONS, principals, conversation_ids
-                )
-                await self._delete_runs_by_owner(conn, run_rows)
                 deleted = await conn.fetchrow(_DELETE_CONVERSATIONS, principals, conversation_ids)
                 return int(deleted["count"]) if deleted is not None else 0
 
         return await self._run_write(_operation)
-
-    async def _delete_runs_by_owner(self, conn: Any, rows: Sequence[Any]) -> RunDeletion:
-        """Delete linked runs one owner at a time, keeping every scope check."""
-        by_owner: dict[str, list[str]] = {}
-        for row in rows:
-            by_owner.setdefault(str(row["principal_id"]), []).append(str(row["answer_run_id"]))
-        runs = artifacts = 0
-        for owner_id, run_ids in by_owner.items():
-            outcome = await self._run_store.delete_runs_in(conn, owner_id=owner_id, run_ids=run_ids)
-            runs += outcome.runs
-            artifacts += outcome.artifacts
-        return RunDeletion(runs=runs, artifacts=artifacts)
 
 
 __all__ = [

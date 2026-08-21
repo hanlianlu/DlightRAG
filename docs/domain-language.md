@@ -92,6 +92,18 @@ _Avoid_: Compaction Summary, Journal Entry, PriorTurns, Evidence, Artifact, reme
 The only durable create, supersede, or forget of a Memory Record: a named remember or forget channel that passed a closed policy check.
 _Avoid_: Silent promotion, transcript scan, model aside, journal side effect
 
+**Memory Record Lifecycle**:
+`active → superseded → purged`, plus hard-delete by `forget` or `clear`. Active records never expire on a timer; superseded history is purged after the shared retention floor. Growth is bounded by supersede folding, explicit forget, and deployment storage quota — not by auto-decay.
+_Avoid_: TTL on active records, confidence decay, automatic consolidation
+
+**Retention Floor**:
+The single deployment clock (`runtime.answer_run_retention_days`, default 365) that bounds how long terminal Answer runs, their event logs, and superseded Memory history stay durable. The sweep is best-effort: it may reclaim later, never earlier.
+_Avoid_: deadline, SLA, per-aggregate TTL, inactivity expiry
+
+**Conversation Read Window**:
+The bounded number of recent turns a Web Conversation snapshot and the history endpoint return. It is a UI and payload bound, not retention: older turns stay durable until the Retention Floor reclaims their runs.
+_Avoid_: max_turns, trim window, retention window
+
 ## Journal And Effects
 
 **Journal Entry**:

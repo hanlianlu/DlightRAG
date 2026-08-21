@@ -392,8 +392,6 @@ async def test_store_unavailability_returns_retryable_503(
     service = WebConversationService(
         store=store,
         answers=FakeAnswers(),
-        max_turns=100,
-        ttl_days=30,
         max_attachments=6,
     )
     application.state.application = SimpleNamespace(web_conversations=service)
@@ -466,8 +464,6 @@ async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailabi
     service = WebConversationService(
         store=store,
         answers=FakeAnswers(),
-        max_turns=100,
-        ttl_days=30,
         max_attachments=6,
     )
     application.state.application = SimpleNamespace(web_conversations=service)

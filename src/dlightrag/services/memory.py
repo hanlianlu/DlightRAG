@@ -3,6 +3,7 @@
 
 from dlightrag.answer.errors import MemoryUnavailableError
 from dlightrag.answer.memory import (
+    MEMORY_SUPERSEDE_RETENTION_DAYS,
     MemoryProvenance,
     MemoryRecord,
     MemoryWrite,
@@ -19,8 +20,14 @@ from dlightrag.answer.memory_store import (
 class MemoryService:
     """Owner list/forget plus fleet purge of expired superseded rows."""
 
-    def __init__(self, store: AnswerMemoryStore) -> None:
+    def __init__(
+        self,
+        store: AnswerMemoryStore,
+        *,
+        superseded_retention_days: int = MEMORY_SUPERSEDE_RETENTION_DAYS,
+    ) -> None:
         self._store = store
+        self._retention_days = superseded_retention_days
 
     async def list_active(self, *, owner_id: str, auth_mode: str) -> tuple[MemoryRecord, ...]:
         if not memory_owner_allowed(auth_mode):
@@ -43,7 +50,9 @@ class MemoryService:
         )
 
     async def purge_expired(self) -> int:
-        removed = await self._store.purge_superseded(older_than=default_purge_cutoff())
+        removed = await self._store.purge_superseded(
+            older_than=default_purge_cutoff(days=self._retention_days)
+        )
         await self._store.prune_write_log(older_than=write_log_cutoff())
         return removed
 

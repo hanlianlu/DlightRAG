@@ -12,10 +12,10 @@ from dlightrag.adapters.postgres.answer_runs import (
 )
 from dlightrag.runtime import (
     ANSWER_RUN_LEASE_SECONDS,
+    DEFAULT_RUN_RETENTION_SECONDS,
     MAX_RECLAIMS_WITHOUT_PROGRESS,
     RUN_ABANDONED_ERROR_KIND,
     RUN_HEARTBEAT_SECONDS,
-    RUN_RETENTION_SECONDS,
 )
 
 
@@ -92,8 +92,8 @@ class TestFixedRuntimeBounds:
         assert MAX_RECLAIMS_WITHOUT_PROGRESS == 4
         assert RUN_ABANDONED_ERROR_KIND == "run_abandoned"
 
-    def test_retention_is_thirty_days(self) -> None:
-        assert RUN_RETENTION_SECONDS == 30 * 24 * 3600
+    def test_retention_floor_is_365_days(self) -> None:
+        assert DEFAULT_RUN_RETENTION_SECONDS == 365 * 24 * 3600
 
     def test_workers_heartbeat_well_inside_their_lease(self) -> None:
         assert 0 < RUN_HEARTBEAT_SECONDS <= ANSWER_RUN_LEASE_SECONDS // 2

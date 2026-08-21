@@ -98,11 +98,11 @@ async def test_pg_purge_superseded(store: PGAnswerMemoryStore) -> None:
     async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
             "UPDATE dlightrag_answer_memory_records "
-            "SET updated_at = NOW() - INTERVAL '40 days' "
+            "SET updated_at = NOW() - INTERVAL '400 days' "
             "WHERE memory_id = $1",
             uuid.UUID(old.memory_id),
         )
-    removed = await store.purge_superseded(older_than=datetime.now(UTC) - timedelta(days=30))
+    removed = await store.purge_superseded(older_than=datetime.now(UTC) - timedelta(days=365))
     assert removed == 1
     assert await store.get(owner_id="alpha", memory_id=old.memory_id) is None
 

@@ -29,9 +29,9 @@ from dlightrag.runtime.errors import (
 )
 from dlightrag.runtime.policy import (
     ANSWER_RUN_LEASE_SECONDS,
+    DEFAULT_RUN_RETENTION_SECONDS,
     MAX_RECLAIMS_WITHOUT_PROGRESS,
     RUN_ABANDONED_ERROR_KIND,
-    RUN_RETENTION_SECONDS,
 )
 from dlightrag.runtime.progress import (
     RunProgressStore,
@@ -178,7 +178,7 @@ __all__ = [
     "parse_run_id",
     "RUN_HEARTBEAT_SECONDS",
     "RUN_ABANDONED_ERROR_KIND",
-    "RUN_RETENTION_SECONDS",
+    "DEFAULT_RUN_RETENTION_SECONDS",
     "EVENT_POLL_SECONDS",
     "EventReader",
     "follow_run_events",
