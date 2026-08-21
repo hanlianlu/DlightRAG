@@ -1,7 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Contract tests for durable M3 Answer run storage that need no database."""
 
+import datetime
 import re
+from dataclasses import replace
 
 import pytest
 
@@ -97,6 +99,66 @@ class TestFixedRuntimeBounds:
 
     def test_workers_heartbeat_well_inside_their_lease(self) -> None:
         assert 0 < RUN_HEARTBEAT_SECONDS <= ANSWER_RUN_LEASE_SECONDS // 2
+
+    def test_accepted_input_envelope_keeps_only_public_fields(self) -> None:
+        from dlightrag.runtime.records import accepted_input_envelope
+
+        envelope = accepted_input_envelope(
+            {
+                "query": "why",
+                "workspaces": ["alpha", "beta"],
+                "mode": "research",
+                "attachments": [{"ordinal": 1, "digest": "d" * 64}],
+                "history": [{"role": "user", "content": "secret"}],
+                "pinned_models": [{"role": "query"}],
+                "resource_manifest": [],
+            }
+        )
+
+        assert envelope == {
+            "query": "why",
+            "workspaces": ["alpha", "beta"],
+            "mode": "research",
+            "attachments": [{"ordinal": 1, "digest": "d" * 64}],
+        }
+
+    def test_request_input_prefers_the_accepted_envelope(self) -> None:
+        from dlightrag.runtime import AnswerRunRecord
+
+        record = AnswerRunRecord(
+            owner_id="owner-1",
+            run_id="00000000-0000-0000-0000-000000000001",
+            idempotency_key=None,
+            prepared_input={"query": "execution copy"},
+            accepted_input={"query": "envelope copy"},
+            status="succeeded",
+            phase=None,
+            stop_reason=None,
+            cancel_requested_at=None,
+            lease_owner=None,
+            lease_expires_at=None,
+            fencing_epoch=0,
+            durable_progress_version=0,
+            last_reclaim_progress_version=0,
+            reclaims_without_progress=0,
+            next_event_sequence=1,
+            events_trimmed_at=None,
+            result=None,
+            error_kind=None,
+            error_message=None,
+            created_at=datetime.datetime(2026, 8, 12, tzinfo=datetime.UTC),
+            updated_at=datetime.datetime(2026, 8, 12, tzinfo=datetime.UTC),
+            started_at=None,
+            finished_at=None,
+        )
+
+        assert record.request_input()["query"] == "envelope copy"
+
+        cleared = replace(record, accepted_input=None)
+        assert cleared.request_input()["query"] == "execution copy"
+
+        both_cleared = replace(cleared, prepared_input=None)
+        assert both_cleared.request_input() == {}
 
 
 class TestCreationValidation:

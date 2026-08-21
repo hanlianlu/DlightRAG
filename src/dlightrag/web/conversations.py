@@ -519,7 +519,7 @@ def _prepare_submission(
     for turn in snapshot.turns:
         if turn.run.status != "succeeded":
             continue
-        turn_request = AnswerRunRequest.from_request(turn.run.prepared_input or {})
+        turn_request = AnswerRunRequest.from_request(turn.run.request_input())
         history.extend(
             (
                 {"role": "user", "content": turn_request.query},
@@ -602,7 +602,7 @@ def project_conversation_turn(
     answer, and that answer is projected from the run's canonical result.
     """
     run = turn.run
-    request = AnswerRunRequest.from_request(run.prepared_input or {})
+    request = AnswerRunRequest.from_request(run.request_input())
     answer = ""
     presentation = None
     if run.status == "succeeded" and run.result is not None:

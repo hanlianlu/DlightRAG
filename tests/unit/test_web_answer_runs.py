@@ -856,6 +856,61 @@ async def test_history_attachments_load_from_the_run_that_accepted_them() -> Non
     assert carried.run_id == origin_run_id
 
 
+async def test_terminal_turns_project_history_from_the_accepted_envelope() -> None:
+    """Blocker 1 regression: the terminal transition clears prepared input,
+
+    so Web continuity must project the prior query from the durable accepted
+    envelope instead of the cleared prepared input.
+    """
+    import dataclasses
+
+    now = datetime.datetime.now(datetime.UTC)
+    store = AsyncMock()
+    store.snapshot.return_value = ConversationSnapshot(
+        principal_id="anonymous",
+        conversation_id=_CID,
+        content_revision=1,
+        title="Conversation",
+        created_at=now,
+        updated_at=now,
+        turns=(
+            linked_turn(
+                dataclasses.replace(
+                    answer_run(
+                        status="succeeded",
+                        accepted={
+                            "query": "What changed?",
+                            "workspaces": ["default"],
+                            "mode": "auto",
+                            "attachments": [],
+                        },
+                        result=stored_result(),
+                    ),
+                    prepared_input=None,
+                )
+            ),
+        ),
+    )
+    store.replay_answer_turn.return_value = None
+    store.create_answer_turn.return_value = None
+    answers = FakeAnswers()
+    service = WebConversationService(store=store, answers=answers, max_attachments=6)
+
+    await service.start_answer(
+        None,
+        conversation_id=_CID,
+        submission_id=SUBMISSION_ID,
+        query="And now?",
+        workspaces=["default"],
+    )
+
+    request = answers.prepared[0]
+    assert [message["content"] for message in request.history] == [
+        "What changed?",
+        "Revenue increased [1].",
+    ]
+
+
 def test_uploads_are_addressed_through_their_run() -> None:
     request = run_request(
         attachments=[

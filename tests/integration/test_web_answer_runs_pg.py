@@ -799,6 +799,50 @@ async def test_a_turn_cannot_reference_a_run_another_principal_owns(
             )
 
 
+async def test_the_accepted_envelope_survives_the_terminal_transition(
+    store: PGWebConversationStore, runs: PGAnswerRunStore, pool: Any
+) -> None:
+    """Blocker 1 regression: finish clears prepared input, not the envelope."""
+    conversation_id = await _conversation(store)
+    content = b"keep-me"
+    digest = artifact_digest(content)
+    reference = PendingArtifactReference(
+        resource_id="attachment-1",
+        reference_kind="current_attachment",
+        ordinal=1,
+        digest=digest,
+        filename="chart.png",
+        mime_type="image/png",
+    )
+    creation = await _submit(
+        store,
+        conversation_id,
+        request=_request(
+            "remember me",
+            attachments=[
+                {
+                    "ordinal": 1,
+                    "digest": digest,
+                    "filename": "chart.png",
+                    "mime_type": "image/png",
+                }
+            ],
+        ),
+        artifacts=[PendingArtifact(content=content)],
+        references=[reference],
+    )
+    assert creation is not None
+    await _finish(pool, creation.turn.answer_run_id, status="succeeded")
+
+    record = await runs.get_run(owner_id=_OWNER, run_id=creation.turn.answer_run_id)
+    assert record is not None
+    assert record.prepared_input is None
+    envelope = record.request_input()
+    assert envelope["query"] == "remember me"
+    assert envelope["workspaces"] == ["alpha"]
+    assert envelope["attachments"][0]["filename"] == "chart.png"
+
+
 async def test_an_empty_conversation_is_reclaimed_after_its_turns_age_out(
     store: PGWebConversationStore, runs: PGAnswerRunStore, pool: Any
 ) -> None:

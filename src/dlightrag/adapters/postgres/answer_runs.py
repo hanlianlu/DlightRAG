@@ -63,6 +63,7 @@ from dlightrag.runtime.records import (
     ShutdownOutcome,
     SweepOutcome,
     TerminalOutcome,
+    accepted_input_envelope,
     advance_reclaim,
     parse_run_id,
 )
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
     run_id              UUID        NOT NULL,
     idempotency_key     TEXT,
     prepared_input_json JSONB,
+    accepted_input_json JSONB        NOT NULL DEFAULT '{}'::jsonb,
     request_fingerprint TEXT        NOT NULL,
     status              TEXT        NOT NULL DEFAULT 'queued',
     phase               TEXT,
@@ -538,6 +540,11 @@ _M5_PUBLICATION_DDL = (
     "'primary_report', 'published_artifact'))",
 )
 
+_ADD_ACCEPTED_INPUT = """
+ALTER TABLE dlightrag_answer_runs
+ADD COLUMN IF NOT EXISTS accepted_input_json JSONB NOT NULL DEFAULT '{}'::jsonb
+"""
+
 ANSWER_RUN_MIGRATIONS = (
     Migration(
         "0001_answer_runs",
@@ -564,6 +571,11 @@ ANSWER_RUN_MIGRATIONS = (
             _M4_WORKSPACE_DDL[4],
         ),
     ),
+    Migration(
+        "0002_accepted_input_envelope",
+        "Add the terminal-surviving public accepted input envelope",
+        (_ADD_ACCEPTED_INPUT,),
+    ),
 )
 
 ANSWER_RUN_SCHEMA_TABLES = (
@@ -574,6 +586,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "run_id",
             "idempotency_key",
             "prepared_input_json",
+            "accepted_input_json",
             "request_fingerprint",
             "status",
             "phase",
@@ -971,6 +984,7 @@ _RUN_COLUMN_SPECS: tuple[tuple[str, str], ...] = (
     ("run_id::text", "run_id"),
     ("idempotency_key", "idempotency_key"),
     ("prepared_input_json", "prepared_input"),
+    ("accepted_input_json", "accepted_input"),
     ("status", "status"),
     ("phase", "phase"),
     ("stop_reason", "stop_reason"),
@@ -1017,9 +1031,10 @@ ORDER BY created_at, run_id LIMIT $3
 
 _INSERT_RUN = f"""
 INSERT INTO dlightrag_answer_runs (
-    owner_id, run_id, idempotency_key, prepared_input_json, request_fingerprint
+    owner_id, run_id, idempotency_key, prepared_input_json, accepted_input_json,
+    request_fingerprint
 )
-VALUES ($1, $2, $3, $4::jsonb, $5)
+VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
 ON CONFLICT (owner_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 RETURNING {_RUN_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _RUN_COLUMNS constant
@@ -1481,6 +1496,7 @@ def answer_run_record(row: Any) -> AnswerRunRecord:
         run_id=str(row["run_id"]),
         idempotency_key=row["idempotency_key"],
         prepared_input=_json_object(prepared) if prepared is not None else None,
+        accepted_input=_json_object(row["accepted_input"]),
         status=row["status"],
         phase=row["phase"],
         stop_reason=row["stop_reason"],
@@ -1648,6 +1664,9 @@ class PGAnswerRunStore(PostgresOperationRunner):
         if run_uuid is None:
             raise ValueError("run_id must be a canonical UUID")
         prepared_json = json.dumps(dict(prepared_input), ensure_ascii=False, sort_keys=True)
+        envelope_json = json.dumps(
+            accepted_input_envelope(prepared_input), ensure_ascii=False, sort_keys=True
+        )
 
         async def _operation(conn: Any) -> RunCreation:
             async with conn.transaction():
@@ -1669,6 +1688,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
                     run_uuid,
                     idempotency_key,
                     prepared_json,
+                    envelope_json,
                     fingerprint,
                 )
                 if row is None:
@@ -1767,11 +1787,20 @@ class PGAnswerRunStore(PostgresOperationRunner):
         if not idempotency_fingerprint:
             raise ValueError("idempotency_fingerprint must be non-empty")
         payload = json.dumps(dict(request), ensure_ascii=False, sort_keys=True)
+        envelope_json = json.dumps(
+            accepted_input_envelope(request), ensure_ascii=False, sort_keys=True
+        )
         run_uuid = _new_run_id()
         for blob in artifacts:
             await self._write_blob(conn, owner, blob)
         row = await conn.fetchrow(
-            _INSERT_RUN, owner, run_uuid, idempotency_key, payload, idempotency_fingerprint
+            _INSERT_RUN,
+            owner,
+            run_uuid,
+            idempotency_key,
+            payload,
+            envelope_json,
+            idempotency_fingerprint,
         )
         if row is None:
             existing = await conn.fetchrow(_SELECT_RUN_BY_KEY, owner, idempotency_key)

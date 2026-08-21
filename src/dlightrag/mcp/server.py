@@ -551,7 +551,7 @@ async def get_answer_run_tool(
             record.result,
             visual_workspaces=await _authorized_workspace_names(
                 AccessAction.WORKSPACE_READ_VISUAL_ASSET,
-                [str(value) for value in (record.prepared_input or {}).get("workspaces") or ()],
+                [str(value) for value in record.request_input().get("workspaces") or ()],
                 application=application,
             ),
         )

@@ -196,6 +196,7 @@ class TestSchema:
             "run_id",
             "idempotency_key",
             "prepared_input_json",
+            "accepted_input_json",
             "request_fingerprint",
             "status",
             "phase",

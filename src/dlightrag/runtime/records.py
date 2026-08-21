@@ -101,6 +101,19 @@ class AnswerRunRecord:
     started_at: datetime.datetime | None
     finished_at: datetime.datetime | None
     workspace_epoch: int | None = None
+    #: The bounded public envelope (query, workspaces, mode, attachment
+    #: identities) that survives the terminal transition: prepared_input_json
+    #: is cleared at finish, so post-terminal readers project from this.
+    accepted_input: Mapping[str, Any] | None = None
+
+    def request_input(self) -> Mapping[str, Any]:
+        """The run's public request for projection: envelope first, then input.
+
+        Terminal transitions clear ``prepared_input_json``; the accepted
+        envelope is the durable public face readers use for history, workspace
+        download authorization, and turn projection.
+        """
+        return self.accepted_input or self.prepared_input or {}
 
     @property
     def cancel_requested(self) -> bool:
@@ -109,6 +122,22 @@ class AnswerRunRecord:
     @property
     def terminal(self) -> bool:
         return self.status in _TERMINAL_STATUSES
+
+
+def accepted_input_envelope(prepared: Mapping[str, Any]) -> dict[str, Any]:
+    """Derive the terminal-surviving public envelope from a prepared input.
+
+    Only fields post-terminal readers may project: the query, the concrete
+    workspace ids, the normalized mode, and attachment reference identities.
+    Execution-only state (history, pinned profiles, manifests) stays in
+    prepared input and dies with it.
+    """
+    return {
+        "query": str(prepared.get("query") or ""),
+        "workspaces": [str(value) for value in prepared.get("workspaces") or ()],
+        "mode": str(prepared["mode"]) if prepared.get("mode") else None,
+        "attachments": [dict(item) for item in prepared.get("attachments") or ()],
+    }
 
 
 @dataclass(frozen=True, slots=True)

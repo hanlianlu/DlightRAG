@@ -123,7 +123,7 @@ async def answer_run_status(
     )
     if turn is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
-    downloadable, visual = await _projection_workspaces(request, turn.run.prepared_input or {})
+    downloadable, visual = await _projection_workspaces(request, turn.run.request_input())
     return project_conversation_turn(
         turn, downloadable_workspaces=downloadable, visual_workspaces=visual
     )
@@ -148,7 +148,7 @@ async def cancel_answer_run(
         raise HTTPException(status_code=404, detail="Answer run not found")
     # 202 only while a running worker still has to observe the request.
     response.status_code = 202 if outcome.outcome == "pending" else 200
-    downloadable, visual = await _projection_workspaces(request, outcome.run.prepared_input or {})
+    downloadable, visual = await _projection_workspaces(request, outcome.run.request_input())
     return project_conversation_turn(
         replace(turn, run=outcome.run),
         downloadable_workspaces=downloadable,
@@ -167,7 +167,7 @@ async def answer_run_report(
     turn = await conversation_service.turn_for_run(user, run_id)
     if turn is None or turn.run.status != "succeeded" or turn.run.result is None:
         raise HTTPException(status_code=404, detail="Primary report not found")
-    downloadable, visual = await _projection_workspaces(request, turn.run.prepared_input or {})
+    downloadable, visual = await _projection_workspaces(request, turn.run.request_input())
     projected = project_answer_result(
         turn.run.result,
         source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
@@ -218,7 +218,7 @@ async def answer_run_events(
             status_code=410,
             detail="Answer run events expired; read its result from the conversation",
         )
-    downloadable, visual = await _projection_workspaces(request, turn.run.prepared_input or {})
+    downloadable, visual = await _projection_workspaces(request, turn.run.request_input())
     events = get_application(request).answers.subscribe(
         owner_id=owner_id_from_user(user),
         run_id=run_id,
