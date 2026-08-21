@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -114,6 +114,20 @@ def _validate_call(
     return tool, arguments, None, None
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedToolTurn:
+    """One model response with its preflight, before any tool executes.
+
+    The host may durably persist the assistant entry and its EffectIntents
+    between ``prepare_turn`` and ``execute_prepared`` so no external effect
+    can run without a durable intent behind it (M3-D12 ordering).
+    """
+
+    assistant: AssistantTurn
+    preflight: ToolPreflight
+    transcript: list[dict[str, Any]]
+
+
 class ToolTurnExecutor:
     """Run one model turn and execute its valid tool calls in parallel."""
 
@@ -126,15 +140,20 @@ class ToolTurnExecutor:
         self._model_func = model_func
         self._telemetry = telemetry
 
-    async def run_turn(
+    async def prepare_turn(
         self,
         messages: list[dict[str, Any]],
         tools: list[AgentTool],
         *,
         tool_choice: ToolChoice = "auto",
-        observation_budget: Callable[[list[dict[str, Any]]], int] | None = None,
         max_tokens: int | None = None,
-    ) -> ExecutedTurn:
+    ) -> PreparedToolTurn:
+        """Call the model once and preflight its tool calls; no side effects.
+
+        A length-stopped response must not be preflighted at all because its
+        calls are never executed (M3-D11); its results are fabricated at
+        execution time as before.
+        """
         model_kwargs: dict[str, Any] = {
             "messages": messages,
             "tools": [tool.definition for tool in tools],
@@ -144,8 +163,42 @@ class ToolTurnExecutor:
             model_kwargs["max_tokens"] = max_tokens
         assistant = await self._model_func(**model_kwargs)
         transcript = [*messages, _assistant_message(assistant)]
+        preflight = (
+            ToolPreflight(intents=(), validation_results=())
+            if assistant.stop_reason == "length"
+            else preflight_tool_calls(assistant, tools)
+        )
+        return PreparedToolTurn(assistant=assistant, preflight=preflight, transcript=transcript)
+
+    async def execute_prepared(
+        self,
+        prepared: PreparedToolTurn,
+        tools: list[AgentTool],
+        *,
+        observation_budget: Callable[[list[dict[str, Any]]], int] | None = None,
+        on_result: (
+            Callable[[EffectIntent, ToolExecution | None, bool], Awaitable[None]] | None
+        ) = None,
+    ) -> ExecutedTurn:
+        """Execute one prepared turn's tool batch and settle in source order.
+
+        Tools still run in parallel; ``on_result`` is awaited per intent in
+        assistant source order as each call's result becomes available, so a
+        host can settle durable EffectIntents incrementally (first-completed
+        settles first, but never out of order). A missing execution settles
+        as interrupted. Validation failures and length-stop fabrications never
+        reach ``on_result`` because they carry no intent.
+        """
+        assistant = prepared.assistant
+        transcript = prepared.transcript
         if not assistant.tool_calls:
-            return ExecutedTurn(assistant=assistant, results=(), messages=transcript)
+            return ExecutedTurn(
+                assistant=assistant,
+                results=(),
+                messages=transcript,
+                intents=prepared.preflight.intents,
+                validation_results=prepared.preflight.validation_results,
+            )
 
         max_observation_tokens = (
             observation_budget(transcript) if observation_budget is not None else None
@@ -154,12 +207,7 @@ class ToolTurnExecutor:
             raise ValueError("observation budget cannot be negative")
 
         tools_by_name = {tool.name: tool for tool in tools}
-        preflight = (
-            ToolPreflight(intents=(), validation_results=())
-            if assistant.stop_reason == "length"
-            else preflight_tool_calls(assistant, tools)
-        )
-        intents = preflight.intents
+        intents = prepared.preflight.intents
         if assistant.stop_reason == "length":
             results = tuple(
                 _error(
@@ -173,30 +221,87 @@ class ToolTurnExecutor:
                 )
                 for call in assistant.tool_calls
             )
-        else:
-            tasks = [
-                asyncio.create_task(_execute_call(call, tools_by_name, self._telemetry))
-                for call in assistant.tool_calls
-            ]
-            completed = False
-            try:
-                results = tuple(await asyncio.gather(*tasks))
-                completed = True
-            finally:
-                if not completed:
-                    for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-        if max_observation_tokens is not None:
-            results = _fit_results(results, max_tokens=max_observation_tokens)
-        transcript.extend(_tool_message(result) for result in results)
-        return ExecutedTurn(
-            assistant=assistant,
-            results=results,
-            messages=transcript,
-            intents=intents,
-            validation_results=preflight.validation_results,
+            return _assemble_turn(
+                assistant,
+                transcript,
+                results,
+                prepared.preflight,
+                max_observation_tokens,
+            )
+
+        tasks = {
+            call.id: asyncio.create_task(_execute_call(call, tools_by_name, self._telemetry))
+            for call in assistant.tool_calls
+        }
+        executions: dict[str, ToolExecution] = {}
+        completed = False
+        try:
+            for position, intent in enumerate(intents):
+                task = tasks.get(intent.source_call_id or "")
+                execution = None
+                if task is not None:
+                    execution = await task
+                    executions[intent.source_call_id or ""] = execution
+                if on_result is not None:
+                    await on_result(intent, execution, position == len(intents) - 1)
+            ordered: list[ToolExecution] = []
+            for call in assistant.tool_calls:
+                execution = executions.get(call.id)
+                if execution is None:
+                    execution = await tasks[call.id]
+                    executions[call.id] = execution
+                ordered.append(execution)
+            completed = True
+        finally:
+            if not completed:
+                for task in tasks.values():
+                    task.cancel()
+                await asyncio.gather(*tasks.values(), return_exceptions=True)
+        return _assemble_turn(
+            assistant,
+            transcript,
+            tuple(ordered),
+            prepared.preflight,
+            max_observation_tokens,
         )
+
+    async def run_turn(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[AgentTool],
+        *,
+        tool_choice: ToolChoice = "auto",
+        observation_budget: Callable[[list[dict[str, Any]]], int] | None = None,
+        max_tokens: int | None = None,
+    ) -> ExecutedTurn:
+        """Convenience for hosts without a durable boundary between the model
+
+        call and tool execution: prepare then execute in one step.
+        """
+        prepared = await self.prepare_turn(
+            messages, tools, tool_choice=tool_choice, max_tokens=max_tokens
+        )
+        return await self.execute_prepared(prepared, tools, observation_budget=observation_budget)
+
+
+def _assemble_turn(
+    assistant: AssistantTurn,
+    transcript: list[dict[str, Any]],
+    results: tuple[ToolExecution, ...],
+    preflight: ToolPreflight,
+    max_observation_tokens: int | None,
+) -> ExecutedTurn:
+    """Fit results to the observation budget and complete the turn."""
+    if max_observation_tokens is not None:
+        results = _fit_results(results, max_tokens=max_observation_tokens)
+    transcript.extend(_tool_message(result) for result in results)
+    return ExecutedTurn(
+        assistant=assistant,
+        results=results,
+        messages=transcript,
+        intents=preflight.intents,
+        validation_results=preflight.validation_results,
+    )
 
 
 def _fit_results(
@@ -388,4 +493,9 @@ def _tool_message(execution: ToolExecution) -> dict[str, Any]:
     }
 
 
-__all__ = ["ToolPreflight", "ToolTurnExecutor", "preflight_tool_calls"]
+__all__ = [
+    "PreparedToolTurn",
+    "ToolPreflight",
+    "ToolTurnExecutor",
+    "preflight_tool_calls",
+]

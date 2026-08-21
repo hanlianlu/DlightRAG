@@ -12,7 +12,12 @@ from dlightrag_agent.tools.contracts import (
     ToolResult,
     ToolResultCapacityError,
 )
-from dlightrag_agent.tools.executor import ToolPreflight, ToolTurnExecutor, preflight_tool_calls
+from dlightrag_agent.tools.executor import (
+    PreparedToolTurn,
+    ToolPreflight,
+    ToolTurnExecutor,
+    preflight_tool_calls,
+)
 from dlightrag_agent.tools.files import (
     bash_tool,
     edit_tool,
@@ -26,6 +31,7 @@ from dlightrag_agent.tools.files import (
 __all__ = [
     "AgentTool",
     "ExecutedTurn",
+    "PreparedToolTurn",
     "ToolExecute",
     "ToolExecution",
     "ToolModelFunc",

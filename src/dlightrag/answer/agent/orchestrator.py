@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from dlightrag_agent.environment.access import AccessScheduler, PathAccess
 from dlightrag_agent.loop import AgentLoop, LoopCancelled
+from dlightrag_agent.session.effects import EffectIntent
 from dlightrag_agent.session.fold import PriorTurns, SessionEpisode, fold_entries
 from dlightrag_agent.session.ids import SessionId
 from dlightrag_agent.session.projection import (
@@ -27,6 +28,8 @@ from dlightrag_agent.session.projection import (
 from dlightrag_agent.tools import (
     AgentTool,
     ExecutedTurn,
+    PreparedToolTurn,
+    ToolExecution,
     ToolResultCapacityError,
     ToolTurnExecutor,
 )
@@ -66,12 +69,25 @@ StreamModel = Callable[..., AsyncIterator[str]]
 class RunBoundaries(Protocol):
     """Durable boundaries a run may observe between agent steps.
 
-    ``commit_turn`` journals the complete assistant response and its ordered
-    intents, settles every intent in source order, and advances durable
-    progress; the live executor executes tool calls before it is invoked.
+    ``commit_intents`` durably appends the complete assistant response and
+    its ordered intents before any tool executes (Blocker 2);
+    ``settle_intent`` settles one persisted intent in source order as its
+    execution completes. ``commit_turn`` remains the append-plus-settle
+    convenience for hosts that persist after execution.
     """
 
     async def enter_phase(self, phase: str) -> None: ...
+
+    async def commit_intents(self, prepared: PreparedToolTurn) -> None: ...
+
+    async def settle_intent(
+        self,
+        intent: EffectIntent,
+        execution: ToolExecution | None,
+        *,
+        turn_number: int,
+        is_last: bool,
+    ) -> None: ...
 
     async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None: ...
 
@@ -94,6 +110,19 @@ class _NoBoundaries:
     async def enter_phase(self, phase: str) -> None:
         return None
 
+    async def commit_intents(self, prepared: PreparedToolTurn) -> None:
+        return None
+
+    async def settle_intent(
+        self,
+        intent: EffectIntent,
+        execution: ToolExecution | None,
+        *,
+        turn_number: int,
+        is_last: bool,
+    ) -> None:
+        return None
+
     async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None:
         return None
 
@@ -108,6 +137,16 @@ class _NoBoundaries:
 
     async def commit_compaction(self, *, projection: Any) -> Any:
         raise AssertionError("no journal behind in-process boundaries")
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedControlTurn:
+    """One preflighted model turn plus the executor context to run it."""
+
+    prepared: PreparedToolTurn
+    executor: ToolTurnExecutor
+    call_messages_len: int
+    observation_budget: Callable[[list[dict[str, Any]]], int]
 
 
 @dataclass(slots=True)
@@ -332,13 +371,17 @@ class AnswerOrchestrator:
 
             async def run_turn(self) -> ExecutedTurn:
                 await boundaries.enter_phase("researching")
+                turn_number = run.agent_turn_count + 1
                 try:
-                    executed, _changed = await self_outer._execute_control_turn(run, boundaries)
+                    executed = await self_outer._durable_control_turn(
+                        run, boundaries, turn_number=turn_number
+                    )
                 except Exception as exc:
-                    executed = await self_outer._handle_overflow_retry(exc, run, boundaries)
+                    executed = await self_outer._handle_overflow_retry(
+                        exc, run, boundaries, turn_number=turn_number
+                    )
                 run.agent_turn_count += 1
                 run.trace["agent_turns"] = run.agent_turn_count
-                await boundaries.commit_turn(executed, turn_number=run.agent_turn_count)
                 return executed
 
         self_outer = self
@@ -501,11 +544,12 @@ class AnswerOrchestrator:
 
         return write
 
-    async def _execute_control_turn(
+    async def _prepare_control_turn(
         self,
         run: PreparedRun,
         boundaries: RunBoundaries,
-    ) -> tuple[ExecutedTurn, bool]:
+    ) -> _PreparedControlTurn:
+        """Model call plus preflight; no tool has executed yet."""
         executor = ToolTurnExecutor(
             cast(ToolModel, self._model_func),
             telemetry=self._telemetry,
@@ -550,22 +594,64 @@ class AnswerOrchestrator:
             self._text_window_budget.update(max(1, residual // call_count))
             return residual
 
-        previous_rows = run.evidence.row_count
+        prepared = await executor.prepare_turn(
+            call_messages,
+            run.tools,
+            tool_choice="auto",
+            max_tokens=max_output_tokens,
+        )
+        return _PreparedControlTurn(
+            prepared=prepared,
+            executor=executor,
+            call_messages_len=len(call_messages),
+            observation_budget=observation_budget,
+        )
+
+    async def _execute_prepared_turn(
+        self,
+        run: PreparedRun,
+        holder: _PreparedControlTurn,
+        boundaries: RunBoundaries,
+        *,
+        turn_number: int,
+    ) -> ExecutedTurn:
+        """Run the prepared tool batch, settling each intent in source order."""
         try:
-            executed = await executor.run_turn(
-                call_messages,
+            executed = await holder.executor.execute_prepared(
+                holder.prepared,
                 run.tools,
-                tool_choice="auto",
-                observation_budget=observation_budget,
-                max_tokens=max_output_tokens,
+                observation_budget=holder.observation_budget,
+                on_result=lambda intent, execution, is_last: boundaries.settle_intent(
+                    intent,
+                    execution,
+                    turn_number=turn_number,
+                    is_last=is_last,
+                ),
             )
         except ToolResultCapacityError as exc:
             raise AnswerInputOverflowError(str(exc)) from exc
         run.trace["tool_observations"].extend(
             execution.observation.as_dict() for execution in executed.results
         )
-        run.episode.record(executed.messages[len(call_messages) :])
-        return executed, run.evidence.row_count != previous_rows
+        run.episode.record(executed.messages[holder.call_messages_len :])
+        return executed
+
+    async def _durable_control_turn(
+        self,
+        run: PreparedRun,
+        boundaries: RunBoundaries,
+        *,
+        turn_number: int,
+    ) -> ExecutedTurn:
+        """One journaled control turn: persist intents, then execute and settle.
+
+        Intents land before any tool executes, so a crash between the two steps
+        leaves recoverable unsettled intents instead of effects with no durable
+        trace (Blocker 2).
+        """
+        holder = await self._prepare_control_turn(run, boundaries)
+        await boundaries.commit_intents(holder.prepared)
+        return await self._execute_prepared_turn(run, holder, boundaries, turn_number=turn_number)
 
     def _compaction_coordinator(self) -> CompactionCoordinator:
         if self._compaction is None:
@@ -623,6 +709,8 @@ class AnswerOrchestrator:
         exc: BaseException,
         run: PreparedRun,
         boundaries: RunBoundaries,
+        *,
+        turn_number: int,
     ) -> ExecutedTurn:
         """Compact-and-retry one genuine provider overflow, then fail loudly."""
         if not is_provider_context_overflow(exc):
@@ -640,7 +728,11 @@ class AnswerOrchestrator:
             force=True,
         )
         try:
-            executed, _changed = await self._execute_control_turn(run, boundaries)
+            holder = await self._prepare_control_turn(run, boundaries)
+            await boundaries.commit_intents(holder.prepared)
+            executed = await self._execute_prepared_turn(
+                run, holder, boundaries, turn_number=turn_number
+            )
         except Exception as retry_exc:
             if is_provider_context_overflow(retry_exc):
                 raise _overflow_retry_error(

@@ -50,8 +50,15 @@ from dlightrag_agent.session.store import (
     SettleCommit,
     VersionConflict,
 )
-from dlightrag_agent.tools import AgentTool, ExecutedTurn
+from dlightrag_agent.tools import (
+    AgentTool,
+    ExecutedTurn,
+    PreparedToolTurn,
+    ToolExecution,
+    ToolPreflight,
+)
 from dlightrag_ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag_ai.messages import AssistantTurn
 from dlightrag_ai.scheduler import model_call_scope
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import Telemetry, safe_log_text
@@ -1287,8 +1294,14 @@ class JournalRunBoundaries:
     async def check_cancelled(self) -> None:
         await self._session.check_cancelled()
 
-    async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None:
-        assistant = _assistant_entry(executed, self._session_id)
+    async def commit_intents(self, prepared: PreparedToolTurn) -> None:
+        """Durably append one prepared turn's assistant entry and its intents.
+
+        This is the persist step that must land before any tool executes:
+        after this commit, a crash leaves recoverable unsettled intents instead
+        of effects with no durable trace (Blocker 2).
+        """
+        assistant = _assistant_entry(prepared.assistant, self._session_id)
         intents = tuple(
             EffectIntentEntry(
                 entry_id=EntryId.new(),
@@ -1296,7 +1309,7 @@ class JournalRunBoundaries:
                 timestamp=_entry_timestamp(),
                 intent=intent,
             )
-            for intent in executed.intents
+            for intent in prepared.preflight.intents
         )
         validation = tuple(
             EffectResultEntry(
@@ -1305,13 +1318,13 @@ class JournalRunBoundaries:
                 timestamp=_entry_timestamp(),
                 result=result,
             )
-            for result in executed.validation_results
+            for result in prepared.preflight.validation_results
         )
         next_projection = None
         if self._active_projection is not None:
             anchor = token_anchor_from_usage(
                 self._last_sequence + 1,
-                executed.assistant.usage_details,
+                prepared.assistant.usage_details,
             )
             if anchor is not None:
                 next_projection = projection_with_anchor(self._active_projection, anchor)
@@ -1332,29 +1345,17 @@ class JournalRunBoundaries:
         else:
             batch_messages = fold_entries((assistant, *intents, *validation))
             self._tail_tokens += estimate_messages_tokens(batch_messages) if batch_messages else 0
-        await self._bind_delegate_parent_intents(executed.intents)
+        await self._bind_delegate_parent_intents(prepared.preflight.intents)
 
-        intent_list = list(executed.intents)
-        for position, intent in enumerate(intent_list):
-            await self._settle_intent(
-                executed,
-                intent,
-                turn_number=turn_number,
-                is_last=position == len(intent_list) - 1,
-            )
-
-    async def _settle_intent(
+    async def settle_intent(
         self,
-        executed: ExecutedTurn,
         intent: EffectIntent,
+        execution: ToolExecution | None,
         *,
         turn_number: int,
         is_last: bool,
     ) -> None:
-        execution = next(
-            (result for result in executed.results if result.call.id == intent.source_call_id),
-            None,
-        )
+        """Settle one already-persisted intent with its execution, or as interrupted."""
         if execution is None:
             outcome: str = "interrupted"
             content = f'Tool "{intent.tool_name}" was interrupted before it settled.'
@@ -1394,6 +1395,35 @@ class JournalRunBoundaries:
             intent,
             appended_tokens=estimate_messages_tokens(fold_entries([result_entry])),
         )
+
+    async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None:
+        """Append and settle one already-executed turn in one step.
+
+        Convenience for hosts that persist after execution (in-process paths
+        and tests); the live Research loop uses ``commit_intents`` before
+        execution plus incremental ``settle_intent`` calls instead.
+        """
+        prepared = PreparedToolTurn(
+            assistant=executed.assistant,
+            preflight=ToolPreflight(
+                intents=executed.intents,
+                validation_results=executed.validation_results,
+            ),
+            transcript=executed.messages,
+        )
+        await self.commit_intents(prepared)
+        intents = executed.intents
+        for position, intent in enumerate(intents):
+            execution = next(
+                (result for result in executed.results if result.call.id == intent.source_call_id),
+                None,
+            )
+            await self.settle_intent(
+                intent,
+                execution,
+                turn_number=turn_number,
+                is_last=position == len(intents) - 1,
+            )
 
     def _host_update(self, intent: EffectIntent, *, is_last: bool) -> M3HostUpdate:
         if not is_last:
@@ -1872,8 +1902,7 @@ def _initial_tail_tokens(
     return estimate_messages_tokens(folded) if folded else 0
 
 
-def _assistant_entry(executed: ExecutedTurn, session_id: SessionId) -> AssistantMessageEntry:
-    assistant = executed.assistant
+def _assistant_entry(assistant: AssistantTurn, session_id: SessionId) -> AssistantMessageEntry:
     return AssistantMessageEntry(
         entry_id=EntryId.new(),
         session_id=session_id,

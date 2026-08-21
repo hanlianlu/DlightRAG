@@ -455,6 +455,74 @@ async def test_provider_overflow_compacts_then_retries_the_same_turn_once() -> N
     assert final_snapshot.active_projection.summary is not None
 
 
+async def test_intents_persist_before_any_tool_executes() -> None:
+    """Blocker 2 regression: commit_intents must land before tool execution,
+
+    and each intent must settle in source order as its execution completes.
+    """
+
+    from dlightrag_agent.session.entries import EffectResultEntry
+    from dlightrag_agent.session.ids import SessionId
+    from dlightrag_agent.session.memory import InMemoryAgentSessionStore
+
+    from dlightrag.answer.executor import JournalRunBoundaries
+
+    order: list[str] = []
+
+    class _FakeSession:
+        run_id = "run-1"
+        owner_id = "owner"
+
+        async def check_cancelled(self) -> None:
+            return None
+
+        async def enter_phase(self, _phase: str) -> None:
+            return None
+
+    class _RecordingBoundaries(JournalRunBoundaries):
+        async def commit_intents(self, prepared: Any) -> None:
+            order.append("commit")
+            await super().commit_intents(prepared)
+
+        async def settle_intent(self, intent: Any, execution: Any, **kwargs: Any) -> None:
+            order.append("settle")
+            await super().settle_intent(intent, execution, **kwargs)
+
+    session_id = SessionId.new()
+    journal = InMemoryAgentSessionStore()
+    boundaries = _RecordingBoundaries(
+        session=_FakeSession(),  # type: ignore[arg-type]
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={},
+        ledger_state=lambda: "{}",
+        fetched_buffer=[],
+        run_id="run-1",
+    )
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        order.append("tool")
+        return _corpus_result()
+
+    agent = ScriptedAgent(
+        _tool(_call(query="q", source="knowledge_base", call_id="c1")),
+        _answer("Done."),
+    )
+    orchestrator = _research(agent, retrieve, None)
+    run = orchestrator.prepare_run("Find it")
+
+    await orchestrator.research_until_stopped(run, boundaries=boundaries)  # type: ignore[arg-type]
+
+    # Turn 1: intents persist, then the tool runs, then the intent settles.
+    # Turn 2 has no tool calls, so it only commits.
+    assert order == ["commit", "tool", "settle", "commit"]
+    snapshot = await journal.load(session_id)
+    effect_results = [entry for entry in snapshot.entries if entry.entry_type == "effect_result"]
+    assert len(effect_results) == 1
+    assert isinstance(effect_results[0], EffectResultEntry)
+    assert effect_results[0].result.outcome == "succeeded"
+
+
 async def test_fast_path_streams_one_synthesis() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()

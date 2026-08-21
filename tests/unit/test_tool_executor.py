@@ -475,3 +475,71 @@ async def test_length_stopped_turn_produces_no_intents() -> None:
     )
     assert executed.intents == ()
     assert executed.results[0].is_error is True
+
+
+async def test_prepare_turn_never_executes_tools() -> None:
+    executed = asyncio.Event()
+
+    async def execute(args: BaseModel) -> ToolResult:
+        executed.set()
+        assert isinstance(args, SearchArgs)
+        return ToolResult(content="ran")
+
+    tools = [AgentTool("search", "Search.", SearchArgs, execute)]
+    model = ScriptedModel(_turn(ToolCall(id="1", name="search", arguments={"query": "q"})))
+    executor = ToolTurnExecutor(model.complete_turn)
+
+    prepared = await executor.prepare_turn([{"role": "user", "content": "q"}], tools)
+
+    assert not executed.is_set()
+    (intent,) = prepared.preflight.intents
+    assert intent.source_call_id == "1"
+
+    executed_turn = await executor.execute_prepared(prepared, tools)
+    assert executed.is_set()
+    assert executed_turn.results[0].call.id == "1"
+
+
+async def test_execute_prepared_settles_in_source_order_despite_completion_order() -> None:
+    """A fast second call must wait behind the first intent's settlement."""
+    release_first = asyncio.Event()
+    second_completed = asyncio.Event()
+
+    async def execute(args: BaseModel) -> ToolResult:
+        assert isinstance(args, SearchArgs)
+        if args.query == "first":
+            await release_first.wait()
+        else:
+            second_completed.set()
+        return ToolResult(content=f"result:{args.query}")
+
+    tools = [AgentTool("search", "Search.", SearchArgs, execute)]
+    model = ScriptedModel(
+        _turn(
+            ToolCall(id="1", name="search", arguments={"query": "first"}),
+            ToolCall(id="2", name="search", arguments={"query": "second"}),
+        )
+    )
+    settled: list[str] = []
+
+    async def on_result(intent: Any, execution: Any, is_last: bool) -> None:
+        del intent, is_last
+        if execution is not None:
+            settled.append(execution.call.id)
+
+    executor = ToolTurnExecutor(model.complete_turn)
+    prepared = await executor.prepare_turn([{"role": "user", "content": "q"}], tools)
+    task = asyncio.create_task(executor.execute_prepared(prepared, tools, on_result=on_result))
+
+    await asyncio.wait_for(second_completed.wait(), timeout=1)
+    assert settled == []  # the second result waits behind the first intent
+
+    release_first.set()
+    executed = await task
+
+    assert settled == ["1", "2"]
+    assert [result.call.id for result in executed.results] == ["1", "2"]
+    assert [message["content"] for message in executed.messages[-2:]] == [
+        "result:first",
+        "result:second",
+    ]
