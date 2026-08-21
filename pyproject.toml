@@ -11,9 +11,9 @@ license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
     # Workspace cores
-    "dlightrag-ai[all]==1.9.0",
-    "dlightrag-agent-core==1.9.0",
-    "dlightrag-rag-core==1.9.0",
+    "dlightrag-ai[all]==1.9.2",
+    "dlightrag-agent-core==1.9.2",
+    "dlightrag-rag-core==1.9.2",
     # Core RAG
     "lightrag-hku>=1.5.6",
     # PostgreSQL
