@@ -23,8 +23,6 @@ ANSWER_RESOURCE_INVALID = "ANSWER_RESOURCE_INVALID"
 UNSUPPORTED_ANSWER_MODE = "unsupported_answer_mode"
 UNSUPPORTED_RESOURCE_CAPABILITY = "unsupported_resource_capability"
 ROUTING_FAILED = "routing_failed"
-MEMORY_WRITE_REJECTED = "memory_write_rejected"
-MEMORY_UNAVAILABLE = "memory_unavailable"
 
 _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
 
@@ -165,8 +163,6 @@ __all__ = [
     "UNSUPPORTED_ANSWER_MODE",
     "UNSUPPORTED_RESOURCE_CAPABILITY",
     "ROUTING_FAILED",
-    "MEMORY_WRITE_REJECTED",
-    "MEMORY_UNAVAILABLE",
     "AnswerInputError",
     "AnswerImageError",
     "AnswerInputOverflowError",

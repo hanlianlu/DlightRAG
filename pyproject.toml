@@ -143,7 +143,6 @@ forbidden_modules = [
     "dlightrag_ai",
     "dlightrag_rag",
     "lightrag",
-    "asyncpg",
     "fastapi",
     "mcp",
 ]

@@ -137,6 +137,14 @@ class _WebStore(_Collaborator):
             raise self.initialize_error
 
 
+class _MemoryStore(_Collaborator):
+    def __init__(self, recorder: _Recorder) -> None:
+        super().__init__(recorder, "memory_store")
+
+    async def initialize(self) -> None:
+        self._record("initialize")
+
+
 class _CancellationListener:
     def __init__(self, recorder: _Recorder) -> None:
         self.recorder = recorder
@@ -213,6 +221,7 @@ class _Parts:
         self.models = _Collaborator(self.recorder, "models")
         self.run_store = _RunStore(self.recorder)
         self.web_store = _WebStore(self.recorder)
+        self.memory_store = _MemoryStore(self.recorder)
         self.coordinator = _Coordinator(self.recorder)
         self.cancellation_listener = _CancellationListener(self.recorder)
         self.corpora = _Corpora(self.recorder)
@@ -241,7 +250,7 @@ class _Parts:
                 retrieval=cast(RetrievalService, self.retrieval),
                 answers=cast(AnswerService, self.answers),
                 memory=cast(Any, self.answers),
-                memory_store=cast(Any, self.run_store),
+                memory_store=cast(Any, self.memory_store),
                 web_conversations=cast(WebConversationService, self.web_conversations),
             ),
             web_enabled=web_enabled,
@@ -292,6 +301,7 @@ async def test_application_exposes_only_typed_services_and_closes_in_dependency_
         "capabilities:validate_startup",
         "run_store:initialize:False",
         "web_store:initialize:False",
+        "memory_store:initialize",
         "run_store:list_active_run_requirements",
         "corpora:initialize",
         "retrieval:planner_for",

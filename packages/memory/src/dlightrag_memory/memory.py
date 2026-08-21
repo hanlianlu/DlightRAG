@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from dlightrag_memory.models import MemoryProvenance, MemoryRecord, MemoryWrite
+from dlightrag_memory.ports import MemorySearch
 from dlightrag_memory.recall import render_auto_recall, select_auto_recall
 from dlightrag_memory.store import MemoryStore, commit_memory_write
 
@@ -18,10 +19,21 @@ _MANAGEMENT_PROVENANCE = MemoryProvenance(run_id="management", session_id="manag
 
 
 class Memory:
-    """Cross-conversation Owner Profile Memory bound to one storage adapter."""
+    """Cross-conversation Owner Profile Memory bound to one storage adapter.
 
-    def __init__(self, store: MemoryStore) -> None:
+    ``search`` is the optional P4 candidate surface; without it, recall falls
+    back to the recency window. ``browse`` pages one owner's active records
+    with keyset cursors independent of retrieval.
+    """
+
+    def __init__(
+        self,
+        store: MemoryStore,
+        *,
+        search: MemorySearch | None = None,
+    ) -> None:
         self._store = store
+        self._search = search
 
     async def remember(
         self,
@@ -76,6 +88,33 @@ class Memory:
     async def list_active(self, *, owner_id: str) -> tuple[MemoryRecord, ...]:
         """Return one owner's active records, newest first."""
         return await self._store.list_active(owner_id=owner_id)
+
+    async def browse(
+        self,
+        *,
+        owner_id: str,
+        cursor: tuple[datetime, str] | None = None,
+        limit: int = 50,
+    ) -> tuple[tuple[MemoryRecord, ...], tuple[datetime, str] | None]:
+        """Page one owner's active records; returns the next keyset cursor."""
+        return await self._store.list_active_page(owner_id=owner_id, after=cursor, limit=limit)
+
+    async def recall(
+        self, *, owner_id: str, query: str, limit: int = 12
+    ) -> tuple[MemoryRecord, ...]:
+        """Query-aware recall when the store can search; recency fallback otherwise.
+
+        Candidates are deduplicated by record id keeping the best score. P4
+        wires this into host context assembly and benchmarks the fusion.
+        """
+        cap = max(1, min(int(limit), 100))
+        if self._search is not None:
+            candidates = await self._search.search_candidates(
+                owner_id=owner_id, query=query, limit=cap
+            )
+            return tuple(candidate.record for candidate in candidates[:cap])
+        active = await self.list_active(owner_id=owner_id)
+        return select_auto_recall(active)[:cap]
 
     async def standing_text(self, *, owner_id: str) -> str:
         """Render the bounded non-citable standing block for one owner."""

@@ -4,6 +4,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from dlightrag_memory import InMemoryMemoryStore, commit_memory_write
 
 from dlightrag.answer.errors import MemoryUnavailableError, MemoryWriteRejectedError
 from dlightrag.answer.memory import (
@@ -12,7 +13,6 @@ from dlightrag.answer.memory import (
     MemoryRecord,
     MemoryWrite,
 )
-from dlightrag.answer.memory_store import InMemoryAnswerMemoryStore, commit_memory_write
 
 
 def _record(
@@ -45,7 +45,7 @@ def _remember(**overrides: object) -> MemoryWrite:
 
 
 async def test_owners_cannot_read_each_other() -> None:
-    store = InMemoryAnswerMemoryStore()
+    store = InMemoryMemoryStore()
     await store.insert(_record(owner="alpha", memory_id="m1"))
     await store.insert(_record(owner="beta", memory_id="m1", body="Other."))
     alpha = await store.list_active(owner_id="alpha")
@@ -55,7 +55,7 @@ async def test_owners_cannot_read_each_other() -> None:
 
 
 async def test_supersede_hides_old_and_forget_hard_deletes() -> None:
-    store = InMemoryAnswerMemoryStore()
+    store = InMemoryMemoryStore()
     await store.insert(_record(memory_id="old"))
     replacement = _record(memory_id="new", body="Use chat only.")
     await store.supersede(owner_id="alpha", old_id="old", new=replacement)
@@ -69,7 +69,7 @@ async def test_supersede_hides_old_and_forget_hard_deletes() -> None:
 
 
 async def test_commit_remember_and_reject_none_owner() -> None:
-    store = InMemoryAnswerMemoryStore()
+    store = InMemoryMemoryStore()
     written = await commit_memory_write(store, _remember())
     assert written is not None
     assert written.body == "No email."
@@ -78,7 +78,7 @@ async def test_commit_remember_and_reject_none_owner() -> None:
 
 
 async def test_supersede_missing_id_is_a_public_reject() -> None:
-    store = InMemoryAnswerMemoryStore()
+    store = InMemoryMemoryStore()
     with pytest.raises(MemoryWriteRejectedError, match="No matching memory to replace"):
         await commit_memory_write(
             store,
@@ -97,7 +97,7 @@ async def test_supersede_missing_id_is_a_public_reject() -> None:
 async def test_service_purge_expired_uses_retention_cutoff() -> None:
     from dlightrag.services.memory import MemoryService
 
-    store = InMemoryAnswerMemoryStore()
+    store = InMemoryMemoryStore()
     await store.insert(_record(memory_id="old"))
     await store.supersede(owner_id="alpha", old_id="old", new=_record(memory_id="new"))
     stale = await store.get(owner_id="alpha", memory_id="old")
@@ -118,7 +118,7 @@ async def test_service_purge_expired_uses_retention_cutoff() -> None:
 
 
 async def test_purge_only_old_superseded_rows() -> None:
-    store = InMemoryAnswerMemoryStore()
+    store = InMemoryMemoryStore()
     await store.insert(_record(memory_id="old"))
     await store.supersede(owner_id="alpha", old_id="old", new=_record(memory_id="new"))
     stale = await store.get(owner_id="alpha", memory_id="old")

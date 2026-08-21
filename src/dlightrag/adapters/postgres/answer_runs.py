@@ -28,10 +28,6 @@ from dlightrag.adapters.postgres._migrations import (
 )
 from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.adapters.postgres._pool import pg_pool
-from dlightrag.adapters.postgres.memory import (
-    MEMORY_DDL,
-    MEMORY_SCHEMA_TABLE,
-)
 from dlightrag.adapters.postgres.session_journal import PGJournalStore, PGProgressStore
 from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
 from dlightrag.answer.routing import RoutingAcceptance, RoutingRecord
@@ -544,6 +540,13 @@ ALTER TABLE dlightrag_answer_runs
 ADD COLUMN IF NOT EXISTS accepted_input_json JSONB NOT NULL DEFAULT '{}'::jsonb
 """
 
+# Memory owns its own schema and migration registry in dlightrag_memory since
+# the package extraction; the Answer-era tables are reclaimed on upgrade.
+_DROP_LEGACY_MEMORY_TABLES = (
+    "DROP TABLE IF EXISTS dlightrag_answer_memory_write_log",
+    "DROP TABLE IF EXISTS dlightrag_answer_memory_records",
+)
+
 ANSWER_RUN_MIGRATIONS = (
     Migration(
         "0001_answer_runs",
@@ -563,7 +566,6 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_RUN_ARTIFACTS,
             _CREATE_ROUTING,
             _CREATE_CHILD_SESSIONS,
-            *MEMORY_DDL,
             _ADD_SESSION_PROJECTION_FK,
             *_CREATE_INDEXES,
             _M4_WORKSPACE_DDL[3],
@@ -574,6 +576,11 @@ ANSWER_RUN_MIGRATIONS = (
         "0002_accepted_input_envelope",
         "Add the terminal-surviving public accepted input envelope",
         (_ADD_ACCEPTED_INPUT,),
+    ),
+    Migration(
+        "0003_drop_legacy_answer_memory_tables",
+        "Reclaim Answer-era memory tables now owned by dlightrag_memory",
+        _DROP_LEGACY_MEMORY_TABLES,
     ),
 )
 
@@ -955,7 +962,6 @@ ANSWER_RUN_SCHEMA_TABLES = (
         checks=("dlightrag_answer_child_sessions_status_check",),
         unique=(("owner_id", "run_id", "parent_session_id", "parent_call_id"),),
     ),
-    MEMORY_SCHEMA_TABLE,
     TableRequirement(
         name="dlightrag_answer_committed_spills",
         columns=(
@@ -1585,8 +1591,6 @@ class PGAnswerRunStore(PostgresOperationRunner):
             for statement in _M5_PUBLICATION_DDL:
                 await conn.execute(statement)
             for statement in _M6_ROUTING_DDL:
-                await conn.execute(statement)
-            for statement in MEMORY_DDL:
                 await conn.execute(statement)
 
         await self._run(_operation)

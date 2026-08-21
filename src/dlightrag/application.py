@@ -21,10 +21,10 @@ from dlightrag.config import DlightragConfig, get_config
 if TYPE_CHECKING:
     from dlightrag_ai.fingerprints import ModelFingerprint
     from dlightrag_ai.settings import ModelRole
+    from dlightrag_memory.postgres import PostgresMemoryStore
     from dlightrag_rag.pool import WorkspacePool
 
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-    from dlightrag.adapters.postgres.memory import PGAnswerMemoryStore
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
     from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
     from dlightrag.answer.model_runtime import AnswerModelRuntime
@@ -64,8 +64,15 @@ class _ApplicationComponents:
     retrieval: RetrievalService
     answers: AnswerService
     memory: MemoryService
-    memory_store: PGAnswerMemoryStore
+    memory_store: PostgresMemoryStore
     web_conversations: WebConversationService
+
+
+def _operational_pool_factory() -> Any:
+    """Lazily resolve DlightRAG's process-wide operational pool."""
+    from dlightrag.adapters.postgres._pool import pg_pool
+
+    return pg_pool.get
 
 
 def _actionable_error(exc: Exception) -> str:
@@ -89,6 +96,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag_ai.scheduler import ModelScheduler
     from dlightrag_ai.telemetry import safe_log_text
     from dlightrag_ai.vision import ModelImageCapabilities
+    from dlightrag_memory.postgres import PostgresMemoryStore
     from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
     from dlightrag_rag.pool import WorkspacePool
     from dlightrag_rag.ports import CorpusSchemaError, WorkspaceCorpusBackend
@@ -101,7 +109,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
     from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
     from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
-    from dlightrag.adapters.postgres.memory import PGAnswerMemoryStore
     from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
     from dlightrag.adapters.postgres.retrieval import PGWorkspaceSchemaLookup
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
@@ -235,7 +242,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     run_store = PGAnswerRunStore(
         retention_seconds=config.runtime.answer_run_retention_days * 24 * 3600
     )
-    memory_store = PGAnswerMemoryStore()
+    memory_store = PostgresMemoryStore(pool_factory=_operational_pool_factory())
     coordinator = RunCoordinator(
         store=run_store,
         executor=AnswerExecutor(
@@ -445,6 +452,8 @@ class Application:
         try:
             await components.run_store.initialize(validate_only=validate_only)
             await components.web_store.initialize(validate_only=validate_only)
+            if not validate_only:
+                await components.memory_store.initialize()
         except RunSchemaError, WebConversationSchemaError:
             raise
         except Exception as exc:

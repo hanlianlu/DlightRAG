@@ -98,7 +98,7 @@ _REQUIRED_EXTERNAL_PROHIBITIONS = {
     "dlightrag": set(),
     "dlightrag-agent-core": {"lightrag", "asyncpg", "fastapi", "mcp"},
     "dlightrag-ai": {"lightrag", "asyncpg", "fastapi", "mcp"},
-    "dlightrag-memory": {"lightrag", "asyncpg", "fastapi", "mcp"},
+    "dlightrag-memory": {"lightrag", "fastapi", "mcp"},
     "dlightrag-rag-core": {
         _CONCRETE_LIGHTRAG_BACKEND,
         "asyncpg",
@@ -234,7 +234,7 @@ asyncio.run(main())
     + """
 assert all(absent(name) for name in (
     'dlightrag', 'dlightrag_agent', 'dlightrag_ai', 'dlightrag_rag',
-    'lightrag', 'asyncpg', 'openai', 'anthropic', 'google.genai'
+    'lightrag', 'fastapi', 'openai', 'anthropic', 'google.genai'
 ))
 """
 )

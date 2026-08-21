@@ -13,14 +13,7 @@ from dlightrag_memory import (
     default_purge_cutoff,
 )
 
-# Back-compat aliases for Answer-era names.
-AnswerMemoryStore = MemoryStore
-InMemoryAnswerMemoryStore = InMemoryMemoryStore
-
-
 __all__ = [
-    "AnswerMemoryStore",
-    "InMemoryAnswerMemoryStore",
     "InMemoryMemoryStore",
     "MemoryStore",
     "commit_memory_write",

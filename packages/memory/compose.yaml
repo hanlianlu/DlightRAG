@@ -1,0 +1,41 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+# One-command PostgreSQL for the dlightrag-memory package.
+#
+# The memory adapter's three recall legs need pgvector, pg_textsearch, and
+# pg_jieba; this stack starts exactly that database. The MCP server and every
+# host adapter connect over DSN and never manage this service themselves.
+#
+#   docker compose -f packages/memory/compose.yaml up -d
+#   dlightrag-memory-mcp --dsn postgres://dlightrag:dlightrag@127.0.0.1:5432/dlightrag
+services:
+  postgres:
+    restart: unless-stopped
+    image: dlightrag-postgres:pg18
+    build:
+      context: ../../postgres
+    shm_size: 1gb
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}
+      POSTGRES_USER: ${DLIGHTRAG_POSTGRES_USER:-dlightrag}
+      POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
+    volumes:
+      - memory_pg_data:/var/lib/postgresql
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_textsearch,pg_jieba"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "work_mem=64MB"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dlightrag -d dlightrag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  memory_pg_data:

@@ -8,6 +8,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 _SOURCE_ROOTS = (_ROOT / "src", _ROOT / "packages")
 _POSTGRES_ADAPTER = _ROOT / "src/dlightrag/adapters/postgres"
+_MEMORY_PG_ADAPTER = _ROOT / "packages/memory/src/dlightrag_memory/_storage"
 _RAG_CORE = _ROOT / "packages/rag-core/src/dlightrag_rag"
 _RAW_SQL_RE = re.compile(
     r"\b(?:SELECT\b.{0,500}\bFROM|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|"
@@ -35,7 +36,7 @@ def _python_files() -> list[Path]:
 def test_asyncpg_is_private_to_the_postgres_adapter() -> None:
     offenders: list[Path] = []
     for path in _python_files():
-        if path.is_relative_to(_POSTGRES_ADAPTER):
+        if path.is_relative_to(_POSTGRES_ADAPTER) or path.is_relative_to(_MEMORY_PG_ADAPTER):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         if any(

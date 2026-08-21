@@ -41,6 +41,14 @@ class MemoryStore(Protocol):
 
     async def list_active(self, *, owner_id: str) -> tuple[MemoryRecord, ...]: ...
 
+    async def list_active_page(
+        self,
+        *,
+        owner_id: str,
+        after: tuple[datetime, str] | None = None,
+        limit: int = 50,
+    ) -> tuple[tuple[MemoryRecord, ...], tuple[datetime, str] | None]: ...
+
     async def purge_superseded(self, *, older_than: datetime) -> int: ...
 
 
@@ -99,6 +107,33 @@ class InMemoryMemoryStore:
         ]
         rows.sort(key=_recency, reverse=True)
         return tuple(rows)
+
+    async def list_active_page(
+        self,
+        *,
+        owner_id: str,
+        after: tuple[datetime, str] | None = None,
+        limit: int = 50,
+    ) -> tuple[tuple[MemoryRecord, ...], tuple[datetime, str] | None]:
+        cap = max(1, min(int(limit), 100))
+        rows = [
+            record
+            for record in self._rows.values()
+            if record.owner_id == owner_id and record.status == "active"
+        ]
+        rows.sort(key=lambda record: (record.updated_at, record.memory_id), reverse=True)
+        if after is not None:
+            rows = [
+                record
+                for record in rows
+                if (record.updated_at, record.memory_id) < (after[0], after[1])
+            ]
+        page = tuple(rows[:cap])
+        if len(rows) <= cap:
+            return page, None
+        last = rows[cap - 1]
+        cursor_time = last.updated_at or last.created_at or datetime.min.replace(tzinfo=UTC)
+        return page, (cursor_time, last.memory_id)
 
     async def purge_superseded(self, *, older_than: datetime) -> int:
         victims = [

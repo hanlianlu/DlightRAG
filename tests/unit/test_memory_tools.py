@@ -4,11 +4,10 @@
 from dataclasses import replace
 
 import pytest
-from dlightrag_memory import Memory
+from dlightrag_memory import InMemoryMemoryStore, Memory, commit_memory_write
 
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.memory import MemoryProvenance, MemoryWrite
-from dlightrag.answer.memory_store import InMemoryAnswerMemoryStore, commit_memory_write
 from dlightrag.answer.tools.composition import compose_research_tools
 from dlightrag.answer.tools.memory import (
     ForgetInput,
@@ -49,7 +48,7 @@ def test_parent_research_gets_memory_tools_child_does_not() -> None:
 
 
 async def test_forget_miss_is_reported() -> None:
-    store = InMemoryAnswerMemoryStore()
+    store = InMemoryMemoryStore()
     host = MemoryHost(
         owner_id="o",
         auth_mode="jwt",
@@ -63,7 +62,7 @@ async def test_forget_miss_is_reported() -> None:
 
 
 async def test_remember_then_forget() -> None:
-    store = InMemoryAnswerMemoryStore()
+    store = InMemoryMemoryStore()
     host = MemoryHost(
         owner_id="o",
         auth_mode="jwt",
@@ -82,7 +81,7 @@ async def test_remember_then_forget() -> None:
 
 
 async def test_supersede_rejects_other_owner() -> None:
-    store = InMemoryAnswerMemoryStore()
+    store = InMemoryMemoryStore()
     first = await commit_memory_write(
         store,
         MemoryWrite(

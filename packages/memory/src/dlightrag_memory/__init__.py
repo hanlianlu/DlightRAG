@@ -16,6 +16,7 @@ from dlightrag_memory.models import (
     MemoryStatus,
     MemoryWrite,
 )
+from dlightrag_memory.normalize import normalized_body
 from dlightrag_memory.policy import (
     MEMORY_BODY_LIMIT,
     MEMORY_RECALL_KIND_LIMIT,
@@ -23,6 +24,14 @@ from dlightrag_memory.policy import (
     MEMORY_SUPERSEDE_RETENTION_DAYS,
     evaluate_memory_write,
     memory_owner_allowed,
+)
+from dlightrag_memory.ports import (
+    MemorySearch,
+    NullEmbedder,
+    SearchCandidate,
+    SearchLeg,
+    TextEmbedder,
+    Vector,
 )
 from dlightrag_memory.recall import (
     render_auto_recall,
@@ -50,12 +59,19 @@ __all__ = [
     "MemoryStatus",
     "MemoryStore",
     "MemoryUnavailableError",
+    "MemorySearch",
     "MemoryWrite",
     "MemoryWriteRejectedError",
+    "NullEmbedder",
+    "SearchCandidate",
+    "SearchLeg",
+    "TextEmbedder",
+    "Vector",
     "commit_memory_write",
     "default_purge_cutoff",
     "evaluate_memory_write",
     "memory_owner_allowed",
+    "normalized_body",
     "render_auto_recall",
     "reserved_auto_recall_text",
     "select_auto_recall",

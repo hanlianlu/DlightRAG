@@ -143,7 +143,7 @@ def _write_workspace_artifacts(
         tmp_path,
         distribution="dlightrag-memory",
         package="dlightrag_memory",
-        requires=(),
+        requires=("asyncpg>=0.31.0",),
     )
     _write_wheel(
         tmp_path,

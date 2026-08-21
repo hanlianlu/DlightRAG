@@ -8,8 +8,9 @@ from typing import Any
 
 import asyncpg
 import pytest
+from dlightrag_memory._storage.pg_bm25 import index_name
+from dlightrag_memory.postgres import PostgresMemoryStore
 
-from dlightrag.adapters.postgres.memory import PGAnswerMemoryStore
 from dlightrag.answer.memory import MemoryProvenance, MemoryRecord
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -30,7 +31,7 @@ async def _pg_available() -> bool:
 
 
 @pytest.fixture
-async def store() -> AsyncIterator[PGAnswerMemoryStore]:
+async def store() -> AsyncIterator[PostgresMemoryStore]:
     if not await _pg_available():
         pytest.skip("PostgreSQL not available")
     db_name = f"dlightrag_mem_{uuid.uuid4().hex[:12]}"
@@ -40,11 +41,12 @@ async def store() -> AsyncIterator[PGAnswerMemoryStore]:
     finally:
         await admin.close()
     pool = await asyncpg.create_pool(**{**_PG, "database": db_name}, min_size=1, max_size=4)
-    created = PGAnswerMemoryStore(pool=pool)
+    created = PostgresMemoryStore(pool=pool)
     await created.initialize()
     try:
         yield created
     finally:
+        await created.aclose()
         await pool.close()
         admin = await asyncpg.connect(**_PG)
         try:
@@ -67,7 +69,7 @@ def _record(*, owner: str = "alpha", body: str = "No email.") -> MemoryRecord:
     )
 
 
-async def test_pg_owners_are_isolated(store: PGAnswerMemoryStore) -> None:
+async def test_pg_owners_are_isolated(store: PostgresMemoryStore) -> None:
     await store.insert(_record(owner="alpha", body="Alpha only."))
     await store.insert(_record(owner="beta", body="Beta only."))
     alpha = await store.list_active(owner_id="alpha")
@@ -76,7 +78,7 @@ async def test_pg_owners_are_isolated(store: PGAnswerMemoryStore) -> None:
     assert [row.body for row in beta] == ["Beta only."]
 
 
-async def test_pg_supersede_and_forget(store: PGAnswerMemoryStore) -> None:
+async def test_pg_supersede_and_forget(store: PostgresMemoryStore) -> None:
     old = _record(body="Old preference.")
     await store.insert(old)
     new = _record(body="New preference.")
@@ -91,13 +93,13 @@ async def test_pg_supersede_and_forget(store: PGAnswerMemoryStore) -> None:
     assert await store.forget(owner_id="beta", memory_id=old.memory_id) is False
 
 
-async def test_pg_purge_superseded(store: PGAnswerMemoryStore) -> None:
+async def test_pg_purge_superseded(store: PostgresMemoryStore) -> None:
     old = _record(body="Stale.")
     await store.insert(old)
     await store.supersede(owner_id="alpha", old_id=old.memory_id, new=_record(body="Fresh."))
     async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
         await conn.execute(
-            "UPDATE dlightrag_answer_memory_records "
+            "UPDATE dlightrag_memory_records "
             "SET updated_at = NOW() - INTERVAL '400 days' "
             "WHERE memory_id = $1",
             uuid.UUID(old.memory_id),
@@ -105,3 +107,27 @@ async def test_pg_purge_superseded(store: PGAnswerMemoryStore) -> None:
     removed = await store.purge_superseded(older_than=datetime.now(UTC) - timedelta(days=365))
     assert removed == 1
     assert await store.get(owner_id="alpha", memory_id=old.memory_id) is None
+
+
+async def test_pg_recall_legs_find_their_owners(store: PostgresMemoryStore) -> None:
+    """Exact and sparse legs return only the matching owner's active records."""
+    await store.insert(_record(owner="alpha", body="No email."))
+    await store.insert(_record(owner="beta", body="No email."))
+    await store.insert(_record(owner="alpha", body="Deploy at midnight."))
+
+    candidates = await store.search_candidates(owner_id="alpha", query="No email", limit=10)
+    bodies = {candidate.record.body for candidate in candidates}
+    assert "No email." in bodies
+    assert all(candidate.record.owner_id == "alpha" for candidate in candidates)
+
+
+async def test_pg_bm25_indexes_are_provisioned(store: PostgresMemoryStore) -> None:
+    """The corpus-tuned BM25 indexes exist on the memory table."""
+    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+        rows = await conn.fetch(
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'dlightrag_memory_records' "
+            "AND indexname LIKE $1",
+            f"{index_name('simple')}%",
+        )
+        names = {str(row["indexname"]) for row in rows}
+        assert index_name("simple") in names
