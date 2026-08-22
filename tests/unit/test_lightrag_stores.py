@@ -30,14 +30,6 @@ def test_lightrag_stores_validates_required_surfaces() -> None:
     assert stores.full_docs is fake.full_docs
 
 
-def test_lightrag_stores_reports_missing_surfaces() -> None:
-    class Broken:
-        chunks_vdb = object()
-
-    with pytest.raises(RuntimeError, match="missing"):
-        LightRAGStores(Broken(), chunk_store=AsyncMock())
-
-
 async def test_overwrite_chunk_vectors_requires_matching_dimension() -> None:
     stores = PGCorpusChunkStore(FakeLightRAG())
 

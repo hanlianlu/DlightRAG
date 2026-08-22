@@ -89,7 +89,7 @@ answer request (query + optional attachments + mode auto|fast|research)
   -> Routing Record stores requested / valid / nullable resolved mode
   -> Fast: planner + retrieval + AnswerSynthesizer
        JWT owners auto-recall a bounded Memory Record set (non-citable)
-  -> Research: AgentLoop until the model emits no tool call
+  -> Research: Agent Loop until the model emits no tool call
        peer tools include search_knowledge_base, read, inspect,
        optional search_web, optional delegate_research, optional path tools,
        and parent-only remember / forget / recall_memory
@@ -147,7 +147,7 @@ and research-answer requests; the later retrieval joins those same services.
 Research control and final generation use separate system prompts. Control
 turns receive identity, tool-selection policy, trust boundaries, and stopping
 rules, but not the answer/citation contract. The last silent turn is the
-answer; citation finalization is programmatic. Fast never enters `AgentLoop`.
+answer; citation finalization is programmatic. Fast never enters the Agent Loop.
 
 When `web_search.api_key` (Exa) is set, Exa Search is an optional peer
 capability. Its passages belong to no workspace and are packed beside corpus

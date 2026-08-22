@@ -176,9 +176,9 @@ _Avoid_: answer body, chat column, Spill, Compaction Summary, required report
 The fenced terminal transaction that makes staged Agent Workspace files owner-visible as Published Artifacts.
 _Avoid_: Staging, Spill settlement, a second model call
 
-**AgentLoop**:
-The unlimited research turn loop that stops when the model emits no tool call, or when cancel, provider error, or an all-terminate batch ends the attempt.
-_Avoid_: max_agent_turns, READY protocol, Fast Answer
+**Agent Loop**:
+The Answer-owned research turn cycle that stops when the model emits no tool call or durable cancellation is observed; provider errors fail the attempt.
+_Avoid_: AgentLoop class, max_agent_turns, READY protocol, Fast Answer
 
 ## Execution And Workspace
 

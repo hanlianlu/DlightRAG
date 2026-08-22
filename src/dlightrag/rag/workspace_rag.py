@@ -32,7 +32,6 @@ from dlightrag.rag.ingestion.paths import (
     workspace_input_root,
 )
 from dlightrag.rag.lifecycle import defer_cancellation, shutdown_lightrag_worker_pools
-from dlightrag.rag.lightrag_contract import LightRAGContractGuard
 from dlightrag.rag.lightrag_models import LightRagChatModels, build_lightrag_embedding
 from dlightrag.rag.ports import (
     CorpusRuntimeModels,
@@ -385,7 +384,6 @@ class WorkspaceRag:
             settings=settings,
         )
         self._lightrag = lightrag
-        LightRAGContractGuard(lightrag).verify()
         corpus_stores = await self.backend.runtime.attach(lightrag)
         logger.info(
             "LightRAG storages %s",

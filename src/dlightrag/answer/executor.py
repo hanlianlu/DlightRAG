@@ -13,7 +13,7 @@ from typing import Any, Literal, Protocol
 
 from dlightrag_memory import Memory, MemoryStore
 
-from dlightrag.agent.loop import LoopCancelled
+from dlightrag.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.agent.session.effects import (
     EffectIntent,
     EffectSettlement,
@@ -925,7 +925,7 @@ class AnswerExecutor:
         pinned_image_descriptions: tuple[str, ...],
         projected_history: PriorTurns,
         model_profiles: Mapping[ModelRole, ModelProfile],
-        environment: object | None = None,
+        environment: LocalExecutionEnvironment | None = None,
         resolved_mode: ResolvedMode,
     ) -> OrchestratorRun:
         history = projected_history
@@ -1657,9 +1657,6 @@ async def run_child_session(
         summary = _child_summary(prepared, status)
     except LeaseLostError:
         raise
-    except LoopCancelled:
-        status, journal_reason = "cancelled", "cancelled"
-        summary = _child_summary(prepared, "cancelled")
     except Exception as exc:
         status, journal_reason = "failed", "abandoned"
         summary = f"Child session failed: {exc}"
@@ -1774,8 +1771,6 @@ def _outcome_from_terminal(
 def _child_status(reason: str) -> tuple[Literal["succeeded", "failed", "cancelled"], str]:
     if reason == "cancelled":
         return "cancelled", "cancelled"
-    if reason == "provider_error":
-        return "failed", "abandoned"
     return "succeeded", "completed"
 
 

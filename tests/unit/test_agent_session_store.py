@@ -12,16 +12,15 @@ from dlightrag.agent.session.entries import (
     UserMessageEntry,
 )
 from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
-from dlightrag.agent.session.memory import InMemoryAgentSessionStore
 from dlightrag.agent.session.projection import ContextProjection
 from dlightrag.agent.session.store import (
     EffectAlreadySettled,
     EffectCommit,
     EffectMissing,
-    NoHostUpdate,
     SessionCommit,
     VersionConflict,
 )
+from tests.in_memory_session_store import InMemoryAgentSessionStore, NoHostUpdate
 
 
 def _now() -> datetime:

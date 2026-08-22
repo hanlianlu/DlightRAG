@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 
 from dlightrag.agent.session.entries import UserMessageEntry
 from dlightrag.agent.session.ids import EntryId, ProjectionId, SessionId
-from dlightrag.agent.session.memory import InMemoryAgentSessionStore
 from dlightrag.agent.session.projection import (
     CompactionSummary,
     ContextProjection,
@@ -17,6 +16,7 @@ from dlightrag.agent.session.store import SessionCommit
 from dlightrag.agent.tools.contracts import ExecutedTurn
 from dlightrag.ai.messages import AssistantTurn
 from dlightrag.answer.executor import JournalRunBoundaries
+from tests.in_memory_session_store import InMemoryAgentSessionStore
 
 
 @dataclass

@@ -223,12 +223,12 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         config = config.model_copy(update={"workspace": workspace})
     print(f"Workspace: {workspace}\n")
 
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
 
     service = await WorkspaceRag.acreate(
         workspace_id=workspace,
         settings=rag_settings(config),
-        backend=PGCorpusBackendFactory(config).create(),
+        backend=build_pg_corpus_backend(config),
         scheduler=ModelScheduler(max_concurrency=config.models.max_concurrency),
         telemetry=LangfuseTelemetry(),
     )

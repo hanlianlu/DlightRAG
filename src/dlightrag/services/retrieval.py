@@ -16,7 +16,7 @@ from dlightrag.ai.settings import ModelSettings
 from dlightrag.ai.telemetry import Telemetry
 from dlightrag.rag.federation import federated_retrieve
 from dlightrag.rag.lifecycle import await_shared_cleanup
-from dlightrag.rag.pool import WorkspacePool, WorkspaceUnavailableError
+from dlightrag.rag.pool import WorkspacePool
 from dlightrag.rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
 from dlightrag.rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
 from dlightrag.services.errors import CorpusUnavailableError
@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 type SchemaLookup = Callable[[Sequence[str]], Awaitable[dict[str, Any]]]
 type QueryImagePreparer = Callable[[Sequence[Mapping[str, Any]]], Awaitable[list[str]]]
+type RetrievalProjection = Callable[[RetrievalResult, "RetrieveProjection"], "ProjectedRetrieval"]
 
 
 class RetrievalTimeoutError(RuntimeError):
@@ -76,14 +77,6 @@ class RetrieveResponse:
     sources: tuple[Mapping[str, Any], ...]
     trace: Mapping[str, Any]
     image_descriptions: tuple[str, ...]
-
-
-class RetrievalProjector(Protocol):
-    def project(
-        self,
-        result: RetrievalResult,
-        projection: RetrieveProjection,
-    ) -> ProjectedRetrieval: ...
 
 
 class PlannerProvider(Protocol):
@@ -158,7 +151,7 @@ class RetrievalService:
         planners: PlannerProvider,
         schema_lookup: SchemaLookup,
         image_preparer: QueryImagePreparer,
-        projector: RetrievalProjector,
+        projector: RetrievalProjection,
         settings: RetrievalSettings,
         telemetry: Telemetry,
         clock: Callable[[], float] = time.monotonic,
@@ -182,11 +175,8 @@ class RetrievalService:
         return self._closed
 
     async def _acquire(self, workspace: str) -> Any:
-        """Acquire one runtime with the pool error translated to a product type."""
-        try:
-            return await self._pool.acquire(workspace)
-        except WorkspaceUnavailableError as exc:
-            raise CorpusUnavailableError(str(exc)) from exc
+        """Acquire one already-authorized workspace runtime."""
+        return await self._pool.acquire(workspace)
 
     def planner_for(self, model_profile: ModelProfile | None = None) -> RetrievalPlanner:
         if self._closed:
@@ -271,7 +261,7 @@ class RetrievalService:
             query_images=images,
             image_descriptions=descriptions,
         )
-        projected = self._projector.project(result, request.projection)
+        projected = self._projector(result, request.projection)
         return RetrieveResponse(
             contexts=projected.contexts,
             sources=projected.sources,
@@ -357,20 +347,17 @@ class RetrievalService:
                 "has_filters": effective_filters is not None,
             },
         ) as observation:
-            try:
-                if len(workspaces) == 1:
-                    runtime = await self._pool.acquire(workspaces[0])
-                    result = await runtime.aretrieve(plan.standalone_query, **kwargs)
-                else:
-                    result = await federated_retrieve(
-                        plan.standalone_query,
-                        list(workspaces),
-                        self._acquire,
-                        max_concurrency=self._settings.workspace_fanout_concurrency,
-                        **kwargs,
-                    )
-            except WorkspaceUnavailableError as exc:
-                raise CorpusUnavailableError(str(exc)) from exc
+            if len(workspaces) == 1:
+                runtime = await self._pool.acquire(workspaces[0])
+                result = await runtime.aretrieve(plan.standalone_query, **kwargs)
+            else:
+                result = await federated_retrieve(
+                    plan.standalone_query,
+                    list(workspaces),
+                    self._acquire,
+                    max_concurrency=self._settings.workspace_fanout_concurrency,
+                    **kwargs,
+                )
             result.image_descriptions = list(image_descriptions)
             result.trace["query_image_description_count"] = len(image_descriptions)
             observation.update(
@@ -429,7 +416,6 @@ __all__ = [
     "RetrieveProjection",
     "RetrieveRequest",
     "RetrieveResponse",
-    "RetrievalProjector",
     "RetrievalPlannerRuntime",
     "RetrievalService",
     "RetrievalSettings",

@@ -9,9 +9,9 @@ import pytest
 
 from dlightrag.adapters.postgres import corpus as corpus_module
 from dlightrag.adapters.postgres.corpus import (
-    PGCorpusBackendFactory,
     PGCorpusCoordination,
     PGCorpusRuntimeBinder,
+    build_pg_corpus_backend,
 )
 from dlightrag.config import DlightragConfig
 from dlightrag.rag.retrieval.bm25 import BM25Profile
@@ -74,14 +74,9 @@ def test_backend_factory_applies_lightrag_environment_on_create(
         lambda _self, *, force=False: apply_runtime(force=force),
     )
 
-    factory = PGCorpusBackendFactory(test_config)
+    backend = build_pg_corpus_backend(test_config)
 
-    apply_backend.assert_not_called()
-    apply_sidecar.assert_not_called()
-    apply_runtime.assert_not_called()
-
-    factory.create()
-
+    assert backend.workspace_id == test_config.deployment.workspace
     apply_backend.assert_called_once_with(force=True)
     apply_sidecar.assert_called_once_with()
     apply_runtime.assert_called_once_with(force=True)
@@ -106,6 +101,7 @@ async def test_runtime_binder_composes_workspace_stores(
     vector_constructor = MagicMock(return_value=vectors)
     create_bm25 = AsyncMock(return_value=bm25)
     guard = SimpleNamespace(
+        verify_surface=MagicMock(),
         verify_read_only_attach_contract=MagicMock(),
         verify_all=AsyncMock(),
     )
@@ -125,6 +121,7 @@ async def test_runtime_binder_composes_workspace_stores(
 
     metadata_constructor.assert_called_once_with(workspace=config.deployment.workspace)
     guard_constructor.assert_called_once_with(lightrag)
+    guard.verify_surface.assert_called_once_with()
     guard.verify_all.assert_awaited_once_with()
     if is_reader:
         guard.verify_read_only_attach_contract.assert_called_once_with()
@@ -157,7 +154,14 @@ async def test_runtime_binder_rejects_missing_postgres_chunk_backend(
 ) -> None:
     lightrag = SimpleNamespace(
         chunks_vdb=None,
+        text_chunks=None,
+        full_docs=None,
+        doc_status=None,
         initialize_storages=AsyncMock(),
+        finalize_storages=AsyncMock(),
+        aquery_data=AsyncMock(),
+        apipeline_enqueue_documents=AsyncMock(),
+        apipeline_process_enqueue_documents=AsyncMock(),
     )
 
     with pytest.raises(RuntimeError, match="chunks_vdb missing"):

@@ -345,7 +345,9 @@ async def run_rebuild(
             if restore_sidecar_alignment:
                 lightrag_surface = _lightrag_surface(tool)
                 from dlightrag.adapters.postgres.corpus_chunks import PGCorpusChunkStore
+                from dlightrag.adapters.postgres.lightrag_contract import PGLightRAGContractGuard
 
+                PGLightRAGContractGuard(lightrag_surface).verify_surface()
                 stores = LightRAGStores(
                     lightrag_surface,
                     chunk_store=PGCorpusChunkStore(lightrag_surface),

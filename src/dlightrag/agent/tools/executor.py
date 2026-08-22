@@ -265,24 +265,6 @@ class ToolTurnExecutor:
             max_observation_tokens,
         )
 
-    async def run_turn(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[AgentTool],
-        *,
-        tool_choice: ToolChoice = "auto",
-        observation_budget: Callable[[list[dict[str, Any]]], int] | None = None,
-        max_tokens: int | None = None,
-    ) -> ExecutedTurn:
-        """Convenience for hosts without a durable boundary between the model
-
-        call and tool execution: prepare then execute in one step.
-        """
-        prepared = await self.prepare_turn(
-            messages, tools, tool_choice=tool_choice, max_tokens=max_tokens
-        )
-        return await self.execute_prepared(prepared, tools, observation_budget=observation_budget)
-
 
 def _assemble_turn(
     assistant: AssistantTurn,

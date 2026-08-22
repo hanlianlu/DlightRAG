@@ -18,19 +18,15 @@ from dlightrag.rag.sourcing.source_contract import validate_download_uri
 from dlightrag.rag.workspaces import require_canonical_workspace_id
 
 
-class SourceDownloadError(RuntimeError):
-    """Base class for safe source-download preparation failures."""
-
-
-class SourceDownloadInvalidError(SourceDownloadError):
+class SourceDownloadInvalidError(ValueError):
     """Stored source metadata cannot produce a safe download."""
 
 
-class SourceDownloadNotFoundError(SourceDownloadError):
+class SourceDownloadNotFoundError(RuntimeError):
     """The requested document or retained bytes do not exist."""
 
 
-class SourceDownloadUnavailableError(SourceDownloadError):
+class SourceDownloadUnavailableError(RuntimeError):
     """A configured remote storage adapter cannot currently sign a download."""
 
 
@@ -164,7 +160,6 @@ class SourceDownloadService:
 __all__ = [
     "LocalDownloadTarget",
     "RedirectDownloadTarget",
-    "SourceDownloadError",
     "SourceDownloadInvalidError",
     "SourceDownloadNotFoundError",
     "SourceDownloadService",

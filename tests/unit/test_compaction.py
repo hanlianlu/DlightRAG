@@ -15,7 +15,6 @@ from dlightrag.agent.session.entries import (
     UserMessageEntry,
 )
 from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
-from dlightrag.agent.session.memory import InMemoryAgentSessionStore
 from dlightrag.agent.session.projection import CompactionSummary, ContextProjection, TokenAnchor
 from dlightrag.agent.session.store import SessionCommit
 from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
@@ -23,6 +22,7 @@ from dlightrag.ai.messages import ToolCall
 from dlightrag.ai.providers.base import is_provider_context_overflow
 from dlightrag.answer.agent.compaction import CompactionCoordinator, parse_compaction_summary
 from dlightrag.answer.errors import AnswerInputOverflowError
+from tests.in_memory_session_store import InMemoryAgentSessionStore
 
 _MARKDOWN = """\
 ## Goal

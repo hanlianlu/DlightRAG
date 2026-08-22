@@ -17,7 +17,7 @@ from uuid import uuid4
 from dlightrag_memory import Memory
 
 from dlightrag.agent.environment.access import AccessScheduler, PathAccess
-from dlightrag.agent.loop import AgentLoop, LoopCancelled
+from dlightrag.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.agent.session.effects import EffectIntent
 from dlightrag.agent.session.fold import PriorTurns, SessionEpisode, fold_entries
 from dlightrag.agent.session.ids import SessionId
@@ -189,7 +189,7 @@ class AnswerOrchestrator:
         model_profile: ModelProfile,
         context_policy: ContextPolicy = CONTEXT_POLICY,
         telemetry: Telemetry,
-        environment: object | None = None,
+        environment: LocalExecutionEnvironment | None = None,
         resource_reader: object | None = None,
         resolved_mode: ResolvedMode,
         delegate_host: DelegateHost | None = None,
@@ -361,36 +361,32 @@ class AnswerOrchestrator:
         return run.evidence.contexts, stream
 
     async def research_until_stopped(self, run: PreparedRun, *, boundaries: RunBoundaries) -> None:
-        """Run evidence turns until AgentLoop reports a terminal stop."""
-
-        class _Host:
-            async def check_cancelled(self) -> None:
-                try:
-                    await boundaries.check_cancelled()
-                except Exception as exc:
-                    if exc.__class__.__name__ in {"RunCancelledError", "AnswerRunCancelledError"}:
-                        raise LoopCancelled from exc
+        """Run durable evidence turns until cancellation or model silence."""
+        while True:
+            try:
+                await boundaries.check_cancelled()
+            except Exception as exc:
+                if exc.__class__.__name__ not in {"RunCancelledError", "AnswerRunCancelledError"}:
                     raise
+                run.stop_reason = "cancelled"
+                return
 
-            async def run_turn(self) -> ExecutedTurn:
-                await boundaries.enter_phase("researching")
-                turn_number = run.agent_turn_count + 1
-                try:
-                    executed = await self_outer._durable_control_turn(
-                        run, boundaries, turn_number=turn_number
-                    )
-                except Exception as exc:
-                    executed = await self_outer._handle_overflow_retry(
-                        exc, run, boundaries, turn_number=turn_number
-                    )
-                run.agent_turn_count += 1
-                run.trace["agent_turns"] = run.agent_turn_count
-                return executed
-
-        self_outer = self
-        outcome = await AgentLoop().run(_Host())
-        run.stop_reason = outcome.reason
-        run.last_turn = outcome.last_turn
+            await boundaries.enter_phase("researching")
+            turn_number = run.agent_turn_count + 1
+            try:
+                executed = await self._durable_control_turn(
+                    run, boundaries, turn_number=turn_number
+                )
+            except Exception as exc:
+                executed = await self._handle_overflow_retry(
+                    exc, run, boundaries, turn_number=turn_number
+                )
+            run.agent_turn_count += 1
+            run.trace["agent_turns"] = run.agent_turn_count
+            run.last_turn = executed
+            if not executed.assistant.tool_calls:
+                run.stop_reason = "model_stop"
+                return
 
     # ------------------------------------------------------------------
     # Research helpers
@@ -525,7 +521,7 @@ class AnswerOrchestrator:
             resource_tools=self._resource_tools,
             register_web_source=self._register_web_source,
             resource_reader=self._resource_reader,
-            environment=self._environment,  # type: ignore[arg-type]
+            environment=self._environment,
             scheduler=self._access,
             spill=(None if child or self._workspace is None else self._spill_writer()),
             delegate_host=None if child else self._delegate_host,

@@ -8,18 +8,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from dlightrag.rag.pool import WorkspacePool, WorkspaceUnavailableError
-from dlightrag.rag.ports import CorpusSchemaError, WorkspaceCorpusBackend
-from dlightrag.rag.settings import RagSettings
+from dlightrag.rag.ports import CorpusSchemaError
 from dlightrag.rag.workspace_rag import WorkspaceRag
 
 
 def _pool(build, *, clock=lambda: 0.0) -> WorkspacePool:
-    return WorkspacePool(
-        settings_for=lambda _workspace: cast(RagSettings, object()),
-        backend_for=lambda _workspace: cast(WorkspaceCorpusBackend, object()),
-        build=build,
-        clock=clock,
-    )
+    return WorkspacePool(build=build, clock=clock)
 
 
 async def test_concurrent_acquire_creates_one_runtime_and_clears_backoff() -> None:

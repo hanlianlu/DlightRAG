@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 from dlightrag.agent.environment.access import PathAccess
 from dlightrag.agent.session.effects import EffectIntent
 from dlightrag.agent.session.ids import IntentId, SessionId
-from dlightrag.agent.session.memory import InMemoryAgentSessionStore
 from dlightrag.agent.tools.context import bind_tool_call, reset_tool_call
 from dlightrag.ai.capacity import CONTEXT_POLICY
 from dlightrag.ai.messages import AssistantTurn
@@ -28,6 +27,7 @@ from dlightrag.answer.tools.delegate import (
     delegate_research_tool,
 )
 from dlightrag.runtime import RunCancelledError
+from tests.in_memory_session_store import InMemoryAgentSessionStore
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
@@ -175,9 +175,7 @@ class _FakeSession:
         return None
 
 
-def _child_orchestrator(
-    model_func: Any, *, environment: object | None = None
-) -> AnswerOrchestrator:
+def _child_orchestrator(model_func: Any, *, environment: Any = None) -> AnswerOrchestrator:
     profile = answer_model_profile()
 
     async def retrieve(_query: str) -> Any:

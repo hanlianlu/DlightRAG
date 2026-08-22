@@ -89,15 +89,12 @@ async def test_bm25_rebuild_provisions_indexes_then_relabels(
             finally:
                 events.append("prerequisites:exit")
 
-    class Factory:
-        def __init__(self, resolved_config: object) -> None:
-            assert resolved_config is config
-            events.append("factory")
+    def build_backend(resolved_config: object) -> SimpleNamespace:
+        assert resolved_config is config
+        events.append("factory")
+        return SimpleNamespace(coordination=Coordination())
 
-        def create(self) -> SimpleNamespace:
-            return SimpleNamespace(coordination=Coordination())
-
-    monkeypatch.setattr(module, "PGCorpusBackendFactory", Factory)
+    monkeypatch.setattr(module, "build_pg_corpus_backend", build_backend)
 
     async def rebuild(config: Any, **kwargs: Any) -> dict[str, int]:
         events.append(("rebuild", config, kwargs))

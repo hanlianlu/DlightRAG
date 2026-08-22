@@ -9,6 +9,7 @@ import signal
 import stat
 import tempfile
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from dlightrag.agent.environment.errors import (
@@ -17,7 +18,24 @@ from dlightrag.agent.environment.errors import (
     PathRejected,
     WorkspaceQuotaExceeded,
 )
-from dlightrag.agent.environment.protocol import CompletedProcess, DirectoryEntry
+
+
+@dataclass(frozen=True, slots=True)
+class DirectoryEntry:
+    """One listing row: relative name, type, and size in bytes."""
+
+    name: str
+    kind: str
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedProcess:
+    """One child-process result: exit code and captured text."""
+
+    returncode: int
+    stdout: str
+    stderr: str
 
 
 class LocalExecutionEnvironment:
@@ -132,7 +150,7 @@ class LocalExecutionEnvironment:
                 process.communicate(), timeout=timeout_seconds
             )
         except TimeoutError:
-            self.terminate_group(process)
+            self._terminate_group(process)
             stdout_bytes, stderr_bytes = await process.communicate()
             return CompletedProcess(
                 returncode=process.returncode or -signal.SIGKILL,
@@ -145,7 +163,7 @@ class LocalExecutionEnvironment:
             stderr=_decode_output(stderr_bytes),
         )
 
-    def terminate_group(self, process: object) -> None:
+    def _terminate_group(self, process: object) -> None:
         pid = getattr(process, "pid", None)
         if pid is None:
             return
@@ -183,4 +201,4 @@ def _decode_output(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-__all__ = ["LocalExecutionEnvironment"]
+__all__ = ["CompletedProcess", "DirectoryEntry", "LocalExecutionEnvironment"]

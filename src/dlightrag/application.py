@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -108,15 +108,14 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from PIL import Image
 
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
+    from dlightrag.adapters.postgres.corpus import PGReadinessProbe, build_pg_corpus_backend
     from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.memory_settings import PGMemorySettingsStore
     from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
-    from dlightrag.adapters.postgres.retrieval import PGWorkspaceSchemaLookup
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
     from dlightrag.adapters.retrieval import (
         AnswerQueryImagePreparer,
-        AnswerRetrievalProjector,
+        project_answer_retrieval,
     )
     from dlightrag.ai.fingerprints import model_fingerprint
     from dlightrag.ai.media import MAX_DECODE_IMAGE_PIXELS
@@ -145,8 +144,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.observability import LangfuseTelemetry
     from dlightrag.rag.ingestion.jobs import IngestJobCoordinator
     from dlightrag.rag.pool import WorkspacePool
-    from dlightrag.rag.ports import CorpusSchemaError, WorkspaceCorpusBackend
-    from dlightrag.rag.settings import RagSettings
+    from dlightrag.rag.ports import CorpusSchemaError
     from dlightrag.rag.source_download import SourceDownloadService
     from dlightrag.rag.workspace_rag import WorkspaceRag
     from dlightrag.rag.workspaces import normalize_workspace
@@ -162,7 +160,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     health = ApplicationHealth(readiness_probe=PGReadinessProbe(config))
     scheduler = ModelScheduler(max_concurrency=config.models.max_concurrency)
     telemetry = LangfuseTelemetry()
-    corpus_backend = PGCorpusBackendFactory(config).create()
+    corpus_backend = build_pg_corpus_backend(config)
 
     # Image capability is role-specific but cached per resolved model config,
     # so roles that share one model share one probe.
@@ -179,11 +177,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         deployment = config.deployment.model_copy(update={"workspace": workspace_id})
         return config.model_copy(update={"deployment": deployment})
 
-    async def build_workspace(
-        workspace_id: str,
-        settings: RagSettings,
-        backend: WorkspaceCorpusBackend,
-    ) -> WorkspaceRag:
+    async def build_workspace(workspace_id: str) -> WorkspaceRag:
+        resolved = workspace_config(workspace_id)
+        settings = rag_settings(resolved)
+        backend = build_pg_corpus_backend(resolved)
         try:
             runtime = await WorkspaceRag.acreate(
                 workspace_id=workspace_id,
@@ -200,11 +197,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         logger.info("Created WorkspaceRag for workspace '%s'", safe_log_text(workspace_id))
         return runtime
 
-    pool = WorkspacePool(
-        settings_for=lambda workspace: rag_settings(workspace_config(workspace)),
-        backend_for=lambda workspace: PGCorpusBackendFactory(workspace_config(workspace)).create(),
-        build=build_workspace,
-    )
+    pool = WorkspacePool(build=build_workspace)
 
     source_download_settings = rag_settings(config)
     corpora = CorpusAdmin(
@@ -237,6 +230,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         models=models,
         capabilities=capabilities,
     )
+    schema_index = PGMetadataIndex(workspace=normalize_workspace(config.deployment.workspace))
+
+    async def schema_lookup(workspaces: Sequence[str]) -> dict[str, Any]:
+        return await schema_index.get_field_schema(workspaces=tuple(workspaces))
+
     retrieval = RetrievalService(
         pool=pool,
         planners=RetrievalPlannerRuntime(
@@ -245,11 +243,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             scheduler=scheduler,
             telemetry=telemetry,
         ),
-        schema_lookup=PGWorkspaceSchemaLookup(
-            default_workspace=normalize_workspace(config.deployment.workspace)
-        ),
+        schema_lookup=schema_lookup,
         image_preparer=AnswerQueryImagePreparer(capabilities=capabilities, models=models),
-        projector=AnswerRetrievalProjector(),
+        projector=project_answer_retrieval,
         settings=retrieval_settings(config),
         telemetry=telemetry,
     )
@@ -516,7 +512,6 @@ class Application:
 
     async def _warm_default_workspace(self) -> str | None:
         """Warm the default workspace; return the detail that degrades startup."""
-        from dlightrag.rag.pool import WorkspaceUnavailableError
         from dlightrag.rag.ports import CorpusSchemaError
         from dlightrag.rag.workspaces import normalize_workspace
         from dlightrag.services.errors import CorpusUnavailableError, StorageSchemaError
@@ -526,8 +521,8 @@ class Application:
             await self._components.pool.acquire(workspace)
         except CorpusSchemaError as exc:
             raise StorageSchemaError(str(exc)) from exc
-        except WorkspaceUnavailableError as exc:
-            raise CorpusUnavailableError(str(exc)) from exc
+        except CorpusUnavailableError:
+            raise
         except Exception as exc:
             logger.warning("Failed to warm up default workspace '%s'", workspace, exc_info=True)
             return str(getattr(exc, "detail", None) or exc) or "unknown"

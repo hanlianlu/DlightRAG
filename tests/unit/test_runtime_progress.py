@@ -123,7 +123,7 @@ class TestBoundStores:
 
 class TestRunExecutionContext:
     def test_context_is_frozen_and_carries_the_claim_binding(self) -> None:
-        from dlightrag.agent.session.memory import InMemoryAgentSessionStore
+        from tests.in_memory_session_store import InMemoryAgentSessionStore
 
         class _NoopProgress:
             async def load_stage(self, stage_intent_id):  # type: ignore[no-untyped-def]

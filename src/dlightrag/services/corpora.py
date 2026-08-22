@@ -16,16 +16,13 @@ from dlightrag.ai.telemetry import safe_log_text
 from dlightrag.rag.contracts import IngestDocument, SourceType, VisualAssetSize
 from dlightrag.rag.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag.rag.ingestion.uploads import (
-    UploadTooLargeError as RagUploadTooLargeError,
-)
-from dlightrag.rag.ingestion.uploads import (
     ignored_upload,
     safe_upload_basename,
     safe_upload_destination,
     upload_batch_dir,
     write_upload_stream,
 )
-from dlightrag.rag.pool import WorkspacePool, WorkspaceUnavailableError
+from dlightrag.rag.pool import WorkspacePool
 from dlightrag.rag.ports import (
     JOB_STATES_WITH_RESULT,
     CorpusMaintenanceStore,
@@ -34,38 +31,10 @@ from dlightrag.rag.ports import (
 )
 from dlightrag.rag.reset import areset_orphaned_workspace
 from dlightrag.rag.retrieval import MetadataFilter
-from dlightrag.rag.retrieval.metadata_fields import (
-    MetadataValidationError as RagMetadataValidationError,
-)
-from dlightrag.rag.source_download import (
-    LocalDownloadTarget as RagLocalDownloadTarget,
-)
-from dlightrag.rag.source_download import (
-    RedirectDownloadTarget as RagRedirectDownloadTarget,
-)
-from dlightrag.rag.source_download import (
-    SourceDownloadInvalidError as RagSourceDownloadInvalidError,
-)
-from dlightrag.rag.source_download import (
-    SourceDownloadNotFoundError as RagSourceDownloadNotFoundError,
-)
-from dlightrag.rag.source_download import (
-    SourceDownloadTarget as RagSourceDownloadTarget,
-)
-from dlightrag.rag.source_download import (
-    SourceDownloadUnavailableError as RagSourceDownloadUnavailableError,
-)
 from dlightrag.rag.workspace_rag import WorkspaceRag
 from dlightrag.rag.workspaces import normalize_workspace, require_canonical_workspace_id
 from dlightrag.services.errors import (
-    CorpusUnavailableError,
-    LocalDownloadTarget,
-    MetadataValidationError,
-    RedirectDownloadTarget,
-    SourceDownloadInvalidError,
-    SourceDownloadNotFoundError,
     SourceDownloadTarget,
-    SourceDownloadUnavailableError,
     StorageSchemaError,
     UnsafeUploadNameError,
     UploadTooLargeError,
@@ -82,12 +51,6 @@ async def _acquire_workspace(pool: WorkspacePool, workspace: str) -> WorkspaceRa
         return await pool.acquire(workspace)
     except CorpusSchemaError as exc:
         raise StorageSchemaError(str(exc)) from exc
-    except WorkspaceUnavailableError as exc:
-        raise CorpusUnavailableError(str(exc)) from exc
-
-
-def _product_metadata_error(exc: RagMetadataValidationError) -> MetadataValidationError:
-    return MetadataValidationError(str(exc))
 
 
 def validate_workspace_name(name: str, *, max_length: int = 64) -> str:
@@ -400,7 +363,7 @@ class UploadReader(Protocol):
 
 
 class SourceDownloadPreparer(Protocol):
-    async def prepare(self, document_id: str) -> RagSourceDownloadTarget: ...
+    async def prepare(self, document_id: str) -> SourceDownloadTarget: ...
 
 
 type SourceDownloadFactory = Callable[[str], SourceDownloadPreparer]
@@ -561,25 +524,9 @@ class CorpusAdmin:
         workspace_id: str,
         document_id: str,
     ) -> SourceDownloadTarget:
-        """Resolve one source download into a product target type."""
+        """Resolve one source download into its canonical target type."""
         workspace = require_canonical_workspace_id(workspace_id)
-        try:
-            target = await self._source_download_for(workspace).prepare(document_id)
-        except RagSourceDownloadInvalidError as exc:
-            raise SourceDownloadInvalidError(str(exc)) from exc
-        except RagSourceDownloadNotFoundError as exc:
-            raise SourceDownloadNotFoundError(str(exc)) from exc
-        except RagSourceDownloadUnavailableError as exc:
-            raise SourceDownloadUnavailableError(str(exc)) from exc
-        if isinstance(target, RagLocalDownloadTarget):
-            return LocalDownloadTarget(
-                path=target.path,
-                media_type=target.media_type,
-                filename=target.filename,
-            )
-        if isinstance(target, RagRedirectDownloadTarget):
-            return RedirectDownloadTarget(url=target.url)
-        raise TypeError("Unsupported source download target")
+        return await self._source_download_for(workspace).prepare(document_id)
 
     async def stage_upload_stream(
         self,
@@ -602,10 +549,7 @@ class CorpusAdmin:
         target_dir = Path(self._settings.input_root) / workspace
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / safe_name
-        try:
-            await write_upload_stream(reader, target_path, max_bytes=max_bytes)
-        except RagUploadTooLargeError as exc:
-            raise UploadTooLargeError(str(exc)) from exc
+        await write_upload_stream(reader, target_path, max_bytes=max_bytes)
         return target_path, safe_name
 
     async def stage_upload_batch(
@@ -640,9 +584,9 @@ class CorpusAdmin:
                     bytes_written=bytes_written,
                 )
                 saved_paths.append(dest)
-        except RagUploadTooLargeError as exc:
+        except UploadTooLargeError:
             shutil.rmtree(upload_dir, ignore_errors=True)
-            raise UploadTooLargeError(str(exc)) from exc
+            raise
         except BaseException:
             shutil.rmtree(upload_dir, ignore_errors=True)
             raise
@@ -693,10 +637,7 @@ class CorpusAdmin:
 
     async def get_metadata(self, workspace_id: str, document_id: str) -> dict[str, Any]:
         runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
-        try:
-            return await runtime.aget_metadata(document_id)
-        except RagMetadataValidationError as exc:
-            raise _product_metadata_error(exc) from exc
+        return await runtime.aget_metadata(document_id)
 
     async def update_metadata(
         self,
@@ -706,10 +647,7 @@ class CorpusAdmin:
     ) -> None:
         self._require_writer("metadata update")
         runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
-        try:
-            await runtime.aupdate_metadata(document_id, data)
-        except RagMetadataValidationError as exc:
-            raise _product_metadata_error(exc) from exc
+        await runtime.aupdate_metadata(document_id, data)
 
     async def search_metadata(
         self,
@@ -717,10 +655,7 @@ class CorpusAdmin:
         filters: MetadataFilter,
     ) -> list[str]:
         runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
-        try:
-            return await runtime.asearch_metadata(filters)
-        except RagMetadataValidationError as exc:
-            raise _product_metadata_error(exc) from exc
+        return await runtime.asearch_metadata(filters)
 
     async def reset(
         self,

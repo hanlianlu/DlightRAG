@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from dlightrag.agent.environment import AccessScheduler
-from dlightrag.agent.environment.protocol import ExecutionEnvironment
+from dlightrag.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.agent.tools import AgentTool, ToolResult
 from dlightrag.agent.tools.files import path_tools, read_tool
 from dlightrag.answer.errors import InvalidToolConfigurationError
@@ -33,7 +33,7 @@ def compose_research_tools(
     resource_tools: list[AgentTool],
     register_web_source: RegisterWebSource | None,
     resource_reader: Any | None = None,
-    environment: ExecutionEnvironment | None = None,
+    environment: LocalExecutionEnvironment | None = None,
     scheduler: AccessScheduler | None = None,
     spill: Any | None = None,
     ripgrep: str = "rg",

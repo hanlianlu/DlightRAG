@@ -6,7 +6,7 @@ import asyncio
 import logging
 
 from dlightrag.adapters.postgres._pool import pg_pool
-from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
 from dlightrag.adapters.postgres.corpus_bm25 import (
     rebuild_postgres_bm25,
 )
@@ -64,7 +64,7 @@ async def run_rebuild_bm25(
 
     pg_pool.bind(resolved_config)
     try:
-        backend = PGCorpusBackendFactory(resolved_config).create()
+        backend = build_pg_corpus_backend(resolved_config)
         async with backend.coordination.workspace_initialization():
             return await rebuild_postgres_bm25(
                 resolved_config,

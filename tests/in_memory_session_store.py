@@ -7,7 +7,7 @@ Host updates are :class:`NoHostUpdate`: nothing outside the session changes.
 """
 
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from dlightrag.agent.session.effects import EffectSettlement
 from dlightrag.agent.session.entries import (
@@ -23,12 +23,16 @@ from dlightrag.agent.session.store import (
     EffectAlreadySettled,
     EffectCommit,
     EffectMissing,
-    NoHostUpdate,
     SessionCommit,
     SessionProgressClass,
     SettleCommit,
     VersionConflict,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class NoHostUpdate:
+    """Test adapter marker: session settlement mutates no external host."""
 
 
 class InMemoryAgentSessionStore:

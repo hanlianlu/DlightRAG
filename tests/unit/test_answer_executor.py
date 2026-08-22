@@ -342,7 +342,7 @@ async def test_research_run_seeds_the_pinned_session_journal() -> None:
     )
 
     from dlightrag.agent.session.ids import SessionId
-    from dlightrag.agent.session.memory import InMemoryAgentSessionStore
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
 
     journal = InMemoryAgentSessionStore()
     session = MagicMock(
@@ -391,7 +391,7 @@ async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -
         UserMessageEntry,
     )
     from dlightrag.agent.session.ids import EntryId, SessionId
-    from dlightrag.agent.session.memory import InMemoryAgentSessionStore
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
 
     session_id = SessionId(request.session_id)
     now = datetime.now(UTC)

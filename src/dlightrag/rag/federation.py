@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Federated retrieval across multiple workspaces."""
 
-import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -12,9 +11,6 @@ from dlightrag.ai.telemetry import safe_log_text
 from dlightrag.rag.retrieval import RetrievalResult
 
 logger = logging.getLogger(__name__)
-
-# Type alias for RBAC hook: given requested workspaces, return accessible subset
-WorkspaceFilter = Callable[[list[str]], Awaitable[list[str]]]
 
 
 class WorkspaceRetriever(Protocol):
@@ -129,8 +125,6 @@ async def federated_retrieve(
     top_k: int | None = None,
     chunk_top_k: int | None = None,
     max_concurrency: int = 8,
-    per_workspace_timeout: float | None = None,
-    workspace_filter: WorkspaceFilter | None = None,
     **kwargs: Any,
 ) -> RetrievalResult:
     """Execute federated retrieval across multiple workspaces.
@@ -142,69 +136,31 @@ async def federated_retrieve(
         top_k: Per-workspace top_k for vector search.
         chunk_top_k: Final merged chunk count limit.
         max_concurrency: Maximum concurrent workspace queries (default 8).
-        per_workspace_timeout: Optional timeout (seconds) for each workspace
-            query. A workspace exceeding this bound is treated as a partial
-            failure (logged + dropped from the merge), so a single slow
-            backend cannot block the federation. ``None`` disables the cap.
-        workspace_filter: Optional RBAC filter — given requested workspaces,
-            returns the accessible subset.
         **kwargs: Additional kwargs passed to each WorkspaceRag.aretrieve().
+
+    The caller owns empty/single-workspace routing and authorization; this
+    function receives two or more already-authorized workspaces.
     """
-    # Apply RBAC filter if provided
-    if workspace_filter is not None:
-        workspaces = await workspace_filter(workspaces)
+    if len(workspaces) < 2:
+        raise ValueError("federated_retrieve requires at least two workspaces")
 
-    if not workspaces:
-        return RetrievalResult(
-            contexts={"chunks": [], "entities": [], "relationships": []},
-        )
-
-    # Single workspace — no federation overhead
-    if len(workspaces) == 1:
-        svc = await get_service(workspaces[0])
-        result = await svc.aretrieve(query=query, top_k=top_k, chunk_top_k=chunk_top_k, **kwargs)
-        from dlightrag.rag.retrieval.references import tag_context_workspace
-
-        tag_context_workspace(result.contexts, workspaces[0])
-        result.trace.setdefault("workspace", workspaces[0])
-        result.trace.setdefault("federated", False)
-        return result
-
-    # Bounded parallel queries with per-workspace timing + optional timeout.
-    # A slow/hanging workspace is treated as a partial failure rather than
-    # blocking the merge, matching ArtRAG's federation graceful-degradation
-    # contract.
     async def _query_workspace(ws: str) -> RetrievalResult:
         start = time.monotonic()
-        try:
-            svc = await get_service(ws)
-            coro = svc.aretrieve(
-                query=query,
-                top_k=top_k,
-                chunk_top_k=chunk_top_k,
-                **kwargs,
-            )
-            if per_workspace_timeout is not None:
-                result = await asyncio.wait_for(coro, timeout=per_workspace_timeout)
-            else:
-                result = await coro
-            elapsed = time.monotonic() - start
-            logger.info(
-                "Federation workspace '%s' retrieved %d chunks in %.2fs",
-                safe_log_text(ws),
-                len(result.contexts.get("chunks", [])),
-                elapsed,
-            )
-            return result
-        except TimeoutError:
-            elapsed = time.monotonic() - start
-            logger.warning(
-                "Federation workspace '%s' timed out after %.2fs (cap=%.2fs)",
-                safe_log_text(ws),
-                elapsed,
-                per_workspace_timeout or 0.0,
-            )
-            raise
+        svc = await get_service(ws)
+        result = await svc.aretrieve(
+            query=query,
+            top_k=top_k,
+            chunk_top_k=chunk_top_k,
+            **kwargs,
+        )
+        elapsed = time.monotonic() - start
+        logger.info(
+            "Federation workspace '%s' retrieved %d chunks in %.2fs",
+            safe_log_text(ws),
+            len(result.contexts.get("chunks", [])),
+            elapsed,
+        )
+        return result
 
     coros = [_query_workspace(ws) for ws in workspaces]
     raw_results = await bounded_gather(

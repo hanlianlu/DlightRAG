@@ -264,7 +264,6 @@ forbidden_modules = [
     "dlightrag.rag.ingestion",
     "dlightrag.rag.source_download",
     "dlightrag.rag.federation",
-    "dlightrag.rag.lightrag_contract",
     "dlightrag.rag.lightrag_models",
     "dlightrag.rag.lightrag_stores",
     "dlightrag.rag.rerank",

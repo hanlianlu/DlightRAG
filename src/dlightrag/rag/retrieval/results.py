@@ -4,7 +4,6 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from dlightrag.rag.contracts import Reference
 from dlightrag.rag.retrieval.models import ContextRow
 
 RetrievalContexts = dict[str, list[ContextRow]]
@@ -17,7 +16,6 @@ class RetrievalResult:
     contexts: RetrievalContexts = field(
         default_factory=lambda: {"chunks": [], "entities": [], "relationships": []}
     )
-    references: list[Reference] = field(default_factory=list)
     image_descriptions: list[str] = field(default_factory=list)
     trace: dict[str, Any] = field(default_factory=dict)
 

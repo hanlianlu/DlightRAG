@@ -9,20 +9,16 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from dlightrag.rag.lifecycle import await_shared_cleanup, defer_cancellation
-from dlightrag.rag.ports import CorpusSchemaError, WorkspaceCorpusBackend
-from dlightrag.rag.settings import RagSettings
+from dlightrag.rag.ports import CorpusSchemaError, CorpusUnavailableError
 from dlightrag.rag.workspace_rag import WorkspaceRag
 from dlightrag.rag.workspaces import require_canonical_workspace_id
 
 logger = logging.getLogger(__name__)
 
-type WorkspaceBuilder = Callable[
-    [str, RagSettings, WorkspaceCorpusBackend],
-    Awaitable[WorkspaceRag],
-]
+type WorkspaceBuilder = Callable[[str], Awaitable[WorkspaceRag]]
 
 
-class WorkspaceUnavailableError(RuntimeError):
+class WorkspaceUnavailableError(CorpusUnavailableError):
     """One canonical workspace runtime is temporarily unavailable."""
 
     def __init__(self, detail: str | None = None) -> None:
@@ -36,16 +32,12 @@ class WorkspacePool:
     def __init__(
         self,
         *,
-        settings_for: Callable[[str], RagSettings],
-        backend_for: Callable[[str], WorkspaceCorpusBackend],
         build: WorkspaceBuilder,
         clock: Callable[[], float] = time.monotonic,
         initial_backoff_seconds: float = 15.0,
         max_backoff_seconds: float = 300.0,
         warm_concurrency: int = 8,
     ) -> None:
-        self._settings_for = settings_for
-        self._backend_for = backend_for
         self._build = build
         self._clock = clock
         self._initial_backoff = initial_backoff_seconds
@@ -91,11 +83,7 @@ class WorkspacePool:
                 return loaded
             self._raise_during_backoff(workspace)
             try:
-                runtime = await self._build(
-                    workspace,
-                    self._settings_for(workspace),
-                    self._backend_for(workspace),
-                )
+                runtime = await self._build(workspace)
             except CorpusSchemaError:
                 raise
             except Exception as exc:

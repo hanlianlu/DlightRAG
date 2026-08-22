@@ -145,8 +145,8 @@ class _MemoryStore:
             row["lease_owner"] = worker_id
             row["lease_live"] = True
             row["fencing_epoch"] = int(row["fencing_epoch"]) + 1
-            from dlightrag.agent.session.memory import InMemoryAgentSessionStore
             from dlightrag.runtime.records import RunExecutionContext
+            from tests.in_memory_session_store import InMemoryAgentSessionStore
 
             class _Progress:
                 def __init__(self, store, run_id):

@@ -33,7 +33,7 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from dlightrag.ai.fingerprints import normalized_endpoint_fingerprint
+from dlightrag.ai.fingerprints import ModelFingerprint, model_endpoint_fingerprint
 from dlightrag.ai.settings import (
     FrozenSettings,
     ModelsSettings,
@@ -626,12 +626,12 @@ class DlightragConfig(BaseSettings):
             raise ValueError("bm25_profiles names must be unique")
         if self.corpus.retrieval.bm25_enabled and not any(p.fallback for p in profiles):
             raise ValueError("bm25_profiles must include at least one fallback profile")
-        seen: set[tuple[str, str, str | None]] = set()
+        seen: set[ModelFingerprint] = set()
         for override in self.models.capacity_overrides:
-            key = (
+            key = model_endpoint_fingerprint(
                 override.provider,
                 override.model,
-                normalized_endpoint_fingerprint(override.base_url),
+                override.base_url,
             )
             if key in seen:
                 raise ValueError(

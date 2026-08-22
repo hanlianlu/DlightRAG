@@ -316,6 +316,7 @@ class PGCorpusRuntimeBinder:
     async def attach(self, lightrag: Any) -> WorkspaceCorpusStores:
         config = self._config
         guard = PGLightRAGContractGuard(lightrag)
+        guard.verify_surface()
         if config.is_reader:
             guard.verify_read_only_attach_contract()
             await attach_lightrag_storages_read_only(lightrag, config=config)
@@ -367,41 +368,32 @@ def apply_lightrag_environment(config: DlightragConfig) -> None:
     config.apply_lightrag_runtime_env(force=True)
 
 
-class PGCorpusBackendFactory:
-    """Translate one root config into a coherent PostgreSQL corpus backend."""
-
-    def __init__(self, config: DlightragConfig) -> None:
-        self._config = config
-        self._backend: WorkspaceCorpusBackend | None = None
-
-    def create(self) -> WorkspaceCorpusBackend:
-        if self._backend is None:
-            apply_lightrag_environment(self._config)
-            required_extensions: tuple[str, ...] = ()
-            if self._config.corpus.retrieval.bm25_enabled:
-                required_extensions = required_postgres_extensions(
-                    profiles_from_config(self._config.corpus.retrieval.bm25_profiles)
-                )
-            connection_kwargs = self._config.pg_connection_kwargs()
-            self._backend = WorkspaceCorpusBackend(
-                workspace_id=self._config.deployment.workspace,
-                read_only=self._config.is_reader,
-                coordination=PGCorpusCoordination(
-                    connection_kwargs=connection_kwargs,
-                    workspace=self._config.deployment.workspace,
-                    reader=self._config.is_reader,
-                    require_halfvec=self._config.storage.lightrag.vector_index_type
-                    == "HNSW_HALFVEC",
-                    required_extensions=required_extensions,
-                    lightrag_pool_max_size=self._config.storage.postgres.lightrag_pool_max_size,
-                    domain_pool_max_size=self._config.storage.postgres.pool_max_size,
-                    acquire_timeout=self._config.storage.postgres.acquire_timeout,
-                ),
-                maintenance=PGCorpusMaintenanceStore(connection_kwargs),
-                runtime=PGCorpusRuntimeBinder(self._config),
-                ingest_jobs=PGIngestJobStore(),
-            )
-        return self._backend
+def build_pg_corpus_backend(config: DlightragConfig) -> WorkspaceCorpusBackend:
+    """Translate one root config into one coherent PostgreSQL corpus backend."""
+    apply_lightrag_environment(config)
+    required_extensions: tuple[str, ...] = ()
+    if config.corpus.retrieval.bm25_enabled:
+        required_extensions = required_postgres_extensions(
+            profiles_from_config(config.corpus.retrieval.bm25_profiles)
+        )
+    connection_kwargs = config.pg_connection_kwargs()
+    return WorkspaceCorpusBackend(
+        workspace_id=config.deployment.workspace,
+        read_only=config.is_reader,
+        coordination=PGCorpusCoordination(
+            connection_kwargs=connection_kwargs,
+            workspace=config.deployment.workspace,
+            reader=config.is_reader,
+            require_halfvec=config.storage.lightrag.vector_index_type == "HNSW_HALFVEC",
+            required_extensions=required_extensions,
+            lightrag_pool_max_size=config.storage.postgres.lightrag_pool_max_size,
+            domain_pool_max_size=config.storage.postgres.pool_max_size,
+            acquire_timeout=config.storage.postgres.acquire_timeout,
+        ),
+        maintenance=PGCorpusMaintenanceStore(connection_kwargs),
+        runtime=PGCorpusRuntimeBinder(config),
+        ingest_jobs=PGIngestJobStore(),
+    )
 
 
 class PGReadinessProbe:
@@ -432,7 +424,7 @@ class PGReadinessProbe:
 
 
 __all__ = [
-    "PGCorpusBackendFactory",
+    "build_pg_corpus_backend",
     "PGCorpusCoordination",
     "PGCorpusMaintenanceStore",
     "PGCorpusRuntimeBinder",

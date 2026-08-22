@@ -4,7 +4,7 @@
 import asyncio
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,7 +12,7 @@ from dlightrag.rag.lifecycle import await_shared_cleanup, shutdown_lightrag_work
 
 
 def _shutdown_target() -> SimpleNamespace:
-    return SimpleNamespace(shutdown=lambda *, graceful=True: None)
+    return SimpleNamespace(shutdown=AsyncMock())
 
 
 async def test_shared_cleanup_preserves_caller_cancellation_over_cleanup_failure() -> None:
@@ -47,15 +47,11 @@ class TestShutdownLightRagWorkerPools:
             },
         )
 
-        with patch(
-            "dlightrag.rag.lifecycle.shutdown_async_callable",
-            new_callable=AsyncMock,
-        ) as shutdown:
-            count = await shutdown_lightrag_worker_pools(lightrag)
+        count = await shutdown_lightrag_worker_pools(lightrag)
 
         assert count == 2
-        shutdown.assert_has_awaits([call(shared), call(rerank)], any_order=True)
-        assert shutdown.await_count == 2
+        shared.shutdown.assert_awaited_once_with(graceful=True)
+        rerank.shutdown.assert_awaited_once_with(graceful=True)
 
     async def test_dry_run_counts_without_shutting_down(self) -> None:
         embedding = _shutdown_target()
@@ -68,14 +64,11 @@ class TestShutdownLightRagWorkerPools:
             },
         )
 
-        with patch(
-            "dlightrag.rag.lifecycle.shutdown_async_callable",
-            new_callable=AsyncMock,
-        ) as shutdown:
-            count = await shutdown_lightrag_worker_pools(lightrag, dry_run=True)
+        count = await shutdown_lightrag_worker_pools(lightrag, dry_run=True)
 
         assert count == 2
-        shutdown.assert_not_awaited()
+        embedding.shutdown.assert_not_called()
+        llm.shutdown.assert_not_called()
 
     async def test_dry_run_counts_discovered_targets_but_real_mode_counts_only_successful_shutdowns(
         self, caplog
@@ -87,24 +80,16 @@ class TestShutdownLightRagWorkerPools:
             _role_llm_states={"query": SimpleNamespace(wrapped=healthy)},
         )
 
-        async def _shutdown(func: object) -> None:
-            if func is broken:
-                raise RuntimeError("boom")
+        broken.shutdown.side_effect = RuntimeError("boom")
 
-        with (
-            patch(
-                "dlightrag.rag.lifecycle.shutdown_async_callable",
-                new_callable=AsyncMock,
-                side_effect=_shutdown,
-            ) as shutdown,
-            caplog.at_level(logging.DEBUG),
-        ):
+        with caplog.at_level(logging.DEBUG):
             dry_run_count = await shutdown_lightrag_worker_pools(lightrag, dry_run=True)
             real_count = await shutdown_lightrag_worker_pools(lightrag)
 
         assert dry_run_count == 2
         assert real_count == 1
-        shutdown.assert_has_awaits([call(broken), call(healthy)])
+        broken.shutdown.assert_awaited_once_with(graceful=True)
+        healthy.shutdown.assert_awaited_once_with(graceful=True)
         assert "Failed to shutdown embedding_func worker pool" in caplog.text
 
     async def test_preserves_cancellation(self) -> None:
@@ -114,10 +99,7 @@ class TestShutdownLightRagWorkerPools:
             _role_llm_states={},
         )
 
-        with patch(
-            "dlightrag.rag.lifecycle.shutdown_async_callable",
-            new_callable=AsyncMock,
-            side_effect=asyncio.CancelledError,
-        ):
-            with pytest.raises(asyncio.CancelledError):
-                await shutdown_lightrag_worker_pools(lightrag)
+        target.shutdown.side_effect = asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await shutdown_lightrag_worker_pools(lightrag)

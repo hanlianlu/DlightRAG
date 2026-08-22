@@ -22,7 +22,7 @@ When upgrading lightrag-hku, verify these surfaces still exist and behave as
 expected. The host contract guard provides runtime contract checks.
 """
 
-from typing import Any, ClassVar
+from typing import Any
 
 from dlightrag.rag.ports import CorpusChunkStore
 
@@ -35,22 +35,12 @@ class LightRAGStores:
     full_docs: Any
     doc_status: Any
 
-    _REQUIRED: ClassVar[frozenset[str]] = frozenset(
-        {
-            "chunks_vdb",
-            "text_chunks",
-            "full_docs",
-            "doc_status",
-        }
-    )
-
     def __init__(self, lightrag: Any, *, chunk_store: CorpusChunkStore) -> None:
-        missing = sorted(name for name in self._REQUIRED if not hasattr(lightrag, name))
-        if missing:
-            raise RuntimeError(f"LightRAGStores missing required surface(s): {missing}")
         self.raw = lightrag
-        for name in self._REQUIRED:
-            setattr(self, name, getattr(lightrag, name))
+        self.chunks_vdb = lightrag.chunks_vdb
+        self.text_chunks = lightrag.text_chunks
+        self.full_docs = lightrag.full_docs
+        self.doc_status = lightrag.doc_status
         self._chunk_store = chunk_store
 
     async def get_doc_status(self, doc_id: str) -> dict[str, Any] | None:

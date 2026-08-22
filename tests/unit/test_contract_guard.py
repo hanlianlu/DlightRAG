@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from dlightrag.adapters.postgres.lightrag_contract import PGLightRAGContractGuard
-from dlightrag.rag.lightrag_contract import LightRAGContractGuard
 
 
 def _fake_lightrag(*, graph_storage: object | None = None) -> SimpleNamespace:
@@ -181,7 +180,7 @@ def test_verify_read_only_attach_contract_rejects_appended_required_signature_pa
             guard.verify_read_only_attach_contract()
 
 
-def test_provider_neutral_guard_reports_public_runtime_drift() -> None:
+def test_postgres_guard_reports_public_runtime_drift() -> None:
     runtime = _fake_lightrag()
     runtime.initialize_storages = AsyncMock()
     runtime.finalize_storages = AsyncMock()
@@ -190,4 +189,4 @@ def test_provider_neutral_guard_reports_public_runtime_drift() -> None:
     runtime.apipeline_process_enqueue_documents = None
 
     with pytest.raises(RuntimeError, match="apipeline_process_enqueue_documents"):
-        LightRAGContractGuard(runtime).verify()
+        PGLightRAGContractGuard(runtime).verify_surface()

@@ -21,11 +21,6 @@ type SessionProgressClass = Literal["live", "prelude"]
 
 
 @dataclass(frozen=True, slots=True)
-class NoHostUpdate:
-    """The in-memory adapter's host update: settlements carry no host facts."""
-
-
-@dataclass(frozen=True, slots=True)
 class SessionCommit:
     """One committed append: new version and the contiguous sequences written."""
 
@@ -110,9 +105,7 @@ class AgentSessionStore[HostUpdateT](Protocol):
     The PostgreSQL adapter commits host updates, ordered result entries,
     projection, settlement, session version, and — for live settlements —
     durable run progress in one transaction. Recovery prelude settlements use
-    ``progress="prelude"`` and must not advance durable progress. The
-    in-memory adapter implements the same version and effect semantics with
-    :class:`NoHostUpdate`.
+    ``progress="prelude"`` and must not advance durable progress.
     """
 
     async def load(self, session_id: SessionId) -> AgentSessionSnapshot:
@@ -156,7 +149,6 @@ __all__ = [
     "EvidenceConflict",
     "HostUpdateT",
     "LeaseLost",
-    "NoHostUpdate",
     "SessionCommit",
     "SessionProgressClass",
     "SettleCommit",

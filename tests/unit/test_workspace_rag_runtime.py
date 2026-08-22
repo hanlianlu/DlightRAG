@@ -848,13 +848,12 @@ class TestWorkspaceRagLightRAGMainPath:
             "lightrag.parser.routing.validate_parser_routing_config",
             lambda rules: events.append(f"validate:{rules}"),
         )
-        from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+        from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
 
-        factory = PGCorpusBackendFactory(test_config)
-        service = _service(test_config, backend=factory.create())
+        backend = build_pg_corpus_backend(test_config)
+        service = _service(test_config, backend=backend)
         monkeypatch.setattr(service, "_do_initialize_unified", AsyncMock())
 
-        factory.create()
         await service._do_initialize()
 
         assert events == [
@@ -865,10 +864,9 @@ class TestWorkspaceRagLightRAGMainPath:
             "patches",
         ]
 
-    async def test_writer_initialization_uses_provider_guard_and_backend_attach(
+    async def test_writer_initialization_uses_backend_attach(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        call_order: list[str] = []
         resume_pipeline = AsyncMock()
 
         class FakeCoordination:
@@ -883,13 +881,6 @@ class TestWorkspaceRagLightRAGMainPath:
         backend.runtime = runtime
         service = _service(test_config, backend=backend)
 
-        class FakeGuard:
-            def __init__(self, _lightrag: object) -> None:
-                pass
-
-            def verify(self) -> None:
-                call_order.append("provider_verify")
-
         monkeypatch.setattr(
             "dlightrag.rag.workspace_rag.LightRagChatModels",
             _FakeChatModels,
@@ -913,8 +904,6 @@ class TestWorkspaceRagLightRAGMainPath:
         monkeypatch.setattr(
             WorkspaceRag, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
         )
-        monkeypatch.setattr("dlightrag.rag.workspace_rag.LightRAGContractGuard", FakeGuard)
-
         with (
             patch("dlightrag.rag.workspace_rag.rerank_consumes_images", return_value=False),
             patch(
@@ -929,7 +918,6 @@ class TestWorkspaceRagLightRAGMainPath:
             await service._do_initialize_unified()
             await asyncio.sleep(0)
 
-        assert call_order == ["provider_verify"]
         # The KG legs resolve chunks through text_chunks, so a document scope
         # only reaches them while this wrapper is installed.
         assert type(service._lightrag.text_chunks).__name__ == "FilteredChunkStore"
@@ -942,13 +930,6 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         cast(Any, service.backend.runtime.attach).side_effect = RuntimeError("reader attach drift")
 
-        class FakeGuard:
-            def __init__(self, _lightrag: object) -> None:
-                pass
-
-            def verify(self) -> None:
-                return None
-
         monkeypatch.setattr(
             "dlightrag.rag.workspace_rag.LightRagChatModels",
             _FakeChatModels,
@@ -972,8 +953,6 @@ class TestWorkspaceRagLightRAGMainPath:
         monkeypatch.setattr(
             WorkspaceRag, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
         )
-        monkeypatch.setattr("dlightrag.rag.workspace_rag.LightRAGContractGuard", FakeGuard)
-
         with (
             patch("dlightrag.rag.workspace_rag.rerank_consumes_images", return_value=False),
             patch("dlightrag.rag.lightrag_stores.LightRAGStores", return_value=object()),
@@ -983,73 +962,6 @@ class TestWorkspaceRagLightRAGMainPath:
         ):
             with pytest.raises(RuntimeError, match="reader attach drift"):
                 await service._do_initialize_unified()
-
-    async def test_provider_contract_runs_before_backend_attach(
-        self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        mutate_config(test_config, "deployment.service_role", "reader")
-        runtime = _runtime_binder()
-        backend = _backend(normalize_workspace(test_config.deployment.workspace), read_only=True)
-        backend.runtime = runtime
-        service = _service(test_config, backend=backend)
-        call_order: list[object] = []
-
-        class FakeGuard:
-            def __init__(self, _lightrag: object) -> None:
-                pass
-
-            def verify(self) -> None:
-                call_order.append("precheck")
-
-        attached_stores = runtime.attach.return_value
-
-        async def _fake_attach(lightrag: object) -> object:
-            assert lightrag is runtime.create.return_value
-            assert "precheck" in call_order
-            call_order.append("attach")
-            return attached_stores
-
-        runtime.attach.side_effect = _fake_attach
-
-        monkeypatch.setattr(
-            "dlightrag.rag.workspace_rag.LightRagChatModels",
-            _FakeChatModels,
-        )
-        monkeypatch.setattr("dlightrag.rag.workspace_rag.build_rerank_func", lambda *_a, **_k: None)
-        monkeypatch.setattr(
-            "dlightrag.rag.workspace_rag.create_embedding_model",
-            lambda *_args, **_kwargs: object(),
-        )
-        monkeypatch.setattr(
-            "dlightrag.rag.workspace_rag.build_lightrag_embedding", lambda *_args: object()
-        )
-        monkeypatch.setattr(
-            "dlightrag.rag.workspace_rag.resolve_direct_image_embedding_enabled",
-            AsyncMock(return_value=False),
-        )
-        monkeypatch.setattr(
-            "dlightrag.rag.workspace_rag.build_document_embedder",
-            lambda *args, **kwargs: object(),
-        )
-        monkeypatch.setattr(
-            WorkspaceRag, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
-        )
-        monkeypatch.setattr("dlightrag.rag.workspace_rag.LightRAGContractGuard", FakeGuard)
-
-        with (
-            patch("dlightrag.rag.workspace_rag.rerank_consumes_images", return_value=False),
-            patch(
-                "dlightrag.rag.retrieval.filtering.FilteredVectorStorage",
-                side_effect=lambda **kwargs: kwargs["original"],
-            ),
-            patch("dlightrag.rag.lightrag_stores.LightRAGStores", return_value=object()),
-            patch("dlightrag.rag.visual_assets.ThumbnailCache", return_value=object()),
-            patch("dlightrag.rag.visual_assets.VisualAssetResolver", return_value=object()),
-            patch("dlightrag.rag.retrieval.retriever.UnifiedRetriever", return_value=object()),
-        ):
-            await service._do_initialize_unified()
-
-        assert call_order == ["precheck", "attach"]
 
     async def test_aingest_azure_blob_single(self, test_config: DlightragConfig) -> None:
         """Downloads one blob into an ephemeral parser item and stores remote metadata."""

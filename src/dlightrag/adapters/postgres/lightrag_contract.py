@@ -39,6 +39,14 @@ class PGLightRAGContractGuard:
     failing on the first issue. PostgreSQL is the only supported backend.
     """
 
+    _REQUIRED_CALLABLES = (
+        "initialize_storages",
+        "finalize_storages",
+        "aquery_data",
+        "apipeline_enqueue_documents",
+        "apipeline_process_enqueue_documents",
+    )
+    _REQUIRED_ATTRIBUTES = ("chunks_vdb", "text_chunks", "full_docs", "doc_status")
     _CHUNKS_VDB_COLUMNS = {"id", "content", "content_vector", "workspace", "file_path"}
     _BM25_TABLE = "lightrag_doc_chunks"
     _BM25_COLUMNS = {"id", "content", "file_path"}
@@ -50,8 +58,26 @@ class PGLightRAGContractGuard:
     def __init__(self, lightrag: Any) -> None:
         self._lightrag = lightrag
 
+    def verify_surface(self) -> None:
+        """Fail before storage initialization when the consumed runtime surface drifted."""
+        errors = [
+            f"LightRAG missing callable {name!r}"
+            for name in self._REQUIRED_CALLABLES
+            if not callable(getattr(self._lightrag, name, None))
+        ]
+        errors.extend(
+            f"LightRAG missing attribute {name!r}"
+            for name in self._REQUIRED_ATTRIBUTES
+            if not hasattr(self._lightrag, name)
+        )
+        if errors:
+            raise RuntimeError(
+                f"LightRAG runtime contract check failed ({len(errors)} issue(s)):\n"
+                + "\n".join(f"  - {error}" for error in errors)
+            )
+
     async def verify_all(self) -> None:
-        """Run all checks, collect errors, raise if any."""
+        """Run all PostgreSQL checks, collect errors, raise if any."""
         errors: list[str] = []
         self._require_pg_backend(errors)
         if not errors:

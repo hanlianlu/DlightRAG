@@ -61,7 +61,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dlightrag.adapters.postgres._pool import pg_pool
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
     from dlightrag.model_settings import rag_settings
     from dlightrag.observability import LangfuseTelemetry
     from dlightrag.rag.workspace_rag import WorkspaceRag
@@ -79,7 +79,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     service = await WorkspaceRag.acreate(
         workspace_id=workspace,
         settings=rag_settings(cfg),
-        backend=PGCorpusBackendFactory(cfg).create(),
+        backend=build_pg_corpus_backend(cfg),
         scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
         telemetry=LangfuseTelemetry(),
     )
@@ -180,7 +180,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     """
     from dlightrag.adapters.postgres._pool import pg_pool
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
     from dlightrag.config import reset_config, set_config
     from dlightrag.model_settings import rag_settings
     from dlightrag.observability import LangfuseTelemetry
@@ -202,7 +202,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     writer = await WorkspaceRag.acreate(
         workspace_id=workspace,
         settings=rag_settings(writer_cfg),
-        backend=PGCorpusBackendFactory(writer_cfg).create(),
+        backend=build_pg_corpus_backend(writer_cfg),
         scheduler=model_scheduler,
         telemetry=LangfuseTelemetry(),
     )
@@ -236,7 +236,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     reader = await WorkspaceRag.acreate(
         workspace_id=workspace,
         settings=rag_settings(reader_cfg),
-        backend=PGCorpusBackendFactory(reader_cfg).create(),
+        backend=build_pg_corpus_backend(reader_cfg),
         scheduler=model_scheduler,
         telemetry=LangfuseTelemetry(),
     )
@@ -286,7 +286,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     cleanup = await WorkspaceRag.acreate(
         workspace_id=workspace,
         settings=rag_settings(writer_cfg),
-        backend=PGCorpusBackendFactory(writer_cfg).create(),
+        backend=build_pg_corpus_backend(writer_cfg),
         scheduler=model_scheduler,
         telemetry=LangfuseTelemetry(),
     )

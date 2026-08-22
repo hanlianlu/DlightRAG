@@ -63,6 +63,27 @@ def _turn(*calls: ToolCall, stop_reason: str = "tool_use") -> AssistantTurn:
     )
 
 
+async def _run_turn(
+    executor: ToolTurnExecutor,
+    messages: list[dict[str, Any]],
+    tools: list[AgentTool],
+    **kwargs: Any,
+):
+    prepared = await executor.prepare_turn(
+        messages,
+        tools,
+        tool_choice=kwargs.pop("tool_choice", "auto"),
+        max_tokens=kwargs.pop("max_tokens", None),
+    )
+    observation_budget = kwargs.pop("observation_budget", None)
+    assert not kwargs
+    return await executor.execute_prepared(
+        prepared,
+        tools,
+        observation_budget=observation_budget,
+    )
+
+
 async def test_valid_calls_execute_in_parallel_and_results_replay_in_source_order() -> None:
     first_started = asyncio.Event()
     second_started = asyncio.Event()
@@ -82,7 +103,8 @@ async def test_valid_calls_execute_in_parallel_and_results_replay_in_source_orde
     )
     executor = ToolTurnExecutor(model.complete_turn)
     task = asyncio.create_task(
-        executor.run_turn(
+        _run_turn(
+            executor,
             [{"role": "user", "content": "q"}],
             [AgentTool("search", "Search.", SearchArgs, execute)],
         )
@@ -117,7 +139,8 @@ async def test_parallel_results_share_the_current_request_residual_budget() -> N
         measured_transcript.extend(transcript)
         return 150
 
-    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
+    executed = await _run_turn(
+        ToolTurnExecutor(model.complete_turn),
         [{"role": "user", "content": "q"}],
         [AgentTool("search", "Search.", SearchArgs, execute)],
         observation_budget=observation_budget,
@@ -146,7 +169,8 @@ async def test_parallel_result_fitting_preserves_every_continuation_suffix() -> 
         )
     )
 
-    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
+    executed = await _run_turn(
+        ToolTurnExecutor(model.complete_turn),
         [{"role": "user", "content": "q"}],
         [AgentTool("search", "Search.", SearchArgs, execute)],
         observation_budget=lambda _transcript: 80,
@@ -168,7 +192,8 @@ async def test_unfit_protected_suffix_raises_a_capacity_error() -> None:
     model = ScriptedModel(_turn(ToolCall(id="1", name="search", arguments={"query": "q"})))
 
     with pytest.raises(ToolResultCapacityError, match="continuation"):
-        await ToolTurnExecutor(model.complete_turn).run_turn(
+        await _run_turn(
+            ToolTurnExecutor(model.complete_turn),
             [{"role": "user", "content": "q"}],
             [AgentTool("search", "Search.", SearchArgs, execute)],
             observation_budget=lambda _transcript: 5,
@@ -182,10 +207,8 @@ async def test_tool_execution_uses_injected_telemetry() -> None:
     telemetry = RecordingTelemetry()
     model = ScriptedModel(_turn(ToolCall(id="call-1", name="search", arguments={"query": "q"})))
 
-    executed = await ToolTurnExecutor(
-        model.complete_turn,
-        telemetry=telemetry,
-    ).run_turn(
+    executed = await _run_turn(
+        ToolTurnExecutor(model.complete_turn, telemetry=telemetry),
         [{"role": "user", "content": "q"}],
         [AgentTool("search", "Search.", SearchArgs, execute)],
     )
@@ -239,7 +262,8 @@ async def test_cancelled_tool_call_cancels_and_joins_siblings() -> None:
 
     try:
         with pytest.raises(asyncio.CancelledError):
-            await ToolTurnExecutor(model.complete_turn).run_turn(
+            await _run_turn(
+                ToolTurnExecutor(model.complete_turn),
                 [{"role": "user", "content": "q"}],
                 [AgentTool("search", "Search.", SearchArgs, execute)],
             )
@@ -276,7 +300,8 @@ async def test_base_exception_tool_call_cancels_and_joins_siblings() -> None:
     )
 
     with pytest.raises(ToolAbort):
-        await ToolTurnExecutor(model.complete_turn).run_turn(
+        await _run_turn(
+            ToolTurnExecutor(model.complete_turn),
             [{"role": "user", "content": "q"}],
             [AgentTool("search", "Search.", SearchArgs, execute)],
         )
@@ -292,7 +317,8 @@ async def test_invalid_arguments_are_returned_to_the_model_without_execution() -
         return ToolResult(content="unreachable")
 
     model = ScriptedModel(_turn(ToolCall(id="1", name="search", arguments={"unexpected": True})))
-    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
+    executed = await _run_turn(
+        ToolTurnExecutor(model.complete_turn),
         [{"role": "user", "content": "q"}],
         [AgentTool("search", "Search.", SearchArgs, execute)],
     )
@@ -320,7 +346,8 @@ async def test_malformed_provider_arguments_are_never_executed() -> None:
             )
         )
     )
-    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
+    executed = await _run_turn(
+        ToolTurnExecutor(model.complete_turn),
         [{"role": "user", "content": "q"}],
         [AgentTool("search", "Search.", SearchArgs, execute)],
     )
@@ -344,7 +371,8 @@ async def test_length_stop_never_executes_possibly_truncated_calls() -> None:
             stop_reason="length",
         )
     )
-    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
+    executed = await _run_turn(
+        ToolTurnExecutor(model.complete_turn),
         [{"role": "user", "content": "q"}],
         [AgentTool("search", "Search.", SearchArgs, execute)],
     )
@@ -357,7 +385,8 @@ async def test_length_stop_never_executes_possibly_truncated_calls() -> None:
 async def test_unknown_tool_is_an_error_result_not_an_exception() -> None:
     model = ScriptedModel(_turn(ToolCall(id="1", name="invented", arguments={})))
 
-    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
+    executed = await _run_turn(
+        ToolTurnExecutor(model.complete_turn),
         [{"role": "user", "content": "q"}],
         [],
     )
@@ -375,7 +404,8 @@ async def test_assistant_provider_state_is_preserved_for_native_replay() -> None
     )
     model = ScriptedModel(turn)
 
-    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
+    executed = await _run_turn(
+        ToolTurnExecutor(model.complete_turn),
         [{"role": "user", "content": "q"}],
         [],
     )
@@ -471,8 +501,8 @@ async def test_length_stopped_turn_produces_no_intents() -> None:
             execute=_search_tool,
         )
     ]
-    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
-        [{"role": "user", "content": "q"}], tools
+    executed = await _run_turn(
+        ToolTurnExecutor(model.complete_turn), [{"role": "user", "content": "q"}], tools
     )
     assert executed.intents == ()
     assert executed.results[0].is_error is True

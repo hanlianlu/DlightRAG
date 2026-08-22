@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Generic read/write/edit/grep/bash factories over an ExecutionEnvironment."""
+"""Generic read/write/edit/grep/bash factories over a LocalExecutionEnvironment."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from dlightrag.agent.environment.errors import (
     PathRejected,
     WorkspaceQuotaExceeded,
 )
-from dlightrag.agent.environment.protocol import DirectoryEntry, ExecutionEnvironment
+from dlightrag.agent.environment.local import DirectoryEntry, LocalExecutionEnvironment
 from dlightrag.agent.environment.text import decode_workspace_text, encode_workspace_text
 from dlightrag.agent.tools.contracts import AgentTool, ToolResult
 
@@ -105,7 +105,7 @@ async def preview_or_spill(
 
 
 def path_tools(
-    environment: ExecutionEnvironment,
+    environment: LocalExecutionEnvironment,
     *,
     scheduler: AccessScheduler,
     ripgrep: str = "rg",
@@ -123,7 +123,7 @@ def path_tools(
 
 
 def read_tool(
-    environment: ExecutionEnvironment | None,
+    environment: LocalExecutionEnvironment | None,
     scheduler: AccessScheduler,
     *,
     resource_reader: ResourceReader | None = None,
@@ -171,7 +171,7 @@ def read_tool(
     )
 
 
-def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
+def write_tool(environment: LocalExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
     async def execute(args: BaseModel) -> ToolResult:
         args = cast(WriteArgs, args)
         path = environment.resolve(args.path)
@@ -196,7 +196,7 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
     )
 
 
-def edit_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
+def edit_tool(environment: LocalExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
     async def execute(args: BaseModel) -> ToolResult:
         args = cast(EditArgs, args)
         if args.old_string == args.new_string:
@@ -231,7 +231,7 @@ def edit_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> 
 
 
 def grep_tool(
-    environment: ExecutionEnvironment,
+    environment: LocalExecutionEnvironment,
     scheduler: AccessScheduler,
     *,
     ripgrep: str,
@@ -265,7 +265,7 @@ def grep_tool(
 
 
 def bash_tool(
-    environment: ExecutionEnvironment,
+    environment: LocalExecutionEnvironment,
     scheduler: AccessScheduler,
     *,
     spill: SpillWriter | None = None,

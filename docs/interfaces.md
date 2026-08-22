@@ -492,7 +492,7 @@ still references.
 `AnswerOrchestrator` owns every answer. Callers set `mode` to `auto`, `fast`, or
 `research` (omitted means `auto`). Capability resolves a Valid Mode Set; routing
 writes a durable Resolved Mode. Fast plans, retrieves, and synthesizes with no
-Agent Session. Research runs `AgentLoop` until the model emits no tool call; the
+Agent Session. Research runs the Agent Loop until the model emits no tool call; the
 last silent turn is the answer. Optional `artifacts/report.md` publishes as a
 Primary Report handle.
 Evidence-producing Exa result URLs are registered as opaque request-local

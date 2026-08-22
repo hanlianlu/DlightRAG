@@ -133,7 +133,7 @@ def test_public_context_projection_strips_internal_source_metadata() -> None:
 
 
 def test_retrieval_projector_hides_composer_cache_and_vector_fields() -> None:
-    from dlightrag.adapters.retrieval import AnswerRetrievalProjector
+    from dlightrag.adapters.retrieval import project_answer_retrieval
     from dlightrag.services.retrieval import RetrieveProjection
 
     private_fields = {
@@ -168,7 +168,7 @@ def test_retrieval_projector_hides_composer_cache_and_vector_fields() -> None:
         }
     )
 
-    projected = AnswerRetrievalProjector().project(
+    projected = project_answer_retrieval(
         result,
         RetrieveProjection(
             downloadable_workspaces=frozenset(),

@@ -47,19 +47,10 @@ class TestRetrievalResult:
         assert r.contexts["chunks"][0]["content"] == "text"
 
 
-class TestRetrievalResultReferences:
-    def test_default_empty_references(self) -> None:
-        result = RetrievalResult()
-        assert result.references == []
-        assert result.image_descriptions == []
-        assert result.trace == {}
-
-    def test_references_populated(self) -> None:
-        from dlightrag.rag.contracts import Reference
-
-        refs = [Reference(id="1", title="doc.pdf")]
-        result = RetrievalResult(references=refs)
-        assert result.references[0].title == "doc.pdf"
+def test_retrieval_result_defaults_to_empty_payload() -> None:
+    result = RetrievalResult()
+    assert result.image_descriptions == []
+    assert result.trace == {}
 
 
 class TestCanonicalizeReferenceIds:

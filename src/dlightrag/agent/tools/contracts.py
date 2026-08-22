@@ -31,7 +31,6 @@ class ToolResult:
     details: dict[str, Any] | None = None
     cached: bool = False
     protected_suffix: str = ""
-    terminate: bool = False
 
 
 @dataclass(frozen=True, slots=True)

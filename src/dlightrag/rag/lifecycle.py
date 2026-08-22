@@ -2,11 +2,10 @@
 """Shared lifecycle helpers for core-owned resources."""
 
 import asyncio
+import inspect
 import logging
-from collections.abc import Mapping
-from typing import Any
-
-from dlightrag.ai.concurrency import shutdown_async_callable
+from collections.abc import Awaitable, Mapping
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +83,9 @@ async def shutdown_lightrag_worker_pools(lightrag: Any, *, dry_run: bool = False
             shutdown_count += 1
             continue
         try:
-            await shutdown_async_callable(func)
+            result = func.shutdown(graceful=True)
+            if inspect.isawaitable(result):
+                await cast(Awaitable[Any], result)
         except Exception:  # noqa: BLE001
             logger.debug("Failed to shutdown %s worker pool", label, exc_info=True)
         else:

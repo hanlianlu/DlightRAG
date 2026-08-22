@@ -42,48 +42,41 @@ class AnswerQueryImagePreparer:
         )
 
 
-class AnswerRetrievalProjector:
+def project_answer_retrieval(
+    result: RetrievalResult,
+    projection: RetrieveProjection,
+) -> ProjectedRetrieval:
     """Reuse Answer's canonical source/context projection for retrieval readers."""
-
-    def project(
-        self,
-        result: RetrievalResult,
-        projection: RetrieveProjection,
-    ) -> ProjectedRetrieval:
-        sources = build_sources(
-            result.contexts,
-            image_url_prefix=projection.image_url_prefix,
-        )
-        source_payloads = project_source_payloads(
-            sources,
-            resolver=(SourceDownloadLinkBuilder() if projection.include_download_links else None),
-            downloadable_workspaces=(
-                set(projection.downloadable_workspaces)
-                if projection.downloadable_workspaces is not None
-                else None
-            ),
-            visual_workspaces=(
-                set(projection.visual_workspaces)
-                if projection.visual_workspaces is not None
-                else None
-            ),
-        )
-        contexts = project_contexts_for_client(
-            result.contexts,
-            image_url_prefix=projection.image_url_prefix,
-            visual_workspaces=(
-                set(projection.visual_workspaces)
-                if projection.visual_workspaces is not None
-                else None
-            ),
-        )
-        return ProjectedRetrieval(
-            contexts=contexts,
-            sources=tuple(source.model_dump() for source in source_payloads),
-        )
+    sources = build_sources(
+        result.contexts,
+        image_url_prefix=projection.image_url_prefix,
+    )
+    source_payloads = project_source_payloads(
+        sources,
+        resolver=(SourceDownloadLinkBuilder() if projection.include_download_links else None),
+        downloadable_workspaces=(
+            set(projection.downloadable_workspaces)
+            if projection.downloadable_workspaces is not None
+            else None
+        ),
+        visual_workspaces=(
+            set(projection.visual_workspaces) if projection.visual_workspaces is not None else None
+        ),
+    )
+    contexts = project_contexts_for_client(
+        result.contexts,
+        image_url_prefix=projection.image_url_prefix,
+        visual_workspaces=(
+            set(projection.visual_workspaces) if projection.visual_workspaces is not None else None
+        ),
+    )
+    return ProjectedRetrieval(
+        contexts=contexts,
+        sources=tuple(source.model_dump() for source in source_payloads),
+    )
 
 
 __all__ = [
     "AnswerQueryImagePreparer",
-    "AnswerRetrievalProjector",
+    "project_answer_retrieval",
 ]

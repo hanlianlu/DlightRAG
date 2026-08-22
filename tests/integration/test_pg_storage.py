@@ -85,11 +85,11 @@ async def _delete_test_workspaces(registry: Any, *extra_workspaces: str) -> None
 
 
 def _corpus_admin(config: Any) -> Any:
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
     from dlightrag.model_settings import corpus_admin_settings
     from dlightrag.services.corpora import CorpusAdmin
 
-    backend = PGCorpusBackendFactory(config).create()
+    backend = build_pg_corpus_backend(config)
     return CorpusAdmin(
         settings=corpus_admin_settings(config),
         pool=cast(Any, SimpleNamespace()),

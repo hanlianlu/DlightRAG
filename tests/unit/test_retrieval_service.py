@@ -69,7 +69,7 @@ async def test_timeout_bounds_only_the_inline_retrieval_request() -> None:
         planners=_Planners(),
         schema_lookup=AsyncMock(return_value={}),
         image_preparer=AsyncMock(return_value=[]),
-        projector=AsyncMock(),
+        projector=Mock(),
         settings=RetrievalSettings(
             default_top_k=8,
             default_chunk_top_k=5,
@@ -108,7 +108,7 @@ async def test_explicit_filters_and_bm25_override_planner_inference() -> None:
     pool = AsyncMock()
     pool.acquire.return_value = runtime
     projector = Mock()
-    projector.project.return_value = ProjectedRetrieval(contexts={}, sources=())
+    projector.return_value = ProjectedRetrieval(contexts={}, sources=())
     service = RetrievalService(
         pool=pool,
         planners=_Planners(planner),
@@ -153,7 +153,7 @@ async def test_schema_cache_is_set_keyed_bounded_and_uses_stale_on_refresh_failu
         planners=_Planners(),
         schema_lookup=lookup,
         image_preparer=AsyncMock(return_value=[]),
-        projector=AsyncMock(),
+        projector=Mock(),
         settings=RetrievalSettings(
             default_top_k=8,
             default_chunk_top_k=5,
@@ -189,7 +189,7 @@ async def test_cold_schema_failure_is_retried_and_recovered() -> None:
         planners=_Planners(),
         schema_lookup=lookup,
         image_preparer=AsyncMock(return_value=[]),
-        projector=AsyncMock(),
+        projector=Mock(),
         settings=RetrievalSettings(
             default_top_k=8,
             default_chunk_top_k=5,
@@ -292,7 +292,7 @@ async def test_raw_retrieval_uses_history_profile_without_inline_projection_or_t
     pool = AsyncMock()
     pool.acquire.return_value = runtime
     projector = Mock()
-    projector.project.side_effect = AssertionError("raw retrieval must not project")
+    projector.side_effect = AssertionError("raw retrieval must not project")
     service = RetrievalService(
         pool=pool,
         planners=planners,
@@ -323,7 +323,7 @@ async def test_raw_retrieval_uses_history_profile_without_inline_projection_or_t
     assert planner.plan.await_args is not None
     assert planner.plan.await_args.kwargs["conversation_history"] == history
     assert planner.plan.await_args.kwargs["preserve_query"] is True
-    projector.project.assert_not_called()
+    projector.assert_not_called()
 
 
 async def test_requested_workspace_schema_is_passed_to_planner() -> None:
@@ -345,7 +345,7 @@ async def test_requested_workspace_schema_is_passed_to_planner() -> None:
     pool = AsyncMock()
     pool.acquire.return_value = runtime
     projector = Mock()
-    projector.project.return_value = ProjectedRetrieval(contexts={}, sources=())
+    projector.return_value = ProjectedRetrieval(contexts={}, sources=())
     service = RetrievalService(
         pool=pool,
         planners=_Planners(planner),
@@ -400,7 +400,7 @@ async def test_retrieve_starts_workspace_warmup_before_planning() -> None:
     pool.warm.side_effect = warm
     pool.acquire.return_value = runtime
     projector = Mock()
-    projector.project.return_value = ProjectedRetrieval(contexts={}, sources=())
+    projector.return_value = ProjectedRetrieval(contexts={}, sources=())
     service = RetrievalService(
         pool=pool,
         planners=_Planners(planner),
@@ -519,7 +519,7 @@ async def test_query_images_are_limited_described_and_forwarded() -> None:
     pool = AsyncMock()
     pool.acquire.return_value = runtime
     projector = Mock()
-    projector.project.return_value = ProjectedRetrieval(contexts={}, sources=())
+    projector.return_value = ProjectedRetrieval(contexts={}, sources=())
     service = RetrievalService(
         pool=pool,
         planners=_Planners(),
@@ -561,7 +561,7 @@ async def test_query_images_are_limited_described_and_forwarded() -> None:
 async def test_multiple_workspaces_use_federated_retrieval() -> None:
     pool = AsyncMock()
     projector = Mock()
-    projector.project.return_value = ProjectedRetrieval(contexts={}, sources=())
+    projector.return_value = ProjectedRetrieval(contexts={}, sources=())
     service = RetrievalService(
         pool=pool,
         planners=_Planners(),

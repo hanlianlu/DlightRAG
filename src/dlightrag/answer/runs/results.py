@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
+from pydantic import BaseModel, Field, field_validator
+
 from dlightrag.answer.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.answer.citations.utils import context_chunk_key
 from dlightrag.answer.media import answer_blocks_from_markdown
@@ -27,11 +29,22 @@ from dlightrag.answer.sources import (
     project_contexts_for_client,
     project_source_payloads,
 )
-from dlightrag.rag.contracts import Reference
 from dlightrag.rag.retrieval import RetrievalContexts
 
 #: Core image route every transport reuses; the route itself authorizes reads.
 IMAGE_URL_PREFIX = "/images"
+
+
+class Reference(BaseModel):
+    """One document-level reference returned with an Answer result."""
+
+    id: str = Field(description="Reference id matching the answer context")
+    title: str = Field(description="Document title or filename")
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _coerce_id(cls, value: object) -> str:
+        return str(value)
 
 
 @dataclass
@@ -234,6 +247,7 @@ def project_report_sources(
 __all__ = [
     "AnswerResult",
     "IMAGE_URL_PREFIX",
+    "Reference",
     "project_answer_result",
     "project_report_sources",
     "restore_answer_result",

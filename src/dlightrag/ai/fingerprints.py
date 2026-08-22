@@ -45,13 +45,23 @@ def normalized_endpoint_fingerprint(value: object) -> str | None:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def model_fingerprint(settings: ModelSettings | EmbeddingSettings) -> ModelFingerprint:
-    """Project resolved settings into a safe provider/model identity."""
+def model_endpoint_fingerprint(provider: str, model: str, base_url: str | None) -> ModelFingerprint:
+    """Build one safe identity from canonical endpoint facts."""
     return ModelFingerprint(
-        provider=settings.provider,
-        model=settings.model,
-        endpoint_fingerprint=normalized_endpoint_fingerprint(settings.base_url),
+        provider=provider,
+        model=model,
+        endpoint_fingerprint=normalized_endpoint_fingerprint(base_url),
     )
 
 
-__all__ = ["ModelFingerprint", "model_fingerprint", "normalized_endpoint_fingerprint"]
+def model_fingerprint(settings: ModelSettings | EmbeddingSettings) -> ModelFingerprint:
+    """Project resolved settings into a safe provider/model identity."""
+    return model_endpoint_fingerprint(settings.provider, settings.model, settings.base_url)
+
+
+__all__ = [
+    "ModelFingerprint",
+    "model_endpoint_fingerprint",
+    "model_fingerprint",
+    "normalized_endpoint_fingerprint",
+]

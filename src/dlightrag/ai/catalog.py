@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any, cast
 
 from dlightrag.ai.capacity import ModelProfile
-from dlightrag.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
+from dlightrag.ai.fingerprints import ModelFingerprint, model_endpoint_fingerprint
 
 
 class UnknownModelProfileError(ValueError):
@@ -23,14 +23,6 @@ class UnknownModelProfileError(ValueError):
         )
 
 
-def _fingerprint(provider: str, model: str, base_url: str | None) -> ModelFingerprint:
-    return ModelFingerprint(
-        provider=provider,
-        model=model,
-        endpoint_fingerprint=normalized_endpoint_fingerprint(base_url),
-    )
-
-
 def _load_catalog() -> tuple[str, MappingProxyType]:
     payload = cast(
         dict[str, Any],
@@ -42,7 +34,7 @@ def _load_catalog() -> tuple[str, MappingProxyType]:
     catalog: dict[ModelFingerprint, ModelProfile] = {}
     for item in cast(list[dict[str, Any]], payload.get("models") or []):
         facts = cast(dict[str, Any], item["profile"])
-        fingerprint = _fingerprint(
+        fingerprint = model_endpoint_fingerprint(
             str(item["provider"]),
             str(item["model"]),
             str(item["base_url"]) if item.get("base_url") is not None else None,

@@ -284,7 +284,7 @@ One `AnswerOrchestrator` executes the durable Resolved Mode:
   knowledge-base retrieval, and one `AnswerSynthesizer` call. There is no Agent
   Session, no research workspace, and no publication. JWT owners auto-recall a
   bounded non-citable Memory Record set.
-- **Research** — requested or routed `research`. `AgentLoop` selects from the
+- **Research** — requested or routed `research`. The Agent Loop selects from the
   composed peer tools (`search_knowledge_base`, `read`, `inspect`, optional
   `search_web`, optional `delegate_research`, optional path tools, parent-only
   `remember` / `forget` / `recall_memory`). Selected tools append to an

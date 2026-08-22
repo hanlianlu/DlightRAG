@@ -18,11 +18,10 @@ from dlightrag.agent.environment.errors import (
     PathRejected,
     WorkspaceQuotaExceeded,
 )
-from dlightrag.agent.environment.local import LocalExecutionEnvironment
-from dlightrag.agent.environment.protocol import (
+from dlightrag.agent.environment.local import (
     CompletedProcess,
     DirectoryEntry,
-    ExecutionEnvironment,
+    LocalExecutionEnvironment,
 )
 
 __all__ = [
@@ -34,7 +33,6 @@ __all__ = [
     "AllAccess",
     "CompletedProcess",
     "DirectoryEntry",
-    "ExecutionEnvironment",
     "ExternalAccess",
     "FullOutputUnavailable",
     "LocalExecutionEnvironment",

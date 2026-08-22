@@ -8,11 +8,7 @@ from dlightrag.access import (
 )
 from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.catalog import resolve_model_profile
-from dlightrag.ai.fingerprints import (
-    ModelFingerprint,
-    model_fingerprint,
-    normalized_endpoint_fingerprint,
-)
+from dlightrag.ai.fingerprints import model_endpoint_fingerprint, model_fingerprint
 from dlightrag.ai.providers import get_adapter_model_profile
 from dlightrag.ai.settings import (
     ModelCapacityOverrideSettings,
@@ -179,14 +175,6 @@ def _profile_from_override(config: ModelCapacityOverrideSettings) -> ModelProfil
     )
 
 
-def _override_fingerprint(config: ModelCapacityOverrideSettings) -> ModelFingerprint:
-    return ModelFingerprint(
-        provider=config.provider,
-        model=config.model,
-        endpoint_fingerprint=normalized_endpoint_fingerprint(config.base_url),
-    )
-
-
 def model_profile_for_settings(
     config: DlightragConfig,
     settings: ModelSettings,
@@ -199,7 +187,12 @@ def model_profile_for_settings(
         (
             _profile_from_override(candidate)
             for candidate in config.models.capacity_overrides
-            if _override_fingerprint(candidate) == fingerprint
+            if model_endpoint_fingerprint(
+                candidate.provider,
+                candidate.model,
+                candidate.base_url,
+            )
+            == fingerprint
         ),
         None,
     )

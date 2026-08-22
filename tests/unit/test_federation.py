@@ -67,14 +67,6 @@ class TestMergeResults:
 
         assert len(merged.contexts["chunks"]) == 5
 
-    def test_references_empty(self) -> None:
-        r1 = _make_result(chunks=[{"id": "a1"}])
-        r2 = _make_result(chunks=[{"id": "b1"}])
-
-        merged = merge_results([r1, r2], ["ws-a", "ws-b"])
-
-        assert merged.references == []
-
     def test_empty_results(self) -> None:
         merged = merge_results([], [])
         assert merged.contexts["chunks"] == []
@@ -113,19 +105,6 @@ class TestMergeResults:
 
 class TestFederatedRetrieve:
     """Test federated_retrieve orchestration."""
-
-    @pytest.mark.asyncio
-    async def test_single_workspace_no_federation(self) -> None:
-        mock_svc = AsyncMock()
-        mock_svc.aretrieve.return_value = _make_result(chunks=[{"id": "c1"}])
-
-        async def get_svc(ws: str):
-            return mock_svc
-
-        result = await federated_retrieve("test query", ["ws-only"], get_svc)
-
-        mock_svc.aretrieve.assert_awaited_once()
-        assert result.contexts["chunks"][0]["_workspace"] == "ws-only"
 
     @pytest.mark.asyncio
     async def test_multi_workspace_parallel(self) -> None:
@@ -179,45 +158,3 @@ class TestFederatedRetrieve:
 
         with pytest.raises(RuntimeError, match="fail"):
             await federated_retrieve("query", ["ws-a", "ws-b"], get_svc)
-
-    @pytest.mark.asyncio
-    async def test_workspace_filter_rbac(self) -> None:
-        svc = AsyncMock()
-        svc.aretrieve.return_value = _make_result(chunks=[{"id": "c1"}])
-
-        async def get_svc(ws: str):
-            return svc
-
-        async def only_allow_a(requested: list[str]) -> list[str]:
-            return [ws for ws in requested if ws == "ws-a"]
-
-        result = await federated_retrieve(
-            "query", ["ws-a", "ws-b"], get_svc, workspace_filter=only_allow_a
-        )
-
-        svc.aretrieve.assert_awaited_once()
-        assert result.contexts["chunks"][0]["_workspace"] == "ws-a"
-
-    @pytest.mark.asyncio
-    async def test_workspace_filter_denies_all(self) -> None:
-        svc = AsyncMock()
-
-        async def get_svc(ws: str):
-            return svc
-
-        async def deny_all(requested: list[str]) -> list[str]:
-            return []
-
-        result = await federated_retrieve("query", ["ws-a"], get_svc, workspace_filter=deny_all)
-
-        svc.aretrieve.assert_not_awaited()
-        assert result.contexts["chunks"] == []
-
-    @pytest.mark.asyncio
-    async def test_empty_workspaces_list(self) -> None:
-        async def get_svc(ws: str):
-            raise AssertionError("Should not be called")
-
-        result = await federated_retrieve("query", [], get_svc)
-
-        assert result.contexts["chunks"] == []

@@ -348,10 +348,10 @@ async def test_provider_overflow_compacts_then_retries_the_same_turn_once() -> N
         UserMessageEntry,
     )
     from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
-    from dlightrag.agent.session.memory import InMemoryAgentSessionStore
     from dlightrag.agent.session.projection import ContextProjection, TokenAnchor
     from dlightrag.agent.session.store import SessionCommit
     from dlightrag.answer.executor import JournalRunBoundaries
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
 
     class _FakeSession:
         run_id = "run-1"
@@ -462,8 +462,8 @@ async def test_intents_persist_before_any_tool_executes() -> None:
 
     from dlightrag.agent.session.entries import EffectResultEntry
     from dlightrag.agent.session.ids import SessionId
-    from dlightrag.agent.session.memory import InMemoryAgentSessionStore
     from dlightrag.answer.executor import JournalRunBoundaries
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
 
     order: list[str] = []
 

@@ -872,9 +872,8 @@ def _smoke_root_interfaces() -> None:
             self.kwargs = kwargs
             return RetrievalResult(contexts={"chunks": [{"chunk_id": "installed"}]})
 
-    class Projector:
-        def project(self, result, _projection):
-            return ProjectedRetrieval(contexts=result.contexts, sources=())
+    def projector(result, _projection):
+        return ProjectedRetrieval(contexts=result.contexts, sources=())
 
     async def empty_schema(_workspaces):
         return {}
@@ -889,7 +888,7 @@ def _smoke_root_interfaces() -> None:
             planners=cast(Any, Planners()),
             schema_lookup=empty_schema,
             image_preparer=no_images,
-            projector=cast(Any, Projector()),
+            projector=projector,
             settings=RetrievalSettings(
                 default_top_k=8,
                 default_chunk_top_k=5,
