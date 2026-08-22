@@ -98,7 +98,7 @@ _REQUIRED_EXTERNAL_PROHIBITIONS = {
     "dlightrag": set(),
     "dlightrag-agent-core": {"lightrag", "asyncpg", "fastapi", "mcp"},
     "dlightrag-ai": {"lightrag", "asyncpg", "fastapi", "mcp"},
-    "dlightrag-memory": {"lightrag", "fastapi", "mcp"},
+    "dlightrag-memory": {"lightrag", "fastapi"},
     "dlightrag-rag-core": {
         _CONCRETE_LIGHTRAG_BACKEND,
         "asyncpg",
@@ -218,7 +218,6 @@ async def main():
     )
     record = await Memory(store).remember(
         owner_id='owner-1',
-        auth_mode='jwt',
         kind='preference',
         body='Installed memory works.',
         confidence=1.0,
@@ -227,6 +226,12 @@ async def main():
     assert record is not None and record.status == 'active'
     records = await Memory(store).list_active(owner_id='owner-1')
     assert [item.body for item in records] == ['Installed memory works.']
+    recalled = await Memory(store).recall(owner_id='owner-1', query='memory works')
+    assert recalled.records
+    server = dlightrag_memory.mcp_server.build_memory_server(Memory(store), subject='owner-1')
+    assert {tool.name for tool in await server.list_tools()} == {
+        'memory_recall', 'memory_remember', 'memory_forget'
+    }
 
 asyncio.run(main())
 """

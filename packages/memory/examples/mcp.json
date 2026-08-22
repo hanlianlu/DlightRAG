@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "dlightrag-memory": {
+      "command": "dlightrag-memory-mcp",
+      "args": [
+        "--dsn",
+        "postgres://dlightrag:dlightrag@127.0.0.1:5432/dlightrag",
+        "--subject",
+        "your-owner-id"
+      ]
+    }
+  }
+}
