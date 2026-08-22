@@ -90,6 +90,22 @@ corpus:
       backend: hybrid-engine
 ```
 
+The local sidecar installer supports MinerU 3.4.5 through the reviewed 3.x API
+range. For an existing checkout, remove or update an older `MINERU_VERSION` /
+`MINERU_MIN_VERSION` override in `.env.mineru`, then upgrade and restart:
+
+```bash
+make mineru-service-stop
+make mineru-install
+make mineru-service-start
+```
+
+MinerU 3.4.5 corrects special-character preservation in DOCX tables and
+supplementary-plane Unicode extraction from PDFs. Existing indexed documents do
+not change when the sidecar package changes; reset and reingest affected sources
+when those corrections matter. The upgrade adds no parser request option, so it
+does not require a new `corpus.sidecars.mineru` setting.
+
 `corpus.sidecars.vlm` owns figure understanding, and MinerU's own image
 analysis is deliberately left off. MinerU extracts each figure as a crop; the
 VLM sidecar then describes that crop together with the surrounding text.
