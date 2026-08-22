@@ -220,7 +220,9 @@ async def _run_ingest(args: argparse.Namespace) -> None:
     config = get_config()
     workspace = normalize_workspace(args.workspace or config.deployment.workspace)
     if args.workspace:
-        config = config.model_copy(update={"workspace": workspace})
+        config = config.model_copy(
+            update={"deployment": config.deployment.model_copy(update={"workspace": workspace})}
+        )
     print(f"Workspace: {workspace}\n")
 
     from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend

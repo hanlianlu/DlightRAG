@@ -27,13 +27,14 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from dotenv import load_dotenv
 from lightrag.evaluation.eval_rag_quality import RAGEvaluator
 from lightrag.utils import logger
 
+from dlightrag.ai.settings import ModelSettings
 from dlightrag.sdk import AnswerRunCancelledError, AnswerRunClient, AnswerRunFailedError
 
 
@@ -103,7 +104,12 @@ def _resolve_eval_env() -> None:
             exc_info=True,
         )
         return
-    query_cfg = config.models.chat.roles.query or config.models.chat.default
+    chat = config.models.chat
+    resolver = getattr(chat, "resolve", None)
+    query_cfg = cast(
+        ModelSettings,
+        resolver("query") if callable(resolver) else chat.roles.query or chat.default,
+    )
     query_is_openai_compatible = query_cfg.provider in _OPENAI_COMPATIBLE_LLM_PROVIDERS
 
     # -- Eval LLM --

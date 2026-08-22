@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.14"
-# dependencies = ["questionary>=2", "rich>=13", "ruamel.yaml>=0.18"]
+# requires-python = ">=3.14,<3.15"
+# dependencies = ["dlightrag", "dlightrag-memory", "questionary>=2", "rich>=13", "ruamel.yaml>=0.18"]
+# [tool.uv.sources]
+# dlightrag = { path = ".", editable = true }
+# dlightrag-memory = { path = "packages/memory", editable = true }
 # ///
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """DlightRAG one-command onboarding wizard.
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import platform
 import posixpath
 import shutil
@@ -58,6 +62,8 @@ class ProviderSpec:
     requires_url: bool = False  # user MUST supply (Azure / Other, tenant-specific)
     requires_key: bool = True
     default_model: str = ""  # "" => no safe default; the user must name the model
+    gui_binding: str | None = None
+    gui_host: str | None = None
 
 
 # LLM roles: openai-compatible => provider "openai" + base_url; else native.
@@ -82,15 +88,52 @@ PROVIDERS_LLM: dict[str, ProviderSpec] = {
 # would silently switch off fused visual retrieval (see EMBEDDING_MODALITY_NOTE).
 PROVIDERS_EMBED: dict[str, ProviderSpec] = {
     "Voyage": ProviderSpec(
-        "voyage", "https://api.voyageai.com/v1", default_model="voyage-multimodal-3.5"
+        "voyage",
+        "https://api.voyageai.com/v1",
+        default_model="voyage-multimodal-3.5",
+        gui_binding="voyageai",
+        gui_host="https://api.voyageai.com/v1",
     ),
-    "OpenAI": ProviderSpec("openai_compatible", "https://api.openai.com/v1"),
-    "Gemini": ProviderSpec("gemini", None),
-    "Jina": ProviderSpec("jina", "https://api.jina.ai/v1", default_model="jina-embeddings-v4"),
-    "Azure OpenAI": ProviderSpec("openai_compatible", None, requires_url=True),
-    "Ollama (local)": ProviderSpec("ollama", "http://localhost:11434", requires_key=False),
+    "OpenAI": ProviderSpec(
+        "openai_compatible",
+        "https://api.openai.com/v1",
+        gui_binding="openai",
+        gui_host="https://api.openai.com/v1",
+    ),
+    "Gemini": ProviderSpec(
+        "gemini",
+        None,
+        gui_binding="gemini",
+        gui_host="DEFAULT_GEMINI_ENDPOINT",
+    ),
+    "Jina": ProviderSpec(
+        "jina",
+        "https://api.jina.ai/v1",
+        default_model="jina-embeddings-v4",
+        gui_binding="jina",
+        gui_host="https://api.jina.ai/v1",
+    ),
+    "Azure OpenAI": ProviderSpec(
+        "openai_compatible",
+        None,
+        requires_url=True,
+        gui_binding="openai",
+        gui_host="https://api.openai.com/v1",
+    ),
+    "Ollama (local)": ProviderSpec(
+        "ollama",
+        "http://host.docker.internal:11434",
+        requires_key=False,
+        gui_binding="ollama",
+        gui_host="http://host.docker.internal:11434",
+    ),
     "Other (OpenAI-compatible)": ProviderSpec(
-        "openai_compatible", None, requires_url=True, requires_key=False
+        "openai_compatible",
+        None,
+        requires_url=True,
+        requires_key=False,
+        gui_binding="openai",
+        gui_host="https://api.openai.com/v1",
     ),
 }
 
@@ -234,11 +277,17 @@ def resolve_embedding_choice(
     return block, "DLIGHTRAG_MODELS__EMBEDDING__API_KEY"
 
 
-def resolve_rerank_choice(choice: str) -> tuple[dict, str | None]:
+def resolve_rerank_choice(
+    choice: str,
+    *,
+    base_url: str | None = None,
+) -> tuple[dict, str | None]:
     strategy, needs_key, model = RERANK_CHOICES[choice]
     block: dict = {"strategy": strategy}
     if model:
         block["model"] = model
+    if base_url:
+        block["base_url"] = base_url
     return block, ("DLIGHTRAG_MODELS__RERANK__API_KEY" if needs_key else None)
 
 
@@ -255,12 +304,20 @@ def _yaml():
 
 
 def _apply_model_block(node, block: dict) -> None:
-    """Replace one model block without retaining stale endpoints or credentials."""
-    for key in ("provider", "model", "base_url", "api_key", "dim"):
-        if key in block:
-            node[key] = block[key]
-        elif key in {"base_url", "api_key"} and key in node:
-            del node[key]
+    """Replace one model block without retaining provider-specific settings."""
+    node.clear()
+    node.update(block)
+
+
+def _configured_embedding_dim(path: Path, env_path: Path) -> int | None:
+    if not path.exists():
+        return None
+    try:
+        return int(_load_effective_config(path, env_path).models.embedding.dim)
+    except OSError, TypeError, ValueError:
+        data = _yaml().load(path) or {}
+        value = ((data.get("models") or {}).get("embedding") or {}).get("dim")
+        return int(value) if value is not None else 1024
 
 
 def write_config_yaml(
@@ -277,17 +334,21 @@ def write_config_yaml(
 ) -> None:
     yaml = _yaml()
     data = yaml.load(path)
-    legacy = {
-        "llm",
-        "embedding",
-        "rerank",
-        "parser_sidecars",
-        "model_capacity_overrides",
-    } & set(data)
-    if legacy:
+    canonical_sections = {
+        "deployment",
+        "storage",
+        "models",
+        "corpus",
+        "answer",
+        "access",
+        "interfaces",
+        "observability",
+    }
+    unknown = set(data) - canonical_sections
+    if unknown:
         raise ValueError(
-            "DlightRAG 1.x config schema detected; replace it with the 2.0 "
-            f"eight-section schema before running setup (legacy: {sorted(legacy)})"
+            "DlightRAG 1.x config schema detected or unknown top-level fields; replace it with the "
+            f"2.0 eight-section schema before running setup (unknown: {sorted(unknown)})"
         )
     models = data.setdefault("models", {})
     chat = models.setdefault("chat", {})
@@ -311,11 +372,8 @@ def write_config_yaml(
         _apply_model_block(models.setdefault("embedding", {}), embedding)
     if rerank is not None:
         rerank_node = models.setdefault("rerank", {})
-        for stale_key in ("provider", "model", "base_url", "api_key"):
-            if stale_key not in rerank:
-                rerank_node.pop(stale_key, None)
-        for key, value in rerank.items():
-            rerank_node[key] = value
+        rerank_node.clear()
+        rerank_node.update(rerank)
     if parser_kind is not None:
         if parser_kind not in {"mineru", "docling"}:
             raise ValueError(f"Unsupported parser kind: {parser_kind}")
@@ -330,7 +388,8 @@ def write_config_yaml(
             sidecars.pop("docling", None)
             mineru = sidecars.setdefault("mineru", {})
             mineru["api_mode"] = mineru_api_mode or "local"
-            mineru.setdefault("local_endpoint", "http://host.docker.internal:8210")
+            if mineru["api_mode"] == "local":
+                mineru["local_endpoint"] = "http://host.docker.internal:8210"
             mineru.setdefault("language", "ch")
         else:
             sidecars.pop("mineru", None)
@@ -384,16 +443,54 @@ def backup_file(path: Path, *, keep: int = MAX_BACKUPS) -> Path | None:
     return backup
 
 
-def validate_config() -> None:
-    """Load config via DlightRAG to validate what we wrote. Raises on invalid.
-
-    Imported lazily so the pure logic stays importable without the runtime
-    package.
-    """
+def _load_effective_config(config_path: Path, env_path: Path):
+    """Load one explicit repository config with normal env-over-dotenv precedence."""
+    if config_path.name != "config.yaml":
+        raise ValueError("canonical configuration file must be named config.yaml")
     from dlightrag.config import load_config, reset_config
 
-    reset_config()
-    load_config()
+    previous = Path.cwd()
+    try:
+        os.chdir(config_path.parent)
+        reset_config()
+        return load_config(env_path)
+    finally:
+        os.chdir(previous)
+
+
+def validate_config() -> None:
+    """Load and validate the exact files written by this wizard."""
+    _load_effective_config(CONFIG_PATH, ENV_PATH)
+
+
+def _restore_file(path: Path, existed: bool, backup: Path | None) -> None:
+    if existed:
+        if backup is None:
+            raise RuntimeError(f"missing rollback backup for {path}")
+        path.write_bytes(backup.read_bytes())
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _apply_parser_change(
+    configure: Callable[[], None],
+    *,
+    after_validation: Callable[[], None] | None = None,
+) -> None:
+    """Back up, apply, validate, and fully roll back one parser reconfiguration."""
+    snapshots = [
+        (path, path.exists(), backup_file(path))
+        for path in (CONFIG_PATH, ENV_PATH, MINERU_ENV_PATH)
+    ]
+    try:
+        configure()
+        validate_config()
+        if after_validation is not None:
+            after_validation()
+    except Exception:
+        for path, existed, backup in snapshots:
+            _restore_file(path, existed, backup)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -585,7 +682,7 @@ def run_parser_step(
         token = _ask_required(lambda: prompter.password("MinerU API token (required)"))
         if require_confirm and not prompter.confirm(PARSER_OVERWRITE_CONFIRM, default=False):
             return None
-        configure_mineru_official(token)
+        _apply_parser_change(lambda: configure_mineru_official(token))
         return "mineru"
 
     if choice in {"Docling bundled (Compose)", "Docling external endpoint"}:
@@ -601,7 +698,7 @@ def run_parser_step(
         if require_confirm and not prompter.confirm(PARSER_OVERWRITE_CONFIRM, default=False):
             return None
         bundled = choice == "Docling bundled (Compose)"
-        configure_docling(endpoint, bundled=bundled)
+        _apply_parser_change(lambda: configure_docling(endpoint, bundled=bundled))
         return "docling" if bundled else "external"
 
     extras = select_mineru_extras(info, has_gpu=has_gpu)
@@ -615,11 +712,16 @@ def run_parser_step(
     # Confirm AFTER collecting choices, right before overwriting existing settings.
     if require_confirm and not prompter.confirm(PARSER_OVERWRITE_CONFIRM, default=False):
         return None
-    configure_mineru_local_env(extras, title_aided=title_aided)
-
     service_model = resolve_service_model(info, systemd_available=systemd_user_available())
-    for cmd in build_mineru_local_commands(service_model):
-        runner(cmd)
+
+    def configure_and_install() -> None:
+        configure_mineru_local_env(extras, title_aided=title_aided)
+
+    def install() -> None:
+        for cmd in build_mineru_local_commands(service_model):
+            runner(cmd)
+
+    _apply_parser_change(configure_and_install, after_validation=install)
     if service_model == "foreground":
         _note_foreground_mineru()
     return "mineru"
@@ -735,15 +837,40 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
         remove_env_keys.append(embed_env)
     else:
         env_values[embed_env] = ekey
+    embed_spec = PROVIDERS_EMBED[ename]
+    if embed_spec.gui_binding is None or embed_spec.gui_host is None:
+        raise ValueError(f"{ename} is missing LightRAG GUI embedding metadata")
+    env_values.update(
+        {
+            "LIGHTRAG_GUI_EMBEDDING_BINDING": embed_spec.gui_binding,
+            "LIGHTRAG_GUI_EMBEDDING_HOST": embed_block.get("base_url") or embed_spec.gui_host,
+            "LIGHTRAG_GUI_EMBEDDING_MODEL": embed_block["model"],
+            "LIGHTRAG_GUI_EMBEDDING_DIM": str(embed_block["dim"]),
+        }
+    )
 
     rerank_choice = "Reuse my LLM"
     if mode == MODEL_MODE_CUSTOM:
         rerank_choice = prompter.select("Reranker", list(RERANK_CHOICES))
-    rerank_block, rerank_env = resolve_rerank_choice(rerank_choice)
+    rerank_base_url = None
+    if rerank_choice == "Azure Cohere":
+        rerank_base_url = _ask_required(lambda: prompter.text("Azure Cohere endpoint (required)"))
+    rerank_block, rerank_env = resolve_rerank_choice(
+        rerank_choice,
+        base_url=rerank_base_url,
+    )
     if rerank_env is not None:
         env_values[rerank_env] = _ask_required(
             lambda: prompter.password("Reranker API key (required)")
         )
+
+    previous_embedding_dim = _configured_embedding_dim(CONFIG_PATH, ENV_PATH)
+    embedding_dim_changed = previous_embedding_dim not in (None, embed_block["dim"])
+    if embedding_dim_changed and not prompter.confirm(
+        EMBEDDING_DIM_RESET_CONFIRM,
+        default=False,
+    ):
+        return None
 
     # Confirm AFTER collecting answers, right before overwriting existing settings.
     if require_confirm and not prompter.confirm(MODELS_OVERWRITE_CONFIRM, default=False):
@@ -780,6 +907,7 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
         "config_backup": config_backup,
         "env_backup": env_backup,
         "env_existed": env_existed,
+        "embedding_dim_changed": embedding_dim_changed,
     }
 
 
@@ -835,17 +963,16 @@ MODELS_OVERWRITE_CONFIRM = (
 PARSER_OVERWRITE_CONFIRM = (
     "Overwrite your current document-parser settings? · 覆盖当前的文档解析器设置？"
 )
+EMBEDDING_DIM_RESET_CONFIRM = (
+    "The embedding dimension changed. Apply it and permanently reset all Corpus data? · "
+    "嵌入维度已变化。应用并永久清空所有语料数据？"
+)
 RESET_WIPE_CONFIRM = (
     "Delete ALL documents you've already added (vectors, graph)? This cannot be undone. · "
     "删除所有已导入的文档（向量、图谱）？此操作不可恢复"
 )
 START_OVER_APPLY_CONFIRM = (
     "Replace model and document-parsing settings from scratch? · 从头替换模型与文档解析设置？"
-)
-
-REQUIRED_ENV_KEYS = (
-    "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY",
-    "DLIGHTRAG_MODELS__EMBEDDING__API_KEY",
 )
 
 
@@ -918,20 +1045,22 @@ def wait_for_readiness(
 # ---------------------------------------------------------------------------
 # Re-run menu: view / change / start over (shown only when already configured)
 # ---------------------------------------------------------------------------
-def _read_env(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if path.exists():
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            if "=" in raw and not raw.lstrip().startswith("#"):
-                key, value = raw.split("=", 1)
-                values[key.strip()] = value.strip()
-    return values
-
-
-def is_configured(env_path: Path | None = None) -> bool:
-    """True when .env already holds the required API keys (a prior successful setup)."""
-    env = _read_env(env_path or ENV_PATH)
-    return all(env.get(key) for key in REQUIRED_ENV_KEYS)
+def is_configured(
+    env_path: Path | None = None,
+    *,
+    config_path: Path | None = None,
+) -> bool:
+    """Return whether one valid config has explicit keyed or keyless model auth."""
+    try:
+        config = _load_effective_config(config_path or CONFIG_PATH, env_path or ENV_PATH)
+    except Exception:
+        return False
+    default_ready = config.models.chat.default.has_explicit_auth
+    embedding = config.models.embedding
+    embedding_ready = "api_key" in embedding.model_fields_set and (
+        embedding.api_key is None or bool(embedding.api_key.strip())
+    )
+    return default_ready and embedding_ready
 
 
 def _capacity_summary(block: dict, overrides: list[dict]) -> dict:
@@ -952,82 +1081,73 @@ def _capacity_summary(block: dict, overrides: list[dict]) -> dict:
     return {"source": "catalog", **profile} if profile is not None else {"source": "unknown"}
 
 
-def read_config_summary(config_path: Path, env_path: Path) -> dict:
-    """Build a display-ready, masked summary of the current config (never secrets)."""
-    data = _yaml().load(config_path)
-    env = _read_env(env_path)
-    models = data.get("models", {}) or {}
-    chat = models.get("chat", {}) or {}
-    default = chat.get("default", {}) or {}
-    roles = chat.get("roles", {}) or {}
-    capacity_overrides = models.get("capacity_overrides", []) or []
-    embedding = models.get("embedding", {}) or {}
-    rerank = models.get("rerank", {}) or {}
-    answer = (data.get("answer", {}) or {}).get("generation", {}) or {}
-    parser_sidecars = (data.get("corpus", {}) or {}).get("sidecars", {}) or {}
-    mineru = parser_sidecars.get("mineru", {}) or {}
-    docling = parser_sidecars.get("docling", {}) or {}
-    parser = (
-        {"name": "MinerU", "detail": mineru.get("api_mode", "?")}
-        if mineru
-        else {"name": "Docling", "detail": docling.get("endpoint", "?")}
-    )
-    # Answer visual inspection reuses the VLM role when set, else the default LLM.
-    inspection = roles.get("vlm") or default
+def _public_model_block(settings) -> dict:
     return {
-        "llm_default": {
-            "provider": default.get("provider", "?"),
-            "model": default.get("model", "?"),
-            "base_url": default.get("base_url"),
-        },
-        "llm_roles": {
-            role: {
-                "provider": (block or {}).get("provider", "?"),
-                "model": (block or {}).get("model", "?"),
-                "base_url": (block or {}).get("base_url"),
-            }
-            for role, block in roles.items()
-        },
+        "provider": settings.provider,
+        "model": settings.model,
+        "base_url": settings.base_url,
+    }
+
+
+def read_config_summary(config_path: Path, env_path: Path) -> dict:
+    """Build a display-ready, secret-free summary from effective canonical settings."""
+    config = _load_effective_config(config_path, env_path)
+    default_settings = config.models.chat.default
+    role_settings = dict(config.models.chat.overrides)
+    default = _public_model_block(default_settings)
+    roles = {role: _public_model_block(settings) for role, settings in role_settings.items()}
+    capacity_overrides = [override.model_dump() for override in config.models.capacity_overrides]
+    embedding = config.models.embedding
+    rerank = config.models.rerank
+    answer = config.answer.generation
+    sidecars = config.corpus.sidecars
+    if sidecars.active_parser == "mineru":
+        parser = {
+            "name": "MinerU",
+            "detail": sidecars.mineru.api_mode if sidecars.mineru is not None else "local",
+        }
+    else:
+        parser = {
+            "name": "Docling",
+            "detail": sidecars.docling.endpoint if sidecars.docling is not None else "?",
+        }
+    inspection_settings = role_settings.get("vlm", default_settings)
+    return {
+        "llm_default": default,
+        "llm_roles": roles,
         "model_capacities": {
             "default": _capacity_summary(default, capacity_overrides),
-            **{
-                role: _capacity_summary(block or {}, capacity_overrides)
-                for role, block in roles.items()
-            },
+            **{role: _capacity_summary(block, capacity_overrides) for role, block in roles.items()},
         },
         "embedding": {
-            "provider": embedding.get("provider", "?"),
-            "model": embedding.get("model", "?"),
-            "dim": embedding.get("dim", "?"),
-            "base_url": embedding.get("base_url"),
+            "provider": embedding.provider,
+            "model": embedding.model,
+            "dim": embedding.dim,
+            "base_url": embedding.base_url,
         },
         "rerank": {
-            "strategy": rerank.get("strategy", "?"),
-            "enabled": bool(rerank.get("enabled", False)),
-            "model": rerank.get("model"),
-            "base_url": rerank.get("base_url"),
+            "strategy": rerank.strategy,
+            "enabled": rerank.enabled,
+            "model": rerank.model,
+            "base_url": rerank.base_url,
         },
         "answer": {
-            "max_attachments": answer.get("max_attachments", DEFAULT_MAX_ATTACHMENTS),
-            "max_attachment_bytes": answer.get(
-                "max_attachment_bytes", DEFAULT_MAX_ATTACHMENT_BYTES
-            ),
-            "max_total_attachment_bytes": answer.get(
-                "max_total_attachment_bytes", DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES
-            ),
-            "max_images": answer.get("max_images", DEFAULT_MAX_ANSWER_IMAGES),
+            "max_attachments": answer.max_attachments,
+            "max_attachment_bytes": answer.max_attachment_bytes,
+            "max_total_attachment_bytes": answer.max_total_attachment_bytes,
+            "max_images": answer.max_images,
         },
         "visual_inspection": {
-            "role": "vlm" if roles.get("vlm") else "default",
-            "provider": inspection.get("provider", "?"),
-            "model": inspection.get("model", "?"),
+            "role": "vlm" if "vlm" in role_settings else "default",
+            "provider": inspection_settings.provider,
+            "model": inspection_settings.model,
         },
         "parser": parser,
-        "workspace": (data.get("deployment", {}) or {}).get("workspace", "default"),
+        "workspace": config.deployment.workspace,
         "keys_set": {
-            "LLM": bool(env.get("DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY")),
-            "Embedding": bool(env.get("DLIGHTRAG_MODELS__EMBEDDING__API_KEY")),
-            "Rerank": bool(env.get("DLIGHTRAG_MODELS__RERANK__API_KEY")),
+            "LLM": bool(default_settings.api_key),
+            "Embedding": bool(embedding.api_key),
+            "Rerank": bool(rerank.api_key),
         },
     }
 
@@ -1113,22 +1233,32 @@ def _bring_up_stack(console, *, profile: str | None = None) -> int:
     return 0
 
 
+def _restore_model_changes(result: dict) -> None:
+    backup = result.get("config_backup")
+    if backup is not None:
+        CONFIG_PATH.write_bytes(backup.read_bytes())
+    env_backup = result.get("env_backup")
+    if env_backup is not None:
+        ENV_PATH.write_bytes(env_backup.read_bytes())
+    elif result.get("env_existed") is False:
+        ENV_PATH.unlink(missing_ok=True)
+
+
 def _apply_and_validate(console, result: dict) -> bool:
-    """Validate the freshly written config; restore backup and report on failure."""
+    """Validate model settings and enforce the required reset after dimension changes."""
     try:
         validate_config()
-        return True
     except Exception as exc:
-        backup = result.get("config_backup")
-        if backup is not None:
-            CONFIG_PATH.write_bytes(backup.read_bytes())
-        env_backup = result.get("env_backup")
-        if env_backup is not None:
-            ENV_PATH.write_bytes(env_backup.read_bytes())
-        elif result.get("env_existed") is False:
-            ENV_PATH.unlink(missing_ok=True)
+        _restore_model_changes(result)
         console.print(f"[red]Config invalid; restored backup:[/red] {exc}")
         return False
+    if result.get("embedding_dim_changed"):
+        if not _wipe_data(console):
+            _restore_model_changes(result)
+            console.print("[red]Corpus reset failed; restored model settings.[/red]")
+            return False
+        result["data_wiped"] = True
+    return True
 
 
 def run_first_time_setup(
@@ -1138,6 +1268,7 @@ def run_first_time_setup(
     *,
     require_confirm: bool = False,
     launch: bool = True,
+    outcome: dict | None = None,
 ) -> int | None:
     result = run_models_step(prompter, require_confirm=require_confirm)
     if result is None:
@@ -1145,6 +1276,8 @@ def run_first_time_setup(
         return None
     if not _apply_and_validate(console, result):
         return 1
+    if outcome is not None:
+        outcome["data_wiped"] = bool(result.get("data_wiped"))
     parser_mode = run_parser_step(
         prompter,
         info,
@@ -1190,15 +1323,31 @@ def run_change_settings(console, prompter: Prompter, info: PlatformInfo) -> None
         console.print("No changes made. · 未做任何更改")
 
 
-def _wipe_data(console, *, runner=_default_runner) -> None:
+def _wipe_data(console, *, runner=_default_runner) -> bool:
     console.print("Erasing ingested data… · 正在清除已导入数据…")
     try:
         runner(["uv", "run", "scripts/reset_workspace.py", "--all", "-y"])
+        runner(
+            [
+                "docker",
+                "compose",
+                "run",
+                "--rm",
+                "--no-deps",
+                "--entrypoint",
+                "sh",
+                "dlightrag-api",
+                "-c",
+                "find /app/dlightrag_storage -mindepth 1 -delete",
+            ]
+        )
     except Exception as exc:
         console.print(
             f"[yellow]Couldn't erase data automatically ({exc}); "
             f"run `uv run scripts/reset_workspace.py --all` yourself.[/yellow]"
         )
+        return False
+    return True
 
 
 def run_start_over(console, prompter: Prompter, info: PlatformInfo) -> int | None:
@@ -1209,11 +1358,19 @@ def run_start_over(console, prompter: Prompter, info: PlatformInfo) -> int | Non
     if not prompter.confirm(START_OVER_APPLY_CONFIRM, default=False):
         console.print("No changes made. · 未做任何更改")
         return None
-    rc = run_first_time_setup(console, prompter, info, require_confirm=False, launch=False)
+    outcome: dict = {}
+    rc = run_first_time_setup(
+        console,
+        prompter,
+        info,
+        require_confirm=False,
+        launch=False,
+        outcome=outcome,
+    )
     if rc != 0:  # None (declined the overwrite) or 1 (invalid config)
         return rc
-    # Confirm the irreversible data wipe immediately before doing it.
-    if prompter.confirm(RESET_WIPE_CONFIRM, default=False):
+    # Confirm the optional wipe unless an embedding-dimension change already required it.
+    if not outcome.get("data_wiped") and prompter.confirm(RESET_WIPE_CONFIRM, default=False):
         _wipe_data(console)
     return _bring_up_stack(console)
 

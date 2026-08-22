@@ -21,6 +21,7 @@ _build_answer_payload = _cli._build_answer_payload
 _apply_query_options = _cli._apply_query_options
 _validate_ingest_args = _cli._validate_ingest_args
 cmd_answer = _cli.cmd_answer
+_run_ingest = _cli._run_ingest
 
 
 def _image_block(url: str) -> dict:
@@ -193,6 +194,36 @@ def test_answer_cli_renders_structured_image_blocks(
     assert "The figure shows the flow [1-1]." in output
     assert "[image 1-1] paper.pdf https://example.test/thumb.png" in output
     assert "References (1):" in output
+
+
+async def test_ingest_workspace_override_reaches_the_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag import config as config_module
+    from dlightrag.config import DeploymentSettings, DlightragConfig
+    from dlightrag.rag.workspace_rag import WorkspaceRag
+
+    captured: dict[str, Any] = {}
+
+    class FakeWorkspaceRag:
+        async def aingest(self, **_kwargs):
+            return {"status": "ok"}
+
+        async def aclose(self) -> None:
+            return None
+
+    async def fake_acreate(**kwargs):
+        captured.update(kwargs)
+        return FakeWorkspaceRag()
+
+    config = DlightragConfig(deployment=DeploymentSettings(workspace="default"))
+    monkeypatch.setattr(config_module, "get_config", lambda: config)
+    monkeypatch.setattr(WorkspaceRag, "acreate", staticmethod(fake_acreate))
+
+    await _run_ingest(_parse_ingest(["./docs", "--workspace", "finance"]))
+
+    assert captured["workspace_id"] == "finance"
+    assert captured["backend"].workspace_id == "finance"
 
 
 def test_ingest_kwargs_support_document_metadata_options() -> None:

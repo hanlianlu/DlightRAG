@@ -105,12 +105,12 @@ services:
       LLM_BINDING_HOST: https://openrouter.ai/api/v1
       LLM_BINDING_API_KEY: ${DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY}
       LLM_MODEL: google/gemini-2.5-flash
-      # Embedding — must match config.yaml: the vector columns are 1024-dim.
-      EMBEDDING_BINDING: voyageai
-      EMBEDDING_BINDING_HOST: https://api.voyageai.com/v1
-      EMBEDDING_BINDING_API_KEY: ${DLIGHTRAG_MODELS__EMBEDDING__API_KEY}
-      EMBEDDING_MODEL: voyage-multimodal-3.5
-      EMBEDDING_DIM: "1024"
+      # Embedding — wizard-maintained values must match DlightRAG's vector columns.
+      EMBEDDING_BINDING: ${LIGHTRAG_GUI_EMBEDDING_BINDING:-voyageai}
+      EMBEDDING_BINDING_HOST: ${LIGHTRAG_GUI_EMBEDDING_HOST:-https://api.voyageai.com/v1}
+      EMBEDDING_BINDING_API_KEY: ${DLIGHTRAG_MODELS__EMBEDDING__API_KEY:-}
+      EMBEDDING_MODEL: ${LIGHTRAG_GUI_EMBEDDING_MODEL:-voyage-multimodal-3.5}
+      EMBEDDING_DIM: "${LIGHTRAG_GUI_EMBEDDING_DIM:-1024}"
       # Server
       HOST: "0.0.0.0"
       PORT: "9621"

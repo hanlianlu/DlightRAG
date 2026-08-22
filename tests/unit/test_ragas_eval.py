@@ -131,6 +131,63 @@ def test_resolve_eval_env_keeps_api_autoresolution_when_eval_keys_are_set(
     assert os.environ["DLIGHTRAG_API_TOKEN"] == "api-token"
 
 
+def test_resolve_eval_env_uses_canonical_query_role_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.ai.settings import (
+        EmbeddingSettings,
+        ModelRoleOverrides,
+        ModelRoleSettings,
+        ModelSettings,
+        ModelsSettings,
+    )
+    from dlightrag.config import DlightragConfig
+
+    chat = ModelRoleSettings(
+        default=ModelSettings(
+            provider="openai",
+            model="default-model",
+            api_key="default-key",
+            base_url="https://default.example/v1",
+        ),
+        roles=ModelRoleOverrides(
+            query=ModelSettings(
+                provider="openai",
+                model="incomplete-query-model",
+                base_url="https://query.example/v1",
+            )
+        ),
+    )
+    config = DlightragConfig(
+        models=ModelsSettings(
+            chat=chat,
+            embedding=EmbeddingSettings(
+                provider="openai_compatible",
+                model="embed",
+                api_key="embed-key",
+            ),
+        )
+    )
+    monkeypatch.setattr(config_module, "DlightragConfig", lambda: config)
+    for key in (
+        "OPENAI_API_KEY",
+        "EVAL_LLM_BINDING_API_KEY",
+        "EVAL_LLM_BINDING_HOST",
+        "EVAL_LLM_MODEL",
+        "EVAL_EMBEDDING_BINDING_API_KEY",
+        "EVAL_EMBEDDING_BINDING_HOST",
+        "DLIGHTRAG_API_URL",
+        "DLIGHTRAG_API_TOKEN",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    _resolve_eval_env()
+
+    assert os.environ["EVAL_LLM_MODEL"] == "default-model"
+    assert os.environ["EVAL_LLM_BINDING_API_KEY"] == "default-key"
+    assert os.environ["EVAL_LLM_BINDING_HOST"] == "https://default.example/v1"
+
+
 def test_resolve_eval_env_does_not_reuse_native_ollama_as_openai_embeddings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

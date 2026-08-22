@@ -116,6 +116,13 @@ class TestNativeTargetValidation:
             allow_remote_reset=False,
         )
         assert any("inside the repository root" in violation for violation in violations)
+        violations = _reset.validate_native_target(
+            target=self._target(),
+            working_dir=root,
+            repo_root=root,
+            allow_remote_reset=False,
+        )
+        assert any("repository root" in violation for violation in violations)
 
     def test_refuses_symlink_root_and_children(self, tmp_path: Path) -> None:
         root = tmp_path / "repo"
@@ -218,6 +225,61 @@ class TestSettingsResolution:
             database="corpus",
         )
 
+    def test_postgres_target_falls_back_to_canonical_yaml(self) -> None:
+        target = _reset.resolve_postgres_target(
+            {},
+            {
+                "storage": {
+                    "postgres": {
+                        "host": "yaml.internal",
+                        "port": 6432,
+                        "user": "yaml-user",
+                        "password": "yaml-secret",
+                        "database": "yaml-db",
+                    }
+                }
+            },
+        )
+
+        assert target == _reset.PostgresTarget(
+            host="yaml.internal",
+            port=6432,
+            user="yaml-user",
+            password="yaml-secret",
+            database="yaml-db",
+        )
+
+    def test_disabled_agent_execution_never_returns_a_cleanup_root(self, tmp_path: Path) -> None:
+        config = {
+            "answer": {
+                "agent": {
+                    "execution_environment": "disabled",
+                    "workspace_root": "/",
+                }
+            }
+        }
+        assert _reset._workspace_root(tmp_path, {}, config) is None
+
+    def test_agent_cleanup_root_rejects_root_home_and_repo_ancestors(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        for unsafe in (Path("/"), Path.home(), tmp_path, repo):
+            violations = _reset.validate_workspace_root(unsafe, repo)
+            assert violations, unsafe
+
+    def test_agent_cleanup_root_requires_an_absolute_configured_path(self, tmp_path: Path) -> None:
+        config = {
+            "answer": {
+                "agent": {
+                    "execution_environment": "local_trusted",
+                    "workspace_root": "relative/workspaces",
+                }
+            }
+        }
+
+        with pytest.raises(ValueError, match="must be an absolute path"):
+            _reset._workspace_root(tmp_path, {}, config)
+
     def test_working_dir_root_falls_back_to_repo_default(self, tmp_path: Path) -> None:
         (tmp_path / "config.yaml").write_text("answer:\n  max_images: 4\n")
         root = _reset._working_dir_root(tmp_path, {})
@@ -233,7 +295,7 @@ class TestDockerMode:
     def test_docker_reset_verifies_empty_database(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
 
-        def fake_compose(*args: str):
+        def fake_compose(*args: str, **_kwargs):
             calls.append(" ".join(args))
             result = Mock()
             result.returncode = 0
@@ -244,7 +306,7 @@ class TestDockerMode:
                 result.stderr = ""
             return result
 
-        def fake_psql(target, query):
+        def fake_psql(target, query, **_kwargs):
             calls.append(f"psql:{query}")
             result = Mock()
             result.returncode = 0
@@ -261,7 +323,7 @@ class TestDockerMode:
 
         monkeypatch.setattr(_reset, "_compose", fake_compose)
         monkeypatch.setattr(_reset, "_psql", fake_psql)
-        monkeypatch.setattr(_reset, "_wait_for_postgres_health", lambda report: True)
+        monkeypatch.setattr(_reset, "_wait_for_postgres_health", lambda report, **_kwargs: True)
 
         report = _reset.ResetReport(mode="docker")
         _reset.run_docker_reset(
@@ -278,17 +340,80 @@ class TestDockerMode:
         assert any("verify-no-app-schema" in step for step, _ in report.steps)
         assert any("verify-no-ledger" in step for step, _ in report.steps)
 
+    def test_docker_reset_fails_when_verification_values_are_wrong(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_compose(*args: str, **_kwargs):
+            result = Mock(returncode=0, stdout="", stderr="")
+            if args[:2] == ("ps", "--format"):
+                result.stdout = "postgres\n"
+            return result
+
+        def fake_psql(_target, query, **_kwargs):
+            result = Mock(returncode=0, stderr="")
+            result.stdout = "1" if "SELECT 1" in query else "wrong"
+            return result
+
+        monkeypatch.setattr(_reset, "_compose", fake_compose)
+        monkeypatch.setattr(_reset, "_psql", fake_psql)
+        monkeypatch.setattr(_reset, "_wait_for_postgres_health", lambda report, **_kwargs: True)
+
+        report = _reset.ResetReport(mode="docker")
+        _reset.run_docker_reset(
+            _reset.PostgresTarget(
+                host="localhost", port=5432, user="u", password="p", database="db"
+            ),
+            report,
+        )
+
+        assert not report.ok
+        assert any("expected" in failure for failure in report.failures)
+
+    def test_docker_reset_preserves_compose_ps_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_compose(*args: str, **_kwargs):
+            if args[:2] == ("ps", "--format"):
+                return Mock(returncode=1, stdout="", stderr="daemon unavailable")
+            return Mock(returncode=0, stdout="", stderr="")
+
+        def fake_psql(_target, query, **_kwargs):
+            if "extname" in query:
+                value = "3"
+            elif "schemata" in query:
+                value = "1"
+            elif "to_regclass" in query:
+                value = "f"
+            else:
+                value = "1"
+            return Mock(returncode=0, stdout=value, stderr="")
+
+        monkeypatch.setattr(_reset, "_compose", fake_compose)
+        monkeypatch.setattr(_reset, "_psql", fake_psql)
+        monkeypatch.setattr(_reset, "_wait_for_postgres_health", lambda report, **_kwargs: True)
+        report = _reset.ResetReport(mode="docker")
+
+        _reset.run_docker_reset(
+            _reset.PostgresTarget(
+                host="localhost", port=5432, user="u", password="p", database="db"
+            ),
+            report,
+        )
+
+        assert not report.ok
+        assert any("daemon unavailable" in failure for failure in report.failures)
+
     def test_docker_reset_reports_unexpected_services(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def fake_compose(*args: str):
+        def fake_compose(*args: str, **_kwargs):
             result = Mock()
             result.returncode = 0
             result.stdout = "postgres\ndlightrag-api\n"
             result.stderr = ""
             return result
 
-        def fake_psql(target, query):
+        def fake_psql(target, query, **_kwargs):
             result = Mock()
             result.returncode = 0
             result.stdout = "0"
@@ -297,7 +422,7 @@ class TestDockerMode:
 
         monkeypatch.setattr(_reset, "_compose", fake_compose)
         monkeypatch.setattr(_reset, "_psql", fake_psql)
-        monkeypatch.setattr(_reset, "_wait_for_postgres_health", lambda report: True)
+        monkeypatch.setattr(_reset, "_wait_for_postgres_health", lambda report, **_kwargs: True)
 
         report = _reset.ResetReport(mode="docker")
         _reset.run_docker_reset(
@@ -308,6 +433,39 @@ class TestDockerMode:
         )
         assert not report.ok
         assert any("dlightrag-api" in failure for failure in report.failures)
+
+    async def test_docker_mode_validates_paths_before_compose_mutation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        called = False
+
+        def destructive_reset(*_args, **_kwargs):
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(_reset, "_REPO_ROOT", tmp_path)
+        monkeypatch.setattr(_reset, "_working_dir_root", lambda *_args: tmp_path)
+        monkeypatch.setattr(_reset, "run_docker_reset", destructive_reset)
+
+        assert await _reset.main(["--mode", "docker", "--yes"]) == 1
+        assert called is False
+
+    def test_docker_preview_lists_every_deleted_volume(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _reset.preview(
+            mode="docker",
+            target=_reset.PostgresTarget(
+                host="localhost", port=5432, user="u", password="p", database="db"
+            ),
+            working_dir=tmp_path / "storage",
+            workspace_root=tmp_path / "agent-workspaces",
+            repo_root=tmp_path,
+            compose_project="custom-project",
+        )
+        output = capsys.readouterr().out
+        assert "custom-project" in output
+        assert "dlightrag_agent_workspaces" in output
 
 
 class TestSeparationFromWorkspaceReset:

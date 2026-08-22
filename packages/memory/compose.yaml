@@ -31,7 +31,7 @@ services:
       - "-c"
       - "work_mem=64MB"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dlightrag -d dlightrag"]
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 10s
       timeout: 5s
       retries: 5

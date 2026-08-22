@@ -12,7 +12,7 @@ LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LA
 PYTHON_LINT_PATHS = packages/ src/ tests/ scripts/ prerequisite_setup.py
 PYTHON_SECURITY_PATHS = packages/ src/ scripts/ prerequisite_setup.py
 
-.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-test frontend-browser-test frontend-build frontend-audit frontend-ci workspace-wheels test-unit ci ci-full test-e2e ci-e2e dev-reset
+.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-test frontend-browser-install frontend-browser-test frontend-build frontend-audit frontend-ci workspace-wheels test-unit ci ci-full test-e2e ci-e2e dev-reset
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -128,7 +128,10 @@ frontend-lint:
 frontend-test:
 	npm --prefix frontend test
 
-frontend-browser-test:
+frontend-browser-install: frontend-install
+	cd frontend && npx playwright install chromium
+
+frontend-browser-test: frontend-browser-install
 	npm --prefix frontend run test:browser
 
 frontend-build:

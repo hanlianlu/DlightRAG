@@ -49,6 +49,56 @@ def test_module_imports(wiz):
     assert wiz.ENV_PATH.name == ".env"
 
 
+def test_inline_script_environment_installs_the_local_product() -> None:
+    source = (_ROOT / "prerequisite_setup.py").read_text(encoding="utf-8")
+    assert '# dependencies = ["dlightrag", "dlightrag-memory",' in source
+    assert '# dlightrag = { path = ".", editable = true }' in source
+    assert '# dlightrag-memory = { path = "packages/memory", editable = true }' in source
+
+
+def test_optional_gui_embedding_tracks_wizard_model() -> None:
+    compose = (_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "${LIGHTRAG_GUI_EMBEDDING_BINDING:-voyageai}" in compose
+    assert "${LIGHTRAG_GUI_EMBEDDING_MODEL:-voyage-multimodal-3.5}" in compose
+    assert "${LIGHTRAG_GUI_EMBEDDING_DIM:-1024}" in compose
+
+
+def test_memory_compose_healthcheck_uses_configured_database_identity() -> None:
+    compose = (_ROOT / "packages/memory/compose.yaml").read_text(encoding="utf-8")
+    assert 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' in compose
+
+
+def test_mineru_template_defaults_to_cross_platform_core() -> None:
+    template = (_ROOT / ".env.mineru.example").read_text(encoding="utf-8")
+    active = [line for line in template.splitlines() if line.startswith("MINERU_INSTALL_EXTRAS=")]
+    assert active == ["MINERU_INSTALL_EXTRAS=core"]
+
+
+def test_local_ci_installs_playwright_chromium() -> None:
+    makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "frontend-browser-install: frontend-install" in makefile
+    assert "npx playwright install chromium" in makefile
+    assert "frontend-browser-test: frontend-browser-install" in makefile
+
+
+def test_validation_reads_the_written_repo_config_from_any_cwd(
+    wiz, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "config.yaml").write_text("llm:\n  invalid: true\n", encoding="utf-8")
+    (repo / ".env").write_text("", encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setattr(wiz, "REPO_ROOT", repo)
+    monkeypatch.setattr(wiz, "CONFIG_PATH", repo / "config.yaml")
+    monkeypatch.setattr(wiz, "ENV_PATH", repo / ".env")
+    monkeypatch.chdir(elsewhere)
+
+    with pytest.raises(ValueError, match="Invalid dlightrag configuration"):
+        wiz.validate_config()
+
+
 # --- Task 2: provider registry / resolvers --------------------------------
 def test_llm_openai_compatible_mapping(wiz):
     block, env_key = wiz.resolve_llm_choice("DeepSeek", model="deepseek-v4-flash", base_url=None)
@@ -132,6 +182,23 @@ def test_embedding_mapping_prefills_dim(wiz):
     assert block["provider"] == "voyage"
     assert block["dim"] == 1024
     assert env_key == "DLIGHTRAG_MODELS__EMBEDDING__API_KEY"
+
+
+def test_compose_ollama_uses_the_host_gateway(wiz):
+    block, _ = wiz.resolve_embedding_choice("Ollama (local)", model="embed", base_url=None)
+    assert block["base_url"] == "http://host.docker.internal:11434"
+
+
+def test_azure_cohere_rerank_records_its_required_endpoint(wiz):
+    block, env_key = wiz.resolve_rerank_choice(
+        "Azure Cohere",
+        base_url="https://example.services.ai.azure.com/models",
+    )
+    assert block == {
+        "strategy": "azure_cohere",
+        "base_url": "https://example.services.ai.azure.com/models",
+    }
+    assert env_key == "DLIGHTRAG_MODELS__RERANK__API_KEY"
 
 
 def test_rerank_reuse_llm_needs_no_key(wiz):
@@ -370,6 +437,25 @@ def test_write_config_selects_mineru_and_removes_docling(wiz, tmp_path):
     }
 
 
+def test_write_config_replaces_native_mineru_endpoint_for_compose(wiz, tmp_path):
+    src = tmp_path / "config.yaml"
+    src.write_text(
+        "corpus:\n"
+        "  sidecars:\n"
+        "    mineru:\n"
+        "      api_mode: local\n"
+        "      local_endpoint: http://127.0.0.1:8210\n",
+        encoding="utf-8",
+    )
+
+    wiz.write_config_yaml(src, parser_kind="mineru", mineru_api_mode="local")
+
+    data = wiz._yaml().load(src)
+    assert (
+        data["corpus"]["sidecars"]["mineru"]["local_endpoint"] == "http://host.docker.internal:8210"
+    )
+
+
 # --- Task 4: .env upsert ---------------------------------------------------
 def test_upsert_env_preserves_and_updates(wiz, tmp_path):
     env = tmp_path / ".env"
@@ -555,6 +641,56 @@ def test_models_step_writes_config_and_env(wiz, tmp_path, monkeypatch):
     assert "DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY" not in env_text
     assert "DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY" not in env_text
     assert "DLIGHTRAG_MODELS__RERANK__API_KEY" not in env_text
+    assert "LIGHTRAG_GUI_EMBEDDING_BINDING=voyageai" in env_text
+    assert "LIGHTRAG_GUI_EMBEDDING_MODEL=voyage-multimodal-3.5" in env_text
+    assert "LIGHTRAG_GUI_EMBEDDING_DIM=1024" in env_text
+
+
+def test_configured_embedding_dimension_honors_env_override(wiz, tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "models:\n  embedding:\n    provider: ollama\n    model: embed\n    dim: 1024\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text("DLIGHTRAG_MODELS__EMBEDDING__DIM=768\n", encoding="utf-8")
+
+    assert wiz._configured_embedding_dim(cfg, env) == 768
+
+
+def test_models_step_marks_embedding_dimension_change_for_required_reset(
+    wiz, tmp_path, monkeypatch
+):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "models:\n"
+        "  chat:\n    default:\n      provider: openai\n      model: old\n"
+        "  embedding:\n    provider: ollama\n    model: old\n    dim: 768\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
+    prompter = _ScriptedPrompter(
+        [
+            wiz.MODEL_MODE_MINIMUM,
+            "DeepSeek",
+            "deepseek-v4-flash",
+            "",
+            "sk-llm",
+            "Voyage",
+            "voyage-multimodal-3.5",
+            "",
+            "sk-embed",
+            True,
+        ]
+    )
+
+    result = wiz.run_models_step(prompter)
+
+    assert result is not None
+    assert result["embedding_dim_changed"] is True
 
 
 def test_models_step_custom_replaces_roles_and_writes_role_env(wiz, tmp_path, monkeypatch):
@@ -857,6 +993,37 @@ def test_run_parser_step_configures_external_docling(wiz, tmp_path, monkeypatch)
     assert "COMPOSE_PROFILES" not in env.read_text(encoding="utf-8")
 
 
+def test_parser_change_rolls_back_all_files_when_validation_fails(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    env = tmp_path / ".env"
+    mineru_env = tmp_path / ".env.mineru"
+    originals = {
+        cfg: "corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n",
+        env: "KEEP=env\n",
+        mineru_env: "KEEP=mineru\n",
+    }
+    for path, content in originals.items():
+        path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    monkeypatch.setattr(wiz, "MINERU_ENV_PATH", mineru_env)
+    monkeypatch.setattr(
+        wiz,
+        "validate_config",
+        lambda: (_ for _ in ()).throw(ValueError("invalid parser config")),
+    )
+
+    with pytest.raises(ValueError, match="invalid parser config"):
+        wiz.run_parser_step(
+            _ScriptedPrompter(["Docling bundled (Compose)"]),
+            wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False),
+            has_gpu=False,
+        )
+
+    for path, content in originals.items():
+        assert path.read_text(encoding="utf-8") == content
+
+
 # --- Plan 3: creds return, title-aided reuse, docker bring-up --------------
 def test_models_step_returns_llm_creds(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
@@ -942,6 +1109,7 @@ def test_run_parser_step_mineru_local_title_aided(wiz, tmp_path, monkeypatch):
         "corpus:\n  sidecars:\n    mineru:\n      api_mode: official\n", encoding="utf-8"
     )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
     monkeypatch.setattr(wiz, "MINERU_ENV_PATH", tmp_path / ".env.mineru")
     monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
     monkeypatch.setattr(wiz, "systemd_user_available", lambda: True)
@@ -1136,6 +1304,60 @@ def test_is_configured_false_when_no_env(wiz, tmp_path):
     assert wiz.is_configured(tmp_path / "missing.env") is False
 
 
+def test_is_configured_accepts_explicit_keyless_local_models(wiz, tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "models:\n"
+        "  chat:\n"
+        "    default:\n"
+        "      provider: openai\n"
+        "      model: local-chat\n"
+        "      base_url: http://127.0.0.1:8888/v1\n"
+        "      api_key: null\n"
+        "  embedding:\n"
+        "    provider: ollama\n"
+        "    model: local-embed\n"
+        "    base_url: http://127.0.0.1:11434\n"
+        "    dim: 768\n"
+        "    api_key: null\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text("", encoding="utf-8")
+
+    assert wiz.is_configured(env, config_path=cfg) is True
+
+
+def test_read_config_summary_uses_effective_defaults_and_role_fallback(wiz, tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "models:\n"
+        "  chat:\n"
+        "    default:\n"
+        "      provider: openai\n"
+        "      model: local-chat\n"
+        "      api_key: null\n"
+        "    roles:\n"
+        "      query:\n"
+        "        provider: openai\n"
+        "        model: incomplete-query\n"
+        "  embedding:\n"
+        "    provider: ollama\n"
+        "    model: local-embed\n"
+        "    dim: 768\n"
+        "    api_key: null\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text("", encoding="utf-8")
+
+    summary = wiz.read_config_summary(cfg, env)
+
+    assert summary["llm_roles"] == {}
+    assert summary["rerank"]["enabled"] is True
+    assert summary["parser"] == {"name": "MinerU", "detail": "local"}
+
+
 def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
@@ -1162,7 +1384,9 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
     )
     env = tmp_path / ".env"
     env.write_text(
-        "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\nDLIGHTRAG_MODELS__EMBEDDING__API_KEY=sk-b\n",
+        "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\n"
+        "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY=sk-role\n"
+        "DLIGHTRAG_MODELS__EMBEDDING__API_KEY=sk-b\n",
         encoding="utf-8",
     )
     s = wiz.read_config_summary(cfg, env)
@@ -1216,9 +1440,13 @@ def test_read_config_summary_reports_vlm_role_visual_inspection(wiz, tmp_path):
         encoding="utf-8",
     )
     env = tmp_path / ".env"
-    env.write_text("DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
+    env.write_text(
+        "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\n"
+        "DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY=sk-vlm\n",
+        encoding="utf-8",
+    )
     s = wiz.read_config_summary(cfg, env)
-    # An explicit vlm role owns answer visual inspection.
+    # A complete explicit vlm role owns answer visual inspection.
     assert s["visual_inspection"] == {
         "role": "vlm",
         "provider": "gemini",
@@ -1262,10 +1490,12 @@ def test_render_summary_shows_context_and_attachment_settings(wiz, tmp_path):
     cfg.write_text(
         "models:\n"
         "  chat:\n    default:\n      provider: openai\n      model: gpt-x\n"
+        "      base_url: https://api.x/v1\n"
         "  embedding:\n    provider: voyage\n    model: voyage-x\n    dim: 1024\n"
         "  rerank:\n    strategy: chat_llm_reranker\n"
         "  capacity_overrides:\n"
         "    - provider: openai\n      model: gpt-x\n"
+        "      base_url: https://api.x/v1\n"
         "      context_window_tokens: 123456\n      max_output_tokens: 8192\n"
         "corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n"
         "deployment:\n  workspace: default\n"
@@ -1342,12 +1572,26 @@ def test_home_reset_with_wipe(wiz, monkeypatch):
     assert events == ["wipe", "start"]
 
 
-def test_wipe_data_invokes_the_workspace_reset_command(wiz):
+def test_wipe_data_invokes_workspace_reset_and_clears_compose_volume(wiz):
     calls: list[list[str]] = []
 
-    wiz._wipe_data(_NullConsole(), runner=lambda args: calls.append(args))
+    assert wiz._wipe_data(_NullConsole(), runner=lambda args: calls.append(args)) is True
 
-    assert calls == [["uv", "run", "scripts/reset_workspace.py", "--all", "-y"]]
+    assert calls == [
+        ["uv", "run", "scripts/reset_workspace.py", "--all", "-y"],
+        [
+            "docker",
+            "compose",
+            "run",
+            "--rm",
+            "--no-deps",
+            "--entrypoint",
+            "sh",
+            "dlightrag-api",
+            "-c",
+            "find /app/dlightrag_storage -mindepth 1 -delete",
+        ],
+    ]
 
 
 def test_home_reset_declined_returns_to_menu(wiz, monkeypatch):

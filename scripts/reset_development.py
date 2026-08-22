@@ -47,10 +47,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import asyncpg
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _COMPOSE_FILE = "docker-compose.yml"
-_COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT_NAME", "dlightrag")
+_DEFAULT_COMPOSE_PROJECT = "dlightrag"
 _DEFAULT_PG = {
     "host": "localhost",
     "port": 5432,
@@ -61,6 +62,7 @@ _DEFAULT_PG = {
 _REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba")
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 _SYSTEM_SCHEMAS = ("pg_catalog", "information_schema", "pg_toast")
+_COMPOSE_VOLUMES = ("pg18_data", "dlightrag_data", "dlightrag_agent_workspaces")
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,54 +111,80 @@ def _read_env(repo_root: Path) -> dict[str, str]:
     return values
 
 
-def _working_dir_root(repo_root: Path, env: dict[str, str]) -> Path:
-    """Resolve the configured working-directory root from config.yaml."""
-    configured = env.get("DLIGHTRAG_DEPLOYMENT__WORKING_DIR")
-    if not configured:
-        config_file = repo_root / "config.yaml"
-        for raw in config_file.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if line.startswith("working_dir:"):
-                configured = line.split(":", 1)[1].strip().strip('"').strip("'")
-                break
-    if not configured:
-        configured = "./dlightrag_storage"
-    path = Path(configured)
-    if not path.is_absolute():
-        path = repo_root / path
-    return path.resolve()
-
-
-def _workspace_root(repo_root: Path, env: dict[str, str]) -> Path | None:
-    """Resolve the optional Agent Workspace root without importing product code."""
-    configured = env.get("DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT")
-    execution = env.get("DLIGHTRAG_ANSWER__AGENT__EXECUTION_ENVIRONMENT")
+def _read_config(repo_root: Path) -> dict[str, object]:
+    """Read the canonical YAML without importing the application being reset."""
     config_file = repo_root / "config.yaml"
-    if config_file.is_file():
-        for raw in config_file.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not configured and line.startswith("workspace_root:"):
-                configured = line.split(":", 1)[1].strip().strip('"').strip("'")
-            if not execution and line.startswith("execution_environment:"):
-                execution = line.split(":", 1)[1].strip().strip('"').strip("'")
-    if not configured or configured in {"null", "None", "~"}:
-        if (execution or "").strip() == "local_trusted":
-            return (Path.home() / ".dlightrag" / "agent_workspaces").resolve()
-        return None
-    path = Path(configured)
+    if not config_file.is_file():
+        return {}
+    loaded = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError("config.yaml must contain a mapping")
+    return loaded
+
+
+def _mapping(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _working_dir_root(
+    repo_root: Path,
+    env: dict[str, str],
+    config: dict[str, object] | None = None,
+) -> Path:
+    """Resolve the canonical working-directory root with env precedence."""
+    config = _read_config(repo_root) if config is None else config
+    deployment = _mapping(config.get("deployment"))
+    configured = env.get("DLIGHTRAG_DEPLOYMENT__WORKING_DIR") or deployment.get("working_dir")
+    path = Path(str(configured or "./dlightrag_storage")).expanduser()
     if not path.is_absolute():
         path = repo_root / path
-    return path.resolve()
+    return path.absolute()
 
 
-def resolve_postgres_target(env: dict[str, str]) -> PostgresTarget:
+def _workspace_root(
+    repo_root: Path,
+    env: dict[str, str],
+    config: dict[str, object] | None = None,
+) -> Path | None:
+    """Resolve the Agent Workspace root only when local execution is enabled."""
+    config = _read_config(repo_root) if config is None else config
+    answer = _mapping(config.get("answer"))
+    agent = _mapping(answer.get("agent"))
+    execution = env.get("DLIGHTRAG_ANSWER__AGENT__EXECUTION_ENVIRONMENT") or agent.get(
+        "execution_environment"
+    )
+    if str(execution or "disabled").strip() != "local_trusted":
+        return None
+    configured = env.get("DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT") or agent.get("workspace_root")
+    if configured is None or str(configured).strip() in {"", "null", "None", "~"}:
+        return (Path.home() / ".dlightrag" / "agent_workspaces").absolute()
+    path = Path(str(configured)).expanduser()
+    if not path.is_absolute():
+        raise ValueError(
+            "answer.agent.workspace_root must be an absolute path when local execution is enabled"
+        )
+    return path.absolute()
+
+
+def resolve_postgres_target(
+    env: dict[str, str],
+    config: dict[str, object] | None = None,
+) -> PostgresTarget:
     prefix = "DLIGHTRAG_STORAGE__POSTGRES__"
+    storage = _mapping((config or {}).get("storage"))
+    postgres = _mapping(storage.get("postgres"))
+
+    def value(name: str) -> object:
+        return env.get(f"{prefix}{name.upper()}") or postgres.get(name) or _DEFAULT_PG[name]
+
     return PostgresTarget(
-        host=str(env.get(f"{prefix}HOST") or _DEFAULT_PG["host"]),
-        port=int(env.get(f"{prefix}PORT") or _DEFAULT_PG["port"]),
-        user=str(env.get(f"{prefix}USER") or _DEFAULT_PG["user"]),
-        password=str(env.get(f"{prefix}PASSWORD") or _DEFAULT_PG["password"]),
-        database=str(env.get(f"{prefix}DATABASE") or _DEFAULT_PG["database"]),
+        host=str(value("host")),
+        port=int(str(value("port"))),
+        user=str(value("user")),
+        password=str(value("password")),
+        database=str(value("database")),
     )
 
 
@@ -165,28 +193,67 @@ def resolve_postgres_target(env: dict[str, str]) -> PostgresTarget:
 # ─────────────────────────────────────────────────────────────────
 
 
-def validate_working_dir(working_dir: Path, repo_root: Path) -> list[str]:
-    """Return path-safety violations for the working-directory root."""
+def _symlink_violations(root: Path, *, stop: Path | None = None) -> list[str]:
     violations: list[str] = []
-    home = Path.home().resolve()
-    root = working_dir
-    if root == Path("/") or root == home:
-        violations.append(f"working-directory root {root} must not be / or the home directory")
-    if repo_root not in root.parents and root != repo_root:
-        violations.append(
-            f"working-directory root {root} must live inside the repository root {repo_root}"
-        )
     for candidate in (root, *root.parents):
-        if candidate == repo_root or candidate == Path(candidate.anchor):
+        if candidate == stop or candidate == Path(candidate.anchor):
             break
         if candidate.is_symlink():
-            violations.append(
-                f"working-directory root or an ancestor is a symbolic link: {candidate}"
-            )
+            violations.append(f"root or an ancestor is a symbolic link: {candidate}")
             break
     for child in root.iterdir() if root.is_dir() else ():
         if child.is_symlink():
-            violations.append(f"working-directory first-level child is a symbolic link: {child}")
+            violations.append(f"first-level child is a symbolic link: {child}")
+    return violations
+
+
+def validate_working_dir(working_dir: Path, repo_root: Path) -> list[str]:
+    """Require the corpus root to be a strict, symlink-free repo descendant."""
+    raw = working_dir.absolute()
+    root, repo, home = raw.resolve(), repo_root.resolve(), Path.home().resolve()
+    violations: list[str] = []
+    if root == Path("/") or root == home:
+        violations.append(f"working-directory root {root} must not be / or the home directory")
+    if root == repo:
+        violations.append(f"working-directory root must not be the repository root {repo}")
+    elif not root.is_relative_to(repo):
+        violations.append(
+            f"working-directory root {root} must live inside the repository root {repo}"
+        )
+    violations.extend(_symlink_violations(raw, stop=repo))
+    return violations
+
+
+def validate_workspace_root(workspace_root: Path, repo_root: Path) -> list[str]:
+    """Reject Agent cleanup roots that could contain user or repository data."""
+    raw = workspace_root.absolute()
+    root, repo, home = raw.resolve(), repo_root.resolve(), Path.home().resolve()
+    violations: list[str] = []
+    if root == Path("/") or root == home:
+        violations.append(f"Agent Workspace root {root} must not be / or the home directory")
+    if root == repo or repo.is_relative_to(root):
+        violations.append(
+            f"Agent Workspace root {root} must not contain the repository root {repo}"
+        )
+    violations.extend(_symlink_violations(raw))
+    return violations
+
+
+def validate_runtime_roots(
+    working_dir: Path,
+    workspace_root: Path | None,
+    repo_root: Path,
+) -> list[str]:
+    violations = validate_working_dir(working_dir, repo_root)
+    if workspace_root is None:
+        return violations
+    violations.extend(validate_workspace_root(workspace_root, repo_root))
+    if (
+        working_dir == workspace_root
+        or working_dir.is_relative_to(workspace_root)
+        or workspace_root.is_relative_to(working_dir)
+    ):
+        violations.append("Agent Workspace root must not overlap the working-directory root")
     return violations
 
 
@@ -263,8 +330,11 @@ async def _other_sessions(conn: asyncpg.Connection, database: str) -> list[dict[
 # ─────────────────────────────────────────────────────────────────
 
 
-def _compose(*args: str) -> subprocess.CompletedProcess[str]:
-    argv = ["docker", "compose", "-p", _COMPOSE_PROJECT, "-f", _COMPOSE_FILE, *args]
+def _compose(
+    *args: str,
+    project: str = _DEFAULT_COMPOSE_PROJECT,
+) -> subprocess.CompletedProcess[str]:
+    argv = ["docker", "compose", "-p", project, "-f", _COMPOSE_FILE, *args]
     return subprocess.run(  # noqa: S603 - fixed docker compose argv, host ops tool
         argv,
         cwd=_REPO_ROOT,
@@ -273,10 +343,16 @@ def _compose(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def run_docker_reset(target: PostgresTarget, report: ResetReport) -> None:
-    """Delete both DlightRAG volumes, start only PostgreSQL, verify the empty database."""
-    report.record("compose", f"project {_COMPOSE_PROJECT}, file {_COMPOSE_FILE}")
-    down = _compose("down", "-v")
+def run_docker_reset(
+    target: PostgresTarget,
+    report: ResetReport,
+    *,
+    compose_project: str | None = None,
+) -> None:
+    """Delete all DlightRAG volumes, start PostgreSQL, and verify exact emptiness."""
+    project = compose_project or _DEFAULT_COMPOSE_PROJECT
+    report.record("compose", f"project {project}, file {_COMPOSE_FILE}")
+    down = _compose("down", "-v", project=project)
     if down.returncode != 0:
         report.fail(
             "compose-down",
@@ -285,10 +361,10 @@ def run_docker_reset(target: PostgresTarget, report: ResetReport) -> None:
         return
     report.record(
         "compose-down",
-        "deleted volumes pg18_data and dlightrag_data; every service stopped",
+        f"deleted volumes {', '.join(_COMPOSE_VOLUMES)}; every service stopped",
     )
 
-    up = _compose("up", "-d", "postgres")
+    up = _compose("up", "-d", "postgres", project=project)
     if up.returncode != 0:
         report.fail(
             "compose-up",
@@ -297,41 +373,54 @@ def run_docker_reset(target: PostgresTarget, report: ResetReport) -> None:
         return
     report.record("compose-up", "started only the postgres service")
 
-    healthy = _wait_for_postgres_health(report)
+    healthy = _wait_for_postgres_health(report, project=project)
     if not healthy:
         return
 
-    psql = _psql(target, "SELECT 1")
+    psql = _psql(target, "SELECT 1", project=project)
     if psql.returncode != 0:
         report.fail("psql-check", f"psql verification query failed: {psql.stderr.strip()}")
         return
     report.record("postgres-health", "postgres is healthy and accepts connections")
     report.record("postgres-empty", "PGDATA reinitialized from empty; init.sql ran")
 
-    violation_checks = [
+    verification_checks = [
         (
             "extensions",
             "SELECT count(*) FROM pg_extension WHERE extname = ANY('{vector,pg_textsearch,pg_jieba}')",
+            "3",
         ),
         (
             "no-app-schema",
             "SELECT count(*) FROM information_schema.schemata"
             " WHERE schema_name NOT IN ('pg_catalog','information_schema','pg_toast')"
             " AND schema_name NOT LIKE 'pg_%'",
+            "1",
         ),
         (
             "no-ledger",
             "SELECT to_regclass('dlightrag_schema_migrations') IS NOT NULL",
+            "f",
         ),
     ]
-    for label, query in violation_checks:
-        result = _psql(target, f"SELECT ({query}) AS value")
+    for label, query, expected in verification_checks:
+        result = _psql(target, f"SELECT ({query}) AS value", project=project)
         if result.returncode != 0:
             report.fail(f"verify-{label}", result.stderr.strip())
             continue
-        report.record(f"verify-{label}", result.stdout.strip())
+        actual = result.stdout.strip()
+        if actual != expected:
+            report.fail(f"verify-{label}", f"expected {expected!r}, got {actual!r}")
+            continue
+        report.record(f"verify-{label}", actual)
 
-    services = _compose("ps", "--format", "{{.Service}}")
+    services = _compose("ps", "--format", "{{.Service}}", project=project)
+    if services.returncode != 0:
+        report.fail(
+            "compose-services",
+            f"docker compose ps failed: {services.stderr.strip() or services.stdout.strip()}",
+        )
+        return
     running = {line.strip() for line in (services.stdout or "").splitlines() if line.strip()}
     unexpected = running - {"postgres"}
     if unexpected:
@@ -340,7 +429,12 @@ def run_docker_reset(target: PostgresTarget, report: ResetReport) -> None:
         report.record("compose-services", "only postgres is running")
 
 
-def _wait_for_postgres_health(report: ResetReport, *, timeout_seconds: int = 180) -> bool:
+def _wait_for_postgres_health(
+    report: ResetReport,
+    *,
+    timeout_seconds: int = 180,
+    project: str = _DEFAULT_COMPOSE_PROJECT,
+) -> bool:
     import time
 
     deadline = time.monotonic() + timeout_seconds
@@ -350,7 +444,7 @@ def _wait_for_postgres_health(report: ResetReport, *, timeout_seconds: int = 180
             "inspect",
             "--format",
             "{{.State.Health.Status}}",
-            f"{_COMPOSE_PROJECT}-postgres-1",
+            f"{project}-postgres-1",
         ]
         inspect = subprocess.run(  # noqa: S603 - fixed docker argv, host ops tool
             argv,
@@ -364,13 +458,18 @@ def _wait_for_postgres_health(report: ResetReport, *, timeout_seconds: int = 180
     return False
 
 
-def _psql(target: PostgresTarget, query: str) -> subprocess.CompletedProcess[str]:
+def _psql(
+    target: PostgresTarget,
+    query: str,
+    *,
+    project: str = _DEFAULT_COMPOSE_PROJECT,
+) -> subprocess.CompletedProcess[str]:
     env = {"PGPASSWORD": target.password}
     argv = [
         "docker",
         "compose",
         "-p",
-        _COMPOSE_PROJECT,
+        project,
         "-f",
         _COMPOSE_FILE,
         "exec",
@@ -537,14 +636,16 @@ def preview(
     mode: str,
     target: PostgresTarget,
     working_dir: Path,
+    workspace_root: Path | None,
     repo_root: Path,
+    compose_project: str,
 ) -> None:
     print("Development reset preview")
     print(f"  mode:                 {mode}")
     if mode == "docker":
-        print(f"  compose project:      {_COMPOSE_PROJECT}")
+        print(f"  compose project:      {compose_project}")
         print(f"  compose file:         {_REPO_ROOT / _COMPOSE_FILE}")
-        print("  volumes to delete:    pg18_data, dlightrag_data")
+        print(f"  volumes to delete:    {', '.join(_COMPOSE_VOLUMES)}")
         print("  post-reset services:  postgres only (healthy, extensions, empty schema)")
     else:
         print(f"  database:             {target.identity()}")
@@ -554,6 +655,7 @@ def preview(
             " (CREATE EXTENSION IF NOT EXISTS)"
         )
     print(f"  working-dir root:     {working_dir}")
+    print(f"  Agent Workspace root: {workspace_root or '(disabled)'}")
     if working_dir.is_dir():
         children = list(working_dir.iterdir())
         print(f"  working-dir children: {len(children)}")
@@ -635,13 +737,28 @@ async def main(argv: list[str] | None = None) -> int:
 
     repo_root = _REPO_ROOT
     env = _read_env(repo_root)
-    target = resolve_postgres_target(env)
-    working_dir = _working_dir_root(repo_root, env)
-
-    preview(mode=args.mode, target=target, working_dir=working_dir, repo_root=repo_root)
-
     report = ResetReport(mode=args.mode)
+    try:
+        config = _read_config(repo_root)
+        target = resolve_postgres_target(env, config)
+        working_dir = _working_dir_root(repo_root, env, config)
+        workspace_root = _workspace_root(repo_root, env, config)
+    except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+        report.fail("configuration", str(exc))
+        _print_report(report, verbose=True)
+        return 1
+    compose_project = env.get("COMPOSE_PROJECT_NAME") or _DEFAULT_COMPOSE_PROJECT
 
+    preview(
+        mode=args.mode,
+        target=target,
+        working_dir=working_dir,
+        workspace_root=workspace_root,
+        repo_root=repo_root,
+        compose_project=compose_project,
+    )
+
+    violations = validate_runtime_roots(working_dir, workspace_root, repo_root)
     if args.mode == "native":
         for violation in validate_native_target(
             target=target,
@@ -649,7 +766,15 @@ async def main(argv: list[str] | None = None) -> int:
             repo_root=repo_root,
             allow_remote_reset=args.allow_remote_reset,
         ):
-            report.fail("target", violation)
+            if violation not in violations:
+                violations.append(violation)
+    for violation in violations:
+        report.fail("target", violation)
+    if report.failures:
+        _print_report(report, verbose=True)
+        return 1
+
+    if args.mode == "native":
         if args.dry_run:
             await _native_pg_work(
                 target,
@@ -678,7 +803,7 @@ async def main(argv: list[str] | None = None) -> int:
         )
         # Independent cleanup steps continue past earlier failures so one
         # failure never hides the rest; every failure is reported (M3-D39).
-        clear_runtime_dirs(working_dir, _workspace_root(repo_root, env), report)
+        clear_runtime_dirs(working_dir, workspace_root, report)
         _print_report(report, verbose=args.verbose)
         print("Development reset complete." if report.ok else "Development reset FAILED.")
         return 0 if report.ok else 1
@@ -693,13 +818,11 @@ async def main(argv: list[str] | None = None) -> int:
         return 1
     report.record("confirmation", "target confirmed")
 
-    run_docker_reset(target, report)
-    # Every invocation also clears the verified host working directory so no
+    run_docker_reset(target, report, compose_project=compose_project)
+    # Every invocation also clears the pre-validated host runtime roots so no
     # half-reset environment can survive (M3-D36).
-    for violation in validate_working_dir(working_dir, repo_root):
-        report.fail("target", violation)
     if not report.failures:
-        clear_runtime_dirs(working_dir, _workspace_root(repo_root, env), report)
+        clear_runtime_dirs(working_dir, workspace_root, report)
     _print_report(report, verbose=args.verbose)
     print("Development reset complete." if report.ok else "Development reset FAILED.")
     return 0 if report.ok else 1
