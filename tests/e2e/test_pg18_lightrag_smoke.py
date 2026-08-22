@@ -14,6 +14,7 @@ from dlightrag.config import set_config
 from dlightrag.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.rag.retrieval.filtering import metadata_filter_scope
 from dlightrag.rag.retrieval.metadata_path import metadata_retrieve
+from tests.config_helpers import clone_config, mutate_config
 from tests.e2e.pg18_harness import (
     RUN_E2E_ENV,
     e2e_enabled,
@@ -73,13 +74,13 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         conn_kwargs=conn_kwargs,
     )
     set_config(cfg)
-    install_fake_model_functions(monkeypatch, dim=cfg.embedding.dim)
+    install_fake_model_functions(monkeypatch, dim=cfg.models.embedding.dim)
 
     service = await WorkspaceRag.acreate(
         workspace_id=workspace,
         settings=rag_settings(cfg),
         backend=PGCorpusBackendFactory(cfg).create(),
-        scheduler=ModelScheduler(max_concurrency=cfg.max_async),
+        scheduler=ModelScheduler(max_concurrency=cfg.models.max_concurrency),
         telemetry=LangfuseTelemetry(),
     )
     doc_path = tmp_path / "pg18-native-smoke.md"
@@ -139,7 +140,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         assert service._lightrag_stores is not None
         raw_chunks = await service._lightrag_stores.get_text_chunks([chunk_id])
         indexed_text = str(raw_chunks[0]["content"])
-        query_embedding = stable_vector(f"document:{indexed_text}", dim=cfg.embedding.dim)
+        query_embedding = stable_vector(f"document:{indexed_text}", dim=cfg.models.embedding.dim)
         missing_scope = MetadataScope(doc_ids=frozenset({"missing-doc"}), chunk_count=1)
         async with metadata_filter_scope(missing_scope):
             assert (
@@ -194,8 +195,8 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         conn_kwargs=conn_kwargs,
     )
     set_config(writer_cfg)
-    install_fake_model_functions(monkeypatch, dim=writer_cfg.embedding.dim)
-    model_scheduler = ModelScheduler(max_concurrency=writer_cfg.max_async)
+    install_fake_model_functions(monkeypatch, dim=writer_cfg.models.embedding.dim)
+    model_scheduler = ModelScheduler(max_concurrency=writer_cfg.models.max_concurrency)
 
     # ── Writer: provision schema + ingest ──────────────────────────────
     writer = await WorkspaceRag.acreate(
@@ -228,7 +229,8 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         reset_config()
 
     # ── Reader: read-only corpus, writable operational state ───────────
-    reader_cfg = writer_cfg.model_copy(update={"service_role": "reader"})
+    reader_cfg = clone_config(writer_cfg)
+    mutate_config(reader_cfg, "deployment.service_role", "reader")
     set_config(reader_cfg)
     pg_pool.bind(reader_cfg)
     reader = await WorkspaceRag.acreate(

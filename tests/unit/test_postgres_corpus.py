@@ -15,6 +15,7 @@ from dlightrag.adapters.postgres.corpus import (
 )
 from dlightrag.config import DlightragConfig
 from dlightrag.rag.retrieval.bm25 import BM25Profile
+from tests.config_helpers import clone_config, mutate_config
 
 
 class _Connection:
@@ -34,13 +35,13 @@ async def test_connection_budget_warning_is_owned_by_coordination(
     monkeypatch.setenv("WEB_CONCURRENCY", "2")
     coordination = PGCorpusCoordination(
         connection_kwargs=test_config.pg_connection_kwargs(),
-        workspace=test_config.workspace,
+        workspace=test_config.deployment.workspace,
         reader=False,
         require_halfvec=False,
         required_extensions=(),
         lightrag_pool_max_size=16,
         domain_pool_max_size=10,
-        acquire_timeout=test_config.postgres_acquire_timeout,
+        acquire_timeout=test_config.storage.postgres.acquire_timeout,
     )
 
     with caplog.at_level(logging.WARNING, logger="dlightrag.adapters.postgres.corpus"):
@@ -92,9 +93,9 @@ async def test_runtime_binder_composes_workspace_stores(
     monkeypatch: pytest.MonkeyPatch,
     is_reader: bool,
 ) -> None:
-    config = test_config.model_copy(
-        update={"service_role": "reader" if is_reader else "writer", "bm25_enabled": True}
-    )
+    config = clone_config(test_config)
+    mutate_config(config, "deployment.service_role", "reader" if is_reader else "writer")
+    mutate_config(config, "corpus.retrieval.bm25_enabled", True)
     metadata = SimpleNamespace(initialize=AsyncMock())
     chunks = object()
     vectors = SimpleNamespace(ensure_document_scope_index=AsyncMock())
@@ -122,7 +123,7 @@ async def test_runtime_binder_composes_workspace_stores(
 
     stores = await PGCorpusRuntimeBinder(config).attach(lightrag)
 
-    metadata_constructor.assert_called_once_with(workspace=config.workspace)
+    metadata_constructor.assert_called_once_with(workspace=config.deployment.workspace)
     guard_constructor.assert_called_once_with(lightrag)
     guard.verify_all.assert_awaited_once_with()
     if is_reader:
@@ -137,7 +138,7 @@ async def test_runtime_binder_composes_workspace_stores(
     chunk_constructor.assert_called_once_with(lightrag)
     vector_constructor.assert_called_once_with(
         chunks_vdb,
-        exact_threshold=config.metadata_filter_exact_vector_threshold,
+        exact_threshold=config.corpus.retrieval.metadata_filter_exact_vector_threshold,
     )
     if is_reader:
         vectors.ensure_document_scope_index.assert_not_awaited()

@@ -10,8 +10,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.access import AccessDeniedError
+from dlightrag.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
 from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig, set_config
+from dlightrag.config import DlightragConfig, set_config
 from dlightrag.services.errors import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
@@ -21,8 +22,8 @@ from dlightrag.services.errors import (
 )
 
 
-def _embedding_config() -> EmbeddingConfig:
-    return EmbeddingConfig(
+def _embedding_config() -> EmbeddingSettings:
+    return EmbeddingSettings(
         provider="voyage",
         model="voyage-multimodal-3.5",
         api_key="test",
@@ -39,10 +40,13 @@ def tmp_working_dir(tmp_path: Path) -> Path:
 async def route_client(
     tmp_working_dir: Path,
 ) -> AsyncIterator[tuple[AsyncClient, AsyncMock]]:
-    config = DlightragConfig(  # type: ignore[call-arg]
-        working_dir=str(tmp_working_dir),
-        llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
-        embedding=_embedding_config(),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        # type: ignore[call-arg]
+        deployment={"working_dir": str(tmp_working_dir)},
+        models={
+            "chat": ModelRoleSettings(default=ModelSettings(model="gpt-5.4-mini", api_key="test")),
+            "embedding": _embedding_config(),
+        },
     )
     set_config(config)
     application_double = AsyncMock()
@@ -157,10 +161,13 @@ async def test_download_authorization_precedes_metadata_lookup(
         async def filter_workspaces(self, user, action, workspaces):
             return [workspace for workspace in workspaces if workspace != "finance"]
 
-    config = DlightragConfig(  # type: ignore[call-arg]
-        working_dir=str(tmp_working_dir),
-        llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
-        embedding=_embedding_config(),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        # type: ignore[call-arg]
+        deployment={"working_dir": str(tmp_working_dir)},
+        models={
+            "chat": ModelRoleSettings(default=ModelSettings(model="gpt-5.4-mini", api_key="test")),
+            "embedding": _embedding_config(),
+        },
     )
     set_config(config)
     application_double = AsyncMock()

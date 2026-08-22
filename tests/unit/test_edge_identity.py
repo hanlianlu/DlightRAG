@@ -475,9 +475,11 @@ class TestEdgeIdentityConfig:
 
     def test_edge_requires_jwt_auth_mode(self) -> None:
         with pytest.raises(ValueError, match="auth_mode='jwt'"):
-            DlightragConfig(
-                auth_mode="none",
-                web_identity=_settings(),
+            DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+                access={
+                    "auth_mode": "none",
+                    "web_identity": _settings(),
+                },
             )
 
     def test_audience_accepts_a_json_array_string(self) -> None:
@@ -503,10 +505,12 @@ class TestWebEdgeMiddleware:
         return app
 
     def _jwt_config(self) -> DlightragConfig:
-        return DlightragConfig(
-            auth_mode="jwt",
-            jwt_verification_key="some-key-for-rest-bearers",
-            web_identity=_settings(),
+        return DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+            access={
+                "auth_mode": "jwt",
+                "jwt_verification_key": "some-key-for-rest-bearers",
+                "web_identity": _settings(),
+            },
         )
 
     def test_valid_assertion_projects_the_edge_owner(self, signing_key, jwks) -> None:
@@ -529,16 +533,18 @@ class TestWebEdgeMiddleware:
         assert response.text == "Authentication required"
 
     def test_azure_missing_id_token_is_401_through_the_middleware(self, jwks) -> None:
-        cfg = DlightragConfig(
-            auth_mode="jwt",
-            jwt_verification_key="some-key-for-rest-bearers",
-            web_identity=WebIdentitySettings.model_validate(
-                {
-                    "edge": "azure",
-                    "issuer": "https://login.microsoftonline.com/test-tenant/v2.0",
-                    "audience": "api-client-id",
-                }
-            ),
+        cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+            access={
+                "auth_mode": "jwt",
+                "jwt_verification_key": "some-key-for-rest-bearers",
+                "web_identity": WebIdentitySettings.model_validate(
+                    {
+                        "edge": "azure",
+                        "issuer": "https://login.microsoftonline.com/test-tenant/v2.0",
+                        "audience": "api-client-id",
+                    }
+                ),
+            },
         )
         client = TestClient(self._app(cfg))
         response = client.get("/web/")
@@ -554,7 +560,12 @@ class TestWebEdgeMiddleware:
         assert response.status_code == 401
 
     def test_paste_path_stays_when_no_edge_is_configured(self) -> None:
-        cfg = DlightragConfig(auth_mode="jwt", jwt_verification_key="some-key")
+        cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+            access={
+                "auth_mode": "jwt",
+                "jwt_verification_key": "some-key",
+            },
+        )
         client = TestClient(self._app(cfg))
         response = client.get("/web/", follow_redirects=False)
         # The legacy path redirects a browser GET to the login page.

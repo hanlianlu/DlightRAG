@@ -21,7 +21,7 @@ from dlightrag.ai.scheduler import ModelScheduler
 from dlightrag.ai.telemetry import Telemetry
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.maintenance.rebuild_bm25 import run_rebuild_bm25
-from dlightrag.model_settings import embedding_settings, rag_settings
+from dlightrag.model_settings import rag_settings
 from dlightrag.observability import LangfuseTelemetry
 from dlightrag.rag.ingestion.document_embedding import (
     build_document_embedder,
@@ -91,14 +91,14 @@ class DlightRAGRebuildTool(RebuildTool):
         self.embedding_func = embedding_func
         self.full_docs = None
         self.doc_status = None
-        self.workspace = config.workspace
+        self.workspace = config.deployment.workspace
 
     def resolve_storage_names(self) -> dict[str, str]:
         return {
-            "graph": self.config.graph_storage,
-            "vector": self.config.vector_storage,
-            "kv": self.config.kv_storage,
-            "doc_status": self.config.doc_status_storage,
+            "graph": self.config.storage.lightrag.graph_storage,
+            "vector": self.config.storage.lightrag.vector_storage,
+            "kv": self.config.storage.lightrag.kv_storage,
+            "doc_status": self.config.storage.lightrag.doc_status_storage,
         }
 
     def build_embedding_func(self) -> Any:
@@ -108,11 +108,11 @@ class DlightRAGRebuildTool(RebuildTool):
         if not self.storage_names:
             self.storage_names = self.resolve_storage_names()
         global_config: dict[str, Any] = {
-            "working_dir": self.config.working_dir,
+            "working_dir": self.config.deployment.working_dir,
             "kv_storage": self.storage_names["kv"],
             "vector_storage": self.storage_names["vector"],
             "graph_storage": self.storage_names["graph"],
-            "embedding_batch_num": self.config.embedding_batch_num,
+            "embedding_batch_num": self.config.models.embedding.batch_size,
             "vector_db_storage_cls_kwargs": {
                 "cosine_better_than_threshold": get_env_value(
                     "COSINE_THRESHOLD",
@@ -122,7 +122,9 @@ class DlightRAGRebuildTool(RebuildTool):
             },
             "embedding_func": self.embedding_func,
         }
-        global_config["vector_db_storage_cls_kwargs"].update(self.config.vector_db_kwargs)
+        global_config["vector_db_storage_cls_kwargs"].update(
+            self.config.storage.lightrag.vector_db_kwargs
+        )
 
         max_token_size = getattr(self.embedding_func, "max_token_size", None)
         if max_token_size:
@@ -142,7 +144,7 @@ class DlightRAGRebuildTool(RebuildTool):
         from lightrag.kg.factory import get_storage_class
 
         self.storage_names = self.resolve_storage_names()
-        self.workspace = self.config.workspace
+        self.workspace = self.config.deployment.workspace
         apply_lightrag_environment(self.config)
 
         print("\nChecking configuration...")
@@ -293,8 +295,8 @@ async def run_rebuild(
         raise SystemExit("--yes is required for rebuild targets; stop DlightRAG first")
 
     resolved_config = config or get_config()
-    resolved_embedding = embedding_settings(resolved_config)
-    model_scheduler = ModelScheduler(max_concurrency=resolved_config.max_async)
+    resolved_embedding = resolved_config.models.embedding
+    model_scheduler = ModelScheduler(max_concurrency=resolved_config.models.max_concurrency)
     multimodal_embedder = create_embedding_model(
         resolved_embedding,
         scheduler=model_scheduler,
@@ -328,7 +330,7 @@ async def run_rebuild(
             exit_code = 1
 
         if exit_code == 0 and target in {"chunks", "all"}:
-            if getattr(resolved_config, "bm25_enabled", False):
+            if resolved_config.corpus.retrieval.bm25_enabled:
                 bm25_stats = await run_rebuild_bm25(
                     config=resolved_config,
                     assume_yes=True,
@@ -355,7 +357,7 @@ async def run_rebuild(
                 )
                 if direct_enabled:
                     stats = await restore_sidecar_image_vectors(
-                        workspace_id=resolved_config.workspace,
+                        workspace_id=resolved_config.deployment.workspace,
                         settings=rag_settings(resolved_config),
                         lightrag=lightrag_surface,
                         stores=stores,
@@ -389,7 +391,9 @@ def main() -> None:
 
     config = load_config(args.env_file) if args.env_file else get_config()
     set_config(config)
-    logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO))
+    logging.basicConfig(
+        level=getattr(logging, config.observability.log_level.upper(), logging.INFO)
+    )
 
     exit_code = asyncio.run(
         run_rebuild(

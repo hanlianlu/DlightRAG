@@ -57,9 +57,9 @@ def _request_body_limits(cfg: DlightragConfig) -> tuple[int, dict[str, int]]:
     which stay in the routes because only the route knows what the parts mean.
     """
     # Base64 inflates an image by 4/3.
-    encoded_image_bytes = ((cfg.answer.image_max_bytes + 2) // 3) * 4
+    encoded_image_bytes = ((cfg.answer.generation.image_max_bytes + 2) // 3) * 4
     answer_multipart_max = (
-        cfg.answer.max_total_attachment_bytes
+        cfg.answer.generation.max_total_attachment_bytes
         + ANSWER_REQUEST_PART_MAX_BYTES
         + _MULTIPART_FRAMING_BYTES
     )
@@ -71,7 +71,7 @@ def _request_body_limits(cfg: DlightragConfig) -> tuple[int, dict[str, int]]:
         {
             "/answer": answer_multipart_max,
             "/web/api/answer": answer_multipart_max,
-            "/ingest/blob": cfg.max_upload_bytes + _MULTIPART_ENVELOPE_BYTES,
+            "/ingest/blob": cfg.corpus.ingestion.max_upload_bytes + _MULTIPART_ENVELOPE_BYTES,
             "/web/api/files/upload": cfg.max_upload_batch_bytes + _MULTIPART_ENVELOPE_BYTES,
         },
     )
@@ -135,10 +135,10 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
     # -- CORS middleware (config-driven; see DlightragConfig.cors_allow_origins) --
     # allow_credentials toggles based on origin list: browsers refuse '*' +
     # credentials, so we only enable credentials when origins are explicit.
-    allow_credentials = cfg.cors_allow_origins != ["*"]
+    allow_credentials = cfg.access.cors_allow_origins != ("*",)
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=cfg.cors_allow_origins,
+        allow_origins=cfg.access.cors_allow_origins,
         allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -302,15 +302,15 @@ def main() -> None:
         config = get_config()
     install_request_id_log_record_factory()
     logging.basicConfig(
-        level=getattr(logging, config.log_level.upper(), logging.INFO),
+        level=getattr(logging, config.observability.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(request_id)s] %(name)s: %(message)s",
     )
 
     uvicorn.run(
         "dlightrag.api.server:get_app",
-        host=config.api_host,
-        port=config.api_port,
-        log_level=config.log_level,
+        host=config.interfaces.api.host,
+        port=config.interfaces.api.port,
+        log_level=config.observability.log_level,
         factory=True,
     )
 

@@ -40,7 +40,7 @@
         <mxCell id="manager" value="&lt;b&gt;Application&lt;/b&gt;&lt;br&gt;composition root&lt;br&gt;answers &#183; retrieval &#183; corpora" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="282" y="375" width="205" height="84" as="geometry"/>
         </mxCell>
-        <mxCell id="run_coordinator" value="&lt;b&gt;RunCoordinator &#8635;&lt;/b&gt;&lt;br&gt;runtime.answer_worker_concurrency&lt;br&gt;leases &#183; events &#183; checkpoints" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
+        <mxCell id="run_coordinator" value="&lt;b&gt;RunCoordinator &#8635;&lt;/b&gt;&lt;br&gt;answer.runtime.answer_worker_concurrency&lt;br&gt;leases &#183; events &#183; checkpoints" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
           <mxGeometry x="525" y="370" width="190" height="72" as="geometry"/>
         </mxCell>
         <mxCell id="orchestrator" value="&lt;b&gt;AnswerOrchestrator&lt;/b&gt;&lt;br&gt;fast path | research path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
@@ -55,10 +55,10 @@
         <mxCell id="workspace_rag" value="&lt;b&gt;WorkspaceRag&lt;/b&gt;&lt;br&gt;canonical ingest &#183; retrieve &#183; reset&lt;br&gt;storage-neutral corpus capability" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
           <mxGeometry x="525" y="540" width="190" height="70" as="geometry"/>
         </mxCell>
-        <mxCell id="lightrag_main" value="&lt;b&gt;LightRAG main &#8635;&lt;/b&gt;&lt;br&gt;rag_pipeline_max_async / workspace&lt;br&gt;parser &#183; chunks &#183; KG &#183; vectors &#183; mix" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
+        <mxCell id="lightrag_main" value="&lt;b&gt;LightRAG main &#8635;&lt;/b&gt;&lt;br&gt;corpus.ingestion.pipeline.max_concurrency / workspace&lt;br&gt;parser &#183; chunks &#183; KG &#183; vectors &#183; mix" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
           <mxGeometry x="750" y="540" width="200" height="70" as="geometry"/>
         </mxCell>
-        <mxCell id="model_scheduler" value="&lt;b&gt;ModelScheduler &#8635;&lt;/b&gt;&lt;br&gt;max_async / process&lt;br&gt;fair by durable run&lt;br&gt;&lt;br&gt;Completion &#183; Tool &#183; Embedding&lt;br&gt;Rerank &#183; capability probes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=9;" vertex="1" parent="1">
+        <mxCell id="model_scheduler" value="&lt;b&gt;ModelScheduler &#8635;&lt;/b&gt;&lt;br&gt;models.max_concurrency / process&lt;br&gt;fair by durable run&lt;br&gt;&lt;br&gt;Completion &#183; Tool &#183; Embedding&lt;br&gt;Rerank &#183; capability probes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=9;" vertex="1" parent="1">
           <mxGeometry x="990" y="370" width="190" height="240" as="geometry"/>
         </mxCell>
 

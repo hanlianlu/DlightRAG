@@ -115,11 +115,11 @@ async def test_bash_does_not_inherit_seeded_secrets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
-    monkeypatch.setenv("DLIGHTRAG_POSTGRES_PASSWORD", "pw")
+    monkeypatch.setenv("DLIGHTRAG_STORAGE__POSTGRES__PASSWORD", "pw")
     env, scheduler = _env(tmp_path)
     tool = bash_tool(env, scheduler)
     result = await tool.execute(
-        BashArgs(command="printf '%s' \"$OPENAI_API_KEY$DLIGHTRAG_POSTGRES_PASSWORD\"")
+        BashArgs(command="printf '%s' \"$OPENAI_API_KEY$DLIGHTRAG_STORAGE__POSTGRES__PASSWORD\"")
     )
     assert "sk-secret" not in result.content
     assert "pw" not in result.content

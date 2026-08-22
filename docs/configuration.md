@@ -20,18 +20,24 @@ constructor args > environment variables > .env > config.yaml > code defaults
 
 ## Public Configuration Boundary
 
+DlightRAG 2.0 has exactly eight top-level sections: `deployment`, `storage`,
+`models`, `corpus`, `answer`, `access`, `interfaces`, and `observability`.
+Nested environment variables use the same path with `__` separators. Removed
+1.x flat names are rejected rather than aliased.
+
 Keep these in normal `config.yaml`:
 
-- model/provider choices: `llm`, `embedding`, `rerank.enabled`, `rerank.strategy`
-- parser sidecar endpoint and visual context controls: `parser_sidecars`
+- model/provider choices: `models.chat`, `models.embedding`, `models.rerank`
+- parser sidecar endpoint and visual context controls: `corpus.sidecars`
 - metadata schema: fixed; custom metadata needs no declaration
-- domain entity guidance: `kg_entity_types`, `extraction.entity_type_prompt_file`
-- PostgreSQL endpoint, process role, and workspace identity: `workspace`,
-  `service_role`, `postgres_*`
-- high-level concurrency raised above upstream defaults: AI-provider `max_async`,
-  `runtime.answer_worker_concurrency`, `rag_pipeline_max_async`,
-  `embedding_func_max_async`, `embedding_batch_num`
-- retrieval/answer controls: `top_k`, `chunk_top_k`, `bm25_enabled`, `direct_visual_top_k`,
+- domain entity guidance: `corpus.retrieval.kg_entity_types`,
+  `corpus.extraction.entity_type_prompt_file`
+- PostgreSQL endpoint, process role, and workspace identity:
+  `storage.postgres`, `deployment.service_role`, `deployment.workspace`
+- high-level concurrency raised above upstream defaults: AI-provider `models.max_concurrency`,
+  `answer.runtime.answer_worker_concurrency`, `corpus.ingestion.pipeline.max_concurrency`,
+  `models.embedding.max_concurrency`, `models.embedding.batch_size`
+- retrieval/answer controls: `corpus.retrieval.top_k`, `corpus.retrieval.chunk_top_k`, `corpus.retrieval.bm25_enabled`, `corpus.retrieval.direct_visual_top_k`,
   `answer.*`
 - auth and observability mode switches when they are not secret
 
@@ -41,7 +47,7 @@ they need to change:
 - storage backend literals
 - raw LightRAG parser rules (derived internally from the active sidecar)
 - PostgreSQL retry/backoff internals
-- per-stage ingest worker counts (`max_parallel_*`) that match LightRAG defaults
+- per-stage ingest worker counts (`corpus.ingestion.pipeline.max_parallel_*`) that match LightRAG defaults
 - queue sizes
 - HNSW index internals
 - BM25 language profile signatures and k1/b tuning
@@ -64,28 +70,25 @@ them.
 Advanced parser fields with code defaults:
 
 ```yaml
-parser:
-  chunk_options: {}
-
-extraction:
-  use_json: true
-
-parser_sidecars:
-  vlm:
-    enabled: true
-    max_image_bytes: 5242880
-    # DlightRAG default 80px, above LightRAG's native 64px minimum: sub-80px
-    # crops are treated as decorative (icons/separators/ornaments) and skipped.
-    # Set 64 explicitly to use LightRAG's native threshold.
-    min_image_pixel: 80
-  mineru:
-    api_mode: local
-    local_endpoint: http://host.docker.internal:8210
-    language: ch
-    backend: hybrid-engine
+corpus:
+  parser:
+    chunk_options: {}
+  extraction:
+    use_json: true
+  sidecars:
+    vlm:
+      enabled: true
+      max_image_bytes: 5242880
+      # DlightRAG default 80px, above LightRAG's native 64px minimum.
+      min_image_pixel: 80
+    mineru:
+      api_mode: local
+      local_endpoint: http://host.docker.internal:8210
+      language: ch
+      backend: hybrid-engine
 ```
 
-`parser_sidecars.vlm` owns figure understanding, and MinerU's own image
+`corpus.sidecars.vlm` owns figure understanding, and MinerU's own image
 analysis is deliberately left off. MinerU extracts each figure as a crop; the
 VLM sidecar then describes that crop together with the surrounding text.
 Enabling MinerU's analysis would run a second VLM over the same image for
@@ -106,20 +109,21 @@ correctly bound captions, at roughly 5x the parse time. Set
 To use Docling instead, remove/comment the MinerU block and configure only:
 
 ```yaml
-parser_sidecars:
-  docling:
-    endpoint: http://docling:5001
-    # code_formula_preset: granite_docling
-    # force_ocr: false
+corpus:
+  sidecars:
+    docling:
+      endpoint: http://docling:5001
+      # code_formula_preset: granite_docling
+      # force_ocr: false
 ```
 
-`parser_sidecars.docling.do_formula_enrichment` transcribes detected formula
+`corpus.sidecars.docling.do_formula_enrichment` transcribes detected formula
 regions and defaults on, matching MinerU's `enable_formula`, so the parser
 choice does not decide whether a corpus keeps its mathematics. Turning it off
 drops formulas silently rather than erroring, so turn it off only on a corpus
 without mathematics.
 
-`parser_sidecars.docling.code_formula_preset` names the model that transcribes
+`corpus.sidecars.docling.code_formula_preset` names the model that transcribes
 them. Leave it unset unless the parser service runs on Apple Silicon:
 
 | Parser service device | `code_formula_preset` |
@@ -146,7 +150,7 @@ the service version.
 The OCR engine needs no configuration, and `ocr_lang` has no effect: the CPU
 image resolves to a single engine that reads Han and Latin from one table.
 
-`parser_sidecars.docling.force_ocr` re-runs OCR over the whole page and discards
+`corpus.sidecars.docling.force_ocr` re-runs OCR over the whole page and discards
 the PDF's embedded text layer. docling-serve defaults it off; DlightRAG defaults
 it on because a PDF whose CID fonts carry no Unicode mapping — common in
 Chinese typesetting output — renders correctly yet extracts as mojibake, and
@@ -171,17 +175,17 @@ The optional local profile starts with `docker compose --profile docling up -d`;
 an external deployment supplies its own reachable endpoint. Native DlightRAG
 processes use `127.0.0.1` endpoints when their parser runs on the same host.
 
-`parser_sidecars.mineru.language` is MinerU's OCR language hint for scanned or
+`corpus.sidecars.mineru.language` is MinerU's OCR language hint for scanned or
 image-based documents. It is separate from `extraction.language`, which controls
 LightRAG's KG extraction prompt language.
 
-`parser_sidecars.mineru.backend` selects MinerU's parse engine and defaults to
+`corpus.sidecars.mineru.backend` selects MinerU's parse engine and defaults to
 `hybrid-engine`, MinerU's current VLM-assisted default. Accepted values are
 `pipeline`, `vlm-engine`, and `hybrid-engine`. Use `pipeline` (MinerU's non-VLM
 OCR engine) to avoid VLM transcription artifacts on difficult scans, at the cost
 of weaker complex-layout and chart handling. DlightRAG always maps the selected
 value privately to `MINERU_LOCAL_BACKEND`, avoiding LightRAG's legacy default.
-Public environment overrides use the typed `DLIGHTRAG_PARSER_SIDECARS__...`
+Public environment overrides use the typed `DLIGHTRAG_CORPUS__SIDECARS__...`
 form; raw MinerU/Docling/VLM variables are not independent configuration inputs.
 
 DlightRAG does not expose MinerU-side image/chart analysis as a product setting;
@@ -220,13 +224,16 @@ LM Studio is `openai_compatible` because it exposes an OpenAI-style
 |---|---|---|
 | `provider` | Required | One transport from the matrix above. Unknown values fail configuration loading. |
 | `model` | Required | The exact model identifier expected by the remote or local server. |
-| `api_key` | None | Provider credential. Prefer `DLIGHTRAG_EMBEDDING__API_KEY` in `.env`; omit it for unauthenticated local servers. |
+| `api_key` | None | Provider credential. Prefer `DLIGHTRAG_MODELS__EMBEDDING__API_KEY` in `.env`; omit it for unauthenticated local servers. |
 | `base_url` | OpenAI API root | API root before the appended endpoint. Include `/v1` only when that protocol expects it; configure this explicitly for non-OpenAI transports. |
 | `dim` | `1024` | Expected vector length. It is sent when the protocol supports a dimension parameter and is always checked against every returned vector. |
 | `max_token_size` | `8192` | Maximum input size advertised to LightRAG's embedding pipeline; it does not change the model's real context limit. |
 | `input_modality` | `auto` | Local routing policy: `auto`, `text`, or `multimodal`. It is never included in an upstream request. |
 | `asymmetric` | `auto` | `auto` enables query/document hints when supported; `require` fails for unsupported providers; `disable` forces symmetric embeddings. |
 | `startup_probe` | `true` | When image routing is active, send one in-memory 1x1 image at startup to verify the selected endpoint/model. The probe writes no storage or files. |
+| `timeout` | `120` | Per-request embedding timeout in seconds. |
+| `max_concurrency` | `16` | Concurrent embedding calls admitted within the global model scheduler. |
+| `batch_size` | `64` | Text inputs sent per embedding provider request. |
 
 DlightRAG does not guess whether an arbitrary model accepts a particular
 dimension. Set `dim` to the model's real output size; a mismatch fails when a
@@ -272,62 +279,66 @@ static mismatches such as `ollama + multimodal` still fail.
 Voyage native multimodal embeddings:
 
 ```yaml
-embedding:
-  provider: voyage
-  model: voyage-multimodal-3.5
-  base_url: https://api.voyageai.com/v1
-  dim: 1024
-  max_token_size: 8192
-  input_modality: auto
-  asymmetric: auto
-  startup_probe: true
+models:
+  embedding:
+    provider: voyage
+    model: voyage-multimodal-3.5
+    base_url: https://api.voyageai.com/v1
+    dim: 1024
+    max_token_size: 8192
+    input_modality: auto
+    asymmetric: auto
+    startup_probe: true
 ```
 
 Keep the Voyage key in `.env`:
 
 ```dotenv
-DLIGHTRAG_EMBEDDING__API_KEY=pa-...
+DLIGHTRAG_MODELS__EMBEDDING__API_KEY=pa-...
 ```
 
 Ollama's native text embedding endpoint:
 
 ```yaml
-embedding:
-  provider: ollama
-  model: nomic-embed-text
-  base_url: http://127.0.0.1:11434
-  dim: 768
-  max_token_size: 8192
-  input_modality: auto
-  asymmetric: disable
+models:
+  embedding:
+    provider: ollama
+    model: nomic-embed-text
+    base_url: http://127.0.0.1:11434
+    dim: 768
+    max_token_size: 8192
+    input_modality: auto
+    asymmetric: disable
 ```
 
 LM Studio or another OpenAI-compatible text embedding server:
 
 ```yaml
-embedding:
-  provider: openai_compatible
-  model: text-embedding-nomic-embed-text-v1.5
-  base_url: http://127.0.0.1:1234/v1
-  dim: 768
-  max_token_size: 8192
-  input_modality: text
-  asymmetric: disable
+models:
+  embedding:
+    provider: openai_compatible
+    model: text-embedding-nomic-embed-text-v1.5
+    base_url: http://127.0.0.1:1234/v1
+    dim: 768
+    max_token_size: 8192
+    input_modality: text
+    asymmetric: disable
 ```
 
 An OpenAI-compatible endpoint serving a multimodal Qwen3-VL embedding model
 uses the same provider and opts into images explicitly:
 
 ```yaml
-embedding:
-  provider: openai_compatible
-  model: qwen3-vl-embedding-2b
-  base_url: http://127.0.0.1:1234/v1
-  dim: 2048
-  max_token_size: 8192
-  input_modality: multimodal
-  asymmetric: disable
-  startup_probe: true
+models:
+  embedding:
+    provider: openai_compatible
+    model: qwen3-vl-embedding-2b
+    base_url: http://127.0.0.1:1234/v1
+    dim: 2048
+    max_token_size: 8192
+    input_modality: multimodal
+    asymmetric: disable
+    startup_probe: true
 ```
 
 For LM Studio, `model` must match the identifier exposed by the running local
@@ -398,16 +409,17 @@ selected endpoint is unknown. For a manually configured private or newly
 released model, provide one complete override at the root:
 
 ```yaml
-model_capacity_overrides:
-  - provider: openai
-    model: private-model
-    base_url: http://localhost:8888/v1
-    context_window_tokens: 262144
-    max_input_tokens: 200000
-    max_output_tokens: 32768
-    supports_images: true
-    supports_tools: true
-    supports_reasoning: false
+models:
+  capacity_overrides:
+    - provider: openai
+      model: private-model
+      base_url: http://localhost:8888/v1
+      context_window_tokens: 262144
+      max_input_tokens: 200000
+      max_output_tokens: 32768
+      supports_images: true
+      supports_tools: true
+      supports_reasoning: false
 ```
 
 `context_window_tokens` is required. `max_input_tokens` and
@@ -430,13 +442,14 @@ through the shared LLM factory. Model configuration decides which provider
 request format is used:
 
 ```yaml
-llm:
-  roles:
-    extract:
-      provider: openai
-      model: deepseek-v4-flash
-      base_url: https://api.deepseek.com
-      structured_output: json_object
+models:
+  chat:
+    roles:
+      extract:
+        provider: openai
+        model: deepseek-v4-flash
+        base_url: https://api.deepseek.com
+        structured_output: json_object
 ```
 
 `structured_output` defaults to `auto`. Auto uses schema-constrained output for
@@ -454,18 +467,19 @@ answers inexpensive while allowing explicit provider-native thinking for
 research turns without guessing a cross-provider flag:
 
 ```yaml
-llm:
-  default:
-    model_kwargs:
-      reasoning: {enabled: false}
-    agentic_model_kwargs:
-      reasoning: {enabled: true}
-  roles:
-    query:
+models:
+  chat:
+    default:
       model_kwargs:
         reasoning: {enabled: false}
       agentic_model_kwargs:
         reasoning: {enabled: true}
+    roles:
+      query:
+        model_kwargs:
+          reasoning: {enabled: false}
+        agentic_model_kwargs:
+          reasoning: {enabled: true}
 ```
 
 The overlay is unconditional key merging, not fallback selection. DlightRAG
@@ -489,17 +503,18 @@ through the chat template instead. Configure the field the endpoint actually
 supports:
 
 ```yaml
-llm:
-  roles:
-    query:
-      model_kwargs:
-        chat_template_kwargs: {enable_thinking: false}
-      agentic_model_kwargs:
-        chat_template_kwargs: {enable_thinking: true}
+models:
+  chat:
+    roles:
+      query:
+        model_kwargs:
+          chat_template_kwargs: {enable_thinking: false}
+        agentic_model_kwargs:
+          chat_template_kwargs: {enable_thinking: true}
 ```
 
 If `roles.query` is absent or incomplete, both sets of options come from
-`llm.default` through the normal role fallback.
+`models.chat.default` through the normal role fallback.
 
 ## Remote Source URLs
 
@@ -511,7 +526,7 @@ valid provenance but are not download locations.
 By default, Azure Blob, S3, URL, and SDK connector files are not copied into
 DlightRAG storage. A non-retained document therefore needs a durable S3, Azure,
 or queryless public HTTPS `download_uri`. Set
-`retain_remote_source_files: true` to keep fetched files under the workspace
+`corpus.ingestion.retain_remote_source_files: true` to keep fetched files under the workspace
 input root by default, or pass `retain_source_file=true` on one SDK/REST/MCP
 ingest call. Retained sources use that local copy for download instead.
 
@@ -527,16 +542,16 @@ REST `GET /files/raw/{document_id}` and Web
 `GET /web/api/files/raw/{document_id}` are separate authenticated projections. Each
 resolves the exact workspace metadata row server-side, then serves a retained
 local file or redirects through a supported provider locator. Azure uses
-`DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential chain
+`DLIGHTRAG_CORPUS__SOURCES__BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential chain
 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS config).
 REST/MCP `source_type="url"` accepts public or signed HTTPS URLs only, does not
 follow redirects to private hosts, and caps each download with
-`url_ingest_max_bytes`. SaaS APIs that require auth headers must stage content
+`corpus.ingestion.url_max_bytes`. SaaS APIs that require auth headers must stage content
 through a supported local, Azure Blob, or S3 source, or expose a public HTTPS
 fetch URL. `source_uri`/`source_uris` set stable identity; they do not substitute
 for the durable locator required by a non-retained signed fetch.
-Set `url_ingest_private_host_allowlist` only for trusted enterprise hosts that
+Set `corpus.ingestion.url_private_host_allowlist` only for trusted enterprise hosts that
 must be fetched by REST/MCP URL ingest. Entries are host/IP patterns such as
 `docs.corp.example`, `*.corp.example`, or `10.0.0.5`.
 
@@ -549,12 +564,15 @@ artifacts only; they do not delete Azure Blob, S3, or URL source objects.
 Advanced signing defaults:
 
 ```yaml
-retain_remote_source_files: false
-url_ingest_max_bytes: 104857600
-url_ingest_private_host_allowlist: []
-azure_sas_expiry: 3600
-s3_presign_expiry: 3600
-s3_region:
+corpus:
+  ingestion:
+    retain_remote_source_files: false
+    url_max_bytes: 104857600
+    url_private_host_allowlist: []
+  sources:
+    azure_sas_expiry: 3600
+    s3_presign_expiry: 3600
+    s3_region:
 ```
 
 ## PostgreSQL
@@ -563,43 +581,49 @@ Core storage is PostgreSQL 18 only. The backend literals are code defaults and
 should normally stay out of `config.yaml`:
 
 ```yaml
-vector_storage: PGVectorStorage
-graph_storage: PGTableGraphStorage
-kv_storage: PGKVStorage
-doc_status_storage: PGDocStatusStorage
+storage:
+  lightrag:
+    vector_storage: PGVectorStorage
+    graph_storage: PGTableGraphStorage
+    kv_storage: PGKVStorage
+    doc_status_storage: PGDocStatusStorage
 ```
 
 Advanced PostgreSQL and index tuning:
 
 ```yaml
-pg_vector_index_type: HNSW_HALFVEC
-pg_hnsw_m: 32
-pg_hnsw_ef_construction: 256
-pg_hnsw_ef_search: 256
-postgres_lightrag_pool_max_size: 16
-postgres_pool_min_size: 2
-postgres_pool_max_size: 16
-postgres_session_settings: {}
-postgres_statement_cache_size:
-postgres_connection_retries: 10
-postgres_connection_retry_backoff: 3.0
-postgres_connection_retry_backoff_max: 30.0
-postgres_pool_close_timeout: 5.0
+storage:
+  lightrag:
+    vector_index_type: HNSW_HALFVEC
+    hnsw_m: 32
+    hnsw_ef_construction: 256
+    hnsw_ef_search: 256
+  postgres:
+    lightrag_pool_max_size: 16
+    pool_min_size: 2
+    pool_max_size: 16
+    session_settings: {}
+    statement_cache_size:
+    connection_retries: 10
+    connection_retry_backoff: 3.0
+    connection_retry_backoff_max: 30.0
+    pool_close_timeout: 5.0
 ```
 
-`postgres_pool_max_size` sizes the DlightRAG domain-store pool (BM25, metadata,
-conversations, jobs, answer runs); `postgres_lightrag_pool_max_size` sizes the
+`storage.postgres.pool_max_size` sizes the DlightRAG domain-store pool (BM25, metadata,
+conversations, jobs, answer runs); `storage.postgres.lightrag_pool_max_size` sizes the
 LightRAG backend pool. Each process opens up to the sum of the two, so multiply
 by the worker count and keep the total under PostgreSQL `max_connections`. Raise
-`postgres_pool_max_size` for high single-worker concurrency; lower it when
+`storage.postgres.pool_max_size` for high single-worker concurrency; lower it when
 running many workers.
 
 ### Process role (writer / reader)
 
-`service_role` selects what a process may do with its single PostgreSQL endpoint:
+`deployment.service_role` selects what a process may do with its single PostgreSQL endpoint:
 
 ```yaml
-service_role: writer   # default: ingest + all APIs, and owns schema migrations
+deployment:
+  service_role: writer   # default: ingest + all APIs, and owns schema migrations
 ```
 
 - `writer` (default) provisions schema, ingests, and serves every API.
@@ -619,7 +643,7 @@ fails `/ready` for both roles. See
 [postgresql.md](postgresql.md#service-roles-and-shared-artifacts) for the full
 deployment and shared-artifact contract.
 
-Multi-host deployments must mount one shared POSIX `working_dir` at the **same
+Multi-host deployments must mount one shared POSIX `deployment.working_dir` at the **same
 absolute path** in every process that serves KB images or retained source
 downloads.
 
@@ -629,11 +653,11 @@ notes.
 ## Ingestion Concurrency And Queues
 
 `config.yaml` keeps only the high-level AI, Runtime, and RAG concurrency knobs.
-`max_async` bounds all provider requests through the process-wide fair AI
-scheduler. `runtime.answer_worker_concurrency` bounds claimed durable Answer
-runs executed by one process. `rag_pipeline_max_async` bounds each workspace's
+`models.max_concurrency` bounds all provider requests through the process-wide fair AI
+scheduler. `answer.runtime.answer_worker_concurrency` bounds claimed durable Answer
+runs executed by one process. `corpus.ingestion.pipeline.max_concurrency` bounds each workspace's
 LightRAG pipeline width; its provider requests still pass through the AI
-scheduler. `embedding_func_max_async` and `embedding_batch_num` shape LightRAG's
+scheduler. `models.embedding.max_concurrency` and `models.embedding.batch_size` shape LightRAG's
 embedding work without changing either worker admission or the global provider
 cap. The
 per-stage worker counts below already match LightRAG's defaults, so they are
@@ -642,24 +666,32 @@ explicitly (in `config.yaml` or via `DLIGHTRAG_*` env) only when a deployment
 needs different parallelism:
 
 ```yaml
-max_parallel_insert: 3        # insert workers (code/LightRAG default 3)
-max_parallel_parse_native: 5  # native + legacy parser workers (default 5)
-max_parallel_parse_mineru: 2  # MinerU parser workers (default 2)
-max_parallel_parse_docling: 2 # Docling parser workers (default 2)
-max_parallel_analyze: 5       # VLM analysis workers (default 5)
+corpus:
+  ingestion:
+    pipeline:
+      max_parallel_insert: 3
+      max_parallel_parse_native: 5
+      max_parallel_parse_mineru: 2
+      max_parallel_parse_docling: 2
+      max_parallel_analyze: 5
 ```
 
 Queue sizes are internal backpressure settings and should only change after
 measuring parser/analyze/insert pressure:
 
 ```yaml
-queue_size_parse: 20
-queue_size_analyze: 100
-queue_size_insert: 4
-embedding_request_timeout: 120
+corpus:
+  ingestion:
+    pipeline:
+      queue_size_parse: 20
+      queue_size_analyze: 100
+      queue_size_insert: 4
+models:
+  embedding:
+    timeout: 120
 ```
 
-`embedding_batch_num` is the number of texts sent per embedding provider
+`models.embedding.batch_size` is the number of texts sent per embedding provider
 request. Raise it to match your provider's per-request cap (for example, Voyage
 accepts up to 1000 inputs and OpenAI up to 2048); a value too high for the
 configured provider surfaces as a request error during ingest, so lower it then.
@@ -675,57 +707,59 @@ and scoring constants are advanced index signatures.
 Defaults:
 
 ```yaml
-bm25_enabled: true
-bm25_profiles:
-  - name: zh
-    text_config: public.jiebacfg
-    languages: ["zh"]
-  - name: en
-    text_config: english
-    languages: ["en"]
-  - name: de
-    text_config: german
-    languages: ["de"]
-  - name: sv
-    text_config: swedish
-    languages: ["sv"]
-  - name: es
-    text_config: spanish
-    languages: ["es"]
-  - name: fr
-    text_config: french
-    languages: ["fr"]
-  - name: it
-    text_config: italian
-    languages: ["it"]
-  - name: pt
-    text_config: portuguese
-    languages: ["pt"]
-  - name: nl
-    text_config: dutch
-    languages: ["nl"]
-  - name: ru
-    text_config: russian
-    languages: ["ru"]
-  - name: da
-    text_config: danish
-    languages: ["da"]
-  - name: fi
-    text_config: finnish
-    languages: ["fi"]
-  - name: simple
-    text_config: simple
-    fallback: true
-bm25_k1: 1.2
-bm25_b: 0.75
+corpus:
+  retrieval:
+    bm25_enabled: true
+    bm25_profiles:
+      - name: zh
+        text_config: public.jiebacfg
+        languages: ["zh"]
+      - name: en
+        text_config: english
+        languages: ["en"]
+      - name: de
+        text_config: german
+        languages: ["de"]
+      - name: sv
+        text_config: swedish
+        languages: ["sv"]
+      - name: es
+        text_config: spanish
+        languages: ["es"]
+      - name: fr
+        text_config: french
+        languages: ["fr"]
+      - name: it
+        text_config: italian
+        languages: ["it"]
+      - name: pt
+        text_config: portuguese
+        languages: ["pt"]
+      - name: nl
+        text_config: dutch
+        languages: ["nl"]
+      - name: ru
+        text_config: russian
+        languages: ["ru"]
+      - name: da
+        text_config: danish
+        languages: ["da"]
+      - name: fi
+        text_config: finnish
+        languages: ["fi"]
+      - name: simple
+        text_config: simple
+        fallback: true
+    bm25_k1: 1.2
+    bm25_b: 0.75
 ```
 
-`bm25_enabled` controls workspace PostgreSQL BM25 indexing, ingest-time
+`corpus.retrieval.bm25_enabled` controls workspace PostgreSQL BM25 indexing, ingest-time
 language labels, and query fusion. It applies to the workspace knowledge-base
 lane only; the answer research path reads attachments through request-local
 resources that never touch workspace indexes.
 
-Changing profile names, text configs, languages, `bm25_k1`, or `bm25_b`
+Changing profile names, text configs, languages, `corpus.retrieval.bm25_k1`, or `corpus.retrieval.bm25_b`
 changes the expected pg_textsearch index signature. Enabling BM25 for an
 existing corpus or changing profile languages also requires relabeling existing
 chunks; restarting alone does not rewrite historical labels. Use the offline
@@ -736,16 +770,18 @@ workspace BM25 rebuild described in [operations.md](operations.md#workspace-bm25
 Advanced retrieval scoring:
 
 ```yaml
-rrf_k: 60
-metadata_filter_exact_vector_threshold: 8192
+corpus:
+  retrieval:
+    rrf_k: 60
+    metadata_filter_exact_vector_threshold: 8192
 ```
 
-`metadata_filter_exact_vector_threshold` controls when DlightRAG can use exact
+`corpus.retrieval.metadata_filter_exact_vector_threshold` controls when DlightRAG can use exact
 vector scoring inside a small metadata candidate set.
 
 ## Image Budgets
 
-`answer.max_images` and the answer byte/geometry fields define one image
+`answer.generation.max_images` and the answer byte/geometry fields define one image
 transport budget for every answer, across REST, SDK, MCP, and Web. That single
 budget covers current attachment images and retrieved workspace visuals.
 Focused VLM inspection is a separate model call: each inspection applies the
@@ -754,18 +790,18 @@ transport budget.
 At startup the configured shape is clamped to the query-role model's discovered
 image capability. Compression budgets are advanced model transport limits:
 
-`chat_llm_reranker` can use its own `rerank.provider` and `rerank.model`. When
-those are omitted, it reuses `llm.default`.
+`chat_llm_reranker` can use its own `models.rerank.provider` and `models.rerank.model`. When
+those are omitted, it reuses `models.chat.default`.
 
 Voyage's text reranker is available with `strategy: voyage_reranker`,
-`model: rerank-2.5` or `rerank-2.5-lite`, and `DLIGHTRAG_RERANK__API_KEY`.
+`model: rerank-2.5` or `rerank-2.5-lite`, and `DLIGHTRAG_MODELS__RERANK__API_KEY`.
 Cohere's public text reranker is available with `strategy: cohere_reranker`,
 `model: rerank-v4.0-pro` or `rerank-v4.0-fast`, and the same API key env var.
 When a provider reranker is explicitly selected, missing credentials are a
 configuration error and fail service initialization rather than falling back to
 `chat_llm_reranker`.
 
-`rerank.input_modality` defaults to `auto`. For `chat_llm_reranker`, auto
+`models.rerank.input_modality` defaults to `auto`. For `chat_llm_reranker`, auto
 reuses the startup vision probe for the selected scoring model: vision-capable
 models receive bounded image data plus text, and non-vision models receive VLM
 text only. HTTP rerankers have no reliable capability probe (the API returns a
@@ -778,34 +814,33 @@ strategy (`voyage_reranker`, `cohere_reranker`, `azure_cohere`) rejects
 `multimodal` at startup rather than sending images its API cannot read.
 
 ```yaml
-rerank:
-  strategy: chat_llm_reranker
-  input_modality: auto
-  # Optional. Omitted keeps all scored candidates before top_k.
-  # score_threshold: 0.5
-  max_concurrency: 8
-  batch_size: 8
-
+models:
+  rerank:
+    strategy: chat_llm_reranker
+    input_modality: auto
+    max_concurrency: 8
+    batch_size: 8
 answer:
-  max_images: 12
-  max_attachments: 6
-  max_attachment_bytes: 104857600
-  max_total_attachment_bytes: 134217728
-  image_max_bytes: 3000000
-  image_max_total_bytes: 24000000
-  image_max_px: 1536
-  image_max_pixels: 40000000
-  image_min_px: 1024
-  image_quality: 89
-  image_min_quality: 79
+  generation:
+    max_images: 12
+    max_attachments: 6
+    max_attachment_bytes: 104857600
+    max_total_attachment_bytes: 134217728
+    image_max_bytes: 3000000
+    image_max_total_bytes: 24000000
+    image_max_px: 1536
+    image_max_pixels: 40000000
+    image_min_px: 1024
+    image_quality: 89
+    image_min_quality: 79
 ```
 
-`answer.max_attachments` (6),
-`answer.max_attachment_bytes` (100 MiB), and `answer.max_total_attachment_bytes`
+`answer.generation.max_attachments` (6),
+`answer.generation.max_attachment_bytes` (100 MiB), and `answer.generation.max_total_attachment_bytes`
 (128 MiB) bound answer attachment admission. `query_images` remains the
 retrieve-only current-image path.
 
-`answer.image_max_pixels` rejects source images whose decoded dimensions exceed
+`answer.generation.image_max_pixels` rejects source images whose decoded dimensions exceed
 the limit before RGB conversion or resizing. The Web upload validator,
 request-local resource inspection, retrieve query-image description, and final
 answer transport use the same ceiling.
@@ -815,7 +850,7 @@ answer transport use the same ceiling.
 Answer public inputs are **attachments**, not query images. REST, the Python
 SDK, MCP, and the Web UI attach files and HTTPS references that become
 request-local resources for the lifetime of one answer. `max_attachments`,
-`max_attachment_bytes`, and `max_total_attachment_bytes` (above) bound admission
+`answer.generation.max_attachment_bytes`, and `answer.generation.max_total_attachment_bytes` (above) bound admission
 on every channel. Attachments are read on demand — deterministic UTF-8/CSV
 decoding and MarkItDown conversion of HTML/PDF/DOCX/PPTX/XLSX first, then focused
 VLM inspection of figures — and their full bytes never enter model context.
@@ -826,21 +861,22 @@ contract shared by REST and MCP. Those images are described with the VLM for
 text retrieval and embedded directly for the visual retrieval leg. They do not
 share an answer budget.
 
-Answer images arrive only as attachments/resources. `answer.max_attachment_bytes`
-governs original upload admission, `answer.max_images` is capability-clamped at
-runtime, and the `answer.image_*` fields bound the compressed payload sent to a
+Answer images arrive only as attachments/resources. `answer.generation.max_attachment_bytes`
+governs original upload admission, `answer.generation.max_images` is capability-clamped at
+runtime, and the `answer.generation.image_*` fields bound the compressed payload sent to a
 model. Public REST, MCP, CLI, and Python answer/retrieve calls remain stateless;
 durable conversation attachments belong only to the Web conversation store:
 
 ```yaml
-visual_assets:
-  thumb_max_px: 300
-  thumb_cache_size: 256
+corpus:
+  visual_assets:
+    thumb_max_px: 300
+    thumb_cache_size: 256
 ```
 
 Web conversations have no retention knobs of their own. Every terminal Answer
 run — conversation-linked or not — is reclaimed once after the shared
-`runtime.answer_run_retention_days` floor (default 365 days) counted from
+`answer.runtime.answer_run_retention_days` floor (default 365 days) counted from
 `finished_at`; the turn cascade empties the conversation, and a lightweight
 hourly task then reclaims conversations that have no turns left. The snapshot
 and history endpoint return the most recent turns as a read window; older turns
@@ -852,12 +888,12 @@ Uploaded answer attachments are stored once as owner-scoped content-addressed
 blobs owned by the durable run, not by a Web-owned table, and the newest
 historical attachments that fit the attachment-count limit are re-registered as
 lazy request-local resources on every follow-up. Consequently, a Web conversation
-that contains an attachment remains on the research path. `visual_assets`
+that contains an attachment remains on the research path. `corpus.visual_assets`
 controls browser thumbnails derived on demand from those attachments. There is no
 answer-time parse cache, no attachment chunk table, and no vector cache; the
 research path reads every resource fresh from its stored bytes.
 
-Durable Answer run state has one operator knob: `runtime.answer_run_retention_days`
+Durable Answer run state has one operator knob: `answer.runtime.answer_run_retention_days`
 (default 365) is the retention floor for terminal run rows, their event logs,
 and superseded profile-memory history. The sweep is a best-effort hourly task
 and may reclaim later, never earlier. Lease duration, heartbeat and sweep
@@ -869,8 +905,9 @@ internal constants.
 The answer research path can call the open web when an Exa key is set:
 
 ```yaml
-web_search:
-  api_key: null  # set DLIGHTRAG_WEB_SEARCH__API_KEY in .env to enable
+answer:
+  web_search:
+    api_key: null  # set DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY in .env to enable
 ```
 
 The key's presence is the whole capability toggle. When set, the orchestrator
@@ -886,27 +923,31 @@ interaction-gated pages.
 REST binds to loopback by default for local development:
 
 ```yaml
-api_host: 127.0.0.1
-api_port: 8100
-auth_mode: none
+interfaces:
+  api:
+    host: 127.0.0.1
+    port: 8100
+access:
+  auth_mode: none
 ```
 
-Set `api_host: 0.0.0.0` only when the server is behind a trusted network or
-`auth_mode` is explicitly enabled.
+Set `interfaces.api.host: 0.0.0.0` only when the server is behind a trusted network or
+`access.auth_mode` is explicitly enabled.
 
 Use [security.md](security.md) for `simple`, static JWT, JWKS/OIDC issuer, and
-access-control deployment guidance. The related config fields are `auth_mode`,
-`api_auth_token`, `jwt_verification_key`, `jwt_jwks_url`, `jwt_issuer`,
-`jwt_audience`, `jwt_algorithm`, `cors_allow_origins`, `access_control`, and
-`web_identity` (edge-asserted Web identity). Example:
+access-control deployment guidance. The related config fields are `access.auth_mode`,
+`access.api_token`, `access.jwt_verification_key`, `access.jwt_jwks_url`, `access.jwt_issuer`,
+`access.jwt_audience`, `access.jwt_algorithm`, `access.cors_allow_origins`, `access.control`, and
+`access.web_identity` (edge-asserted Web identity). Example:
 
 ```yaml
-auth_mode: jwt
-web_identity:
-  edge: cloudflare            # cloudflare | azure | aws
-  issuer: https://<team>.cloudflareaccess.com
-  audience: <application-aud-tag>
-  # jwks_url: ...             # required for aws; derived for cloudflare/azure
+access:
+  auth_mode: jwt
+  web_identity:
+    edge: cloudflare            # cloudflare | azure | aws
+    issuer: https://<team>.cloudflareaccess.com
+    audience: <application-aud-tag>
+    # jwks_url: ...             # required for aws; derived for cloudflare/azure
 ```
 
 See security.md for the per-edge credential shapes and the required
@@ -914,10 +955,10 @@ See security.md for the per-edge credential shapes and the required
 
 The Python SDK and CLI resolve their HTTP target from `DLIGHTRAG_API_URL` and an
 optional bearer from `DLIGHTRAG_API_TOKEN` (or the deployment-only
-`DLIGHTRAG_API_AUTH_TOKEN`). `DLIGHTRAG_CLIENT_TIMEOUT` bounds one caller-owned
+`DLIGHTRAG_ACCESS__API_TOKEN`). `DLIGHTRAG_CLIENT_TIMEOUT` bounds one caller-owned
 HTTP request and defaults to 120 seconds. It is independent of the server's
 inline retrieval timeout, configured separately as
-`DLIGHTRAG_RETRIEVAL_TIMEOUT`.
+`DLIGHTRAG_CORPUS__RETRIEVAL__TIMEOUT`.
 
 ## MCP Streamable HTTP
 
@@ -926,42 +967,46 @@ single `/mcp` endpoint (it does not expose the deprecated HTTP+SSE `/sse` +
 `/messages` pair). It binds to loopback by default:
 
 ```yaml
-mcp_transport: streamable-http
-mcp_host: 127.0.0.1
-mcp_port: 8101
+interfaces:
+  mcp:
+    transport: streamable-http
+    host: 127.0.0.1
+    port: 8101
 ```
 
-To expose MCP beyond loopback, set `mcp_host`, explicitly allow the public Host
-and Origin with `mcp_allowed_hosts` / `mcp_allowed_origins`, and enable
-`auth_mode`. Browser clients must also be allowed by `cors_allow_origins`. JWT
+To expose MCP beyond loopback, set `interfaces.mcp.host`, explicitly allow the public Host
+and Origin with `interfaces.mcp.allowed_hosts` / `interfaces.mcp.allowed_origins`, and enable
+`access.auth_mode`. Browser clients must also be allowed by `access.cors_allow_origins`. JWT
 mode continues to accept direct bearer tokens. To additionally enable MCP 2.0
 OAuth discovery, set the public endpoint URL:
 
 ```yaml
-mcp_resource_server_url: https://rag.example.com/mcp
+interfaces:
+  mcp:
+    resource_server_url: https://rag.example.com/mcp
 ```
 
 This one optional field makes the MCP server publish RFC 9728 Protected Resource
-Metadata using the existing `jwt_issuer`. It is not needed for stdio, simple
+Metadata using the existing `access.jwt_issuer`. It is not needed for stdio, simple
 bearer auth, or directly supplied static-key JWTs. See [security.md](security.md).
 
 ## Observability
 
-Tracing is off until both `langfuse_public_key` and `langfuse_secret_key` are
+Tracing is off until both `observability.langfuse_public_key` and `observability.langfuse_secret_key` are
 set; those are secrets and belong in `.env`. The rest is non-secret and lives in
 `config.yaml`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `langfuse_host` | `https://cloud.langfuse.com` | Where traces are sent. Set per run mode — see [operations.md](operations.md#trace-endpoint-address) |
-| `langfuse_trace_sensitive_data` | `true` | `false` suppresses raw query/answer text, LLM prompts/responses, raw error text, and raw IDs while retaining bounded structural metadata, usage, cost, status, and timing |
-| `langfuse_export_external_spans` | `false` | Also export third-party OTEL spans. DlightRAG records model calls itself, so leaving this off avoids double counting |
-| `langfuse_environment` | unset | Environment label on every trace |
-| `langfuse_release` | unset | Release label on every trace |
-| `langfuse_sample_rate` | `1.0` | Fraction of traces exported |
-| `langfuse_timeout` | SDK default | Export request timeout, seconds |
-| `langfuse_flush_at` | SDK default | Events buffered before a flush |
-| `langfuse_flush_interval` | SDK default | Seconds between flushes |
+| `observability.langfuse_host` | `https://cloud.langfuse.com` | Where traces are sent. Set per run mode — see [operations.md](operations.md#trace-endpoint-address) |
+| `observability.langfuse_trace_sensitive_data` | `true` | `false` suppresses raw query/answer text, LLM prompts/responses, raw error text, and raw IDs while retaining bounded structural metadata, usage, cost, status, and timing |
+| `observability.langfuse_export_external_spans` | `false` | Also export third-party OTEL spans. DlightRAG records model calls itself, so leaving this off avoids double counting |
+| `observability.langfuse_environment` | unset | Environment label on every trace |
+| `observability.langfuse_release` | unset | Release label on every trace |
+| `observability.langfuse_sample_rate` | `1.0` | Fraction of traces exported |
+| `observability.langfuse_timeout` | SDK default | Export request timeout, seconds |
+| `observability.langfuse_flush_at` | SDK default | Events buffered before a flush |
+| `observability.langfuse_flush_interval` | SDK default | Seconds between flushes |
 
 Running the bundled local stack is covered in
 [operations.md](operations.md#local-langfuse-observability).
@@ -1014,15 +1059,15 @@ Path tools, Bash, and private spill are absent unless `execution_environment` is
 `local_trusted`. That value is an operator assertion, not a sandbox.
 
 When `local_trusted` and `workspace_root` is unset, native processes use
-`~/.dlightrag/agent_workspaces` (outside the repo, never `working_dir`). An
+`~/.dlightrag/agent_workspaces` (outside the repo, never `deployment.working_dir`). An
 explicit value must be an absolute path. The root must not overlap
-`working_dir` and must have headroom for one 2 GiB epoch copy. Multi-host
+`deployment.working_dir` and must have headroom for one 2 GiB epoch copy. Multi-host
 deployments must set the same absolute path on every worker; do not rely on `~`.
 
 Official Compose already sets
-`DLIGHTRAG_AGENT__WORKSPACE_ROOT=/app/dlightrag_agent_workspaces` on the named
+`DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT=/app/dlightrag_agent_workspaces` on the named
 volume. In that stack you only need `execution_environment: local_trusted` (or
-`DLIGHTRAG_AGENT__EXECUTION_ENVIRONMENT=local_trusted`); leave `workspace_root`
+`DLIGHTRAG_ANSWER__AGENT__EXECUTION_ENVIRONMENT=local_trusted`); leave `workspace_root`
 null so the Compose env wins. If you remove that env var, the container falls
 back to the service user's `~/.dlightrag/agent_workspaces`, which is **not** the
 named volume.
@@ -1052,11 +1097,11 @@ and context policy decide how much reaches a model.
 `max_upload_bytes` is the per-file cap for REST multipart ingest and Web
 workspace/folder uploads. It also supplies the tighter receive-layer cap for
 `/ingest/blob`, with fixed multipart framing allowance. URL ingestion has its own
-`url_ingest_max_bytes` download cap. Answer attachments use the separate
-`answer.max_attachment_bytes` (100 MiB) per-attachment ceiling, not this ingest
+`corpus.ingestion.url_max_bytes` download cap. Answer attachments use the separate
+`answer.generation.max_attachment_bytes` (100 MiB) per-attachment ceiling, not this ingest
 cap. `max_upload_size_mb` is the general receive-layer cap for multipart uploads
 and the per-request total cap for multi-file Web workspace uploads. Answer routes
-use their tighter answer attachment policy instead. `ingest_timeout` limits how
+use their tighter answer attachment policy instead. `corpus.ingestion.timeout` limits how
 long the in-process `CorpusAdmin.ingest()` convenience method waits for its
 durable job. When it expires, the job keeps running and the method returns its
 current row instead of cancelling it. REST, Web, and MCP start jobs immediately

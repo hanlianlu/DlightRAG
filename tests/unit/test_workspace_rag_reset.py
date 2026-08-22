@@ -11,11 +11,12 @@ from dlightrag.ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
     ModelSettings,
+    ModelsSettings,
     RerankSettings,
 )
 from dlightrag.ai.telemetry import NoopTelemetry
 from dlightrag.rag.ports import WorkspaceCorpusBackend
-from dlightrag.rag.settings import RagSettings
+from dlightrag.rag.settings import CorpusSettings, IngestionSettings, PipelineSettings, RagSettings
 from dlightrag.rag.workspace_rag import WorkspaceRag
 
 _FAKE_STORAGE_ATTRS = ("full_docs", "chunks_vdb", "doc_status")
@@ -35,26 +36,33 @@ def _make_service(*, workspace: str = "test_ws") -> WorkspaceRag:
     """Create a WorkspaceRag through its final constructor."""
     model = ModelSettings(provider="openai", model="gpt-5.4-mini", api_key="test")
     settings = RagSettings(
-        model_roles=ModelRoleSettings(default=model),
-        embedding=EmbeddingSettings(
-            provider="openai_compatible",
-            model="text-embedding-3-small",
-            api_key="test",
-            startup_probe=False,
+        models=ModelsSettings(
+            chat=ModelRoleSettings(default=model),
+            embedding=EmbeddingSettings(
+                provider="openai_compatible",
+                model="text-embedding-3-small",
+                api_key="test",
+                startup_probe=False,
+                max_concurrency=2,
+                batch_size=2,
+            ),
+            rerank=RerankSettings(enabled=False),
         ),
-        rerank=RerankSettings(enabled=False),
-        rerank_scoring_model=model,
-        rag_pipeline_max_async=2,
-        embedding_func_max_async=2,
-        embedding_batch_num=2,
-        max_parallel_insert=1,
-        max_parallel_parse_native=1,
-        max_parallel_parse_mineru=1,
-        max_parallel_parse_docling=1,
-        max_parallel_analyze=1,
-        queue_size_parse=1,
-        queue_size_analyze=1,
-        queue_size_insert=1,
+        corpus=CorpusSettings(
+            ingestion=IngestionSettings(
+                pipeline=PipelineSettings(
+                    max_concurrency=2,
+                    max_parallel_insert=1,
+                    max_parallel_parse_native=1,
+                    max_parallel_parse_mineru=1,
+                    max_parallel_parse_docling=1,
+                    max_parallel_analyze=1,
+                    queue_size_parse=1,
+                    queue_size_analyze=1,
+                    queue_size_insert=1,
+                )
+            )
+        ),
         input_root=Path("/tmp/dlightrag-test/inputs"),
     )
     maintenance = MagicMock()

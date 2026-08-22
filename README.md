@@ -53,7 +53,7 @@ projected by status interfaces.
 | Enterprise | Multi-user internal product | Managed PG18 | Independently operated parser service | `jwt` + JWKS, optional claim access control | [Security](docs/security.md), [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md) |
 
 Do not install a parser into the DlightRAG app container. Configure one
-`parser_sidecars.mineru` or `parser_sidecars.docling` block; DlightRAG derives
+`corpus.sidecars.mineru` or `corpus.sidecars.docling` block; DlightRAG derives
 LightRAG routing automatically. If both blocks are present, MinerU takes
 priority. On macOS, keep MinerU as a native host process for MLX/MPS, or use the
 optional Docling Compose profile.
@@ -116,13 +116,13 @@ cp .env.example .env
 Fill secrets in `.env`:
 
 ```bash
-DLIGHTRAG_LLM__DEFAULT__API_KEY=...
-DLIGHTRAG_EMBEDDING__API_KEY=...
-DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=...
-DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=...
-DLIGHTRAG_LLM__ROLES__QUERY__API_KEY=...
-DLIGHTRAG_LLM__ROLES__VLM__API_KEY=...
-DLIGHTRAG_RERANK__API_KEY=...
+DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=...
+DLIGHTRAG_MODELS__EMBEDDING__API_KEY=...
+DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY=...
+DLIGHTRAG_MODELS__CHAT__ROLES__KEYWORD__API_KEY=...
+DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY=...
+DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY=...
+DLIGHTRAG_MODELS__RERANK__API_KEY=...
 ```
 
 These match the checked-in `config.yaml`, which configures DeepSeek extract and
@@ -209,7 +209,7 @@ Docker:
 ```bash
 docker compose up -d postgres
 uv sync
-DLIGHTRAG_PARSER_SIDECARS__MINERU__LOCAL_ENDPOINT=http://127.0.0.1:8210 \
+DLIGHTRAG_CORPUS__SIDECARS__MINERU__LOCAL_ENDPOINT=http://127.0.0.1:8210 \
   uv run dlightrag-api
 ```
 
@@ -299,7 +299,8 @@ import os
 
 from dlightrag import Application
 from dlightrag.access import DEPLOYMENT_OWNER_ID
-from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig
+from dlightrag.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings, ModelsSettings
+from dlightrag.config import DeploymentSettings, DlightragConfig
 from dlightrag.services.answers import AnswerRequest
 from dlightrag.services.corpora import IngestSpec
 
@@ -307,22 +308,26 @@ from dlightrag.services.corpora import IngestSpec
 async def main() -> None:
     workspace = "research_notes"
     config = DlightragConfig(
-        workspace=workspace,
-        working_dir="./dlightrag_storage/sdk_demo",
-        llm=LLMConfig(
-            default=ModelConfig(
+        deployment=DeploymentSettings(
+            workspace=workspace,
+            working_dir="./dlightrag_storage/sdk_demo",
+        ),
+        models=ModelsSettings(
+            chat=ModelRoleSettings(
+                default=ModelSettings(
                 provider="openai",  # protocol family: openai | anthropic | gemini (vendor via base_url)
                 model="gpt-4.1-mini",
                 api_key=os.environ["OPENAI_API_KEY"],
                 temperature=0.2,
             )
         ),
-        embedding=EmbeddingConfig(
-            provider="openai_compatible",
-            model="text-embedding-3-large",
-            api_key=os.environ["OPENAI_API_KEY"],
-            base_url="https://api.openai.com/v1",
-            dim=3072,
+            embedding=EmbeddingSettings(
+                provider="openai_compatible",
+                model="text-embedding-3-large",
+                api_key=os.environ["OPENAI_API_KEY"],
+                base_url="https://api.openai.com/v1",
+                dim=3072,
+            ),
         ),
     )
     application = await Application.acreate(config)
@@ -366,8 +371,8 @@ Use stdio when an agent starts DlightRAG as a subprocess:
 Use streamable HTTP when multiple clients connect to a running service:
 
 ```bash
-DLIGHTRAG_MCP_TRANSPORT=streamable-http \
-DLIGHTRAG_MCP_HOST=127.0.0.1 \
+DLIGHTRAG_INTERFACES__MCP__TRANSPORT=streamable-http \
+DLIGHTRAG_INTERFACES__MCP__HOST=127.0.0.1 \
 dlightrag-mcp
 ```
 

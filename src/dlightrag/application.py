@@ -84,20 +84,17 @@ def _memory_embedder(
 ) -> MultimodalEmbedder:
     """Build the Memory dense leg from DlightRAG's embedding endpoint."""
     from dlightrag.ai.embedding import create_embedding_model
-    from dlightrag.model_settings import embedding_settings
 
-    return create_embedding_model(
-        embedding_settings(config), scheduler=scheduler, telemetry=telemetry
-    )
+    return create_embedding_model(config.models.embedding, scheduler=scheduler, telemetry=telemetry)
 
 
 def _actionable_error(exc: Exception) -> str:
     msg = f"{type(exc).__name__}: {exc}"
     text = str(exc).lower()
     if "connection" in text and ("refused" in text or "reset" in text):
-        return f"{msg}. Check DLIGHTRAG_POSTGRES_* or model server settings."
+        return f"{msg}. Check DLIGHTRAG_STORAGE__POSTGRES__* or model server settings."
     if "asyncpg" in type(exc).__module__:
-        return f"{msg}. Check DLIGHTRAG_POSTGRES_HOST/PORT/USER/PASSWORD."
+        return f"{msg}. Check DLIGHTRAG_STORAGE__POSTGRES__HOST/PORT/USER/PASSWORD."
     if "timeout" in text or "timed out" in text:
         return f"{msg}. Service may be overloaded or unreachable."
     if "authentication" in text or "password" in text or "denied" in text:
@@ -163,7 +160,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     # Large document scans are DlightRAG product policy, not an AI package import side effect.
     Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS
     health = ApplicationHealth(readiness_probe=PGReadinessProbe(config))
-    scheduler = ModelScheduler(max_concurrency=config.max_async)
+    scheduler = ModelScheduler(max_concurrency=config.models.max_concurrency)
     telemetry = LangfuseTelemetry()
     corpus_backend = PGCorpusBackendFactory(config).create()
 
@@ -179,7 +176,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
 
     def workspace_config(workspace_id: str) -> DlightragConfig:
-        return config.model_copy(update={"workspace": workspace_id})
+        deployment = config.deployment.model_copy(update={"workspace": workspace_id})
+        return config.model_copy(update={"deployment": deployment})
 
     async def build_workspace(
         workspace_id: str,
@@ -248,7 +246,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             telemetry=telemetry,
         ),
         schema_lookup=PGWorkspaceSchemaLookup(
-            default_workspace=normalize_workspace(config.workspace)
+            default_workspace=normalize_workspace(config.deployment.workspace)
         ),
         image_preparer=AnswerQueryImagePreparer(capabilities=capabilities, models=models),
         projector=AnswerRetrievalProjector(),
@@ -257,7 +255,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
 
     run_store = PGAnswerRunStore(
-        retention_seconds=config.runtime.answer_run_retention_days * 24 * 3600
+        retention_seconds=config.answer.runtime.answer_run_retention_days * 24 * 3600
     )
     memory_embedder = _memory_embedder(config, scheduler=scheduler, telemetry=telemetry)
     memory_store = PostgresMemoryStore(
@@ -268,7 +266,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     memory = MemoryService(
         memory_store,
         settings_store=memory_settings,
-        superseded_retention_days=config.runtime.answer_run_retention_days,
+        superseded_retention_days=config.answer.runtime.answer_run_retention_days,
     )
     coordinator = RunCoordinator(
         store=run_store,
@@ -281,13 +279,13 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             resources=resources,
             settings=answer_executor_settings(config),
             telemetry=telemetry,
-            execution_environment=config.agent.execution_environment,
-            workspace_root=config.agent.workspace_root,
-            working_dir=config.working_dir,
+            execution_environment=config.answer.agent.execution_environment,
+            workspace_root=config.answer.agent.workspace_root,
+            working_dir=config.deployment.working_dir,
             memory_store=memory_store,
             memory_recall_enabled=memory.recall_enabled,
         ),
-        answer_worker_concurrency=config.runtime.answer_worker_concurrency,
+        answer_worker_concurrency=config.answer.runtime.answer_worker_concurrency,
     )
 
     async def _cancel_local(owner: str, run_id: str) -> None:
@@ -329,7 +327,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         web_conversations=WebConversationService(
             store=web_store,
             answers=answers,
-            max_attachments=config.answer.max_attachments,
+            max_attachments=config.answer.generation.max_attachments,
         ),
     )
 
@@ -421,11 +419,11 @@ class Application:
         from dlightrag.answer.execution_settings import validate_agent_execution
 
         self._workspace_root = validate_agent_execution(
-            execution_environment=self._config.agent.execution_environment,
-            workspace_root=self._config.agent.workspace_root,
-            working_dir=self._config.working_dir,
+            execution_environment=self._config.answer.agent.execution_environment,
+            workspace_root=self._config.answer.agent.workspace_root,
+            working_dir=self._config.deployment.working_dir,
         )
-        init_tracing(self._config)
+        init_tracing(self._config.observability)
         # Bind the process-wide domain pool to this config so the endpoint and
         # role cannot silently diverge from a caller-supplied SDK config that
         # never called set_config().
@@ -523,7 +521,7 @@ class Application:
         from dlightrag.rag.workspaces import normalize_workspace
         from dlightrag.services.errors import CorpusUnavailableError, StorageSchemaError
 
-        workspace = normalize_workspace(self._config.workspace)
+        workspace = normalize_workspace(self._config.deployment.workspace)
         try:
             await self._components.pool.acquire(workspace)
         except CorpusSchemaError as exc:

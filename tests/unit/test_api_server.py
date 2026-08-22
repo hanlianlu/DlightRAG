@@ -37,6 +37,7 @@ from dlightrag.services.corpora import IngestSpec
 from dlightrag.services.errors import CorpusUnavailableError, MetadataValidationError
 from dlightrag.services.retrieval import RetrievalTimeoutError
 from dlightrag.services.retrieval import RetrieveResponse as ServiceResponse
+from tests.config_helpers import clone_config, mutate_config, replace_config
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -278,8 +279,8 @@ class TestAuthMiddleware:
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
         cfg = mock_config_no_auth_override
-        cfg.api_auth_token = "secret-token"
-        cfg.auth_mode = "simple"
+        mutate_config(cfg, "access.api_token", "secret-token")
+        mutate_config(cfg, "access.auth_mode", "simple")
         resp = await client.get(
             "/files",
             headers={"Authorization": "Bearer secret-token"},
@@ -291,8 +292,8 @@ class TestAuthMiddleware:
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
         cfg = mock_config_no_auth_override
-        cfg.api_auth_token = "secret-token"
-        cfg.auth_mode = "simple"
+        mutate_config(cfg, "access.api_token", "secret-token")
+        mutate_config(cfg, "access.auth_mode", "simple")
         resp = await client.get("/files")
         assert resp.status_code == 401
 
@@ -308,9 +309,9 @@ class TestWorkspaceLifecycleAPI:
         mock_application,
     ) -> None:
         _api_app.state.application = mock_application
-        mock_config.workspace = "app_ws"
-        singleton_config = mock_config.model_copy(deep=True)
-        singleton_config.workspace = "singleton_ws"
+        mutate_config(mock_config, "deployment.workspace", "app_ws")
+        singleton_config = clone_config(mock_config)
+        mutate_config(singleton_config, "deployment.workspace", "singleton_ws")
         set_config(singleton_config)
 
         resp = await client.get("/files")
@@ -386,8 +387,8 @@ class TestWorkspaceLifecycleAPI:
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
         cfg = mock_config_no_auth_override
-        cfg.api_auth_token = "secret-token"
-        cfg.auth_mode = "simple"
+        mutate_config(cfg, "access.api_token", "secret-token")
+        mutate_config(cfg, "access.auth_mode", "simple")
         resp = await client.get(
             "/files",
             headers={"Authorization": "Basic abc123"},
@@ -399,8 +400,8 @@ class TestWorkspaceLifecycleAPI:
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
         cfg = mock_config_no_auth_override
-        cfg.api_auth_token = "secret-token"
-        cfg.auth_mode = "simple"
+        mutate_config(cfg, "access.api_token", "secret-token")
+        mutate_config(cfg, "access.auth_mode", "simple")
         resp = await client.get(
             "/files",
             headers={"Authorization": "Bearer wrong-token"},
@@ -426,8 +427,8 @@ class TestWorkspaceLifecycleAPI:
         mock_config_no_auth_override: DlightragConfig,
     ) -> None:
         cfg = mock_config_no_auth_override
-        cfg.api_auth_token = "secret-token"
-        cfg.auth_mode = "simple"
+        mutate_config(cfg, "access.api_token", "secret-token")
+        mutate_config(cfg, "access.auth_mode", "simple")
         resp = await client.request(method, path, json=body)
         assert resp.status_code == 401
 
@@ -436,7 +437,7 @@ class TestWorkspaceLifecycleAPI:
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
         cfg = mock_config_no_auth_override
-        cfg.auth_mode = "none"
+        mutate_config(cfg, "access.auth_mode", "none")
         resp = await client.get("/files")
         assert resp.status_code == 200
 
@@ -445,10 +446,10 @@ class TestWorkspaceLifecycleAPI:
         self, test_config: DlightragConfig
     ) -> None:
         """Setting api_auth_token without auth_mode is a config error."""
-        test_config.api_auth_token = "my-token"
-        test_config.auth_mode = "none"
+        mutate_config(test_config, "access.api_token", "my-token")
+        mutate_config(test_config, "access.auth_mode", "none")
         with pytest.raises(ValueError, match="auth_mode='simple'"):
-            test_config._validate_auth_mode()
+            test_config._validate_auth()
 
 
 # ---------------------------------------------------------------------------
@@ -466,9 +467,9 @@ class TestJWTAuth:
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
         cfg = mock_config_no_auth_override
-        cfg.auth_mode = "jwt"
-        cfg.jwt_verification_key = _JWT_VERIFICATION_KEY
-        cfg.jwt_algorithm = "HS256"
+        mutate_config(cfg, "access.auth_mode", "jwt")
+        mutate_config(cfg, "access.jwt_verification_key", _JWT_VERIFICATION_KEY)
+        mutate_config(cfg, "access.jwt_algorithm", "HS256")
 
         payload = {
             "sub": "user-42",
@@ -487,19 +488,23 @@ class TestJWTAuth:
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig, mock_application
     ) -> None:
         cfg = mock_config_no_auth_override
-        cfg.auth_mode = "jwt"
-        cfg.jwt_verification_key = _JWT_VERIFICATION_KEY
-        cfg.jwt_algorithm = "HS256"
-        cfg.access_control = AccessControlConfig(
-            mode="jwt_claims",
-            rules=[
-                AccessControlRuleConfig(
-                    claim="groups",
-                    value="finance-rag-readers",
-                    workspaces=["finance"],
-                    actions=["workspace.query"],
-                )
-            ],
+        mutate_config(cfg, "access.auth_mode", "jwt")
+        mutate_config(cfg, "access.jwt_verification_key", _JWT_VERIFICATION_KEY)
+        mutate_config(cfg, "access.jwt_algorithm", "HS256")
+        cfg = replace_config(
+            cfg,
+            "access.control",
+            AccessControlConfig(
+                mode="jwt_claims",
+                rules=[
+                    AccessControlRuleConfig(
+                        claim="groups",
+                        value="finance-rag-readers",
+                        workspaces=["finance"],
+                        actions=["workspace.query"],
+                    )
+                ],
+            ),
         )
         token = jwt.encode(
             {
@@ -525,19 +530,23 @@ class TestJWTAuth:
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig, mock_application
     ) -> None:
         cfg = mock_config_no_auth_override
-        cfg.auth_mode = "jwt"
-        cfg.jwt_verification_key = _JWT_VERIFICATION_KEY
-        cfg.jwt_algorithm = "HS256"
-        cfg.access_control = AccessControlConfig(
-            mode="jwt_claims",
-            rules=[
-                AccessControlRuleConfig(
-                    claim="groups",
-                    value="finance-rag-readers",
-                    workspaces=["finance"],
-                    actions=["workspace.query"],
-                )
-            ],
+        mutate_config(cfg, "access.auth_mode", "jwt")
+        mutate_config(cfg, "access.jwt_verification_key", _JWT_VERIFICATION_KEY)
+        mutate_config(cfg, "access.jwt_algorithm", "HS256")
+        cfg = replace_config(
+            cfg,
+            "access.control",
+            AccessControlConfig(
+                mode="jwt_claims",
+                rules=[
+                    AccessControlRuleConfig(
+                        claim="groups",
+                        value="finance-rag-readers",
+                        workspaces=["finance"],
+                        actions=["workspace.query"],
+                    )
+                ],
+            ),
         )
         token = jwt.encode(
             {
@@ -580,16 +589,20 @@ class TestJWTAuth:
         mock_application.corpora.alist_workspace_records.return_value = [
             {"workspace": workspace} for workspace in registered
         ]
-        mock_config_no_auth_override.access_control = AccessControlConfig(
-            mode="jwt_claims",
-            rules=[
-                AccessControlRuleConfig(
-                    claim="groups",
-                    value="finance-rag-readers",
-                    workspaces=allowed,
-                    actions=["workspace.query"],
-                )
-            ],
+        replace_config(
+            mock_config_no_auth_override,
+            "access.control",
+            AccessControlConfig(
+                mode="jwt_claims",
+                rules=[
+                    AccessControlRuleConfig(
+                        claim="groups",
+                        value="finance-rag-readers",
+                        workspaces=allowed,
+                        actions=["workspace.query"],
+                    )
+                ],
+            ),
         )
         _api_app.dependency_overrides[get_current_user] = lambda: UserContext(
             user_id="alice",
@@ -614,9 +627,9 @@ class TestJWTAuth:
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
         cfg = mock_config_no_auth_override
-        cfg.auth_mode = "jwt"
-        cfg.jwt_verification_key = _JWT_VERIFICATION_KEY
-        cfg.jwt_algorithm = "HS256"
+        mutate_config(cfg, "access.auth_mode", "jwt")
+        mutate_config(cfg, "access.jwt_verification_key", _JWT_VERIFICATION_KEY)
+        mutate_config(cfg, "access.jwt_algorithm", "HS256")
 
         payload = {
             "sub": "user-42",
@@ -653,34 +666,34 @@ class TestAuthenticateBearerToken:
         )
 
     def test_simple_valid_token(self, test_config: DlightragConfig) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
         ctx = self.authenticate("secret-token", test_config)
         assert ctx.user_id == "anonymous"
         assert ctx.auth_mode == "simple"
 
     def test_simple_invalid_token_raises_403(self, test_config: DlightragConfig) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
         with pytest.raises(AuthenticationError, match="Invalid token"):
             self.authenticate("wrong-token", test_config)
 
     def test_simple_empty_token_raises_403(self, test_config: DlightragConfig) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
         with pytest.raises(AuthenticationError, match="Invalid token"):
             self.authenticate("", test_config)
 
     def test_simple_default_user_id(self, test_config: DlightragConfig) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
         ctx = self.authenticate("secret-token", test_config, default_user_id="user-99")
         assert ctx.user_id == "user-99"
 
     def test_jwt_valid_token(self, test_config: DlightragConfig) -> None:
-        test_config.auth_mode = "jwt"
-        test_config.jwt_verification_key = _JWT_VERIFICATION_KEY
-        test_config.jwt_algorithm = "HS256"
+        mutate_config(test_config, "access.auth_mode", "jwt")
+        mutate_config(test_config, "access.jwt_verification_key", _JWT_VERIFICATION_KEY)
+        mutate_config(test_config, "access.jwt_algorithm", "HS256")
 
         payload = {
             "sub": "user-42",
@@ -696,16 +709,18 @@ class TestAuthenticateBearerToken:
         test_config: DlightragConfig,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        test_config.auth_mode = "jwt"
-        test_config.jwt_jwks_url = "https://login.example.com/discovery/keys"
-        test_config.jwt_issuer = "https://login.example.com/tenant/v2.0"
-        test_config.jwt_audience = "api://dlightrag"
-        test_config.jwt_algorithm = "HS256"
+        mutate_config(test_config, "access.auth_mode", "jwt")
+        mutate_config(
+            test_config, "access.jwt_jwks_url", "https://login.example.com/discovery/keys"
+        )
+        mutate_config(test_config, "access.jwt_issuer", "https://login.example.com/tenant/v2.0")
+        mutate_config(test_config, "access.jwt_audience", "api://dlightrag")
+        mutate_config(test_config, "access.jwt_algorithm", "HS256")
 
         payload = {
             "sub": "user-42",
-            "iss": test_config.jwt_issuer,
-            "aud": test_config.jwt_audience,
+            "iss": test_config.access.jwt_issuer,
+            "aud": test_config.access.jwt_audience,
             "groups": ["finance-rag-readers"],
             "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
         }
@@ -729,15 +744,17 @@ class TestAuthenticateBearerToken:
         test_config: DlightragConfig,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        test_config.auth_mode = "jwt"
-        test_config.jwt_jwks_url = "https://login.example.com/discovery/keys"
-        test_config.jwt_issuer = "https://login.example.com/tenant/v2.0"
-        test_config.jwt_audience = "api://dlightrag"
-        test_config.jwt_algorithm = "HS256"
+        mutate_config(test_config, "access.auth_mode", "jwt")
+        mutate_config(
+            test_config, "access.jwt_jwks_url", "https://login.example.com/discovery/keys"
+        )
+        mutate_config(test_config, "access.jwt_issuer", "https://login.example.com/tenant/v2.0")
+        mutate_config(test_config, "access.jwt_audience", "api://dlightrag")
+        mutate_config(test_config, "access.jwt_algorithm", "HS256")
 
         payload = {
             "sub": "user-42",
-            "iss": test_config.jwt_issuer,
+            "iss": test_config.access.jwt_issuer,
             "aud": "api://other",
             "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
         }
@@ -759,15 +776,17 @@ class TestAuthenticateBearerToken:
         test_config: DlightragConfig,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        test_config.auth_mode = "jwt"
-        test_config.jwt_jwks_url = "https://login.example.com/discovery/keys"
-        test_config.jwt_issuer = "https://login.example.com/tenant/v2.0"
-        test_config.jwt_audience = ["api://dlightrag", "proxy-client-id"]
-        test_config.jwt_algorithm = "HS256"
+        mutate_config(test_config, "access.auth_mode", "jwt")
+        mutate_config(
+            test_config, "access.jwt_jwks_url", "https://login.example.com/discovery/keys"
+        )
+        mutate_config(test_config, "access.jwt_issuer", "https://login.example.com/tenant/v2.0")
+        mutate_config(test_config, "access.jwt_audience", ["api://dlightrag", "proxy-client-id"])
+        mutate_config(test_config, "access.jwt_algorithm", "HS256")
 
         payload = {
             "sub": "user-42",
-            "iss": test_config.jwt_issuer,
+            "iss": test_config.access.jwt_issuer,
             "aud": "proxy-client-id",
             "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
         }
@@ -786,9 +805,9 @@ class TestAuthenticateBearerToken:
         assert ctx.user_id == "user-42"
 
     def test_jwt_expired_token_raises_401(self, test_config: DlightragConfig) -> None:
-        test_config.auth_mode = "jwt"
-        test_config.jwt_verification_key = _JWT_VERIFICATION_KEY
-        test_config.jwt_algorithm = "HS256"
+        mutate_config(test_config, "access.auth_mode", "jwt")
+        mutate_config(test_config, "access.jwt_verification_key", _JWT_VERIFICATION_KEY)
+        mutate_config(test_config, "access.jwt_algorithm", "HS256")
 
         payload = {
             "sub": "user-42",
@@ -799,9 +818,9 @@ class TestAuthenticateBearerToken:
             self.authenticate(token, test_config)
 
     def test_jwt_missing_sub_claim_raises_401(self, test_config: DlightragConfig) -> None:
-        test_config.auth_mode = "jwt"
-        test_config.jwt_verification_key = _JWT_VERIFICATION_KEY
-        test_config.jwt_algorithm = "HS256"
+        mutate_config(test_config, "access.auth_mode", "jwt")
+        mutate_config(test_config, "access.jwt_verification_key", _JWT_VERIFICATION_KEY)
+        mutate_config(test_config, "access.jwt_algorithm", "HS256")
 
         payload = {
             "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
@@ -811,9 +830,9 @@ class TestAuthenticateBearerToken:
             self.authenticate(token, test_config)
 
     def test_jwt_wrong_verification_key_raises_401(self, test_config: DlightragConfig) -> None:
-        test_config.auth_mode = "jwt"
-        test_config.jwt_verification_key = _JWT_VERIFICATION_KEY
-        test_config.jwt_algorithm = "HS256"
+        mutate_config(test_config, "access.auth_mode", "jwt")
+        mutate_config(test_config, "access.jwt_verification_key", _JWT_VERIFICATION_KEY)
+        mutate_config(test_config, "access.jwt_algorithm", "HS256")
 
         payload = {"sub": "user-42"}
         token = jwt.encode(
@@ -1346,8 +1365,8 @@ class TestReadinessEndpoint:
     ) -> None:
         from dlightrag.adapters.postgres._pool import pg_pool
 
-        mock_config_no_auth_override.auth_mode = "simple"
-        mock_config_no_auth_override.api_auth_token = "required-elsewhere"
+        mutate_config(mock_config_no_auth_override, "access.auth_mode", "simple")
+        mutate_config(mock_config_no_auth_override, "access.api_token", "required-elsewhere")
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
         app.state.application = mock_application
@@ -1391,7 +1410,7 @@ class TestReadinessEndpoint:
     ) -> None:
         from dlightrag.adapters.postgres._pool import pg_pool
 
-        mock_config.service_role = "reader"
+        mutate_config(mock_config, "deployment.service_role", "reader")
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="on"))
         app.state.application = mock_application
 
@@ -1436,7 +1455,7 @@ class TestReadinessEndpoint:
         from dlightrag.adapters.postgres._pool import pg_pool
         from dlightrag.adapters.postgres.corpus import PGReadinessProbe
 
-        mock_config.service_role = "reader"
+        mutate_config(mock_config, "deployment.service_role", "reader")
         mock_application.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
         mock_application.health.mark_ready()
         app.state.health = mock_application.health
@@ -1468,7 +1487,7 @@ class TestReadinessEndpoint:
         from dlightrag.adapters.postgres._pool import pg_pool
         from dlightrag.adapters.postgres.corpus import PGReadinessProbe
 
-        mock_config.service_role = "reader"
+        mutate_config(mock_config, "deployment.service_role", "reader")
         mock_application.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
         mock_application.health.mark_ready()
         app.state.health = mock_application.health
@@ -1764,7 +1783,7 @@ class TestAnswerEndpoint:
     async def test_json_enforces_link_count_limit(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_config.answer.max_attachments = 2
+        mutate_config(mock_config, "answer.generation.max_attachments", 2)
         app.state.application = mock_application
 
         resp = await client.post(
@@ -1945,7 +1964,7 @@ class TestAnswerMultipart:
     ) -> None:
         import json as json_mod
 
-        mock_config.answer.max_attachments = 2
+        mutate_config(mock_config, "answer.generation.max_attachments", 2)
         app.state.application = mock_application
         resp = await client.post(
             "/answer",
@@ -1961,7 +1980,7 @@ class TestAnswerMultipart:
     ) -> None:
         import json as json_mod
 
-        mock_config.answer.max_attachment_bytes = 8
+        mutate_config(mock_config, "answer.generation.max_attachment_bytes", 8)
         app.state.application = mock_application
         resp = await client.post(
             "/answer",
@@ -1977,7 +1996,7 @@ class TestAnswerMultipart:
     ) -> None:
         import json as json_mod
 
-        mock_config.answer.max_total_attachment_bytes = 16
+        mutate_config(mock_config, "answer.generation.max_total_attachment_bytes", 16)
         app.state.application = mock_application
         resp = await client.post(
             "/answer",
@@ -2247,7 +2266,7 @@ async def test_a_chunked_answer_multipart_is_refused_at_receive_layer(path: str)
 async def test_real_app_returns_413_for_chunked_answer_multipart_overflow(
     mock_config: DlightragConfig,
 ) -> None:
-    mock_config.answer.max_total_attachment_bytes = 64
+    mutate_config(mock_config, "answer.generation.max_total_attachment_bytes", 64)
     set_config(mock_config)
 
     async def chunks():
@@ -2293,8 +2312,8 @@ async def test_real_app_returns_413_for_chunked_answer_multipart_overflow(
 async def test_real_app_caps_chunked_ingest_multipart_before_parsing(
     mock_config: DlightragConfig,
 ) -> None:
-    mock_config.max_upload_size_mb = 8
-    mock_config.max_upload_bytes = 1024 * 1024
+    mutate_config(mock_config, "interfaces.max_upload_size_mb", 8)
+    mutate_config(mock_config, "corpus.ingestion.max_upload_bytes", 1024 * 1024)
     set_config(mock_config)
 
     async def chunks():
@@ -2336,8 +2355,8 @@ async def test_real_app_caps_chunked_ingest_multipart_before_parsing(
 async def test_ingest_blob_authenticates_before_parsing_multipart(
     mock_config: DlightragConfig,
 ) -> None:
-    mock_config.auth_mode = "simple"
-    mock_config.api_auth_token = "secret-token"
+    mutate_config(mock_config, "access.auth_mode", "simple")
+    mutate_config(mock_config, "access.api_token", "secret-token")
     set_config(mock_config)
     application = create_app(include_web_app=False)
     application.state.application = AsyncMock()
@@ -2357,7 +2376,7 @@ async def test_ingest_blob_authenticates_before_parsing_multipart(
 async def test_multipart_header_does_not_raise_json_route_body_cap(
     mock_config: DlightragConfig,
 ) -> None:
-    mock_config.max_upload_size_mb = 32
+    mutate_config(mock_config, "interfaces.max_upload_size_mb", 32)
     set_config(mock_config)
 
     async def chunks():
@@ -2403,7 +2422,9 @@ async def test_the_app_still_refuses_a_body_over_the_shared_json_budget(
 
     set_config(mock_config)
     history_bytes = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS * 4
-    image_bytes = MAX_QUERY_IMAGES * (((mock_config.answer.image_max_bytes + 2) // 3) * 4)
+    image_bytes = MAX_QUERY_IMAGES * (
+        ((mock_config.answer.generation.image_max_bytes + 2) // 3) * 4
+    )
     over_budget = max(history_bytes, image_bytes) + 2 * 1024 * 1024
 
     response = await _post(
@@ -2423,7 +2444,7 @@ async def test_the_app_admits_the_fixed_retrieve_image_contract(
 
     set_config(mock_config)
     image_sized_body = (
-        MAX_QUERY_IMAGES * (((mock_config.answer.image_max_bytes + 2) // 3) * 4) - 4096
+        MAX_QUERY_IMAGES * (((mock_config.answer.generation.image_max_bytes + 2) // 3) * 4) - 4096
     )
 
     response = await _post(

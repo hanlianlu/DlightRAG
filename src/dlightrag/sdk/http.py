@@ -20,17 +20,9 @@ def api_url() -> str:
 
 
 def auth_token() -> str | None:
-    """Resolve an API bearer token from HTTP env or simple-auth config."""
-    token = os.environ.get("DLIGHTRAG_API_TOKEN") or os.environ.get("DLIGHTRAG_API_AUTH_TOKEN")
-    if token:
-        return token
-
-    from dlightrag.config import DlightragConfig
-
-    config = DlightragConfig()  # pyright: ignore[reportCallIssue]
-    if config.auth_mode == "simple" and config.api_auth_token:
-        return config.api_auth_token
-    return None
+    """Resolve an API bearer from client or nested deployment environment."""
+    token = os.environ.get("DLIGHTRAG_API_TOKEN") or os.environ.get("DLIGHTRAG_ACCESS__API_TOKEN")
+    return token or None
 
 
 def auth_headers() -> dict[str, str]:

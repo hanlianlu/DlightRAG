@@ -18,6 +18,7 @@ from dlightrag.mcp import server as mcp_server
 from dlightrag.runtime import AnswerRunRecord
 from dlightrag.services.corpora import IngestSpec
 from dlightrag.services.retrieval import RetrieveResponse as ServiceResponse
+from tests.config_helpers import mutate_config, replace_config
 from tests.unit.conftest import answer_capability_view
 
 _IMAGE_BLOCK = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
@@ -75,7 +76,6 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
         ),
         capabilities=capability_view.read,
     )
-    application.config.answer.max_attachments = 6
     monkeypatch.setattr(mcp_server, "_ensure_application", AsyncMock(return_value=application))
     return application
 
@@ -273,12 +273,12 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
 def test_mcp_security_defaults_are_loopback_only() -> None:
     cfg = cast(Any, DlightragConfig)()
 
-    assert cfg.mcp_allowed_hosts == ["127.0.0.1:*", "localhost:*", "[::1]:*"]
-    assert cfg.mcp_allowed_origins == [
+    assert cfg.interfaces.mcp.allowed_hosts == ("127.0.0.1:*", "localhost:*", "[::1]:*")
+    assert cfg.interfaces.mcp.allowed_origins == (
         "http://127.0.0.1:*",
         "http://localhost:*",
         "http://[::1]:*",
-    ]
+    )
 
 
 async def test_mcp_rejects_unknown_mode_without_schema_wrapper(mock_mcp_application) -> None:
@@ -351,18 +351,22 @@ async def test_mcp_jwt_claims_access_control_denies_unmapped_workspace(
     mock_mcp_application,
     test_config: DlightragConfig,
 ) -> None:
-    test_config.auth_mode = "jwt"
-    test_config.jwt_verification_key = "test-key"
-    test_config.access_control = AccessControlConfig(
-        mode="jwt_claims",
-        rules=[
-            AccessControlRuleConfig(
-                claim="groups",
-                value="finance-rag-readers",
-                workspaces=["finance"],
-                actions=["workspace.query"],
-            )
-        ],
+    mutate_config(test_config, "access.auth_mode", "jwt")
+    mutate_config(test_config, "access.jwt_verification_key", "test-key")
+    test_config = replace_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="groups",
+                    value="finance-rag-readers",
+                    workspaces=["finance"],
+                    actions=["workspace.query"],
+                )
+            ],
+        ),
     )
 
     with request_scope_context(
@@ -385,16 +389,20 @@ async def test_mcp_query_permission_does_not_imply_visual_asset_permission(
     mock_mcp_application,
     test_config: DlightragConfig,
 ) -> None:
-    test_config.access_control = AccessControlConfig(
-        mode="jwt_claims",
-        rules=[
-            AccessControlRuleConfig(
-                claim="groups",
-                value="finance-rag-readers",
-                workspaces=["default"],
-                actions=["workspace.query"],
-            )
-        ],
+    test_config = replace_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="groups",
+                    value="finance-rag-readers",
+                    workspaces=["default"],
+                    actions=["workspace.query"],
+                )
+            ],
+        ),
     )
     mock_mcp_application.retrieval.retrieve.return_value = ServiceResponse(
         contexts={
@@ -451,7 +459,7 @@ async def test_mcp_all_workspaces_rejects_empty_authorized_set(
     mock_mcp_application,
     test_config: DlightragConfig,
 ) -> None:
-    test_config.access_control = AccessControlConfig(mode="jwt_claims", rules=[])
+    mutate_config(test_config, "access.control", AccessControlConfig(mode="jwt_claims", rules=[]))
 
     with request_scope_context(RequestScope(user_id="alice", auth_mode="jwt")):
         result = await mcp_server.mcp_app.call_tool(
@@ -469,16 +477,20 @@ async def test_mcp_all_workspaces_is_relative_to_query_authorization(
 ) -> None:
     registered = [f"ws_{index:02d}" for index in range(14)]
     allowed = registered[:10]
-    test_config.access_control = AccessControlConfig(
-        mode="jwt_claims",
-        rules=[
-            AccessControlRuleConfig(
-                claim="groups",
-                value="finance-rag-readers",
-                workspaces=allowed,
-                actions=["workspace.query"],
-            )
-        ],
+    test_config = replace_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="groups",
+                    value="finance-rag-readers",
+                    workspaces=allowed,
+                    actions=["workspace.query"],
+                )
+            ],
+        ),
     )
     mock_mcp_application.corpora.alist_workspace_records.return_value = [
         {"workspace": workspace} for workspace in registered
@@ -630,14 +642,22 @@ async def test_mcp_requests_stay_bound_to_running_application_config(
 
     application_config = test_config.model_copy(
         update={
-            "workspace": "Application Workspace",
-            "working_dir": str(tmp_path / "application-storage"),
+            "deployment": test_config.deployment.model_copy(
+                update={
+                    "workspace": "Application Workspace",
+                    "working_dir": str((tmp_path / "application-storage").resolve()),
+                }
+            )
         }
     )
     global_config = test_config.model_copy(
         update={
-            "workspace": "Global Workspace",
-            "working_dir": str(tmp_path / "global-storage"),
+            "deployment": test_config.deployment.model_copy(
+                update={
+                    "workspace": "Global Workspace",
+                    "working_dir": str((tmp_path / "global-storage").resolve()),
+                }
+            )
         }
     )
     mock_mcp_application.config = application_config
@@ -891,7 +911,7 @@ async def test_mcp_answer_rejects_local_and_base64_attachments(
 
 
 async def test_mcp_answer_enforces_link_count_limit(mock_mcp_application) -> None:
-    mock_mcp_application.config.answer.max_attachments = 2
+    mutate_config(mock_mcp_application.config, "answer.generation.max_attachments", 2)
 
     result = await mcp_server.mcp_app.call_tool(
         "answer",

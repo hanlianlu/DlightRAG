@@ -15,6 +15,7 @@ from dlightrag.answer.capability import AnswerImageCapability
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
 from dlightrag.web.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
+from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
 
 if TYPE_CHECKING:
@@ -180,8 +181,8 @@ class TestWebAuth:
     async def test_simple_missing_auth_redirects_browser_get(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
 
         async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get("/web/")
@@ -194,8 +195,8 @@ class TestWebAuth:
     ) -> None:
         from urllib.parse import parse_qs, urlsplit
 
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
         path = f"/web/conversations/{CONVERSATION_ID}"
 
         async with _web_client_for(test_config, mock_application) as client:
@@ -210,8 +211,8 @@ class TestWebAuth:
     ) -> None:
         from urllib.parse import parse_qs, urlsplit
 
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
 
         async with _web_client_for(test_config, mock_application) as client:
             response = await client.get(
@@ -226,8 +227,8 @@ class TestWebAuth:
     async def test_simple_invalid_bearer_rejected(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
 
         async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
@@ -240,8 +241,8 @@ class TestWebAuth:
     async def test_simple_login_page_is_static_and_no_store(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
 
         async with _web_client_for(test_config, mock_application) as client:
             response = await client.get(
@@ -260,8 +261,8 @@ class TestWebAuth:
     ) -> None:
         from urllib.parse import parse_qs, urlsplit
 
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
         target = f"/web/conversations/{CONVERSATION_ID}"
 
         async with _web_client_for(test_config, mock_application) as client:
@@ -277,8 +278,8 @@ class TestWebAuth:
     async def test_simple_login_sets_cookie_and_grants_access(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
 
         async with _web_client_for(test_config, mock_application) as c:
             login = await c.post(
@@ -296,8 +297,8 @@ class TestWebAuth:
     ) -> None:
         from dlightrag.services.errors import LocalDownloadTarget
 
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
         source = test_config.input_dir_path / "default" / "notes.md"
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("downloadable notes", encoding="utf-8")
@@ -331,8 +332,8 @@ class TestWebAuth:
     async def test_login_redirect_rejects_external_next(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
 
         async with _web_client_for(test_config, mock_application) as c:
             resp = await c.post(
@@ -346,8 +347,8 @@ class TestWebAuth:
     async def test_invalid_auth_cookie_is_cleared(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
 
         async with _web_client_for(test_config, mock_application) as c:
             c.cookies.set("dlightrag_web_auth", "not base64!")
@@ -360,8 +361,8 @@ class TestWebAuth:
     async def test_bearer_header_grants_web_access(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        test_config.auth_mode = "simple"
-        test_config.api_auth_token = "secret-token"
+        mutate_config(test_config, "access.auth_mode", "simple")
+        mutate_config(test_config, "access.api_token", "secret-token")
 
         async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
@@ -374,8 +375,12 @@ class TestWebAuth:
     async def test_jwt_invalid_bearer_rejected(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        test_config.auth_mode = "jwt"
-        test_config.jwt_verification_key = "test-jwt-verification-key-for-web-route-tests"
+        mutate_config(test_config, "access.auth_mode", "jwt")
+        mutate_config(
+            test_config,
+            "access.jwt_verification_key",
+            "test-jwt-verification-key-for-web-route-tests",
+        )
 
         async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
@@ -388,8 +393,12 @@ class TestWebAuth:
     async def test_jwt_bearer_header_grants_web_access(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        test_config.auth_mode = "jwt"
-        test_config.jwt_verification_key = "test-jwt-verification-key-for-web-route-tests"
+        mutate_config(test_config, "access.auth_mode", "jwt")
+        mutate_config(
+            test_config,
+            "access.jwt_verification_key",
+            "test-jwt-verification-key-for-web-route-tests",
+        )
         token = jwt.encode(
             {
                 "sub": "user-1",

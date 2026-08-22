@@ -324,6 +324,15 @@ owns the independent `dlightrag_memory_records` schema and migration path. Root
 `LangfuseTelemetry` is injected into internal model operations; standalone
 Memory has no telemetry dependency.
 
+Configuration follows the same ownership direction. `DlightragConfig` has
+exactly eight operator-facing sections and directly composes deeply frozen
+Pydantic settings from the lowest owning module: AI owns model, embedding, and
+rerank settings; RAG owns corpus settings; root modules own product-only
+sections. Runtime code consumes those canonical values or narrow derived
+policies—there is no second dataclass snapshot of model or corpus fields. The
+2.0 schema is intentionally strict: removed flat YAML and environment names are
+rejected rather than aliased.
+
 ### Memory package surface
 
 `dlightrag-memory` is host-neutral and independently installable. Storage is

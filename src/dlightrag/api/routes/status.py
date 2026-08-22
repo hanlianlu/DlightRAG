@@ -76,13 +76,13 @@ async def health(request: Request) -> dict[str, object]:
     status: dict[str, object] = {
         "status": "degraded" if application_health.is_degraded else "healthy",
         "rag_initialized": application_health.is_ready,
-        "service_role": config.service_role,
+        "service_role": config.deployment.service_role,
         "crafted_by": "hllyu",
         "maintained_by": "HanlianLyu",
         "storage": {
-            "vector": config.vector_storage,
-            "graph": config.graph_storage,
-            "kv": config.kv_storage,
+            "vector": config.storage.lightrag.vector_storage,
+            "graph": config.storage.lightrag.graph_storage,
+            "kv": config.storage.lightrag.kv_storage,
         },
         "answer_image_capability": application_health.answer_image_capability,
     }
@@ -102,6 +102,6 @@ async def readiness(request: Request) -> ReadinessResponse | JSONResponse:
     config = request.app.state.application.config
     detail = await _application_health(request).readiness_detail()
     if detail is not None:
-        return _not_ready(service_role=config.service_role, detail=detail)
+        return _not_ready(service_role=config.deployment.service_role, detail=detail)
 
-    return ReadinessResponse(status="ready", service_role=config.service_role)
+    return ReadinessResponse(status="ready", service_role=config.deployment.service_role)

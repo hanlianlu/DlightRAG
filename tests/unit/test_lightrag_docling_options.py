@@ -86,28 +86,34 @@ def test_active_docling_fails_closed_when_upstream_contract_changes(
 def test_do_formula_enrichment_defaults_on_like_mineru() -> None:
     from lightrag.parser.external.mineru.cache import DEFAULT_MINERU_ENABLE_FORMULA
 
-    from dlightrag.config import DoclingSidecarConfig
+    from dlightrag.rag.settings import DoclingSidecarSettings
 
-    assert DoclingSidecarConfig().do_formula_enrichment is DEFAULT_MINERU_ENABLE_FORMULA
+    assert DoclingSidecarSettings().do_formula_enrichment is DEFAULT_MINERU_ENABLE_FORMULA
 
 
 def test_do_formula_enrichment_reaches_lightrag_env() -> None:
-    from dlightrag.config import DlightragConfig, DoclingSidecarConfig, ParserSidecarsConfig
+    from dlightrag.config import DlightragConfig
+    from dlightrag.rag.settings import DoclingSidecarSettings, ParserSidecarsSettings
 
-    config = DlightragConfig(
-        parser_sidecars=ParserSidecarsConfig(
-            docling=DoclingSidecarConfig(do_formula_enrichment=True),
-        ),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        corpus={
+            "sidecars": ParserSidecarsSettings(
+                docling=DoclingSidecarSettings(do_formula_enrichment=True),
+            ),
+        },
     )
     assert config._lightrag_sidecar_env_map()["DOCLING_DO_FORMULA_ENRICHMENT"] == "true"
 
 
 def test_force_ocr_reaches_lightrag_env() -> None:
-    from dlightrag.config import DlightragConfig, DoclingSidecarConfig, ParserSidecarsConfig
+    from dlightrag.config import DlightragConfig
+    from dlightrag.rag.settings import DoclingSidecarSettings, ParserSidecarsSettings
 
-    config = DlightragConfig(
-        parser_sidecars=ParserSidecarsConfig(
-            docling=DoclingSidecarConfig(force_ocr=False),
-        ),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        corpus={
+            "sidecars": ParserSidecarsSettings(
+                docling=DoclingSidecarSettings(force_ocr=False),
+            ),
+        },
     )
     assert config._lightrag_sidecar_env_map()["DOCLING_FORCE_OCR"] == "false"

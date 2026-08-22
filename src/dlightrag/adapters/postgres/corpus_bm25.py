@@ -357,17 +357,21 @@ async def _provision_postgres_bm25(
     *,
     profiles: tuple[BM25Profile, ...] | None = None,
 ) -> tuple[PGBM25ProfileSearch, tuple[BM25Profile, ...]] | None:
-    if not config.bm25_enabled:
+    if not config.corpus.retrieval.bm25_enabled:
         return None
-    runtime_profiles = profiles or profiles_from_config(config.bm25_profiles)
+    runtime_profiles = profiles or profiles_from_config(config.corpus.retrieval.bm25_profiles)
     adapter = PGBM25ProfileSearch(
-        workspace=config.workspace,
+        workspace=config.deployment.workspace,
         profiles=runtime_profiles,
     )
     if config.is_reader:
-        await adapter.verify_indexes(k1=config.bm25_k1, b=config.bm25_b)
+        await adapter.verify_indexes(
+            k1=config.corpus.retrieval.bm25_k1, b=config.corpus.retrieval.bm25_b
+        )
     else:
-        await adapter.ensure_indexes(k1=config.bm25_k1, b=config.bm25_b)
+        await adapter.ensure_indexes(
+            k1=config.corpus.retrieval.bm25_k1, b=config.corpus.retrieval.bm25_b
+        )
     return adapter, runtime_profiles
 
 
@@ -382,7 +386,7 @@ async def create_postgres_bm25(
     adapter, runtime_profiles = provisioned
     return ProfiledBM25Search(
         adapter,
-        workspace=config.workspace,
+        workspace=config.deployment.workspace,
         profiles=runtime_profiles,
     )
 
@@ -392,7 +396,7 @@ async def rebuild_postgres_bm25(
     *,
     batch_size: int = 500,
 ) -> dict[str, int]:
-    if config.bm25_enabled and config.is_reader:
+    if config.corpus.retrieval.bm25_enabled and config.is_reader:
         raise RuntimeError("BM25 rebuild requires the writer service role")
     provisioned = await _provision_postgres_bm25(config)
     if provisioned is None:

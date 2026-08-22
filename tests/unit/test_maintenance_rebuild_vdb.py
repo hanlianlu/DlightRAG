@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for DlightRAG's offline VDB rebuild wrapper."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -9,6 +10,7 @@ import pytest
 
 from dlightrag.ai.scheduler import ModelScheduler
 from dlightrag.ai.telemetry import NoopTelemetry
+from tests.config_helpers import mutate_config
 
 
 def test_parser_defaults_to_check_only() -> None:
@@ -88,8 +90,8 @@ async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.Mo
     }
     assert calls["embedding_func"] is fake_embedding
     assert isinstance(calls["scheduler"], ModelScheduler)
-    assert calls["scheduler"].max_concurrency == config.max_async
-    assert calls["global_config"]["working_dir"] == "/tmp/dlightrag"
+    assert calls["scheduler"].max_concurrency == config.models.max_concurrency
+    assert calls["global_config"]["working_dir"] == str(Path("/tmp/dlightrag").resolve())
     assert calls["global_config"]["embedding_func"] is fake_embedding
 
 
@@ -140,7 +142,7 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
     )
 
     stats = await module.restore_sidecar_image_vectors(
-        workspace_id=config.workspace,
+        workspace_id=config.deployment.workspace,
         settings=settings,
         lightrag=lightrag,
         stores=stores,
@@ -165,7 +167,7 @@ async def test_chunks_rebuild_relabels_bm25_languages_after_success(
     from dlightrag.maintenance import rebuild_vdb as module
 
     config = _fake_config()
-    config.bm25_enabled = True
+    mutate_config(config, "corpus.retrieval.bm25_enabled", True)
     embedder = AsyncMock()
     monkeypatch.setattr(
         module,
@@ -299,8 +301,8 @@ async def test_chunks_rebuild_delegates_bm25_before_embedder_close_fails(
     from dlightrag.maintenance import rebuild_vdb as module
 
     config = _fake_config()
-    config.bm25_enabled = True
-    config.embedding.startup_probe = False
+    mutate_config(config, "corpus.retrieval.bm25_enabled", True)
+    mutate_config(config, "models.embedding.startup_probe", False)
     embedder = AsyncMock()
     embedder.aclose.side_effect = RuntimeError("embedder close failed")
     monkeypatch.setattr(module, "create_embedding_model", lambda *_args, **_kwargs: embedder)
@@ -345,38 +347,39 @@ async def test_chunks_rebuild_delegates_bm25_before_embedder_close_fails(
     )
 
 
-def _fake_config() -> SimpleNamespace:
-    return SimpleNamespace(
-        workspace="research",
-        working_dir="/tmp/dlightrag",
-        vector_storage="PGVectorStorage",
-        graph_storage="PGTableGraphStorage",
-        kv_storage="PGKVStorage",
-        doc_status_storage="PGDocStatusStorage",
-        embedding_batch_num=7,
-        max_async=3,
-        vector_db_kwargs={},
-        metadata_filter_exact_vector_threshold=8192,
-        parser_rules="*:mineru-iteP",
-        parser_sidecars=SimpleNamespace(
-            vlm=SimpleNamespace(min_image_pixel=64),
-        ),
-        embedding=SimpleNamespace(
-            provider="openai_compatible",
-            model="text-embedding-3-small",
-            api_key="key",
-            base_url="https://api.example/v1",
-            dim=1536,
-            max_token_size=8192,
-            input_modality="auto",
-            asymmetric="auto",
-            startup_probe=False,
-            model_kwargs={},
-        ),
-        embedding_request_timeout=120.0,
-        bm25_enabled=False,
-        bm25_profiles=[],
-        apply_lightrag_backend_env=lambda force=False: None,
-        apply_lightrag_runtime_env=lambda force=False: None,
-        apply_lightrag_sidecar_env=lambda force=False: None,
+def _fake_config():
+    from dlightrag.config import DlightragConfig
+
+    return DlightragConfig.model_validate(
+        {
+            "deployment": {"workspace": "research", "working_dir": "/tmp/dlightrag"},
+            "storage": {
+                "lightrag": {
+                    "vector_storage": "PGVectorStorage",
+                    "graph_storage": "PGTableGraphStorage",
+                    "kv_storage": "PGKVStorage",
+                    "doc_status_storage": "PGDocStatusStorage",
+                    "vector_db_kwargs": {},
+                }
+            },
+            "models": {
+                "max_concurrency": 3,
+                "embedding": {
+                    "provider": "openai_compatible",
+                    "model": "text-embedding-3-small",
+                    "api_key": "key",
+                    "base_url": "https://api.example/v1",
+                    "dim": 1536,
+                    "startup_probe": False,
+                    "batch_size": 7,
+                },
+            },
+            "corpus": {
+                "retrieval": {
+                    "metadata_filter_exact_vector_threshold": 8192,
+                    "bm25_enabled": False,
+                },
+                "sidecars": {"vlm": {"min_image_pixel": 64}},
+            },
+        }
     )

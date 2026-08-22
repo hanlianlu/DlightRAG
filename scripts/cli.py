@@ -218,7 +218,7 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         print(f"Ingesting S3: bucket={args.bucket}, {target} (replace={args.replace})")
 
     config = get_config()
-    workspace = normalize_workspace(args.workspace or config.workspace)
+    workspace = normalize_workspace(args.workspace or config.deployment.workspace)
     if args.workspace:
         config = config.model_copy(update={"workspace": workspace})
     print(f"Workspace: {workspace}\n")
@@ -229,7 +229,7 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         workspace_id=workspace,
         settings=rag_settings(config),
         backend=PGCorpusBackendFactory(config).create(),
-        scheduler=ModelScheduler(max_concurrency=config.max_async),
+        scheduler=ModelScheduler(max_concurrency=config.models.max_concurrency),
         telemetry=LangfuseTelemetry(),
     )
     try:

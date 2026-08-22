@@ -11,16 +11,14 @@ import pytest
 from dlightrag.adapters.postgres.answer_runs import (
     PGAnswerRunStore,
 )
-from dlightrag.answer.routing import RoutingAcceptance
-from dlightrag.config import (
-    DlightragConfig,
-    EmbeddingConfig,
-    LLMConfig,
-    ModelCapacityOverrideConfig,
-    ModelConfig,
-    reset_config,
-    set_config,
+from dlightrag.ai.settings import (
+    EmbeddingSettings,
+    ModelCapacityOverrideSettings,
+    ModelRoleSettings,
+    ModelSettings,
 )
+from dlightrag.answer.routing import RoutingAcceptance
+from dlightrag.config import DlightragConfig, reset_config, set_config
 from dlightrag.runtime import (
     PendingArtifact,
     PendingArtifactReference,
@@ -129,31 +127,34 @@ def test_config(tmp_working_dir: Path) -> DlightragConfig:
     Also sets the global singleton so that code calling get_config()
     directly (e.g. /health endpoint) gets the test config.
     """
-    cfg = DlightragConfig(  # type: ignore[call-arg]
-        working_dir=str(tmp_working_dir),
-        llm=LLMConfig(
-            default=ModelConfig(
-                model="gpt-5.4-mini",
+    cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        # type: ignore[call-arg]
+        deployment={"working_dir": str(tmp_working_dir)},
+        models={
+            "chat": ModelRoleSettings(
+                default=ModelSettings(
+                    model="gpt-5.4-mini",
+                    api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
+                )
+            ),
+            "capacity_overrides": [
+                ModelCapacityOverrideSettings(
+                    provider="openai",
+                    model="gpt-5.4-mini",
+                    context_window_tokens=400_000,
+                    max_output_tokens=128_000,
+                    supports_images=True,
+                    supports_tools=True,
+                    supports_reasoning=True,
+                )
+            ],
+            "embedding": EmbeddingSettings(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
                 api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
-            )
-        ),
-        model_capacity_overrides=[
-            ModelCapacityOverrideConfig(
-                provider="openai",
-                model="gpt-5.4-mini",
-                context_window_tokens=400_000,
-                max_output_tokens=128_000,
-                supports_images=True,
-                supports_tools=True,
-                supports_reasoning=True,
-            )
-        ],
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
-            startup_probe=False,
-        ),
+                startup_probe=False,
+            ),
+        },
     )
     set_config(cfg)
     return cfg

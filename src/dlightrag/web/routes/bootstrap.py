@@ -96,13 +96,13 @@ async def build_web_bootstrap(
         effective_current_upload_limit = capability.effective_max_images
 
     extensions = sorted(SUPPORTED_DOCUMENT_EXTENSIONS)
-    attachment_limit = application.config.answer.max_attachment_bytes
+    attachment_limit = application.config.answer.generation.max_attachment_bytes
     return WebBootstrap(
         workspaces=workspaces,
         primary_workspace=primary,
         active_workspaces=active,
         answer_attachments=WebAttachmentBootstrap(
-            count_limit=application.config.answer.max_attachments,
+            count_limit=application.config.answer.generation.max_attachments,
             image_max_bytes=attachment_limit,
             document_max_bytes=attachment_limit,
             extensions=extensions,

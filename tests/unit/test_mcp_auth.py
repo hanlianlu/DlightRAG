@@ -32,7 +32,13 @@ async def test_mcp_access_token_preserves_identity_claims_and_scopes(
         "authenticate_bearer_token",
         lambda token, settings: UserContext(user_id="alice", auth_mode="jwt", claims=claims),
     )
-    config = test_config.model_copy(update={"auth_mode": "jwt", "jwt_verification_key": "test-key"})
+    config = test_config.model_copy(
+        update={
+            "access": test_config.access.model_copy(
+                update={"auth_mode": "jwt", "jwt_verification_key": "test-key"}
+            )
+        }
+    )
     set_config(config)
     verifier = mcp_auth.DlightRAGTokenVerifier(config)
 
@@ -70,7 +76,13 @@ async def test_mcp_request_scope_does_not_boot_application(
     from dlightrag.application import Application
 
     set_config(
-        test_config.model_copy(update={"auth_mode": "jwt", "jwt_verification_key": "test-key"})
+        test_config.model_copy(
+            update={
+                "access": test_config.access.model_copy(
+                    update={"auth_mode": "jwt", "jwt_verification_key": "test-key"}
+                )
+            }
+        )
     )
 
     async def _boom(*_args: Any, **_kwargs: Any) -> None:
@@ -100,7 +112,13 @@ async def test_mcp_request_scope_restores_prior_scope_when_handler_fails(
     test_config: DlightragConfig,
 ) -> None:
     set_config(
-        test_config.model_copy(update={"auth_mode": "jwt", "jwt_verification_key": "test-key"})
+        test_config.model_copy(
+            update={
+                "access": test_config.access.model_copy(
+                    update={"auth_mode": "jwt", "jwt_verification_key": "test-key"}
+                )
+            }
+        )
     )
     token = AccessToken(
         token="signed-token",
@@ -129,10 +147,14 @@ async def test_mcp_oauth_requires_exact_resource_audience(test_config: Dlightrag
     signing_secret = "test-signing-secret-at-least-32-bytes"
     config = test_config.model_copy(
         update={
-            "auth_mode": "jwt",
-            "jwt_verification_key": signing_secret,
-            "jwt_algorithm": "HS256",
-            "jwt_audience": "api://rest",
+            "access": test_config.access.model_copy(
+                update={
+                    "auth_mode": "jwt",
+                    "jwt_verification_key": signing_secret,
+                    "jwt_algorithm": "HS256",
+                    "jwt_audience": "api://rest",
+                }
+            )
         }
     )
     verifier = mcp_auth.DlightRAGTokenVerifier(

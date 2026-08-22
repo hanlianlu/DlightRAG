@@ -109,13 +109,13 @@ There is no `stream` request field and no temporary Answer mode.
 ### Execution
 
 An answer execution slot is one of the
-`runtime.answer_worker_concurrency` runs that a process may execute
+`answer.runtime.answer_worker_concurrency` runs that a process may execute
 concurrently. It is not a token, context, image, storage, PostgreSQL, or model
 request budget. A process reserves a local slot before it claims a row, so a
 worker never owns a lease while waiting for local capacity.
 
-AI provider requests use the independent process-wide `max_async` scheduler.
-LightRAG corpus processing uses `rag_pipeline_max_async`. Changing either value
+AI provider requests use the independent process-wide `models.max_concurrency` scheduler.
+LightRAG corpus processing uses `corpus.ingestion.pipeline.max_concurrency`. Changing either value
 does not change durable Answer worker admission; a run may issue multiple model
 requests, and those requests compete fairly with requests from other runs.
 

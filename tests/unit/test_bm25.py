@@ -147,8 +147,23 @@ def test_bm25_required_extensions_follow_profile_text_configs() -> None:
     ) == ("pg_textsearch", "pg_jieba")
 
 
+def _bm25_config(*, enabled: bool, is_reader: bool = False):
+    return SimpleNamespace(
+        corpus=SimpleNamespace(
+            retrieval=SimpleNamespace(
+                bm25_enabled=enabled,
+                bm25_profiles=[],
+                bm25_k1=1.2,
+                bm25_b=0.75,
+            )
+        ),
+        deployment=SimpleNamespace(workspace="default"),
+        is_reader=is_reader,
+    )
+
+
 async def test_create_postgres_bm25_returns_none_when_disabled() -> None:
-    config = SimpleNamespace(bm25_enabled=False)
+    config = _bm25_config(enabled=False)
 
     assert await create_postgres_bm25(config) is None
 
@@ -168,14 +183,10 @@ async def test_create_postgres_bm25_provisions_for_service_role(
     constructor = MagicMock(return_value=instance)
     monkeypatch.setattr(module, "PGBM25ProfileSearch", constructor)
     profiles = (BM25_PROFILE_FALLBACK,)
-    config = SimpleNamespace(
-        bm25_enabled=True,
-        is_reader=is_reader,
-        workspace="research",
-        bm25_profiles=[],
-        bm25_k1=1.4,
-        bm25_b=0.65,
-    )
+    config = _bm25_config(enabled=True, is_reader=is_reader)
+    config.deployment.workspace = "research"
+    config.corpus.retrieval.bm25_k1 = 1.4
+    config.corpus.retrieval.bm25_b = 0.65
 
     result = await create_postgres_bm25(config, profiles=profiles)
 
@@ -202,7 +213,7 @@ async def test_rebuild_postgres_bm25_provisions_then_relabels(
     )
     provision = AsyncMock(return_value=(adapter, (BM25_PROFILE_FALLBACK,)))
     monkeypatch.setattr(module, "_provision_postgres_bm25", provision)
-    config = SimpleNamespace(bm25_enabled=True, is_reader=False)
+    config = _bm25_config(enabled=True, is_reader=False)
     stats = await rebuild_postgres_bm25(
         config,
         batch_size=25,
@@ -216,7 +227,7 @@ async def test_rebuild_postgres_bm25_provisions_then_relabels(
 
 
 async def test_rebuild_postgres_bm25_skips_when_disabled() -> None:
-    config = SimpleNamespace(bm25_enabled=False)
+    config = _bm25_config(enabled=False)
 
     assert await rebuild_postgres_bm25(config) == {
         "processed_chunks": 0,
@@ -225,7 +236,7 @@ async def test_rebuild_postgres_bm25_skips_when_disabled() -> None:
 
 
 async def test_rebuild_postgres_bm25_rejects_reader_role() -> None:
-    config = SimpleNamespace(bm25_enabled=True, is_reader=True)
+    config = _bm25_config(enabled=True, is_reader=True)
 
     with pytest.raises(RuntimeError, match="writer service role"):
         await rebuild_postgres_bm25(config)

@@ -30,11 +30,17 @@ from dlightrag.access import UserContext, owner_id_from_user
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
-from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.ai.settings import (
+    MODEL_ROLE_NAMES,
+    EmbeddingSettings,
+    ModelRole,
+    ModelRoleSettings,
+    ModelSettings,
+)
 from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig, set_config
+from dlightrag.config import DlightragConfig, set_config
 from dlightrag.services.answers import AnswerService
 
 pytestmark = [
@@ -240,15 +246,19 @@ class _StoreBackedApplication:
 
 @pytest.fixture
 def app(store: PGAnswerRunStore, tmp_path) -> Iterator[FastAPI]:
-    config = DlightragConfig(
-        working_dir=str(tmp_path / "dlightrag_storage"),
-        llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="test",
-            startup_probe=False,
-        ),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        deployment={
+            "working_dir": str(tmp_path / "dlightrag_storage"),
+        },
+        models={
+            "chat": ModelRoleSettings(default=ModelSettings(model="gpt-5.4-mini", api_key="test")),
+            "embedding": EmbeddingSettings(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="test",
+                startup_probe=False,
+            ),
+        },
     )
     set_config(config)
     application = create_app(include_web_app=False)

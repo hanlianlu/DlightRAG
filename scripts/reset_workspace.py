@@ -139,10 +139,10 @@ async def _run(
 
     config = get_config()
     print("\nCorpus storage backends (from config):")
-    print(f"  KV:         {config.kv_storage}")
-    print(f"  Vector:     {config.vector_storage}")
-    print(f"  Graph:      {config.graph_storage}")
-    print(f"  Default:    {config.workspace}")
+    print(f"  KV:         {config.storage.lightrag.kv_storage}")
+    print(f"  Vector:     {config.storage.lightrag.vector_storage}")
+    print(f"  Graph:      {config.storage.lightrag.graph_storage}")
+    print(f"  Default:    {config.deployment.workspace}")
 
     application = await Application.acreate(config)
     try:
@@ -151,7 +151,7 @@ async def _run(
             AccessGate(AllowAllAccessControl(), None),
             workspace=workspace,
             reset_all=reset_all,
-            default_workspace=config.workspace,
+            default_workspace=config.deployment.workspace,
             keep_files=keep_files,
             dry_run=dry_run,
         )

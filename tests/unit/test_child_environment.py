@@ -11,7 +11,7 @@ def test_child_env_keeps_path_and_drops_seeded_secrets(tmp_path: Path) -> None:
         "PATH": "/usr/bin",
         "HOME": "/root",
         "SSH_AUTH_SOCK": "/tmp/ssh",
-        "DLIGHTRAG_POSTGRES_PASSWORD": "secret",
+        "DLIGHTRAG_STORAGE__POSTGRES__PASSWORD": "secret",
         "POSTGRES_PASSWORD": "secret",
         "OPENAI_API_KEY": "sk-test",
         "AWS_SECRET_ACCESS_KEY": "aws",
@@ -24,7 +24,7 @@ def test_child_env_keeps_path_and_drops_seeded_secrets(tmp_path: Path) -> None:
     assert env["HOME"] == str(tmp_path / "home")
     assert env["TERM"] == "dumb"
     assert "SSH_AUTH_SOCK" not in env
-    assert "DLIGHTRAG_POSTGRES_PASSWORD" not in env
+    assert "DLIGHTRAG_STORAGE__POSTGRES__PASSWORD" not in env
     assert "POSTGRES_PASSWORD" not in env
     assert "OPENAI_API_KEY" not in env
     assert "AWS_SECRET_ACCESS_KEY" not in env

@@ -12,12 +12,8 @@ from typing import Any, cast
 import numpy as np
 from PIL import Image
 
-from dlightrag.config import (
-    DlightragConfig,
-    EmbeddingConfig,
-    LLMConfig,
-    ModelConfig,
-)
+from dlightrag.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
+from dlightrag.config import DlightragConfig
 
 RUN_E2E_ENV = "DLIGHTRAG_RUN_E2E_PG18"
 REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba")
@@ -37,7 +33,7 @@ def pg_conn_kwargs_from_env(env: Mapping[str, str] | None = None) -> dict[str, A
     def get(name: str, default: str) -> str:
         return (
             source.get(f"DLIGHTRAG_E2E_POSTGRES_{name}")
-            or source.get(f"DLIGHTRAG_POSTGRES_{name}")
+            or source.get(f"DLIGHTRAG_STORAGE__POSTGRES__{name}")
             or default
         )
 
@@ -120,15 +116,15 @@ def make_e2e_config(
         embedding_batch_num=2,
         bm25_enabled=True,
         rerank={"enabled": False},
-        llm=LLMConfig(
-            default=ModelConfig(
+        llm=ModelRoleSettings(
+            default=ModelSettings(
                 provider="openai",
                 model="e2e-fake-llm",
                 api_key="e2e-fake-key",
                 timeout=30,
             )
         ),
-        embedding=EmbeddingConfig(
+        embedding=EmbeddingSettings(
             provider="voyage",
             model="e2e-fake-multimodal",
             api_key="e2e-fake-key",

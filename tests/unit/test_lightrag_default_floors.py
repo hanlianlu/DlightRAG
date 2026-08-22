@@ -9,36 +9,67 @@ out by hand rather than matched on name: ``chunk_p_token_size`` answers to
 to an LLM call budget.
 """
 
+from typing import Any
+
 import lightrag.constants as lightrag_constants
 import pytest
 
-from dlightrag.config import DlightragConfig, LLMConfig
+from dlightrag.ai.settings import ModelRoleSettings
+from dlightrag.config import DlightragConfig
 
 # DlightRAG default -> the LightRAG constant it must not undercut.
-UPSTREAM_FLOORS: dict[str, str] = {
-    "top_k": "DEFAULT_TOP_K",
-    "chunk_top_k": "DEFAULT_CHUNK_TOP_K",
-    "chunk_p_token_size": "DEFAULT_CHUNK_P_SIZE",
-    "rag_pipeline_max_async": "DEFAULT_MAX_ASYNC",
-    "embedding_func_max_async": "DEFAULT_EMBEDDING_FUNC_MAX_ASYNC",
-    "embedding_batch_num": "DEFAULT_EMBEDDING_BATCH_NUM",
-    "max_total_tokens": "DEFAULT_MAX_TOTAL_TOKENS",
-    "max_entity_tokens": "DEFAULT_MAX_ENTITY_TOKENS",
-    "max_relation_tokens": "DEFAULT_MAX_RELATION_TOKENS",
-    "max_parallel_analyze": "DEFAULT_MAX_PARALLEL_ANALYZE",
-    "max_parallel_insert": "DEFAULT_MAX_PARALLEL_INSERT",
-    "max_parallel_parse_docling": "DEFAULT_MAX_PARALLEL_PARSE_DOCLING",
-    "max_parallel_parse_mineru": "DEFAULT_MAX_PARALLEL_PARSE_MINERU",
-    "max_parallel_parse_native": "DEFAULT_MAX_PARALLEL_PARSE_NATIVE",
-    "queue_size_analyze": "DEFAULT_QUEUE_SIZE_ANALYZE",
-    "queue_size_insert": "DEFAULT_QUEUE_SIZE_INSERT",
-    "queue_size_parse": "DEFAULT_QUEUE_SIZE_PARSE",
+UPSTREAM_FLOORS: dict[str, tuple[str, str]] = {
+    "top_k": ("corpus.retrieval.top_k", "DEFAULT_TOP_K"),
+    "chunk_top_k": ("corpus.retrieval.chunk_top_k", "DEFAULT_CHUNK_TOP_K"),
+    "chunk_p_token_size": ("corpus.ingestion.chunk_token_size", "DEFAULT_CHUNK_P_SIZE"),
+    "rag_pipeline_max_async": ("corpus.ingestion.pipeline.max_concurrency", "DEFAULT_MAX_ASYNC"),
+    "embedding_func_max_async": (
+        "models.embedding.max_concurrency",
+        "DEFAULT_EMBEDDING_FUNC_MAX_ASYNC",
+    ),
+    "embedding_batch_num": ("models.embedding.batch_size", "DEFAULT_EMBEDDING_BATCH_NUM"),
+    "max_total_tokens": ("corpus.retrieval.max_total_tokens", "DEFAULT_MAX_TOTAL_TOKENS"),
+    "max_entity_tokens": ("corpus.retrieval.max_entity_tokens", "DEFAULT_MAX_ENTITY_TOKENS"),
+    "max_relation_tokens": ("corpus.retrieval.max_relation_tokens", "DEFAULT_MAX_RELATION_TOKENS"),
+    "max_parallel_analyze": (
+        "corpus.ingestion.pipeline.max_parallel_analyze",
+        "DEFAULT_MAX_PARALLEL_ANALYZE",
+    ),
+    "max_parallel_insert": (
+        "corpus.ingestion.pipeline.max_parallel_insert",
+        "DEFAULT_MAX_PARALLEL_INSERT",
+    ),
+    "max_parallel_parse_docling": (
+        "corpus.ingestion.pipeline.max_parallel_parse_docling",
+        "DEFAULT_MAX_PARALLEL_PARSE_DOCLING",
+    ),
+    "max_parallel_parse_mineru": (
+        "corpus.ingestion.pipeline.max_parallel_parse_mineru",
+        "DEFAULT_MAX_PARALLEL_PARSE_MINERU",
+    ),
+    "max_parallel_parse_native": (
+        "corpus.ingestion.pipeline.max_parallel_parse_native",
+        "DEFAULT_MAX_PARALLEL_PARSE_NATIVE",
+    ),
+    "queue_size_analyze": (
+        "corpus.ingestion.pipeline.queue_size_analyze",
+        "DEFAULT_QUEUE_SIZE_ANALYZE",
+    ),
+    "queue_size_insert": (
+        "corpus.ingestion.pipeline.queue_size_insert",
+        "DEFAULT_QUEUE_SIZE_INSERT",
+    ),
+    "queue_size_parse": ("corpus.ingestion.pipeline.queue_size_parse", "DEFAULT_QUEUE_SIZE_PARSE"),
 }
 
 
-@pytest.mark.parametrize(("field_name", "constant_name"), sorted(UPSTREAM_FLOORS.items()))
-def test_default_is_not_below_lightrag(field_name: str, constant_name: str) -> None:
-    ours = DlightragConfig.model_fields[field_name].default
+@pytest.mark.parametrize(("field_name", "mapping"), sorted(UPSTREAM_FLOORS.items()))
+def test_default_is_not_below_lightrag(field_name: str, mapping: tuple[str, str]) -> None:
+    path, constant_name = mapping
+    value: Any = DlightragConfig()
+    for part in path.split("."):
+        value = getattr(value, part)
+    ours = int(value)
     upstream = getattr(lightrag_constants, constant_name)
 
     assert ours >= upstream, (
@@ -49,4 +80,4 @@ def test_default_is_not_below_lightrag(field_name: str, constant_name: str) -> N
 
 def test_shipped_llm_timeout_is_not_below_lightrag() -> None:
     """The default role's timeout becomes LightRAG's ``default_llm_timeout``."""
-    assert LLMConfig().default.timeout >= lightrag_constants.DEFAULT_LLM_TIMEOUT
+    assert ModelRoleSettings().default.timeout >= lightrag_constants.DEFAULT_LLM_TIMEOUT

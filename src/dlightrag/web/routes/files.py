@@ -44,7 +44,9 @@ async def download_source(
     """Download one source document through the Web session boundary."""
     from dlightrag.rag.workspaces import normalize_workspace
 
-    safe_workspace = normalize_workspace(workspace or get_application(request).config.workspace)
+    safe_workspace = normalize_workspace(
+        workspace or get_application(request).config.deployment.workspace
+    )
     try:
         await enforce_web_access(
             request,
@@ -226,7 +228,7 @@ async def upload_files(
     # path (REST /ingest/blob, URL, web upload): one document may not exceed it.
     # The larger per-request cap is a temp-directory guard for multi-file
     # (folder) uploads.
-    per_file_max_bytes = cfg.max_upload_bytes
+    per_file_max_bytes = cfg.corpus.ingestion.max_upload_bytes
     batch_max_bytes = cfg.max_upload_batch_bytes
     per_file_max_mb = per_file_max_bytes // (1024 * 1024)
 
@@ -269,7 +271,7 @@ async def upload_files(
             status_code=413,
             detail=(
                 f"Upload exceeds limit ({per_file_max_mb} MB per file, "
-                f"{cfg.max_upload_size_mb} MB per request)"
+                f"{cfg.interfaces.max_upload_size_mb} MB per request)"
             ),
         ) from None
     except Exception:

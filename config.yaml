@@ -1,71 +1,12 @@
-# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-#
-# DlightRAG — curated application configuration
-#
-# This file is intentionally small. Keep high-signal product and deployment
-# choices here; keep secrets in .env; keep rare tuning in docs/configuration.md
-# or pass it through environment variables when a deployment needs it.
-#
-# Priority: env vars > .env > config.yaml > code defaults
+# DlightRAG 2.0 canonical configuration
+# Priority: env > .env > config.yaml > defaults
 
-# ─────────────────────────────────────────────────────────────────
-# Models
-# ─────────────────────────────────────────────────────────────────
-# `provider` selects the API protocol / SDK family — not the vendor brand.
-# It accepts exactly three values (case-insensitive):
-#   openai     Any OpenAI-compatible endpoint. Choose the vendor with base_url:
-#              OpenAI, DeepSeek, OpenRouter, Azure OpenAI, MiniMax, Qwen, Zhipu,
-#              local vLLM / Ollama, … all use provider: openai.
-#   anthropic  Anthropic Claude, native SDK (leave base_url unset).
-#   gemini     Google Gemini, native SDK (leave base_url unset).
-# There is no provider: deepseek / openrouter / azure — those are provider:
-# openai plus the matching base_url (an unknown value is rejected at load time).
-#
-# LLM roles follow LightRAG role names exactly:
-#   extract — entity/relationship extraction and ingest-time semantic projection
-#   keyword — LightRAG retrieval keyword extraction
-#   query   — answer generation and optional evidence-agent turns
-#   vlm     — image/table/equation analysis
-# `agentic_model_kwargs` shallow-overrides same-named top-level `model_kwargs`
-# only for research control/final calls; use the field names supported by the
-# configured endpoint.
-
-llm:
-  default:
-    provider: openai
-    model: z-ai/glm-5.2
-    base_url: https://openrouter.ai/api/v1
-    structured_output: json_schema
-    temperature: 0.4
-    model_kwargs:
-      reasoning:
-        enabled: false
-    agentic_model_kwargs:
-      reasoning:
-        enabled: true
-  roles:
-    extract:
+models:
+  chat:
+    default:
       provider: openai
-      model: deepseek-v4-flash
-      base_url: https://api.deepseek.com
-      structured_output: json_object
-      temperature: 0.0
-      model_kwargs:
-        thinking:
-          type: disabled
-    keyword:
-      provider: openai
-      model: deepseek-v4-flash
-      base_url: https://api.deepseek.com
-      structured_output: json_object
-      temperature: 0.0
-      model_kwargs:
-        thinking:
-          type: disabled
-    query:
-      provider: openai
-      model: xiaomi/mimo-v2.5 # huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF:Q8_0
-      base_url: https://openrouter.ai/api/v1 # http://host.docker.internal:8888/v1 # Unsloth Studio on the Docker host
+      model: z-ai/glm-5.2
+      base_url: https://openrouter.ai/api/v1
       structured_output: json_schema
       temperature: 0.4
       model_kwargs:
@@ -74,179 +15,90 @@ llm:
       agentic_model_kwargs:
         reasoning:
           enabled: true
-      # model_kwargs:
-      #   chat_template_kwargs:
-      #     enable_thinking: false
-    vlm:
-      provider: openai
-      model: xiaomi/mimo-v2.5
-      base_url: https://openrouter.ai/api/v1 
-      structured_output: json_schema
-      temperature: 0.0
-      model_kwargs:
-        reasoning:
-          enabled: false
-
-embedding:
-  provider: voyage
-  model: voyage-multimodal-3.5
-  base_url: https://api.voyageai.com/v1
-  dim: 1024
-  input_modality: auto
-
-rerank:
-  enabled: true
-  strategy: voyage_reranker
-  model: rerank-2.5-lite
-  input_modality: auto
-  ## Keep the credential in .env as DLIGHTRAG_RERANK__API_KEY.
-
-# ─────────────────────────────────────────────────────────────────
-# Parser and Ingestion
-# ─────────────────────────────────────────────────────────────────
-
-working_dir: ./dlightrag_storage
-
-extraction:
-  language: English
-  ## Must deactivate kg_entity_types if using entity_type_prompt_file
-  # entity_type_prompt_file: domain-entities.yaml
-
-parser_sidecars:
-  mineru:
-    api_mode: local
-    local_endpoint: http://host.docker.internal:8210
-    language: ch
-    ## MinerU parse engine. DlightRAG defaults explicitly to hybrid-engine.
-    backend: hybrid-engine
-    ## Set pipeline for MinerU's non-VLM OCR engine (avoids VLM transcription
-    ## artifacts on hard scans; weaker on complex layout/charts).
-    ## Options: pipeline | vlm-engine | hybrid-engine
-    # api_mode: official
-    # official_endpoint: https://mineru.net
-    ## Put DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN in .env.
-
-  ## To use Docling instead, comment/remove the MinerU block above and enable
-  ## this block. If both are configured, MinerU takes priority.
-  ## Use http://docling:5001 instead when running the compose `docling` profile.
-  # docling:
-  #   endpoint: http://host.docker.internal:5001
-  #   ## Only needed on Apple Silicon; see docs/configuration.md.
-  #   # code_formula_preset: granite_docling
-  #   ## false keeps a well-encoded PDF's own text layer; see docs/configuration.md.
-  #   # force_ocr: false
-
-## kg_entity_types is a lightweight hint (one line of extraction guidance).
-## Left empty so DlightRAG defers to LightRAG's built-in general taxonomy
-## (Person/Organization/Location/Event/Concept/Method/Content/Data/Artifact/
-## NaturalObject/...). Uncomment and list domain-specific types only to bias
-## extraction toward a particular corpus.
-# kg_entity_types:
-#   - Product
-#   - Standard
-
-# ─────────────────────────────────────────────────────────────────
-# Deployment
-# ─────────────────────────────────────────────────────────────────
-
-workspace: default
-
-## Process role. 'writer' (default) provisions schema, ingests, and serves every
-## API against a write-capable endpoint. 'reader' serves only stateless
-## query/read APIs against an infra-managed physical read replica under eventual
-## consistency (no schema writes; mutating APIs return 403). For a reader, point
-## DLIGHTRAG_POSTGRES_HOST at the read endpoint. See
-## docs/postgresql.md#reader-role-and-read-replicas.
-# service_role: writer
-
-## The PostgreSQL endpoint lives in .env (untracked), not here. See .env.example
-## and docs/postgresql.md#external-and-managed-endpoints.
-
-## See docs/configuration.md to tune them. Raise it only after provider rate limits 
-## and PostgreSQL capacity are understood.
-
-max_async: 16                 # process-wide AI provider request concurrency
-runtime:
-  answer_worker_concurrency: 16  # durable Answer runs executed per process
-  answer_run_retention_days: 365  # floor for terminal runs, event logs, and superseded memory history
-rag_pipeline_max_async: 16    # LightRAG workspace pipeline LLM concurrency
-embedding_func_max_async: 16  # LightRAG default 8
-embedding_batch_num: 64       # texts per embedding request (provider cap varies: Voyage<=1000, OpenAI<=2048)
-
-# ─────────────────────────────────────────────────────────────────
-# Retrieval and Answering
-# ─────────────────────────────────────────────────────────────────
-
-# top_k and chunk_top_k are LightRAG QueryParam controls (names mirror LightRAG).
-# direct_visual_top_k and answer.* are DlightRAG-native.
-top_k: 60        # LightRAG QueryParam: KG entity/relationship breadth.
-chunk_top_k: 30  # LightRAG QueryParam: chunk/BM25 candidate breadth (not a final /retrieve cap).
-# bm25_enabled: true  # Workspace PostgreSQL BM25 lane; answer attachments use request-local resources.
-direct_visual_top_k: 20  # DlightRAG: image->image query-vector retrieval breadth.
-
+    roles:
+      extract:
+        provider: openai
+        model: deepseek-v4-flash
+        base_url: https://api.deepseek.com
+        structured_output: json_object
+        temperature: 0.0
+        model_kwargs:
+          thinking:
+            type: disabled
+      keyword:
+        provider: openai
+        model: deepseek-v4-flash
+        base_url: https://api.deepseek.com
+        structured_output: json_object
+        temperature: 0.0
+        model_kwargs:
+          thinking:
+            type: disabled
+      query:
+        provider: openai
+        model: xiaomi/mimo-v2.5
+        base_url: https://openrouter.ai/api/v1
+        structured_output: json_schema
+        temperature: 0.4
+        model_kwargs:
+          reasoning:
+            enabled: false
+        agentic_model_kwargs:
+          reasoning:
+            enabled: true
+      vlm:
+        provider: openai
+        model: xiaomi/mimo-v2.5
+        base_url: https://openrouter.ai/api/v1
+        structured_output: json_schema
+        temperature: 0.0
+        model_kwargs:
+          reasoning:
+            enabled: false
+  embedding:
+    provider: voyage
+    model: voyage-multimodal-3.5
+    base_url: https://api.voyageai.com/v1
+    dim: 1024
+    input_modality: auto
+    max_concurrency: 16
+    batch_size: 64
+  rerank:
+    enabled: true
+    strategy: voyage_reranker
+    model: rerank-2.5-lite
+    input_modality: auto
+  max_concurrency: 16
+deployment:
+  working_dir: ./dlightrag_storage
+  workspace: default
+corpus:
+  extraction:
+    language: English
+  sidecars:
+    mineru:
+      api_mode: local
+      local_endpoint: http://host.docker.internal:8210
+      language: ch
+      backend: hybrid-engine
+  ingestion:
+    pipeline:
+      max_concurrency: 16
+  retrieval:
+    top_k: 60
+    chunk_top_k: 30
+    direct_visual_top_k: 20
 answer:
-  max_images: 12
-  max_attachments: 6
-  max_attachment_bytes: 104857600      # 100 MiB per answer attachment.
-  max_total_attachment_bytes: 134217728  # 128 MiB total across answer attachments.
-
-# ─────────────────────────────────────────────────────────────────
-# Security and Observability
-# ─────────────────────────────────────────────────────────────────
-
-## Auth secrets are better kept in .env.
-## jwt_audience accepts one value or a list, e.g. ["api://dlightrag", "<proxy-client-id>"]
-
-# auth_mode: simple
-# api_auth_token: ""
-# jwt_verification_key: ""
-# jwt_jwks_url: ""
-# jwt_issuer: ""
-# jwt_audience: ""
-# jwt_algorithm: "HS256"
-
-## Edge-asserted Web identity (auth_mode: jwt). The browser front door
-## (Cloudflare Access / Azure Easy Auth / AWS Amplify-CloudFront) authenticates
-## the human; the Web surface verifies the edge credential per request. See
-## docs/security.md for the per-edge setup.
-# web_identity:
-#   edge: cloudflare
-#   issuer: ""
-#   audience: ""
-#   jwks_url: ""
-
-## Resource authorization. Default allow_all lets any authenticated caller use
-## any workspace. Switch to jwt_claims to map verified JWT claims to workspace
-## and action permissions; requires auth_mode: jwt and at least one rule.
-
-## Rule fields:
-##   claim      - verified JWT claim name (on Entra, prefer App Role `roles`
-##                over `groups`).
-##   value      - claim value to match.
-##   workspaces - exact name(s) or "*" (quote a bare *).
-##   actions    - list; each item is a preset (reader|editor|admin), an exact
-##                action, "workspace.*", or "*". Any match grants access, so you
-##                may mix, e.g. [reader, workspace.update_metadata].
-## Full reference: docs/security.md.
-
-# access_control:
-#   mode: jwt_claims
-#   rules:
-#     - claim: roles
-#       value: finance.readers
-#       workspaces: [finance]
-#       actions: [reader]
-
-## Langfuse keys (secret) belong in .env. Non-secret SDK behavior lives here.
-## langfuse_host is where the app SENDS traces, set for how DlightRAG runs:
-##   Dockerized app + bundled local stack -> http://host.docker.internal:3300
-##   Native (non-Docker) app              -> http://localhost:3300
-## Unset falls back to Langfuse Cloud. See docs/operations.md.
-langfuse_host: http://host.docker.internal:3300
-# langfuse_export_external_spans: false
-# langfuse_trace_sensitive_data: true   # true = full detail (query, raw errors, raw IDs) for ops/dev; false = redact (privacy mode)
-# langfuse_environment: production
-
-agent:
-  execution_environment: disabled
-  workspace_root: null
+  runtime:
+    answer_worker_concurrency: 16
+    answer_run_retention_days: 365
+  generation:
+    max_images: 12
+    max_attachments: 6
+    max_attachment_bytes: 104857600
+    max_total_attachment_bytes: 134217728
+  agent:
+    execution_environment: disabled
+    workspace_root: null
+observability:
+  langfuse_host: http://host.docker.internal:3300

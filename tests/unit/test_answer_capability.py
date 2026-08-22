@@ -13,7 +13,13 @@ import pytest
 from PIL import Image
 
 from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import ModelSettings
+from dlightrag.ai.settings import (
+    EmbeddingSettings,
+    ModelCapacityOverrideSettings,
+    ModelRoleOverrides,
+    ModelRoleSettings,
+    ModelSettings,
+)
 from dlightrag.ai.vision import (
     ImageCapabilityStatus,
     ImageProbeOutcome,
@@ -29,14 +35,7 @@ from dlightrag.answer.capability import (
     derive_effective_max_images,
 )
 from dlightrag.answer.executor import AnswerResourceResolver
-from dlightrag.config import (
-    DlightragConfig,
-    EmbeddingConfig,
-    LLMConfig,
-    LLMRolesConfig,
-    ModelCapacityOverrideConfig,
-    ModelConfig,
-)
+from dlightrag.config import DlightragConfig
 from dlightrag.model_settings import (
     answer_capability_settings,
     answer_resource_settings,
@@ -44,6 +43,7 @@ from dlightrag.model_settings import (
     model_settings_for_role,
     rerank_scoring_model_settings,
 )
+from tests.config_helpers import mutate_config, replace_config
 
 
 @pytest.mark.parametrize(
@@ -117,34 +117,36 @@ def test_public_capability_snapshot_is_frozen() -> None:
 async def test_capability_probe_targets_resolved_query_role_without_borrowing_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = DlightragConfig(
-        llm=LLMConfig(
-            default=ModelConfig(model="default-model", api_key="default-key"),
-            roles=LLMRolesConfig(
-                query=ModelConfig(
-                    model="local-query",
-                    api_key=None,
-                    base_url="http://host.docker.internal:8888/v1",
-                )
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "chat": ModelRoleSettings(
+                default=ModelSettings(model="default-model", api_key="default-key"),
+                roles=ModelRoleOverrides(
+                    query=ModelSettings(
+                        model="local-query",
+                        api_key=None,
+                        base_url="http://host.docker.internal:8888/v1",
+                    )
+                ),
             ),
-        ),
-        model_capacity_overrides=[
-            ModelCapacityOverrideConfig(
-                provider="openai",
-                model="local-query",
-                base_url="http://host.docker.internal:8888/v1",
-                context_window_tokens=100_000,
-                max_output_tokens=10_000,
-                supports_images=True,
-                supports_tools=True,
-            )
-        ],
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            startup_probe=False,
-        ),
+            "capacity_overrides": [
+                ModelCapacityOverrideSettings(
+                    provider="openai",
+                    model="local-query",
+                    base_url="http://host.docker.internal:8888/v1",
+                    context_window_tokens=100_000,
+                    max_output_tokens=10_000,
+                    supports_images=True,
+                    supports_tools=True,
+                )
+            ],
+            "embedding": EmbeddingSettings(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        },
     )
     coordinator, health_updates = _coordinator(config)
     probed: dict[str, object] = {}
@@ -167,7 +169,7 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
     await coordinator.probe_answer()
 
     cap = coordinator.answer_image_capability
-    ceiling = int(config.answer.max_images)
+    ceiling = int(config.answer.generation.max_images)
     query_cfg = model_settings_for_role(config, "query")
     assert isinstance(cap, AnswerImageCapability)
     assert cap.status == "supported"
@@ -178,25 +180,27 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
 
 
 def _reprobe_config() -> DlightragConfig:
-    return DlightragConfig(
-        model_capacity_overrides=[
-            ModelCapacityOverrideConfig(
-                provider="openai",
-                model="z-ai/glm-5.2",
-                base_url="https://openrouter.ai/api/v1",
-                context_window_tokens=1_048_576,
-                max_output_tokens=262_144,
-                supports_images=True,
-                supports_tools=True,
-                supports_reasoning=True,
-            )
-        ],
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            startup_probe=False,
-        ),
+    return DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "capacity_overrides": [
+                ModelCapacityOverrideSettings(
+                    provider="openai",
+                    model="z-ai/glm-5.2",
+                    base_url="https://openrouter.ai/api/v1",
+                    context_window_tokens=1_048_576,
+                    max_output_tokens=262_144,
+                    supports_images=True,
+                    supports_tools=True,
+                    supports_reasoning=True,
+                )
+            ],
+            "embedding": EmbeddingSettings(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        },
     )
 
 
@@ -219,7 +223,7 @@ async def test_unknown_capability_lazily_reprobes_to_supported(
     cap = snapshot.answer
     assert resolve.await_count == 2
     assert cap is not None and cap.status == "supported"
-    assert cap.effective_max_images == _reprobe_config().answer.max_images
+    assert cap.effective_max_images == _reprobe_config().answer.generation.max_images
 
 
 async def test_confirmed_image_context_refreshes_the_query_profile_after_reprobe(
@@ -550,12 +554,12 @@ async def test_cancelled_probe_finishes_provider_close(
         await task
 
 
-def _role_config(**roles: ModelConfig) -> DlightragConfig:
-    default = ModelConfig(model="default-model", api_key="default-key")
-    profiles: dict[tuple[str, str, str | None], ModelCapacityOverrideConfig] = {}
+def _role_config(**roles: ModelSettings) -> DlightragConfig:
+    default = ModelSettings(model="default-model", api_key="default-key")
+    profiles: dict[tuple[str, str, str | None], ModelCapacityOverrideSettings] = {}
     for model in (default, *roles.values()):
         identity = (model.provider, model.model, model.base_url)
-        profiles[identity] = ModelCapacityOverrideConfig(
+        profiles[identity] = ModelCapacityOverrideSettings(
             provider=model.provider,
             model=model.model,
             base_url=model.base_url,
@@ -564,18 +568,20 @@ def _role_config(**roles: ModelConfig) -> DlightragConfig:
             supports_images=True,
             supports_tools=True,
         )
-    return DlightragConfig(
-        llm=LLMConfig(
-            default=default,
-            roles=LLMRolesConfig(**roles),
-        ),
-        model_capacity_overrides=list(profiles.values()),
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            startup_probe=False,
-        ),
+    return DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "chat": ModelRoleSettings(
+                default=default,
+                roles=ModelRoleOverrides(**roles),
+            ),
+            "capacity_overrides": list(profiles.values()),
+            "embedding": EmbeddingSettings(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        },
     )
 
 
@@ -633,7 +639,7 @@ async def test_zero_configured_ceiling_disables_answer_images_without_a_model_ca
 ) -> None:
     probed = _probed_models(monkeypatch, "supported")
     config = _role_config()
-    config.answer.max_images = 0
+    mutate_config(config, "answer.generation.max_images", 0)
     coordinator, _health_updates = _coordinator(config)
 
     await coordinator.probe_answer()
@@ -649,13 +655,15 @@ async def test_zero_configured_ceiling_disables_answer_images_without_a_model_ca
 async def test_live_probe_cannot_widen_profile_declared_image_support(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = DlightragConfig(
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            startup_probe=False,
-        ),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "embedding": EmbeddingSettings(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        },
     )
     image_capabilities, resolve = _stub_capabilities(monkeypatch, "supported")
     coordinator, _health_updates = _coordinator(config, image_capabilities=image_capabilities)
@@ -676,7 +684,7 @@ async def test_zero_configured_ceiling_settles_the_vlm_role_without_a_model_call
     """No role has an image slot under a zero ceiling, so the probe buys nothing."""
     probed = _probed_models(monkeypatch, "supported")
     config = _role_config()
-    config.answer.max_images = 0
+    mutate_config(config, "answer.generation.max_images", 0)
     coordinator, _health_updates = _coordinator(config)
 
     await coordinator.probe_vlm()
@@ -688,16 +696,20 @@ async def test_zero_configured_ceiling_settles_the_vlm_role_without_a_model_call
 async def test_rerank_capability_is_probed_from_the_rerank_scoring_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.config import RerankConfig
+    from dlightrag.ai.settings import RerankSettings
 
     config = _role_config()
-    config.rerank = RerankConfig(
-        enabled=True,
-        strategy="chat_llm_reranker",
-        provider="openai",
-        model="rerank-scorer",
-        api_key=None,
-        base_url="http://host.docker.internal:9999/v1",
+    config = replace_config(
+        config,
+        "models.rerank",
+        RerankSettings(
+            enabled=True,
+            strategy="chat_llm_reranker",
+            provider="openai",
+            model="rerank-scorer",
+            api_key=None,
+            base_url="http://host.docker.internal:9999/v1",
+        ),
     )
     provider = type("Provider", (), {"aclose": AsyncMock()})()
     provider_factory = MagicMock(return_value=provider)

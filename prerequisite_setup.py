@@ -114,10 +114,10 @@ RERANK_CHOICES: dict[str, tuple[str, bool, str]] = {
 }
 
 LLM_ROLE_ENV_KEYS: dict[str, str] = {
-    "extract": "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY",
-    "keyword": "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY",
-    "query": "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY",
-    "vlm": "DLIGHTRAG_LLM__ROLES__VLM__API_KEY",
+    "extract": "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY",
+    "keyword": "DLIGHTRAG_MODELS__CHAT__ROLES__KEYWORD__API_KEY",
+    "query": "DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY",
+    "vlm": "DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY",
 }
 
 
@@ -131,7 +131,7 @@ def _model_block(spec: ProviderSpec, model: str, base_url: str | None) -> dict:
 
 def resolve_llm_choice(provider_name: str, *, model: str, base_url: str | None) -> tuple[dict, str]:
     spec = PROVIDERS_LLM[provider_name]
-    return _model_block(spec, model, base_url), "DLIGHTRAG_LLM__DEFAULT__API_KEY"
+    return _model_block(spec, model, base_url), "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY"
 
 
 def _normalized_endpoint(value: str | None) -> str | None:
@@ -231,7 +231,7 @@ def resolve_embedding_choice(
     spec = PROVIDERS_EMBED[provider_name]
     block = _model_block(spec, model, base_url)
     block["dim"] = EMBED_DIMS.get(model, 0)  # 0 => caller must prompt
-    return block, "DLIGHTRAG_EMBEDDING__API_KEY"
+    return block, "DLIGHTRAG_MODELS__EMBEDDING__API_KEY"
 
 
 def resolve_rerank_choice(choice: str) -> tuple[dict, str | None]:
@@ -239,7 +239,7 @@ def resolve_rerank_choice(choice: str) -> tuple[dict, str | None]:
     block: dict = {"strategy": strategy}
     if model:
         block["model"] = model
-    return block, ("DLIGHTRAG_RERANK__API_KEY" if needs_key else None)
+    return block, ("DLIGHTRAG_MODELS__RERANK__API_KEY" if needs_key else None)
 
 
 # ---------------------------------------------------------------------------
@@ -277,39 +277,55 @@ def write_config_yaml(
 ) -> None:
     yaml = _yaml()
     data = yaml.load(path)
+    legacy = {
+        "llm",
+        "embedding",
+        "rerank",
+        "parser_sidecars",
+        "model_capacity_overrides",
+    } & set(data)
+    if legacy:
+        raise ValueError(
+            "DlightRAG 1.x config schema detected; replace it with the 2.0 "
+            f"eight-section schema before running setup (legacy: {sorted(legacy)})"
+        )
+    models = data.setdefault("models", {})
+    chat = models.setdefault("chat", {})
     if llm_default is not None:
-        _apply_model_block(data["llm"]["default"], llm_default)
+        _apply_model_block(chat.setdefault("default", {}), llm_default)
     if llm_roles is not None:
         if not llm_roles:
-            data["llm"].pop("roles", None)
+            chat.pop("roles", None)
         else:
-            roles = data["llm"].setdefault("roles", {})
+            roles = chat.setdefault("roles", {})
             roles.clear()
             for role, block in llm_roles.items():
                 roles.setdefault(role, {})
                 _apply_model_block(roles[role], block)
     if model_capacity_overrides is not None:
         if model_capacity_overrides:
-            data["model_capacity_overrides"] = model_capacity_overrides
+            models["capacity_overrides"] = model_capacity_overrides
         else:
-            data.pop("model_capacity_overrides", None)
+            models.pop("capacity_overrides", None)
     if embedding is not None:
-        _apply_model_block(data["embedding"], embedding)
+        _apply_model_block(models.setdefault("embedding", {}), embedding)
     if rerank is not None:
+        rerank_node = models.setdefault("rerank", {})
         for stale_key in ("provider", "model", "base_url", "api_key"):
             if stale_key not in rerank:
-                data["rerank"].pop(stale_key, None)
+                rerank_node.pop(stale_key, None)
         for key, value in rerank.items():
-            data["rerank"][key] = value
+            rerank_node[key] = value
     if parser_kind is not None:
         if parser_kind not in {"mineru", "docling"}:
             raise ValueError(f"Unsupported parser kind: {parser_kind}")
-        parser = data.get("parser")
+        corpus = data.setdefault("corpus", {})
+        parser = corpus.get("parser")
         if isinstance(parser, dict):
             parser.pop("rules", None)
             if not parser:
-                data.pop("parser", None)
-        sidecars = data.setdefault("parser_sidecars", {})
+                corpus.pop("parser", None)
+        sidecars = corpus.setdefault("sidecars", {})
         if parser_kind == "mineru":
             sidecars.pop("docling", None)
             mineru = sidecars.setdefault("mineru", {})
@@ -474,7 +490,7 @@ def configure_mineru_official(token: str) -> None:
     write_config_yaml(CONFIG_PATH, parser_kind="mineru", mineru_api_mode="official")
     upsert_env(
         ENV_PATH,
-        {"DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN": token},
+        {"DLIGHTRAG_CORPUS__SIDECARS__MINERU__API_TOKEN": token},
         remove_keys=("COMPOSE_PROFILES",),
     )
 
@@ -504,7 +520,7 @@ def configure_mineru_local_env(extras: str, *, title_aided: dict | None = None) 
         {},
         remove_keys=(
             "COMPOSE_PROFILES",
-            "DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN",
+            "DLIGHTRAG_CORPUS__SIDECARS__MINERU__API_TOKEN",
         ),
     )
 
@@ -517,11 +533,11 @@ def configure_docling(endpoint: str, *, bundled: bool) -> None:
     )
     values = {"COMPOSE_PROFILES": "docling"} if bundled else {}
     remove_keys = (
-        ("DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN",)
+        ("DLIGHTRAG_CORPUS__SIDECARS__MINERU__API_TOKEN",)
         if bundled
         else (
             "COMPOSE_PROFILES",
-            "DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN",
+            "DLIGHTRAG_CORPUS__SIDECARS__MINERU__API_TOKEN",
         )
     )
     upsert_env(ENV_PATH, values, remove_keys=remove_keys)
@@ -757,7 +773,7 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
     )
     remove_env_keys.extend(stale_role_keys)
     if rerank_env is None:
-        remove_env_keys.append("DLIGHTRAG_RERANK__API_KEY")
+        remove_env_keys.append("DLIGHTRAG_MODELS__RERANK__API_KEY")
     upsert_env(ENV_PATH, env_values, remove_keys=tuple(dict.fromkeys(remove_env_keys)))
     return {
         "llm": {"api_key": key, "base_url": llm_block.get("base_url"), "model": model},
@@ -828,8 +844,8 @@ START_OVER_APPLY_CONFIRM = (
 )
 
 REQUIRED_ENV_KEYS = (
-    "DLIGHTRAG_LLM__DEFAULT__API_KEY",
-    "DLIGHTRAG_EMBEDDING__API_KEY",
+    "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY",
+    "DLIGHTRAG_MODELS__EMBEDDING__API_KEY",
 )
 
 
@@ -940,14 +956,15 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
     """Build a display-ready, masked summary of the current config (never secrets)."""
     data = _yaml().load(config_path)
     env = _read_env(env_path)
-    llm = data.get("llm", {}) or {}
-    default = llm.get("default", {}) or {}
-    roles = llm.get("roles", {}) or {}
-    capacity_overrides = data.get("model_capacity_overrides", []) or []
-    embedding = data.get("embedding", {}) or {}
-    rerank = data.get("rerank", {}) or {}
-    answer = data.get("answer", {}) or {}
-    parser_sidecars = data.get("parser_sidecars", {}) or {}
+    models = data.get("models", {}) or {}
+    chat = models.get("chat", {}) or {}
+    default = chat.get("default", {}) or {}
+    roles = chat.get("roles", {}) or {}
+    capacity_overrides = models.get("capacity_overrides", []) or []
+    embedding = models.get("embedding", {}) or {}
+    rerank = models.get("rerank", {}) or {}
+    answer = (data.get("answer", {}) or {}).get("generation", {}) or {}
+    parser_sidecars = (data.get("corpus", {}) or {}).get("sidecars", {}) or {}
     mineru = parser_sidecars.get("mineru", {}) or {}
     docling = parser_sidecars.get("docling", {}) or {}
     parser = (
@@ -1006,11 +1023,11 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             "model": inspection.get("model", "?"),
         },
         "parser": parser,
-        "workspace": data.get("workspace", "default"),
+        "workspace": (data.get("deployment", {}) or {}).get("workspace", "default"),
         "keys_set": {
-            "LLM": bool(env.get("DLIGHTRAG_LLM__DEFAULT__API_KEY")),
-            "Embedding": bool(env.get("DLIGHTRAG_EMBEDDING__API_KEY")),
-            "Rerank": bool(env.get("DLIGHTRAG_RERANK__API_KEY")),
+            "LLM": bool(env.get("DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY")),
+            "Embedding": bool(env.get("DLIGHTRAG_MODELS__EMBEDDING__API_KEY")),
+            "Rerank": bool(env.get("DLIGHTRAG_MODELS__RERANK__API_KEY")),
         },
     }
 

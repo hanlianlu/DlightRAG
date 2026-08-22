@@ -104,14 +104,14 @@ def bootstrap(
         public_key
         or os.environ.get("LANGFUSE_INIT_PROJECT_PUBLIC_KEY")
         or langfuse.values.get("LANGFUSE_INIT_PROJECT_PUBLIC_KEY")
-        or dlightrag.values.get("DLIGHTRAG_LANGFUSE_PUBLIC_KEY")
+        or dlightrag.values.get("DLIGHTRAG_OBSERVABILITY__LANGFUSE_PUBLIC_KEY")
         or DEFAULT_PUBLIC_KEY
     )
     resolved_secret = (
         secret_key
         or os.environ.get("LANGFUSE_INIT_PROJECT_SECRET_KEY")
         or langfuse.values.get("LANGFUSE_INIT_PROJECT_SECRET_KEY")
-        or dlightrag.values.get("DLIGHTRAG_LANGFUSE_SECRET_KEY")
+        or dlightrag.values.get("DLIGHTRAG_OBSERVABILITY__LANGFUSE_SECRET_KEY")
         or _secret_key()
     )
 
@@ -129,8 +129,12 @@ def bootstrap(
     _set_value(langfuse, "LANGFUSE_INIT_PROJECT_PUBLIC_KEY", resolved_public, overwrite=True)
     _set_value(langfuse, "LANGFUSE_INIT_PROJECT_SECRET_KEY", resolved_secret, overwrite=True)
 
-    _set_value(dlightrag, "DLIGHTRAG_LANGFUSE_PUBLIC_KEY", resolved_public, overwrite=True)
-    _set_value(dlightrag, "DLIGHTRAG_LANGFUSE_SECRET_KEY", resolved_secret, overwrite=True)
+    _set_value(
+        dlightrag, "DLIGHTRAG_OBSERVABILITY__LANGFUSE_PUBLIC_KEY", resolved_public, overwrite=True
+    )
+    _set_value(
+        dlightrag, "DLIGHTRAG_OBSERVABILITY__LANGFUSE_SECRET_KEY", resolved_secret, overwrite=True
+    )
 
     write_env(langfuse)
     write_env(dlightrag)

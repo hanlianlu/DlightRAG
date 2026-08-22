@@ -115,13 +115,13 @@ DlightRAG's own config:
 
 | Eval setting | Auto-resolved from |
 |---|---|
-| ``EVAL_LLM_BINDING_API_KEY`` | OpenAI-compatible ``config.llm.roles.query.api_key`` → ``config.llm.default.api_key`` |
-| ``EVAL_LLM_MODEL`` | OpenAI-compatible ``config.llm.roles.query.model`` → ``config.llm.default.model`` |
-| ``EVAL_LLM_BINDING_HOST`` | OpenAI-compatible ``config.llm.roles.query.base_url`` → ``config.llm.default.base_url`` |
+| ``EVAL_LLM_BINDING_API_KEY`` | OpenAI-compatible ``config.models.chat.roles.query.api_key`` → ``config.models.chat.default.api_key`` |
+| ``EVAL_LLM_MODEL`` | OpenAI-compatible ``config.models.chat.roles.query.model`` → ``config.models.chat.default.model`` |
+| ``EVAL_LLM_BINDING_HOST`` | OpenAI-compatible ``config.models.chat.roles.query.base_url`` → ``config.models.chat.default.base_url`` |
 | ``EVAL_EMBEDDING_BINDING_API_KEY`` | ``EVAL_LLM_BINDING_API_KEY`` → DlightRAG embedding key (if OpenAI-compatible provider) |
 | ``EVAL_EMBEDDING_BINDING_HOST`` | ``EVAL_LLM_BINDING_HOST`` → DlightRAG embedding base_url (if OpenAI-compatible) |
-| ``DLIGHTRAG_API_URL`` | ``config.api_host``:``config.api_port`` |
-| ``DLIGHTRAG_API_TOKEN`` | ``config.api_auth_token`` (simple); explicit external bearer token for jwt |
+| ``DLIGHTRAG_API_URL`` | ``config.interfaces.api.host``:``config.interfaces.api.port`` |
+| ``DLIGHTRAG_API_TOKEN`` | ``config.access.api_token`` (simple); explicit external bearer token for jwt |
 
 JWT deployments must provide an externally issued bearer token via
 ``DLIGHTRAG_API_TOKEN``. Native-SDK-only LLM providers (Anthropic, Gemini) need

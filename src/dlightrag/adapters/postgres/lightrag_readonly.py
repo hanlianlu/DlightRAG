@@ -302,7 +302,9 @@ async def attach_lightrag_storages_read_only(
     """Attach LightRAG PostgreSQL storages to a read-only pool without DDL."""
     active_storages = _active_lightrag_storages(lightrag)
     db_config, signature = _read_only_vector_signature(
-        vector_storage=config.vector_storage if vector_storage is None else vector_storage
+        vector_storage=config.storage.lightrag.vector_storage
+        if vector_storage is None
+        else vector_storage
     )
     db = await _acquire_read_only_db(
         db_config=db_config,
@@ -313,7 +315,7 @@ async def attach_lightrag_storages_read_only(
         _bind_storage_db_workspace(
             storages=active_storages,
             db=db,
-            fallback_workspace=config.workspace,
+            fallback_workspace=config.deployment.workspace,
         )
         await verify_lightrag_read_only_schema(db=db, storages=active_storages)
         lightrag._owning_loop = asyncio.get_running_loop()

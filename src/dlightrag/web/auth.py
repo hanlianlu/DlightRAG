@@ -234,11 +234,11 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         cfg = self._config_getter()
-        if cfg.auth_mode == "none":
+        if cfg.access.auth_mode == "none":
             request.state.user_context = UserContext(user_id="anonymous", auth_mode="none")
             return await call_next(request)
 
-        if cfg.web_identity.edge is not None:
+        if cfg.access.web_identity.edge is not None:
             return await self._dispatch_edge_identity(cfg, request, call_next)
 
         source: str | None = None
@@ -274,7 +274,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
     async def _dispatch_edge_identity(self, cfg, request: Request, call_next) -> Response:
         """Resolve the Web caller from the configured edge credential only."""
         try:
-            provider = edge_identity_provider(cfg.web_identity)
+            provider = edge_identity_provider(cfg.access.web_identity)
             identity = provider.authenticate(request)
         except EdgeIdentityError as exc:
             status = 500 if exc.kind == "misconfigured" else 401
@@ -304,7 +304,7 @@ async def login_page(request: Request, next: str = "/web/"):
     """Serve the static paste-token form when global auth is enabled."""
     cfg = request.app.state.application.config
     target = _safe_next_path(next)
-    if cfg.auth_mode == "none" or cfg.web_identity.edge is not None:
+    if cfg.access.auth_mode == "none" or cfg.access.web_identity.edge is not None:
         # The edge owns login; the paste form is the no-edge development hatch.
         return RedirectResponse(target, status_code=303)
     return app_html_response("login.html")
@@ -319,7 +319,7 @@ async def login(
     """Validate a bearer token and store it in an HttpOnly web cookie."""
     cfg = request.app.state.application.config
     target = _safe_next_path(next)
-    if cfg.auth_mode == "none" or cfg.web_identity.edge is not None:
+    if cfg.access.auth_mode == "none" or cfg.access.web_identity.edge is not None:
         return RedirectResponse(target, status_code=303)
     try:
         _authenticate_bearer(token, cfg)

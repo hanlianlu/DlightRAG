@@ -23,7 +23,7 @@ from dlightrag.application import (
 )
 from dlightrag.config import DlightragConfig
 from dlightrag.health import ApplicationHealth
-from dlightrag.model_settings import embedding_settings, model_settings_for_role
+from dlightrag.model_settings import model_settings_for_role
 from dlightrag.rag.ports import CorpusSchemaError
 from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.runtime import RunCoordinator, RunSchemaError
@@ -33,6 +33,7 @@ from dlightrag.services.errors import StorageSchemaError
 from dlightrag.services.retrieval import RetrievalService
 from dlightrag.web.conversation_models import WebConversationSchemaError
 from dlightrag.web.conversations import WebConversationService
+from tests.config_helpers import mutate_config
 
 _CLOSE_ORDER = [
     "close:corpora",
@@ -315,7 +316,7 @@ def test_memory_dense_leg_reuses_root_embedding_settings(
         is expected
     )
     assert captured == {
-        "settings": embedding_settings(test_config),
+        "settings": test_config.models.embedding,
         "scheduler": scheduler,
         "telemetry": telemetry,
     }
@@ -339,7 +340,7 @@ async def test_application_exposes_only_typed_services_and_closes_in_dependency_
         "corpora:initialize",
         "retrieval:planner_for",
         "capabilities:probe_all",
-        f"pool:acquire:{normalize_workspace(test_config.workspace)}",
+        f"pool:acquire:{normalize_workspace(test_config.deployment.workspace)}",
         "corpora:start_recovery",
         "listener:start",
         "coordinator:start",
@@ -360,7 +361,7 @@ async def test_application_exposes_only_typed_services_and_closes_in_dependency_
 async def test_a_reader_validates_the_durable_schema_it_does_not_own(
     test_config: DlightragConfig,
 ) -> None:
-    test_config.service_role = "reader"
+    mutate_config(test_config, "deployment.service_role", "reader")
     parts = _Parts()
 
     await parts.application(test_config).astart()

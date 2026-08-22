@@ -69,8 +69,11 @@ def test_lit_app_projects_one_unified_attachment_policy() -> None:
 def test_bootstrap_advertises_exact_backend_attachment_limits() -> None:
     bootstrap_source = (ROOT / "src/dlightrag/web/routes/bootstrap.py").read_text(encoding="utf-8")
 
-    assert "count_limit=application.config.answer.max_attachments" in bootstrap_source
-    assert "attachment_limit = application.config.answer.max_attachment_bytes" in bootstrap_source
+    assert "count_limit=application.config.answer.generation.max_attachments" in bootstrap_source
+    assert (
+        "attachment_limit = application.config.answer.generation.max_attachment_bytes"
+        in bootstrap_source
+    )
     assert "image_max_bytes=attachment_limit" in bootstrap_source
     assert "document_max_bytes=attachment_limit" in bootstrap_source
 

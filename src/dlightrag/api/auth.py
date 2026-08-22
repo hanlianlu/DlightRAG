@@ -32,7 +32,7 @@ def authentication_http_error(error: AuthenticationError) -> HTTPException:
 async def get_current_user(request: Request) -> UserContext:
     """Extract one bearer token and authenticate it through Access."""
     cfg = request.app.state.application.config
-    if cfg.auth_mode == "none":
+    if cfg.access.auth_mode == "none":
         return UserContext(user_id="anonymous", auth_mode="none")
 
     raw_token = _extract_bearer_token(request)

@@ -14,6 +14,7 @@ from dlightrag.rag.source_download import (
     SourceDownloadUnavailableError,
 )
 from dlightrag.rag.sourcing.aws_s3 import S3CredentialsUnavailable
+from tests.config_helpers import mutate_config
 
 
 def _service(
@@ -120,7 +121,9 @@ async def test_signed_https_locator_is_invalid(test_config) -> None:
 
 
 async def test_azure_locator_returns_signed_redirect(test_config) -> None:
-    test_config.blob_connection_string = "AccountName=acct;AccountKey=dGVzdA=="
+    mutate_config(
+        test_config, "corpus.sources.blob_connection_string", "AccountName=acct;AccountKey=dGVzdA=="
+    )
     metadata_index = AsyncMock()
     metadata_index.get.return_value = {"download_locator": "azure://container/report.pdf"}
 
@@ -134,9 +137,9 @@ async def test_azure_locator_returns_signed_redirect(test_config) -> None:
         url="https://acct.blob.core.windows.net/container/report.pdf?sig=x"
     )
     signer.assert_called_once_with(
-        connection_string=test_config.blob_connection_string,
+        connection_string=test_config.corpus.sources.blob_connection_string,
         raw_path="azure://container/report.pdf",
-        expiry_seconds=test_config.azure_sas_expiry,
+        expiry_seconds=test_config.corpus.sources.azure_sas_expiry,
     )
 
 
@@ -154,8 +157,8 @@ async def test_s3_locator_returns_signed_redirect(test_config) -> None:
     assert target == RedirectDownloadTarget(url="https://bucket.s3.example/report.pdf?sig=x")
     signer.assert_awaited_once_with(
         raw_path="s3://bucket/report.pdf",
-        expiry_seconds=test_config.s3_presign_expiry,
-        region=test_config.s3_region,
+        expiry_seconds=test_config.corpus.sources.s3_presign_expiry,
+        region=test_config.corpus.sources.s3_region,
     )
 
 

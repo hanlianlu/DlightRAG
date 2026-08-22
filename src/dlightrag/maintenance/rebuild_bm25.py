@@ -57,7 +57,7 @@ async def run_rebuild_bm25(
         raise SystemExit("--batch-size must be >= 1")
 
     resolved_config = config or get_config()
-    if not resolved_config.bm25_enabled:
+    if not resolved_config.corpus.retrieval.bm25_enabled:
         raise SystemExit("Set bm25_enabled=true before rebuilding workspace BM25")
     if resolved_config.is_reader:
         raise SystemExit("BM25 rebuild requires the writer service role")
@@ -82,7 +82,9 @@ def main() -> None:
 
     config = load_config(args.env_file) if args.env_file else get_config()
     set_config(config)
-    logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO))
+    logging.basicConfig(
+        level=getattr(logging, config.observability.log_level.upper(), logging.INFO)
+    )
     stats = asyncio.run(
         run_rebuild_bm25(
             config=config,

@@ -32,7 +32,7 @@ prefer full-precision storage and have rebuilt indexes accordingly.
 
 ## External and Managed Endpoints
 
-Set `DLIGHTRAG_POSTGRES_*` in `.env` (see `.env.example`). `config.yaml` is
+Set `DLIGHTRAG_STORAGE__POSTGRES__*` in `.env` (see `.env.example`). `config.yaml` is
 tracked and carries no endpoint; under Compose `.env` outranks it anyway.
 
 Three capabilities are gated independently, so missing one does not force the
@@ -41,8 +41,8 @@ others down:
 | Requirement | If unavailable |
 | --- | --- |
 | PostgreSQL 18 | Hard stop, no fallback |
-| pgvector ≥ 0.7 | `pg_vector_index_type: HNSW` |
-| `pg_textsearch` | `bm25_enabled: false` (vector-only) |
+| pgvector ≥ 0.7 | `storage.lightrag.vector_index_type: HNSW` |
+| `pg_textsearch` | `corpus.retrieval.bm25_enabled: false` (vector-only) |
 
 `pg_textsearch` refuses to install unless the server preloads it, which managed
 providers rarely expose — that, not the extension catalog, usually decides
@@ -62,31 +62,35 @@ DlightRAG splits PostgreSQL tuning into two layers:
   checked-in compose stack sets `shm_size: 8gb` so HNSW index builds and
   rebuilds have enough `/dev/shm` headroom. This should be kept in proportion
   to corpus size and concurrent index maintenance.
-- **Session-level settings** belong to DlightRAG config. `pg_hnsw_ef_search`
-  becomes `hnsw.ef_search`, and `postgres_session_settings` can add additional
+- **Session-level settings** belong to DlightRAG config.
+  `storage.lightrag.hnsw_ef_search` becomes `hnsw.ef_search`, and
+  `storage.postgres.session_settings` can add additional
   per-connection GUCs. DlightRAG applies the same session settings to both
   LightRAG's PostgreSQL pool and the DlightRAG domain-store `pg_pool`.
 
 Example:
 
 ```yaml
-pg_hnsw_ef_search: 256
-postgres_session_settings:
-  application_name: dlightrag
-  statement_timeout: "60000"
-postgres_statement_cache_size: 256
-postgres_lightrag_pool_max_size: 16
-postgres_pool_min_size: 2
-postgres_pool_max_size: 16
-postgres_connection_retries: 10
-postgres_connection_retry_backoff: 3.0
-postgres_connection_retry_backoff_max: 30.0
-postgres_pool_close_timeout: 5.0
+storage:
+  lightrag:
+    hnsw_ef_search: 256
+  postgres:
+    session_settings:
+      application_name: dlightrag
+      statement_timeout: "60000"
+    statement_cache_size: 256
+    lightrag_pool_max_size: 16
+    pool_min_size: 2
+    pool_max_size: 16
+    connection_retries: 10
+    connection_retry_backoff: 3.0
+    connection_retry_backoff_max: 30.0
+    pool_close_timeout: 5.0
 ```
 
 SSL belongs with the endpoint in `.env`
-(`DLIGHTRAG_POSTGRES_SSL_MODE`, `_SSL_ROOT_CERT`, `_SSL_CERT`, `_SSL_KEY`,
-`_SSL_CRL`). It is bridged to LightRAG's `POSTGRES_SSL_*` environment
+(`DLIGHTRAG_STORAGE__POSTGRES__SSL_MODE`, `__SSL_ROOT_CERT`, `__SSL_CERT`,
+`__SSL_KEY`, `__SSL_CRL`). It is bridged to LightRAG's `POSTGRES_SSL_*` environment
 contract once, when the root PostgreSQL corpus adapter is constructed.
 DlightRAG's domain-store pool, maintenance adapter, and readiness adapter use the
 same `pg_connection_kwargs()` path, so managed PostgreSQL deployments do not
@@ -95,9 +99,9 @@ not mutate LightRAG's process environment.
 
 Connection budgets are split deliberately:
 
-- `postgres_lightrag_pool_max_size` controls LightRAG's PostgreSQL backend
-  pool and is bridged to `POSTGRES_MAX_CONNECTIONS`.
-- `postgres_pool_min_size` / `postgres_pool_max_size` control DlightRAG-owned
+- `storage.postgres.lightrag_pool_max_size` controls LightRAG's PostgreSQL
+  backend pool and is bridged to `POSTGRES_MAX_CONNECTIONS`.
+- `storage.postgres.pool_min_size` / `storage.postgres.pool_max_size` control DlightRAG-owned
   domain stores such as metadata, workspaces, Web conversations, and BM25.
 - Docker Compose defaults `max_connections` to `80` for the local profile.
   Production deployments should size the server limit from the number of
@@ -113,20 +117,20 @@ Concurrency knobs affect different bottlenecks:
 
 | Setting | Controls | First bottleneck |
 |---|---|---|
-| `postgres_lightrag_pool_max_size` | LightRAG PostgreSQL connections | PostgreSQL `max_connections` |
-| `postgres_pool_max_size` | DlightRAG metadata/BM25/job connections | PostgreSQL `max_connections` |
-| `max_parallel_insert` | staged insert/vector/KG write workers | PostgreSQL writes and vector indexes |
-| `max_parallel_parse_native` | native parser workers | CPU and file I/O |
-| `max_parallel_parse_mineru` | External parser workers for the MinerU-compatible route | Parser service, CPU/GPU, OCR latency |
-| `max_parallel_parse_docling` | External parser workers for the Docling route | Parser service, CPU/GPU, OCR latency |
-| `max_parallel_analyze` | visual/multimodal analysis workers | VLM endpoint limits |
-| `max_async` | Process-wide AI provider request concurrency | model endpoint throughput |
-| `runtime.answer_worker_concurrency` | Durable Answer runs executed per process | run throughput, CPU, and memory |
-| `rag_pipeline_max_async` | LightRAG pipeline LLM request concurrency | LLM endpoint limits |
-| `embedding_func_max_async` | embedding request concurrency | embedding endpoint and vector writes |
+| `storage.postgres.lightrag_pool_max_size` | LightRAG PostgreSQL connections | PostgreSQL `max_connections` |
+| `storage.postgres.pool_max_size` | DlightRAG metadata/BM25/job connections | PostgreSQL `max_connections` |
+| `corpus.ingestion.pipeline.max_parallel_insert` | staged insert/vector/KG write workers | PostgreSQL writes and vector indexes |
+| `corpus.ingestion.pipeline.max_parallel_parse_native` | native parser workers | CPU and file I/O |
+| `corpus.ingestion.pipeline.max_parallel_parse_mineru` | External parser workers for the MinerU-compatible route | Parser service, CPU/GPU, OCR latency |
+| `corpus.ingestion.pipeline.max_parallel_parse_docling` | External parser workers for the Docling route | Parser service, CPU/GPU, OCR latency |
+| `corpus.ingestion.pipeline.max_parallel_analyze` | visual/multimodal analysis workers | VLM endpoint limits |
+| `models.max_concurrency` | Process-wide AI provider request concurrency | model endpoint throughput |
+| `answer.runtime.answer_worker_concurrency` | Durable Answer runs executed per process | run throughput, CPU, and memory |
+| `corpus.ingestion.pipeline.max_concurrency` | LightRAG pipeline LLM request concurrency | LLM endpoint limits |
+| `models.embedding.max_concurrency` | embedding request concurrency | embedding endpoint and vector writes |
 
 For a single DlightRAG process, reserve roughly
-`postgres_lightrag_pool_max_size + postgres_pool_max_size` PostgreSQL
+`storage.postgres.lightrag_pool_max_size + storage.postgres.pool_max_size` PostgreSQL
 connections. Multiply that by API worker count before comparing it with
 PostgreSQL `max_connections`, leaving room for migrations, admin sessions,
 health checks, and managed-service maintenance.
@@ -254,7 +258,7 @@ connections or exception classes to RAG, reset, Web, API, or MCP code.
 
 ## Service roles and shared artifacts
 
-`service_role: reader` (or `DLIGHTRAG_SERVICE_ROLE=reader`) means
+`deployment.service_role: reader` (or `DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE=reader`) means
 **corpus-read-only, not process-read-only**. A reader may create and execute
 answer runs and may write DlightRAG operational state: runs, events, artifacts,
 and Web conversations. Web is enabled on readers.

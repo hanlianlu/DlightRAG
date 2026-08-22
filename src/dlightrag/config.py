@@ -17,8 +17,9 @@ import os
 import re
 import ssl
 import warnings
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal, Self
+from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlencode, urlsplit
 
 from pydantic import (
@@ -26,13 +27,25 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    field_serializer,
     field_validator,
     model_validator,
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from dlightrag.ai.contracts import AsymmetricMode, ChatProvider, InputModality
 from dlightrag.ai.fingerprints import normalized_endpoint_fingerprint
+from dlightrag.ai.settings import (
+    FrozenSettings,
+    ModelsSettings,
+    freeze_settings_value,
+    thaw_settings_value,
+)
+from dlightrag.rag.settings import (
+    CorpusSettings,
+    DoclingSidecarSettings,
+    MinerUSidecarSettings,
+    VLMSidecarSettings,
+)
 
 type ServiceRole = Literal["writer", "reader"]
 
@@ -47,6 +60,22 @@ _LOCAL_MCP_ALLOWED_ORIGINS = [
     "http://[::1]:*",
 ]
 _LOCAL_API_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_AUXILIARY_ENV_NAMES = {
+    "DLIGHTRAG_API_TOKEN",
+    "DLIGHTRAG_API_URL",
+    "DLIGHTRAG_CLIENT_TIMEOUT",
+    "DLIGHTRAG_OPENAI_API_KEY",
+    # Compose-only PostgreSQL container tuning; these are interpolated by
+    # docker-compose and intentionally are not application config fields.
+    "DLIGHTRAG_POSTGRES_EFFECTIVE_CACHE_SIZE",
+    "DLIGHTRAG_POSTGRES_MAINTENANCE_WORK_MEM",
+    "DLIGHTRAG_POSTGRES_MAX_CONNECTIONS",
+    "DLIGHTRAG_POSTGRES_SHARED_BUFFERS",
+    "DLIGHTRAG_POSTGRES_SHM_SIZE",
+    "DLIGHTRAG_POSTGRES_WORK_MEM",
+    "DLIGHTRAG_RUN_E2E_PG18",
+}
+_AUXILIARY_ENV_PREFIXES = ("DLIGHTRAG_E2E_",)
 PostgresSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 
 
@@ -101,345 +130,10 @@ def _find_yaml_config() -> Path | None:
     return None
 
 
-def _canonical_provider_name(value: Any) -> Any:
-    """Fold provider names to canonical lowercase (e.g. ``OpenAI`` -> ``openai``)."""
-    return value.strip().lower() if isinstance(value, str) else value
-
-
-class ModelConfig(BaseModel):
-    """Reusable model configuration block."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    provider: ChatProvider = "openai"
-    model: str
-    api_key: str | None = None
-    base_url: str | None = None
-    structured_output: Literal["auto", "json_schema", "json_object"] = "auto"
-    temperature: float | None = Field(default=None, ge=0)
-    # LightRAG's DEFAULT_LLM_TIMEOUT; the default role's value becomes its
-    # default_llm_timeout, so a lower ceiling would cut extraction calls short.
-    timeout: float = Field(default=240.0, gt=0)
-    max_retries: int = Field(default=3, ge=0)
-    model_kwargs: dict[str, Any] = Field(default_factory=dict)
-    agentic_model_kwargs: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("provider", mode="before")
-    @classmethod
-    def _fold_provider(cls, value: Any) -> Any:
-        return _canonical_provider_name(value)
-
-    @model_validator(mode="after")
-    def validate_structured_output_mode(self) -> Self:
-        if self.provider == "anthropic" and self.structured_output == "json_object":
-            raise ValueError("Anthropic native structured output requires json_schema")
-        return self
-
-
-class ModelCapacityOverrideConfig(BaseModel):
-    """Explicit capacity and capability facts for one model endpoint."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    provider: ChatProvider = "openai"
-    model: str
-    base_url: str | None = None
-    context_window_tokens: int = Field(ge=1)
-    max_input_tokens: int | None = Field(default=None, ge=1)
-    max_output_tokens: int | None = Field(default=None, ge=1)
-    supports_images: bool = False
-    supports_tools: bool = False
-    supports_reasoning: bool = False
-
-    @field_validator("provider", mode="before")
-    @classmethod
-    def _fold_provider(cls, value: Any) -> Any:
-        return _canonical_provider_name(value)
-
-    @field_validator("model")
-    @classmethod
-    def _validate_model(cls, value: str) -> str:
-        model = value.strip()
-        if not model:
-            raise ValueError("model must be non-empty")
-        return model
-
-    @model_validator(mode="after")
-    def _validate_input_limit(self) -> Self:
-        if self.max_input_tokens is not None and self.max_input_tokens > self.context_window_tokens:
-            raise ValueError("max_input_tokens cannot exceed context_window_tokens")
-        return self
-
-
-class EmbeddingConfig(BaseModel):
-    """Embedding-specific configuration."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    provider: Literal[
-        "voyage",
-        "gemini",
-        "jina",
-        "openai_compatible",
-        "ollama",
-    ] = "voyage"
-    model: str = "voyage-multimodal-3.5"
-    api_key: str | None = None
-    base_url: str | None = "https://api.voyageai.com/v1"
-    dim: int = Field(default=1024, ge=1)
-    max_token_size: int = Field(default=8192, ge=1)
-    input_modality: InputModality = "auto"
-    asymmetric: AsymmetricMode = "auto"
-    startup_probe: bool = True
-
-
-class LLMRolesConfig(BaseModel):
-    """Role-specific LLM overrides aligned with LightRAG role names."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    extract: ModelConfig | None = None
-    keyword: ModelConfig | None = None
-    query: ModelConfig | None = None
-    vlm: ModelConfig | None = None
-
-
-class LLMConfig(BaseModel):
-    """Default model plus LightRAG-compatible role overrides."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    default: ModelConfig = Field(
-        default_factory=lambda: ModelConfig(
-            provider="openai",
-            model="z-ai/glm-5.2",
-            base_url="https://openrouter.ai/api/v1",
-            structured_output="json_schema",
-            temperature=0.4,
-        )
-    )
-    roles: LLMRolesConfig = Field(default_factory=LLMRolesConfig)
-
-
-class ParserConfig(BaseModel):
-    """Optional LightRAG chunker snapshot overrides."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    chunk_options: dict[str, Any] = Field(default_factory=dict)
-
-
-class ExtractionConfig(BaseModel):
-    """Entity/relation extraction stability controls."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    use_json: bool = True
-    language: str = "English"
-    entity_type_prompt_file: str | None = Field(
-        default=None,
-        description=(
-            "LightRAG entity-type prompt profile YAML file name. Loaded from "
-            "PROMPT_DIR/entity_type; must be a .yml/.yaml file name, not a path."
-        ),
-    )
-
-    @field_validator("entity_type_prompt_file")
-    @classmethod
-    def _validate_entity_type_prompt_file(cls, value: str | None) -> str | None:
-        """Mirror LightRAG's ENTITY_TYPE_PROMPT_FILE contract."""
-        if value is None:
-            return None
-        file_name = value.strip()
-        if not file_name:
-            return None
-        candidate = Path(file_name)
-        if (
-            "\\" in file_name
-            or candidate.is_absolute()
-            or candidate.name != file_name
-            or ".." in candidate.parts
-        ):
-            raise ValueError(
-                "entity_type_prompt_file must be a file name under PROMPT_DIR/entity_type"
-            )
-        if candidate.suffix.lower() not in {".yml", ".yaml"}:
-            raise ValueError("entity_type_prompt_file must use a .yml or .yaml extension")
-        return file_name
-
-
-class VLMSidecarConfig(BaseModel):
-    """LightRAG visual sidecar analysis settings."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
-    max_image_bytes: int = Field(default=5_242_880, ge=1)
-    # DlightRAG raises the minimum-image-side gate above LightRAG's built-in
-    # DEFAULT_MM_IMAGE_MIN_PIXEL (64) to 80px: sub-80px crops are treated as
-    # decorative (icons, separators, page ornaments) and skipped from VLM
-    # analysis, so they never become hallucinated figure chunks. Emitted as
-    # VLM_MIN_IMAGE_PIXEL. Set 64 explicitly to use LightRAG's native threshold.
-    min_image_pixel: int = Field(default=80, ge=1)
-    surrounding_leading_max_tokens: int | None = Field(default=256, ge=0)
-    surrounding_trailing_max_tokens: int | None = Field(default=256, ge=0)
-
-    # Pydantic field → LightRAG env var. Single source of truth;
-    # _lightrag_sidecar_env_map() and _LIGHTRAG_SIDECAR_ENV_KEYS derive from this.
-    _ENV_MAP: ClassVar[dict[str, str]] = {
-        "enabled": "VLM_PROCESS_ENABLE",
-        "max_image_bytes": "VLM_MAX_IMAGE_BYTES",
-        "min_image_pixel": "VLM_MIN_IMAGE_PIXEL",
-        "surrounding_leading_max_tokens": "SURROUNDING_LEADING_MAX_TOKENS",
-        "surrounding_trailing_max_tokens": "SURROUNDING_TRAILING_MAX_TOKENS",
-    }
-
-
-class MinerUSidecarConfig(BaseModel):
-    """LightRAG MinerU parser sidecar settings.
-
-    Only fields that are *necessary to route or override* are declared here.
-    Everything else — parse method, table/formula, OCR, page ranges, and
-    MinerU-side image analysis — is left to LightRAG's built-in defaults.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    api_mode: Literal["local", "official"] = "local"
-    api_token: str | None = None
-    official_endpoint: str = "https://mineru.net"
-    local_endpoint: str = "http://127.0.0.1:8210"
-    language: MinerULanguage = "ch"
-    # Pin MinerU's canonical default instead of inheriting LightRAG's legacy alias.
-    # Set ``pipeline`` explicitly for MinerU's non-VLM OCR path.
-    backend: MinerULocalBackend = "hybrid-engine"
-
-    # Both parser clients use a five-second interval and a two-hour wait budget.
-    # The sidecar's HTTP keep-alive must exceed this interval, or an idle pooled
-    # connection is closed exactly as the next poll reuses it. See
-    # scripts/mineru/sitecustomize.py.
-    poll_interval_seconds: int = Field(default=5, ge=1)
-    max_polls: int = Field(default=1440, ge=1)
-
-    # Pydantic field → LightRAG/MinerU env var.
-    _ENV_MAP: ClassVar[dict[str, str]] = {
-        "api_mode": "MINERU_API_MODE",
-        "api_token": "MINERU_API_TOKEN",
-        "official_endpoint": "MINERU_OFFICIAL_ENDPOINT",
-        "local_endpoint": "MINERU_LOCAL_ENDPOINT",
-        "language": "MINERU_LANGUAGE",
-        "backend": "MINERU_LOCAL_BACKEND",
-        "poll_interval_seconds": "MINERU_POLL_INTERVAL_SECONDS",
-        "max_polls": "MINERU_MAX_POLLS",
-    }
-
-
-class DoclingSidecarConfig(BaseModel):
-    """LightRAG Docling parser endpoint and operational recovery controls."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    endpoint: str = "http://127.0.0.1:5001"
-    # On to match MinerU's enable_formula, so the parser choice does not decide
-    # whether a corpus keeps its mathematics. Apple Silicon also needs a preset.
-    do_formula_enrichment: bool = True
-    # Full-page OCR replacing the PDF text layer. On (docling-serve defaults it
-    # off) because a corpus of badly encoded PDFs silently ingests mojibake
-    # otherwise; see docs/configuration.md.
-    force_ocr: bool = True
-    # Unset sends no preset, leaving LightRAG's request untouched. Setting it also
-    # requires the matching docling-serve setting; see docs/configuration.md.
-    code_formula_preset: str | None = None
-    poll_interval_seconds: int = Field(default=5, ge=1)
-    max_polls: int = Field(default=1440, ge=1)
-
-    _ENV_MAP: ClassVar[dict[str, str]] = {
-        "endpoint": "DOCLING_ENDPOINT",
-        "do_formula_enrichment": "DOCLING_DO_FORMULA_ENRICHMENT",
-        "force_ocr": "DOCLING_FORCE_OCR",
-        "poll_interval_seconds": "DOCLING_POLL_INTERVAL_SECONDS",
-        "max_polls": "DOCLING_MAX_POLLS",
-    }
-
-
-class ParserSidecarsConfig(BaseModel):
-    """Typed parser config; configured sidecar presence selects the engine."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    vlm: VLMSidecarConfig = Field(default_factory=VLMSidecarConfig)
-    mineru: MinerUSidecarConfig | None = None
-    docling: DoclingSidecarConfig | None = None
-
-    @model_validator(mode="after")
-    def _default_to_mineru(self) -> Self:
-        if self.mineru is None and self.docling is None:
-            self.mineru = MinerUSidecarConfig()
-        return self
-
-    @property
-    def active_parser(self) -> Literal["mineru", "docling"]:
-        return "mineru" if self.mineru is not None else "docling"
-
-
-# Populate the sidecar env keys frozenset from the model _ENV_MAP declarations.
-_SIDECAR_ENV_KEYS: set[str] = set()
-for _cls in (VLMSidecarConfig, MinerUSidecarConfig, DoclingSidecarConfig):
-    _SIDECAR_ENV_KEYS.update(_cls._ENV_MAP.values())
-_LIGHTRAG_SIDECAR_ENV_KEYS = frozenset(_SIDECAR_ENV_KEYS)
-
-
-class RerankConfig(BaseModel):
-    """Reranking configuration."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
-    strategy: Literal[
-        "chat_llm_reranker",
-        "jina_reranker",
-        "aliyun_reranker",
-        "local_reranker",
-        "voyage_reranker",
-        "cohere_reranker",
-        "azure_cohere",
-    ] = "chat_llm_reranker"
-    provider: ChatProvider | None = None
-    model: str | None = None
-    api_key: str | None = None
-    base_url: str | None = None
-    input_modality: InputModality = Field(
-        default="auto",
-        description=(
-            "Reranker input selection. For chat_llm_reranker 'auto' follows the scoring "
-            "model's startup vision probe; for HTTP rerankers 'auto' resolves to 'text' "
-            "(no reliable probe). 'text' always uses chunk content; 'multimodal' sends "
-            "image_data and is rejected at startup by a text-only rerank strategy."
-        ),
-    )
-    score_threshold: float | None = Field(
-        default=None,
-        ge=0,
-        description=(
-            "Minimum rerank score to keep. When omitted, rerankers keep all scored "
-            "candidates before top_k."
-        ),
-    )
-    max_concurrency: int = Field(default=8, ge=1)
-    batch_size: int = Field(default=8, ge=1)
-    temperature: float | None = Field(default=None, ge=0)
-    model_kwargs: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("provider", mode="before")
-    @classmethod
-    def _fold_provider(cls, value: Any) -> Any:
-        return _canonical_provider_name(value)
-
-
 class CitationHighlightConfig(BaseModel):
     """Optional semantic highlighting for cited source snippets."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     enabled: bool = True
     timeout: float = Field(default=10.0, gt=0)
@@ -452,7 +146,7 @@ class CitationHighlightConfig(BaseModel):
 class CitationsConfig(BaseModel):
     """Citation validation and UI enrichment configuration."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     highlights: CitationHighlightConfig = Field(default_factory=CitationHighlightConfig)
 
@@ -460,7 +154,7 @@ class CitationsConfig(BaseModel):
 class AnswerConfig(BaseModel):
     """Final answer generation controls."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     max_attachments: int = Field(
         default=6,
@@ -527,7 +221,7 @@ class AnswerConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Durable Answer worker admission owned by the Runtime layer."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     answer_worker_concurrency: int = Field(default=16, ge=1)
     answer_run_retention_days: int = Field(
@@ -546,7 +240,7 @@ class RuntimeConfig(BaseModel):
 class AgentExecutionConfig(BaseModel):
     """Optional trusted local execution for path tools and spill."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     execution_environment: Literal["disabled", "local_trusted"] = Field(default="disabled")
     workspace_root: str | None = Field(
@@ -562,37 +256,28 @@ class AgentExecutionConfig(BaseModel):
 class WebConversationsConfig(BaseModel):
     """Browser conversation surface; retention follows RuntimeConfig."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class WebSearchConfig(BaseModel):
     """Web search credentials. A key present is the capability; there is no switch."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     api_key: str | None = Field(
         default=None,
         description=(
             "Exa API key. Web search is offered to the browser channel when this is "
             "set and skipped entirely when it is not. Keep it in .env as "
-            "DLIGHTRAG_WEB_SEARCH__API_KEY."
+            "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY."
         ),
     )
-
-
-class VisualAssetsConfig(BaseModel):
-    """Browser-facing visual asset serving controls."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    thumb_max_px: int = Field(default=300, ge=1)
-    thumb_cache_size: int = Field(default=256, ge=1)
 
 
 class AccessControlRuleConfig(BaseModel):
     """Map one verified JWT claim value to DlightRAG actions."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     claim: str
     value: str
@@ -603,50 +288,10 @@ class AccessControlRuleConfig(BaseModel):
 class AccessControlConfig(BaseModel):
     """DlightRAG resource authorization settings."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     mode: Literal["allow_all", "jwt_claims"] = "allow_all"
     rules: list[AccessControlRuleConfig] = Field(default_factory=list)
-
-
-class BM25ProfileConfig(BaseModel):
-    """Query-language-routed pg_textsearch BM25 profile."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    text_config: str
-    languages: list[str] = Field(default_factory=list)
-    fallback: bool = False
-
-    @field_validator("name")
-    @classmethod
-    def _validate_pg_identifier(cls, value: str) -> str:
-        text = value.strip()
-        if not _PG_IDENTIFIER_RE.fullmatch(text):
-            raise ValueError("BM25 profile name must be a safe PostgreSQL identifier")
-        return text
-
-    @field_validator("text_config")
-    @classmethod
-    def _validate_pg_text_config(cls, value: str) -> str:
-        text = value.strip()
-        if not _PG_QUALIFIED_IDENTIFIER_RE.fullmatch(text):
-            raise ValueError("BM25 text_config must be a safe PostgreSQL identifier")
-        return text
-
-    @field_validator("languages")
-    @classmethod
-    def _normalize_languages(cls, value: list[str]) -> list[str]:
-        return [language.strip().lower() for language in value if language.strip()]
-
-    @model_validator(mode="after")
-    def _validate_routing(self):
-        if self.fallback and self.languages:
-            raise ValueError("BM25 fallback profiles must not declare languages")
-        if not self.fallback and len(self.languages) != 1:
-            raise ValueError("BM25 language profiles must declare exactly one language")
-        return self
 
 
 def _redact_dict(data: dict[str, Any], patterns: tuple[str, ...]) -> dict[str, Any]:
@@ -742,538 +387,105 @@ class WebIdentitySettings(BaseModel):
         return self
 
 
-class DlightragConfig(BaseSettings):
-    """DlightRAG configuration.
+class DeploymentSettings(FrozenSettings):
+    service_role: ServiceRole = "writer"
+    workspace: str = "default"
+    working_dir: str = "./dlightrag_storage"
 
-    Configuration sources (highest → lowest precedence):
-        1. Constructor arguments (when used as library)
-        2. Environment variables (DLIGHTRAG_ prefix)
-        3. .env file (secrets + deployment)
-        4. config.yaml (structured app settings)
-        5. Default values
-
-    Supports both pure-.env and hybrid config.yaml + .env setups.
-    """
-
-    _SECRET_PATTERNS: tuple[str, ...] = (
-        "api_key",
-        "api_secret",
-        "secret",
-        "verification_key",
-        "password",
-        "connection_string",
-        "account_key",
-        "sas_token",
-    )
-
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        """Serialize config with sensitive fields redacted."""
-        data = super().model_dump(**kwargs)
-        return _redact_dict(data, self._SECRET_PATTERNS)
-
-    def model_dump_json(self, **kwargs: Any) -> str:
-        """Serialize config to JSON with sensitive fields redacted."""
-        # Extract json.dumps-specific kwargs that model_dump doesn't accept
-        indent = kwargs.pop("indent", None)
-        data = self.model_dump(**kwargs)
-        dump_kwargs: dict[str, Any] = {"default": str}
-        if indent is not None:
-            dump_kwargs["indent"] = indent
-        return json.dumps(data, **dump_kwargs)
-
-    def __repr__(self) -> str:
-        """Redact secrets in repr for safe logging."""
-        data = self.model_dump()
-        inner = ", ".join(f"{k}={v!r}" for k, v in data.items())
-        return f"{self.__class__.__name__}({inner})"
-
-    model_config = SettingsConfigDict(
-        env_prefix="DLIGHTRAG_",
-        env_nested_delimiter="__",
-        env_file=_find_env_file(),
-        env_file_encoding="utf-8",
-        dotenv_filtering="match_prefix",
-        case_sensitive=False,
-        # Reject any unknown DLIGHTRAG_* env var, .env entry, or config.yaml key.
-        # Catches typos and removed flat-schema fields without hardcoding a finite list.
-        extra="forbid",
-    )
-
+    @field_validator("working_dir")
     @classmethod
-    def settings_customise_sources(
-        cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
-    ):
-        """Priority: init > env > .env > config.yaml > defaults."""
-        from pydantic_settings import YamlConfigSettingsSource
+    def _absolute_working_dir(cls, value: str) -> str:
+        return str(Path(value).resolve())
 
-        yaml_path = _find_yaml_config()
-        sources = [init_settings, env_settings, dotenv_settings]
-        if yaml_path is not None:
-            sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=yaml_path))
-        sources.append(file_secret_settings)
-        return tuple(sources)
+    @property
+    def working_dir_path(self) -> Path:
+        return Path(self.working_dir)
 
-    # ===== PostgreSQL (Default Storage Backend) =====
-    service_role: ServiceRole = Field(
-        default="writer",
-        description=(
-            "Process role against one shared write-capable endpoint. 'writer' "
-            "serves ingest plus all APIs and owns schema migrations. 'reader' is "
-            "corpus-read-only: it serves query, Answer, and Web traffic and writes "
-            "DlightRAG operational state, but reads the LightRAG corpus through "
-            "read-only sessions, applies no schema changes, and rejects "
-            "corpus-mutating APIs."
-        ),
-    )
-    postgres_host: str = Field(default="localhost")
-    postgres_port: int = Field(default=5432, ge=1, le=65535)
-    postgres_user: str = Field(default="dlightrag")
-    postgres_password: str = Field(default="dlightrag")
-    postgres_database: str = Field(default="dlightrag")
-    postgres_ssl_mode: PostgresSSLMode | None = Field(
-        default=None,
-        description=(
-            "PostgreSQL SSL mode bridged to LightRAG and DlightRAG asyncpg connections. "
-            "Matches LightRAG's POSTGRES_SSL_MODE contract."
-        ),
-    )
-    postgres_ssl_cert: str | None = Field(default=None)
-    postgres_ssl_key: str | None = Field(default=None)
-    postgres_ssl_root_cert: str | None = Field(default=None)
-    postgres_ssl_crl: str | None = Field(default=None)
 
-    # Advanced (env-only; keep out of curated config.yaml —
-    # see docs/configuration.md "Public Configuration Boundary").
-    postgres_pool_min_size: int = Field(
-        default=2, description="DlightRAG domain store pool min connections."
-    )
-    postgres_pool_max_size: int = Field(
-        default=16,
-        description=(
-            "DlightRAG domain store pool max connections per process. Total server "
-            "connections per process = this + postgres_lightrag_pool_max_size; multiply "
-            "by the worker count and keep the sum under PostgreSQL max_connections. "
-            "Raise for high single-worker concurrency; lower it when running many workers."
-        ),
-    )
-    postgres_command_timeout: float | None = Field(
-        default=60.0,
-        gt=0,
-        description=(
-            "Default per-statement timeout (seconds) for DlightRAG domain store "
-            "connections, so one hung query cannot hold a pooled connection forever. "
-            "None disables the cap."
-        ),
-    )
-    postgres_acquire_timeout: float = Field(
-        default=30.0,
-        gt=0,
-        description=(
-            "Max seconds to wait for a free DlightRAG domain store connection before "
-            "raising, so callers cannot block indefinitely when the pool is saturated."
-        ),
-    )
-    postgres_lightrag_pool_max_size: int = Field(
-        default=16,
-        ge=1,
-        description=(
-            "LightRAG PostgreSQL backend pool max connections per process. "
-            "Bridged to LightRAG's POSTGRES_MAX_CONNECTIONS."
-        ),
-    )
-    postgres_session_settings: dict[str, str | int | float | bool] = Field(
-        default_factory=dict,
-        description="Per-connection PostgreSQL GUCs applied to both LightRAG and DlightRAG pools.",
-    )
-    postgres_statement_cache_size: int | None = Field(
-        default=None,
-        description="Optional asyncpg statement cache size for LightRAG and DlightRAG pools.",
-    )
-    postgres_connection_retries: int = Field(
-        default=10,
-        ge=1,
-        le=100,
-        description="PostgreSQL transient connection retry attempts for LightRAG and DlightRAG pools.",
-    )
-    postgres_connection_retry_backoff: float = Field(
-        default=3.0,
-        ge=0.0,
-        le=300.0,
-        description="Initial PostgreSQL transient retry backoff in seconds.",
-    )
-    postgres_connection_retry_backoff_max: float = Field(
-        default=30.0,
-        ge=0.0,
-        le=600.0,
-        description="Maximum PostgreSQL transient retry backoff in seconds.",
-    )
-    postgres_pool_close_timeout: float = Field(
-        default=5.0,
-        ge=0.0,
-        le=30.0,
-        description="Seconds to wait when closing a stale PostgreSQL pool after transient failure.",
-    )
-    workspace: str = Field(default="default")
+class PostgresSettings(FrozenSettings):
+    host: str = "localhost"
+    port: int = Field(default=5432, ge=1, le=65535)
+    user: str = "dlightrag"
+    password: str = "dlightrag"  # noqa: S105 - local development default
+    database: str = "dlightrag"
+    ssl_mode: PostgresSSLMode | None = None
+    ssl_cert: str | None = None
+    ssl_key: str | None = None
+    ssl_root_cert: str | None = None
+    ssl_crl: str | None = None
+    pool_min_size: int = 2
+    pool_max_size: int = 16
+    command_timeout: float | None = Field(default=60.0, gt=0)
+    acquire_timeout: float = Field(default=30.0, gt=0)
+    lightrag_pool_max_size: int = Field(default=16, ge=1)
+    session_settings: Mapping[str, str | int | float | bool] = Field(default_factory=dict)
+    statement_cache_size: int | None = None
+    connection_retries: int = Field(default=10, ge=1, le=100)
+    connection_retry_backoff: float = Field(default=3.0, ge=0, le=300)
+    connection_retry_backoff_max: float = Field(default=30.0, ge=0, le=600)
+    pool_close_timeout: float = Field(default=5.0, ge=0, le=30)
 
-    # pgvector index configuration. LightRAG derives VECTOR/HALFVEC from this.
-    # Advanced (env-only; see docs/configuration.md "Public Configuration Boundary").
-    pg_vector_index_type: Literal["HNSW", "HNSW_HALFVEC", "IVFFLAT", "VCHORDRQ"] = Field(
-        default="HNSW_HALFVEC",
-        description="pgvector index type — case-sensitive (HNSW, HNSW_HALFVEC, IVFFLAT, VCHORDRQ)",
-    )
-    pg_hnsw_m: int = Field(default=32, description="HNSW M parameter (connections per node)")
-    pg_hnsw_ef_construction: int = Field(
-        default=256, description="HNSW ef_construction (index build quality)"
-    )
-    pg_hnsw_ef_search: int = Field(
-        default=256,
-        description="HNSW ef_search (query-time exploration depth, pgvector default is 40). "
-        "Bridged via POSTGRES_SERVER_SETTINGS because LightRAG's POSTGRES_HNSW_EF "
-        "is actually ef_construction despite the misleading name.",
-    )
+    @field_validator("session_settings", mode="after")
+    @classmethod
+    def _freeze_session_settings(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return freeze_settings_value(value)
 
-    # ===== Storage Backends (PostgreSQL-only core path) =====
-    vector_storage: Literal["PGVectorStorage"] = Field(
-        default="PGVectorStorage", description="LightRAG vector storage backend."
-    )
-    graph_storage: Literal["PGTableGraphStorage"] = Field(
-        default="PGTableGraphStorage",
-        description="LightRAG graph storage backend.",
-    )
-    kv_storage: Literal["PGKVStorage"] = Field(
-        default="PGKVStorage", description="LightRAG KV storage backend."
-    )
-    doc_status_storage: Literal["PGDocStatusStorage"] = Field(
-        default="PGDocStatusStorage", description="LightRAG doc status backend."
-    )
+    @field_serializer("session_settings")
+    def _serialize_session_settings(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return thaw_settings_value(value)
 
-    # ===== Vector DB Backend Kwargs (passthrough to LightRAG) =====
-    vector_db_kwargs: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Extra parameters forwarded to LightRAG vector_db_storage_cls_kwargs. "
-        "Backend-specific — see .env.example for per-backend options. "
-        'Example: DLIGHTRAG_VECTOR_DB_KWARGS=\'{"index_type": "HNSW_SQ", "sq_type": "SQ8"}\'',
-    )
 
-    # ===== Model config =====
-    llm: LLMConfig = Field(default_factory=LLMConfig)
-    model_capacity_overrides: list[ModelCapacityOverrideConfig] = Field(default_factory=list)
-    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
-    rerank: RerankConfig = Field(default_factory=RerankConfig)
-    parser: ParserConfig = Field(default_factory=ParserConfig)
-    parser_sidecars: ParserSidecarsConfig = Field(default_factory=ParserSidecarsConfig)
-    extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
-    citations: CitationsConfig = Field(default_factory=CitationsConfig)
-    answer: AnswerConfig = Field(default_factory=AnswerConfig)
+class LightRAGStorageSettings(FrozenSettings):
+    vector_index_type: Literal["HNSW", "HNSW_HALFVEC", "IVFFLAT", "VCHORDRQ"] = "HNSW_HALFVEC"
+    hnsw_m: int = 32
+    hnsw_ef_construction: int = 256
+    hnsw_ef_search: int = 256
+    vector_storage: Literal["PGVectorStorage"] = "PGVectorStorage"
+    graph_storage: Literal["PGTableGraphStorage"] = "PGTableGraphStorage"
+    kv_storage: Literal["PGKVStorage"] = "PGKVStorage"
+    doc_status_storage: Literal["PGDocStatusStorage"] = "PGDocStatusStorage"
+    vector_db_kwargs: Mapping[str, Any] = Field(default_factory=dict)
+
+    @field_validator("vector_db_kwargs", mode="after")
+    @classmethod
+    def _freeze_vector_kwargs(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return freeze_settings_value(value)
+
+    @field_serializer("vector_db_kwargs")
+    def _serialize_vector_kwargs(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return thaw_settings_value(value)
+
+
+class StorageSettings(FrozenSettings):
+    postgres: PostgresSettings = Field(default_factory=PostgresSettings)
+    lightrag: LightRAGStorageSettings = Field(default_factory=LightRAGStorageSettings)
+
+
+class AnswerSectionSettings(FrozenSettings):
+    generation: AnswerConfig = Field(default_factory=AnswerConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     agent: AgentExecutionConfig = Field(default_factory=AgentExecutionConfig)
-    web_conversations: WebConversationsConfig = Field(default_factory=WebConversationsConfig)
+    citations: CitationsConfig = Field(default_factory=CitationsConfig)
+    conversations: WebConversationsConfig = Field(default_factory=WebConversationsConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
-    visual_assets: VisualAssetsConfig = Field(default_factory=VisualAssetsConfig)
-    access_control: AccessControlConfig = Field(default_factory=AccessControlConfig)
 
-    @field_validator("model_capacity_overrides")
-    @classmethod
-    def _reject_duplicate_model_capacity_overrides(
-        cls,
-        overrides: list[ModelCapacityOverrideConfig],
-    ) -> list[ModelCapacityOverrideConfig]:
-        seen: set[tuple[str, str, str | None]] = set()
-        for override in overrides:
-            fingerprint = (
-                override.provider,
-                override.model,
-                normalized_endpoint_fingerprint(override.base_url),
-            )
-            if fingerprint in seen:
-                raise ValueError(
-                    "duplicate model capacity override for "
-                    f"provider={override.provider!r}, model={override.model!r}"
-                )
-            seen.add(fingerprint)
-        return overrides
 
-    # ===== RAG Processing =====
-    working_dir: str = Field(default="./dlightrag_storage")
-    # LightRAG's DEFAULT_CHUNK_P_SIZE. Heading-aligned paragraph merging needs the
-    # headroom; below ~1200 the strategy degrades into premature splits.
-    chunk_p_token_size: int = Field(default=2000, ge=1)
-
-    # ===== Ingestion Performance =====
-    # Advanced (env-only; keep out of curated config.yaml —
-    # see docs/configuration.md "Public Configuration Boundary").
-    # These per-stage worker/queue knobs match LightRAG's own defaults.
-    max_parallel_insert: int = Field(
-        default=3,
-        ge=1,
-        description="LightRAG staged pipeline insert-worker concurrency.",
-    )
-    max_parallel_parse_native: int = Field(
-        default=5,
-        ge=1,
-        description="LightRAG native-parser worker concurrency.",
-    )
-    max_parallel_parse_mineru: int = Field(
-        default=2,
-        ge=1,
-        description="LightRAG external parser worker concurrency for the MinerU-compatible route.",
-    )
-    max_parallel_parse_docling: int = Field(
-        default=2,
-        ge=1,
-        description="LightRAG external parser worker concurrency for the Docling route.",
-    )
-    max_parallel_analyze: int = Field(
-        default=5,
-        ge=1,
-        description=("LightRAG multimodal analysis worker concurrency."),
-    )
-    queue_size_parse: int = Field(
-        default=20,
-        ge=1,
-        description="LightRAG staged pipeline parse queue size.",
-    )
-    queue_size_analyze: int = Field(
-        default=100,
-        ge=1,
-        description="LightRAG staged pipeline multimodal analysis queue size. "
-        "Matches LightRAG's DEFAULT_QUEUE_SIZE_ANALYZE (100); never set the code "
-        "default below the upstream default.",
-    )
-    queue_size_insert: int = Field(
-        default=4,
-        ge=1,
-        description="LightRAG staged pipeline insert queue size.",
-    )
-
-    # Concurrency (product-tier; also surfaced in config.yaml).
-    max_async: int = Field(
-        default=16,
-        ge=1,
-        description="Process-wide concurrent AI provider requests.",
-    )
-    rag_pipeline_max_async: int = Field(
-        default=16,
-        ge=1,
-        description="LightRAG corpus-pipeline LLM concurrency per workspace.",
-    )
-    embedding_func_max_async: int = Field(default=16, ge=1)
-    embedding_batch_num: int = Field(
-        default=64,
-        ge=1,
-        description=(
-            "Texts sent per embedding provider request (the per-request batch size). "
-            "Raise it to match your provider's cap — e.g. Voyage up to 1000, OpenAI up "
-            "to 2048. LightRAG's upstream default is 10; setting it too high for a "
-            "provider surfaces as a request error at ingest time."
-        ),
-    )
-    embedding_request_timeout: int = Field(
-        default=120,
-        gt=0,
-        description="Per-request timeout for embedding calls (seconds). "
-        "LightRAG worker timeout is 2x this value. "
-        "Increase for slow local models (CPU inference).",
-    )
-    ingestion_replace_default: bool = Field(default=False)
-    retain_remote_source_files: bool = Field(
-        default=False,
-        description=(
-            "Keep S3/Azure/URL/SDK remote source files under the workspace input root. "
-            "When false, only parser artifacts and remote source URI metadata are retained."
-        ),
-    )
-    url_ingest_max_bytes: int = Field(
-        default=100 * 1024 * 1024,
-        ge=1,
-        description="Maximum bytes to download for one public HTTPS URL ingest.",
-    )
-    url_ingest_private_host_allowlist: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Explicit host/IP patterns allowed to resolve to private addresses for URL ingest. "
-            "Keep empty unless ingesting trusted enterprise intranet URLs."
-        ),
-    )
-    max_upload_bytes: int = Field(
-        default=100 * 1024 * 1024,
-        ge=1,
-        description="Maximum file size in bytes for /api/ingest/blob uploads (default 100MB).",
-    )
-
-    # ===== Query Configuration =====
-    top_k: int = Field(default=60, ge=1)
-    chunk_top_k: int = Field(default=30, ge=1)
-    bm25_enabled: bool = Field(default=True)
-
-    # Advanced (env-only; see docs/configuration.md "Public Configuration Boundary"):
-    # BM25 language profiles, k1/b tuning, and the RRF constant.
-    bm25_profiles: list[BM25ProfileConfig] = Field(
-        default_factory=lambda: [
-            BM25ProfileConfig(name="zh", text_config="public.jiebacfg", languages=["zh"]),
-            BM25ProfileConfig(name="en", text_config="english", languages=["en"]),
-            BM25ProfileConfig(name="de", text_config="german", languages=["de"]),
-            BM25ProfileConfig(name="sv", text_config="swedish", languages=["sv"]),
-            BM25ProfileConfig(name="es", text_config="spanish", languages=["es"]),
-            BM25ProfileConfig(name="fr", text_config="french", languages=["fr"]),
-            BM25ProfileConfig(name="it", text_config="italian", languages=["it"]),
-            BM25ProfileConfig(name="pt", text_config="portuguese", languages=["pt"]),
-            BM25ProfileConfig(name="nl", text_config="dutch", languages=["nl"]),
-            BM25ProfileConfig(name="ru", text_config="russian", languages=["ru"]),
-            BM25ProfileConfig(name="da", text_config="danish", languages=["da"]),
-            BM25ProfileConfig(name="fi", text_config="finnish", languages=["fi"]),
-            BM25ProfileConfig(name="simple", text_config="simple", fallback=True),
-        ],
-        description="Query-language-routed pg_textsearch BM25 profiles.",
-    )
-    bm25_k1: float = Field(
-        default=1.2,
-        gt=0,
-        description="BM25 term-frequency saturation parameter passed to pg_textsearch.",
-    )
-    bm25_b: float = Field(
-        default=0.75,
-        ge=0,
-        le=1,
-        description="BM25 document-length normalization parameter passed to pg_textsearch.",
-    )
-    rrf_k: int = Field(default=60, ge=1)
-    direct_visual_top_k: int = Field(default=20, ge=0)
-
-    # Advanced (env-only; see docs/configuration.md "Public Configuration Boundary"):
-    # metadata exact-vector threshold and KG token budgets.
-    metadata_filter_exact_vector_threshold: int = Field(
-        default=8192,
-        ge=0,
-        description="Use exact vector scoring inside metadata candidates at or below this size.",
-    )
-    max_entity_tokens: int = Field(default=6000, ge=1)
-    max_relation_tokens: int = Field(default=8000, ge=1)
-    max_total_tokens: int = Field(default=40000, ge=1)
-
-    # ===== Knowledge Graph =====
-    kg_chunk_pick_method: Literal["VECTOR", "WEIGHT"] = Field(
-        default="VECTOR",
-        description="How LightRAG selects chunks linked to KG entities/relations. "
-        "VECTOR: rank by similarity to query embedding (recommended for most workloads). "
-        "WEIGHT: rank by entity/relation importance scores. "
-        "Maps to LightRAG's KG_CHUNK_PICK_METHOD (1.4.7+).",
-    )
-    kg_entity_types: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Optional one-line entity-type extraction hint. Empty (default) defers to "
-            "LightRAG's built-in general taxonomy (Person/Organization/Location/Event/"
-            "Concept/Method/Content/Data/Artifact/NaturalObject/...). Set a domain list "
-            "only to bias extraction toward a specific corpus."
-        ),
-    )
-
-    # ===== Sourcing (Optional) =====
-    blob_connection_string: str | None = Field(default=None)
-    azure_sas_expiry: int = Field(default=3600, ge=1, description="Azure SAS URL expiry in seconds")
-    s3_presign_expiry: int = Field(
-        default=3600, ge=1, description="S3 presigned URL expiry in seconds"
-    )
-    s3_region: str | None = Field(default=None, description="S3 client region")
-
-    # ===== MCP Server =====
-    mcp_transport: Literal["stdio", "streamable-http"] = Field(default="stdio")
-    mcp_host: str = Field(
-        default="127.0.0.1",
-        description="MCP streamable-http bind address. Default 127.0.0.1 (loopback only) "
-        "because MCP exposes ingest/answer/delete_files. Use 0.0.0.0 only with explicit "
-        "bearer authentication and matching mcp_allowed_hosts/mcp_allowed_origins.",
-    )
-    mcp_port: int = Field(default=8101, ge=1, le=65535)
-    mcp_allowed_hosts: list[str] = Field(
-        default_factory=lambda: list(_LOCAL_MCP_ALLOWED_HOSTS),
-        description=(
-            "Allowed Host header values for MCP streamable-http DNS rebinding protection. "
-            "Public deployments must explicitly allow their externally visible host."
-        ),
-    )
-    mcp_allowed_origins: list[str] = Field(
-        default_factory=lambda: list(_LOCAL_MCP_ALLOWED_ORIGINS),
-        description=(
-            "Allowed Origin header values for MCP streamable-http DNS rebinding protection. "
-            "Origin may be absent for non-browser clients."
-        ),
-    )
-    mcp_resource_server_url: str | None = Field(
-        default=None,
-        description=(
-            "Public MCP endpoint URL used as the OAuth resource identifier and RFC 9728 "
-            "Protected Resource Metadata URL. Set it to enable native MCP OAuth discovery; "
-            "omit it to keep direct bearer-token authentication."
-        ),
-    )
-
-    # ===== REST API Server =====
-    api_host: str = Field(default="127.0.0.1")
-    api_port: int = Field(default=8100, ge=1, le=65535)
-    api_auth_token: str | None = Field(
-        default=None,
-        description=(
-            "Bearer token for auth_mode='simple' and MCP streamable-http. "
-            "Setting this while auth_mode='none' is invalid."
-        ),
-    )
-    auth_mode: Literal["none", "simple", "jwt"] = Field(
-        default="none",
-        description="API auth strategy: 'none', 'simple' (bearer token), 'jwt'.",
-    )
-    allow_insecure_no_auth: bool = Field(
-        default=False,
-        description=(
-            "Permit non-loopback REST or MCP HTTP listeners with auth_mode='none'. Off "
-            "by default: DlightRAG refuses unsafe unauthenticated network listeners."
-        ),
-    )
-    jwt_verification_key: str | None = Field(
-        default=None,
-        description=(
-            "JWT signature verification key. For HS* algorithms this is the shared "
-            "HMAC key; for RS*/ES* algorithms this is the public key PEM. DlightRAG "
-            "verifies externally issued JWTs and does not sign or renew tokens."
-        ),
-    )
-    jwt_jwks_url: str | None = Field(
-        default=None,
-        description="JWKS endpoint for externally issued JWT signing keys.",
-    )
-    jwt_issuer: str | None = Field(
-        default=None,
-        description="Expected JWT issuer. Required with jwt_jwks_url.",
-    )
-    jwt_audience: Annotated[str | list[str] | None, NoDecode] = Field(
-        default=None,
-        description=(
-            "Expected JWT audience(s). A single string or a list of strings; a "
-            "token is accepted when its aud matches any entry. A list lets one "
-            "deployment trust tokens minted for different audiences (e.g. a "
-            "browser front door and direct API clients). Required with jwt_jwks_url."
-        ),
-    )
-    web_identity: WebIdentitySettings = Field(
-        default_factory=WebIdentitySettings,
-        description=(
-            "Edge-asserted identity for the Web surface. When set, the browser "
-            "front door (Cloudflare Access, Azure Easy Auth, or AWS Amplify/"
-            "CloudFront) already authenticated the human; the Web surface verifies "
-            "the edge credential per request instead of reading a pasted token."
-        ),
-    )
+class AccessSectionSettings(FrozenSettings):
+    auth_mode: Literal["none", "simple", "jwt"] = "none"
+    api_token: str | None = None
+    allow_insecure_no_auth: bool = False
+    jwt_verification_key: str | None = None
+    jwt_jwks_url: str | None = None
+    jwt_issuer: str | None = None
+    jwt_audience: Annotated[str | tuple[str, ...] | None, NoDecode] = None
+    jwt_algorithm: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256"] = "HS256"
+    cors_allow_origins: tuple[str, ...] = ("*",)
+    web_identity: WebIdentitySettings = Field(default_factory=WebIdentitySettings)
+    control: AccessControlConfig = Field(default_factory=AccessControlConfig)
 
     @field_validator("jwt_audience", mode="before")
     @classmethod
-    def _normalize_jwt_audience(cls, value: Any) -> str | list[str] | None:
-        """Accept a single audience, a list, or (from env) a JSON-array string.
-
-        NoDecode keeps pydantic-settings from JSON-parsing env values, so a
-        plain ``DLIGHTRAG_JWT_AUDIENCE=api://x`` still works while a JSON array
-        string enables multiple audiences from the environment.
-        """
+    def _normalize_audience(cls, value: Any) -> str | tuple[str, ...] | None:
         if value is None:
             return None
         if isinstance(value, str):
@@ -1285,184 +497,192 @@ class DlightragConfig(BaseSettings):
             try:
                 value = json.loads(text)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    "jwt_audience string must be a plain audience or a JSON array"
-                ) from exc
+                raise ValueError("jwt_audience must be a plain audience or JSON array") from exc
         if isinstance(value, (list, tuple)):
-            items = [str(item).strip() for item in value if str(item).strip()]
+            items = tuple(str(item).strip() for item in value if str(item).strip())
             return items or None
-        raise ValueError("jwt_audience must be a string or a list of strings")
+        raise ValueError("jwt_audience must be a string or sequence of strings")
 
-    jwt_algorithm: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256"] = Field(
-        default="HS256",
-        description="JWT signature algorithm — restricted to safe HMAC/RSA/ECDSA variants. "
-        "Notably 'none' is rejected to prevent unsigned-token forgery.",
-    )
-    cors_allow_origins: list[str] = Field(
-        default_factory=lambda: ["*"],
-        description="CORS allow_origins list. Default '*' is convenient for dev; set "
-        "explicit origins (e.g. ['https://app.example.com']) when auth_mode is "
-        "not 'none'. Browsers reject the '*' + credentials combo.",
-    )
-    max_upload_size_mb: int = Field(
-        default=512,
-        ge=1,
-        description=(
-            "Receive-layer cap for multipart upload requests and total cap for multi-file "
-            "Web workspace uploads (MB). Answer uploads use their tighter answer policy; "
-            "/ingest/blob uses the tighter max_upload_bytes cap."
-        ),
-    )
 
-    # ===== Operational =====
-    log_level: str = Field(default="info")
-    ingest_timeout: float | None = Field(
-        default=None,
-        ge=0,
-        description="Seconds to wait for synchronous ingest calls. None waits until completion; timeouts return the running job instead of cancelling ingest.",
+class ApiInterfaceSettings(FrozenSettings):
+    host: str = "127.0.0.1"
+    port: int = Field(default=8100, ge=1, le=65535)
+
+
+class McpInterfaceSettings(FrozenSettings):
+    transport: Literal["stdio", "streamable-http"] = "stdio"
+    host: str = "127.0.0.1"
+    port: int = Field(default=8101, ge=1, le=65535)
+    allowed_hosts: tuple[str, ...] = tuple(_LOCAL_MCP_ALLOWED_HOSTS)
+    allowed_origins: tuple[str, ...] = tuple(_LOCAL_MCP_ALLOWED_ORIGINS)
+    resource_server_url: str | None = None
+
+
+class InterfacesSettings(FrozenSettings):
+    api: ApiInterfaceSettings = Field(default_factory=ApiInterfaceSettings)
+    mcp: McpInterfaceSettings = Field(default_factory=McpInterfaceSettings)
+    max_upload_size_mb: int = Field(default=512, ge=1)
+
+
+class ObservabilitySettings(FrozenSettings):
+    log_level: str = "info"
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_export_external_spans: bool = False
+    langfuse_trace_sensitive_data: bool = True
+    langfuse_environment: str | None = None
+    langfuse_release: str | None = None
+    langfuse_sample_rate: float = Field(default=1.0, ge=0, le=1)
+    langfuse_timeout: int | None = Field(default=None, ge=1, le=300)
+    langfuse_flush_at: int | None = Field(default=None, ge=1)
+    langfuse_flush_interval: float | None = Field(default=None, ge=0.1, le=300)
+
+
+class DlightragConfig(BaseSettings):
+    """The eight-section immutable DlightRAG configuration."""
+
+    _SECRET_PATTERNS: tuple[str, ...] = (
+        "api_key",
+        "api_secret",
+        "api_token",
+        "secret",
+        "verification_key",
+        "password",
+        "connection_string",
+        "account_key",
+        "sas_token",
+        "token",
     )
-    retrieval_timeout: int = Field(
-        default=300,
-        gt=0,
-        description="Timeout in seconds for one caller-awaited inline retrieval.",
-    )
-    # ===== Observability =====
-    langfuse_public_key: str | None = Field(default=None)
-    langfuse_secret_key: str | None = Field(default=None)
-    langfuse_host: str = Field(default="https://cloud.langfuse.com")
-    langfuse_export_external_spans: bool = Field(
-        default=False,
-        description="Export third-party GenAI/LLM OpenTelemetry spans to Langfuse. "
-        "Disabled by default because DlightRAG records model calls manually.",
-    )
-    langfuse_trace_sensitive_data: bool = Field(
-        default=True,
-        description=(
-            "Include sensitive request data in Langfuse traces for full "
-            "debuggability: the user query, raw error messages, and raw "
-            "principal/conversation IDs. Enabled by default. Set to false to "
-            "redact them (privacy mode: query omitted, generic error text, "
-            "hashed IDs). Does not affect LLM prompt/response capture."
-        ),
-    )
-    langfuse_environment: str | None = Field(
-        default=None,
-        description="Optional Langfuse tracing environment label, e.g. production or staging.",
-    )
-    langfuse_release: str | None = Field(
-        default=None,
-        description="Optional Langfuse release/version label for trace grouping.",
-    )
-    langfuse_sample_rate: float = Field(
-        default=1.0,
-        ge=0.0,
-        le=1.0,
-        description="Langfuse trace sample rate.",
-    )
-    langfuse_timeout: int | None = Field(
-        default=None,
-        ge=1,
-        le=300,
-        description="Langfuse SDK request timeout in seconds.",
-    )
-    langfuse_flush_at: int | None = Field(
-        default=None,
-        ge=1,
-        description="Langfuse SDK batch size before flush.",
-    )
-    langfuse_flush_interval: float | None = Field(
-        default=None,
-        ge=0.1,
-        le=300.0,
-        description="Langfuse SDK automatic flush interval in seconds.",
+    model_config = SettingsConfigDict(
+        env_prefix="DLIGHTRAG_",
+        env_nested_delimiter="__",
+        nested_model_default_partial_update=True,
+        env_file=_find_env_file(),
+        env_file_encoding="utf-8",
+        dotenv_filtering="match_prefix",
+        case_sensitive=False,
+        extra="forbid",
+        frozen=True,
     )
 
-    # ===== Validators =====
+    def __init__(self, **values: Any) -> None:
+        allowed = {name.upper() for name in self.__class__.model_fields}
+        unknown = sorted(
+            key
+            for key in os.environ
+            if key.startswith("DLIGHTRAG_")
+            and key not in _AUXILIARY_ENV_NAMES
+            and not key.startswith(_AUXILIARY_ENV_PREFIXES)
+            and key.removeprefix("DLIGHTRAG_").split("__", 1)[0].upper() not in allowed
+        )
+        if unknown:
+            raise ValueError(f"Unknown DlightRAG environment variables: {unknown}")
+        super().__init__(**values)
+        # BaseSettings serializes constructor-supplied nested models through its
+        # source pipeline. Restore the already-validated canonical instances so
+        # explicit-field provenance (notably keyless vs incomplete model roles)
+        # and object identity survive composition.
+        for field_name in self.__class__.model_fields:
+            supplied = values.get(field_name)
+            if isinstance(supplied, BaseModel):
+                object.__setattr__(self, field_name, supplied)
+
+    deployment: DeploymentSettings = Field(default_factory=DeploymentSettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
+    models: ModelsSettings = Field(default_factory=ModelsSettings)
+    corpus: CorpusSettings = Field(default_factory=CorpusSettings)
+    answer: AnswerSectionSettings = Field(default_factory=AnswerSectionSettings)
+    access: AccessSectionSettings = Field(default_factory=AccessSectionSettings)
+    interfaces: InterfacesSettings = Field(default_factory=InterfacesSettings)
+    observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
+
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
+    ):
+        from pydantic_settings import YamlConfigSettingsSource
+
+        sources = [init_settings, env_settings, dotenv_settings]
+        if (yaml_path := _find_yaml_config()) is not None:
+            sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=yaml_path))
+        sources.append(file_secret_settings)
+        return tuple(sources)
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        return _redact_dict(super().model_dump(**kwargs), self._SECRET_PATTERNS)
+
+    def model_dump_json(self, **kwargs: Any) -> str:
+        indent = kwargs.pop("indent", None)
+        return json.dumps(self.model_dump(**kwargs), default=str, indent=indent)
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({', '.join(f'{k}={v!r}' for k, v in self.model_dump().items())})"
 
     @model_validator(mode="after")
-    def _validate_config(self):
-        """Validate cross-field configuration."""
-        self._validate_bm25_profiles()
-        self._validate_auth_mode()
-        self._validate_access_control()
+    def _validate_config(self) -> Self:
+        profiles = self.corpus.retrieval.bm25_profiles
+        if len({profile.name for profile in profiles}) != len(profiles):
+            raise ValueError("bm25_profiles names must be unique")
+        if self.corpus.retrieval.bm25_enabled and not any(p.fallback for p in profiles):
+            raise ValueError("bm25_profiles must include at least one fallback profile")
+        seen: set[tuple[str, str, str | None]] = set()
+        for override in self.models.capacity_overrides:
+            key = (
+                override.provider,
+                override.model,
+                normalized_endpoint_fingerprint(override.base_url),
+            )
+            if key in seen:
+                raise ValueError(
+                    f"duplicate model capacity override for provider={override.provider!r}, model={override.model!r}"
+                )
+            seen.add(key)
+        self._validate_auth()
         return self
 
-    def _validate_bm25_profiles(self) -> None:
-        """Validate BM25 profile routing configuration."""
-        profile_names = [profile.name for profile in self.bm25_profiles]
-        if len(profile_names) != len(set(profile_names)):
-            raise ValueError("bm25_profiles names must be unique")
-        if self.bm25_enabled and not any(profile.fallback for profile in self.bm25_profiles):
-            raise ValueError("bm25_profiles must include at least one fallback profile")
-
-    def _validate_auth_mode(self) -> None:
-        """Validate API/web authentication configuration."""
-        if self.auth_mode == "none" and self.api_auth_token:
-            raise ValueError("api_auth_token is set; configure auth_mode='simple' explicitly")
-        if self.auth_mode == "simple" and not self.api_auth_token:
-            raise ValueError("auth_mode='simple' requires api_auth_token to be set")
-        # Fail-fast: jwt mode requires verification material; otherwise every request 500s.
-        if self.auth_mode == "jwt" and not (self.jwt_verification_key or self.jwt_jwks_url):
+    def _validate_auth(self) -> None:
+        access, api, mcp = self.access, self.interfaces.api, self.interfaces.mcp
+        if access.auth_mode == "none" and access.api_token:
+            raise ValueError("api_token is set; configure auth_mode='simple' explicitly")
+        if access.auth_mode == "simple" and not access.api_token:
+            raise ValueError("auth_mode='simple' requires api_token")
+        if access.auth_mode == "jwt" and not (access.jwt_verification_key or access.jwt_jwks_url):
             raise ValueError("auth_mode='jwt' requires jwt_verification_key or jwt_jwks_url")
-        if self.jwt_jwks_url and not (self.jwt_issuer and self.jwt_audience):
+        if access.jwt_jwks_url and not (access.jwt_issuer and access.jwt_audience):
             raise ValueError("jwt_jwks_url requires jwt_issuer and jwt_audience")
-        if self.web_identity.edge and self.auth_mode != "jwt":
-            raise ValueError(
-                "web_identity.edge requires auth_mode='jwt': edge-asserted identity "
-                "is a JWT surface, not a 'none'/'simple' login product"
-            )
-        if self.mcp_resource_server_url:
-            if self.auth_mode != "jwt" or self.mcp_transport != "streamable-http":
-                raise ValueError(
-                    "mcp_resource_server_url requires auth_mode='jwt' and "
-                    "mcp_transport='streamable-http'"
-                )
-            if not self.jwt_issuer:
-                raise ValueError("mcp_resource_server_url requires jwt_issuer")
-            _validate_oauth_endpoint_url(
-                str(self.mcp_resource_server_url), "mcp_resource_server_url"
-            )
-            _validate_oauth_endpoint_url(self.jwt_issuer, "jwt_issuer")
-        insecure_listeners: list[str] = []
-        if self.api_host not in _LOCAL_API_HOSTS:
-            insecure_listeners.append(f"REST api_host={self.api_host}")
-        if self.mcp_transport == "streamable-http" and self.mcp_host not in _LOCAL_API_HOSTS:
-            insecure_listeners.append(f"MCP mcp_host={self.mcp_host}")
-        if self.auth_mode == "none" and insecure_listeners:
-            listeners = ", ".join(insecure_listeners)
-            if not self.allow_insecure_no_auth:
-                raise ValueError(
-                    f"auth_mode='none' with non-loopback {listeners} is refused. Enable "
-                    "authentication, bind the listener to loopback, or set "
-                    "allow_insecure_no_auth=true for an explicitly trusted network."
-                )
+        if access.web_identity.edge and access.auth_mode != "jwt":
+            raise ValueError("web_identity.edge requires auth_mode='jwt'")
+        if mcp.resource_server_url:
+            if access.auth_mode != "jwt" or mcp.transport != "streamable-http":
+                raise ValueError("mcp.resource_server_url requires JWT and streamable-http")
+            if not access.jwt_issuer:
+                raise ValueError("mcp.resource_server_url requires jwt_issuer")
+            _validate_oauth_endpoint_url(mcp.resource_server_url, "mcp.resource_server_url")
+            _validate_oauth_endpoint_url(access.jwt_issuer, "jwt_issuer")
+        insecure = []
+        if api.host not in _LOCAL_API_HOSTS:
+            insecure.append(f"REST host={api.host}")
+        if mcp.transport == "streamable-http" and mcp.host not in _LOCAL_API_HOSTS:
+            insecure.append(f"MCP host={mcp.host}")
+        if access.auth_mode == "none" and insecure:
+            if not access.allow_insecure_no_auth:
+                raise ValueError("auth_mode='none' with non-loopback listeners is refused")
             warnings.warn(
-                f"auth_mode='none' on non-loopback {listeners} (allow_insecure_no_auth=true).",
+                "auth_mode='none' on non-loopback listeners (allow_insecure_no_auth=true)",
                 stacklevel=2,
             )
-        # Browsers reject allow_origins=['*'] with credentials. When auth is
-        # on, an explicit origin list MUST replace the wildcard.
-        if self.auth_mode != "none" and self.cors_allow_origins == ["*"]:
+        if access.auth_mode != "none" and access.cors_allow_origins == ("*",):
             warnings.warn(
-                "auth_mode is enabled but cors_allow_origins=['*']; browsers will "
-                "reject credentialed cross-origin requests. Set DLIGHTRAG_CORS_ALLOW_ORIGINS "
-                "to explicit origins (e.g. ['https://your-frontend.example.com']).",
-                stacklevel=2,
+                "auth_mode is enabled but wildcard CORS rejects credentials", stacklevel=2
             )
-
-    def _validate_access_control(self) -> None:
-        if self.access_control.mode == "allow_all":
-            return
-        if self.auth_mode != "jwt":
-            raise ValueError("access_control.mode='jwt_claims' requires auth_mode='jwt'")
-        if not self.access_control.rules:
-            raise ValueError("access_control.mode='jwt_claims' requires at least one rule")
-
-    # ===== Computed Properties =====
+        if access.control.mode != "allow_all":
+            if access.auth_mode != "jwt" or not access.control.rules:
+                raise ValueError("jwt_claims access control requires JWT and rules")
 
     @property
     def working_dir_path(self) -> Path:
-        return Path(self.working_dir).resolve()
+        return Path(self.deployment.working_dir)
 
     @property
     def temp_dir(self) -> Path:
@@ -1474,62 +694,55 @@ class DlightragConfig(BaseSettings):
 
     @property
     def is_reader(self) -> bool:
-        """Whether this process runs as a corpus-read-only reader."""
-        return self.service_role == "reader"
+        return self.deployment.service_role == "reader"
 
     @property
     def max_upload_batch_bytes(self) -> int:
-        """Total byte cap for one multi-file Web upload request."""
-        return self.max_upload_size_mb * 1024 * 1024
+        return self.interfaces.max_upload_size_mb * 1024 * 1024
+
+    @property
+    def parser_rules(self) -> str:
+        return self.corpus.parser_rules
 
     def _pg_ssl_value(self) -> ssl.SSLContext | bool | None:
-        """Return asyncpg's ssl argument matching LightRAG's SSL mode semantics."""
-        if self.postgres_ssl_mode is None:
+        pg = self.storage.postgres
+        if pg.ssl_mode is None:
             return None
-
-        if self.postgres_ssl_mode in {"require", "prefer"}:
+        if pg.ssl_mode in {"require", "prefer"}:
             return True
-        if self.postgres_ssl_mode == "disable":
+        if pg.ssl_mode == "disable":
             return False
-        if self.postgres_ssl_mode == "allow":
+        if pg.ssl_mode == "allow":
             return None
-
         try:
             context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            context.check_hostname = self.postgres_ssl_mode == "verify-full"
-
-            if self.postgres_ssl_root_cert and Path(self.postgres_ssl_root_cert).exists():
-                context.load_verify_locations(cafile=self.postgres_ssl_root_cert)
+            context.check_hostname = pg.ssl_mode == "verify-full"
+            if pg.ssl_root_cert and Path(pg.ssl_root_cert).exists():
+                context.load_verify_locations(cafile=pg.ssl_root_cert)
             if (
-                self.postgres_ssl_cert
-                and self.postgres_ssl_key
-                and Path(self.postgres_ssl_cert).exists()
-                and Path(self.postgres_ssl_key).exists()
+                pg.ssl_cert
+                and pg.ssl_key
+                and Path(pg.ssl_cert).exists()
+                and Path(pg.ssl_key).exists()
             ):
-                context.load_cert_chain(self.postgres_ssl_cert, self.postgres_ssl_key)
-            if self.postgres_ssl_crl and Path(self.postgres_ssl_crl).exists():
+                context.load_cert_chain(pg.ssl_cert, pg.ssl_key)
+            if pg.ssl_crl and Path(pg.ssl_crl).exists():
                 context.verify_flags |= ssl.VERIFY_CRL_CHECK_LEAF
-                context.load_verify_locations(cafile=self.postgres_ssl_crl)
+                context.load_verify_locations(cafile=pg.ssl_crl)
             return context
         except Exception as exc:
             raise ValueError(f"PostgreSQL SSL configuration error: {exc}") from exc
 
     def pg_connection_kwargs(self) -> dict[str, Any]:
-        """Return asyncpg connection kwargs for DlightRAG's PostgreSQL endpoint.
-
-        Both roles connect to the same write-capable endpoint: a reader is
-        corpus-read-only, and its DlightRAG operational state (Answer runs,
-        events, artifacts, Web conversations) must be writable.
-        """
+        pg = self.storage.postgres
         kwargs: dict[str, Any] = {
-            "host": self.postgres_host,
-            "port": self.postgres_port,
-            "user": self.postgres_user,
-            "password": self.postgres_password,
-            "database": self.postgres_database,
+            "host": pg.host,
+            "port": pg.port,
+            "user": pg.user,
+            "password": pg.password,
+            "database": pg.database,
         }
-        ssl_value = self._pg_ssl_value()
-        if ssl_value is not None:
+        if (ssl_value := self._pg_ssl_value()) is not None:
             kwargs["ssl"] = ssl_value
         return kwargs
 
@@ -1539,136 +752,88 @@ class DlightragConfig(BaseSettings):
             return None
         if isinstance(value, bool):
             return "true" if value else "false"
-        text = str(value).strip()
-        return text or None
+        return str(value).strip() or None
 
     def domain_pool_server_settings(self) -> dict[str, str]:
-        """Return asyncpg server_settings for the DlightRAG domain pool.
-
-        Writable for every role: readers own their Answer run, event, artifact,
-        and Web conversation state.
-        """
-        settings: dict[str, str] = {"hnsw.ef_search": str(self.pg_hnsw_ef_search)}
-        for key, value in self.postgres_session_settings.items():
-            rendered = self._env_value(value)
-            if rendered is not None:
+        pg, vector = self.storage.postgres, self.storage.lightrag
+        settings = {"hnsw.ef_search": str(vector.hnsw_ef_search)}
+        for key, value in pg.session_settings.items():
+            if (rendered := self._env_value(value)) is not None:
                 settings[str(key)] = rendered
         return settings
 
     def lightrag_pool_server_settings(self) -> dict[str, str]:
-        """Return asyncpg server_settings for the LightRAG corpus pool.
-
-        A reader's corpus sessions are read-only in PostgreSQL itself, not only
-        behind method guards. The GUC ships in the startup packet, so it survives
-        asyncpg's pool ``RESET ALL`` and every LightRAG reconnect.
-        """
         settings = self.domain_pool_server_settings()
         if self.is_reader:
-            # Applied last so no operator session setting can weaken it.
             settings["default_transaction_read_only"] = "on"
         return settings
 
     def postgres_server_settings_env_value(self) -> str:
-        """Return LightRAG's POSTGRES_SERVER_SETTINGS query-string format."""
         return urlencode(self.lightrag_pool_server_settings())
 
-    @property
-    def parser_rules(self) -> str:
-        """Return the internal LightRAG wildcard for the configured sidecar."""
-        return f"*:{self.parser_sidecars.active_parser}-iteP"
-
     def _lightrag_sidecar_env_map(self) -> dict[str, str]:
-        """Derive shared and active-parser LightRAG env vars from typed config."""
-        raw: dict[str, str | int | float | bool | None] = {}
-        config_objects: list[VLMSidecarConfig | MinerUSidecarConfig | DoclingSidecarConfig] = [
-            self.parser_sidecars.vlm
+        sidecars = self.corpus.sidecars
+        objects: list[VLMSidecarSettings | MinerUSidecarSettings | DoclingSidecarSettings] = [
+            sidecars.vlm
         ]
-        mineru = self.parser_sidecars.mineru
-        if mineru is not None:
-            config_objects.append(mineru)
-        else:
-            docling = self.parser_sidecars.docling
-            if docling is None:
-                raise RuntimeError("Parser sidecar invariant violated")
-            config_objects.append(docling)
-        for config_obj in config_objects:
-            for field_name, env_name in config_obj._ENV_MAP.items():
-                raw[env_name] = getattr(config_obj, field_name)
-        rendered: dict[str, str] = {}
-        for key, value in raw.items():
-            text = self._env_value(value)
-            if text is not None:
-                rendered[key] = text
-        return rendered
+        objects.append(sidecars.mineru if sidecars.mineru is not None else sidecars.docling)  # type: ignore[arg-type]
+        raw = {env: getattr(obj, field) for obj in objects for field, env in obj._ENV_MAP.items()}
+        return {
+            key: text for key, value in raw.items() if (text := self._env_value(value)) is not None
+        }
 
     def apply_lightrag_sidecar_env(self) -> None:
-        """Synchronize typed sidecar config into LightRAG's private env API."""
         env_map = self._lightrag_sidecar_env_map()
-        for key in _LIGHTRAG_SIDECAR_ENV_KEYS - env_map.keys():
+        keys = {
+            env
+            for cls in (VLMSidecarSettings, MinerUSidecarSettings, DoclingSidecarSettings)
+            for env in cls._ENV_MAP.values()
+        }
+        for key in keys - env_map.keys():
             os.environ.pop(key, None)
         os.environ.update(env_map)
 
     def apply_lightrag_backend_env(self, *, force: bool = False) -> None:
-        """Bridge this config's active PostgreSQL endpoint into LightRAG env vars."""
-        active_pg = self.pg_connection_kwargs()
-        # LightRAG's PostgreSQL ClientManager is process-wide. A global
-        # POSTGRES_WORKSPACE would pin every LightRAG instance to whichever
-        # workspace initialized first, so DlightRAG always passes workspace via
-        # the LightRAG constructor instead.
+        pg, vector = self.storage.postgres, self.storage.lightrag
+        active = self.pg_connection_kwargs()
         os.environ.pop("POSTGRES_WORKSPACE", None)
-        pg_env_map = {
-            "POSTGRES_HOST": active_pg["host"],
-            "POSTGRES_PORT": str(active_pg["port"]),
-            "POSTGRES_USER": active_pg["user"],
-            "POSTGRES_PASSWORD": active_pg["password"],
-            "POSTGRES_DATABASE": active_pg["database"],
-            "POSTGRES_VECTOR_INDEX_TYPE": self.pg_vector_index_type,
-            "POSTGRES_HNSW_M": str(self.pg_hnsw_m),
-            # LightRAG's POSTGRES_HNSW_EF is used as ef_construction.
-            "POSTGRES_HNSW_EF": str(self.pg_hnsw_ef_construction),
-            "POSTGRES_MAX_CONNECTIONS": str(self.postgres_lightrag_pool_max_size),
+        values: dict[str, Any] = {
+            "POSTGRES_HOST": active["host"],
+            "POSTGRES_PORT": active["port"],
+            "POSTGRES_USER": active["user"],
+            "POSTGRES_PASSWORD": active["password"],
+            "POSTGRES_DATABASE": active["database"],
+            "POSTGRES_VECTOR_INDEX_TYPE": vector.vector_index_type,
+            "POSTGRES_HNSW_M": vector.hnsw_m,
+            "POSTGRES_HNSW_EF": vector.hnsw_ef_construction,
+            "POSTGRES_MAX_CONNECTIONS": pg.lightrag_pool_max_size,
+            "POSTGRES_CONNECTION_RETRIES": pg.connection_retries,
+            "POSTGRES_CONNECTION_RETRY_BACKOFF": pg.connection_retry_backoff,
+            "POSTGRES_CONNECTION_RETRY_BACKOFF_MAX": pg.connection_retry_backoff_max,
+            "POSTGRES_POOL_CLOSE_TIMEOUT": pg.pool_close_timeout,
         }
-        if self.postgres_statement_cache_size is not None:
-            pg_env_map["POSTGRES_STATEMENT_CACHE_SIZE"] = str(self.postgres_statement_cache_size)
-        postgres_ssl_env = {
-            "POSTGRES_SSL_MODE": self.postgres_ssl_mode,
-            "POSTGRES_SSL_CERT": self.postgres_ssl_cert,
-            "POSTGRES_SSL_KEY": self.postgres_ssl_key,
-            "POSTGRES_SSL_ROOT_CERT": self.postgres_ssl_root_cert,
-            "POSTGRES_SSL_CRL": self.postgres_ssl_crl,
-        }
-        for key, value in postgres_ssl_env.items():
-            rendered = self._env_value(value)
-            if rendered is not None:
-                pg_env_map[key] = rendered
-        pg_env_map["POSTGRES_CONNECTION_RETRIES"] = str(self.postgres_connection_retries)
-        pg_env_map["POSTGRES_CONNECTION_RETRY_BACKOFF"] = str(
-            self.postgres_connection_retry_backoff
-        )
-        pg_env_map["POSTGRES_CONNECTION_RETRY_BACKOFF_MAX"] = str(
-            self.postgres_connection_retry_backoff_max
-        )
-        pg_env_map["POSTGRES_POOL_CLOSE_TIMEOUT"] = str(self.postgres_pool_close_timeout)
-        for key, value in pg_env_map.items():
+        if pg.statement_cache_size is not None:
+            values["POSTGRES_STATEMENT_CACHE_SIZE"] = pg.statement_cache_size
+        for key, value in {
+            "POSTGRES_SSL_MODE": pg.ssl_mode,
+            "POSTGRES_SSL_CERT": pg.ssl_cert,
+            "POSTGRES_SSL_KEY": pg.ssl_key,
+            "POSTGRES_SSL_ROOT_CERT": pg.ssl_root_cert,
+            "POSTGRES_SSL_CRL": pg.ssl_crl,
+        }.items():
+            if (rendered := self._env_value(value)) is not None:
+                values[key] = rendered
+        for key, value in values.items():
             if force or key not in os.environ:
-                os.environ[key] = value
-
+                os.environ[key] = str(value)
         if force or "POSTGRES_SERVER_SETTINGS" not in os.environ:
             os.environ["POSTGRES_SERVER_SETTINGS"] = self.postgres_server_settings_env_value()
 
     def apply_lightrag_runtime_env(self, *, force: bool = False) -> None:
-        """Bridge LightRAG runtime settings controlled by DlightRAG."""
         if force or "LIGHTRAG_PARSER" not in os.environ:
             os.environ["LIGHTRAG_PARSER"] = self.parser_rules
         if force or "INPUT_DIR" not in os.environ:
             os.environ["INPUT_DIR"] = str(self.input_dir_path)
-
-    def model_post_init(self, _context) -> None:
-        """Resolve process-relative paths without mutating backend state."""
-        # Resolve working_dir to absolute path
-        path = Path(self.working_dir)
-        if not path.is_absolute():
-            self.working_dir = str(path.resolve())
 
 
 # Singleton for standalone mode (MCP/API server)

@@ -140,8 +140,13 @@ def test_compose_postgres_endpoint_is_env_overridable() -> None:
     """A hardcoded endpoint would silently beat config.yaml: env outranks YAML."""
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
-    assert "DLIGHTRAG_POSTGRES_HOST: ${DLIGHTRAG_POSTGRES_HOST:-postgres}" in compose
-    assert 'DLIGHTRAG_POSTGRES_PORT: "${DLIGHTRAG_POSTGRES_PORT:-5432}"' in compose
+    assert (
+        "DLIGHTRAG_STORAGE__POSTGRES__HOST: ${DLIGHTRAG_STORAGE__POSTGRES__HOST:-postgres}"
+        in compose
+    )
+    assert (
+        'DLIGHTRAG_STORAGE__POSTGRES__PORT: "${DLIGHTRAG_STORAGE__POSTGRES__PORT:-5432}"' in compose
+    )
 
 
 def test_compose_postgres_performance_knobs_are_env_overridable() -> None:
@@ -180,7 +185,7 @@ def test_compose_binds_api_port_to_loopback_on_host() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
     assert '"127.0.0.1:8100:8100"' in compose
-    assert 'DLIGHTRAG_API_HOST: "0.0.0.0"' in compose
+    assert 'DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"' in compose
 
 
 def test_compose_mcp_local_listener_passes_security_validation() -> None:
@@ -190,14 +195,22 @@ def test_compose_mcp_local_listener_passes_security_validation() -> None:
     environment = compose["services"]["dlightrag-mcp"]["environment"]
 
     with pytest.warns(UserWarning, match="allow_insecure_no_auth"):
-        config = DlightragConfig(
-            mcp_transport=environment["DLIGHTRAG_MCP_TRANSPORT"],
-            mcp_host=environment["DLIGHTRAG_MCP_HOST"],
-            mcp_port=environment["DLIGHTRAG_MCP_PORT"],
-            allow_insecure_no_auth=(environment.get("DLIGHTRAG_ALLOW_INSECURE_NO_AUTH") == "true"),
+        config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+            interfaces={
+                "mcp": {
+                    "transport": environment["DLIGHTRAG_INTERFACES__MCP__TRANSPORT"],
+                    "host": environment["DLIGHTRAG_INTERFACES__MCP__HOST"],
+                    "port": environment["DLIGHTRAG_INTERFACES__MCP__PORT"],
+                },
+            },
+            access={
+                "allow_insecure_no_auth": (
+                    environment.get("DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH") == "true"
+                ),
+            },
         )
 
-    assert config.mcp_host == "0.0.0.0"
+    assert config.interfaces.mcp.host == "0.0.0.0"
 
 
 def test_compose_api_healthcheck_uses_strict_readiness_endpoint() -> None:
@@ -234,25 +247,28 @@ def test_docx_native_parser_runtime_dependency_is_direct() -> None:
 
 def test_default_parser_routing_has_no_unrouted_fallback() -> None:
     """Default ingestion must not silently degrade into an unrouted parser path."""
-    from dlightrag.config import DlightragConfig, EmbeddingConfig
+    from dlightrag.ai.settings import EmbeddingSettings
+    from dlightrag.config import DlightragConfig
 
-    cfg = DlightragConfig(
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            startup_probe=False,
-        ),
+    cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "embedding": EmbeddingSettings(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        },
     )
 
-    assert ("leg" + "acy") not in cfg.parser_rules.lower()
+    assert ("leg" + "acy") not in cfg.corpus.parser_rules.lower()
 
 
 def test_config_yaml_uses_input_modality_for_rerank() -> None:
     config = Path("config.yaml").read_text(encoding="utf-8")
 
-    assert re.search(r"(?m)^  input_modality: auto$", config)
-    assert not re.search(r"(?m)^  api_key:", config)
+    assert re.search(r"(?m)^    input_modality: auto$", config)
+    assert not re.search(r"(?m)^    api_key:", config)
     assert "multimodal:" not in config
 
 
@@ -261,8 +277,8 @@ def test_curated_config_routes_container_mineru_to_host_sidecar_by_default() -> 
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
     assert "local_endpoint: http://host.docker.internal:8210" in config
-    assert "DLIGHTRAG_PARSER_SIDECARS__MINERU__LOCAL_ENDPOINT" not in compose
-    assert "DLIGHTRAG_PARSER_SIDECARS__DOCLING__ENDPOINT" not in compose
+    assert "DLIGHTRAG_CORPUS__SIDECARS__MINERU__LOCAL_ENDPOINT" not in compose
+    assert "DLIGHTRAG_CORPUS__SIDECARS__DOCLING__ENDPOINT" not in compose
 
 
 def test_codeql_config_filters_self_referential_advanced_setup_alert() -> None:

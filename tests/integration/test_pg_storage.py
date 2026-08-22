@@ -112,7 +112,8 @@ class TestPGWorkspaceDiscovery:
     async def test_discovers_workspaces_from_workspace_meta(self) -> None:
         """list_workspaces() returns workspaces found in dlightrag_workspace_meta."""
         from dlightrag.adapters.postgres._pool import pg_pool
-        from dlightrag.config import DlightragConfig, EmbeddingConfig, set_config
+        from dlightrag.ai.settings import EmbeddingSettings
+        from dlightrag.config import DlightragConfig, set_config
 
         pool, registry = await _open_workspace_registry()
         try:
@@ -128,14 +129,15 @@ class TestPGWorkspaceDiscovery:
                 embedding_model="voyage-multimodal-3.5",
             )
 
-            cfg = DlightragConfig(  # type: ignore[call-arg]
-                kv_storage="PGKVStorage",
-                embedding=EmbeddingConfig(
-                    provider="voyage",
-                    model="voyage-multimodal-3.5",
-                    api_key="test",
-                    startup_probe=False,
-                ),
+            cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+                models={
+                    "embedding": EmbeddingSettings(
+                        provider="voyage",
+                        model="voyage-multimodal-3.5",
+                        api_key="test",
+                        startup_probe=False,
+                    ),
+                },
             )
             set_config(cfg)
 
@@ -153,22 +155,26 @@ class TestPGWorkspaceDiscovery:
             await pool.close()
 
     async def test_empty_table_returns_default_workspace(self) -> None:
-        """Empty workspace metadata falls back to config.workspace."""
+        """Empty workspace metadata falls back to config.deployment.workspace."""
         from dlightrag.adapters.postgres._pool import pg_pool
-        from dlightrag.config import DlightragConfig, EmbeddingConfig, set_config
+        from dlightrag.ai.settings import EmbeddingSettings
+        from dlightrag.config import DlightragConfig, set_config
 
         pool, registry = await _open_workspace_registry()
         try:
             await _delete_test_workspaces(registry, "test-fallback-ws")
-            cfg = DlightragConfig(  # type: ignore[call-arg]
-                kv_storage="PGKVStorage",
-                workspace="test-fallback-ws",
-                embedding=EmbeddingConfig(
-                    provider="voyage",
-                    model="voyage-multimodal-3.5",
-                    api_key="test",
-                    startup_probe=False,
-                ),
+            cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+                deployment={
+                    "workspace": "test-fallback-ws",
+                },
+                models={
+                    "embedding": EmbeddingSettings(
+                        provider="voyage",
+                        model="voyage-multimodal-3.5",
+                        api_key="test",
+                        startup_probe=False,
+                    ),
+                },
             )
             set_config(cfg)
 

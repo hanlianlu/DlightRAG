@@ -18,6 +18,7 @@ from dlightrag.access import (
 )
 from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
 from dlightrag.model_settings import access_settings
+from tests.config_helpers import mutate_config, replace_config
 
 
 class _WorkspaceCatalog:
@@ -70,18 +71,22 @@ async def test_allow_all_access_control_is_default(test_config: DlightragConfig)
 async def test_jwt_claims_access_control_matches_claim_workspace_and_action(
     test_config: DlightragConfig,
 ) -> None:
-    test_config.auth_mode = "jwt"
-    test_config.jwt_verification_key = "test-key"
-    test_config.access_control = AccessControlConfig(
-        mode="jwt_claims",
-        rules=[
-            AccessControlRuleConfig(
-                claim="groups",
-                value="finance-rag-readers",
-                workspaces=["Finance Reports"],
-                actions=["workspace.query", "workspace.list_files"],
-            )
-        ],
+    mutate_config(test_config, "access.auth_mode", "jwt")
+    mutate_config(test_config, "access.jwt_verification_key", "test-key")
+    test_config = replace_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="groups",
+                    value="finance-rag-readers",
+                    workspaces=["Finance Reports"],
+                    actions=["workspace.query", "workspace.list_files"],
+                )
+            ],
+        ),
     )
     access_control = access_control_from_settings(access_settings(test_config))
     user = UserContext(
@@ -102,18 +107,22 @@ async def test_jwt_claims_access_control_matches_claim_workspace_and_action(
 
 
 def _preset_access_control(preset: str, test_config: DlightragConfig):
-    test_config.auth_mode = "jwt"
-    test_config.jwt_verification_key = "test-key"
-    test_config.access_control = AccessControlConfig(
-        mode="jwt_claims",
-        rules=[
-            AccessControlRuleConfig(
-                claim="roles",
-                value=f"finance.{preset}",
-                workspaces=["finance"],
-                actions=[preset],
-            )
-        ],
+    mutate_config(test_config, "access.auth_mode", "jwt")
+    mutate_config(test_config, "access.jwt_verification_key", "test-key")
+    test_config = replace_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="roles",
+                    value=f"finance.{preset}",
+                    workspaces=["finance"],
+                    actions=[preset],
+                )
+            ],
+        ),
     )
     user = UserContext(
         user_id="alice",
@@ -168,16 +177,20 @@ async def test_admin_preset_allows_every_action(test_config: DlightragConfig) ->
 async def test_workspace_wildcard_rule_matches_any_canonical_workspace(
     test_config: DlightragConfig,
 ) -> None:
-    test_config.access_control = AccessControlConfig(
-        mode="jwt_claims",
-        rules=[
-            AccessControlRuleConfig(
-                claim="roles",
-                value="reader",
-                workspaces=["*"],
-                actions=[AccessAction.WORKSPACE_QUERY],
-            )
-        ],
+    test_config = replace_config(
+        test_config,
+        "access.control",
+        AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="roles",
+                    value="reader",
+                    workspaces=["*"],
+                    actions=[AccessAction.WORKSPACE_QUERY],
+                )
+            ],
+        ),
     )
     access_control = access_control_from_settings(access_settings(test_config))
     user = UserContext(user_id="alice", auth_mode="jwt", claims={"roles": ["reader"]})

@@ -14,7 +14,7 @@ from dlightrag.services.corpora import safe_upload_basename
 # One ordered attachment collection per message. Images and documents mix; the
 # Answer preparation extracts verified images into current-image blocks and registers the
 # rest as request-local resources. The admitted count is owned at runtime by
-# ``config.answer.max_attachments`` and threaded in by callers.
+# ``config.answer.generation.max_attachments`` and threaded in by callers.
 SUPPORTED_DOCUMENT_EXTENSIONS = frozenset(
     {
         "pdf",

@@ -26,6 +26,7 @@ from dlightrag.rag.ingestion.paths import iter_ingestable_files, stage_input_fil
 from dlightrag.rag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.rag.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
 from dlightrag.rag.workspaces import normalize_workspace
+from tests.config_helpers import mutate_config
 
 
 def _service(
@@ -33,7 +34,7 @@ def _service(
     *,
     backend: Any | None = None,
 ) -> WorkspaceRag:
-    workspace_id = normalize_workspace(config.workspace)
+    workspace_id = normalize_workspace(config.deployment.workspace)
     return WorkspaceRag(
         workspace_id=workspace_id,
         settings=rag_settings(config),
@@ -131,19 +132,19 @@ class TestWorkspaceRagAingest:
         self,
         test_config: DlightragConfig,
     ) -> None:
-        config = test_config.model_copy(update={"workspace": "test-fallback-ws"})
+        mutate_config(test_config, "deployment.workspace", "test-fallback-ws")
         maintenance = MagicMock()
         maintenance.register_workspace = AsyncMock()
         backend = _backend("test_fallback_ws", read_only=False)
         backend.maintenance = maintenance
-        service = _service(config, backend=backend)
+        service = _service(test_config, backend=backend)
 
         await service._upsert_workspace_meta()
 
         maintenance.register_workspace.assert_awaited_once_with(
             workspace="test_fallback_ws",
             display_name="test_fallback_ws",
-            embedding_model=config.embedding.model,
+            embedding_model=test_config.models.embedding.model,
         )
 
     async def test_aingest_not_initialized_raises(self, test_config: DlightragConfig) -> None:
@@ -163,12 +164,12 @@ class TestWorkspaceRagAingest:
 
         with pytest.raises(RuntimeError, match="initialization failed"):
             await WorkspaceRag.acreate(
-                workspace_id=normalize_workspace(test_config.workspace),
+                workspace_id=normalize_workspace(test_config.deployment.workspace),
                 settings=rag_settings(test_config),
                 backend=cast(
                     Any,
                     _backend(
-                        normalize_workspace(test_config.workspace),
+                        normalize_workspace(test_config.deployment.workspace),
                         read_only=test_config.is_reader,
                     ),
                 ),
@@ -181,7 +182,7 @@ class TestWorkspaceRagAingest:
     async def test_aingest_replace_default_from_config(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        test_config.ingestion_replace_default = True
+        mutate_config(test_config, "corpus.ingestion.replace_default", True)
         fake_pdf = tmp_path / "file.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
         service, ingestion = self._make_initialized_service(test_config)
@@ -192,7 +193,7 @@ class TestWorkspaceRagAingest:
     async def test_aingest_replace_explicit_overrides_config(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        test_config.ingestion_replace_default = True
+        mutate_config(test_config, "corpus.ingestion.replace_default", True)
         fake_pdf = tmp_path / "file.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
         service, ingestion = self._make_initialized_service(test_config)
@@ -338,7 +339,7 @@ class TestWorkspaceRagClose:
                 await allow_lock.wait()
                 yield
 
-        backend = _backend(normalize_workspace(test_config.workspace), read_only=False)
+        backend = _backend(normalize_workspace(test_config.deployment.workspace), read_only=False)
         backend.coordination = FakeCoordination()
         service = _service(test_config, backend=backend)
         service._lightrag = MagicMock()
@@ -416,7 +417,7 @@ class TestWorkspaceRagRetrieve:
             row["_workspace"]
             for key in ("chunks", "entities", "relationships")
             for row in result.contexts[key]
-        } == {test_config.workspace}
+        } == {test_config.deployment.workspace}
 
     async def test_aretrieve_forwards_caller_bm25_query(self, test_config):
         service, orchestrator = self._make_retrieval_service(test_config)
@@ -653,7 +654,11 @@ class TestBuildAddonParams:
     """Test LightRAG 1.5 addon_params contract."""
 
     def test_uses_lightrag_15_entity_guidance(self, test_config: DlightragConfig) -> None:
-        test_config.kg_entity_types = ["Product", "Technology", "Organization"]
+        mutate_config(
+            test_config,
+            "corpus.retrieval.kg_entity_types",
+            ["Product", "Technology", "Organization"],
+        )
 
         result = rag_settings(test_config).addon_params()
 
@@ -666,9 +671,11 @@ class TestBuildAddonParams:
     def test_addon_params_include_extraction_prompt_profile(
         self, test_config: DlightragConfig
     ) -> None:
-        test_config.extraction.language = "Chinese"
-        test_config.extraction.entity_type_prompt_file = "domain-entities.yaml"
-        test_config.kg_entity_types = []
+        mutate_config(test_config, "corpus.extraction.language", "Chinese")
+        mutate_config(
+            test_config, "corpus.extraction.entity_type_prompt_file", "domain-entities.yaml"
+        )
+        mutate_config(test_config, "corpus.retrieval.kg_entity_types", [])
 
         result = rag_settings(test_config).addon_params()
 
@@ -683,9 +690,9 @@ class TestBuildRetrievalBackend:
     """Test DlightRAG retrieval backend configuration wiring."""
 
     def test_passes_query_budget_config(self, test_config: DlightragConfig) -> None:
-        test_config.max_entity_tokens = 111
-        test_config.max_relation_tokens = 222
-        test_config.max_total_tokens = 333
+        mutate_config(test_config, "corpus.retrieval.max_entity_tokens", 111)
+        mutate_config(test_config, "corpus.retrieval.max_relation_tokens", 222)
+        mutate_config(test_config, "corpus.retrieval.max_total_tokens", 333)
 
         backend = WorkspaceRag._build_retrieval_backend(
             rag_settings(test_config),
@@ -779,9 +786,9 @@ class TestDirectImageEmbeddingCapability:
         self,
         test_config: DlightragConfig,
     ) -> None:
-        test_config.embedding.dim = 7
-        test_config.embedding_func_max_async = 5
-        test_config.parser_sidecars.vlm.min_image_pixel = 80
+        mutate_config(test_config, "models.embedding.dim", 7)
+        mutate_config(test_config, "models.embedding.max_concurrency", 5)
+        mutate_config(test_config, "corpus.sidecars.vlm.min_image_pixel", 80)
         embedder = MagicMock()
         expected = MagicMock()
 
@@ -871,7 +878,7 @@ class TestWorkspaceRagLightRAGMainPath:
 
         runtime = _runtime_binder()
         runtime.create.return_value.apipeline_process_enqueue_documents = resume_pipeline
-        backend = _backend(normalize_workspace(test_config.workspace), read_only=False)
+        backend = _backend(normalize_workspace(test_config.deployment.workspace), read_only=False)
         backend.coordination = FakeCoordination()
         backend.runtime = runtime
         service = _service(test_config, backend=backend)
@@ -931,8 +938,8 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_backend_attach_failure_aborts_initialization(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        reader_config = test_config.model_copy(update={"service_role": "reader"})
-        service = _service(reader_config)
+        mutate_config(test_config, "deployment.service_role", "reader")
+        service = _service(test_config)
         cast(Any, service.backend.runtime.attach).side_effect = RuntimeError("reader attach drift")
 
         class FakeGuard:
@@ -980,11 +987,11 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_provider_contract_runs_before_backend_attach(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        reader_config = test_config.model_copy(update={"service_role": "reader"})
+        mutate_config(test_config, "deployment.service_role", "reader")
         runtime = _runtime_binder()
-        backend = _backend(normalize_workspace(reader_config.workspace), read_only=True)
+        backend = _backend(normalize_workspace(test_config.deployment.workspace), read_only=True)
         backend.runtime = runtime
-        service = _service(reader_config, backend=backend)
+        service = _service(test_config, backend=backend)
         call_order: list[object] = []
 
         class FakeGuard:
@@ -1086,7 +1093,7 @@ class TestWorkspaceRagLightRAGMainPath:
         assert item.parser_path.suffix == ".pdf"
         assert "report" in item.parser_path.name
         assert not item.parser_path.exists()
-        assert not (test_config.working_dir_path / "sources").exists()
+        assert not (test_config.deployment.working_dir_path / "sources").exists()
 
     async def test_aingest_unified_azure_blob_batch(self, test_config: DlightragConfig) -> None:
         """Prefix ingest calls the engine once with a prepared batch."""
@@ -1365,14 +1372,17 @@ class TestWorkspaceRagLightRAGMainPath:
         assert item.parser_path.suffix == ".pdf"
         assert item.source_uri != item.download_locator
         assert item.parser_path.is_relative_to(
-            test_config.input_dir_path / test_config.workspace / "__remote_sources__" / source_type
+            test_config.input_dir_path
+            / test_config.deployment.workspace
+            / "__remote_sources__"
+            / source_type
         )
         assert "__remote_ingest__" not in str(item.parser_path)
 
     async def test_remote_source_retention_call_override_can_disable_config(
         self, test_config: DlightragConfig
     ) -> None:
-        test_config.retain_remote_source_files = True
+        mutate_config(test_config, "corpus.ingestion.retain_remote_source_files", True)
 
         class RemoteSource(AsyncDataSource):
             async def aiter_documents(self, prefix: str | None = None):
@@ -1855,7 +1865,7 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_aingest_local_manifest_preserves_workspace_relative_path(
         self, test_config: DlightragConfig
     ) -> None:
-        input_root = test_config.input_dir_path / test_config.workspace
+        input_root = test_config.input_dir_path / test_config.deployment.workspace
         source = input_root / "docs" / "report.pdf"
         explicit = input_root / "docs" / "custom.pdf"
         source.parent.mkdir(parents=True)
@@ -1886,7 +1896,10 @@ class TestWorkspaceRagLightRAGMainPath:
 
         assert result["processed"] == 2
         assert seen_items[0].parser_path == source
-        assert seen_items[0].source_uri == f"local://{test_config.workspace}/docs/report.pdf"
+        assert (
+            seen_items[0].source_uri
+            == f"local://{test_config.deployment.workspace}/docs/report.pdf"
+        )
         assert seen_items[0].download_locator == str(source)
         assert seen_items[0].metadata == {"asset_id": "local-a"}
         assert seen_items[0].source_uri_explicit is False
@@ -1938,7 +1951,9 @@ class TestWorkspaceRagLightRAGMainPath:
 
     async def test_aingest_url_uses_url_data_source(self, test_config: DlightragConfig) -> None:
         """REST/MCP URL jobs enter the same remote ingest pipeline."""
-        test_config.url_ingest_private_host_allowlist = ["*.corp.example"]
+        mutate_config(
+            test_config, "corpus.ingestion.url_private_host_allowlist", ("*.corp.example",)
+        )
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
@@ -1977,7 +1992,7 @@ class TestWorkspaceRagLightRAGMainPath:
         cls.assert_called_once_with(
             urls=["https://api.bynder.com/docs/getting-started"],
             filename="getting-started.html",
-            max_download_bytes=test_config.url_ingest_max_bytes,
+            max_download_bytes=test_config.corpus.ingestion.url_max_bytes,
             allow_private_hosts=("*.corp.example",),
         )
         assert result["status"] == "success"
@@ -2078,7 +2093,7 @@ class TestWorkspaceRagLightRAGMainPath:
         temp_base = test_config.temp_dir
         if temp_base.exists():
             assert len(os.listdir(temp_base)) == 0
-        assert not (test_config.working_dir_path / "sources").exists()
+        assert not (test_config.deployment.working_dir_path / "sources").exists()
 
     async def test_aingest_unified_delegates_to_engine(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -2096,10 +2111,10 @@ class TestWorkspaceRagLightRAGMainPath:
 
         result = await service.aingest(source_type="local", path=str(fake_pdf))
         service._ingestion_engine.aingest_file.assert_awaited_once()
-        staged = test_config.input_dir_path / test_config.workspace / "f.pdf"
+        staged = test_config.input_dir_path / test_config.deployment.workspace / "f.pdf"
         assert service._ingestion_engine.aingest_file.call_args.args[0] == staged
         assert service._ingestion_engine.aingest_file.call_args.kwargs["source_uri"] == (
-            f"local://{test_config.workspace}/f.pdf"
+            f"local://{test_config.deployment.workspace}/f.pdf"
         )
         assert service._ingestion_engine.aingest_file.call_args.kwargs["download_locator"] == str(
             staged
@@ -2150,7 +2165,7 @@ class TestWorkspaceRagLightRAGMainPath:
 
         assert result["processed"] == 3
         assert [item["doc_id"] for item in result["results"]] == ["a.docx", "b.pdf", "c.pptx"]
-        staged_root = test_config.input_dir_path / test_config.workspace
+        staged_root = test_config.input_dir_path / test_config.deployment.workspace
         service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
         await_args = service._ingestion_engine.aingest_files.await_args
@@ -2162,9 +2177,9 @@ class TestWorkspaceRagLightRAGMainPath:
             staged_root / "nested" / "c.pptx",
         ]
         assert [item.source_uri for item in items] == [
-            f"local://{test_config.workspace}/a.docx",
-            f"local://{test_config.workspace}/b.pdf",
-            f"local://{test_config.workspace}/nested/c.pptx",
+            f"local://{test_config.deployment.workspace}/a.docx",
+            f"local://{test_config.deployment.workspace}/b.pdf",
+            f"local://{test_config.deployment.workspace}/nested/c.pptx",
         ]
         assert [item.download_locator for item in items] == [
             str(staged_root / "a.docx"),
@@ -2228,13 +2243,13 @@ class TestWorkspaceRagLightRAGMainPath:
         result = await service.aingest(source_type="local", path=str(upload_dir))
 
         assert result["processed"] == 1
-        staged_root = test_config.input_dir_path / test_config.workspace
+        staged_root = test_config.input_dir_path / test_config.deployment.workspace
         service._ingestion_engine.aingest_files.assert_awaited_once()
         await_args = service._ingestion_engine.aingest_files.await_args
         assert await_args is not None
         item = await_args.args[0][0]
         assert item.parser_path == staged_root / "uploaded.pdf"
-        assert item.source_uri == f"local://{test_config.workspace}/uploaded.pdf"
+        assert item.source_uri == f"local://{test_config.deployment.workspace}/uploaded.pdf"
         assert item.download_locator == str(staged_root / "uploaded.pdf")
         assert (staged_root / "uploaded.pdf").read_bytes() == b"%PDF-fake"
 
@@ -2537,15 +2552,15 @@ class TestWorkspaceRagLightRAGMainPath:
         service._metadata_index = metadata_index
         document_embedder = AsyncMock()
         document_embedder.image_enabled = False
-        document_embedder.dimension = test_config.embedding.dim
+        document_embedder.dimension = test_config.models.embedding.dim
         service._ingestion_engine = UnifiedIngestionEngine(
             lightrag=lightrag,
             stores=stores,
             metadata_index=metadata_index,
             document_embedder=document_embedder,
-            workspace=test_config.workspace,
-            parser_rules=test_config.parser_rules,
-            chunk_options=test_config.parser.chunk_options,
+            workspace=test_config.deployment.workspace,
+            parser_rules=test_config.corpus.parser_rules,
+            chunk_options=dict(test_config.corpus.parser.chunk_options),
         )
         service.alist_failed_docs = AsyncMock(
             return_value=[

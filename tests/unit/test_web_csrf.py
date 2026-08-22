@@ -18,7 +18,7 @@ def _bearer(cfg: DlightragConfig) -> str:
             "iss": "https://issuer.example.com",
             "exp": datetime.now(UTC) + timedelta(minutes=5),
         },
-        cfg.jwt_verification_key or "test-key",
+        cfg.access.jwt_verification_key or "test-key",
         algorithm="HS256",
     )
 
@@ -43,7 +43,12 @@ def _app(cfg: DlightragConfig) -> FastAPI:
 
 
 def _jwt_config() -> DlightragConfig:
-    return DlightragConfig(auth_mode="jwt", jwt_verification_key="test-key")
+    return DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        access={
+            "auth_mode": "jwt",
+            "jwt_verification_key": "test-key",
+        },
+    )
 
 
 def _client_with_session(cfg: DlightragConfig) -> tuple[TestClient, str, str]:

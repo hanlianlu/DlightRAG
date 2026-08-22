@@ -394,7 +394,7 @@ async def create_answer_run(
     bytes and their references are committed with the run itself.
     """
     application = get_application(request)
-    body, uploads = await _parse_answer_body(request, application.config.answer)
+    body, uploads = await _parse_answer_body(request, application.config.answer.generation)
     workspaces = await resolve_authorized_query_workspaces(
         request,
         user,

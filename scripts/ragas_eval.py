@@ -60,8 +60,8 @@ def _resolve_eval_env() -> None:
     Cascade (each level only applies when the env var is unset):
 
     Eval LLM:
-      1. EVAL_LLM_BINDING_API_KEY  ← config.llm.roles.query.api_key
-                                    ← config.llm.default.api_key
+      1. EVAL_LLM_BINDING_API_KEY  ← config.models.chat.roles.query.api_key
+                                    ← config.models.chat.default.api_key
       2. EVAL_LLM_MODEL            ← query role model  ← default model
       3. EVAL_LLM_BINDING_HOST     ← query role base_url ← default base_url
 
@@ -72,8 +72,8 @@ def _resolve_eval_env() -> None:
                                           ← DlightRAG embedding base_url (if OpenAI-compatible)
 
     DlightRAG connection:
-      6. DLIGHTRAG_API_URL              ← config.api_host:api_port
-      7. DLIGHTRAG_API_TOKEN            ← config.api_auth_token (simple)
+      6. DLIGHTRAG_API_URL              ← config.interfaces.api.host:api_port
+      7. DLIGHTRAG_API_TOKEN            ← config.access.api_token (simple)
     """
     llm_key_set = bool(os.getenv("EVAL_LLM_BINDING_API_KEY"))
     embed_key_set = bool(os.getenv("EVAL_EMBEDDING_BINDING_API_KEY"))
@@ -103,7 +103,7 @@ def _resolve_eval_env() -> None:
             exc_info=True,
         )
         return
-    query_cfg = config.llm.roles.query or config.llm.default
+    query_cfg = config.models.chat.roles.query or config.models.chat.default
     query_is_openai_compatible = query_cfg.provider in _OPENAI_COMPATIBLE_LLM_PROVIDERS
 
     # -- Eval LLM --
@@ -116,7 +116,7 @@ def _resolve_eval_env() -> None:
         else:
             logger.warning(
                 "No eval LLM key found — set EVAL_LLM_BINDING_API_KEY, "
-                "DLIGHTRAG_LLM__DEFAULT__API_KEY, or OPENAI_API_KEY"
+                "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY, or OPENAI_API_KEY"
             )
     elif not eval_llm_available:
         logger.warning(
@@ -139,9 +139,9 @@ def _resolve_eval_env() -> None:
         resolved_embed_key = os.getenv("EVAL_LLM_BINDING_API_KEY")
         if (
             not resolved_embed_key
-            and config.embedding.provider in _OPENAI_COMPATIBLE_EMBED_PROVIDERS
+            and config.models.embedding.provider in _OPENAI_COMPATIBLE_EMBED_PROVIDERS
         ):
-            resolved_embed_key = config.embedding.api_key
+            resolved_embed_key = config.models.embedding.api_key
         if resolved_embed_key:
             os.environ["EVAL_EMBEDDING_BINDING_API_KEY"] = resolved_embed_key
             logger.info("Eval embedding key: cascaded from eval LLM or DlightRAG embedding config")
@@ -149,23 +149,25 @@ def _resolve_eval_env() -> None:
     if not os.getenv("EVAL_EMBEDDING_BINDING_HOST"):
         # Cascade: EVAL_LLM host → DlightRAG embedding host (if OpenAI-compatible)
         llm_host = os.getenv("EVAL_LLM_BINDING_HOST")
-        embed_cfg = config.embedding
+        embed_cfg = config.models.embedding
         if llm_host:
             os.environ["EVAL_EMBEDDING_BINDING_HOST"] = llm_host
         elif embed_cfg.provider in _OPENAI_COMPATIBLE_EMBED_PROVIDERS and embed_cfg.base_url:
             os.environ["EVAL_EMBEDDING_BINDING_HOST"] = embed_cfg.base_url
 
     # -- DlightRAG API URL (--api / $DLIGHTRAG_API_URL / config) --
-    if not os.getenv("DLIGHTRAG_API_URL") and config.api_host:
-        os.environ["DLIGHTRAG_API_URL"] = f"http://{config.api_host}:{config.api_port}"
+    if not os.getenv("DLIGHTRAG_API_URL") and config.interfaces.api.host:
+        os.environ["DLIGHTRAG_API_URL"] = (
+            f"http://{config.interfaces.api.host}:{config.interfaces.api.port}"
+        )
         logger.info(
             "DlightRAG API URL: auto-resolved from config (%s)", os.environ["DLIGHTRAG_API_URL"]
         )
 
     # -- DlightRAG API token (simple auth only; JWT tokens come from the issuer) --
     if not os.getenv("DLIGHTRAG_API_TOKEN"):
-        if config.auth_mode == "simple" and config.api_auth_token:
-            os.environ["DLIGHTRAG_API_TOKEN"] = config.api_auth_token
+        if config.access.auth_mode == "simple" and config.access.api_token:
+            os.environ["DLIGHTRAG_API_TOKEN"] = config.access.api_token
             logger.info("DlightRAG API token: auto-resolved from config (simple auth)")
 
 

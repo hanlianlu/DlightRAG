@@ -21,8 +21,8 @@ def test_pg18_harness_is_opt_in() -> None:
 
 def test_pg18_harness_connection_env_prefers_e2e_namespace() -> None:
     env = {
-        "DLIGHTRAG_POSTGRES_HOST": "primary",
-        "DLIGHTRAG_POSTGRES_PORT": "5432",
+        "DLIGHTRAG_STORAGE__POSTGRES__HOST": "primary",
+        "DLIGHTRAG_STORAGE__POSTGRES__PORT": "5432",
         "DLIGHTRAG_E2E_POSTGRES_HOST": "localhost",
         "DLIGHTRAG_E2E_POSTGRES_PORT": "55432",
         "DLIGHTRAG_E2E_POSTGRES_USER": "e2e_user",
@@ -36,6 +36,24 @@ def test_pg18_harness_connection_env_prefers_e2e_namespace() -> None:
         "user": "e2e_user",
         "password": "e2e_pass",
         "database": "e2e_db",
+    }
+
+
+def test_pg18_harness_connection_env_falls_back_to_canonical_storage_namespace() -> None:
+    assert pg_conn_kwargs_from_env(
+        {
+            "DLIGHTRAG_STORAGE__POSTGRES__HOST": "primary",
+            "DLIGHTRAG_STORAGE__POSTGRES__PORT": "5544",
+            "DLIGHTRAG_STORAGE__POSTGRES__USER": "app",
+            "DLIGHTRAG_STORAGE__POSTGRES__PASSWORD": "secret",
+            "DLIGHTRAG_STORAGE__POSTGRES__DATABASE": "corpus",
+        }
+    ) == {
+        "host": "primary",
+        "port": 5544,
+        "user": "app",
+        "password": "secret",
+        "database": "corpus",
     }
 
 

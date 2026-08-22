@@ -111,7 +111,7 @@ def _read_env(repo_root: Path) -> dict[str, str]:
 
 def _working_dir_root(repo_root: Path, env: dict[str, str]) -> Path:
     """Resolve the configured working-directory root from config.yaml."""
-    configured = env.get("DLIGHTRAG_WORKING_DIR")
+    configured = env.get("DLIGHTRAG_DEPLOYMENT__WORKING_DIR")
     if not configured:
         config_file = repo_root / "config.yaml"
         for raw in config_file.read_text(encoding="utf-8").splitlines():
@@ -129,8 +129,8 @@ def _working_dir_root(repo_root: Path, env: dict[str, str]) -> Path:
 
 def _workspace_root(repo_root: Path, env: dict[str, str]) -> Path | None:
     """Resolve the optional Agent Workspace root without importing product code."""
-    configured = env.get("DLIGHTRAG_AGENT__WORKSPACE_ROOT")
-    execution = env.get("DLIGHTRAG_AGENT__EXECUTION_ENVIRONMENT")
+    configured = env.get("DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT")
+    execution = env.get("DLIGHTRAG_ANSWER__AGENT__EXECUTION_ENVIRONMENT")
     config_file = repo_root / "config.yaml"
     if config_file.is_file():
         for raw in config_file.read_text(encoding="utf-8").splitlines():
@@ -150,7 +150,7 @@ def _workspace_root(repo_root: Path, env: dict[str, str]) -> Path | None:
 
 
 def resolve_postgres_target(env: dict[str, str]) -> PostgresTarget:
-    prefix = "DLIGHTRAG_POSTGRES_"
+    prefix = "DLIGHTRAG_STORAGE__POSTGRES__"
     return PostgresTarget(
         host=str(env.get(f"{prefix}HOST") or _DEFAULT_PG["host"]),
         port=int(env.get(f"{prefix}PORT") or _DEFAULT_PG["port"]),

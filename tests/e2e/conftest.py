@@ -31,7 +31,13 @@ from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.ai.media import MODEL_IMAGE_MAX_PIXELS
-from dlightrag.ai.settings import MODEL_ROLE_NAMES
+from dlightrag.ai.settings import (
+    MODEL_ROLE_NAMES,
+    EmbeddingSettings,
+    ModelCapacityOverrideSettings,
+    ModelRoleSettings,
+    ModelSettings,
+)
 from dlightrag.answer.capabilities import AnswerCapabilities
 from dlightrag.answer.capability import AnswerImageCapability
 from dlightrag.answer.runs.execution import (
@@ -40,18 +46,12 @@ from dlightrag.answer.runs.execution import (
     PinnedModelProfile,
 )
 from dlightrag.api.server import create_app
-from dlightrag.config import (
-    DlightragConfig,
-    EmbeddingConfig,
-    LLMConfig,
-    ModelCapacityOverrideConfig,
-    ModelConfig,
-    set_config,
-)
+from dlightrag.config import DlightragConfig, set_config
 from dlightrag.runtime import AnswerRunEvent, AnswerRunRecord
 from dlightrag.services.answers import AnswerInputArtifact
 from dlightrag.web.conversation_models import ConversationHistory, ConversationSummary, LinkedTurn
 from dlightrag.web.conversations import WebAnswerSubmission, project_conversation_turn
+from tests.config_helpers import mutate_config
 
 MOCK_WORKSPACES = [
     {"workspace": "default", "display_name": "Default", "embedding_model": "voyage-multimodal-3.5"},
@@ -472,31 +472,42 @@ def e2e_base_url(
 ) -> Generator[str, Any]:
     """Start one real FastAPI server for the E2E session on a random port."""
     working_directory = tempfile.TemporaryDirectory(prefix="dlightrag-e2e-")
-    application_config = DlightragConfig(  # type: ignore[call-arg]
+    application_config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        # type: ignore[call-arg]
         working_dir=working_directory.name,
-        llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
-        model_capacity_overrides=[
-            ModelCapacityOverrideConfig(
-                provider="openai",
-                model="gpt-5.4-mini",
-                context_window_tokens=400_000,
-                max_output_tokens=128_000,
-                supports_images=True,
-                supports_tools=True,
-                supports_reasoning=True,
-            )
-        ],
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="test",
-            startup_probe=False,
-        ),
+        models={
+            "chat": ModelRoleSettings(default=ModelSettings(model="gpt-5.4-mini", api_key="test")),
+            "capacity_overrides": [
+                ModelCapacityOverrideSettings(
+                    provider="openai",
+                    model="gpt-5.4-mini",
+                    context_window_tokens=400_000,
+                    max_output_tokens=128_000,
+                    supports_images=True,
+                    supports_tools=True,
+                    supports_reasoning=True,
+                )
+            ],
+            "embedding": EmbeddingSettings(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="test",
+                startup_probe=False,
+            ),
+        },
     )
-    application_config.answer.image_max_pixels = MODEL_IMAGE_MAX_PIXELS
-    application_config.answer.max_attachments = 6
-    application_config.answer.max_attachment_bytes = 100 * 1024 * 1024
-    application_config.answer.max_total_attachment_bytes = 128 * 1024 * 1024
+    mutate_config(
+        application_config, "answer.generation.generation.image_max_pixels", MODEL_IMAGE_MAX_PIXELS
+    )
+    mutate_config(application_config, "answer.generation.generation.max_attachments", 6)
+    mutate_config(
+        application_config, "answer.generation.generation.max_attachment_bytes", 100 * 1024 * 1024
+    )
+    mutate_config(
+        application_config,
+        "answer.generation.generation.max_total_attachment_bytes",
+        128 * 1024 * 1024,
+    )
     set_config(application_config)
     application_double = AsyncMock()
     application_double.config = application_config

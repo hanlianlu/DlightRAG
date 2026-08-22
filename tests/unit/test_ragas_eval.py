@@ -104,16 +104,16 @@ def test_resolve_eval_env_keeps_api_autoresolution_when_eval_keys_are_set(
         base_url="https://llm",
     )
     fake_config = SimpleNamespace(
-        llm=SimpleNamespace(roles=SimpleNamespace(query=query_cfg), default=query_cfg),
-        embedding=SimpleNamespace(
-            provider="openai_compatible",
-            api_key="embedding-key",
-            base_url="https://embed",
+        models=SimpleNamespace(
+            chat=SimpleNamespace(roles=SimpleNamespace(query=query_cfg), default=query_cfg),
+            embedding=SimpleNamespace(
+                provider="openai_compatible",
+                api_key="embedding-key",
+                base_url="https://embed",
+            ),
         ),
-        api_host="127.0.0.1",
-        api_port=8100,
-        auth_mode="simple",
-        api_auth_token="api-token",
+        interfaces=SimpleNamespace(api=SimpleNamespace(host="127.0.0.1", port=8100)),
+        access=SimpleNamespace(auth_mode="simple", api_token="api-token"),
     )
     monkeypatch.setattr(config_module, "DlightragConfig", lambda: fake_config)
     monkeypatch.setenv("EVAL_LLM_BINDING_API_KEY", "judge-key")
@@ -141,16 +141,16 @@ def test_resolve_eval_env_does_not_reuse_native_ollama_as_openai_embeddings(
         base_url=None,
     )
     fake_config = SimpleNamespace(
-        llm=SimpleNamespace(roles=SimpleNamespace(query=query_cfg), default=query_cfg),
-        embedding=SimpleNamespace(
-            provider="ollama",
-            api_key="ollama-key",
-            base_url="http://127.0.0.1:11434",
+        models=SimpleNamespace(
+            chat=SimpleNamespace(roles=SimpleNamespace(query=query_cfg), default=query_cfg),
+            embedding=SimpleNamespace(
+                provider="ollama",
+                api_key="ollama-key",
+                base_url="http://127.0.0.1:11434",
+            ),
         ),
-        api_host="127.0.0.1",
-        api_port=8100,
-        auth_mode="none",
-        api_auth_token=None,
+        interfaces=SimpleNamespace(api=SimpleNamespace(host="127.0.0.1", port=8100)),
+        access=SimpleNamespace(auth_mode="none", api_token=None),
     )
     monkeypatch.setattr(config_module, "DlightragConfig", lambda: fake_config)
     for key in (
@@ -183,16 +183,16 @@ def test_resolve_eval_env_does_not_reuse_native_llm_as_openai_evaluator(
         base_url="https://native.example",
     )
     fake_config = SimpleNamespace(
-        llm=SimpleNamespace(roles=SimpleNamespace(query=query_cfg), default=query_cfg),
-        embedding=SimpleNamespace(
-            provider="voyage",
-            api_key="voyage-key",
-            base_url="https://api.voyageai.com/v1",
+        models=SimpleNamespace(
+            chat=SimpleNamespace(roles=SimpleNamespace(query=query_cfg), default=query_cfg),
+            embedding=SimpleNamespace(
+                provider="voyage",
+                api_key="voyage-key",
+                base_url="https://api.voyageai.com/v1",
+            ),
         ),
-        api_host="127.0.0.1",
-        api_port=8100,
-        auth_mode="none",
-        api_auth_token=None,
+        interfaces=SimpleNamespace(api=SimpleNamespace(host="127.0.0.1", port=8100)),
+        access=SimpleNamespace(auth_mode="none", api_token=None),
     )
     monkeypatch.setattr(config_module, "DlightragConfig", lambda: fake_config)
     for key in (

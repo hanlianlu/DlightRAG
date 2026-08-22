@@ -27,7 +27,9 @@ def get_application(request: Request) -> Application:
 
 def resolve_workspace(ws: str | None, request: Request | None = None) -> str:
     workspace = (
-        get_application(request).config.workspace if request is not None else get_config().workspace
+        get_application(request).config.deployment.workspace
+        if request is not None
+        else get_config().deployment.workspace
     )
     return normalize_workspace(ws or workspace)
 
@@ -85,7 +87,9 @@ async def resolve_authorized_query_workspaces(
     try:
         return await get_access_gate(request, user).resolve_query_workspaces(
             get_application(request).corpora,
-            default_workspace=normalize_workspace(get_application(request).config.workspace),
+            default_workspace=normalize_workspace(
+                get_application(request).config.deployment.workspace
+            ),
             workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
         )

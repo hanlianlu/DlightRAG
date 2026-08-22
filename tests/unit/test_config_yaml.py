@@ -1,154 +1,132 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for hybrid YAML + .env configuration loading."""
+"""YAML precedence for the canonical nested configuration."""
 
-import os
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
-import yaml
-from pydantic import ValidationError
 
 from dlightrag.config import DlightragConfig, _find_yaml_config
 
-ROOT = Path(__file__).resolve().parents[2]
 
-
-def _settings_config(**kwargs: Any) -> DlightragConfig:
-    return cast(Any, DlightragConfig)(**kwargs)
-
-
-@pytest.fixture
-def yaml_config_dir(tmp_path, monkeypatch):
-    """Create a config.yaml in a temp dir and cd into it."""
-    config_data = {
-        "llm": {
-            "default": {
-                "provider": "openai",
-                "model": "gemma4:26b-a4b-it-q8_0",
-                "base_url": "http://localhost:11434/v1",
-            }
-        },
-        "embedding": {
-            "provider": "openai_compatible",
-            "model": "text-embedding-3-large",
-            "dim": 512,
-            "startup_probe": False,
-        },
-        "rerank": {"enabled": False},
-        "top_k": 100,
-        "kg_entity_types": ["Person", "Company"],
-    }
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.dump(config_data))
+def test_nested_yaml_loads_and_environment_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "config.yaml").write_text(
+        """
+deployment:
+  workspace: yaml-space
+storage:
+  postgres:
+    host: yaml-db
+models:
+  embedding:
+    dim: 768
+corpus:
+  retrieval:
+    top_k: 41
+""",
+        encoding="utf-8",
+    )
     monkeypatch.chdir(tmp_path)
-    return tmp_path
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
+    monkeypatch.setenv("DLIGHTRAG_CORPUS__RETRIEVAL__TOP_K", "43")
+
+    config = DlightragConfig()
+
+    assert config.deployment.workspace == "yaml-space"
+    assert config.storage.postgres.host == "yaml-db"
+    assert config.models.embedding.dim == 768
+    assert config.corpus.retrieval.top_k == 43
 
 
-@pytest.fixture(autouse=True)
-def _clean_dlightrag_env(monkeypatch):
-    """Remove any DLIGHTRAG_* env vars that could interfere with tests."""
-    for key in list(os.environ):
-        if key.startswith("DLIGHTRAG_"):
-            monkeypatch.delenv(key, raising=False)
+def test_incomplete_yaml_role_falls_back_but_explicit_null_is_keyless(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "config.yaml").write_text(
+        """
+models:
+  chat:
+    default:
+      model: default-model
+    roles:
+      query:
+        model: incomplete-query
+      keyword:
+        model: local-keyword
+        api_key: null
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
+
+    roles = DlightragConfig().models.chat
+
+    assert roles.resolve("query").model == "default-model"
+    assert roles.resolve("keyword").model == "local-keyword"
 
 
-class TestFindYamlConfig:
-    @pytest.mark.usefixtures("yaml_config_dir")
-    def test_finds_yaml_in_cwd(self):
-        result = _find_yaml_config()
-        assert result is not None
-        assert result.name == "config.yaml"
+def test_constructor_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "config.yaml").write_text(
+        "deployment:\n  workspace: yaml-space\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
 
-    def test_returns_none_when_no_yaml(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        assert _find_yaml_config() is None
+    config = DlightragConfig(deployment={"workspace": "constructor-space"})  # type: ignore[arg-type]
 
-
-@pytest.mark.usefixtures("yaml_config_dir")
-class TestYamlConfigLoading:
-    def test_loads_from_yaml(self):
-        config = _settings_config()
-        assert config.llm.default.model == "gemma4:26b-a4b-it-q8_0"
-        assert config.llm.default.base_url == "http://localhost:11434/v1"
-        assert config.embedding.dim == 512
-        assert config.rerank.enabled is False
-        assert config.top_k == 100
-        assert config.kg_entity_types == ["Person", "Company"]
-
-    def test_env_overrides_yaml(self, monkeypatch):
-        monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-5.4-mini")
-        monkeypatch.setenv("DLIGHTRAG_TOP_K", "200")
-
-        config = _settings_config()
-        assert config.llm.default.model == "gpt-5.4-mini"  # env override
-        assert config.llm.default.base_url == "http://localhost:11434/v1"  # from yaml
-        assert config.top_k == 200  # env override
-
-    def test_constructor_overrides_yaml(self):
-        config = _settings_config(top_k=300)
-        assert config.top_k == 300  # constructor override
-        assert config.llm.default.model == "gemma4:26b-a4b-it-q8_0"  # from yaml
-
-    def test_repo_config_declares_embedding_input_modality(self) -> None:
-        config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
-
-        assert config["embedding"]["input_modality"] == "auto"
-        assert config["runtime"]["answer_worker_concurrency"] == 16
-
-    def test_env_example_keeps_web_search_secret_and_answer_behavior_separate(self) -> None:
-        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-
-        assert "# DLIGHTRAG_WEB_SEARCH__API_KEY=" in env_example
-        assert "DLIGHTRAG_ANSWER__CONTEXT_WINDOW_TOKENS" not in env_example
-        assert "DLIGHTRAG_ANSWER__MAX_ATTACHMENTS" not in env_example
-        assert "DLIGHTRAG_ANSWER__MAX_ATTACHMENT_BYTES" not in env_example
-        assert "DLIGHTRAG_ANSWER__MAX_TOTAL_ATTACHMENT_BYTES" not in env_example
+    assert config.deployment.workspace == "constructor-space"
 
 
-class TestConfigSources:
-    def test_works_without_yaml(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        config = _settings_config(
-            embedding={
-                "provider": "openai_compatible",
-                "model": "text-embedding-3-large",
-                "api_key": "test",
-                "startup_probe": False,
-            },
-            llm={"default": {"model": "gpt-5.4-mini", "api_key": "test"}},
-        )
-        assert config.llm.default.model == "gpt-5.4-mini"
-        assert config.embedding.model == "text-embedding-3-large"
+def test_nested_runtime_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
+    monkeypatch.setenv("DLIGHTRAG_ANSWER__RUNTIME__ANSWER_WORKER_CONCURRENCY", "7")
 
-    def test_env_vars_still_work_without_yaml(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-5.4-mini")
-        monkeypatch.setenv("DLIGHTRAG_EMBEDDING__PROVIDER", "openai_compatible")
-        monkeypatch.setenv("DLIGHTRAG_EMBEDDING__MODEL", "text-embedding-3-large")
-        monkeypatch.setenv("DLIGHTRAG_EMBEDDING__API_KEY", "test")
-        monkeypatch.setenv("DLIGHTRAG_EMBEDDING__STARTUP_PROBE", "false")
-
-        config = _settings_config()
-        assert config.llm.default.model == "gpt-5.4-mini"
+    assert DlightragConfig().answer.runtime.answer_worker_concurrency == 7
 
 
-def test_runtime_answer_worker_concurrency_is_nested() -> None:
-    config = _settings_config(runtime={"answer_worker_concurrency": 7})
-
-    assert config.runtime.answer_worker_concurrency == 7
-
-
-def test_runtime_answer_worker_concurrency_uses_nested_env(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_flat_runtime_environment_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DLIGHTRAG_RUNTIME__ANSWER_WORKER_CONCURRENCY", "5")
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
+    monkeypatch.setenv("DLIGHTRAG_ANSWER_WORKER_CONCURRENCY", "7")
 
-    assert _settings_config().runtime.answer_worker_concurrency == 5
+    with pytest.raises(ValueError, match="Unknown DlightRAG environment variables"):
+        DlightragConfig()
 
 
-def test_flat_answer_worker_concurrency_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="answer_worker_concurrency"):
-        _settings_config(answer_worker_concurrency=5)
+def test_yaml_discovery_and_no_yaml_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert _find_yaml_config() is None
+    config = DlightragConfig(_env_file=None)
+    assert config.deployment.workspace == "default"
+
+    path = tmp_path / "config.yaml"
+    path.write_text("deployment:\n  workspace: found\n", encoding="utf-8")
+    assert _find_yaml_config() == Path("config.yaml")
+    assert DlightragConfig(_env_file=None).deployment.workspace == "found"
+
+
+def test_shipped_config_and_env_example_use_canonical_sections() -> None:
+    root = Path(__file__).resolve().parents[2]
+    config_text = (root / "config.yaml").read_text(encoding="utf-8")
+    env_text = (root / ".env.example").read_text(encoding="utf-8")
+
+    assert "models:\n" in config_text
+    assert "  embedding:\n" in config_text
+    assert "    input_modality: auto\n" in config_text
+    assert "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY" in env_text
+    assert "DLIGHTRAG_WEB_SEARCH__API_KEY" not in env_text
+
+
+def test_old_yaml_root_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "config.yaml").write_text("postgres_host: old-db\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
+
+    with pytest.raises(Exception, match="Extra inputs"):
+        DlightragConfig()

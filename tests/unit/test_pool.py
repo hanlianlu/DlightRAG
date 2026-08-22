@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import asyncpg
 import pytest
 
+from tests.config_helpers import mutate_config
+
 
 class TestPGPoolGet:
     """Tests for PGPool.get()."""
@@ -20,15 +22,15 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mock_config.postgres_host = "testhost"
-        mock_config.postgres_port = 5432
-        mock_config.postgres_user = "testuser"
-        mock_config.postgres_password = "testpass"
-        mock_config.postgres_database = "testdb"
-        mock_config.postgres_pool_min_size = 2
-        mock_config.postgres_pool_max_size = 10
-        mock_config.postgres_statement_cache_size = None
-        mock_config.postgres_command_timeout = None
+        mutate_config(mock_config, "storage.postgres.host", "testhost")
+        mutate_config(mock_config, "storage.postgres.port", 5432)
+        mutate_config(mock_config, "storage.postgres.user", "testuser")
+        mutate_config(mock_config, "storage.postgres.password", "testpass")
+        mutate_config(mock_config, "storage.postgres.database", "testdb")
+        mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
+        mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
+        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
+        mutate_config(mock_config, "storage.postgres.command_timeout", None)
         mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "testhost",
@@ -67,12 +69,12 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mock_config.postgres_host = "localhost"
-        mock_config.postgres_port = 5432
-        mock_config.postgres_user = "u"
-        mock_config.postgres_password = "p"
-        mock_config.postgres_database = "db"
-        mock_config.postgres_statement_cache_size = None
+        mutate_config(mock_config, "storage.postgres.host", "localhost")
+        mutate_config(mock_config, "storage.postgres.port", 5432)
+        mutate_config(mock_config, "storage.postgres.user", "u")
+        mutate_config(mock_config, "storage.postgres.password", "p")
+        mutate_config(mock_config, "storage.postgres.database", "db")
+        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
         mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "localhost",
@@ -129,12 +131,12 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mock_config.postgres_host = "localhost"
-        mock_config.postgres_port = 5432
-        mock_config.postgres_user = "u"
-        mock_config.postgres_password = "p"
-        mock_config.postgres_database = "db"
-        mock_config.postgres_statement_cache_size = None
+        mutate_config(mock_config, "storage.postgres.host", "localhost")
+        mutate_config(mock_config, "storage.postgres.port", 5432)
+        mutate_config(mock_config, "storage.postgres.user", "u")
+        mutate_config(mock_config, "storage.postgres.password", "p")
+        mutate_config(mock_config, "storage.postgres.database", "db")
+        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
         mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "localhost",
@@ -168,10 +170,10 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mock_config.postgres_pool_min_size = 2
-        mock_config.postgres_pool_max_size = 10
-        mock_config.postgres_statement_cache_size = 128
-        mock_config.postgres_command_timeout = None
+        mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
+        mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
+        mutate_config(mock_config, "storage.postgres.statement_cache_size", 128)
+        mutate_config(mock_config, "storage.postgres.command_timeout", None)
         mock_config.domain_pool_server_settings.return_value = {
             "hnsw.ef_search": "384",
             "application_name": "dlightrag",
@@ -218,10 +220,10 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mock_config.postgres_pool_min_size = 2
-        mock_config.postgres_pool_max_size = 10
-        mock_config.postgres_statement_cache_size = None
-        mock_config.postgres_command_timeout = None
+        mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
+        mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
+        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
+        mutate_config(mock_config, "storage.postgres.command_timeout", None)
         mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "primary",
@@ -268,13 +270,13 @@ class TestPGPoolGet:
         the_pool.acquire.return_value.__aenter__.side_effect = [stale_conn, fresh_conn]
 
         mock_config = MagicMock()
-        mock_config.postgres_pool_min_size = 2
-        mock_config.postgres_pool_max_size = 10
-        mock_config.postgres_statement_cache_size = None
+        mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
+        mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
+        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
         mock_config.domain_pool_server_settings.return_value = {}
-        mock_config.postgres_connection_retries = 2
-        mock_config.postgres_connection_retry_backoff = 0
-        mock_config.postgres_connection_retry_backoff_max = 0
+        mutate_config(mock_config, "storage.postgres.connection_retries", 2)
+        mutate_config(mock_config, "storage.postgres.connection_retry_backoff", 0)
+        mutate_config(mock_config, "storage.postgres.connection_retry_backoff_max", 0)
         mock_config.pg_connection_kwargs.return_value = {
             "host": "primary",
             "port": 5432,
@@ -320,9 +322,9 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mock_config.postgres_statement_cache_size = None
-        mock_config.postgres_command_timeout = None
-        mock_config.postgres_acquire_timeout = 12.5
+        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
+        mutate_config(mock_config, "storage.postgres.command_timeout", None)
+        mutate_config(mock_config, "storage.postgres.acquire_timeout", 12.5)
         mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
 
@@ -359,10 +361,10 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mock_config.postgres_pool_min_size = 2
-        mock_config.postgres_pool_max_size = 10
-        mock_config.postgres_statement_cache_size = None
-        mock_config.postgres_command_timeout = 60.0
+        mutate_config(mock_config, "storage.postgres.pool_min_size", 2)
+        mutate_config(mock_config, "storage.postgres.pool_max_size", 10)
+        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
+        mutate_config(mock_config, "storage.postgres.command_timeout", 60.0)
         mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "primary",
@@ -393,10 +395,10 @@ class TestPGPoolGet:
         pool = PGPool()
 
         mock_config = MagicMock()
-        mock_config.postgres_statement_cache_size = None
-        mock_config.postgres_command_timeout = None
-        mock_config.postgres_acquire_timeout = 12.5
-        mock_config.postgres_connection_retries = 1
+        mutate_config(mock_config, "storage.postgres.statement_cache_size", None)
+        mutate_config(mock_config, "storage.postgres.command_timeout", None)
+        mutate_config(mock_config, "storage.postgres.acquire_timeout", 12.5)
+        mutate_config(mock_config, "storage.postgres.connection_retries", 1)
         mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
 

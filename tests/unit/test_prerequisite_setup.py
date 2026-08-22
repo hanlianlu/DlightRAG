@@ -55,7 +55,7 @@ def test_llm_openai_compatible_mapping(wiz):
     assert block["provider"] == "openai"
     assert block["base_url"] == "https://api.deepseek.com"
     assert block["model"] == "deepseek-v4-flash"
-    assert env_key == "DLIGHTRAG_LLM__DEFAULT__API_KEY"
+    assert env_key == "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY"
 
 
 def test_llm_native_provider_has_no_base_url(wiz):
@@ -131,7 +131,7 @@ def test_embedding_mapping_prefills_dim(wiz):
     )
     assert block["provider"] == "voyage"
     assert block["dim"] == 1024
-    assert env_key == "DLIGHTRAG_EMBEDDING__API_KEY"
+    assert env_key == "DLIGHTRAG_MODELS__EMBEDDING__API_KEY"
 
 
 def test_rerank_reuse_llm_needs_no_key(wiz):
@@ -221,19 +221,28 @@ def test_ask_model_returns_none_for_unauthenticated_local_provider(wiz):
 
 
 # --- Task 3: config.yaml writer -------------------------------------------
+def test_write_config_rejects_legacy_schema_with_actionable_message(wiz, tmp_path):
+    src = tmp_path / "config.yaml"
+    src.write_text("llm:\n  default:\n    model: old\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="1.x config schema detected"):
+        wiz.write_config_yaml(src, llm_default={"model": "new"})
+
+
 def test_write_config_preserves_comments_and_updates(wiz, tmp_path):
     src = tmp_path / "config.yaml"
     src.write_text(
         "# curated header comment\n"
-        "llm:\n"
-        "  default:\n"
-        "    provider: openai  # inline note\n"
-        "    model: old-model\n"
-        "    base_url: https://old\n"
-        "embedding:\n"
-        "  provider: voyage\n"
-        "  model: old-embed\n"
-        "  dim: 1024\n",
+        "models:\n"
+        "  chat:\n"
+        "    default:\n"
+        "      provider: openai  # inline note\n"
+        "      model: old-model\n"
+        "      base_url: https://old\n"
+        "  embedding:\n"
+        "    provider: voyage\n"
+        "    model: old-embed\n"
+        "    dim: 1024\n",
         encoding="utf-8",
     )
     wiz.write_config_yaml(
@@ -260,12 +269,13 @@ def test_write_config_preserves_comments_and_updates(wiz, tmp_path):
 def test_write_config_replaces_stale_role_blocks_when_roles_are_explicit(wiz, tmp_path):
     src = tmp_path / "config.yaml"
     src.write_text(
-        "llm:\n"
-        "  default:\n    provider: openai\n    model: default\n"
-        "  roles:\n"
-        "    extract:\n      provider: openai\n      model: stale-extract\n"
-        "    vlm:\n      provider: openai\n      model: stale-vlm\n"
-        "embedding:\n  provider: voyage\n  model: embed\n  dim: 1024\n",
+        "models:\n"
+        "  chat:\n"
+        "    default:\n      provider: openai\n      model: default\n"
+        "    roles:\n"
+        "      extract:\n        provider: openai\n        model: stale-extract\n"
+        "      vlm:\n        provider: openai\n        model: stale-vlm\n"
+        "  embedding:\n    provider: voyage\n    model: embed\n    dim: 1024\n",
         encoding="utf-8",
     )
 
@@ -290,11 +300,12 @@ def test_write_config_replaces_stale_role_blocks_when_roles_are_explicit(wiz, tm
 def test_write_config_keyed_role_removes_stale_keyless_yaml(wiz, tmp_path):
     src = tmp_path / "config.yaml"
     src.write_text(
-        "llm:\n"
-        "  default:\n    provider: openai\n    model: default\n"
-        "  roles:\n"
-        "    extract:\n      provider: openai\n      model: local\n      api_key: null\n"
-        "embedding:\n  provider: voyage\n  model: embed\n  dim: 1024\n",
+        "models:\n"
+        "  chat:\n"
+        "    default:\n      provider: openai\n      model: default\n"
+        "    roles:\n"
+        "      extract:\n        provider: openai\n        model: local\n        api_key: null\n"
+        "  embedding:\n    provider: voyage\n    model: embed\n    dim: 1024\n",
         encoding="utf-8",
     )
 
@@ -309,7 +320,7 @@ def test_write_config_keyed_role_removes_stale_keyless_yaml(wiz, tmp_path):
         },
     )
 
-    role = wiz._yaml().load(src)["llm"]["roles"]["extract"]
+    role = wiz._yaml().load(src)["models"]["chat"]["roles"]["extract"]
     assert role["model"] == "keyed-extract"
     assert "api_key" not in role
 
@@ -318,9 +329,10 @@ def test_write_config_selects_docling_and_removes_mineru(wiz, tmp_path):
     src = tmp_path / "config.yaml"
     src.write_text(
         "# parser comment\n"
-        'parser:\n  rules: "*:mineru-iteP"\n'
-        "parser_sidecars:\n"
-        "  mineru:\n    api_mode: local\n    language: ch\n",
+        "corpus:\n"
+        '  parser:\n    rules: "*:mineru-iteP"\n'
+        "  sidecars:\n"
+        "    mineru:\n      api_mode: local\n      language: ch\n",
         encoding="utf-8",
     )
 
@@ -331,24 +343,25 @@ def test_write_config_selects_docling_and_removes_mineru(wiz, tmp_path):
     )
 
     data = wiz._yaml().load(src)
-    assert "parser" not in data
-    assert data["parser_sidecars"] == {"docling": {"endpoint": "https://docling.example.com"}}
+    assert "parser" not in data["corpus"]
+    assert data["corpus"]["sidecars"] == {"docling": {"endpoint": "https://docling.example.com"}}
     assert "# parser comment" in src.read_text(encoding="utf-8")
 
 
 def test_write_config_selects_mineru_and_removes_docling(wiz, tmp_path):
     src = tmp_path / "config.yaml"
     src.write_text(
-        'parser:\n  rules: "*:docling-iteP"\n'
-        "parser_sidecars:\n  docling:\n    endpoint: http://docling:5001\n",
+        "corpus:\n"
+        '  parser:\n    rules: "*:docling-iteP"\n'
+        "  sidecars:\n    docling:\n      endpoint: http://docling:5001\n",
         encoding="utf-8",
     )
 
     wiz.write_config_yaml(src, parser_kind="mineru", mineru_api_mode="local")
 
     data = wiz._yaml().load(src)
-    assert "parser" not in data
-    assert data["parser_sidecars"] == {
+    assert "parser" not in data["corpus"]
+    assert data["corpus"]["sidecars"] == {
         "mineru": {
             "api_mode": "local",
             "local_endpoint": "http://host.docker.internal:8210",
@@ -360,16 +373,21 @@ def test_write_config_selects_mineru_and_removes_docling(wiz, tmp_path):
 # --- Task 4: .env upsert ---------------------------------------------------
 def test_upsert_env_preserves_and_updates(wiz, tmp_path):
     env = tmp_path / ".env"
-    env.write_text("EXISTING=keep\nDLIGHTRAG_LLM__DEFAULT__API_KEY=old\n", encoding="utf-8")
+    env.write_text(
+        "EXISTING=keep\nDLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=old\n", encoding="utf-8"
+    )
     wiz.upsert_env(
         env,
-        {"DLIGHTRAG_LLM__DEFAULT__API_KEY": "new", "DLIGHTRAG_EMBEDDING__API_KEY": "e"},
+        {
+            "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY": "new",
+            "DLIGHTRAG_MODELS__EMBEDDING__API_KEY": "e",
+        },
     )
     lines = env.read_text(encoding="utf-8").splitlines()
     assert "EXISTING=keep" in lines
-    assert "DLIGHTRAG_LLM__DEFAULT__API_KEY=new" in lines
-    assert "DLIGHTRAG_EMBEDDING__API_KEY=e" in lines
-    assert sum(line.startswith("DLIGHTRAG_LLM__DEFAULT__API_KEY=") for line in lines) == 1
+    assert "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=new" in lines
+    assert "DLIGHTRAG_MODELS__EMBEDDING__API_KEY=e" in lines
+    assert sum(line.startswith("DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=") for line in lines) == 1
 
 
 def test_upsert_env_collapses_duplicate_keys(wiz, tmp_path):
@@ -486,20 +504,21 @@ def test_resolve_service_model(wiz, os_name, is_wsl, systemd, expected):
 def test_models_step_writes_config_and_env(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "llm:\n  default:\n    provider: openai\n    model: x\n    base_url: https://x\n"
-        "  roles:\n    extract:\n      provider: openai\n      model: stale-extract\n"
-        "    vlm:\n      provider: openai\n      model: stale-vlm\n"
-        "embedding:\n  provider: voyage\n  model: x\n  dim: 1024\n"
-        "rerank:\n  strategy: voyage_reranker\n  model: stale-rerank\n  base_url: https://stale\n",
+        "models:\n"
+        "  chat:\n    default:\n      provider: openai\n      model: x\n      base_url: https://x\n"
+        "    roles:\n      extract:\n        provider: openai\n        model: stale-extract\n"
+        "      vlm:\n        provider: openai\n        model: stale-vlm\n"
+        "  embedding:\n    provider: voyage\n    model: x\n    dim: 1024\n"
+        "  rerank:\n    strategy: voyage_reranker\n    model: stale-rerank\n    base_url: https://stale\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
     env.write_text(
-        "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=old-extract\n"
-        "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=old-keyword\n"
-        "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY=old-query\n"
-        "DLIGHTRAG_LLM__ROLES__VLM__API_KEY=old-vlm\n"
-        "DLIGHTRAG_RERANK__API_KEY=old-rerank\n",
+        "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY=old-extract\n"
+        "DLIGHTRAG_MODELS__CHAT__ROLES__KEYWORD__API_KEY=old-keyword\n"
+        "DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY=old-query\n"
+        "DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY=old-vlm\n"
+        "DLIGHTRAG_MODELS__RERANK__API_KEY=old-rerank\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
@@ -529,31 +548,32 @@ def test_models_step_writes_config_and_env(wiz, tmp_path, monkeypatch):
     assert "stale-extract" not in text
     assert "stale-vlm" not in text
     env_text = env.read_text(encoding="utf-8")
-    assert "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-llm" in env_text
-    assert "DLIGHTRAG_EMBEDDING__API_KEY=sk-embed" in env_text
-    assert "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY" not in env_text
-    assert "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY" not in env_text
-    assert "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY" not in env_text
-    assert "DLIGHTRAG_LLM__ROLES__VLM__API_KEY" not in env_text
-    assert "DLIGHTRAG_RERANK__API_KEY" not in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-llm" in env_text
+    assert "DLIGHTRAG_MODELS__EMBEDDING__API_KEY=sk-embed" in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY" not in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__KEYWORD__API_KEY" not in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY" not in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY" not in env_text
+    assert "DLIGHTRAG_MODELS__RERANK__API_KEY" not in env_text
 
 
 def test_models_step_custom_replaces_roles_and_writes_role_env(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "llm:\n  default:\n    provider: openai\n    model: x\n    base_url: https://x\n"
-        "  roles:\n    vlm:\n      provider: openai\n      model: stale-vlm\n"
-        "embedding:\n  provider: voyage\n  model: x\n  dim: 1024\n"
-        "rerank:\n  strategy: voyage_reranker\n",
+        "models:\n"
+        "  chat:\n    default:\n      provider: openai\n      model: x\n      base_url: https://x\n"
+        "    roles:\n      vlm:\n        provider: openai\n        model: stale-vlm\n"
+        "  embedding:\n    provider: voyage\n    model: x\n    dim: 1024\n"
+        "  rerank:\n    strategy: voyage_reranker\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
     env.write_text(
-        "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=old-extract\n"
-        "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=old-keyword\n"
-        "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY=old-query\n"
-        "DLIGHTRAG_LLM__ROLES__VLM__API_KEY=old-vlm\n"
-        "DLIGHTRAG_RERANK__API_KEY=old-rerank\n",
+        "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY=old-extract\n"
+        "DLIGHTRAG_MODELS__CHAT__ROLES__KEYWORD__API_KEY=old-keyword\n"
+        "DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY=old-query\n"
+        "DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY=old-vlm\n"
+        "DLIGHTRAG_MODELS__RERANK__API_KEY=old-rerank\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
@@ -590,27 +610,28 @@ def test_models_step_custom_replaces_roles_and_writes_role_env(wiz, tmp_path, mo
     assert "keyword:" in text
     assert "stale-vlm" not in text
     env_text = env.read_text(encoding="utf-8")
-    assert "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=sk-extract" in env_text
-    assert "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=sk-keyword" in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY=sk-extract" in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__KEYWORD__API_KEY=sk-keyword" in env_text
     assert "old-extract" not in env_text
     assert "old-keyword" not in env_text
-    assert "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY" not in env_text
-    assert "DLIGHTRAG_LLM__ROLES__VLM__API_KEY" not in env_text
-    assert "DLIGHTRAG_RERANK__API_KEY" not in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__QUERY__API_KEY" not in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY" not in env_text
+    assert "DLIGHTRAG_MODELS__RERANK__API_KEY" not in env_text
 
 
 def test_models_step_writes_keyless_role_to_yaml_and_removes_stale_env(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "llm:\n  default:\n    provider: openai\n    model: old\n"
-        "  roles:\n    extract:\n      provider: openai\n      model: old\n"
-        "embedding:\n  provider: voyage\n  model: old\n  dim: 1024\n"
-        "rerank:\n  strategy: chat_llm_reranker\n",
+        "models:\n"
+        "  chat:\n    default:\n      provider: openai\n      model: old\n"
+        "    roles:\n      extract:\n        provider: openai\n        model: old\n"
+        "  embedding:\n    provider: voyage\n    model: old\n    dim: 1024\n"
+        "  rerank:\n    strategy: chat_llm_reranker\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
     env.write_text(
-        "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=stale-key\n",
+        "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY=stale-key\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
@@ -643,27 +664,31 @@ def test_models_step_writes_keyless_role_to_yaml_and_removes_stale_env(wiz, tmp_
     wiz.run_models_step(prompter)
 
     config = wiz._yaml().load(cfg)
-    assert config["llm"]["roles"]["extract"]["api_key"] is None
+    assert config["models"]["chat"]["roles"]["extract"]["api_key"] is None
     env_text = env.read_text(encoding="utf-8")
-    assert "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY" not in env_text
-    assert "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=sk-keyword" in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__EXTRACT__API_KEY" not in env_text
+    assert "DLIGHTRAG_MODELS__CHAT__ROLES__KEYWORD__API_KEY=sk-keyword" in env_text
 
 
 # --- Plan 2 Task 1: MinerU config helpers ---------------------------------
 def test_configure_mineru_official(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: local\n", encoding="utf-8")
+    cfg.write_text("corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n", encoding="utf-8")
     env = tmp_path / ".env"
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
     monkeypatch.setattr(wiz, "ENV_PATH", env)
     wiz.configure_mineru_official("tok-123")
     assert "api_mode: official" in cfg.read_text(encoding="utf-8")
-    assert "DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN=tok-123" in env.read_text(encoding="utf-8")
+    assert "DLIGHTRAG_CORPUS__SIDECARS__MINERU__API_TOKEN=tok-123" in env.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_configure_mineru_local_env_writes_extras_and_title_aided(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
+    cfg.write_text(
+        "corpus:\n  sidecars:\n    mineru:\n      api_mode: official\n", encoding="utf-8"
+    )
     mineru_env = tmp_path / ".env.mineru"
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
     monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
@@ -688,7 +713,7 @@ def test_configure_mineru_local_env_disables_and_scrubs_stale_title_aided(
     wiz, tmp_path, monkeypatch
 ):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: local\n", encoding="utf-8")
+    cfg.write_text("corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n", encoding="utf-8")
     mineru_env = tmp_path / ".env.mineru"
     mineru_env.write_text(
         "MINERU_INSTALL_EXTRAS=core\n"
@@ -743,7 +768,7 @@ def test_build_mineru_local_commands(wiz, service_model, expected):
 # --- Plan 2 Task 2: parser step --------------------------------------------
 def test_run_parser_step_mineru_official(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: local\n", encoding="utf-8")
+    cfg.write_text("corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n", encoding="utf-8")
     env = tmp_path / ".env"
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
     monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
@@ -758,7 +783,9 @@ def test_run_parser_step_mineru_official(wiz, tmp_path, monkeypatch):
 
 def test_run_parser_step_mineru_local_runs_commands(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
+    cfg.write_text(
+        "corpus:\n  sidecars:\n    mineru:\n      api_mode: official\n", encoding="utf-8"
+    )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
     monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
     monkeypatch.setattr(wiz, "MINERU_ENV_PATH", tmp_path / ".env.mineru")
@@ -779,11 +806,11 @@ def test_run_parser_step_mineru_local_runs_commands(wiz, tmp_path, monkeypatch):
 def test_run_parser_step_configures_bundled_docling(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        'parser:\n  rules: "*:mineru-iteP"\nparser_sidecars:\n  mineru:\n    api_mode: local\n',
+        'corpus:\n  parser:\n    rules: "*:mineru-iteP"\n  sidecars:\n    mineru:\n      api_mode: local\n',
         encoding="utf-8",
     )
     env = tmp_path / ".env"
-    env.write_text("DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN=stale\n", encoding="utf-8")
+    env.write_text("DLIGHTRAG_CORPUS__SIDECARS__MINERU__API_TOKEN=stale\n", encoding="utf-8")
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
     monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
     monkeypatch.setattr(wiz, "ENV_PATH", env)
@@ -796,7 +823,7 @@ def test_run_parser_step_configures_bundled_docling(wiz, tmp_path, monkeypatch):
     )
 
     assert mode == "docling"
-    assert wiz._yaml().load(cfg)["parser_sidecars"] == {
+    assert wiz._yaml().load(cfg)["corpus"]["sidecars"] == {
         "docling": {"endpoint": "http://docling:5001"}
     }
     env_text = env.read_text(encoding="utf-8")
@@ -807,7 +834,7 @@ def test_run_parser_step_configures_bundled_docling(wiz, tmp_path, monkeypatch):
 def test_run_parser_step_configures_external_docling(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        'parser:\n  rules: "*:mineru-iteP"\nparser_sidecars:\n  mineru:\n    api_mode: local\n',
+        'corpus:\n  parser:\n    rules: "*:mineru-iteP"\n  sidecars:\n    mineru:\n      api_mode: local\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
@@ -824,7 +851,7 @@ def test_run_parser_step_configures_external_docling(wiz, tmp_path, monkeypatch)
     )
 
     assert mode == "external"
-    assert wiz._yaml().load(cfg)["parser_sidecars"]["docling"]["endpoint"] == (
+    assert wiz._yaml().load(cfg)["corpus"]["sidecars"]["docling"]["endpoint"] == (
         "https://docling.example.com"
     )
     assert "COMPOSE_PROFILES" not in env.read_text(encoding="utf-8")
@@ -834,9 +861,10 @@ def test_run_parser_step_configures_external_docling(wiz, tmp_path, monkeypatch)
 def test_models_step_returns_llm_creds(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "llm:\n  default:\n    provider: openai\n    model: x\n    base_url: https://x\n"
-        "embedding:\n  provider: voyage\n  model: x\n  dim: 1024\n"
-        "rerank:\n  strategy: voyage_reranker\n",
+        "models:\n"
+        "  chat:\n    default:\n      provider: openai\n      model: x\n      base_url: https://x\n"
+        "  embedding:\n    provider: voyage\n    model: x\n    dim: 1024\n"
+        "  rerank:\n    strategy: voyage_reranker\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
@@ -867,9 +895,10 @@ def test_models_step_returns_llm_creds(wiz, tmp_path, monkeypatch):
 def test_models_step_reprompts_for_reranker_key(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "llm:\n  default:\n    provider: openai\n    model: x\n"
-        "embedding:\n  provider: voyage\n  model: x\n  dim: 1024\n"
-        "rerank:\n  strategy: chat_llm_reranker\n",
+        "models:\n"
+        "  chat:\n    default:\n      provider: openai\n      model: x\n"
+        "  embedding:\n    provider: voyage\n    model: x\n    dim: 1024\n"
+        "  rerank:\n    strategy: chat_llm_reranker\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
@@ -904,12 +933,14 @@ def test_models_step_reprompts_for_reranker_key(wiz, tmp_path, monkeypatch):
 
     wiz.run_models_step(prompter)
 
-    assert "DLIGHTRAG_RERANK__API_KEY=sk-rerank" in env.read_text(encoding="utf-8")
+    assert "DLIGHTRAG_MODELS__RERANK__API_KEY=sk-rerank" in env.read_text(encoding="utf-8")
 
 
 def test_run_parser_step_mineru_local_title_aided(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
+    cfg.write_text(
+        "corpus:\n  sidecars:\n    mineru:\n      api_mode: official\n", encoding="utf-8"
+    )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
     monkeypatch.setattr(wiz, "MINERU_ENV_PATH", tmp_path / ".env.mineru")
     monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
@@ -1089,7 +1120,7 @@ def test_apply_and_validate_removes_new_env_on_failure(wiz, tmp_path, monkeypatc
 def test_is_configured_true_when_keys_present(wiz, tmp_path):
     env = tmp_path / ".env"
     env.write_text(
-        "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\nDLIGHTRAG_EMBEDDING__API_KEY=sk-b\n",
+        "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\nDLIGHTRAG_MODELS__EMBEDDING__API_KEY=sk-b\n",
         encoding="utf-8",
     )
     assert wiz.is_configured(env) is True
@@ -1097,7 +1128,7 @@ def test_is_configured_true_when_keys_present(wiz, tmp_path):
 
 def test_is_configured_false_when_missing_key(wiz, tmp_path):
     env = tmp_path / ".env"
-    env.write_text("DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
+    env.write_text("DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
     assert wiz.is_configured(env) is False
 
 
@@ -1108,27 +1139,30 @@ def test_is_configured_false_when_no_env(wiz, tmp_path):
 def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "llm:\n"
-        "  default:\n    provider: openai\n    model: gpt-x\n    base_url: https://api.x\n"
-        "  roles:\n    extract:\n      provider: openai\n      model: cheap\n"
-        "      base_url: https://api.deepseek.com\n"
-        "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
-        "  base_url: https://api.voyageai.com/v1\n"
-        "rerank:\n  enabled: true\n  strategy: voyage_reranker\n  model: rerank-2.5-lite\n"
-        "model_capacity_overrides:\n"
-        "  - provider: openai\n    model: gpt-x\n    base_url: https://api.x\n"
-        "    context_window_tokens: 123456\n    max_output_tokens: 8192\n"
-        "answer:\n  max_attachments: 6\n"
-        "  max_attachment_bytes: 104857600\n  max_total_attachment_bytes: 134217728\n"
-        "  max_images: 12\n"
-        "parser_sidecars:\n  mineru:\n    api_mode: local\n"
-        "  docling:\n    endpoint: http://docling:5001\n"
-        "workspace: default\n",
+        "models:\n"
+        "  chat:\n"
+        "    default:\n      provider: openai\n      model: gpt-x\n      base_url: https://api.x\n"
+        "    roles:\n      extract:\n        provider: openai\n        model: cheap\n"
+        "        base_url: https://api.deepseek.com\n"
+        "  embedding:\n    provider: voyage\n    model: voyage-x\n    dim: 1024\n"
+        "    base_url: https://api.voyageai.com/v1\n"
+        "  rerank:\n    enabled: true\n    strategy: voyage_reranker\n"
+        "    model: rerank-2.5-lite\n"
+        "  capacity_overrides:\n"
+        "    - provider: openai\n      model: gpt-x\n      base_url: https://api.x\n"
+        "      context_window_tokens: 123456\n      max_output_tokens: 8192\n"
+        "answer:\n  generation:\n    max_attachments: 6\n"
+        "    max_attachment_bytes: 104857600\n"
+        "    max_total_attachment_bytes: 134217728\n"
+        "    max_images: 12\n"
+        "corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n"
+        "    docling:\n      endpoint: http://docling:5001\n"
+        "deployment:\n  workspace: default\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
     env.write_text(
-        "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\nDLIGHTRAG_EMBEDDING__API_KEY=sk-b\n",
+        "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\nDLIGHTRAG_MODELS__EMBEDDING__API_KEY=sk-b\n",
         encoding="utf-8",
     )
     s = wiz.read_config_summary(cfg, env)
@@ -1171,17 +1205,18 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
 def test_read_config_summary_reports_vlm_role_visual_inspection(wiz, tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "llm:\n"
-        "  default:\n    provider: openai\n    model: gpt-x\n"
-        "  roles:\n    vlm:\n      provider: gemini\n      model: gemini-vision\n"
-        "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
-        "rerank:\n  enabled: false\n  strategy: chat_llm_reranker\n"
-        "parser_sidecars:\n  mineru:\n    api_mode: local\n"
-        "workspace: default\n",
+        "models:\n"
+        "  chat:\n"
+        "    default:\n      provider: openai\n      model: gpt-x\n"
+        "    roles:\n      vlm:\n        provider: gemini\n        model: gemini-vision\n"
+        "  embedding:\n    provider: voyage\n    model: voyage-x\n    dim: 1024\n"
+        "  rerank:\n    enabled: false\n    strategy: chat_llm_reranker\n"
+        "corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n"
+        "deployment:\n  workspace: default\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
-    env.write_text("DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
+    env.write_text("DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
     s = wiz.read_config_summary(cfg, env)
     # An explicit vlm role owns answer visual inspection.
     assert s["visual_inspection"] == {
@@ -1194,15 +1229,16 @@ def test_read_config_summary_reports_vlm_role_visual_inspection(wiz, tmp_path):
 def test_read_config_summary_uses_answer_defaults_when_absent(wiz, tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "llm:\n  default:\n    provider: openai\n    model: gpt-x\n"
-        "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
-        "rerank:\n  strategy: chat_llm_reranker\n"
-        "parser_sidecars:\n  mineru:\n    api_mode: local\n"
-        "workspace: default\n",
+        "models:\n"
+        "  chat:\n    default:\n      provider: openai\n      model: gpt-x\n"
+        "  embedding:\n    provider: voyage\n    model: voyage-x\n    dim: 1024\n"
+        "  rerank:\n    strategy: chat_llm_reranker\n"
+        "corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n"
+        "deployment:\n  workspace: default\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
-    env.write_text("DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
+    env.write_text("DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
     s = wiz.read_config_summary(cfg, env)
     # Absent answer block falls back to attachment/image product defaults only.
     assert "context_window_tokens" not in s["answer"]
@@ -1224,20 +1260,21 @@ def test_render_summary_shows_context_and_attachment_settings(wiz, tmp_path):
     # Distinctive values, so the assertions cannot be satisfied by the shipped config.yaml.
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "llm:\n  default:\n    provider: openai\n    model: gpt-x\n"
-        "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
-        "rerank:\n  strategy: chat_llm_reranker\n"
-        "model_capacity_overrides:\n"
-        "  - provider: openai\n    model: gpt-x\n"
-        "    context_window_tokens: 123456\n    max_output_tokens: 8192\n"
-        "parser_sidecars:\n  mineru:\n    api_mode: local\n"
-        "workspace: default\n"
-        "answer:\n  max_attachments: 7\n"
-        "  max_attachment_bytes: 3145728\n",
+        "models:\n"
+        "  chat:\n    default:\n      provider: openai\n      model: gpt-x\n"
+        "  embedding:\n    provider: voyage\n    model: voyage-x\n    dim: 1024\n"
+        "  rerank:\n    strategy: chat_llm_reranker\n"
+        "  capacity_overrides:\n"
+        "    - provider: openai\n      model: gpt-x\n"
+        "      context_window_tokens: 123456\n      max_output_tokens: 8192\n"
+        "corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n"
+        "deployment:\n  workspace: default\n"
+        "answer:\n  generation:\n    max_attachments: 7\n"
+        "    max_attachment_bytes: 3145728\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
-    env.write_text("DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
+    env.write_text("DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
 
     console = Console(record=True, width=100)
     wiz.render_summary(console, wiz.read_config_summary(cfg, env))
@@ -1388,9 +1425,11 @@ _MODELS_ANSWERS = [
 def _models_cfg(tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "llm:\n  default:\n    provider: openai\n    model: old\n    base_url: https://old\n"
-        "embedding:\n  provider: voyage\n  model: old\n  dim: 1024\n"
-        "rerank:\n  strategy: voyage_reranker\n",
+        "models:\n"
+        "  chat:\n    default:\n      provider: openai\n      model: old\n"
+        "      base_url: https://old\n"
+        "  embedding:\n    provider: voyage\n    model: old\n    dim: 1024\n"
+        "  rerank:\n    strategy: voyage_reranker\n",
         encoding="utf-8",
     )
     return cfg
@@ -1421,7 +1460,9 @@ def test_models_step_confirm_accepted_writes(wiz, tmp_path, monkeypatch):
 
 def test_parser_step_confirm_declined_skips_write(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
+    cfg.write_text(
+        "corpus:\n  sidecars:\n    mineru:\n      api_mode: official\n", encoding="utf-8"
+    )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
     monkeypatch.setattr(wiz, "MINERU_ENV_PATH", tmp_path / ".env.mineru")
     monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")

@@ -13,6 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
+from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
 from tests.unit.web.answer_run_fixtures import FakeAnswers, web_answer_submission
 
@@ -65,8 +66,8 @@ async def cookie_conversation_client(
     test_config: DlightragConfig,
     conversation_service: AsyncMock,
 ):
-    test_config.auth_mode = "simple"
-    test_config.api_auth_token = "secret-token"
+    mutate_config(test_config, "access.auth_mode", "simple")
+    mutate_config(test_config, "access.api_token", "secret-token")
     application = create_app(include_web_app=True)
     application.state.application = AsyncMock(config=test_config)
     application.state.application.web_conversations = conversation_service

@@ -229,7 +229,7 @@ class DlightRAGRequestScopeMiddleware:
         if access_token is not None:
             scope = RequestScope(
                 user_id=access_token.subject or access_token.client_id,
-                auth_mode=_get_config().auth_mode,
+                auth_mode=_get_config().access.auth_mode,
                 claims=dict(access_token.claims or {}),
             )
         with request_scope_context(scope):
@@ -269,12 +269,12 @@ async def _mcp_lifespan(_: MCPServer[Any]) -> AsyncIterator[None]:
 def _http_auth(
     config: DlightragConfig,
 ) -> tuple[AuthSettings | None, DlightRAGTokenVerifier | None]:
-    if config.mcp_transport != "streamable-http" or config.auth_mode == "none":
+    if config.interfaces.mcp.transport != "streamable-http" or config.access.auth_mode == "none":
         return None, None
-    resource = config.mcp_resource_server_url
+    resource = config.interfaces.mcp.resource_server_url
     auth = AuthSettings.model_validate(
         {
-            "issuer_url": config.jwt_issuer or "http://localhost",
+            "issuer_url": config.access.jwt_issuer or "http://localhost",
             "resource_server_url": resource,
         }
     )
@@ -350,7 +350,7 @@ async def _resolve_authorized_query_workspaces(
     try:
         return await _access_gate(application).resolve_query_workspaces(
             application.corpora,
-            default_workspace=normalize_workspace(application.config.workspace),
+            default_workspace=normalize_workspace(application.config.deployment.workspace),
             workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
         )
@@ -493,7 +493,7 @@ async def answer_tool(
 ) -> dict[str, Any]:
     args = AnswerInput.model_validate(locals())
     application = await _ensure_application()
-    max_attachments = application.config.answer.max_attachments
+    max_attachments = application.config.answer.generation.max_attachments
     if len(args.attachments) > max_attachments:
         raise ValueError(f"Too many attachments; at most {max_attachments} are allowed")
     resolved_workspaces = await _resolve_authorized_query_workspaces(
@@ -969,7 +969,7 @@ async def ingest_tool(
 ) -> dict[str, Any]:
     args = IngestInput.model_validate(locals())
     application = await _ensure_application()
-    workspace_name = args.workspace or application.config.workspace
+    workspace_name = args.workspace or application.config.deployment.workspace
     workspace_name = normalize_workspace(workspace_name)
     await _enforce_access(
         AccessAction.WORKSPACE_INGEST,
@@ -1058,7 +1058,7 @@ async def list_files_tool(
 ) -> dict[str, Any]:
     args = ListFilesInput.model_validate(locals())
     application = await _ensure_application()
-    workspace_name = normalize_workspace(args.workspace or application.config.workspace)
+    workspace_name = normalize_workspace(args.workspace or application.config.deployment.workspace)
     await _enforce_access(
         AccessAction.WORKSPACE_LIST_FILES,
         workspace_name,
@@ -1096,7 +1096,7 @@ async def delete_files_tool(
 ) -> dict[str, Any]:
     args = DeleteFilesInput.model_validate(locals())
     application = await _ensure_application()
-    workspace_name = normalize_workspace(args.workspace or application.config.workspace)
+    workspace_name = normalize_workspace(args.workspace or application.config.deployment.workspace)
     await _enforce_access(
         AccessAction.WORKSPACE_DELETE_FILES,
         workspace_name,
@@ -1123,19 +1123,19 @@ def create_mcp_http_app() -> ASGIApp:
     config = _get_config()
     transport_security = TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=config.mcp_allowed_hosts,
-        allowed_origins=config.mcp_allowed_origins,
+        allowed_hosts=list(config.interfaces.mcp.allowed_hosts),
+        allowed_origins=list(config.interfaces.mcp.allowed_origins),
     )
     http_app: ASGIApp = mcp_app.streamable_http_app(
         streamable_http_path="/mcp",
         json_response=True,
         stateless_http=True,
         transport_security=transport_security,
-        host=config.mcp_host,
+        host=config.interfaces.mcp.host,
     )
     return CORSMiddleware(
         http_app,
-        allow_origins=config.cors_allow_origins,
+        allow_origins=config.access.cors_allow_origins,
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=[
             "Authorization",
@@ -1159,8 +1159,8 @@ async def run_streamable_http() -> None:
     config = _get_config()
     uvicorn_config = uvicorn.Config(
         create_mcp_http_app(),
-        host=config.mcp_host,
-        port=config.mcp_port,
+        host=config.interfaces.mcp.host,
+        port=config.interfaces.mcp.port,
         log_level="info",
     )
     await uvicorn.Server(uvicorn_config).serve()
@@ -1169,13 +1169,15 @@ async def run_streamable_http() -> None:
 def run() -> None:
     """Run the configured MCP transport."""
     config = _get_config()
-    logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO))
+    logging.basicConfig(
+        level=getattr(logging, config.observability.log_level.upper(), logging.INFO)
+    )
 
-    if config.mcp_transport == "streamable-http":
+    if config.interfaces.mcp.transport == "streamable-http":
         logger.info(
             "Starting MCP server (streamable-http) on %s:%d",
-            config.mcp_host,
-            config.mcp_port,
+            config.interfaces.mcp.host,
+            config.interfaces.mcp.port,
         )
         asyncio.run(run_streamable_http())
     else:

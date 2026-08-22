@@ -40,11 +40,11 @@ def test_bootstrap_creates_matching_headless_and_dlightrag_env(tmp_path: Path) -
     assert langfuse_values["LANGFUSE_INIT_USER_PASSWORD"]
 
     dlightrag_values = read_env(dlightrag_env).values
-    assert dlightrag_values["DLIGHTRAG_LANGFUSE_PUBLIC_KEY"] == "pk-test"
-    assert dlightrag_values["DLIGHTRAG_LANGFUSE_SECRET_KEY"] == "sk-test"
+    assert dlightrag_values["DLIGHTRAG_OBSERVABILITY__LANGFUSE_PUBLIC_KEY"] == "pk-test"
+    assert dlightrag_values["DLIGHTRAG_OBSERVABILITY__LANGFUSE_SECRET_KEY"] == "sk-test"
     # Non-secret SDK behavior stays in config.yaml, not .env.
-    assert "DLIGHTRAG_LANGFUSE_HOST" not in dlightrag_values
-    assert "DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS" not in dlightrag_values
+    assert "DLIGHTRAG_OBSERVABILITY__LANGFUSE_HOST" not in dlightrag_values
+    assert "DLIGHTRAG_OBSERVABILITY__LANGFUSE_EXPORT_EXTERNAL_SPANS" not in dlightrag_values
 
 
 def test_bootstrap_reuses_existing_langfuse_init_project_keys(tmp_path: Path) -> None:
@@ -66,8 +66,8 @@ def test_bootstrap_reuses_existing_langfuse_init_project_keys(tmp_path: Path) ->
     dlightrag_values = read_env(dlightrag_env).values
     assert langfuse_values["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"] == "pk-existing"
     assert langfuse_values["LANGFUSE_INIT_PROJECT_SECRET_KEY"] == "sk-existing"
-    assert dlightrag_values["DLIGHTRAG_LANGFUSE_PUBLIC_KEY"] == "pk-existing"
-    assert dlightrag_values["DLIGHTRAG_LANGFUSE_SECRET_KEY"] == "sk-existing"
+    assert dlightrag_values["DLIGHTRAG_OBSERVABILITY__LANGFUSE_PUBLIC_KEY"] == "pk-existing"
+    assert dlightrag_values["DLIGHTRAG_OBSERVABILITY__LANGFUSE_SECRET_KEY"] == "sk-existing"
 
 
 def test_bootstrap_accepts_headless_keys_from_environment(
@@ -87,8 +87,8 @@ def test_bootstrap_accepts_headless_keys_from_environment(
     dlightrag_values = read_env(dlightrag_env).values
     assert langfuse_values["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"] == "pk-env"
     assert langfuse_values["LANGFUSE_INIT_PROJECT_SECRET_KEY"] == "sk-env"
-    assert dlightrag_values["DLIGHTRAG_LANGFUSE_PUBLIC_KEY"] == "pk-env"
-    assert dlightrag_values["DLIGHTRAG_LANGFUSE_SECRET_KEY"] == "sk-env"
+    assert dlightrag_values["DLIGHTRAG_OBSERVABILITY__LANGFUSE_PUBLIC_KEY"] == "pk-env"
+    assert dlightrag_values["DLIGHTRAG_OBSERVABILITY__LANGFUSE_SECRET_KEY"] == "sk-env"
 
 
 def test_bootstrap_preserves_user_choices(tmp_path: Path) -> None:
@@ -102,7 +102,7 @@ def test_bootstrap_preserves_user_choices(tmp_path: Path) -> None:
     )
     dlightrag_env = tmp_path / ".env"
     dlightrag_env.write_text(
-        "DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=true\n",
+        "DLIGHTRAG_OBSERVABILITY__LANGFUSE_EXPORT_EXTERNAL_SPANS=true\n",
         encoding="utf-8",
     )
 
@@ -114,4 +114,4 @@ def test_bootstrap_preserves_user_choices(tmp_path: Path) -> None:
     langfuse_values = read_env(langfuse_env).values
     dlightrag_values = read_env(dlightrag_env).values
     assert langfuse_values["LANGFUSE_INIT_USER_PASSWORD"] == "already-set"
-    assert dlightrag_values["DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS"] == "true"
+    assert dlightrag_values["DLIGHTRAG_OBSERVABILITY__LANGFUSE_EXPORT_EXTERNAL_SPANS"] == "true"

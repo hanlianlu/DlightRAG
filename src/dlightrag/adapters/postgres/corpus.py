@@ -287,23 +287,23 @@ class PGCorpusRuntimeBinder:
         config = self._config
         vector_kwargs: dict[str, Any] = {
             "cosine_better_than_threshold": DEFAULT_COSINE_THRESHOLD,
-            **config.vector_db_kwargs,
+            **config.storage.lightrag.vector_db_kwargs,
         }
         return LightRAG(
             working_dir=str(config.working_dir_path),
             llm_model_func=models.default_llm_func,
             embedding_func=models.embedding_func,
-            workspace=config.workspace,
+            workspace=config.deployment.workspace,
             default_llm_timeout=int(settings.model_roles.default.timeout),
             default_embedding_timeout=int(settings.embedding.timeout),
             **settings.lightrag_pipeline_kwargs(),
             llm_model_max_async=settings.rag_pipeline_max_async,
             embedding_func_max_async=settings.embedding_func_max_async,
             embedding_batch_num=settings.embedding_batch_num,
-            vector_storage=config.vector_storage,
-            graph_storage=config.graph_storage,
-            kv_storage=config.kv_storage,
-            doc_status_storage=config.doc_status_storage,
+            vector_storage=config.storage.lightrag.vector_storage,
+            graph_storage=config.storage.lightrag.graph_storage,
+            kv_storage=config.storage.lightrag.kv_storage,
+            doc_status_storage=config.storage.lightrag.doc_status_storage,
             vector_db_storage_cls_kwargs=vector_kwargs,
             role_llm_configs=models.role_llm_configs,
             kg_chunk_pick_method=settings.kg_chunk_pick_method,
@@ -323,14 +323,14 @@ class PGCorpusRuntimeBinder:
             await lightrag.initialize_storages()
         await guard.verify_all()
 
-        metadata_index = PGMetadataIndex(workspace=config.workspace)
+        metadata_index = PGMetadataIndex(workspace=config.deployment.workspace)
         await metadata_index.initialize(validate_only=config.is_reader)
 
         chunks = PGCorpusChunkStore(lightrag)
         filtered_vectors = (
             PGFilteredVectorSearch(
                 lightrag.chunks_vdb,
-                exact_threshold=config.metadata_filter_exact_vector_threshold,
+                exact_threshold=config.corpus.retrieval.metadata_filter_exact_vector_threshold,
             )
             if lightrag.chunks_vdb is not None
             else None
@@ -338,7 +338,11 @@ class PGCorpusRuntimeBinder:
         if filtered_vectors is not None and not config.is_reader:
             await filtered_vectors.ensure_document_scope_index()
 
-        profiles = profiles_from_config(config.bm25_profiles) if config.bm25_enabled else ()
+        profiles = (
+            profiles_from_config(config.corpus.retrieval.bm25_profiles)
+            if config.corpus.retrieval.bm25_enabled
+            else ()
+        )
         bm25 = await create_postgres_bm25(
             config,
             profiles=profiles or None,
@@ -374,23 +378,24 @@ class PGCorpusBackendFactory:
         if self._backend is None:
             apply_lightrag_environment(self._config)
             required_extensions: tuple[str, ...] = ()
-            if self._config.bm25_enabled:
+            if self._config.corpus.retrieval.bm25_enabled:
                 required_extensions = required_postgres_extensions(
-                    profiles_from_config(self._config.bm25_profiles)
+                    profiles_from_config(self._config.corpus.retrieval.bm25_profiles)
                 )
             connection_kwargs = self._config.pg_connection_kwargs()
             self._backend = WorkspaceCorpusBackend(
-                workspace_id=self._config.workspace,
+                workspace_id=self._config.deployment.workspace,
                 read_only=self._config.is_reader,
                 coordination=PGCorpusCoordination(
                     connection_kwargs=connection_kwargs,
-                    workspace=self._config.workspace,
+                    workspace=self._config.deployment.workspace,
                     reader=self._config.is_reader,
-                    require_halfvec=self._config.pg_vector_index_type == "HNSW_HALFVEC",
+                    require_halfvec=self._config.storage.lightrag.vector_index_type
+                    == "HNSW_HALFVEC",
                     required_extensions=required_extensions,
-                    lightrag_pool_max_size=self._config.postgres_lightrag_pool_max_size,
-                    domain_pool_max_size=self._config.postgres_pool_max_size,
-                    acquire_timeout=self._config.postgres_acquire_timeout,
+                    lightrag_pool_max_size=self._config.storage.postgres.lightrag_pool_max_size,
+                    domain_pool_max_size=self._config.storage.postgres.pool_max_size,
+                    acquire_timeout=self._config.storage.postgres.acquire_timeout,
                 ),
                 maintenance=PGCorpusMaintenanceStore(connection_kwargs),
                 runtime=PGCorpusRuntimeBinder(self._config),

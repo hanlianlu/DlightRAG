@@ -11,26 +11,19 @@ import pytest
 
 
 def _config(*, enabled: bool = True, reader: bool = False) -> SimpleNamespace:
-    return SimpleNamespace(
+    retrieval = SimpleNamespace(
         bm25_enabled=enabled,
-        is_reader=reader,
-        workspace="research",
         bm25_profiles=[
-            SimpleNamespace(
-                name="en",
-                text_config="english",
-                languages=["en"],
-                fallback=False,
-            ),
-            SimpleNamespace(
-                name="simple",
-                text_config="simple",
-                languages=[],
-                fallback=True,
-            ),
+            SimpleNamespace(name="en", text_config="english", languages=["en"], fallback=False),
+            SimpleNamespace(name="simple", text_config="simple", languages=[], fallback=True),
         ],
         bm25_k1=1.4,
         bm25_b=0.65,
+    )
+    return SimpleNamespace(
+        corpus=SimpleNamespace(retrieval=retrieval),
+        deployment=SimpleNamespace(workspace="research"),
+        is_reader=reader,
     )
 
 

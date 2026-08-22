@@ -14,23 +14,20 @@ from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.completion import CompletionModel
 from dlightrag.ai.providers.base import CompletionOutput
 from dlightrag.ai.scheduler import ModelScheduler, model_call_scope
-from dlightrag.ai.settings import ModelSettings
-from dlightrag.ai.structured import StructuredOutput
-from dlightrag.config import (
-    DlightragConfig,
-    EmbeddingConfig,
-    LLMConfig,
-    LLMRolesConfig,
-    ModelCapacityOverrideConfig,
-    ModelConfig,
-    RerankConfig,
+from dlightrag.ai.settings import (
+    EmbeddingSettings,
+    ModelCapacityOverrideSettings,
+    ModelRoleOverrides,
+    ModelRoleSettings,
+    ModelSettings,
+    RerankSettings,
 )
+from dlightrag.ai.structured import StructuredOutput
+from dlightrag.config import DlightragConfig
 from dlightrag.model_settings import (
-    embedding_settings,
     model_profile_for_role,
     model_settings_for_role,
     rerank_scoring_model_settings,
-    rerank_settings,
 )
 
 
@@ -77,8 +74,8 @@ def _capture_provider(
     return seen
 
 
-def _embedding_config() -> EmbeddingConfig:
-    return EmbeddingConfig(
+def _embedding_config() -> EmbeddingSettings:
+    return EmbeddingSettings(
         provider="voyage",
         model="voyage-multimodal-3.5",
         api_key="sk-test",
@@ -87,19 +84,21 @@ def _embedding_config() -> EmbeddingConfig:
 
 
 def test_root_maps_explicit_keyless_role_to_immutable_ai_settings() -> None:
-    config = DlightragConfig(
-        llm=LLMConfig(
-            default=ModelConfig(model="default-model", api_key="default-key"),
-            roles=LLMRolesConfig(
-                query=ModelConfig(
-                    model="local-query",
-                    api_key=None,
-                    base_url="http://host.docker.internal:8888/v1",
-                    model_kwargs={"reasoning": {"enabled": False}},
-                )
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "chat": ModelRoleSettings(
+                default=ModelSettings(model="default-model", api_key="default-key"),
+                roles=ModelRoleOverrides(
+                    query=ModelSettings(
+                        model="local-query",
+                        api_key=None,
+                        base_url="http://host.docker.internal:8888/v1",
+                        model_kwargs={"reasoning": {"enabled": False}},
+                    )
+                ),
             ),
-        ),
-        embedding=_embedding_config(),
+            "embedding": _embedding_config(),
+        },
     )
 
     settings = model_settings_for_role(config, "query")
@@ -112,38 +111,40 @@ def test_root_maps_explicit_keyless_role_to_immutable_ai_settings() -> None:
 
 
 def test_root_resolves_model_profiles_independently_per_role() -> None:
-    config = DlightragConfig(
-        llm=LLMConfig(
-            default=ModelConfig(
-                model="z-ai/glm-5.2",
-                base_url="https://openrouter.ai/api/v1",
-            ),
-            roles=LLMRolesConfig(
-                extract=ModelConfig(
-                    model="deepseek-v4-flash",
-                    base_url="https://api.deepseek.com",
-                    api_key=None,
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "chat": ModelRoleSettings(
+                default=ModelSettings(
+                    model="z-ai/glm-5.2",
+                    base_url="https://openrouter.ai/api/v1",
                 ),
-                query=ModelConfig(
+                roles=ModelRoleOverrides(
+                    extract=ModelSettings(
+                        model="deepseek-v4-flash",
+                        base_url="https://api.deepseek.com",
+                        api_key=None,
+                    ),
+                    query=ModelSettings(
+                        model="private-query",
+                        base_url="http://localhost:8888/v1",
+                        api_key=None,
+                    ),
+                ),
+            ),
+            "capacity_overrides": [
+                ModelCapacityOverrideSettings(
+                    provider="openai",
                     model="private-query",
                     base_url="http://localhost:8888/v1",
-                    api_key=None,
-                ),
-            ),
-        ),
-        model_capacity_overrides=[
-            ModelCapacityOverrideConfig(
-                provider="openai",
-                model="private-query",
-                base_url="http://localhost:8888/v1",
-                context_window_tokens=262_144,
-                max_input_tokens=200_000,
-                max_output_tokens=32_768,
-                supports_tools=True,
-                supports_reasoning=True,
-            )
-        ],
-        embedding=_embedding_config(),
+                    context_window_tokens=262_144,
+                    max_input_tokens=200_000,
+                    max_output_tokens=32_768,
+                    supports_tools=True,
+                    supports_reasoning=True,
+                )
+            ],
+            "embedding": _embedding_config(),
+        },
     )
 
     assert model_profile_for_role(config, "keyword").max_output_tokens == 262_144
@@ -160,14 +161,16 @@ def test_root_consults_adapter_profile_before_catalog(
     adapter_profile = ModelProfile(context_window_tokens=123_456, supports_tools=True)
     metadata = MagicMock(return_value=adapter_profile)
     monkeypatch.setattr("dlightrag.model_settings.get_adapter_model_profile", metadata)
-    config = DlightragConfig(
-        llm=LLMConfig(
-            default=ModelConfig(
-                model="z-ai/glm-5.2",
-                base_url="https://openrouter.ai/api/v1",
-            )
-        ),
-        embedding=_embedding_config(),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "chat": ModelRoleSettings(
+                default=ModelSettings(
+                    model="z-ai/glm-5.2",
+                    base_url="https://openrouter.ai/api/v1",
+                )
+            ),
+            "embedding": _embedding_config(),
+        },
     )
 
     profile = model_profile_for_role(config, "query")
@@ -185,16 +188,18 @@ def test_root_override_short_circuits_adapter_metadata(
 ) -> None:
     metadata = MagicMock(side_effect=AssertionError("override must win before adapter loading"))
     monkeypatch.setattr("dlightrag.model_settings.get_adapter_model_profile", metadata)
-    config = DlightragConfig(
-        llm=LLMConfig(default=ModelConfig(model="private-model")),
-        model_capacity_overrides=[
-            ModelCapacityOverrideConfig(
-                provider="openai",
-                model="private-model",
-                context_window_tokens=200_000,
-            )
-        ],
-        embedding=_embedding_config(),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "chat": ModelRoleSettings(default=ModelSettings(model="private-model")),
+            "capacity_overrides": [
+                ModelCapacityOverrideSettings(
+                    provider="openai",
+                    model="private-model",
+                    context_window_tokens=200_000,
+                )
+            ],
+            "embedding": _embedding_config(),
+        },
     )
 
     profile = model_profile_for_role(config, "query")
@@ -283,22 +288,27 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
 def test_root_maps_embedding_settings_into_ai_factory(monkeypatch) -> None:
     from dlightrag.ai import embedding
 
-    config = DlightragConfig(
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="embed-key",
-            dim=768,
-            input_modality="multimodal",
-            asymmetric="require",
-        ),
-        embedding_request_timeout=45,
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "embedding": EmbeddingSettings(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="embed-key",
+                dim=768,
+                input_modality="multimodal",
+                asymmetric="require",
+            ).model_copy(
+                update={
+                    "timeout": 45,
+                }
+            ),
+        },
     )
     provider = MagicMock()
     provider.request_headers.return_value = {}
     monkeypatch.setattr(embedding, "get_embed_provider", lambda _name: provider)
 
-    settings = embedding_settings(config)
+    settings = config.models.embedding
     model = embedding.create_embedding_model(
         settings,
         scheduler=ModelScheduler(max_concurrency=1),
@@ -310,41 +320,44 @@ def test_root_maps_embedding_settings_into_ai_factory(monkeypatch) -> None:
 
 
 def test_root_maps_rerank_settings_to_immutable_ai_value() -> None:
-    config = DlightragConfig(
-        rerank=RerankConfig(
-            strategy="voyage_reranker",
-            model="rerank-2.5",
-            api_key="rerank-key",
-            input_modality="multimodal",
-            score_threshold=0.42,
-            max_concurrency=3,
-            batch_size=5,
-            model_kwargs={"truncation": {"enabled": False}},
-        ),
-        embedding=_embedding_config(),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "rerank": RerankSettings(
+                strategy="voyage_reranker",
+                model="rerank-2.5",
+                api_key="rerank-key",
+                input_modality="multimodal",
+                score_threshold=0.42,
+                max_concurrency=3,
+                batch_size=5,
+                model_kwargs={"truncation": {"enabled": False}},
+            ),
+            "embedding": _embedding_config(),
+        },
     )
 
-    settings = rerank_settings(config)
+    settings = config.models.rerank
 
     assert settings.strategy == "voyage_reranker"
     assert settings.score_threshold == 0.42
     assert settings.max_concurrency == 3
     assert settings.batch_size == 5
-    assert config.rerank.model_kwargs == {"truncation": {"enabled": False}}
-    assert "model_kwargs" not in type(settings).__slots__
+    assert settings.model_kwargs == {"truncation": {"enabled": False}}
 
 
 def test_chat_rerank_scoring_settings_preserve_model_kwargs_and_temperature() -> None:
-    config = DlightragConfig(
-        rerank=RerankConfig(
-            strategy="chat_llm_reranker",
-            provider="openai",
-            model="scoring-model",
-            api_key="key",
-            temperature=None,
-            model_kwargs={"reasoning": {"enabled": False}},
-        ),
-        embedding=_embedding_config(),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "rerank": RerankSettings(
+                strategy="chat_llm_reranker",
+                provider="openai",
+                model="scoring-model",
+                api_key="key",
+                temperature=None,
+                model_kwargs={"reasoning": {"enabled": False}},
+            ),
+            "embedding": _embedding_config(),
+        },
     )
 
     scoring = rerank_scoring_model_settings(config)
@@ -354,16 +367,18 @@ def test_chat_rerank_scoring_settings_preserve_model_kwargs_and_temperature() ->
 
 
 def test_rerank_scoring_settings_ignore_unrelated_role_overrides() -> None:
-    config = DlightragConfig(
-        llm=LLMConfig(
-            default=ModelConfig(model="default-model", api_key="default-key"),
-            roles=LLMRolesConfig(
-                query=ModelConfig(model="query-model", api_key="query-key"),
-                vlm=ModelConfig(model="vlm-model", api_key="vlm-key"),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "chat": ModelRoleSettings(
+                default=ModelSettings(model="default-model", api_key="default-key"),
+                roles=ModelRoleOverrides(
+                    query=ModelSettings(model="query-model", api_key="query-key"),
+                    vlm=ModelSettings(model="vlm-model", api_key="vlm-key"),
+                ),
             ),
-        ),
-        rerank=RerankConfig(strategy="chat_llm_reranker"),
-        embedding=_embedding_config(),
+            "rerank": RerankSettings(strategy="chat_llm_reranker"),
+            "embedding": _embedding_config(),
+        },
     )
 
     assert rerank_scoring_model_settings(config).model == "default-model"
@@ -371,15 +386,19 @@ def test_rerank_scoring_settings_ignore_unrelated_role_overrides() -> None:
 
 @pytest.mark.parametrize("api_key", ["", "   "])
 def test_incomplete_independent_reranker_falls_back_to_default(api_key: str) -> None:
-    config = DlightragConfig(
-        llm=LLMConfig(default=ModelConfig(model="default-model", api_key="default-key")),
-        rerank=RerankConfig(
-            strategy="chat_llm_reranker",
-            provider="openai",
-            model="incomplete-reranker",
-            api_key=api_key,
-        ),
-        embedding=_embedding_config(),
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        models={
+            "chat": ModelRoleSettings(
+                default=ModelSettings(model="default-model", api_key="default-key")
+            ),
+            "rerank": RerankSettings(
+                strategy="chat_llm_reranker",
+                provider="openai",
+                model="incomplete-reranker",
+                api_key=api_key,
+            ),
+            "embedding": _embedding_config(),
+        },
     )
 
     assert rerank_scoring_model_settings(config).model == "default-model"

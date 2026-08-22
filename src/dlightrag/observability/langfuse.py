@@ -26,7 +26,7 @@ def install_client(client: Any | None, *, trace_sensitive: bool) -> None:
 
 
 def init_tracing(config: Any) -> None:
-    """Initialize Langfuse from root configuration, or disable it safely."""
+    """Initialize Langfuse from its narrow settings, or disable it safely."""
     trace_sensitive = bool(getattr(config, "langfuse_trace_sensitive_data", True))
     if not config.langfuse_public_key or not config.langfuse_secret_key:
         install_client(None, trace_sensitive=trace_sensitive)

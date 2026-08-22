@@ -189,15 +189,34 @@ class TestWorkingDirectory:
 class TestSettingsResolution:
     def test_read_env_overlays_dotenv_and_environment(self, tmp_path: Path) -> None:
         (tmp_path / ".env").write_text(
-            "DLIGHTRAG_POSTGRES_HOST=env-host\n"
-            "DLIGHTRAG_POSTGRES_PORT=5544\n"
+            "DLIGHTRAG_STORAGE__POSTGRES__HOST=env-host\n"
+            "DLIGHTRAG_STORAGE__POSTGRES__PORT=5544\n"
             "# a comment\n"
-            "DLIGHTRAG_POSTGRES_DATABASE=env-db\n"
+            "DLIGHTRAG_STORAGE__POSTGRES__DATABASE=env-db\n"
         )
         env = _reset._read_env(tmp_path)
-        assert env["DLIGHTRAG_POSTGRES_HOST"] == "env-host"
-        assert env["DLIGHTRAG_POSTGRES_PORT"] == "5544"
-        assert env["DLIGHTRAG_POSTGRES_DATABASE"] == "env-db"
+        assert env["DLIGHTRAG_STORAGE__POSTGRES__HOST"] == "env-host"
+        assert env["DLIGHTRAG_STORAGE__POSTGRES__PORT"] == "5544"
+        assert env["DLIGHTRAG_STORAGE__POSTGRES__DATABASE"] == "env-db"
+
+    def test_postgres_target_uses_canonical_nested_environment(self) -> None:
+        target = _reset.resolve_postgres_target(
+            {
+                "DLIGHTRAG_STORAGE__POSTGRES__HOST": "db.internal",
+                "DLIGHTRAG_STORAGE__POSTGRES__PORT": "5544",
+                "DLIGHTRAG_STORAGE__POSTGRES__USER": "operator",
+                "DLIGHTRAG_STORAGE__POSTGRES__PASSWORD": "secret",
+                "DLIGHTRAG_STORAGE__POSTGRES__DATABASE": "corpus",
+            }
+        )
+
+        assert target == _reset.PostgresTarget(
+            host="db.internal",
+            port=5544,
+            user="operator",
+            password="secret",
+            database="corpus",
+        )
 
     def test_working_dir_root_falls_back_to_repo_default(self, tmp_path: Path) -> None:
         (tmp_path / "config.yaml").write_text("answer:\n  max_images: 4\n")
@@ -205,7 +224,7 @@ class TestSettingsResolution:
         assert root == (tmp_path / "dlightrag_storage").resolve()
 
     def test_working_dir_root_resolves_config_value(self, tmp_path: Path) -> None:
-        (tmp_path / "config.yaml").write_text("working_dir: ./custom_storage\n")
+        (tmp_path / "config.yaml").write_text("deployment:\n  working_dir: ./custom_storage\n")
         root = _reset._working_dir_root(tmp_path, {})
         assert root == (tmp_path / "custom_storage").resolve()
 

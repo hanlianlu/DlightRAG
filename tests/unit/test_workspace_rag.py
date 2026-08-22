@@ -2,24 +2,32 @@
 """Interface contract for one storage-neutral workspace RAG capability."""
 
 from contextlib import asynccontextmanager
-from dataclasses import FrozenInstanceError
 from types import MappingProxyType
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from dlightrag.ai.scheduler import ModelScheduler
 from dlightrag.ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
     ModelSettings,
+    ModelsSettings,
     RerankSettings,
 )
 from dlightrag.ai.telemetry import NoopTelemetry
 from dlightrag.rag.ports import WorkspaceCorpusBackend
-from dlightrag.rag.settings import RagSettings
+from dlightrag.rag.settings import (
+    CorpusSettings,
+    IngestionSettings,
+    ParserSettings,
+    PipelineSettings,
+    RagSettings,
+)
 from dlightrag.rag.workspace_rag import WorkspaceRag
 from dlightrag.runtime import RunCoordinator
+from tests.config_helpers import mutate_config
 
 
 class _Coordination:
@@ -46,34 +54,41 @@ def _backend() -> WorkspaceCorpusBackend:
 def _settings() -> RagSettings:
     model = ModelSettings(provider="openai", model="gpt-5.4-mini", api_key="test")
     return RagSettings(
-        model_roles=ModelRoleSettings(default=model),
-        embedding=EmbeddingSettings(
-            provider="openai_compatible",
-            model="text-embedding-3-small",
-            api_key="test",
-            startup_probe=False,
+        models=ModelsSettings(
+            chat=ModelRoleSettings(default=model),
+            embedding=EmbeddingSettings(
+                provider="openai_compatible",
+                model="text-embedding-3-small",
+                api_key="test",
+                startup_probe=False,
+                max_concurrency=7,
+                batch_size=11,
+            ),
+            rerank=RerankSettings(enabled=False),
         ),
-        rerank=RerankSettings(enabled=False),
-        rerank_scoring_model=model,
-        rag_pipeline_max_async=9,
-        embedding_func_max_async=7,
-        embedding_batch_num=11,
-        max_parallel_insert=2,
-        max_parallel_parse_native=3,
-        max_parallel_parse_mineru=4,
-        max_parallel_parse_docling=5,
-        max_parallel_analyze=6,
-        queue_size_parse=20,
-        queue_size_analyze=30,
-        queue_size_insert=40,
-        chunk_options={"paragraph": {"max_tokens": 512}},
+        corpus=CorpusSettings(
+            parser=ParserSettings(chunk_options={"paragraph": {"max_tokens": 512}}),
+            ingestion=IngestionSettings(
+                pipeline=PipelineSettings(
+                    max_concurrency=9,
+                    max_parallel_insert=2,
+                    max_parallel_parse_native=3,
+                    max_parallel_parse_mineru=4,
+                    max_parallel_parse_docling=5,
+                    max_parallel_analyze=6,
+                    queue_size_parse=20,
+                    queue_size_analyze=30,
+                    queue_size_insert=40,
+                )
+            ),
+        ),
     )
 
 
 def test_rag_settings_are_deeply_immutable() -> None:
     settings = _settings()
 
-    with pytest.raises(FrozenInstanceError):
+    with pytest.raises(ValidationError):
         settings.rag_pipeline_max_async = 10  # type: ignore[misc]
     assert isinstance(settings.chunk_options, MappingProxyType)
     with pytest.raises(TypeError):
@@ -133,33 +148,33 @@ def test_workspace_rag_rejects_backend_role_drift() -> None:
 def test_root_config_maps_independent_rag_pipeline_settings(test_config) -> None:
     from dlightrag.model_settings import rag_settings
 
-    test_config.max_async = 3
-    test_config.rag_pipeline_max_async = 13
-    test_config.embedding_func_max_async = 7
-    test_config.parser.chunk_options = {"paragraph": {"max_tokens": 384}}
+    mutate_config(test_config, "models.max_concurrency", 3)
+    mutate_config(test_config, "corpus.ingestion.pipeline.max_concurrency", 13)
+    mutate_config(test_config, "models.embedding.max_concurrency", 7)
+    mutate_config(test_config, "corpus.parser.chunk_options", {"paragraph": {"max_tokens": 384}})
 
     settings = rag_settings(test_config)
 
     assert settings.rag_pipeline_max_async == 13
     assert settings.embedding_func_max_async == 7
-    assert settings.model_roles.default.model == test_config.llm.default.model
-    assert settings.embedding.model == test_config.embedding.model
+    assert settings.model_roles.default.model == test_config.models.chat.default.model
+    assert settings.embedding.model == test_config.models.embedding.model
     assert settings.chunk_options["paragraph"]["max_tokens"] == 384
-    assert test_config.max_async == 3
+    assert test_config.models.max_concurrency == 3
 
 
 def test_ai_runtime_and_rag_concurrency_owners_vary_independently(test_config) -> None:
     from dlightrag.model_settings import rag_settings
 
-    test_config.max_async = 3
-    test_config.runtime.answer_worker_concurrency = 5
-    test_config.rag_pipeline_max_async = 13
+    mutate_config(test_config, "models.max_concurrency", 3)
+    mutate_config(test_config, "answer.runtime.answer_worker_concurrency", 5)
+    mutate_config(test_config, "corpus.ingestion.pipeline.max_concurrency", 13)
 
-    scheduler = ModelScheduler(max_concurrency=test_config.max_async)
+    scheduler = ModelScheduler(max_concurrency=test_config.models.max_concurrency)
     coordinator = RunCoordinator(
         store=AsyncMock(),
         executor=AsyncMock(),
-        answer_worker_concurrency=test_config.runtime.answer_worker_concurrency,
+        answer_worker_concurrency=test_config.answer.runtime.answer_worker_concurrency,
     )
 
     assert scheduler.max_concurrency == 3

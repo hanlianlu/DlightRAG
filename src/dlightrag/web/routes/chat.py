@@ -75,10 +75,10 @@ async def start_answer_run(
     capability = (await application.answers.capabilities()).answer
     body = await parse_web_answer_request(
         request,
-        max_attachments=cfg.answer.max_attachments,
-        max_attachment_bytes=cfg.answer.max_attachment_bytes,
-        max_total_attachment_bytes=cfg.answer.max_total_attachment_bytes,
-        image_max_pixels=cfg.answer.image_max_pixels,
+        max_attachments=cfg.answer.generation.max_attachments,
+        max_attachment_bytes=cfg.answer.generation.max_attachment_bytes,
+        max_total_attachment_bytes=cfg.answer.generation.max_total_attachment_bytes,
+        image_max_pixels=cfg.answer.generation.image_max_pixels,
         answer_image_capability=capability,
     )
     query = body.query.strip()

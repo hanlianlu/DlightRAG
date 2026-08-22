@@ -8,42 +8,45 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.config import (
-    DlightragConfig,
-    EmbeddingConfig,
-    LLMConfig,
-    LLMRolesConfig,
-    ModelConfig,
+from dlightrag.ai.settings import (
+    EmbeddingSettings,
+    ModelRoleOverrides,
+    ModelRoleSettings,
+    ModelSettings,
+    ModelsSettings,
 )
+from dlightrag.config import DlightragConfig
 
 
 def _cfg() -> DlightragConfig:
     return DlightragConfig(
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            dim=1024,
-            startup_probe=False,
-        ),
-        llm=LLMConfig(
-            default=ModelConfig(provider="openai", model="default-model", api_key="default-key"),
-            roles=LLMRolesConfig(
-                keyword=ModelConfig(
-                    provider="openai",
-                    model="keyword-model",
-                    api_key=None,
+        models=ModelsSettings(
+            embedding=EmbeddingSettings(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                dim=1024,
+                startup_probe=False,
+            ),
+            chat=ModelRoleSettings(
+                default=ModelSettings(
+                    provider="openai", model="default-model", api_key="default-key"
                 ),
-                query=ModelConfig(provider="openai", model="incomplete-query"),
+                roles=ModelRoleOverrides(
+                    keyword=ModelSettings(
+                        provider="openai",
+                        model="keyword-model",
+                        api_key=None,
+                    ),
+                    query=ModelSettings(provider="openai", model="incomplete-query"),
+                ),
             ),
         ),
     )
 
 
-def test_root_maps_only_complete_role_overrides_to_immutable_ai_settings() -> None:
-    from dlightrag.model_settings import model_role_settings
-
-    roles = model_role_settings(_cfg())
+def test_root_exposes_only_complete_role_overrides() -> None:
+    roles = _cfg().models.chat
 
     assert isinstance(roles.overrides, MappingProxyType)
     assert tuple(roles.overrides) == ("keyword",)
@@ -52,7 +55,7 @@ def test_root_maps_only_complete_role_overrides_to_immutable_ai_settings() -> No
 
 
 async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypatch) -> None:
-    from dlightrag.ai.settings import ModelRoleSettings, ModelSettings
+    from dlightrag.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
     from dlightrag.rag import lightrag_models
 
     class FakeCompletionModel:
@@ -76,13 +79,14 @@ async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypat
     bundle = await lightrag_models.LightRagChatModels.acreate(
         ModelRoleSettings(
             default=ModelSettings(provider="openai", model="default-model"),
-            overrides={
-                "keyword": ModelSettings(
+            roles=ModelRoleOverrides(
+                keyword=ModelSettings(
                     provider="openai",
                     model="keyword-model",
+                    api_key=None,
                     timeout=30,
                 )
-            },
+            ),
         ),
         scheduler=scheduler,
     )
@@ -111,7 +115,7 @@ async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypat
 async def test_rag_chat_bundle_closes_created_models_when_role_construction_fails(
     monkeypatch,
 ) -> None:
-    from dlightrag.ai.settings import ModelRoleSettings, ModelSettings
+    from dlightrag.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
     from dlightrag.rag import lightrag_models
 
     class FakeCompletionModel:
@@ -135,7 +139,9 @@ async def test_rag_chat_bundle_closes_created_models_when_role_construction_fail
         await lightrag_models.LightRagChatModels.acreate(
             ModelRoleSettings(
                 default=ModelSettings(provider="openai", model="default-model"),
-                overrides={"keyword": ModelSettings(provider="openai", model="broken-role")},
+                roles=ModelRoleOverrides(
+                    keyword=ModelSettings(provider="openai", model="broken-role", api_key=None)
+                ),
             ),
             scheduler=ModelScheduler(max_concurrency=1),
         )
@@ -147,7 +153,7 @@ async def test_rag_chat_bundle_closes_created_models_when_role_construction_fail
 async def test_rag_chat_bundle_preserves_construction_error_when_cleanup_fails(
     monkeypatch,
 ) -> None:
-    from dlightrag.ai.settings import ModelRoleSettings, ModelSettings
+    from dlightrag.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
     from dlightrag.rag import lightrag_models
 
     class FakeCompletionModel:
@@ -167,7 +173,9 @@ async def test_rag_chat_bundle_preserves_construction_error_when_cleanup_fails(
         await lightrag_models.LightRagChatModels.acreate(
             ModelRoleSettings(
                 default=ModelSettings(provider="openai", model="default-model"),
-                overrides={"keyword": ModelSettings(provider="openai", model="broken-role")},
+                roles=ModelRoleOverrides(
+                    keyword=ModelSettings(provider="openai", model="broken-role", api_key=None)
+                ),
             ),
             scheduler=ModelScheduler(max_concurrency=1),
         )

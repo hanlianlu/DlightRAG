@@ -98,7 +98,7 @@ can leave a partial release that must be completed by rerunning the workflow.
 ## Optional Docling Parser
 
 Parser selection comes from `config.yaml`: keep one
-`parser_sidecars.mineru` or `parser_sidecars.docling` block. If both are
+`corpus.sidecars.mineru` or `corpus.sidecars.docling` block. If both are
 present, MinerU takes priority. The optional local Docling service is not a
 core dependency and starts only with:
 
@@ -259,7 +259,7 @@ bundles a self-hosted Langfuse stack for local development so you do not need a
 Langfuse Cloud account. It runs as its own Docker Compose project on isolated
 ports and is wired to DlightRAG by two helper scripts under `scripts/langfuse/`.
 
-Non-secret SDK behavior (`langfuse_host`, `langfuse_export_external_spans`,
+Non-secret SDK behavior (`observability.langfuse_host`, `langfuse_export_external_spans`,
 `langfuse_trace_sensitive_data`, `langfuse_environment`, sample rate, timeout) lives in
 [configuration.md](configuration.md). This section covers running the stack.
 
@@ -304,8 +304,8 @@ trigger one request if the list is empty.
 
 `scripts/langfuse/headless.py` keeps one public/secret key pair on both sides:
 it writes `LANGFUSE_INIT_PROJECT_*` into `../langfuse-local/.env` (the stack's
-headless initialization) and the matching `DLIGHTRAG_LANGFUSE_PUBLIC_KEY` /
-`DLIGHTRAG_LANGFUSE_SECRET_KEY` into DlightRAG's `.env`. Both keys are required;
+headless initialization) and the matching `DLIGHTRAG_OBSERVABILITY__LANGFUSE_PUBLIC_KEY` /
+`DLIGHTRAG_OBSERVABILITY__LANGFUSE_SECRET_KEY` into DlightRAG's `.env`. Both keys are required;
 if either is missing, DlightRAG starts with tracing disabled. The keys are
 generated once and reused, so re-running bootstrap does not rotate them.
 
@@ -316,11 +316,11 @@ data volume.
 
 ### Trace Endpoint Address
 
-`langfuse_host` in [config.yaml](../config.yaml) is where the app sends traces.
+`observability.langfuse_host` in [config.yaml](../config.yaml) is where the app sends traces.
 It is non-secret, so it stays in `config.yaml`; `make langfuse-up` only writes
 the secret keys to `.env`. Set it for how DlightRAG itself runs:
 
-| DlightRAG run mode | `langfuse_host` |
+| DlightRAG run mode | `observability.langfuse_host` |
 |---|---|
 | Docker Compose (default) | `http://host.docker.internal:3300` |
 | Native (non-Docker) | `http://localhost:3300` |
@@ -330,7 +330,7 @@ reaches the host-published Langfuse port through the Docker host alias, the same
 way it reaches a host-native parser. Your browser and `make langfuse-health` use
 `http://localhost:3300` because they run on the host. On native Linux Docker, a
 host alias reaching a loopback-bound port can need extra host networking. If
-`langfuse_host` is unset, DlightRAG falls back to Langfuse Cloud.
+`observability.langfuse_host` is unset, DlightRAG falls back to Langfuse Cloud.
 
 ### Cost Tracking
 
@@ -350,14 +350,15 @@ per model rather than in the shared default, and keep it off non-OpenRouter
 roles (they may reject an unknown `usage` body field):
 
 ```yaml
-llm:
-  default:
-    provider: openai
-    base_url: https://openrouter.ai/api/v1
-    model: google/gemini-3.1-flash-lite
-    model_kwargs:
-      usage:
-        include: true
+models:
+  chat:
+    default:
+      provider: openai
+      base_url: https://openrouter.ai/api/v1
+      model: google/gemini-3.1-flash-lite
+      model_kwargs:
+        usage:
+          include: true
 ```
 
 DlightRAG forwards the response's `usage.cost` to Langfuse as the generation's
@@ -370,7 +371,7 @@ model-price approach above. Recreate the app containers after editing
 The DlightRAG app services load `.env` with Compose `env_file`, which is read
 when a container is created. `docker compose restart` does not reload it. After
 `make langfuse-up` first writes the Langfuse keys (or after you change
-`langfuse_host` in `config.yaml`), recreate the app containers so they pick up
+`observability.langfuse_host` in `config.yaml`), recreate the app containers so they pick up
 the values:
 
 ```bash
@@ -385,14 +386,14 @@ docker compose logs dlightrag-api | grep -i "langfuse tracing"
 ```
 
 If a log line shows `→ https://cloud.langfuse.com`, the app started without
-`langfuse_host` set and is using the code default; set it in `config.yaml` and
+`observability.langfuse_host` set and is using the code default; set it in `config.yaml` and
 recreate the containers.
 
 ### Stop Or Disable
 
 - Stop the stack: `make langfuse-down`.
 - Disable tracing without removing the stack: clear
-  `DLIGHTRAG_LANGFUSE_PUBLIC_KEY` and `DLIGHTRAG_LANGFUSE_SECRET_KEY` in `.env`,
+  `DLIGHTRAG_OBSERVABILITY__LANGFUSE_PUBLIC_KEY` and `DLIGHTRAG_OBSERVABILITY__LANGFUSE_SECRET_KEY` in `.env`,
   then recreate the app containers. With no keys, DlightRAG runs with tracing
   off and never contacts Langfuse.
 
@@ -415,7 +416,7 @@ Try the non-destructive options first:
   through the public API with the key pair (no UI login required).
 
   ```bash
-  curl -u "$DLIGHTRAG_LANGFUSE_PUBLIC_KEY:$DLIGHTRAG_LANGFUSE_SECRET_KEY" \
+  curl -u "$DLIGHTRAG_OBSERVABILITY__LANGFUSE_PUBLIC_KEY:$DLIGHTRAG_OBSERVABILITY__LANGFUSE_SECRET_KEY" \
     http://localhost:3300/api/public/traces
   ```
 

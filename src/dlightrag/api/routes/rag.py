@@ -250,14 +250,14 @@ async def ingest_blob(
                 ws,
                 filename=file.filename,
                 reader=file,
-                max_bytes=cfg.max_upload_bytes,
+                max_bytes=cfg.corpus.ingestion.max_upload_bytes,
             )
         except UnsafeUploadNameError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except UploadTooLargeError as exc:
             raise HTTPException(
                 status_code=413,
-                detail=f"File exceeds maximum size of {cfg.max_upload_bytes} bytes",
+                detail=f"File exceeds maximum size of {cfg.corpus.ingestion.max_upload_bytes} bytes",
             ) from exc
     finally:
         await form.close()

@@ -11,36 +11,51 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from lightrag.kg.pgtable_impl import PGTableGraphStorage
 
-from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig
+from dlightrag.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelsSettings
+from dlightrag.config import (
+    DeploymentSettings,
+    DlightragConfig,
+    PostgresSettings,
+    StorageSettings,
+)
 
 
 def _config(*, service_role: str = "writer", **overrides) -> DlightragConfig:
+    postgres = PostgresSettings(
+        host=overrides.pop("postgres_host", "localhost"),
+        session_settings=overrides.pop("postgres_session_settings", {}),
+    )
+    assert not overrides
     return cast(Any, DlightragConfig)(
         _env_file=None,
-        service_role=service_role,
-        llm=LLMConfig(),
-        embedding=EmbeddingConfig(
-            provider="voyage", model="m", api_key="k", dim=8, startup_probe=False
+        deployment=DeploymentSettings(service_role=cast(Any, service_role)),
+        storage=StorageSettings(postgres=postgres),
+        models=ModelsSettings(
+            chat=ModelRoleSettings(),
+            embedding=EmbeddingSettings(
+                provider="voyage", model="m", api_key="k", dim=8, startup_probe=False
+            ),
         ),
-        **overrides,
     )
 
 
 class TestServiceRoleConfig:
     def test_defaults_to_writer(self) -> None:
         cfg = _config()
-        assert cfg.service_role == "writer"
+        assert cfg.deployment.service_role == "writer"
         assert cfg.is_reader is False
 
     def test_reader_predicate(self) -> None:
         assert _config(service_role="reader").is_reader is True
 
     def test_env_spelling(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DLIGHTRAG_SERVICE_ROLE", "reader")
+        monkeypatch.setenv("DLIGHTRAG_DEPLOYMENT__SERVICE_ROLE", "reader")
         cfg = cast(Any, DlightragConfig)(
             _env_file=None,
-            embedding=EmbeddingConfig(
-                provider="voyage", model="m", api_key="k", dim=8, startup_probe=False
+            models=ModelsSettings(
+                embedding=EmbeddingSettings(
+                    provider="voyage", model="m", api_key="k", dim=8, startup_probe=False
+                )
             ),
         )
         assert cfg.is_reader is True
@@ -504,7 +519,7 @@ class TestReadOnlyAdapter:
         assert client_manager._instances["ref_count"] == 4
         assert client_manager._instances["vector_signature"] == {
             "database": "db",
-            "vector_storage": _config(service_role="reader").vector_storage,
+            "vector_storage": _config(service_role="reader").storage.lightrag.vector_storage,
         }
         assert full_docs.db is db
         assert chunks_vdb.db is db

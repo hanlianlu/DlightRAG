@@ -2,14 +2,14 @@
 # Credentials come from .env (not tracked in git).
 
 x-common-env: &common-env
-  DLIGHTRAG_POSTGRES_HOST: ${DLIGHTRAG_POSTGRES_HOST:-postgres}
-  DLIGHTRAG_POSTGRES_PORT: "${DLIGHTRAG_POSTGRES_PORT:-5432}"
-  DLIGHTRAG_POSTGRES_DATABASE: ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}
-  DLIGHTRAG_POSTGRES_USER: ${DLIGHTRAG_POSTGRES_USER:-dlightrag}
-  DLIGHTRAG_POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
-  DLIGHTRAG_WORKSPACE: ${DLIGHTRAG_WORKSPACE:-default}
-  DLIGHTRAG_WORKING_DIR: /app/dlightrag_storage
-  DLIGHTRAG_AGENT__WORKSPACE_ROOT: /app/dlightrag_agent_workspaces
+  DLIGHTRAG_STORAGE__POSTGRES__HOST: ${DLIGHTRAG_STORAGE__POSTGRES__HOST:-postgres}
+  DLIGHTRAG_STORAGE__POSTGRES__PORT: "${DLIGHTRAG_STORAGE__POSTGRES__PORT:-5432}"
+  DLIGHTRAG_STORAGE__POSTGRES__DATABASE: ${DLIGHTRAG_STORAGE__POSTGRES__DATABASE:-dlightrag}
+  DLIGHTRAG_STORAGE__POSTGRES__USER: ${DLIGHTRAG_STORAGE__POSTGRES__USER:-dlightrag}
+  DLIGHTRAG_STORAGE__POSTGRES__PASSWORD: ${DLIGHTRAG_STORAGE__POSTGRES__PASSWORD:-dlightrag}
+  DLIGHTRAG_DEPLOYMENT__WORKSPACE: ${DLIGHTRAG_DEPLOYMENT__WORKSPACE:-default}
+  DLIGHTRAG_DEPLOYMENT__WORKING_DIR: /app/dlightrag_storage
+  DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT: /app/dlightrag_agent_workspaces
 x-app-image: &app-image dlightrag:local
 x-app-build: &app-build
   context: .
@@ -23,13 +23,13 @@ services:
       - "127.0.0.1:8100:8100"
     environment:
       <<: *common-env
-      DLIGHTRAG_API_HOST: "0.0.0.0"
-      DLIGHTRAG_API_PORT: "8100"
+      DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
+      DLIGHTRAG_INTERFACES__API__PORT: "8100"
       # The container binds 0.0.0.0, but the port above is published to
       # 127.0.0.1 only, so no-auth is acceptable for local dev. Set
-      # DLIGHTRAG_AUTH_MODE=simple + DLIGHTRAG_API_AUTH_TOKEN (and drop this
+      # DLIGHTRAG_ACCESS__AUTH_MODE=simple + DLIGHTRAG_ACCESS__API_TOKEN (and drop this
       # override) before publishing the port on a non-loopback address.
-      DLIGHTRAG_ALLOW_INSECURE_NO_AUTH: "true"
+      DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
     env_file: .env
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -56,16 +56,16 @@ services:
     image: *app-image
     build: *app-build
     # SECURITY: MCP streamable-http exposes ingest / delete_files / answer.
-    # This maps the host port to 127.0.0.1 only; set DLIGHTRAG_AUTH_MODE=simple
-    # + DLIGHTRAG_API_AUTH_TOKEN before exposing it on a non-loopback network.
+    # This maps the host port to 127.0.0.1 only; set DLIGHTRAG_ACCESS__AUTH_MODE=simple
+    # + DLIGHTRAG_ACCESS__API_TOKEN before exposing it on a non-loopback network.
     ports:
       - "127.0.0.1:8101:8101"
     environment:
       <<: *common-env
-      DLIGHTRAG_MCP_TRANSPORT: streamable-http
-      DLIGHTRAG_MCP_HOST: "0.0.0.0"
-      DLIGHTRAG_MCP_PORT: "8101"
-      DLIGHTRAG_ALLOW_INSECURE_NO_AUTH: "true"
+      DLIGHTRAG_INTERFACES__MCP__TRANSPORT: streamable-http
+      DLIGHTRAG_INTERFACES__MCP__HOST: "0.0.0.0"
+      DLIGHTRAG_INTERFACES__MCP__PORT: "8101"
+      DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
     env_file: .env
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -90,25 +90,25 @@ services:
       # PostgreSQL — same instance as DlightRAG (read-only, no conflict)
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-      POSTGRES_USER: ${DLIGHTRAG_POSTGRES_USER:-dlightrag}
-      POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
-      POSTGRES_DATABASE: ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}
+      POSTGRES_USER: ${DLIGHTRAG_STORAGE__POSTGRES__USER:-dlightrag}
+      POSTGRES_PASSWORD: ${DLIGHTRAG_STORAGE__POSTGRES__PASSWORD:-dlightrag}
+      POSTGRES_DATABASE: ${DLIGHTRAG_STORAGE__POSTGRES__DATABASE:-dlightrag}
       # Storage backends — must match DlightRAG exactly
       LIGHTRAG_GRAPH_STORAGE: PGTableGraphStorage
       LIGHTRAG_VECTOR_STORAGE: PGVectorStorage
       LIGHTRAG_KV_STORAGE: PGKVStorage
       LIGHTRAG_DOC_STATUS_STORAGE: PGDocStatusStorage
       # Workspace — same as DlightRAG to see the same graph
-      WORKSPACE: ${DLIGHTRAG_WORKSPACE:-default}
+      WORKSPACE: ${DLIGHTRAG_DEPLOYMENT__WORKSPACE:-default}
       # LLM — OpenRouter (initialization only; graph browsing never calls it)
       LLM_BINDING: openai
       LLM_BINDING_HOST: https://openrouter.ai/api/v1
-      LLM_BINDING_API_KEY: ${DLIGHTRAG_LLM__DEFAULT__API_KEY}
+      LLM_BINDING_API_KEY: ${DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY}
       LLM_MODEL: google/gemini-2.5-flash
       # Embedding — must match config.yaml: the vector columns are 1024-dim.
       EMBEDDING_BINDING: voyageai
       EMBEDDING_BINDING_HOST: https://api.voyageai.com/v1
-      EMBEDDING_BINDING_API_KEY: ${DLIGHTRAG_EMBEDDING__API_KEY}
+      EMBEDDING_BINDING_API_KEY: ${DLIGHTRAG_MODELS__EMBEDDING__API_KEY}
       EMBEDDING_MODEL: voyage-multimodal-3.5
       EMBEDDING_DIM: "1024"
       # Server
@@ -132,9 +132,9 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     environment:
-      POSTGRES_DB: ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}
-      POSTGRES_USER: ${DLIGHTRAG_POSTGRES_USER:-dlightrag}
-      POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
+      POSTGRES_DB: ${DLIGHTRAG_STORAGE__POSTGRES__DATABASE:-dlightrag}
+      POSTGRES_USER: ${DLIGHTRAG_STORAGE__POSTGRES__USER:-dlightrag}
+      POSTGRES_PASSWORD: ${DLIGHTRAG_STORAGE__POSTGRES__PASSWORD:-dlightrag}
     volumes:
       - pg18_data:/var/lib/postgresql
     command:
@@ -174,7 +174,7 @@ services:
       - "-c"
       - "huge_pages=off"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DLIGHTRAG_POSTGRES_USER:-dlightrag} -d ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DLIGHTRAG_STORAGE__POSTGRES__USER:-dlightrag} -d ${DLIGHTRAG_STORAGE__POSTGRES__DATABASE:-dlightrag}"]
       interval: 5s
       timeout: 3s
       retries: 10

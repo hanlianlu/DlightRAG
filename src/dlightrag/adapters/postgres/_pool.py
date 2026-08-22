@@ -47,12 +47,12 @@ class PGPool:
     def _binding_signature(config: Any) -> tuple[Any, ...]:
         """Connection-identity fields that must not change under one process."""
         return (
-            config.postgres_host,
-            config.postgres_port,
-            config.postgres_user,
-            config.postgres_database,
-            config.service_role,
-            config.postgres_ssl_mode,
+            config.storage.postgres.host,
+            config.storage.postgres.port,
+            config.storage.postgres.user,
+            config.storage.postgres.database,
+            config.deployment.service_role,
+            config.storage.postgres.ssl_mode,
             tuple(sorted(config.domain_pool_server_settings().items())),
         )
 
@@ -94,17 +94,17 @@ class PGPool:
             if self._pool is not None:
                 return self._pool
 
-            min_size = getattr(config, "postgres_pool_min_size", _DEFAULT_MIN_SIZE)
-            max_size = getattr(config, "postgres_pool_max_size", _DEFAULT_MAX_SIZE)
+            min_size = getattr(config.storage.postgres, "pool_min_size", _DEFAULT_MIN_SIZE)
+            max_size = getattr(config.storage.postgres, "pool_max_size", _DEFAULT_MAX_SIZE)
             endpoint = config.pg_connection_kwargs()
             pool_kwargs: dict[str, Any] = dict(endpoint)
             pool_kwargs["min_size"] = min_size
             pool_kwargs["max_size"] = max_size
-            statement_cache_size = getattr(config, "postgres_statement_cache_size", None)
+            statement_cache_size = getattr(config.storage.postgres, "statement_cache_size", None)
             if statement_cache_size is not None:
                 pool_kwargs["statement_cache_size"] = int(statement_cache_size)
-            if config.postgres_command_timeout is not None:
-                pool_kwargs["command_timeout"] = config.postgres_command_timeout
+            if config.storage.postgres.command_timeout is not None:
+                pool_kwargs["command_timeout"] = config.storage.postgres.command_timeout
             server_settings = config.domain_pool_server_settings()
             if server_settings:
                 pool_kwargs["server_settings"] = server_settings
@@ -131,18 +131,30 @@ class PGPool:
         config = self._active_config()
         attempts = max(
             1,
-            int(getattr(config, "postgres_connection_retries", _DEFAULT_RETRY_ATTEMPTS)),
+            int(
+                getattr(
+                    config.storage.postgres,
+                    "connection_retries",
+                    _DEFAULT_RETRY_ATTEMPTS,
+                )
+            ),
         )
         backoff = max(
             0.0,
-            float(getattr(config, "postgres_connection_retry_backoff", _DEFAULT_RETRY_BACKOFF)),
+            float(
+                getattr(
+                    config.storage.postgres,
+                    "connection_retry_backoff",
+                    _DEFAULT_RETRY_BACKOFF,
+                )
+            ),
         )
         backoff_max = max(
             backoff,
             float(
                 getattr(
-                    config,
-                    "postgres_connection_retry_backoff_max",
+                    config.storage.postgres,
+                    "connection_retry_backoff_max",
                     _DEFAULT_RETRY_BACKOFF_MAX,
                 )
             ),
@@ -151,7 +163,7 @@ class PGPool:
         for attempt in range(1, attempts + 1):
             try:
                 pool = await self.get()
-                async with pool.acquire(timeout=config.postgres_acquire_timeout) as conn:
+                async with pool.acquire(timeout=config.storage.postgres.acquire_timeout) as conn:
                     return await operation(conn)
             except Exception as exc:
                 if not is_postgres_unavailable(exc):
@@ -181,7 +193,7 @@ class PGPool:
         """
         config = self._active_config()
         pool = await self.get()
-        async with pool.acquire(timeout=config.postgres_acquire_timeout) as conn:
+        async with pool.acquire(timeout=config.storage.postgres.acquire_timeout) as conn:
             return await operation(conn)
 
     async def stream(
@@ -191,7 +203,7 @@ class PGPool:
         """Stream a read through one pooled connection without retry."""
         config = self._active_config()
         pool = await self.get()
-        async with pool.acquire(timeout=config.postgres_acquire_timeout) as conn:
+        async with pool.acquire(timeout=config.storage.postgres.acquire_timeout) as conn:
             async for piece in operation(conn):
                 yield piece
 

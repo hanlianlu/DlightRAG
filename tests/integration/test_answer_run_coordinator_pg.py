@@ -486,7 +486,11 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
 
 def _answer_runtime(store: FingerprintingAnswerRunStore) -> tuple[Application, RunCoordinator]:
     """Compose the final executor and coordinator over the throwaway database."""
-    config = DlightragConfig(runtime=RuntimeConfig(answer_worker_concurrency=1))
+    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        answer={
+            "runtime": RuntimeConfig(answer_worker_concurrency=1),
+        },
+    )
     components = _compose(config)
     application = Application(config, components)
     orchestrator = AnswerOrchestrator(

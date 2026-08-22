@@ -38,7 +38,8 @@ from dlightrag.adapters.postgres.answer_runs import (
     ANSWER_RUN_SCHEMA_TABLES,
     PGAnswerRunStore,
 )
-from dlightrag.config import DlightragConfig, EmbeddingConfig
+from dlightrag.ai.settings import EmbeddingSettings, ModelsSettings
+from dlightrag.config import DeploymentSettings, DlightragConfig, PostgresSettings, StorageSettings
 from dlightrag.rag.ports import CorpusSchemaError
 
 pytestmark = [
@@ -106,14 +107,20 @@ async def database() -> AsyncIterator[str]:
 def _config(database: str, *, service_role: str) -> DlightragConfig:
     return cast(Any, DlightragConfig)(
         _env_file=None,
-        service_role=service_role,
-        postgres_host=_PG_CONN_KWARGS["host"],
-        postgres_port=_PG_CONN_KWARGS["port"],
-        postgres_user=_PG_CONN_KWARGS["user"],
-        postgres_password=_PG_CONN_KWARGS["password"],
-        postgres_database=database,
-        embedding=EmbeddingConfig(
-            provider="voyage", model="m", api_key="k", dim=8, startup_probe=False
+        deployment=DeploymentSettings(service_role=cast(Any, service_role)),
+        storage=StorageSettings(
+            postgres=PostgresSettings(
+                host=_PG_CONN_KWARGS["host"],
+                port=_PG_CONN_KWARGS["port"],
+                user=_PG_CONN_KWARGS["user"],
+                password=_PG_CONN_KWARGS["password"],
+                database=database,
+            )
+        ),
+        models=ModelsSettings(
+            embedding=EmbeddingSettings(
+                provider="voyage", model="m", api_key="k", dim=8, startup_probe=False
+            )
         ),
     )
 

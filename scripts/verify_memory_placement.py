@@ -38,10 +38,9 @@ async def _run() -> int:
     from dlightrag.ai.completion import CompletionModel
     from dlightrag.ai.scheduler import ModelScheduler
     from dlightrag.config import get_config
-    from dlightrag.model_settings import model_role_settings
 
     config = get_config()
-    settings = model_role_settings(config).resolve("query")
+    settings = config.models.chat.resolve("query")
     model = CompletionModel(settings, scheduler=ModelScheduler(max_concurrency=1))
     try:
         text = str(await model(MESSAGES, max_tokens=16))

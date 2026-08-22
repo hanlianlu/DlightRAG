@@ -819,10 +819,12 @@ def _smoke_root_interfaces() -> None:
     import dlightrag
     from dlightrag import Application
     from dlightrag.access import DEPLOYMENT_OWNER_ID
+    from dlightrag.ai.settings import ModelsSettings
     from dlightrag.ai.telemetry import NoopTelemetry
-    from dlightrag.config import DlightragConfig, RuntimeConfig
+    from dlightrag.config import AnswerSectionSettings, DlightragConfig, RuntimeConfig
     from dlightrag.model_settings import rag_settings
     from dlightrag.rag.retrieval import RetrievalResult
+    from dlightrag.rag.settings import CorpusSettings, IngestionSettings, PipelineSettings
     from dlightrag.runtime import answer_run_request_fingerprint
     from dlightrag.sdk import AnswerRunClient
     from dlightrag.services.corpora import CorpusAdmin, CorpusAdminSettings, IngestSpec
@@ -965,9 +967,11 @@ def _smoke_root_interfaces() -> None:
             raise ValueError("installed CorpusAdmin did not project its ingest contract")
 
     config = DlightragConfig(
-        max_async=2,
-        runtime=RuntimeConfig(answer_worker_concurrency=3),
-        rag_pipeline_max_async=5,
+        models=ModelsSettings(max_concurrency=2),
+        answer=AnswerSectionSettings(runtime=RuntimeConfig(answer_worker_concurrency=3)),
+        corpus=CorpusSettings(
+            ingestion=IngestionSettings(pipeline=PipelineSettings(max_concurrency=5))
+        ),
     )
     settings = rag_settings(config)
     if len(DEPLOYMENT_OWNER_ID) != 64:
@@ -994,9 +998,9 @@ def _smoke_root_interfaces() -> None:
             retired_spec = None
         if retired_spec is not None:
             raise ValueError(f"installed root package still contains {retired_module}")
-    if config.max_async != 2:
+    if config.models.max_concurrency != 2:
         raise ValueError("installed root config did not preserve AI concurrency")
-    if config.runtime.answer_worker_concurrency != 3:
+    if config.answer.runtime.answer_worker_concurrency != 3:
         raise ValueError("installed root config did not preserve Runtime concurrency")
     if settings.rag_pipeline_max_async != 5:
         raise ValueError("installed root mapping did not preserve RAG concurrency")
