@@ -49,6 +49,10 @@ DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES = 128 * 1024 * 1024
 DEFAULT_MAX_ANSWER_IMAGES = 12
 
+DOCLING_EXTERNAL_CHOICE = "Docling external endpoint (recommended)"
+DOCLING_MPS_DEVICE_CHOICE = "Apple Silicon MPS (granite_docling)"
+DOCLING_SERVICE_DEFAULT_DEVICE_CHOICE = "CUDA, XPU, or CPU (service default)"
+
 
 # ---------------------------------------------------------------------------
 # Provider registry and role resolvers
@@ -331,6 +335,7 @@ def write_config_yaml(
     parser_kind: str | None = None,
     mineru_api_mode: str | None = None,
     docling_endpoint: str | None = None,
+    docling_code_formula_preset: str | None = None,
 ) -> None:
     yaml = _yaml()
     data = yaml.load(path)
@@ -393,7 +398,9 @@ def write_config_yaml(
             mineru.setdefault("language", "ch")
         else:
             sidecars.pop("mineru", None)
-            sidecars["docling"] = {"endpoint": docling_endpoint or "http://docling:5001"}
+            docling = sidecars.setdefault("docling", {})
+            docling["endpoint"] = docling_endpoint or "http://docling:5001"
+            docling["code_formula_preset"] = docling_code_formula_preset
     yaml.dump(data, path)
 
 
@@ -622,11 +629,17 @@ def configure_mineru_local_env(extras: str, *, title_aided: dict | None = None) 
     )
 
 
-def configure_docling(endpoint: str, *, bundled: bool) -> None:
+def configure_docling(
+    endpoint: str,
+    *,
+    bundled: bool,
+    code_formula_preset: str | None = "granite_docling",
+) -> None:
     write_config_yaml(
         CONFIG_PATH,
         parser_kind="docling",
         docling_endpoint=endpoint,
+        docling_code_formula_preset=None if bundled else code_formula_preset,
     )
     values = {"COMPOSE_PROFILES": "docling"} if bundled else {}
     remove_keys = (
@@ -672,10 +685,10 @@ def run_parser_step(
     choice = prompter.select(
         "Document parser",
         [
-            "MinerU local (recommended)",
+            DOCLING_EXTERNAL_CHOICE,
+            "MinerU local",
             "MinerU official cloud API",
             "Docling bundled (Compose)",
-            "Docling external endpoint",
         ],
     )
     if choice == "MinerU official cloud API":
@@ -685,20 +698,32 @@ def run_parser_step(
         _apply_parser_change(lambda: configure_mineru_official(token))
         return "mineru"
 
-    if choice in {"Docling bundled (Compose)", "Docling external endpoint"}:
+    if choice in {"Docling bundled (Compose)", DOCLING_EXTERNAL_CHOICE}:
         endpoint = "http://docling:5001"
-        if choice == "Docling external endpoint":
-            endpoint = "http://host.docker.internal:5001"
+        code_formula_preset = None
+        if choice == DOCLING_EXTERNAL_CHOICE:
             endpoint = _ask_required(
                 lambda: prompter.text(
                     "Docling endpoint (required)",
-                    default=endpoint,
+                    default="http://host.docker.internal:5001",
                 )
             )
+            device = prompter.select(
+                "Docling service device",
+                [DOCLING_MPS_DEVICE_CHOICE, DOCLING_SERVICE_DEFAULT_DEVICE_CHOICE],
+            )
+            if device == DOCLING_MPS_DEVICE_CHOICE:
+                code_formula_preset = "granite_docling"
         if require_confirm and not prompter.confirm(PARSER_OVERWRITE_CONFIRM, default=False):
             return None
         bundled = choice == "Docling bundled (Compose)"
-        _apply_parser_change(lambda: configure_docling(endpoint, bundled=bundled))
+        _apply_parser_change(
+            lambda: configure_docling(
+                endpoint,
+                bundled=bundled,
+                code_formula_preset=code_formula_preset,
+            )
+        )
         return "docling" if bundled else "external"
 
     extras = select_mineru_extras(info, has_gpu=has_gpu)

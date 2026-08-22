@@ -62,14 +62,16 @@ they need to change:
 
 ## Parser Routing And Sidecars
 
-The configured external sidecar selects the parser automatically. Configure a
-`mineru` block or a `docling` block; DlightRAG derives the internal LightRAG
-wildcard. With neither block, the code default is MinerU. If both are present,
-only MinerU is effective. MinerU and Docling are durable ingestion parsers only;
-answer attachments are decoded and converted request-locally and never invoke
-them.
+The configured external sidecar selects the parser automatically. Configure
+exactly one `docling` or `mineru` block; DlightRAG derives the internal LightRAG
+wildcard. With neither block, the code default is Docling at
+`http://127.0.0.1:5001`. If both are present, MinerU remains effective for
+backward compatibility, so do not configure both. Docling and MinerU are durable
+ingestion parsers only; answer attachments are decoded and converted
+request-locally and never invoke them.
 
-Advanced parser fields with code defaults:
+The checked-in Docker-first configuration consumes the host-native
+Docling Serve MPS service rather than enabling the optional Compose profile:
 
 ```yaml
 corpus:
@@ -83,57 +85,15 @@ corpus:
       max_image_bytes: 5242880
       # DlightRAG default 80px, above LightRAG's native 64px minimum.
       min_image_pixel: 80
-    mineru:
-      api_mode: local
-      local_endpoint: http://host.docker.internal:8210
-      language: ch
-      backend: hybrid-engine
-```
-
-The local sidecar installer supports MinerU 3.4.5 through the reviewed 3.x API
-range. For an existing checkout, remove or update an older `MINERU_VERSION` /
-`MINERU_MIN_VERSION` override in `.env.mineru`, then upgrade and restart:
-
-```bash
-make mineru-service-stop
-make mineru-install
-make mineru-service-start
-```
-
-MinerU 3.4.5 corrects special-character preservation in DOCX tables and
-supplementary-plane Unicode extraction from PDFs. Existing indexed documents do
-not change when the sidecar package changes; reset and reingest affected sources
-when those corrections matter. The upgrade adds no parser request option, so it
-does not require a new `corpus.sidecars.mineru` setting.
-
-`corpus.sidecars.vlm` owns figure understanding, and MinerU's own image
-analysis is deliberately left off. MinerU extracts each figure as a crop; the
-VLM sidecar then describes that crop together with the surrounding text.
-Enabling MinerU's analysis would run a second VLM over the same image for
-roughly 58% more parse time and largely duplicate content, so there is no
-setting for it.
-
-A parse therefore emits zero `chart` blocks by design — the figures arrive as
-`image` blocks and become `drawing` chunks carrying the sidecar's description.
-That is the expected shape, not a missing feature.
-
-The sidecar only ever sees the figures MinerU cut, so the `hybrid-engine`
-backend's effort setting decides what it gets. MinerU's own default, `medium`,
-consumes precomputed layout boxes and can split a dense multi-panel figure into
-fragments. `high` lets the VLM detect blocks itself, returning whole figures with
-correctly bound captions, at roughly 5x the parse time. Set
-`MINERU_HYBRID_EFFORT=high` in `.env.mineru` for figure-heavy corpora.
-
-To use Docling instead, remove/comment the MinerU block and configure only:
-
-```yaml
-corpus:
-  sidecars:
     docling:
-      endpoint: http://docling:5001
-      # code_formula_preset: granite_docling
+      endpoint: http://host.docker.internal:5001
+      code_formula_preset: granite_docling
       # force_ocr: false
 ```
+
+Changing the selected parser affects new parses; it does not rewrite an
+existing workspace's chunks, vectors, graph, or parser cache. Explicitly reset
+and reingest a corpus when it must be rebuilt with Docling artifacts.
 
 `corpus.sidecars.docling.do_formula_enrichment` transcribes detected formula
 regions and defaults on, matching MinerU's `enable_formula`, so the parser
@@ -142,16 +102,18 @@ drops formulas silently rather than erroring, so turn it off only on a corpus
 without mathematics.
 
 `corpus.sidecars.docling.code_formula_preset` names the model that transcribes
-them. Leave it unset unless the parser service runs on Apple Silicon:
+them. The code default matches the host-native Apple Silicon service; explicitly
+set YAML `null` for other devices:
 
 | Parser service device | `code_formula_preset` |
 | --- | --- |
-| CUDA, XPU, or CPU | Unset — Docling's built-in `codeformulav2` is used |
+| CUDA, XPU, or CPU | `null` — use Docling's built-in `codeformulav2` |
 | MPS | `granite_docling` |
 
-Docling's default model cannot run on MPS, so enrichment fails on Apple Silicon
-until the preset is set. Repointing the preset invalidates the Docling bundle
-cache, so affected documents re-parse on their own. The
+Docling's default formula model cannot run on MPS, so enrichment fails on Apple
+Silicon without `granite_docling`. The setup wizard asks for the service device
+instead of inferring it from the endpoint. Repointing the preset invalidates the
+Docling bundle cache, so affected documents re-parse on their own. The
 `DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS` allowlist matters only if an
 operator narrowed it; a stock docling-serve allows every preset.
 
@@ -165,8 +127,10 @@ newer** (docling-jobkit 3.3.0 is the first release that maps the field onto the
 pipeline); an older service accepts the field and drops it silently, so verify
 the service version.
 
-The OCR engine needs no configuration, and `ocr_lang` has no effect: the CPU
-image resolves to a single engine that reads Han and Latin from one table.
+DlightRAG does not select Docling's OCR engine or forward `ocr_lang`; that policy
+belongs to the independently operated service. The checked-in MPS deployment
+uses OCRMac with Simplified Chinese and English recognition, while the optional
+CPU image retains its own OCR default.
 
 `corpus.sidecars.docling.force_ocr` re-runs OCR over the whole page and discards
 the PDF's embedded text layer. docling-serve defaults it off; DlightRAG defaults
@@ -189,9 +153,53 @@ parser service DlightRAG does not launch must be configured the same way
 
 OCR, formula enrichment, output formats, referenced images, raw-bundle
 validation, and retry semantics remain owned by LightRAG and the parser service.
-The optional local profile starts with `docker compose --profile docling up -d`;
-an external deployment supplies its own reachable endpoint. Native DlightRAG
-processes use `127.0.0.1` endpoints when their parser runs on the same host.
+Dockerized DlightRAG reaches a host-native service through
+`host.docker.internal`; a native DlightRAG process uses `127.0.0.1` when the
+parser runs on the same host. The optional Compose profile starts with
+`docker compose --profile docling up -d`; point its block to
+`http://docling:5001` and set `code_formula_preset: null`.
+
+To use MinerU instead, remove the Docling block and configure only:
+
+```yaml
+corpus:
+  sidecars:
+    mineru:
+      api_mode: local
+      local_endpoint: http://host.docker.internal:8210
+      language: ch
+      backend: hybrid-engine
+```
+
+The local sidecar installer supports MinerU 3.4.5 through the reviewed 3.x API
+range. For an existing checkout, remove or update an older `MINERU_VERSION` /
+`MINERU_MIN_VERSION` override in `.env.mineru`, then upgrade and restart:
+
+```bash
+make mineru-service-stop
+make mineru-install
+make mineru-service-start
+```
+
+MinerU 3.4.5 corrects special-character preservation in DOCX tables and
+supplementary-plane Unicode extraction from PDFs. Existing indexed documents do
+not change when the sidecar package changes; reset and reingest affected sources
+when those corrections matter.
+
+`corpus.sidecars.vlm` owns figure understanding, and MinerU's own image analysis
+is deliberately left off. MinerU extracts each figure as a crop; the VLM sidecar
+then describes that crop together with the surrounding text. Enabling MinerU's
+analysis would run a second VLM over the same image for roughly 58% more parse
+time and largely duplicate content, so there is no setting for it. A parse
+therefore emits zero `chart` blocks by design: figures arrive as `image` blocks
+and become `drawing` chunks carrying the sidecar's description.
+
+The sidecar only ever sees the figures MinerU cut, so the `hybrid-engine`
+backend's effort setting decides what it gets. MinerU's own default, `medium`,
+consumes precomputed layout boxes and can split a dense multi-panel figure into
+fragments. `high` lets the VLM detect blocks itself, returning whole figures with
+correctly bound captions, at roughly 5x the parse time. Set
+`MINERU_HYBRID_EFFORT=high` in `.env.mineru` for figure-heavy corpora.
 
 `corpus.sidecars.mineru.language` is MinerU's OCR language hint for scanned or
 image-based documents. It is separate from `corpus.extraction.language`, which controls

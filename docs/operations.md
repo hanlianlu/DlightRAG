@@ -96,12 +96,16 @@ Configure both projects before pushing the tag. The workflow uses GitHub OIDC
 two projects is not transactional, so a missing project or publisher binding
 can leave a partial release that must be completed by rerunning the workflow.
 
-## Optional Docling Parser
+## Parser Services
 
-Parser selection comes from `config.yaml`: keep one
-`corpus.sidecars.mineru` or `corpus.sidecars.docling` block. If both are
-present, MinerU takes priority. The optional local Docling service is not a
-core dependency and starts only with:
+Parser selection comes from `config.yaml`: keep exactly one
+`corpus.sidecars.docling` or `corpus.sidecars.mineru` block. The checked-in
+default consumes a host-native Docling service through
+`http://host.docker.internal:5001`; DlightRAG does not own that service's
+lifecycle. On Apple Silicon, `docling-serve-mps start` provides the matching
+loopback service.
+
+The optional Compose CPU service remains available with:
 
 ```bash
 docker compose --profile docling up -d
@@ -109,9 +113,11 @@ docker compose --profile docling up -d
 
 It uses `quay.io/docling-project/docling-serve-cpu:latest` with
 `pull_policy: always`, publishes only `127.0.0.1:5001`, and exposes `/health`.
-Set `DOCLING_SERVE_IMAGE` for another official image. External deployments set
-the Docling block's endpoint and leave the profile disabled. DlightRAG does not
-provide Docling install, launchd, systemd, or service-management scripts.
+Point the Docling block at `http://docling:5001` and set
+`code_formula_preset: null` when using that profile; do not run it alongside a
+host service on the same port. MinerU's independent
+install and service-management scripts remain available when a MinerU block is
+selected.
 
 ## Workspace BM25 Rebuild
 

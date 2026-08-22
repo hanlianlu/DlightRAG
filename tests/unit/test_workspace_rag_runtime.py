@@ -860,7 +860,7 @@ class TestWorkspaceRagLightRAGMainPath:
             "backend",
             "sidecar",
             "runtime",
-            "validate:*:mineru-iteP",
+            "validate:*:docling-iteP",
             "patches",
         ]
 

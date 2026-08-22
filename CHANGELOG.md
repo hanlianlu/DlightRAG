@@ -27,6 +27,9 @@ contract.
   consume their owning section instead of copied snapshots of root settings.
 - Configuration precedence is constructor arguments, environment variables,
   `.env`, `config.yaml`, then code defaults.
+- Docling is the default durable parser. The checked-in Docker-first config
+  consumes an independently operated host service on port 5001 rather than
+  enabling the optional Compose Docling profile; MinerU remains opt-in.
 - Root and Memory wheels are built and smoke-tested as isolated installations,
   including their packaged data and type markers.
 

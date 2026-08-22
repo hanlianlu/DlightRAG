@@ -122,7 +122,7 @@ class DoclingSidecarSettings(FrozenSettings):
     endpoint: str = "http://127.0.0.1:5001"
     do_formula_enrichment: bool = True
     force_ocr: bool = True
-    code_formula_preset: str | None = None
+    code_formula_preset: str | None = "granite_docling"
     poll_interval_seconds: int = Field(default=5, ge=1)
     max_polls: int = Field(default=1440, ge=1)
     _ENV_MAP: ClassVar[dict[str, str]] = {
@@ -136,18 +136,20 @@ class DoclingSidecarSettings(FrozenSettings):
 
 class ParserSidecarsSettings(FrozenSettings):
     vlm: VLMSidecarSettings = Field(default_factory=VLMSidecarSettings)
-    mineru: MinerUSidecarSettings | None = Field(default_factory=MinerUSidecarSettings)
-    docling: DoclingSidecarSettings | None = None
+    mineru: MinerUSidecarSettings | None = None
+    docling: DoclingSidecarSettings | None = Field(default_factory=DoclingSidecarSettings)
 
     @model_validator(mode="before")
     @classmethod
     def _select_parser(cls, value: Any) -> Any:
         if isinstance(value, dict):
             value = dict(value)
-            if value.get("docling") is not None and "mineru" not in value:
+            if value.get("mineru") is not None and "docling" not in value:
+                value["docling"] = None
+            elif value.get("docling") is not None and "mineru" not in value:
                 value["mineru"] = None
             elif value.get("mineru") is None and value.get("docling") is None:
-                value["mineru"] = {}
+                value["docling"] = {}
         return value
 
     @property

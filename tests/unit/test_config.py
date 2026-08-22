@@ -156,7 +156,7 @@ def test_postgres_projection_and_reader_settings() -> None:
 
 def test_parser_selection_is_canonical() -> None:
     config = DlightragConfig(corpus=CorpusSettings(sidecars=ParserSidecarsSettings()))
-    assert config.parser_rules == "*:mineru-iteP"
+    assert config.parser_rules == "*:docling-iteP"
 
 
 def test_dump_redacts_nested_secrets() -> None:

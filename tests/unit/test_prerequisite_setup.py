@@ -29,8 +29,10 @@ class _ScriptedPrompter:
 
     def __init__(self, answers):
         self._a = list(answers)
+        self.select_choices = []
 
     def select(self, message, choices):
+        self.select_choices.append(list(choices))
         return self._a.pop(0)
 
     def text(self, message, default=""):
@@ -411,8 +413,36 @@ def test_write_config_selects_docling_and_removes_mineru(wiz, tmp_path):
 
     data = wiz._yaml().load(src)
     assert "parser" not in data["corpus"]
-    assert data["corpus"]["sidecars"] == {"docling": {"endpoint": "https://docling.example.com"}}
+    assert data["corpus"]["sidecars"] == {
+        "docling": {
+            "endpoint": "https://docling.example.com",
+            "code_formula_preset": None,
+        }
+    }
     assert "# parser comment" in src.read_text(encoding="utf-8")
+
+
+def test_write_config_clears_stale_mps_preset_for_cpu_service(wiz, tmp_path):
+    src = tmp_path / "config.yaml"
+    src.write_text(
+        "corpus:\n"
+        "  sidecars:\n"
+        "    docling:\n"
+        "      endpoint: http://host.docker.internal:5001\n"
+        "      code_formula_preset: granite_docling\n",
+        encoding="utf-8",
+    )
+
+    wiz.write_config_yaml(
+        src,
+        parser_kind="docling",
+        docling_endpoint="https://docling.example.com",
+    )
+
+    assert wiz._yaml().load(src)["corpus"]["sidecars"]["docling"] == {
+        "endpoint": "https://docling.example.com",
+        "code_formula_preset": None,
+    }
 
 
 def test_write_config_selects_mineru_and_removes_docling(wiz, tmp_path):
@@ -820,6 +850,28 @@ def test_configure_mineru_official(wiz, tmp_path, monkeypatch):
     )
 
 
+def test_configure_external_docling_default_uses_host_mps_service(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text("COMPOSE_PROFILES=docling\n", encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+
+    wiz.configure_docling("http://host.docker.internal:5001", bundled=False)
+
+    assert wiz._yaml().load(cfg)["corpus"]["sidecars"] == {
+        "docling": {
+            "endpoint": "http://host.docker.internal:5001",
+            "code_formula_preset": "granite_docling",
+        }
+    }
+    assert "COMPOSE_PROFILES" not in env.read_text(encoding="utf-8")
+
+
 def test_configure_mineru_local_env_writes_extras_and_title_aided(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
@@ -929,7 +981,7 @@ def test_run_parser_step_mineru_local_runs_commands(wiz, tmp_path, monkeypatch):
     monkeypatch.setattr(wiz, "systemd_user_available", lambda: False)
     ran: list = []
     info = wiz.PlatformInfo(os="macos", arch="arm64", is_wsl=False)
-    prompter = _ScriptedPrompter(["MinerU local (recommended)", False])
+    prompter = _ScriptedPrompter(["MinerU local", False])
     wiz.run_parser_step(prompter, info, has_gpu=False, runner=lambda cmd: ran.append(cmd))
     assert ["make", "mineru-install"] in ran
     assert ["make", "mineru-title-aided"] in ran
@@ -960,7 +1012,10 @@ def test_run_parser_step_configures_bundled_docling(wiz, tmp_path, monkeypatch):
 
     assert mode == "docling"
     assert wiz._yaml().load(cfg)["corpus"]["sidecars"] == {
-        "docling": {"endpoint": "http://docling:5001"}
+        "docling": {
+            "endpoint": "http://docling:5001",
+            "code_formula_preset": None,
+        }
     }
     env_text = env.read_text(encoding="utf-8")
     assert "MINERU__API_TOKEN" not in env_text
@@ -980,16 +1035,21 @@ def test_run_parser_step_configures_external_docling(wiz, tmp_path, monkeypatch)
     monkeypatch.setattr(wiz, "ENV_PATH", env)
     info = wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
 
-    mode = wiz.run_parser_step(
-        _ScriptedPrompter(["Docling external endpoint", "https://docling.example.com"]),
-        info,
-        has_gpu=False,
+    prompter = _ScriptedPrompter(
+        [
+            wiz.DOCLING_EXTERNAL_CHOICE,
+            "https://docling.example.com",
+            wiz.DOCLING_SERVICE_DEFAULT_DEVICE_CHOICE,
+        ]
     )
+    mode = wiz.run_parser_step(prompter, info, has_gpu=False)
 
+    assert prompter.select_choices[0][0] == wiz.DOCLING_EXTERNAL_CHOICE
+    assert prompter.select_choices[1][0] == wiz.DOCLING_MPS_DEVICE_CHOICE
     assert mode == "external"
-    assert wiz._yaml().load(cfg)["corpus"]["sidecars"]["docling"]["endpoint"] == (
-        "https://docling.example.com"
-    )
+    docling = wiz._yaml().load(cfg)["corpus"]["sidecars"]["docling"]
+    assert docling["endpoint"] == "https://docling.example.com"
+    assert docling["code_formula_preset"] is None
     assert "COMPOSE_PROFILES" not in env.read_text(encoding="utf-8")
 
 
@@ -1115,7 +1175,7 @@ def test_run_parser_step_mineru_local_title_aided(wiz, tmp_path, monkeypatch):
     monkeypatch.setattr(wiz, "systemd_user_available", lambda: True)
     ran: list = []
     info = wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
-    prompter = _ScriptedPrompter(["MinerU local (recommended)", True])
+    prompter = _ScriptedPrompter(["MinerU local", True])
     creds = {
         "api_key": "sk",
         "base_url": "https://api.deepseek.com",
@@ -1355,7 +1415,10 @@ def test_read_config_summary_uses_effective_defaults_and_role_fallback(wiz, tmp_
 
     assert summary["llm_roles"] == {}
     assert summary["rerank"]["enabled"] is True
-    assert summary["parser"] == {"name": "MinerU", "detail": "local"}
+    assert summary["parser"] == {
+        "name": "Docling",
+        "detail": "http://127.0.0.1:5001",
+    }
 
 
 def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
@@ -1712,7 +1775,7 @@ def test_parser_step_confirm_declined_skips_write(wiz, tmp_path, monkeypatch):
     monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
     ran: list = []
     info = wiz.PlatformInfo(os="macos", arch="arm64", is_wsl=False)
-    prompter = _ScriptedPrompter(["MinerU local (recommended)", False])
+    prompter = _ScriptedPrompter(["MinerU local", False])
     applied = wiz.run_parser_step(
         prompter, info, has_gpu=False, runner=lambda c: ran.append(c), require_confirm=True
     )
