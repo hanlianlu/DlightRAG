@@ -2,8 +2,8 @@
 """Behavioral tests for one shared conversation-history projection."""
 
 import pytest
-from dlightrag_ai.capacity import ModelProfile
 
+from dlightrag.ai.capacity import ModelProfile
 from dlightrag.answer.history import (
     HistoryProjectionOverflowError,
     HistoryProjectionTarget,

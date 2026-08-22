@@ -4,7 +4,6 @@
 import logging
 from typing import Any
 
-from dlightrag_rag.workspaces import normalize_workspace
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -21,6 +20,7 @@ from dlightrag.api.models import (
     UploadIngestJobResponse,
 )
 from dlightrag.api.payloads import metadata_filter_from_payload
+from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.services.corpora import (
     CorpusResetResult,
     IngestSpec,

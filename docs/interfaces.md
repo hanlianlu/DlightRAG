@@ -897,7 +897,7 @@ they are read as request-local resources and never returned as durable image
 identifiers. Public answer/retrieve requests do not persist either.
 
 ```python
-from dlightrag_rag.retrieval import ContextRow, RetrievalContexts
+from dlightrag.rag.retrieval import ContextRow, RetrievalContexts
 ```
 
 ### chunks

@@ -585,8 +585,8 @@ class TestLeaseFencing:
             )
         ).committed is False
         assert await store.release_for_shutdown(**stale_args) == "lease_lost"
-        from dlightrag_agent.session.entries import UserMessageEntry
-        from dlightrag_agent.session.ids import EntryId, SessionId
+        from dlightrag.agent.session.entries import UserMessageEntry
+        from dlightrag.agent.session.ids import EntryId, SessionId
 
         assert creation.run.prepared_input is not None
         stale_session = SessionId(str(creation.run.prepared_input["session_id"]))

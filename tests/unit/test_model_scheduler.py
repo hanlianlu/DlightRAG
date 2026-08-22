@@ -4,7 +4,8 @@
 import asyncio
 
 import pytest
-from dlightrag_ai.scheduler import ModelScheduler, model_call_scope
+
+from dlightrag.ai.scheduler import ModelScheduler, model_call_scope
 
 
 async def test_waiting_runs_are_admitted_round_robin() -> None:

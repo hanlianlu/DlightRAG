@@ -4,7 +4,7 @@
 import base64
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from dlightrag_rag.visual_assets import ThumbnailCache, VisualAssetResolver
+from dlightrag.rag.visual_assets import ThumbnailCache, VisualAssetResolver
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -19,7 +19,7 @@ async def test_visual_asset_resolver_returns_full_asset() -> None:
 
     with (
         patch(
-            "dlightrag_rag.visual_assets.hydrate_lightrag_chunk_provenance",
+            "dlightrag.rag.visual_assets.hydrate_lightrag_chunk_provenance",
             new=AsyncMock(),
         ) as hydrate,
     ):
@@ -41,7 +41,7 @@ async def test_visual_asset_resolver_generates_and_caches_thumbnail() -> None:
 
     with (
         patch(
-            "dlightrag_rag.visual_assets.hydrate_lightrag_chunk_provenance",
+            "dlightrag.rag.visual_assets.hydrate_lightrag_chunk_provenance",
             new=AsyncMock(),
         ),
     ):
@@ -60,6 +60,6 @@ async def test_visual_asset_resolver_returns_none_for_missing_image_data() -> No
     resolver = VisualAssetResolver(stores=stores)
 
     with (
-        patch("dlightrag_rag.visual_assets.hydrate_lightrag_chunk_provenance", new=AsyncMock()),
+        patch("dlightrag.rag.visual_assets.hydrate_lightrag_chunk_provenance", new=AsyncMock()),
     ):
         assert await resolver.resolve("chunk_no_image") is None

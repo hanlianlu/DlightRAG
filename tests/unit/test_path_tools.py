@@ -4,12 +4,13 @@
 from pathlib import Path
 
 import pytest
-from dlightrag_agent.environment import (
+
+from dlightrag.agent.environment import (
     AccessScheduler,
     FullOutputUnavailable,
     LocalExecutionEnvironment,
 )
-from dlightrag_agent.tools.files import (
+from dlightrag.agent.tools.files import (
     BashArgs,
     EditArgs,
     ReadArgs,
@@ -101,7 +102,7 @@ async def test_grep_uses_argv_not_a_shell(tmp_path: Path) -> None:
     fake.chmod(0o755)
     env, scheduler = _env(tmp_path)
     (tmp_path / "hit.txt").write_text("needle", encoding="utf-8")
-    from dlightrag_agent.tools.files import GrepArgs, grep_tool
+    from dlightrag.agent.tools.files import GrepArgs, grep_tool
 
     tool = grep_tool(env, scheduler, ripgrep=str(fake))
     result = await tool.execute(GrepArgs(pattern="needle"))

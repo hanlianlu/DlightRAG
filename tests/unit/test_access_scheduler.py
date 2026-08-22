@@ -4,7 +4,8 @@
 import asyncio
 
 import pytest
-from dlightrag_agent.environment import AccessScheduler, AllAccess, PathAccess
+
+from dlightrag.agent.environment import AccessScheduler, AllAccess, PathAccess
 
 
 @pytest.mark.asyncio

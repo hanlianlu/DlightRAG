@@ -6,10 +6,11 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_rag.pool import WorkspacePool, WorkspaceUnavailableError
-from dlightrag_rag.ports import CorpusSchemaError, WorkspaceCorpusBackend
-from dlightrag_rag.settings import RagSettings
-from dlightrag_rag.workspace_rag import WorkspaceRag
+
+from dlightrag.rag.pool import WorkspacePool, WorkspaceUnavailableError
+from dlightrag.rag.ports import CorpusSchemaError, WorkspaceCorpusBackend
+from dlightrag.rag.settings import RagSettings
+from dlightrag.rag.workspace_rag import WorkspaceRag
 
 
 def _pool(build, *, clock=lambda: 0.0) -> WorkspacePool:

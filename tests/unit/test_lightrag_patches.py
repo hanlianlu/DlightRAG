@@ -2,7 +2,8 @@
 """Tests for active-parser LightRAG patch selection."""
 
 import pytest
-from dlightrag_rag import _lightrag_patches
+
+from dlightrag.rag import _lightrag_patches
 
 
 def test_docling_mode_does_not_install_the_mineru_patch(
@@ -10,11 +11,11 @@ def test_docling_mode_does_not_install_the_mineru_patch(
 ) -> None:
     installed: list[str] = []
     monkeypatch.setattr(
-        "dlightrag_rag.ingestion.parser_hygiene.apply_mineru_content_list_hygiene",
+        "dlightrag.rag.ingestion.parser_hygiene.apply_mineru_content_list_hygiene",
         lambda: installed.append("mineru") or True,
     )
     monkeypatch.setattr(
-        "dlightrag_rag.ingestion.docling_options.apply_docling_request_options",
+        "dlightrag.rag.ingestion.docling_options.apply_docling_request_options",
         lambda **_kwargs: installed.append("docling") or True,
     )
 

@@ -5,7 +5,8 @@ import json
 from pathlib import Path
 
 import pytest
-from dlightrag_rag.ingestion.sidecar_provenance import (
+
+from dlightrag.rag.ingestion.sidecar_provenance import (
     block_ids_from_multimodal_item,
     is_multimodal_sidecar,
 )

@@ -5,15 +5,13 @@ import asyncio
 from typing import Any, cast
 
 import pytest
-from dlightrag_ai.capacity import CONTEXT_POLICY_REVISION
-from dlightrag_ai.fingerprints import ModelFingerprint, model_fingerprint
-from dlightrag_ai.settings import MODEL_ROLE_NAMES
-from dlightrag_rag.ports import CorpusSchemaError
-from dlightrag_rag.workspaces import normalize_workspace
 
 from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION
+from dlightrag.ai.fingerprints import ModelFingerprint, model_fingerprint
+from dlightrag.ai.settings import MODEL_ROLE_NAMES
 from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
 from dlightrag.answer.executor import IncompatibleActiveRunError
 from dlightrag.answer.model_runtime import AnswerModelRuntime
@@ -26,6 +24,8 @@ from dlightrag.application import (
 from dlightrag.config import DlightragConfig
 from dlightrag.health import ApplicationHealth
 from dlightrag.model_settings import embedding_settings, model_settings_for_role
+from dlightrag.rag.ports import CorpusSchemaError
+from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.runtime import RunCoordinator, RunSchemaError
 from dlightrag.services.answers import AnswerService
 from dlightrag.services.corpora import CorpusAdmin
@@ -302,7 +302,7 @@ def test_memory_dense_leg_reuses_root_embedding_settings(
         captured.update(settings=settings, scheduler=scheduler, telemetry=telemetry)
         return expected
 
-    monkeypatch.setattr("dlightrag_ai.embedding.create_embedding_model", create)
+    monkeypatch.setattr("dlightrag.ai.embedding.create_embedding_model", create)
     scheduler = object()
     telemetry = object()
 

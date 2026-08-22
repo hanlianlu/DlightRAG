@@ -5,9 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from dlightrag_rag.lightrag_contract import LightRAGContractGuard
 
 from dlightrag.adapters.postgres.lightrag_contract import PGLightRAGContractGuard
+from dlightrag.rag.lightrag_contract import LightRAGContractGuard
 
 
 def _fake_lightrag(*, graph_storage: object | None = None) -> SimpleNamespace:

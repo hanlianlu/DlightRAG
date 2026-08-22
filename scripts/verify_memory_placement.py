@@ -35,9 +35,8 @@ MESSAGES = [
 
 
 async def _run() -> int:
-    from dlightrag_ai.completion import CompletionModel
-    from dlightrag_ai.scheduler import ModelScheduler
-
+    from dlightrag.ai.completion import CompletionModel
+    from dlightrag.ai.scheduler import ModelScheduler
     from dlightrag.config import get_config
     from dlightrag.model_settings import model_role_settings
 

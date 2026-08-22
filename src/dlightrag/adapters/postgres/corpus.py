@@ -10,14 +10,6 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import asyncpg
-from dlightrag_rag.ports import (
-    CorpusRuntimeModels,
-    CorpusUnavailableError,
-    WorkspaceCorpusBackend,
-    WorkspaceCorpusStores,
-)
-from dlightrag_rag.retrieval.bm25 import profile_languages, profiles_from_config
-from dlightrag_rag.settings import RagSettings
 from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 
 from dlightrag.adapters.postgres._errors import is_postgres_unavailable
@@ -43,6 +35,14 @@ from dlightrag.adapters.postgres.lightrag_readonly import (
 from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
 from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
 from dlightrag.config import DlightragConfig
+from dlightrag.rag.ports import (
+    CorpusRuntimeModels,
+    CorpusUnavailableError,
+    WorkspaceCorpusBackend,
+    WorkspaceCorpusStores,
+)
+from dlightrag.rag.retrieval.bm25 import profile_languages, profiles_from_config
+from dlightrag.rag.settings import RagSettings
 
 logger = logging.getLogger(__name__)
 

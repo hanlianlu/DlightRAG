@@ -196,13 +196,12 @@ def _render_answer_for_terminal(data: dict[str, Any]) -> str:
 
 
 async def _run_ingest(args: argparse.Namespace) -> None:
-    from dlightrag_ai.scheduler import ModelScheduler
-    from dlightrag_rag.workspace_rag import WorkspaceRag
-    from dlightrag_rag.workspaces import normalize_workspace
-
+    from dlightrag.ai.scheduler import ModelScheduler
     from dlightrag.config import get_config
     from dlightrag.model_settings import rag_settings
     from dlightrag.observability import LangfuseTelemetry
+    from dlightrag.rag.workspace_rag import WorkspaceRag
+    from dlightrag.rag.workspaces import normalize_workspace
 
     source = args.source_type
     kwargs = ingest_kwargs_from_spec(ingest_spec_from_payload(args))

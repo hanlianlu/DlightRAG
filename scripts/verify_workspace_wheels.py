@@ -28,60 +28,40 @@ from urllib.request import url2pathname
 
 _EXPECTED_PACKAGES = {
     "dlightrag": "dlightrag",
-    "dlightrag-agent-core": "dlightrag_agent",
-    "dlightrag-ai": "dlightrag_ai",
     "dlightrag-memory": "dlightrag_memory",
-    "dlightrag-rag-core": "dlightrag_rag",
 }
 _EXPECTED_DLIGHTRAG_DEPENDENCIES = {
-    "dlightrag": {"dlightrag-agent-core", "dlightrag-ai", "dlightrag-memory", "dlightrag-rag-core"},
-    "dlightrag-agent-core": {"dlightrag-ai"},
-    "dlightrag-ai": set(),
+    "dlightrag": {"dlightrag-memory"},
     "dlightrag-memory": set(),
-    "dlightrag-rag-core": {"dlightrag-ai"},
 }
 _EXPECTED_EXTRAS = {
     "dlightrag": set(),
-    "dlightrag-agent-core": set(),
-    "dlightrag-ai": {"all", "anthropic", "gemini", "openai"},
     "dlightrag-memory": set(),
-    "dlightrag-rag-core": set(),
 }
+_REQUIRED_ROOT_DEPENDENCIES = frozenset(
+    {
+        "aiofiles",
+        "aiobotocore",
+        "anthropic",
+        "azure-storage-blob",
+        "botocore",
+        "google-genai",
+        "json-repair",
+        "lightrag-hku",
+        "lingua-language-detector",
+        "openai",
+    }
+)
 _WORKSPACE_MANIFESTS = {
     "dlightrag": (Path("pyproject.toml"), ".", "src/dlightrag"),
-    "dlightrag-agent-core": (
-        Path("packages/agent-core/pyproject.toml"),
-        "packages/agent-core",
-        "src/dlightrag_agent",
-    ),
-    "dlightrag-ai": (
-        Path("packages/ai/pyproject.toml"),
-        "packages/ai",
-        "src/dlightrag_ai",
-    ),
     "dlightrag-memory": (
         Path("packages/memory/pyproject.toml"),
         "packages/memory",
         "src/dlightrag_memory",
     ),
-    "dlightrag-rag-core": (
-        Path("packages/rag-core/pyproject.toml"),
-        "packages/rag-core",
-        "src/dlightrag_rag",
-    ),
 }
-_EXPECTED_WORKSPACE_MEMBERS = [
-    "packages/ai",
-    "packages/agent-core",
-    "packages/memory",
-    "packages/rag-core",
-]
-_EXPECTED_WORKSPACE_SOURCES = {
-    "dlightrag-ai": {"workspace": True},
-    "dlightrag-agent-core": {"workspace": True},
-    "dlightrag-memory": {"workspace": True},
-    "dlightrag-rag-core": {"workspace": True},
-}
+_EXPECTED_WORKSPACE_MEMBERS = ["packages/memory"]
+_EXPECTED_WORKSPACE_SOURCES = {"dlightrag-memory": {"workspace": True}}
 _ROOT_CONSOLE_SCRIPTS = (
     "dlightrag-api",
     "dlightrag-mcp",
@@ -91,20 +71,12 @@ _ROOT_CONSOLE_SCRIPTS = (
 _CONCRETE_LIGHTRAG_BACKEND = "lightrag.kg.postgres_impl"
 # import-linter rejects external submodules as contract targets, so the built
 # artifact gate owns this one exact LightRAG implementation prohibition.
-_SPECIFIC_FORBIDDEN_IMPORTS = {
-    "dlightrag-rag-core": (_CONCRETE_LIGHTRAG_BACKEND,),
+_SPECIFIC_SOURCE_PROHIBITIONS = {
+    "dlightrag": {"dlightrag.rag": (_CONCRETE_LIGHTRAG_BACKEND,)},
 }
 _REQUIRED_EXTERNAL_PROHIBITIONS = {
     "dlightrag": set(),
-    "dlightrag-agent-core": {"lightrag", "asyncpg", "fastapi", "mcp"},
-    "dlightrag-ai": {"lightrag", "asyncpg", "fastapi", "mcp"},
     "dlightrag-memory": {"lightrag", "fastapi"},
-    "dlightrag-rag-core": {
-        _CONCRETE_LIGHTRAG_BACKEND,
-        "asyncpg",
-        "fastapi",
-        "mcp",
-    },
 }
 _DLIGHTRAG_DISTRIBUTIONS = frozenset(_EXPECTED_PACKAGES)
 _NORMALIZE_RE = re.compile(r"[-_.]+")
@@ -116,88 +88,6 @@ def absent(name):
     except ModuleNotFoundError:
         return True
 """
-
-_AI_SMOKE = (
-    """
-import asyncio
-import importlib
-import importlib.util
-import pkgutil
-import sys
-from PIL import Image
-from dlightrag_ai.scheduler import ModelScheduler
-
-pillow_max_image_pixels = Image.MAX_IMAGE_PIXELS
-import dlightrag_ai
-
-optional_modules = {
-    'dlightrag_ai.providers.anthropic_native',
-    'dlightrag_ai.providers.gemini_native',
-    'dlightrag_ai.providers.openai_compatible',
-}
-for module in pkgutil.walk_packages(dlightrag_ai.__path__, prefix='dlightrag_ai.'):
-    if module.name not in optional_modules:
-        importlib.import_module(module.name)
-
-assert optional_modules.isdisjoint(sys.modules)
-assert Image.MAX_IMAGE_PIXELS == pillow_max_image_pixels
-
-async def scheduler_smoke():
-    scheduler = ModelScheduler(max_concurrency=1)
-    assert await scheduler.run(lambda: asyncio.sleep(0, result='scheduled')) == 'scheduled'
-
-asyncio.run(scheduler_smoke())
-"""
-    + _ABSENT_HELPER
-    + """
-assert all(absent(name) for name in (
-    'dlightrag', 'dlightrag_agent', 'dlightrag_rag', 'lightrag', 'asyncpg',
-    'openai', 'anthropic', 'google.genai'
-))
-"""
-)
-
-_AI_ALL_SMOKE = """
-import importlib
-
-for module in (
-    'dlightrag_ai.providers.anthropic_native',
-    'dlightrag_ai.providers.gemini_native',
-    'dlightrag_ai.providers.openai_compatible',
-):
-    importlib.import_module(module)
-"""
-
-_AGENT_SMOKE = (
-    """
-import asyncio
-import importlib
-import importlib.util
-import pkgutil
-import dlightrag_agent
-from dlightrag_agent.tools import ToolTurnExecutor
-from dlightrag_ai.messages import AssistantTurn
-
-for module in pkgutil.walk_packages(dlightrag_agent.__path__, prefix='dlightrag_agent.'):
-    importlib.import_module(module.name)
-
-async def model(**kwargs):
-    return AssistantTurn(text='done', tool_calls=(), stop_reason='model_stop')
-
-async def main():
-    result = await ToolTurnExecutor(model).run_turn([], [])
-    assert result.assistant.text == 'done'
-
-asyncio.run(main())
-"""
-    + _ABSENT_HELPER
-    + """
-assert all(absent(name) for name in (
-    'dlightrag', 'dlightrag_rag', 'lightrag', 'asyncpg',
-    'openai', 'anthropic', 'google.genai'
-))
-"""
-)
 
 _MEMORY_SMOKE = (
     """
@@ -238,74 +128,8 @@ asyncio.run(main())
     + _ABSENT_HELPER
     + """
 assert all(absent(name) for name in (
-    'dlightrag', 'dlightrag_agent', 'dlightrag_ai', 'dlightrag_rag',
+    'dlightrag', 'dlightrag.agent', 'dlightrag.ai', 'dlightrag.rag',
     'lightrag', 'fastapi', 'openai', 'anthropic', 'google.genai'
-))
-"""
-)
-
-_RAG_SMOKE = (
-    """
-import asyncio
-import importlib
-import importlib.util
-import pkgutil
-import tempfile
-from pathlib import Path
-import dlightrag_rag
-from dlightrag_ai.capacity import ModelProfile
-from dlightrag_rag.ingestion.uploads import write_upload_stream
-from dlightrag_rag.retrieval.language import BM25LanguageClassifier
-from dlightrag_rag.retrieval import MetadataFilter, RetrievalPlanner, rrf_fuse
-
-for module in pkgutil.walk_packages(dlightrag_rag.__path__, prefix='dlightrag_rag.'):
-    importlib.import_module(module.name)
-
-rows = rrf_fuse([[{'chunk_id': 'a'}], [{'chunk_id': 'a'}]])
-assert rows[0]['chunk_id'] == 'a'
-assert abs(rows[0]['score'] - 2 / 61) < 1e-12
-assert MetadataFilter(filename=' example.pdf ').filename == 'example.pdf'
-classifier = BM25LanguageClassifier(('en', 'zh'))
-assert classifier.detect('The quick brown fox jumps over the lazy dog.') == 'en'
-
-class Upload:
-    def __init__(self):
-        self._chunks = [b'installed ', b'RAG upload', b'']
-
-    async def read(self, _size):
-        return self._chunks.pop(0)
-
-async def upload_smoke():
-    with tempfile.TemporaryDirectory() as raw_temp:
-        destination = Path(raw_temp) / 'upload.bin'
-        written = await write_upload_stream(Upload(), destination, max_bytes=1024)
-        assert written == 20
-        assert destination.read_bytes() == b'installed RAG upload'
-
-async def planner_model(**_kwargs):
-    return '{"standalone_query":"ignored","bm25_query":"installed terms","filters":{"author":"Ada"},"filter_confidence":"high"}'
-
-async def planner_smoke():
-    planner = RetrievalPlanner(
-        llm_func=planner_model,
-        model_profile=ModelProfile(
-            context_window_tokens=16_000,
-            max_input_tokens=12_000,
-            max_output_tokens=512,
-        ),
-    )
-    plan = await planner.plan('installed planner')
-    assert plan.standalone_query == 'installed planner'
-    assert plan.bm25_query == 'installed terms'
-    assert plan.metadata_filter.author == 'Ada'
-
-asyncio.run(upload_smoke())
-asyncio.run(planner_smoke())
-"""
-    + _ABSENT_HELPER
-    + """
-assert all(absent(name) for name in (
-    'dlightrag', 'dlightrag_agent', 'asyncpg'
 ))
 """
 )
@@ -330,6 +154,8 @@ class WheelFacts:
 class SdistFacts:
     distribution: str
     version: str
+    dependencies: frozenset[str]
+    requirements: tuple[str, ...]
     extras: frozenset[str]
     top_level_packages: frozenset[str]
     license_files: frozenset[str]
@@ -435,7 +261,7 @@ def _wheel_facts(
             set(wheel.namelist()),
             prefix="dlightrag/web/static/app",
         )
-        has_model_catalog = "dlightrag_ai/model_catalog.json" in wheel.namelist()
+        has_model_catalog = "dlightrag/ai/model_catalog.json" in wheel.namelist()
         sources = (
             (name, wheel.read(name))
             for name in wheel.namelist()
@@ -600,9 +426,11 @@ def _import_rules(config_path: Path) -> dict[str, tuple[ImportRule, ...]]:
                     rules_by_root[root].append(ImportRule(source, forbidden))
                     break
 
-    for distribution, forbidden in _SPECIFIC_FORBIDDEN_IMPORTS.items():
+    for distribution, source_rules in _SPECIFIC_SOURCE_PROHIBITIONS.items():
         root = _EXPECTED_PACKAGES[distribution]
-        rules_by_root[root].append(ImportRule(root, forbidden))
+        rules_by_root[root].extend(
+            ImportRule(source, forbidden) for source, forbidden in source_rules.items()
+        )
 
     rules_by_distribution = {
         distribution: tuple(rules_by_root[root])
@@ -643,7 +471,7 @@ def _sdist_facts(
         metadata_file = sdist.extractfile(metadata_members[0])
         if metadata_file is None:
             raise ValueError(f"{path.name}: could not read PKG-INFO")
-        distribution, version, _, extras, license_files = _metadata_facts(
+        distribution, version, requirements, extras, license_files = _metadata_facts(
             metadata_file.read(), artifact=path.name
         )
         sdist_root = Path(metadata_members[0].name).parts[0]
@@ -667,7 +495,7 @@ def _sdist_facts(
                     legal_members[Path(member.name).name] = legal_file.read()
             if member.name == expected_py_typed:
                 has_py_typed = True
-            if member.name == f"{sdist_root}/src/dlightrag_ai/model_catalog.json":
+            if member.name == f"{sdist_root}/src/dlightrag/ai/model_catalog.json":
                 has_model_catalog = True
             if len(parts) > 1:
                 frontend_members.add("/".join(parts[1:]))
@@ -690,6 +518,8 @@ def _sdist_facts(
     return SdistFacts(
         distribution,
         version,
+        frozenset(_requirement_name(item) for item in requirements),
+        requirements,
         extras,
         frozenset(top_level),
         license_files,
@@ -704,7 +534,7 @@ def _sdist_facts(
 
 
 def verify_workspace_definition(workspace_root: Path) -> None:
-    """Verify source manifests and uv.lock describe the exact five-package workspace."""
+    """Verify manifests and uv.lock describe the root-plus-Memory workspace."""
     workspace_root = workspace_root.resolve()
     uv_executable = shutil.which("uv")
     if uv_executable is None:
@@ -763,16 +593,9 @@ def verify_workspace_definition(workspace_root: Path) -> None:
     except (KeyError, TypeError) as exc:
         raise ValueError("root manifest is missing [tool.uv]") from exc
     if root_uv.get("workspace", {}).get("members") != _EXPECTED_WORKSPACE_MEMBERS:
-        raise ValueError("root workspace members differ from the five-package contract")
+        raise ValueError("root workspace members differ from the root-plus-Memory contract")
     if root_uv.get("sources") != _EXPECTED_WORKSPACE_SOURCES:
-        raise ValueError("root workspace sources differ from the five-package contract")
-    expected_ai_source = {"dlightrag-ai": {"workspace": True}}
-    for distribution in ("dlightrag-agent-core", "dlightrag-rag-core"):
-        member_sources = (
-            configs[distribution].get("tool", {}).get("uv", {}).get("sources", {})  # type: ignore[union-attr]
-        )
-        if member_sources != expected_ai_source:
-            raise ValueError(f"{distribution}: workspace AI source is missing or stale")
+        raise ValueError("root workspace sources differ from the root-plus-Memory contract")
 
     lock_path = workspace_root / "uv.lock"
     try:
@@ -783,7 +606,7 @@ def verify_workspace_definition(workspace_root: Path) -> None:
     if lock.get("requires-python") != "==3.14.*":
         raise ValueError("uv.lock Python requirement differs from workspace manifests")
     if lock.get("manifest", {}).get("members") != list(_EXPECTED_PACKAGES):
-        raise ValueError("uv.lock manifest members differ from the five-package contract")
+        raise ValueError("uv.lock manifest members differ from the root-plus-Memory contract")
     for distribution, (_, editable_path, _) in _WORKSPACE_MANIFESTS.items():
         matches = [package for package in lock_packages if package.get("name") == distribution]
         if len(matches) != 1:
@@ -808,9 +631,9 @@ def verify_workspace_definition(workspace_root: Path) -> None:
 def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
     wheels = sorted(dist_dir.glob("*.whl"))
     sdists = sorted(dist_dir.glob("*.tar.gz"))
-    if len(wheels) != 5 or len(sdists) != 5:
+    if len(wheels) != 2 or len(sdists) != 2:
         raise ValueError(
-            f"expected five wheels and five sdists, found {len(wheels)} wheels and {len(sdists)} sdists"
+            f"expected two wheels and two sdists, found {len(wheels)} wheels and {len(sdists)} sdists"
         )
 
     facts_by_distribution: dict[str, WheelFacts] = {}
@@ -867,18 +690,17 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
                 f"{distribution}: expected extras {sorted(_EXPECTED_EXTRAS[distribution])}, "
                 f"found {sorted(facts.extras)}"
             )
-        if distribution == "dlightrag" and not any(
-            requirement.lower().startswith("dlightrag-ai[all]")
-            for requirement in facts.requirements
-        ):
-            raise ValueError("dlightrag: dlightrag-ai dependency must request the all extra")
+        if distribution == "dlightrag":
+            missing = _REQUIRED_ROOT_DEPENDENCIES - set(facts.dependencies)
+            if missing:
+                raise ValueError(
+                    f"dlightrag: wheel is missing batteries-included dependencies {sorted(missing)}"
+                )
         compact_requirements = {
             requirement.replace(" ", "").lower() for requirement in facts.requirements
         }
         for dependency in expected_dependencies:
             expected_requirement = f"{dependency}=={version}"
-            if dependency == "dlightrag-ai" and distribution == "dlightrag":
-                expected_requirement = f"dlightrag-ai[all]=={version}"
             if expected_requirement not in compact_requirements:
                 raise ValueError(
                     f"{distribution}: dependency must be pinned as {expected_requirement}"
@@ -887,8 +709,8 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             raise ValueError(f"{distribution}: wheel must contain repository LICENSE and NOTICE")
         if not facts.has_py_typed:
             raise ValueError(f"{distribution}: wheel must contain py.typed")
-        if distribution == "dlightrag-ai" and not facts.has_model_catalog:
-            raise ValueError("dlightrag-ai: wheel must contain model_catalog.json")
+        if distribution == "dlightrag" and not facts.has_model_catalog:
+            raise ValueError("dlightrag: wheel must contain ai/model_catalog.json")
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: wheel must contain generated frontend assets")
 
@@ -903,12 +725,31 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             raise ValueError("sdist metadata or top-level packages do not match workspace wheels")
         if set(facts.extras) != _EXPECTED_EXTRAS[distribution]:
             raise ValueError(f"{distribution}: sdist extras do not match workspace wheel metadata")
+        expected_dependencies = _EXPECTED_DLIGHTRAG_DEPENDENCIES[distribution]
+        actual_dlightrag_dependencies = set(facts.dependencies) & _DLIGHTRAG_DISTRIBUTIONS
+        if actual_dlightrag_dependencies != expected_dependencies:
+            raise ValueError(f"{distribution}: sdist dependencies do not match wheel contract")
+        compact_requirements = {
+            requirement.replace(" ", "").lower() for requirement in facts.requirements
+        }
+        for dependency in expected_dependencies:
+            expected_requirement = f"{dependency}=={version}"
+            if expected_requirement not in compact_requirements:
+                raise ValueError(
+                    f"{distribution}: sdist dependency must be pinned as {expected_requirement}"
+                )
+        if distribution == "dlightrag":
+            missing = _REQUIRED_ROOT_DEPENDENCIES - set(facts.dependencies)
+            if missing:
+                raise ValueError(
+                    f"dlightrag: sdist is missing batteries-included dependencies {sorted(missing)}"
+                )
         if facts.license_files != {"LICENSE", "NOTICE"} or facts.legal_hashes != legal_hashes:
             raise ValueError(f"{distribution}: sdist must contain repository LICENSE and NOTICE")
         if not facts.has_py_typed:
             raise ValueError(f"{distribution}: sdist must contain py.typed")
-        if distribution == "dlightrag-ai" and not facts.has_model_catalog:
-            raise ValueError("dlightrag-ai: sdist must contain model_catalog.json")
+        if distribution == "dlightrag" and not facts.has_model_catalog:
+            raise ValueError("dlightrag: sdist must contain ai/model_catalog.json")
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: sdist must contain generated frontend assets")
 
@@ -975,14 +816,13 @@ def _smoke_root_interfaces() -> None:
     from types import SimpleNamespace
     from typing import Any, cast
 
-    from dlightrag_ai.telemetry import NoopTelemetry
-    from dlightrag_rag.retrieval import RetrievalResult
-
     import dlightrag
     from dlightrag import Application
     from dlightrag.access import DEPLOYMENT_OWNER_ID
+    from dlightrag.ai.telemetry import NoopTelemetry
     from dlightrag.config import DlightragConfig, RuntimeConfig
     from dlightrag.model_settings import rag_settings
+    from dlightrag.rag.retrieval import RetrievalResult
     from dlightrag.runtime import answer_run_request_fingerprint
     from dlightrag.sdk import AnswerRunClient
     from dlightrag.services.corpora import CorpusAdmin, CorpusAdminSettings, IngestSpec
@@ -1170,7 +1010,7 @@ def _smoke_root_interfaces() -> None:
 
 
 def verify_installed(dist_dir: Path) -> None:
-    """Prove this interpreter loaded all five distributions from the current wheels."""
+    """Prove this interpreter loaded root and Memory from the current wheels."""
     dist_dir = dist_dir.resolve()
     repository = dist_dir.parent.resolve()
     versions: set[str] = set()
@@ -1234,13 +1074,7 @@ def smoke_installed(dist_dir: Path, *, config_path: Path) -> None:
     uv_executable = shutil.which("uv")
     if uv_executable is None:
         raise ValueError("uv is required to smoke installed wheels")
-    smoke_cases = (
-        ("ai", ("dlightrag-ai",), _AI_SMOKE),
-        ("ai-all", ("dlightrag-ai[all]",), _AI_ALL_SMOKE),
-        ("agent", ("dlightrag-ai", "dlightrag-agent-core"), _AGENT_SMOKE),
-        ("rag", ("dlightrag-ai", "dlightrag-rag-core"), _RAG_SMOKE),
-        ("memory", ("dlightrag-memory",), _MEMORY_SMOKE),
-    )
+    smoke_cases = (("memory", ("dlightrag-memory",), _MEMORY_SMOKE),)
     required_distributions = {
         requirement.partition("[")[0]
         for _, requirements, _ in smoke_cases
@@ -1356,7 +1190,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--workspace-root",
         type=Path,
-        help="Workspace containing the five manifests and uv.lock (defaults to config parent)",
+        help="Workspace containing root/Memory manifests and uv.lock (defaults to config parent)",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(

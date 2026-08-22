@@ -11,9 +11,9 @@ import time
 from collections import OrderedDict, defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 
-from dlightrag_ai.concurrency import bounded_map
 from pydantic import BaseModel, Field
 
+from dlightrag.ai.concurrency import bounded_map
 from dlightrag.answer.prompts import (
     HIGHLIGHT_BATCH_USER_PROMPT,
     HIGHLIGHT_SYSTEM_PROMPT,

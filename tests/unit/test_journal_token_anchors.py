@@ -4,19 +4,18 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from dlightrag_agent.session.entries import UserMessageEntry
-from dlightrag_agent.session.ids import EntryId, ProjectionId, SessionId
-from dlightrag_agent.session.memory import InMemoryAgentSessionStore
-from dlightrag_agent.session.projection import (
+from dlightrag.agent.session.entries import UserMessageEntry
+from dlightrag.agent.session.ids import EntryId, ProjectionId, SessionId
+from dlightrag.agent.session.memory import InMemoryAgentSessionStore
+from dlightrag.agent.session.projection import (
     CompactionSummary,
     ContextProjection,
     TokenAnchor,
     live_anchor,
 )
-from dlightrag_agent.session.store import SessionCommit
-from dlightrag_agent.tools.contracts import ExecutedTurn
-from dlightrag_ai.messages import AssistantTurn
-
+from dlightrag.agent.session.store import SessionCommit
+from dlightrag.agent.tools.contracts import ExecutedTurn
+from dlightrag.ai.messages import AssistantTurn
 from dlightrag.answer.executor import JournalRunBoundaries
 
 

@@ -1,12 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Web visual chunk image routes."""
 
-from dlightrag_rag.contracts import VisualAssetSize
-from dlightrag_rag.workspaces import normalize_workspace
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from dlightrag.access import AccessAction
+from dlightrag.rag.contracts import VisualAssetSize
+from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.web.deps import enforce_web_access, get_application
 
 router = APIRouter()

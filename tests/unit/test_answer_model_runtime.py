@@ -5,11 +5,11 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from dlightrag_ai.capacity import ModelProfile
-from dlightrag_ai.scheduler import ModelScheduler
-from dlightrag_ai.settings import ModelRoleSettings, ModelSettings
-from dlightrag_ai.telemetry import NOOP_TELEMETRY
 
+from dlightrag.ai.capacity import ModelProfile
+from dlightrag.ai.scheduler import ModelScheduler
+from dlightrag.ai.settings import ModelRoleSettings, ModelSettings
+from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.images import AnswerImagePolicy
 from dlightrag.answer.model_runtime import (
     AnswerModelRuntime,

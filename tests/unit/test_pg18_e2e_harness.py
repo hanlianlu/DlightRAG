@@ -3,8 +3,7 @@
 
 from typing import Any
 
-from dlightrag_ai.scheduler import ModelScheduler
-
+from dlightrag.ai.scheduler import ModelScheduler
 from tests.e2e.pg18_harness import (
     REQUIRED_EXTENSIONS,
     e2e_enabled,
@@ -56,7 +55,7 @@ async def test_pg18_fake_model_factories_match_service_initialization(monkeypatc
     import importlib
     from typing import Any, cast
 
-    service_module = cast(Any, importlib.import_module("dlightrag_rag.workspace_rag"))
+    service_module = cast(Any, importlib.import_module("dlightrag.rag.workspace_rag"))
 
     embedder = install_fake_model_functions(monkeypatch, dim=8)
     config: Any = object()

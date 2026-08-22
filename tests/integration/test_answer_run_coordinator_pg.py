@@ -22,15 +22,14 @@ from typing import Any, cast
 
 import asyncpg
 import pytest
-from dlightrag_agent.session.fold import PriorTurns
-from dlightrag_agent.session.fold import SessionEpisode as _RunEpisode
-from dlightrag_ai.capacity import ModelProfile
-from dlightrag_ai.fingerprints import ModelFingerprint
-from dlightrag_ai.telemetry import NOOP_TELEMETRY
-from dlightrag_rag.retrieval import RetrievalResult
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+from dlightrag.agent.session.fold import PriorTurns
+from dlightrag.agent.session.fold import SessionEpisode as _RunEpisode
+from dlightrag.ai.capacity import ModelProfile
+from dlightrag.ai.fingerprints import ModelFingerprint
+from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.citations.streaming import AnswerStream
 from dlightrag.answer.executor import (
@@ -44,6 +43,7 @@ from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.application import Application, _compose
 from dlightrag.config import DlightragConfig, RuntimeConfig
 from dlightrag.model_settings import answer_executor_settings, answer_resource_settings
+from dlightrag.rag.retrieval import RetrievalResult
 from dlightrag.runtime import (
     RunCoordinator,
     RunSession,
@@ -170,8 +170,8 @@ async def test_journaled_turn_survives_a_new_worker(store: FingerprintingAnswerR
     run_id = creation.run.run_id
     seen: list[int] = []
 
-    from dlightrag_agent.session.entries import AssistantMessageEntry
-    from dlightrag_agent.session.ids import EntryId, SessionId
+    from dlightrag.agent.session.entries import AssistantMessageEntry
+    from dlightrag.agent.session.ids import EntryId, SessionId
 
     async def body(session: RunSession) -> Mapping[str, Any]:
         journal = session.execution.session_store
@@ -399,9 +399,9 @@ async def test_journal_round_trips_through_jsonb(store: FingerprintingAnswerRunS
     assert claimed is not None
     journal = claimed.execution.session_store
 
-    from dlightrag_agent.session.entries import AssistantMessageEntry, UserMessageEntry
-    from dlightrag_agent.session.fold import fold_entries
-    from dlightrag_agent.session.ids import EntryId, SessionId
+    from dlightrag.agent.session.entries import AssistantMessageEntry, UserMessageEntry
+    from dlightrag.agent.session.fold import fold_entries
+    from dlightrag.agent.session.ids import EntryId, SessionId
 
     assert creation.run.prepared_input is not None
     session_id = SessionId(str(creation.run.prepared_input["session_id"]))

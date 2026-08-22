@@ -20,7 +20,6 @@ from typing import Any
 from urllib.parse import parse_qsl
 
 import asyncpg
-from dlightrag_rag.ports import CorpusSchemaError
 from lightrag.kg.pgtable_impl import PGTableGraphStorage
 from lightrag.kg.postgres_impl import ClientManager, PostgreSQLDB, namespace_to_table_name
 from lightrag.kg.shared_storage import (
@@ -33,6 +32,7 @@ from pgvector.asyncpg import register_vector
 
 from dlightrag.adapters.postgres.identifiers import pg_qualified_identifier
 from dlightrag.adapters.postgres.lightrag_contract import READ_ONLY_STORAGE_ATTRS
+from dlightrag.rag.ports import CorpusSchemaError
 
 logger = logging.getLogger(__name__)
 

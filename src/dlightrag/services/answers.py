@@ -6,19 +6,14 @@ from contextlib import AbstractAsyncContextManager, aclosing
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from dlightrag_ai.capacity import (
+from dlightrag.ai.capacity import (
     CONTEXT_POLICY,
     CONTEXT_POLICY_REVISION,
     ModelProfile,
 )
-from dlightrag_ai.catalog import MODEL_CATALOG_REVISION
-from dlightrag_ai.fingerprints import ModelFingerprint
-from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
-from dlightrag_rag.retrieval import MetadataFilter, RetrievalResult
-from dlightrag_rag.retrieval.planner import RetrievalPlanner
-from dlightrag_rag.sourcing.source_contract import safe_source_filename
-from dlightrag_rag.workspaces import require_canonical_workspace_id
-
+from dlightrag.ai.catalog import MODEL_CATALOG_REVISION
+from dlightrag.ai.fingerprints import ModelFingerprint
+from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.answer.agent.orchestrator import research_history_input_measure
 from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.answer.capability import AnswerImageCapability
@@ -55,6 +50,10 @@ from dlightrag.answer.runs.execution import (
 from dlightrag.answer.runs.results import AnswerResult, restore_answer_result
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import compose_research_tools
+from dlightrag.rag.retrieval import MetadataFilter, RetrievalResult
+from dlightrag.rag.retrieval.planner import RetrievalPlanner
+from dlightrag.rag.sourcing.source_contract import safe_source_filename
+from dlightrag.rag.workspaces import require_canonical_workspace_id
 from dlightrag.runtime import (
     AnswerRunCancelledError,
     AnswerRunEvent,
@@ -273,7 +272,7 @@ def _prepared_input_payload(
     run_input: Any, *, requested_mode: str, auth_mode: str = "none"
 ) -> dict[str, Any]:
     """Encode the M3 prepared input. Research session ids pin only for explicit research."""
-    from dlightrag_agent.session.ids import SessionId
+    from dlightrag.agent.session.ids import SessionId
 
     payload = dict(run_input.as_request())
     payload["auth_mode"] = auth_mode
@@ -285,8 +284,7 @@ def _prepared_input_payload(
 
 
 def _require_prepared_input_bounds(prepared_input: Mapping[str, Any]) -> None:
-    from dlightrag_agent.session.effects import canonical_json
-
+    from dlightrag.agent.session.effects import canonical_json
     from dlightrag.answer.prepared_input import MAX_PREPARED_INPUT_BYTES, PreparedInputTooLargeError
 
     encoded = canonical_json(dict(prepared_input)).encode("utf-8")

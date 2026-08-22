@@ -7,18 +7,18 @@ from types import MappingProxyType
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_ai.scheduler import ModelScheduler
-from dlightrag_ai.settings import (
+
+from dlightrag.ai.scheduler import ModelScheduler
+from dlightrag.ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
     ModelSettings,
     RerankSettings,
 )
-from dlightrag_ai.telemetry import NoopTelemetry
-from dlightrag_rag.ports import WorkspaceCorpusBackend
-from dlightrag_rag.settings import RagSettings
-from dlightrag_rag.workspace_rag import WorkspaceRag
-
+from dlightrag.ai.telemetry import NoopTelemetry
+from dlightrag.rag.ports import WorkspaceCorpusBackend
+from dlightrag.rag.settings import RagSettings
+from dlightrag.rag.workspace_rag import WorkspaceRag
 from dlightrag.runtime import RunCoordinator
 
 

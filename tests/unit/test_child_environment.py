@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from dlightrag_agent.environment import build_child_environment, looks_like_secret_name
+from dlightrag.agent.environment import build_child_environment, looks_like_secret_name
 
 
 def test_child_env_keeps_path_and_drops_seeded_secrets(tmp_path: Path) -> None:

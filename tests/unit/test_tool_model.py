@@ -8,10 +8,11 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_ai.messages import AssistantTurn, ToolDefinition
-from dlightrag_ai.scheduler import ModelScheduler, model_call_scope
-from dlightrag_ai.settings import ModelSettings
-from dlightrag_ai.tool_model import ToolModel
+
+from dlightrag.ai.messages import AssistantTurn, ToolDefinition
+from dlightrag.ai.scheduler import ModelScheduler, model_call_scope
+from dlightrag.ai.settings import ModelSettings
+from dlightrag.ai.tool_model import ToolModel
 
 
 async def test_ai_tool_model_accepts_settings_and_owns_provider(monkeypatch) -> None:
@@ -22,7 +23,7 @@ async def test_ai_tool_model_accepts_settings_and_owns_provider(monkeypatch) -> 
         stop_reason="stop",
     )
     monkeypatch.setattr(
-        "dlightrag_ai.tool_model.get_provider",
+        "dlightrag.ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     model = ToolModel(
@@ -64,7 +65,7 @@ async def test_tool_model_error_uses_privacy_safe_status(monkeypatch) -> None:
     provider = AsyncMock()
     provider.complete_tool_turn.side_effect = RuntimeError("echoed secret tool transcript")
     monkeypatch.setattr(
-        "dlightrag_ai.tool_model.get_provider",
+        "dlightrag.ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     model = ToolModel(
@@ -106,7 +107,7 @@ async def test_tool_model_passes_provider_settings_and_agentic_options(monkeypat
         seen.update({"provider": name, **kwargs})
         return provider
 
-    monkeypatch.setattr("dlightrag_ai.tool_model.get_provider", get_provider)
+    monkeypatch.setattr("dlightrag.ai.tool_model.get_provider", get_provider)
     settings = ModelSettings(
         provider="openai",
         model="default-model",
@@ -138,7 +139,7 @@ async def test_query_tool_model_owns_query_role_provider_and_closes_it(monkeypat
         seen.update({"provider": name, **kwargs})
         return provider
 
-    monkeypatch.setattr("dlightrag_ai.tool_model.get_provider", get_provider)
+    monkeypatch.setattr("dlightrag.ai.tool_model.get_provider", get_provider)
     settings = ModelSettings(
         provider="openai",
         model="query-model",
@@ -187,7 +188,7 @@ async def test_query_tool_model_streams_final_text_through_owned_provider(monkey
 
     provider.stream_tool_text = stream_tool_text
     monkeypatch.setattr(
-        "dlightrag_ai.tool_model.get_provider",
+        "dlightrag.ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
@@ -220,7 +221,7 @@ async def test_stream_text_thinking_off_merges_provider_switch_under_cap(
 
     provider.stream_tool_text = stream_tool_text
     monkeypatch.setattr(
-        "dlightrag_ai.tool_model.get_provider",
+        "dlightrag.ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
@@ -262,7 +263,7 @@ async def test_query_tool_model_retries_empty_final_stream_with_ordinary_kwargs(
 
     provider.stream_tool_text = stream_tool_text
     monkeypatch.setattr(
-        "dlightrag_ai.tool_model.get_provider",
+        "dlightrag.ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     settings = _query_settings(
@@ -298,7 +299,7 @@ async def test_query_tool_model_rejects_repeated_empty_final_stream(monkeypatch)
 
     provider.stream_tool_text = stream_tool_text
     monkeypatch.setattr(
-        "dlightrag_ai.tool_model.get_provider",
+        "dlightrag.ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
@@ -330,7 +331,7 @@ async def test_tool_model_stream_abandonment_closes_provider_iterator(monkeypatc
 
     provider.stream_tool_text = stream_tool_text
     monkeypatch.setattr(
-        "dlightrag_ai.tool_model.get_provider",
+        "dlightrag.ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
@@ -348,7 +349,7 @@ async def test_query_tool_model_completes_final_text_through_owned_provider(monk
         return_value=AssistantTurn(text="final answer", tool_calls=(), stop_reason="stop")
     )
     monkeypatch.setattr(
-        "dlightrag_ai.tool_model.get_provider",
+        "dlightrag.ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
@@ -394,7 +395,7 @@ async def test_query_tool_model_retries_empty_final_completion_with_ordinary_kwa
 
     provider = Provider()
     monkeypatch.setattr(
-        "dlightrag_ai.tool_model.get_provider",
+        "dlightrag.ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     settings = _query_settings(

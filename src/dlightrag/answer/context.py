@@ -4,10 +4,9 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from dlightrag_rag.retrieval import ContextRow, RetrievalContexts
-
 from dlightrag.answer.citations.utils import context_chunk_key, split_source_ids
 from dlightrag.answer.images import AnswerImageBudget
+from dlightrag.rag.retrieval import ContextRow, RetrievalContexts
 
 
 @dataclass

@@ -5,11 +5,11 @@ import re
 from typing import Any
 
 import nh3
-from dlightrag_rag.sourcing.url import validate_public_web_url
 
 from dlightrag.answer.citations.parser import CITATION_PATTERN, DOC_CITATION_PATTERN
 from dlightrag.answer.citations.schemas import SourceReferencePayload
 from dlightrag.answer.client_contracts import ClientContractModel
+from dlightrag.rag.sourcing.url import validate_public_web_url
 from dlightrag.web.markdown import (
     inject_highlights,
     normalize_chunk_source,

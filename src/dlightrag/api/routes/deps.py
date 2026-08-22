@@ -3,7 +3,6 @@
 
 from collections.abc import Sequence
 
-from dlightrag_rag.workspaces import normalize_workspace, normalize_workspace_ids
 from fastapi import HTTPException, Request
 
 from dlightrag.access import (
@@ -19,6 +18,7 @@ from dlightrag.access import (
 from dlightrag.application import Application
 from dlightrag.config import get_config
 from dlightrag.model_settings import access_settings
+from dlightrag.rag.workspaces import normalize_workspace, normalize_workspace_ids
 
 
 def get_application(request: Request) -> Application:

@@ -3,15 +3,14 @@
 
 from unittest.mock import AsyncMock
 
-from dlightrag_rag.retrieval import MetadataScope
-from dlightrag_rag.retrieval.filtering import (
+from dlightrag.adapters.postgres.corpus_vectors import PGFilteredVectorSearch
+from dlightrag.rag.retrieval import MetadataScope
+from dlightrag.rag.retrieval.filtering import (
     FilteredChunkStore,
     FilteredVectorStorage,
     _active_filter,
     metadata_filter_scope,
 )
-
-from dlightrag.adapters.postgres.corpus_vectors import PGFilteredVectorSearch
 
 
 class _FakeDB:

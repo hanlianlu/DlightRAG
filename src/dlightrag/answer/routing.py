@@ -24,7 +24,7 @@ class RoutingAcceptance:
     @classmethod
     def fallback(cls, prepared_input: Mapping[str, Any]) -> RoutingAcceptance:
         """Best-effort row for accept seams that do not yet pass policy."""
-        from dlightrag_ai.capacity import CONTEXT_POLICY_REVISION
+        from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION
 
         return cls(
             requested_mode=canonical_answer_mode(str(prepared_input.get("mode") or "") or None),

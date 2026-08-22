@@ -34,9 +34,7 @@ jobs:
           expected = sys.argv[1]
           manifests = [
               pathlib.Path("pyproject.toml"),
-              pathlib.Path("packages/ai/pyproject.toml"),
-              pathlib.Path("packages/agent-core/pyproject.toml"),
-              pathlib.Path("packages/rag-core/pyproject.toml"),
+              pathlib.Path("packages/memory/pyproject.toml"),
           ]
           versions = {
               str(path): tomllib.loads(path.read_text(encoding="utf-8"))["project"]["version"]

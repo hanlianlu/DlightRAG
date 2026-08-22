@@ -23,7 +23,7 @@ DEFAULT_WORKSPACE = "default"
 
 def get_workspace(dlightrag_workspace: str = Cookie(default=DEFAULT_WORKSPACE)) -> str:
     """Read current workspace from cookie, normalized to a safe identifier."""
-    from dlightrag_rag.workspaces import normalize_workspace
+    from dlightrag.rag.workspaces import normalize_workspace
 
     return normalize_workspace(dlightrag_workspace)
 

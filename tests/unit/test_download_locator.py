@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from dlightrag_rag.sourcing.source_contract import (
+
+from dlightrag.rag.sourcing.source_contract import (
     implicit_https_download_uri,
     local_source_uri,
     validate_download_uri,

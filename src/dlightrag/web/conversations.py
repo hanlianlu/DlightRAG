@@ -17,9 +17,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 from uuid import UUID, uuid5
 
-from dlightrag_ai.media import thumbnail_bytes
-
 from dlightrag.access import UserContext, owner_id_from_user
+from dlightrag.ai.media import thumbnail_bytes
 from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.answer.routing import RoutingAcceptance
 from dlightrag.answer.runs.execution import (

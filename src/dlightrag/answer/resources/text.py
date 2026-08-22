@@ -10,8 +10,8 @@ undecodable payloads surface as errors instead of lossy text.
 from __future__ import annotations
 
 from charset_normalizer import from_bytes
-from dlightrag_ai.tokens import estimate_tokens
 
+from dlightrag.ai.tokens import estimate_tokens
 from dlightrag.answer.resources.models import ResourceDecodeError, TextWindowLocator
 
 # Bytes that legitimately appear in decoded single-/multi-byte text. High bytes

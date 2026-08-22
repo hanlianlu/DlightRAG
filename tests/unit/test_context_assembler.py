@@ -4,10 +4,10 @@
 from typing import Any
 
 import pytest
-from dlightrag_agent.session.fold import PriorTurns, SessionEpisode
-from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
-from dlightrag_ai.tokens import estimate_messages_tokens
 
+from dlightrag.agent.session.fold import PriorTurns, SessionEpisode
+from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
+from dlightrag.ai.tokens import estimate_messages_tokens
 from dlightrag.answer.agent.context import ContextAssembler
 from dlightrag.answer.agent.orchestrator import research_history_input_measure
 from dlightrag.answer.errors import AnswerInputOverflowError

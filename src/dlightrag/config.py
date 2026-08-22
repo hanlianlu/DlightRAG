@@ -21,8 +21,6 @@ from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self
 from urllib.parse import urlencode, urlsplit
 
-from dlightrag_ai.contracts import AsymmetricMode, ChatProvider, InputModality
-from dlightrag_ai.fingerprints import normalized_endpoint_fingerprint
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -32,6 +30,9 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from dlightrag.ai.contracts import AsymmetricMode, ChatProvider, InputModality
+from dlightrag.ai.fingerprints import normalized_endpoint_fingerprint
 
 type ServiceRole = Literal["writer", "reader"]
 

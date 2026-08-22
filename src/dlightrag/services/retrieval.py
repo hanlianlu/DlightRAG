@@ -9,17 +9,16 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
-from dlightrag_ai.completion import CompletionModel
-from dlightrag_ai.scheduler import ModelScheduler
-from dlightrag_ai.settings import ModelSettings
-from dlightrag_ai.telemetry import Telemetry
-from dlightrag_rag.federation import federated_retrieve
-from dlightrag_rag.lifecycle import await_shared_cleanup
-from dlightrag_rag.pool import WorkspacePool, WorkspaceUnavailableError
-from dlightrag_rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
-from dlightrag_rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
-
+from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
+from dlightrag.ai.completion import CompletionModel
+from dlightrag.ai.scheduler import ModelScheduler
+from dlightrag.ai.settings import ModelSettings
+from dlightrag.ai.telemetry import Telemetry
+from dlightrag.rag.federation import federated_retrieve
+from dlightrag.rag.lifecycle import await_shared_cleanup
+from dlightrag.rag.pool import WorkspacePool, WorkspaceUnavailableError
+from dlightrag.rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
+from dlightrag.rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
 from dlightrag.services.errors import CorpusUnavailableError
 
 logger = logging.getLogger(__name__)

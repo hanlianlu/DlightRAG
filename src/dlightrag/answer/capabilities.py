@@ -4,10 +4,9 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
-from dlightrag_ai.capacity import ModelCapabilityError, ModelProfile
-from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole, ModelSettings
-from dlightrag_ai.vision import ImageCapabilityStatus, ImageProbeOutcome, ModelImageCapabilities
-
+from dlightrag.ai.capacity import ModelCapabilityError, ModelProfile
+from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole, ModelSettings
+from dlightrag.ai.vision import ImageCapabilityStatus, ImageProbeOutcome, ModelImageCapabilities
 from dlightrag.answer.capability import (
     AnswerImageCapability,
     answer_image_capability_summary,

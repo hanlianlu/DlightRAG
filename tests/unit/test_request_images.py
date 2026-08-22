@@ -8,9 +8,9 @@ import threading
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_ai.media import decode_image_base64
 from PIL import Image
 
+from dlightrag.ai.media import decode_image_base64
 from dlightrag.answer.resources.images import QueryImageDescriber
 from tests.unit.conftest import answer_image_policy
 

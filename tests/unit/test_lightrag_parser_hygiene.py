@@ -6,7 +6,8 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from dlightrag_rag.ingestion.parser_hygiene import (
+
+from dlightrag.rag.ingestion.parser_hygiene import (
     apply_mineru_content_list_hygiene,
     filter_mineru_auxiliary_blocks,
     normalize_mineru_drawing_aliases,

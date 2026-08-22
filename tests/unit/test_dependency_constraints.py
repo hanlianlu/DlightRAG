@@ -8,12 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-_MANIFESTS = (
-    Path("pyproject.toml"),
-    Path("packages/ai/pyproject.toml"),
-    Path("packages/agent-core/pyproject.toml"),
-    Path("packages/rag-core/pyproject.toml"),
-)
+_MANIFESTS = (Path("pyproject.toml"), Path("packages/memory/pyproject.toml"))
 
 
 def _project(path: Path = Path("pyproject.toml")) -> dict[str, object]:
@@ -30,17 +25,29 @@ def test_workspace_versions_are_lockstep() -> None:
     assert len(versions) == 1
 
 
-def test_root_depends_on_workspace_cores_without_redeclaring_provider_sdks() -> None:
+def test_root_is_batteries_included_and_depends_only_on_standalone_memory() -> None:
     dependencies = _dependencies()
     version = _project()["version"]
 
-    assert f"dlightrag-ai[all]=={version}" in dependencies
-    assert f"dlightrag-agent-core=={version}" in dependencies
-    assert f"dlightrag-rag-core=={version}" in dependencies
-    assert not any(
-        dependency.startswith(("openai", "anthropic", "google-genai", "json-repair"))
-        for dependency in dependencies
+    assert f"dlightrag-memory=={version}" in dependencies
+    assert all(
+        any(dependency.startswith(name) for dependency in dependencies)
+        for name in (
+            "openai",
+            "anthropic",
+            "google-genai",
+            "json-repair",
+            "aiofiles",
+            "aiobotocore",
+            "azure-storage-blob",
+            "botocore",
+            "lightrag-hku",
+            "lingua-language-detector",
+        )
     )
+    assert [dependency for dependency in dependencies if dependency.startswith("dlightrag-")] == [
+        f"dlightrag-memory=={version}"
+    ]
 
 
 def test_root_has_no_server_template_runtime_dependency() -> None:
@@ -51,40 +58,11 @@ def test_root_has_no_server_template_runtime_dependency() -> None:
     assert names.isdisjoint({"jinja2", "markupsafe"})
 
 
-def test_core_distribution_dependencies_follow_import_direction() -> None:
-    agent = _dependencies(Path("packages/agent-core/pyproject.toml"))
-    rag = _dependencies(Path("packages/rag-core/pyproject.toml"))
-    version = _project()["version"]
-
-    assert agent == [f"dlightrag-ai=={version}", "pydantic>=2.11.0"]
-    assert rag == [
-        f"dlightrag-ai=={version}",
-        "aiofiles>=24.1.0",
-        "aiobotocore>=3.9.0",
-        "azure-storage-blob>=12.28.0",
-        "botocore>=1.43.3",
-        "httpx>=0.28.0",
-        "lingua-language-detector>=2.2.0",
-        "lightrag-hku>=1.5.6",
-        "numpy>=2.5.0",
-        "pillow>=12.3.0",
-        "pydantic>=2.11.0",
-    ]
-
-
 def test_workspace_sources_and_lock_are_exact() -> None:
     root = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    assert root["tool"]["uv"]["workspace"]["members"] == [
-        "packages/ai",
-        "packages/agent-core",
-        "packages/memory",
-        "packages/rag-core",
-    ]
+    assert root["tool"]["uv"]["workspace"]["members"] == ["packages/memory"]
     assert root["tool"]["uv"]["sources"] == {
-        "dlightrag-ai": {"workspace": True},
-        "dlightrag-agent-core": {"workspace": True},
         "dlightrag-memory": {"workspace": True},
-        "dlightrag-rag-core": {"workspace": True},
     }
 
     lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
@@ -95,10 +73,7 @@ def test_workspace_sources_and_lock_are_exact() -> None:
     }
     assert workspace_sources == {
         "dlightrag": {"editable": "."},
-        "dlightrag-agent-core": {"editable": "packages/agent-core"},
-        "dlightrag-ai": {"editable": "packages/ai"},
         "dlightrag-memory": {"editable": "packages/memory"},
-        "dlightrag-rag-core": {"editable": "packages/rag-core"},
     }
 
 
@@ -123,12 +98,8 @@ def test_langfuse_dependency_has_no_upper_bound() -> None:
     assert re.fullmatch(r"langfuse>=4\.\d+(\.\d+)?", langfuse_dep)
 
 
-def test_language_detection_dependency_is_owned_by_rag() -> None:
-    root_dependencies = _dependencies()
-    rag_dependencies = _dependencies(Path("packages/rag-core/pyproject.toml"))
-
-    assert any(dep.startswith("lingua-language-detector") for dep in rag_dependencies)
-    assert not any(dep.startswith("lingua-language-detector") for dep in root_dependencies)
+def test_language_detection_dependency_is_owned_by_root() -> None:
+    assert any(dep.startswith("lingua-language-detector") for dep in _dependencies())
 
 
 def test_postgres_init_uses_required_pg18_extensions() -> None:

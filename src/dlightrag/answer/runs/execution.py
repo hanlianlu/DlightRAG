@@ -12,9 +12,8 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag_ai.capacity import ModelProfile
-from dlightrag_ai.fingerprints import ModelFingerprint
-
+from dlightrag.ai.capacity import ModelProfile
+from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.answer.mode import canonical_answer_mode
 from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.runtime.errors import RunExecutionError

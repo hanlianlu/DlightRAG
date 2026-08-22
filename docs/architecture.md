@@ -183,7 +183,7 @@ errors into `RunExecutionError` before they cross that boundary;
 `dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore` implements the runtime
 store port.
 
-`dlightrag-rag-core` owns the coherent `WorkspaceCorpusBackend` bundle:
+`dlightrag.rag` owns the coherent `WorkspaceCorpusBackend` bundle:
 coordination and maintenance, durable ingest jobs, plus a runtime binder for
 metadata, chunk, filtered-vector, and BM25 stores. The root PostgreSQL adapter
 implements those ports and hides environment translation, server/version/
@@ -191,9 +191,9 @@ extension checks, advisory-lock lifetimes, reader attachment, catalog scans,
 workspace maintenance, schema DDL, and SQL identifiers. Startup availability
 failures are translated to corpus errors; operation-specific failures retain
 their adapter context for the current product error policy.
-The current `Application` composes the adapter; the independently installable RAG
-package, Runtime, status routes, API, Web, and MCP never import it. Corpus and
-operational pools remain separate even when they use the same endpoint.
+The current `Application` composes the adapter; the internal RAG module,
+Runtime, status routes, API, Web, and MCP never import it. Corpus and operational
+pools remain separate even when they use the same endpoint.
 
 ## Web Frontend Ownership
 
@@ -295,38 +295,34 @@ complete role, migration-order, and shared-artifact contract.
 
 ## Code Layering
 
-The repository is one UV workspace with five lockstep distributions. Distinct
-top-level Python packages make their import directions observable in source and
-in built wheels:
+The repository is one UV workspace with two lockstep distributions. The root
+wheel contains three internal deep modules whose import direction remains
+machine-enforced; Memory remains a separate deployment seam:
 
 ```text
-dlightrag-ai          immutable settings/fingerprints; fair provider admission;
-     ↑       ↑        chat, tool, embedding, rerank and probe lifecycles
+dlightrag.ai       immutable settings/fingerprints; fair provider admission;
+     ↑       ↑     chat, tool, embedding, rerank and probe lifecycles
      │       │
-dlightrag-agent-core  generic tool contracts and deterministic turn execution
+dlightrag.agent    generic tool contracts and deterministic turn execution
 
-dlightrag-rag-core    LightRAG chat/embedding adapters, rerank orchestration,
-                      storage-neutral metadata records and score fusion
+dlightrag.rag      LightRAG chat/embedding adapters, rerank orchestration,
+                   storage-neutral metadata records and score fusion
 
-dlightrag-memory      cross-conversation Owner Profile Memory: the closed write
-                      checklist, structured recall, storage-neutral ports, and
-                      the package-owned PostgreSQL adapter with its own schema
+dlightrag          product composition, root PostgreSQL adapters,
+                   REST/Web/MCP/SDK
 
-dlightrag             product composition, root PostgreSQL composition,
-                      REST/Web/MCP/SDK
+dlightrag-memory   independently installable Owner Profile Memory, stdio MCP,
+                   storage-neutral ports and package-owned PostgreSQL schema
 ```
 
-Agent, RAG, and Memory cores depend on AI; Memory is additionally PG-first and
-declares `asyncpg` directly, while its PostgreSQL adapter owns a schema
-(`dlightrag_memory_records`) and migration path independent of the root
-product's. RAG core also owns its direct LightRAG API dependency. The root
-product depends on all four cores and maps Pydantic input configuration into
-immutable AI settings before composition. RAG imports neither the root product
-nor Agent and never imports concrete PostgreSQL adapters. Memory imports no
-product, Agent, or RAG module. Concrete provider SDKs are lazy AI extras, so
-importing `dlightrag_ai` does not load OpenAI, Anthropic, or Gemini clients.
-Root `LangfuseTelemetry` is injected into core model operations; standalone
-cores use the explicit no-op adapter.
+Agent and RAG may depend on AI but not on product modules or each other. RAG
+owns its direct LightRAG dependency and never imports concrete PostgreSQL
+adapters. The root product is batteries-included: all provider and source SDKs
+are direct dependencies, while provider modules remain lazy imports. Memory
+imports no root, AI, Agent, or RAG module; it declares `asyncpg` directly and
+owns the independent `dlightrag_memory_records` schema and migration path. Root
+`LangfuseTelemetry` is injected into internal model operations; standalone
+Memory has no telemetry dependency.
 
 ### Memory package surface
 
@@ -354,7 +350,7 @@ import higher ones.
 ```text
 L9  api, mcp, web                                  interface adapters
 L8  application; services                         composition and use cases
-L7  dlightrag_rag.WorkspacePool, WorkspaceRag      corpus runtime ownership
+L7  dlightrag.rag.WorkspacePool, WorkspaceRag      corpus runtime ownership
 L6  answer                                         execution, lifecycle, source/media projection
 L5  host and storage adapters                      PostgreSQL; LightRAG contract and lifecycle
 L4  workspace cores and model adapters             AI; Agent; RAG retrieval, ingestion, sourcing
@@ -372,11 +368,12 @@ The layering checks are part of local and CI verification:
 uv run lint-imports
 ```
 
-`lint-imports` enforces contracts over all four roots: AI cannot import the
-product, Agent, RAG, LightRAG, PostgreSQL, or transport packages; Agent may use
-AI but not product/RAG/storage/transport code; and RAG may use AI and LightRAG
-APIs but cannot import the product, Agent, PostgreSQL, or transport packages.
-Existing root contracts continue to
+`lint-imports` enforces contracts over the root and Memory distributions plus
+the internal AI, Agent, and RAG module seams: AI cannot import product, Agent,
+RAG, LightRAG, PostgreSQL, or transport modules; Agent may use AI but not
+product/RAG/storage/transport code; and RAG may use AI and LightRAG APIs but
+cannot import product, Agent, PostgreSQL, or transport modules. Existing root
+contracts continue to
 keep `api`/`mcp`/`web` out of internal modules, order the foundation and core
 coordination stacks, keep Runtime free of Answer/RAG/storage/transport code,
 make status routes depend only on `ApplicationHealth`, and separate resources

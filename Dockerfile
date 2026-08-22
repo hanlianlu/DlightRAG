@@ -23,9 +23,7 @@ ENV UV_LINK_MODE=copy
 COPY --from=uv-bin /usr/local/bin/uv /bin/
 
 COPY pyproject.toml uv.lock ./
-COPY packages/ai/pyproject.toml packages/ai/pyproject.toml
-COPY packages/agent-core/pyproject.toml packages/agent-core/pyproject.toml
-COPY packages/rag-core/pyproject.toml packages/rag-core/pyproject.toml
+COPY packages/memory/pyproject.toml packages/memory/pyproject.toml
 # Deps only — binary-only (UV_NO_BUILD): never compile an sdist; the slim base has
 # no toolchain, so a missing wheel fails fast. Keep it off the project build below.
 RUN --mount=type=cache,target=/root/.cache/uv \

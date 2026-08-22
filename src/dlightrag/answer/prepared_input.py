@@ -15,8 +15,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag_agent.session.effects import canonical_json
-from dlightrag_agent.session.ids import SessionId
+from dlightrag.agent.session.effects import canonical_json
+from dlightrag.agent.session.ids import SessionId
 
 MAX_PREPARED_INPUT_BYTES = 8 * 1024 * 1024
 PREPARED_INPUT_SCHEMA_VERSION = 1
@@ -147,7 +147,7 @@ def minimal_prepared_input(
     fingerprint: str = "0" * 64,
 ) -> PreparedAnswerInput:
     """Build a minimal valid prepared input for tests and acceptance plumbing."""
-    from dlightrag_agent.session.ids import SessionId
+    from dlightrag.agent.session.ids import SessionId
 
     return PreparedAnswerInput(
         session_id=session_id or SessionId.new().value,

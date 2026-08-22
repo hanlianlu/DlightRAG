@@ -11,14 +11,16 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
-from dlightrag_agent.loop import LoopCancelled
-from dlightrag_agent.session.effects import (
+from dlightrag_memory import Memory, MemoryStore
+
+from dlightrag.agent.loop import LoopCancelled
+from dlightrag.agent.session.effects import (
     EffectIntent,
     EffectSettlement,
     ToolResultEntry,
     canonical_json,
 )
-from dlightrag_agent.session.entries import (
+from dlightrag.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
     EffectIntentEntry,
@@ -28,9 +30,9 @@ from dlightrag_agent.session.entries import (
     SessionTerminalEntry,
     UserMessageEntry,
 )
-from dlightrag_agent.session.fold import PriorTurns, fold_entries
-from dlightrag_agent.session.ids import EntryId, ProjectionId, SessionId, StageIntentId
-from dlightrag_agent.session.projection import (
+from dlightrag.agent.session.fold import PriorTurns, fold_entries
+from dlightrag.agent.session.ids import EntryId, ProjectionId, SessionId, StageIntentId
+from dlightrag.agent.session.projection import (
     ContextProjection,
     TokenAnchor,
     accounted_input_tokens,
@@ -38,7 +40,7 @@ from dlightrag_agent.session.projection import (
     projection_with_anchor,
     token_anchor_from_usage,
 )
-from dlightrag_agent.session.store import (
+from dlightrag.agent.session.store import (
     AgentSessionStore,
     EffectAlreadySettled,
     EffectCommit,
@@ -50,30 +52,19 @@ from dlightrag_agent.session.store import (
     SettleCommit,
     VersionConflict,
 )
-from dlightrag_agent.tools import (
+from dlightrag.agent.tools import (
     AgentTool,
     ExecutedTurn,
     PreparedToolTurn,
     ToolExecution,
     ToolPreflight,
 )
-from dlightrag_ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
-from dlightrag_ai.messages import AssistantTurn
-from dlightrag_ai.scheduler import model_call_scope
-from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
-from dlightrag_ai.telemetry import Telemetry, safe_log_text
-from dlightrag_ai.tokens import estimate_messages_tokens
-from dlightrag_memory import Memory, MemoryStore
-from dlightrag_rag.lifecycle import defer_cancellation
-from dlightrag_rag.pool import WorkspacePool
-from dlightrag_rag.retrieval import (
-    MetadataFilter,
-    RetrievalContexts,
-    RetrievalResult,
-)
-from dlightrag_rag.sourcing.source_contract import safe_source_filename
-from dlightrag_rag.sourcing.url import afetch_public_https_bytes, avalidate_public_https_url
-
+from dlightrag.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.ai.messages import AssistantTurn
+from dlightrag.ai.scheduler import model_call_scope
+from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.ai.telemetry import Telemetry, safe_log_text
+from dlightrag.ai.tokens import estimate_messages_tokens
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.capabilities import AnswerCapabilityCoordinator, RequestModelContext
 from dlightrag.answer.capability import AnswerImageCapability, check_answer_image_capability
@@ -122,6 +113,15 @@ from dlightrag.answer.workspace import (
     WorkspaceRecoveryFailed,
     bind_run_workspace,
 )
+from dlightrag.rag.lifecycle import defer_cancellation
+from dlightrag.rag.pool import WorkspacePool
+from dlightrag.rag.retrieval import (
+    MetadataFilter,
+    RetrievalContexts,
+    RetrievalResult,
+)
+from dlightrag.rag.sourcing.source_contract import safe_source_filename
+from dlightrag.rag.sourcing.url import afetch_public_https_bytes, avalidate_public_https_url
 from dlightrag.runtime import (
     LeaseLostError,
     RunCancelledError,
@@ -1218,7 +1218,7 @@ class JournalRunBoundaries:
                 if tool is None:
                     raise RuntimeError("matched contract lost its tool")
                 try:
-                    from dlightrag_agent.tools.context import bind_tool_call, reset_tool_call
+                    from dlightrag.agent.tools.context import bind_tool_call, reset_tool_call
 
                     arguments = tool.input_model.model_validate(_json.loads(intent.canonical_input))
                     token = bind_tool_call(
@@ -2009,7 +2009,7 @@ def _fenced_child_writer(store: object, name: str, session: RunSession) -> Any |
 
 
 def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[str, str]:
-    from dlightrag_ai.media import image_bytes_to_data_uri, verify_web_image_bytes
+    from dlightrag.ai.media import image_bytes_to_data_uri, verify_web_image_bytes
 
     mime = verify_web_image_bytes(data, max_pixels=max_pixels)
     return mime, image_bytes_to_data_uri(data, fallback_mime=mime)

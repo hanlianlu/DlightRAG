@@ -3,7 +3,8 @@
 from unittest.mock import patch
 
 import pytest
-from dlightrag_rag.sourcing.azure_blob import generate_azure_sas_url
+
+from dlightrag.rag.sourcing.azure_blob import generate_azure_sas_url
 
 CONN_STR = "DefaultEndpointsProtocol=https;AccountName=myaccount;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net"
 
@@ -14,7 +15,7 @@ class TestGenerateAzureSasUrl:
         with pytest.raises(ValueError, match="azure://"):
             generate_azure_sas_url(connection_string=CONN_STR, raw_path="/local/path.pdf")
 
-    @patch("dlightrag_rag.sourcing.azure_blob.generate_blob_sas", return_value="sv=2024&sig=abc")
+    @patch("dlightrag.rag.sourcing.azure_blob.generate_blob_sas", return_value="sv=2024&sig=abc")
     def test_parses_connection_string_and_generates_url(self, mock_sas) -> None:
         """Core: connection string → account creds, azure:// path → container/blob, output → signed HTTPS URL."""
         url = generate_azure_sas_url(

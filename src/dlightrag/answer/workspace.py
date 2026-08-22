@@ -10,8 +10,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from dlightrag_agent.environment import LocalExecutionEnvironment
-
+from dlightrag.agent.environment import LocalExecutionEnvironment
 from dlightrag.runtime.workspace import HandoffCommit, WorkspaceStore
 
 

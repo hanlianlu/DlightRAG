@@ -7,7 +7,6 @@ from dataclasses import replace
 from functools import partial
 from typing import Any
 
-from dlightrag_rag.workspaces import normalize_workspace_ids
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -15,6 +14,7 @@ from dlightrag.access import AccessAction, owner_id_from_user
 from dlightrag.answer.runs.results import project_answer_result, project_report_sources
 from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor
+from dlightrag.rag.workspaces import normalize_workspace_ids
 from dlightrag.runtime import IdempotencyKeyConflict
 from dlightrag.web.answer_events import browser_frame
 from dlightrag.web.app_shell import app_html_response

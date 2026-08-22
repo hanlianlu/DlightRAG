@@ -44,7 +44,7 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
         references: Sequence[PendingArtifactReference] = (),
     ) -> RunCreation:
 
-        from dlightrag_agent.session.ids import SessionId
+        from dlightrag.agent.session.ids import SessionId
 
         if prepared_input is not None:
             return await super().create_run(
@@ -86,7 +86,7 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
         routing: RoutingAcceptance | None = None,
     ) -> RunCreation:
 
-        from dlightrag_agent.session.ids import SessionId
+        from dlightrag.agent.session.ids import SessionId
 
         prepared: dict[str, Any] = {
             "session_id": SessionId.new().value,

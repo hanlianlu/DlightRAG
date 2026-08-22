@@ -7,7 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, call, patch
 
 import pytest
-from dlightrag_rag.lifecycle import await_shared_cleanup, shutdown_lightrag_worker_pools
+
+from dlightrag.rag.lifecycle import await_shared_cleanup, shutdown_lightrag_worker_pools
 
 
 def _shutdown_target() -> SimpleNamespace:
@@ -47,7 +48,7 @@ class TestShutdownLightRagWorkerPools:
         )
 
         with patch(
-            "dlightrag_rag.lifecycle.shutdown_async_callable",
+            "dlightrag.rag.lifecycle.shutdown_async_callable",
             new_callable=AsyncMock,
         ) as shutdown:
             count = await shutdown_lightrag_worker_pools(lightrag)
@@ -68,7 +69,7 @@ class TestShutdownLightRagWorkerPools:
         )
 
         with patch(
-            "dlightrag_rag.lifecycle.shutdown_async_callable",
+            "dlightrag.rag.lifecycle.shutdown_async_callable",
             new_callable=AsyncMock,
         ) as shutdown:
             count = await shutdown_lightrag_worker_pools(lightrag, dry_run=True)
@@ -92,7 +93,7 @@ class TestShutdownLightRagWorkerPools:
 
         with (
             patch(
-                "dlightrag_rag.lifecycle.shutdown_async_callable",
+                "dlightrag.rag.lifecycle.shutdown_async_callable",
                 new_callable=AsyncMock,
                 side_effect=_shutdown,
             ) as shutdown,
@@ -114,7 +115,7 @@ class TestShutdownLightRagWorkerPools:
         )
 
         with patch(
-            "dlightrag_rag.lifecycle.shutdown_async_callable",
+            "dlightrag.rag.lifecycle.shutdown_async_callable",
             new_callable=AsyncMock,
             side_effect=asyncio.CancelledError,
         ):

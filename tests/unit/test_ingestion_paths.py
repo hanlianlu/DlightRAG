@@ -1,7 +1,9 @@
 from pathlib import Path
 
 import pytest
-from dlightrag_rag.ingestion.paths import (
+from lightrag.constants import PARSED_DIR_NAME
+
+from dlightrag.rag.ingestion.paths import (
     REMOTE_INGEST_DIR_NAME,
     REMOTE_SOURCES_DIR_NAME,
     UPLOADS_DIR_NAME,
@@ -13,7 +15,6 @@ from dlightrag_rag.ingestion.paths import (
     staged_input_path,
     workspace_input_root,
 )
-from lightrag.constants import PARSED_DIR_NAME
 
 
 def test_iter_ingestable_files_skips_parser_upload_and_hidden_artifacts(tmp_path: Path) -> None:

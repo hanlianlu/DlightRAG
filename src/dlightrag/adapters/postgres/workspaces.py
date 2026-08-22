@@ -8,8 +8,6 @@ this table owns the user-facing workspace list, including empty workspaces.
 
 from typing import Any
 
-from dlightrag_rag.ports import CorpusSchemaError
-
 from dlightrag.adapters.postgres._migrations import (
     Migration,
     TableRequirement,
@@ -17,6 +15,7 @@ from dlightrag.adapters.postgres._migrations import (
     verify_migrations,
 )
 from dlightrag.adapters.postgres._operations import PostgresOperationRunner
+from dlightrag.rag.ports import CorpusSchemaError
 
 _CREATE = """
 CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (

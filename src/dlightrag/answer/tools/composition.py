@@ -5,12 +5,12 @@ import hashlib
 from collections import Counter
 from typing import Any
 
-from dlightrag_agent.environment import AccessScheduler
-from dlightrag_agent.environment.protocol import ExecutionEnvironment
-from dlightrag_agent.tools import AgentTool, ToolResult
-from dlightrag_agent.tools.files import path_tools, read_tool
 from pydantic import BaseModel
 
+from dlightrag.agent.environment import AccessScheduler
+from dlightrag.agent.environment.protocol import ExecutionEnvironment
+from dlightrag.agent.tools import AgentTool, ToolResult
+from dlightrag.agent.tools.files import path_tools, read_tool
 from dlightrag.answer.errors import InvalidToolConfigurationError
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.tools.delegate import DelegateHost, delegate_research_tool

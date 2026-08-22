@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from dlightrag_rag.sourcing.source_contract import safe_source_filename
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
@@ -34,6 +33,7 @@ from dlightrag.api.models import (
     AnswerRunStatusResponse,
 )
 from dlightrag.config import AnswerConfig
+from dlightrag.rag.sourcing.source_contract import safe_source_filename
 from dlightrag.runtime import (
     AnswerRunEvent,
     AnswerRunRecord,
@@ -190,7 +190,7 @@ def _service_request(
     workspaces: list[str],
 ) -> ServiceAnswerRequest:
     """Project one validated wire request into the Answer application contract."""
-    from dlightrag_rag.retrieval import MetadataFilter
+    from dlightrag.rag.retrieval import MetadataFilter
 
     resources = answer_link_resources(body.attachments)
     resources.extend(

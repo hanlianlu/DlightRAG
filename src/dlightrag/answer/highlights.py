@@ -6,9 +6,8 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from dlightrag_ai.completion import CompletionModel
-from dlightrag_ai.telemetry import Telemetry
-
+from dlightrag.ai.completion import CompletionModel
+from dlightrag.ai.telemetry import Telemetry
 from dlightrag.answer.citations.highlight import extract_highlights_for_sources
 from dlightrag.answer.citations.schemas import HighlightSource
 

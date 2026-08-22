@@ -6,8 +6,9 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dlightrag_ai.scheduler import ModelScheduler
-from dlightrag_ai.telemetry import NoopTelemetry
+
+from dlightrag.ai.scheduler import ModelScheduler
+from dlightrag.ai.telemetry import NoopTelemetry
 
 
 def test_parser_defaults_to_check_only() -> None:

@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from dlightrag_ai.telemetry import bounded_telemetry_text
+from dlightrag.ai.telemetry import bounded_telemetry_text
 
 _SENSITIVE_KEY_PARTS = (
     "api_key",

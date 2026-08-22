@@ -4,14 +4,13 @@
 import json
 from datetime import UTC, datetime
 
-from dlightrag_rag.retrieval.planner_prompt import RETRIEVAL_PLANNER_SYSTEM_PROMPT
-
 from dlightrag.answer.prompts import (
     HIGHLIGHT_BATCH_USER_PROMPT,
     HIGHLIGHT_SYSTEM_PROMPT,
     answer_core,
 )
 from dlightrag.answer.prompts.identity import core_identity
+from dlightrag.rag.retrieval.planner_prompt import RETRIEVAL_PLANNER_SYSTEM_PROMPT
 
 
 def test_answer_prompt_is_assembled_from_core_identity_and_guidance() -> None:

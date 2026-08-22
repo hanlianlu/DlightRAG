@@ -12,11 +12,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_ai.capacity import ModelProfile
-from dlightrag_ai.fingerprints import ModelFingerprint
-from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS
 
 from dlightrag import config as config_module
+from dlightrag.ai.capacity import ModelProfile
+from dlightrag.ai.fingerprints import ModelFingerprint
+from dlightrag.ai.media import MODEL_IMAGE_MAX_PIXELS
 from dlightrag.answer.capabilities import AnswerCapabilities
 from dlightrag.answer.capability import AnswerImageCapability
 from dlightrag.answer.images import AnswerImagePolicy

@@ -17,9 +17,8 @@ import logging
 import sys
 from typing import Any
 
-from dlightrag_rag.workspaces import normalize_workspace
-
 from dlightrag.access import AccessAction, AccessGate, AllowAllAccessControl
+from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.services.corpora import CorpusAdmin, CorpusResetResult
 
 logger = logging.getLogger(__name__)

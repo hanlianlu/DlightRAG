@@ -6,15 +6,15 @@ import io
 from dataclasses import FrozenInstanceError
 
 import pytest
-from dlightrag_ai.media import (
+from PIL import Image
+
+from dlightrag.ai.media import (
     ImagePayloadBudget,
     bounded_embedding_image_data_uri,
     bounded_image_data_uri,
     decode_image_base64,
     flatten_image_to_rgb,
 )
-from PIL import Image
-
 from dlightrag.answer.images import AnswerImageBudget, AnswerImagePolicy
 
 _PNG_B64 = (
@@ -334,7 +334,7 @@ def _b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
-# ── Canonical image normalization path (dlightrag_ai.media) ──
+# ── Canonical image normalization path (dlightrag.ai.media) ──
 
 
 def test_bounded_image_applies_exif_orientation() -> None:

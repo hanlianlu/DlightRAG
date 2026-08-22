@@ -6,14 +6,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag_rag.ports import CorpusSchemaError
-from dlightrag_rag.retrieval import MetadataFilter
-from dlightrag_rag.retrieval.metadata_fields import (
-    FILTER_FIELD_COLUMNS,
-    METADATA_FIELD_IDS,
-    canonical_metadata_key,
-)
-
 from dlightrag.adapters.postgres._migrations import (
     Migration,
     TableRequirement,
@@ -22,6 +14,13 @@ from dlightrag.adapters.postgres._migrations import (
 )
 from dlightrag.adapters.postgres._operations import PostgresOperationRunner
 from dlightrag.adapters.postgres.identifiers import pg_identifier
+from dlightrag.rag.ports import CorpusSchemaError
+from dlightrag.rag.retrieval import MetadataFilter
+from dlightrag.rag.retrieval.metadata_fields import (
+    FILTER_FIELD_COLUMNS,
+    METADATA_FIELD_IDS,
+    canonical_metadata_key,
+)
 
 logger = logging.getLogger(__name__)
 

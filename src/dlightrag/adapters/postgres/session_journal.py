@@ -20,11 +20,13 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
-from dlightrag_agent.session.effects import EffectSettlement, JsonValue
-from dlightrag_agent.session.entries import EffectIntentEntry, SessionEntry
-from dlightrag_agent.session.ids import IntentId, ProjectionId, SessionId, StageIntentId
-from dlightrag_agent.session.projection import ContextProjection
-from dlightrag_agent.session.store import (
+from dlightrag.adapters.postgres._operations import ConnectionPool
+from dlightrag.adapters.postgres._pool import pg_pool
+from dlightrag.agent.session.effects import EffectSettlement, JsonValue
+from dlightrag.agent.session.entries import EffectIntentEntry, SessionEntry
+from dlightrag.agent.session.ids import IntentId, ProjectionId, SessionId, StageIntentId
+from dlightrag.agent.session.projection import ContextProjection
+from dlightrag.agent.session.store import (
     AgentSessionSnapshot,
     AppendCommit,
     EffectAlreadySettled,
@@ -37,9 +39,6 @@ from dlightrag_agent.session.store import (
     SettleCommit,
     VersionConflict,
 )
-
-from dlightrag.adapters.postgres._operations import ConnectionPool
-from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.runtime.progress import (
     StageCommit,
     StageCommitResult,
@@ -1141,7 +1140,7 @@ def _json_payload(value: Any) -> dict[str, Any]:
 
 
 def _token_anchor(payload: Any) -> Any:
-    from dlightrag_agent.session.projection import TokenAnchor
+    from dlightrag.agent.session.projection import TokenAnchor
 
     return TokenAnchor(
         through_sequence=int(payload["through_sequence"]),
@@ -1151,8 +1150,8 @@ def _token_anchor(payload: Any) -> Any:
 
 
 def _decode_entry(row: Any, *, owner_id: str, run_id: str, session_id: SessionId) -> SessionEntry:
-    from dlightrag_agent.session.entries import ENTRY_TYPE_TO_CLASS, decode_entry_payload
-    from dlightrag_agent.session.ids import EntryId
+    from dlightrag.agent.session.entries import ENTRY_TYPE_TO_CLASS, decode_entry_payload
+    from dlightrag.agent.session.ids import EntryId
 
     entry_class = ENTRY_TYPE_TO_CLASS.get(str(row["entry_type"]))
     if entry_class is None:

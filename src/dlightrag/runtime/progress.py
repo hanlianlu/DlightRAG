@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from dlightrag_agent.session.ids import StageIntentId
+from dlightrag.agent.session.ids import StageIntentId
 
 type StageCommitOutcome = Literal[
     "committed", "version_conflict", "lease_lost", "stage_conflict", "evidence_conflict"

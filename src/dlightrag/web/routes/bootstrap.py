@@ -3,12 +3,12 @@
 
 from typing import Literal
 
-from dlightrag_ai.vision import ImageCapabilityStatus
-from dlightrag_rag.workspaces import normalize_workspace
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from dlightrag.access import AccessAction, WorkspaceRecord
+from dlightrag.ai.vision import ImageCapabilityStatus
 from dlightrag.answer.client_contracts import ClientContractModel
+from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.web.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from dlightrag.web.deps import (
     filter_web_workspace_records,

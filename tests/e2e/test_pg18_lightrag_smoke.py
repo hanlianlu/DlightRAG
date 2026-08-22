@@ -8,12 +8,12 @@ Run with:
 from pathlib import Path
 
 import pytest
-from dlightrag_ai.scheduler import ModelScheduler
-from dlightrag_rag.retrieval import MetadataFilter, MetadataScope
-from dlightrag_rag.retrieval.filtering import metadata_filter_scope
-from dlightrag_rag.retrieval.metadata_path import metadata_retrieve
 
+from dlightrag.ai.scheduler import ModelScheduler
 from dlightrag.config import set_config
+from dlightrag.rag.retrieval import MetadataFilter, MetadataScope
+from dlightrag.rag.retrieval.filtering import metadata_filter_scope
+from dlightrag.rag.retrieval.metadata_path import metadata_retrieve
 from tests.e2e.pg18_harness import (
     RUN_E2E_ENV,
     e2e_enabled,
@@ -59,12 +59,11 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag_rag.workspace_rag import WorkspaceRag
-
     from dlightrag.adapters.postgres._pool import pg_pool
     from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
     from dlightrag.model_settings import rag_settings
     from dlightrag.observability import LangfuseTelemetry
+    from dlightrag.rag.workspace_rag import WorkspaceRag
 
     conn_kwargs = pg_conn_kwargs_from_env()
     workspace = make_workspace_name()
@@ -178,14 +177,13 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     reads the corpus through read-only sessions while its DlightRAG domain pool
     stays writable for durable Answer run state.
     """
-    from dlightrag_rag.workspace_rag import WorkspaceRag
-
     from dlightrag.adapters.postgres._pool import pg_pool
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
     from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
     from dlightrag.config import reset_config, set_config
     from dlightrag.model_settings import rag_settings
     from dlightrag.observability import LangfuseTelemetry
+    from dlightrag.rag.workspace_rag import WorkspaceRag
     from dlightrag.runtime import answer_run_request_fingerprint
 
     conn_kwargs = pg_conn_kwargs_from_env()

@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for the storage-neutral RetrievalResult."""
 
-from dlightrag_rag.retrieval import (
+from dlightrag.rag.retrieval import (
     RetrievalContexts,
     RetrievalResult,
 )
@@ -55,7 +55,7 @@ class TestRetrievalResultReferences:
         assert result.trace == {}
 
     def test_references_populated(self) -> None:
-        from dlightrag_rag.contracts import Reference
+        from dlightrag.rag.contracts import Reference
 
         refs = [Reference(id="1", title="doc.pdf")]
         result = RetrievalResult(references=refs)
@@ -67,12 +67,12 @@ class TestCanonicalizeReferenceIds:
     idempotent on chunks already assigned by aquery_data."""
 
     def test_empty_input(self) -> None:
-        from dlightrag_rag.retrieval.references import canonicalize_reference_ids
+        from dlightrag.rag.retrieval.references import canonicalize_reference_ids
 
         assert canonicalize_reference_ids([]) == []
 
     def test_assigns_ids_by_file_path_frequency(self) -> None:
-        from dlightrag_rag.retrieval.references import canonicalize_reference_ids
+        from dlightrag.rag.retrieval.references import canonicalize_reference_ids
 
         chunks = [
             {"chunk_id": "c1", "file_path": "/A.pdf", "reference_id": ""},
@@ -86,7 +86,7 @@ class TestCanonicalizeReferenceIds:
         assert out[1]["reference_id"] == "2"
 
     def test_fills_missing_on_injected_chunks(self) -> None:
-        from dlightrag_rag.retrieval.references import canonicalize_reference_ids
+        from dlightrag.rag.retrieval.references import canonicalize_reference_ids
 
         # Mix: chunks from aquery_data (with ref_id) + injected (empty ref_id)
         chunks = [
@@ -102,7 +102,7 @@ class TestCanonicalizeReferenceIds:
         assert out[3]["reference_id"] != ""
 
     def test_preserves_existing_lightrag_ids_when_filling_missing(self) -> None:
-        from dlightrag_rag.retrieval.references import canonicalize_reference_ids
+        from dlightrag.rag.retrieval.references import canonicalize_reference_ids
 
         chunks = [
             {"chunk_id": "b1", "file_path": "/B.pdf", "reference_id": "1"},
@@ -116,7 +116,7 @@ class TestCanonicalizeReferenceIds:
         assert out[2]["reference_id"] == "2"
 
     def test_uses_lightrag_reference_list_as_seed(self) -> None:
-        from dlightrag_rag.retrieval.references import canonicalize_reference_ids
+        from dlightrag.rag.retrieval.references import canonicalize_reference_ids
 
         chunks = [
             {"chunk_id": "x1", "file_path": "/X.pdf", "reference_id": ""},
@@ -131,7 +131,7 @@ class TestCanonicalizeReferenceIds:
         assert out[1]["reference_id"] == "8"
 
     def test_empty_file_path_keeps_empty_ref_id(self) -> None:
-        from dlightrag_rag.retrieval.references import canonicalize_reference_ids
+        from dlightrag.rag.retrieval.references import canonicalize_reference_ids
 
         chunks = [
             {"chunk_id": "c1", "file_path": "/A.pdf", "reference_id": ""},
@@ -142,7 +142,7 @@ class TestCanonicalizeReferenceIds:
         assert out[1]["reference_id"] == ""
 
     def test_does_not_mutate_input(self) -> None:
-        from dlightrag_rag.retrieval.references import canonicalize_reference_ids
+        from dlightrag.rag.retrieval.references import canonicalize_reference_ids
 
         chunks = [{"chunk_id": "c1", "file_path": "/A.pdf", "reference_id": ""}]
         canonicalize_reference_ids(chunks)
@@ -151,7 +151,7 @@ class TestCanonicalizeReferenceIds:
     def test_federated_separates_same_filename_across_workspaces(self) -> None:
         """Two workspaces ingesting different docs with the same filename
         must end up with distinct reference_ids after federation merge."""
-        from dlightrag_rag.retrieval.references import canonicalize_reference_ids
+        from dlightrag.rag.retrieval.references import canonicalize_reference_ids
 
         chunks = [
             # Workspace A's report.pdf (one doc)
@@ -171,7 +171,7 @@ class TestCanonicalizeReferenceIds:
         assert out[2]["file_path"] == "/report.pdf"
 
     def test_federated_groups_same_workspace_same_file(self) -> None:
-        from dlightrag_rag.retrieval.references import canonicalize_reference_ids
+        from dlightrag.rag.retrieval.references import canonicalize_reference_ids
 
         chunks = [
             {"chunk_id": "c1", "file_path": "/A.pdf", "_workspace": "ws"},

@@ -6,8 +6,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dlightrag_ai.scheduler import ModelScheduler
 
+from dlightrag.ai.scheduler import ModelScheduler
 from dlightrag.config import (
     DlightragConfig,
     EmbeddingConfig,
@@ -52,8 +52,8 @@ def test_root_maps_only_complete_role_overrides_to_immutable_ai_settings() -> No
 
 
 async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypatch) -> None:
-    from dlightrag_ai.settings import ModelRoleSettings, ModelSettings
-    from dlightrag_rag import lightrag_models
+    from dlightrag.ai.settings import ModelRoleSettings, ModelSettings
+    from dlightrag.rag import lightrag_models
 
     class FakeCompletionModel:
         instances: list[FakeCompletionModel] = []
@@ -111,8 +111,8 @@ async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypat
 async def test_rag_chat_bundle_closes_created_models_when_role_construction_fails(
     monkeypatch,
 ) -> None:
-    from dlightrag_ai.settings import ModelRoleSettings, ModelSettings
-    from dlightrag_rag import lightrag_models
+    from dlightrag.ai.settings import ModelRoleSettings, ModelSettings
+    from dlightrag.rag import lightrag_models
 
     class FakeCompletionModel:
         instances: list[FakeCompletionModel] = []
@@ -147,8 +147,8 @@ async def test_rag_chat_bundle_closes_created_models_when_role_construction_fail
 async def test_rag_chat_bundle_preserves_construction_error_when_cleanup_fails(
     monkeypatch,
 ) -> None:
-    from dlightrag_ai.settings import ModelRoleSettings, ModelSettings
-    from dlightrag_rag import lightrag_models
+    from dlightrag.ai.settings import ModelRoleSettings, ModelSettings
+    from dlightrag.rag import lightrag_models
 
     class FakeCompletionModel:
         def __init__(self, settings: ModelSettings, **_kwargs: Any) -> None:
@@ -174,8 +174,8 @@ async def test_rag_chat_bundle_preserves_construction_error_when_cleanup_fails(
 
 
 async def test_rag_embedding_adapter_injects_context_and_numpy_shape() -> None:
-    from dlightrag_ai.settings import EmbeddingSettings
-    from dlightrag_rag.lightrag_models import build_lightrag_embedding
+    from dlightrag.ai.settings import EmbeddingSettings
+    from dlightrag.rag.lightrag_models import build_lightrag_embedding
 
     embedder = MagicMock()
     embedder.supports_asymmetric = True

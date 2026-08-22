@@ -6,9 +6,8 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from dlightrag_ai.concurrency import bounded_map
-from dlightrag_ai.media import image_url_block
-
+from dlightrag.ai.concurrency import bounded_map
+from dlightrag.ai.media import image_url_block
 from dlightrag.answer.images import AnswerImagePolicy
 
 logger = logging.getLogger(__name__)

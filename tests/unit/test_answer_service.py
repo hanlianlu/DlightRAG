@@ -9,11 +9,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dlightrag_ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
-from dlightrag_ai.catalog import MODEL_CATALOG_REVISION
-from dlightrag_ai.fingerprints import ModelFingerprint
-from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 
+from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.ai.catalog import MODEL_CATALOG_REVISION
+from dlightrag.ai.fingerprints import ModelFingerprint
+from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.answer.errors import UnsupportedAnswerModeError
 from dlightrag.answer.resources.models import ResourceInput

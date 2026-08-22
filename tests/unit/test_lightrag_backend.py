@@ -7,9 +7,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dlightrag_rag.retrieval.lightrag_backend import LightRAGMixBackend
-from dlightrag_rag.retrieval.provenance import hydrate_lightrag_chunk_provenance
 from PIL import Image
+
+from dlightrag.rag.retrieval.lightrag_backend import LightRAGMixBackend
+from dlightrag.rag.retrieval.provenance import hydrate_lightrag_chunk_provenance
 
 
 def _write_image(path: Path) -> None:

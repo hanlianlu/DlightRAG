@@ -4,7 +4,7 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag.rag.sourcing.base import AsyncDataSource, SourceDocument
 
 
 class StreamingOnlySource(AsyncDataSource):

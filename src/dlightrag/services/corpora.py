@@ -9,54 +9,54 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Literal, Protocol, TypedDict
 
-from dlightrag_ai.telemetry import safe_log_text
-from dlightrag_rag.contracts import IngestDocument, SourceType, VisualAssetSize
-from dlightrag_rag.ingestion.paths import is_explicit_upload_batch_dir
-from dlightrag_rag.ingestion.uploads import (
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from dlightrag.access import WorkspaceRecord
+from dlightrag.ai.telemetry import safe_log_text
+from dlightrag.rag.contracts import IngestDocument, SourceType, VisualAssetSize
+from dlightrag.rag.ingestion.paths import is_explicit_upload_batch_dir
+from dlightrag.rag.ingestion.uploads import (
     UploadTooLargeError as RagUploadTooLargeError,
 )
-from dlightrag_rag.ingestion.uploads import (
+from dlightrag.rag.ingestion.uploads import (
     ignored_upload,
     safe_upload_basename,
     safe_upload_destination,
     upload_batch_dir,
     write_upload_stream,
 )
-from dlightrag_rag.pool import WorkspacePool, WorkspaceUnavailableError
-from dlightrag_rag.ports import (
+from dlightrag.rag.pool import WorkspacePool, WorkspaceUnavailableError
+from dlightrag.rag.ports import (
     JOB_STATES_WITH_RESULT,
     CorpusMaintenanceStore,
     CorpusSchemaError,
     IngestJobSchemaError,
 )
-from dlightrag_rag.reset import areset_orphaned_workspace
-from dlightrag_rag.retrieval import MetadataFilter
-from dlightrag_rag.retrieval.metadata_fields import (
+from dlightrag.rag.reset import areset_orphaned_workspace
+from dlightrag.rag.retrieval import MetadataFilter
+from dlightrag.rag.retrieval.metadata_fields import (
     MetadataValidationError as RagMetadataValidationError,
 )
-from dlightrag_rag.source_download import (
+from dlightrag.rag.source_download import (
     LocalDownloadTarget as RagLocalDownloadTarget,
 )
-from dlightrag_rag.source_download import (
+from dlightrag.rag.source_download import (
     RedirectDownloadTarget as RagRedirectDownloadTarget,
 )
-from dlightrag_rag.source_download import (
+from dlightrag.rag.source_download import (
     SourceDownloadInvalidError as RagSourceDownloadInvalidError,
 )
-from dlightrag_rag.source_download import (
+from dlightrag.rag.source_download import (
     SourceDownloadNotFoundError as RagSourceDownloadNotFoundError,
 )
-from dlightrag_rag.source_download import (
+from dlightrag.rag.source_download import (
     SourceDownloadTarget as RagSourceDownloadTarget,
 )
-from dlightrag_rag.source_download import (
+from dlightrag.rag.source_download import (
     SourceDownloadUnavailableError as RagSourceDownloadUnavailableError,
 )
-from dlightrag_rag.workspace_rag import WorkspaceRag
-from dlightrag_rag.workspaces import normalize_workspace, require_canonical_workspace_id
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from dlightrag.access import WorkspaceRecord
+from dlightrag.rag.workspace_rag import WorkspaceRag
+from dlightrag.rag.workspaces import normalize_workspace, require_canonical_workspace_id
 from dlightrag.services.errors import (
     CorpusUnavailableError,
     LocalDownloadTarget,

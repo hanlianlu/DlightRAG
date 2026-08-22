@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for retrieval score fusion."""
 
-from dlightrag_rag.retrieval import rrf_fuse
+from dlightrag.rag.retrieval import rrf_fuse
 
 
 def test_rrf_fuse_deduplicates_by_chunk_id() -> None:

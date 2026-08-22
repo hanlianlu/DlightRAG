@@ -6,11 +6,11 @@ import shutil
 from pathlib import Path
 from typing import Any, NoReturn
 
-from dlightrag_ai.telemetry import safe_log_text
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
 from dlightrag.access import AccessAction
+from dlightrag.ai.telemetry import safe_log_text
 from dlightrag.services.corpora import IngestSpec
 from dlightrag.services.errors import (
     LocalDownloadTarget,
@@ -42,7 +42,7 @@ async def download_source(
     workspace: str | None = Query(default=None),
 ) -> FileResponse | RedirectResponse:
     """Download one source document through the Web session boundary."""
-    from dlightrag_rag.workspaces import normalize_workspace
+    from dlightrag.rag.workspaces import normalize_workspace
 
     safe_workspace = normalize_workspace(workspace or get_application(request).config.workspace)
     try:
@@ -88,7 +88,7 @@ def _source_download_response(
 
 
 def _resolve_workspace(requested: str | None, cookie_workspace: str) -> str:
-    from dlightrag_rag.workspaces import normalize_workspace
+    from dlightrag.rag.workspaces import normalize_workspace
 
     if not requested:
         return cookie_workspace
@@ -101,7 +101,7 @@ async def _resolve_registered_workspace(
     workspace: str,
 ) -> str | None:
     """Return the requested workspace when it is registered."""
-    from dlightrag_rag.workspaces import normalize_workspace
+    from dlightrag.rag.workspaces import normalize_workspace
 
     application = get_application(request)
     try:
@@ -119,7 +119,7 @@ async def _resolve_registered_workspace(
 
 async def _workspace_is_registered(request: Request, workspace: str) -> bool:
     """Return whether a workspace is registered; fail open on registry outages."""
-    from dlightrag_rag.workspaces import normalize_workspace
+    from dlightrag.rag.workspaces import normalize_workspace
 
     application = get_application(request)
     try:

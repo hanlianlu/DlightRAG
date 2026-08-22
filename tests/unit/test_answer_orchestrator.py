@@ -7,13 +7,12 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import pytest
-from dlightrag_agent.tools import AgentTool, ToolResult
-from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
-from dlightrag_ai.messages import AssistantTurn, ToolCall
-from dlightrag_ai.telemetry import NOOP_TELEMETRY
-from dlightrag_rag.retrieval import RetrievalResult
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from dlightrag.agent.tools import AgentTool, ToolResult
+from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
+from dlightrag.ai.messages import AssistantTurn, ToolCall
+from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.citations import finalize_answer
 from dlightrag.answer.errors import (
@@ -28,6 +27,7 @@ from dlightrag.answer.runs.results import AnswerResult
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import SearchInput, compose_research_tools
 from dlightrag.answer.tools.web import WebSearchHit, WebSearchResult
+from dlightrag.rag.retrieval import RetrievalResult
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
@@ -340,18 +340,17 @@ class _OverflowOnceAgent:
 async def test_provider_overflow_compacts_then_retries_the_same_turn_once() -> None:
     from datetime import UTC, datetime
 
-    from dlightrag_agent.session.effects import EffectIntent, ToolResultEntry
-    from dlightrag_agent.session.entries import (
+    from dlightrag.agent.session.effects import EffectIntent, ToolResultEntry
+    from dlightrag.agent.session.entries import (
         AssistantMessageEntry,
         EffectIntentEntry,
         EffectResultEntry,
         UserMessageEntry,
     )
-    from dlightrag_agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
-    from dlightrag_agent.session.memory import InMemoryAgentSessionStore
-    from dlightrag_agent.session.projection import ContextProjection, TokenAnchor
-    from dlightrag_agent.session.store import SessionCommit
-
+    from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
+    from dlightrag.agent.session.memory import InMemoryAgentSessionStore
+    from dlightrag.agent.session.projection import ContextProjection, TokenAnchor
+    from dlightrag.agent.session.store import SessionCommit
     from dlightrag.answer.executor import JournalRunBoundaries
 
     class _FakeSession:
@@ -461,10 +460,9 @@ async def test_intents_persist_before_any_tool_executes() -> None:
     and each intent must settle in source order as its execution completes.
     """
 
-    from dlightrag_agent.session.entries import EffectResultEntry
-    from dlightrag_agent.session.ids import SessionId
-    from dlightrag_agent.session.memory import InMemoryAgentSessionStore
-
+    from dlightrag.agent.session.entries import EffectResultEntry
+    from dlightrag.agent.session.ids import SessionId
+    from dlightrag.agent.session.memory import InMemoryAgentSessionStore
     from dlightrag.answer.executor import JournalRunBoundaries
 
     order: list[str] = []
@@ -1188,7 +1186,7 @@ async def test_tool_failure_reaches_the_operator_log(
         _answer("cannot recover"),
         final_text="Best effort answer.",
     )
-    with caplog.at_level(logging.WARNING, logger="dlightrag_agent.tools"):
+    with caplog.at_level(logging.WARNING, logger="dlightrag.agent.tools"):
         await _research(agent, retrieve, search).answer("Question")
 
     failures = [
@@ -1515,8 +1513,7 @@ async def test_research_stream_final_flows_through_synthesizer_no_context() -> N
 
 
 def test_bound_workspace_exposes_staged_artifacts(tmp_path: Any) -> None:
-    from dlightrag_agent.environment import LocalExecutionEnvironment
-
+    from dlightrag.agent.environment import LocalExecutionEnvironment
     from dlightrag.answer.workspace import RunWorkspace
 
     root = tmp_path

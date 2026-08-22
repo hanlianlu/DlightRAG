@@ -10,15 +10,16 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-import dlightrag_rag.ingestion.document_embedding as document_embedding
 import pytest
-from dlightrag_rag.ingestion.document_embedding import (
+from PIL import Image
+
+import dlightrag.rag.ingestion.document_embedding as document_embedding
+from dlightrag.rag.ingestion.document_embedding import (
     DocumentEmbeddingInput,
     DocumentEmbeddingTrace,
     DocumentEmbeddingVector,
     RobustDocumentEmbedder,
 )
-from PIL import Image
 
 
 def _png_bytes(*, size: tuple[int, int] = (8, 8), mode: str = "RGB") -> bytes:

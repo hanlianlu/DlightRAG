@@ -25,13 +25,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from dlightrag_ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
-from dlightrag_ai.catalog import MODEL_CATALOG_REVISION
-from dlightrag_ai.fingerprints import ModelFingerprint
-from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS
-from dlightrag_ai.settings import MODEL_ROLE_NAMES
 from playwright.sync_api import Browser, Page, sync_playwright
 
+from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.ai.catalog import MODEL_CATALOG_REVISION
+from dlightrag.ai.fingerprints import ModelFingerprint
+from dlightrag.ai.media import MODEL_IMAGE_MAX_PIXELS
+from dlightrag.ai.settings import MODEL_ROLE_NAMES
 from dlightrag.answer.capabilities import AnswerCapabilities
 from dlightrag.answer.capability import AnswerImageCapability
 from dlightrag.answer.runs.execution import (

@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dlightrag_rag.retrieval.bm25 import BM25Profile
 
 from dlightrag.adapters.postgres import corpus as corpus_module
 from dlightrag.adapters.postgres.corpus import (
@@ -15,6 +14,7 @@ from dlightrag.adapters.postgres.corpus import (
     PGCorpusRuntimeBinder,
 )
 from dlightrag.config import DlightragConfig
+from dlightrag.rag.retrieval.bm25 import BM25Profile
 
 
 class _Connection:

@@ -7,10 +7,10 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from dlightrag_agent.session.ids import SessionId
-from dlightrag_agent.tools import AgentTool, ToolResult, current_tool_call
 from pydantic import BaseModel, ConfigDict, Field
 
+from dlightrag.agent.session.ids import SessionId
+from dlightrag.agent.tools import AgentTool, ToolResult, current_tool_call
 from dlightrag.answer.evidence import EvidenceDelta
 
 ChildStatus = Literal["succeeded", "failed", "cancelled"]

@@ -6,7 +6,7 @@ pinned Research model, a markdown-to-typed-summary parser, framework-extracted
 paths/handles, whole-exchange boundaries, hierarchical slices when the
 covered prefix does not fit the summarizer window, and a bounded
 shrink-and-retry loop with halved retained tails. Pure vocabulary stays in
-``dlightrag_agent.session``; prompts live in ``dlightrag.answer.prompts``.
+``dlightrag.agent.session``; prompts live in ``dlightrag.answer.prompts``.
 """
 
 from __future__ import annotations
@@ -17,24 +17,23 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from dlightrag_agent.session.entries import CompactionEntry, EffectIntentEntry, SessionEntry
-from dlightrag_agent.session.fold import (
+from dlightrag.agent.session.entries import CompactionEntry, EffectIntentEntry, SessionEntry
+from dlightrag.agent.session.fold import (
     exchange_starts,
     fold_entries,
     select_compaction_boundary,
 )
-from dlightrag_agent.session.ids import ProjectionId
-from dlightrag_agent.session.projection import (
+from dlightrag.agent.session.ids import ProjectionId
+from dlightrag.agent.session.projection import (
     CompactionSummary,
     ContextProjection,
     render_compaction_summary,
     should_compact,
     validate_projection_commit,
 )
-from dlightrag_agent.session.store import AgentSessionSnapshot, SessionCommit
-from dlightrag_ai.capacity import ContextPolicy, ModelProfile
-from dlightrag_ai.tokens import estimate_messages_tokens, estimate_tokens
-
+from dlightrag.agent.session.store import AgentSessionSnapshot, SessionCommit
+from dlightrag.ai.capacity import ContextPolicy, ModelProfile
+from dlightrag.ai.tokens import estimate_messages_tokens, estimate_tokens
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.prompts.compaction import COMPACTION_SYSTEM_PROMPT, compaction_user_prompt
 

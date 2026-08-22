@@ -18,7 +18,8 @@ venv/
 ENV/
 
 # Local planning artifacts
-docs/plans/
+docs/plans/*
+!docs/plans/README.md
 docs/superpowers/
 docs/upstream/
 superpowers/

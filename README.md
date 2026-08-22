@@ -21,7 +21,7 @@ Clients
   -> Application (composition)
       -> WorkspaceRag -> LightRAG main -> corpus storage
       -> dlightrag.runtime RunCoordinator -> Answer executor + root PG adapter
-      -> dlightrag-rag-core corpus ports -> root PG corpus adapter
+      -> dlightrag.rag corpus ports -> root PG corpus adapter
       -> ApplicationHealth -> liveness/readiness projection
   -> PostgreSQL 18 storage ecosystem
 ```
@@ -29,19 +29,19 @@ Clients
 DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. The full runtime and code-layer view is in
 [docs/architecture.md](docs/architecture.md).
 
-The repository is one UV workspace with a lockstep release train. Reusable
-model settings, provider lifecycles, embedding/rerank execution, media, and
-capability probing ship as `dlightrag-ai`; generic tool execution ships as
-`dlightrag-agent-core`; LightRAG adapters, rerank orchestration, and
-storage-neutral retrieval records/fusion ship as `dlightrag-rag-core`. The
-`dlightrag` distribution maps product configuration and composes those cores
-into the REST, Web, MCP, SDK, and PostgreSQL-backed product. CI builds and
-inspects all four wheels outside the editable workspace. Inside that root
-distribution, `dlightrag.runtime` owns storage-neutral durable-run contracts and
-coordination; `dlightrag-rag-core` owns storage-neutral corpus coordination and
-maintenance ports; and `dlightrag.adapters.postgres` owns every concrete
-PostgreSQL implementation. `ApplicationHealth` is the single process-health
-state projected by status interfaces.
+The repository is one UV workspace with two lockstep distributions. The root
+`dlightrag` distribution contains three internal deep modules: `dlightrag.ai`
+owns model settings and provider lifecycles, `dlightrag.agent` owns generic tool
+and turn mechanics, and `dlightrag.rag` owns LightRAG integration plus
+storage-neutral retrieval and corpus contracts. The root composes those modules
+into the REST, Web, MCP, SDK, and PostgreSQL-backed product. Owner Profile Memory
+remains the independently installable `dlightrag-memory` distribution for both
+DlightRAG and external stdio MCP hosts. CI builds and inspects the root and
+Memory wheels outside the editable workspace. `dlightrag.runtime` owns
+storage-neutral durable-run contracts and coordination;
+`dlightrag.adapters.postgres` owns every concrete product PostgreSQL
+implementation; and `ApplicationHealth` is the single process-health state
+projected by status interfaces.
 
 ## Choose Your Deployment Path
 

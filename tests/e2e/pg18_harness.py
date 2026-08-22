@@ -218,7 +218,7 @@ async def fake_lightrag_llm(prompt: str, **_: Any) -> str:
 
 def install_fake_model_functions(monkeypatch: Any, *, dim: int = 8) -> FakeMultimodalEmbedder:
     """Patch WorkspaceRag model factories to avoid external network calls."""
-    import dlightrag_rag.workspace_rag as service_module
+    import dlightrag.rag.workspace_rag as service_module
 
     multimodal_embedder = FakeMultimodalEmbedder(dim=dim)
 

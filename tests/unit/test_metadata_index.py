@@ -5,11 +5,10 @@ import json
 import re
 from typing import Any
 
-from dlightrag_rag.retrieval import MetadataFilter
-from dlightrag_rag.retrieval.metadata_fields import METADATA_FIELD_IDS
-
 from dlightrag.adapters.postgres import pg_metadata_index
 from dlightrag.adapters.postgres.pg_metadata_index import _SCHEMA_MIGRATIONS, _UPSERT
+from dlightrag.rag.retrieval import MetadataFilter
+from dlightrag.rag.retrieval.metadata_fields import METADATA_FIELD_IDS
 
 
 def _index_sql() -> str:
@@ -337,7 +336,7 @@ async def test_metadata_index_get_many_fetches_doc_ids_in_one_query() -> None:
 
 async def test_custom_filter_matches_case_insensitively_with_bound_key() -> None:
     """Values are stored verbatim, so the fold happens here; the key is never interpolated."""
-    from dlightrag_rag.retrieval import MetadataFilter
+    from dlightrag.rag.retrieval import MetadataFilter
 
     idx = pg_metadata_index.PGMetadataIndex(workspace="default")
     seen: dict[str, Any] = {}

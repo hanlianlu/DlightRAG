@@ -6,15 +6,16 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
-from dlightrag_agent.tools import (
+from pydantic import BaseModel, ConfigDict
+
+from dlightrag.agent.tools import (
     AgentTool,
     ToolResult,
     ToolResultCapacityError,
     ToolTurnExecutor,
 )
-from dlightrag_ai.messages import AssistantTurn, ToolCall
-from dlightrag_ai.tokens import estimate_tokens
-from pydantic import BaseModel, ConfigDict
+from dlightrag.ai.messages import AssistantTurn, ToolCall
+from dlightrag.ai.tokens import estimate_tokens
 
 
 class SearchArgs(BaseModel):
@@ -387,7 +388,7 @@ async def _search_tool(_args: BaseModel) -> ToolResult:
 
 
 async def test_preflight_creates_ordered_intents_for_valid_calls() -> None:
-    from dlightrag_agent.tools import preflight_tool_calls
+    from dlightrag.agent.tools import preflight_tool_calls
 
     tools = [
         AgentTool(
@@ -412,7 +413,7 @@ async def test_preflight_creates_ordered_intents_for_valid_calls() -> None:
 
 
 async def test_preflight_orders_invalid_calls_as_validation_results() -> None:
-    from dlightrag_agent.tools import preflight_tool_calls
+    from dlightrag.agent.tools import preflight_tool_calls
 
     tools = [
         AgentTool(
@@ -437,7 +438,7 @@ async def test_preflight_orders_invalid_calls_as_validation_results() -> None:
 
 
 async def test_preflight_is_never_policy_for_web_and_contracts_are_pinned() -> None:
-    from dlightrag_agent.tools import preflight_tool_calls
+    from dlightrag.agent.tools import preflight_tool_calls
 
     web_tool = AgentTool(
         name="search_web",

@@ -7,9 +7,9 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
 
 from dlightrag.access import ACTION_PRESETS, AccessAction
+from dlightrag.rag.ingestion.jobs import IngestJobCoordinator
 
 
 def _coordinator(store: Any | None = None) -> IngestJobCoordinator:
@@ -136,8 +136,9 @@ async def test_cancelling_parks_docs_that_a_startup_sweep_would_otherwise_resume
     """LightRAG resets PARSING/ANALYZING/PROCESSING to PENDING and re-runs them."""
     from dataclasses import dataclass, field
 
-    from dlightrag_rag.workspace_rag import WorkspaceRag
     from lightrag.base import DocStatus
+
+    from dlightrag.rag.workspace_rag import WorkspaceRag
 
     @dataclass
     class _Doc:
@@ -170,8 +171,9 @@ async def test_cancelling_parks_docs_that_a_startup_sweep_would_otherwise_resume
 
 
 async def test_terminal_docs_are_left_alone() -> None:
-    from dlightrag_rag.workspace_rag import WorkspaceRag
     from lightrag.base import DocStatus
+
+    from dlightrag.rag.workspace_rag import WorkspaceRag
 
     class _Stores:
         doc_status = None
@@ -212,7 +214,7 @@ async def test_the_sweeper_runs_at_startup_and_then_on_a_schedule(monkeypatch) -
         await _coordinator()._sweep_jobs(cast(Any, store))
 
     assert store.passes == 2
-    from dlightrag_rag.ports import JOB_ORPHAN_AFTER_SECONDS
+    from dlightrag.rag.ports import JOB_ORPHAN_AFTER_SECONDS
 
     assert slept == [JOB_ORPHAN_AFTER_SECONDS // 2] * 2
 

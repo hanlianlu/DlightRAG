@@ -17,9 +17,6 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
-from dlightrag_rag.contracts import Reference
-from dlightrag_rag.retrieval import RetrievalContexts
-
 from dlightrag.answer.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.answer.citations.utils import context_chunk_key
 from dlightrag.answer.media import answer_blocks_from_markdown
@@ -30,6 +27,8 @@ from dlightrag.answer.sources import (
     project_contexts_for_client,
     project_source_payloads,
 )
+from dlightrag.rag.contracts import Reference
+from dlightrag.rag.retrieval import RetrievalContexts
 
 #: Core image route every transport reuses; the route itself authorizes reads.
 IMAGE_URL_PREFIX = "/images"

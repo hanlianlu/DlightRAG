@@ -9,24 +9,25 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dlightrag_ai.contracts import InputModality, ResolvedInputModality
-from dlightrag_ai.embedding import (
+from PIL import Image
+
+from dlightrag.ai.contracts import InputModality, ResolvedInputModality
+from dlightrag.ai.embedding import (
     MultimodalEmbedder as _MultimodalEmbedder,
 )
-from dlightrag_ai.embedding import (
+from dlightrag.ai.embedding import (
     resolve_embedding_input_modality,
 )
-from dlightrag_ai.fingerprints import ModelFingerprint
-from dlightrag_ai.media import decode_image_base64
-from dlightrag_ai.providers.embed_base import EmbedProvider
-from dlightrag_ai.providers.embed_providers import (
+from dlightrag.ai.fingerprints import ModelFingerprint
+from dlightrag.ai.media import decode_image_base64
+from dlightrag.ai.providers.embed_base import EmbedProvider
+from dlightrag.ai.providers.embed_providers import (
     GeminiEmbedProvider,
     OllamaEmbedProvider,
     OpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
 )
-from dlightrag_ai.scheduler import ModelScheduler
-from PIL import Image
+from dlightrag.ai.scheduler import ModelScheduler
 
 _TEST_FINGERPRINT = ModelFingerprint(
     provider="test",
@@ -404,7 +405,7 @@ async def test_embed_query_images_batches_with_query_context() -> None:
 
 
 async def test_embed_query_images_builds_payload_off_event_loop(monkeypatch) -> None:
-    from dlightrag_ai import embedding
+    from dlightrag.ai import embedding
 
     provider = VoyageEmbedProvider()
     loop_thread = threading.get_ident()
@@ -443,7 +444,7 @@ async def test_embed_query_images_builds_payload_off_event_loop(monkeypatch) -> 
 
 
 async def test_embed_index_fused_builds_payload_off_event_loop(monkeypatch) -> None:
-    from dlightrag_ai import embedding
+    from dlightrag.ai import embedding
 
     provider = VoyageEmbedProvider()
     loop_thread = threading.get_ident()

@@ -2,7 +2,6 @@
 """Tests for the shared client contracts across REST, Web, and MCP surfaces."""
 
 import pytest
-from dlightrag_rag.contracts import IngestDocument
 from pydantic import ValidationError
 
 from dlightrag.answer.citations.schemas import SourceReference, SourceReferencePayload
@@ -15,6 +14,7 @@ from dlightrag.answer.client_contracts import (
 )
 from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
 from dlightrag.mcp.contracts import AnswerInput, RetrieveInput
+from dlightrag.rag.contracts import IngestDocument
 from dlightrag.services.corpora import (
     IngestSpec,
     ingest_kwargs_from_spec,

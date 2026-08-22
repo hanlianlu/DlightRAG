@@ -5,8 +5,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from dlightrag_agent.session.effects import EffectIntent, ToolResultEntry
-from dlightrag_agent.session.entries import (
+
+from dlightrag.agent.session.effects import EffectIntent, ToolResultEntry
+from dlightrag.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
     ContextInjectionEntry,
@@ -16,15 +17,15 @@ from dlightrag_agent.session.entries import (
     SessionTerminalEntry,
     UserMessageEntry,
 )
-from dlightrag_agent.session.fold import (
+from dlightrag.agent.session.fold import (
     SessionEpisode,
     exchange_starts,
     fold_entries,
     head_tail_text,
     select_compaction_boundary,
 )
-from dlightrag_agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
-from dlightrag_ai.messages import ToolCall
+from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
+from dlightrag.ai.messages import ToolCall
 
 
 def _now() -> datetime:
@@ -143,7 +144,7 @@ def test_error_results_fold_with_is_error() -> None:
 
 
 def test_compaction_entry_renders_deterministically_at_its_position() -> None:
-    from dlightrag_agent.session.projection import CompactionSummary
+    from dlightrag.agent.session.projection import CompactionSummary
 
     session_id = SessionId.new()
     summary = CompactionSummary(goal="answer q", progress="found sources").canonical_json()

@@ -5,8 +5,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from dlightrag_agent.session.effects import EffectIntent, ToolResultEntry
-from dlightrag_agent.session.entries import (
+
+from dlightrag.agent.session.effects import EffectIntent, ToolResultEntry
+from dlightrag.agent.session.entries import (
     ENTRY_TYPE_TO_CLASS,
     SESSION_ENTRY_SCHEMA_VERSION,
     AssistantMessageEntry,
@@ -19,7 +20,7 @@ from dlightrag_agent.session.entries import (
     entry_type_of,
     new_session_entry,
 )
-from dlightrag_agent.session.ids import (
+from dlightrag.agent.session.ids import (
     EntryId,
     IntentId,
     ProjectionId,
@@ -28,7 +29,7 @@ from dlightrag_agent.session.ids import (
     deterministic_uuid,
     new_uuid7,
 )
-from dlightrag_ai.messages import ToolCall
+from dlightrag.ai.messages import ToolCall
 
 
 def _now() -> datetime:

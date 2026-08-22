@@ -8,17 +8,17 @@ from typing import Any
 
 import asyncpg
 import pytest
-from dlightrag_agent.session.effects import EffectIntent, EffectSettlement, ToolResultEntry
-from dlightrag_agent.session.entries import (
+
+from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
+from dlightrag.adapters.postgres.session_journal import PGJournalStore
+from dlightrag.agent.session.effects import EffectIntent, EffectSettlement, ToolResultEntry
+from dlightrag.agent.session.entries import (
     EffectIntentEntry,
     EffectResultEntry,
     UserMessageEntry,
 )
-from dlightrag_agent.session.ids import EntryId, IntentId, ProjectionId, SessionId, StageIntentId
-from dlightrag_agent.session.projection import ContextProjection, TokenAnchor
-
-from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-from dlightrag.adapters.postgres.session_journal import PGJournalStore
+from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId, StageIntentId
+from dlightrag.agent.session.projection import ContextProjection, TokenAnchor
 from dlightrag.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
 from dlightrag.runtime.settlements import (
     CompleteBlobDescriptor,

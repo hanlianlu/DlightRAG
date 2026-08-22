@@ -4,17 +4,18 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
-from dlightrag_ai.capacity import (
+
+from dlightrag.ai.capacity import (
     CONTEXT_POLICY,
     ContextPolicy,
     ModelInputOverflowError,
     ModelProfile,
 )
-from dlightrag_ai.catalog import (
+from dlightrag.ai.catalog import (
     UnknownModelProfileError,
     resolve_model_profile,
 )
-from dlightrag_ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
+from dlightrag.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
 
 
 def test_context_policy_applies_hard_limit_and_compaction_formulas() -> None:

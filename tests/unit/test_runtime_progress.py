@@ -4,8 +4,8 @@
 import inspect
 
 import pytest
-from dlightrag_agent.session.ids import StageIntentId
 
+from dlightrag.agent.session.ids import StageIntentId
 from dlightrag.runtime.progress import RunProgressStore, StageCommitResult
 from dlightrag.runtime.records import (
     ReclaimDecision,
@@ -123,7 +123,7 @@ class TestBoundStores:
 
 class TestRunExecutionContext:
     def test_context_is_frozen_and_carries_the_claim_binding(self) -> None:
-        from dlightrag_agent.session.memory import InMemoryAgentSessionStore
+        from dlightrag.agent.session.memory import InMemoryAgentSessionStore
 
         class _NoopProgress:
             async def load_stage(self, stage_intent_id):  # type: ignore[no-untyped-def]

@@ -5,9 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_rag.lightrag_stores import LightRAGStores
 
 from dlightrag.adapters.postgres.corpus_chunks import PGCorpusChunkStore
+from dlightrag.rag.lightrag_stores import LightRAGStores
 
 
 class FakeLightRAG:

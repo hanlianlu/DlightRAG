@@ -4,11 +4,12 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_rag.federation import (
+
+from dlightrag.rag.federation import (
     federated_retrieve,
     merge_results,
 )
-from dlightrag_rag.retrieval import RetrievalResult
+from dlightrag.rag.retrieval import RetrievalResult
 
 
 def _make_result(

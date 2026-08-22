@@ -4,11 +4,11 @@
 import logging
 from typing import Any
 
-from dlightrag_ai.telemetry import safe_log_text
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.responses import FileResponse, RedirectResponse
 
 from dlightrag.access import AccessAction, UserContext
+from dlightrag.ai.telemetry import safe_log_text
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     DeleteFilesResponse,

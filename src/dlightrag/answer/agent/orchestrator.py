@@ -14,18 +14,20 @@ from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from dlightrag_agent.environment.access import AccessScheduler, PathAccess
-from dlightrag_agent.loop import AgentLoop, LoopCancelled
-from dlightrag_agent.session.effects import EffectIntent
-from dlightrag_agent.session.fold import PriorTurns, SessionEpisode, fold_entries
-from dlightrag_agent.session.ids import SessionId
-from dlightrag_agent.session.projection import (
+from dlightrag_memory import Memory
+
+from dlightrag.agent.environment.access import AccessScheduler, PathAccess
+from dlightrag.agent.loop import AgentLoop, LoopCancelled
+from dlightrag.agent.session.effects import EffectIntent
+from dlightrag.agent.session.fold import PriorTurns, SessionEpisode, fold_entries
+from dlightrag.agent.session.ids import SessionId
+from dlightrag.agent.session.projection import (
     AgentInputOverflowError,
     ContextProjection,
     require_compactable,
     should_compact,
 )
-from dlightrag_agent.tools import (
+from dlightrag.agent.tools import (
     AgentTool,
     ExecutedTurn,
     PreparedToolTurn,
@@ -33,18 +35,15 @@ from dlightrag_agent.tools import (
     ToolResultCapacityError,
     ToolTurnExecutor,
 )
-from dlightrag_ai.capacity import (
+from dlightrag.ai.capacity import (
     CONTEXT_POLICY,
     ContextPolicy,
     ModelProfile,
 )
-from dlightrag_ai.messages import AssistantTurn
-from dlightrag_ai.providers.base import is_provider_context_overflow
-from dlightrag_ai.telemetry import Telemetry
-from dlightrag_ai.tokens import estimate_tokens
-from dlightrag_memory import Memory
-from dlightrag_rag.retrieval import RetrievalContexts
-
+from dlightrag.ai.messages import AssistantTurn
+from dlightrag.ai.providers.base import is_provider_context_overflow
+from dlightrag.ai.telemetry import Telemetry
+from dlightrag.ai.tokens import estimate_tokens
 from dlightrag.answer.agent.compaction import CompactionCoordinator
 from dlightrag.answer.agent.context import ContextAssembler
 from dlightrag.answer.citations.streaming import AnswerStream
@@ -60,6 +59,7 @@ from dlightrag.answer.tools import KnowledgeRetrieval, WebSearch, compose_resear
 from dlightrag.answer.tools.delegate import DelegateHost
 from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.workspace import RunWorkspace
+from dlightrag.rag.retrieval import RetrievalContexts
 
 logger = logging.getLogger(__name__)
 

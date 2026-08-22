@@ -5,8 +5,9 @@ import logging
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_rag.retrieval import MetadataFilter
-from dlightrag_rag.retrieval.retriever import UnifiedRetriever
+
+from dlightrag.rag.retrieval import MetadataFilter
+from dlightrag.rag.retrieval.retriever import UnifiedRetriever
 
 
 async def test_unified_retriever_empty_metadata_candidates_short_circuits() -> None:
@@ -30,7 +31,7 @@ async def test_unified_retriever_empty_metadata_candidates_short_circuits() -> N
 
 
 async def test_unified_retriever_llm_empty_candidates_falls_back_unfiltered() -> None:
-    from dlightrag_rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval import RetrievalResult
 
     metadata_index = AsyncMock()
     metadata_index.query.return_value = []
@@ -61,7 +62,7 @@ async def test_unified_retriever_llm_empty_candidates_falls_back_unfiltered() ->
 
 
 async def test_unified_retriever_llm_filtered_empty_falls_back_unfiltered() -> None:
-    from dlightrag_rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval import RetrievalResult
 
     metadata_index = AsyncMock()
     metadata_index.query.return_value = ["doc-1"]
@@ -99,7 +100,7 @@ async def test_unified_retriever_llm_filtered_empty_falls_back_unfiltered() -> N
 
 
 async def test_unified_retriever_explicit_filtered_empty_stays_filtered() -> None:
-    from dlightrag_rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval import RetrievalResult
 
     metadata_index = AsyncMock()
     metadata_index.query.return_value = ["doc-1"]
@@ -131,7 +132,7 @@ async def test_unified_retriever_explicit_filtered_empty_stays_filtered() -> Non
 
 
 async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
-    from dlightrag_rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval import RetrievalResult
 
     metadata_index = AsyncMock()
     stores = AsyncMock()
@@ -164,7 +165,7 @@ async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
 
 
 async def test_unified_retriever_fuses_visual_leg_as_an_independent_ranking() -> None:
-    from dlightrag_rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval import RetrievalResult
 
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
@@ -204,7 +205,7 @@ async def test_unified_retriever_fuses_visual_leg_as_an_independent_ranking() ->
 
 
 async def test_unified_retriever_skips_visual_leg_without_query_images() -> None:
-    from dlightrag_rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval import RetrievalResult
 
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
@@ -228,7 +229,7 @@ async def test_unified_retriever_skips_visual_leg_without_query_images() -> None
 
 
 async def test_unified_retriever_does_not_cap_fused_chunks_to_candidate_limit() -> None:
-    from dlightrag_rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval import RetrievalResult
 
     metadata_index = AsyncMock()
     stores = AsyncMock()
@@ -261,7 +262,7 @@ async def test_unified_retriever_does_not_cap_fused_chunks_to_candidate_limit() 
 
 
 async def test_unified_retriever_keeps_distinct_chunks_with_same_content_prefix() -> None:
-    from dlightrag_rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval import RetrievalResult
 
     shared = "The quick brown fox jumps. " + "x" * 173
     metadata_index = AsyncMock()
@@ -295,7 +296,7 @@ async def test_unified_retriever_keeps_distinct_chunks_with_same_content_prefix(
 async def test_unified_retriever_logs_retrieval_mix_summary(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from dlightrag_rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval import RetrievalResult
 
     metadata_index = AsyncMock()
     stores = AsyncMock()
@@ -320,7 +321,7 @@ async def test_unified_retriever_logs_retrieval_mix_summary(
         rrf_k=60,
     )
 
-    with caplog.at_level(logging.INFO, logger="dlightrag_rag.retrieval.retriever"):
+    with caplog.at_level(logging.INFO, logger="dlightrag.rag.retrieval.retriever"):
         result = await retriever.aretrieve("query", bm25_query="keyword query", top_k=3)
 
     assert "[Retriever] mix" in caplog.text
@@ -358,7 +359,7 @@ async def test_unified_retriever_lightrag_failure_falls_back_to_bm25() -> None:
 
 
 async def test_unified_retriever_bm25_failure_falls_back_to_semantic() -> None:
-    from dlightrag_rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval import RetrievalResult
 
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
@@ -418,7 +419,7 @@ async def test_unified_retriever_raises_semantic_error_when_bm25_is_disabled(
         stores=AsyncMock(),
     )
 
-    with caplog.at_level(logging.ERROR, logger="dlightrag_rag.retrieval.retriever"):
+    with caplog.at_level(logging.ERROR, logger="dlightrag.rag.retrieval.retriever"):
         with pytest.raises(RuntimeError, match="semantic unavailable") as exc_info:
             await retriever.aretrieve("query", top_k=5)
 
@@ -429,8 +430,8 @@ async def test_unified_retriever_raises_semantic_error_when_bm25_is_disabled(
 
 async def test_unified_retriever_traces_kg_chunks_dropped_by_scope() -> None:
     """The KG legs run inside the scope, so their drops must reach the trace."""
-    from dlightrag_rag.retrieval import RetrievalResult
-    from dlightrag_rag.retrieval.filtering import FilteredChunkStore
+    from dlightrag.rag.retrieval import RetrievalResult
+    from dlightrag.rag.retrieval.filtering import FilteredChunkStore
 
     chunk_store = FilteredChunkStore(
         original=AsyncMock(

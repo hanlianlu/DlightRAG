@@ -9,13 +9,13 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dlightrag_agent.session.fold import PriorTurns
-from dlightrag_ai.capacity import ModelProfile
-from dlightrag_ai.fingerprints import ModelFingerprint
-from dlightrag_ai.scheduler import ModelScheduler
-from dlightrag_ai.telemetry import NOOP_TELEMETRY
 from PIL import Image
 
+from dlightrag.agent.session.fold import PriorTurns
+from dlightrag.ai.capacity import ModelProfile
+from dlightrag.ai.fingerprints import ModelFingerprint
+from dlightrag.ai.scheduler import ModelScheduler
+from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.capabilities import AnswerCapabilities
 from dlightrag.answer.capability import AnswerImageCapability
 from dlightrag.answer.errors import CurrentDocumentParseError
@@ -341,8 +341,8 @@ async def test_research_run_seeds_the_pinned_session_journal() -> None:
         )
     )
 
-    from dlightrag_agent.session.ids import SessionId
-    from dlightrag_agent.session.memory import InMemoryAgentSessionStore
+    from dlightrag.agent.session.ids import SessionId
+    from dlightrag.agent.session.memory import InMemoryAgentSessionStore
 
     journal = InMemoryAgentSessionStore()
     session = MagicMock(
@@ -386,12 +386,12 @@ async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -
     )
     from datetime import UTC, datetime
 
-    from dlightrag_agent.session.entries import (
+    from dlightrag.agent.session.entries import (
         AssistantMessageEntry,
         UserMessageEntry,
     )
-    from dlightrag_agent.session.ids import EntryId, SessionId
-    from dlightrag_agent.session.memory import InMemoryAgentSessionStore
+    from dlightrag.agent.session.ids import EntryId, SessionId
+    from dlightrag.agent.session.memory import InMemoryAgentSessionStore
 
     session_id = SessionId(request.session_id)
     now = datetime.now(UTC)

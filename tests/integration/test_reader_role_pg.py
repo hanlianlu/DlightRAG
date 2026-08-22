@@ -20,7 +20,6 @@ from typing import Any, cast
 
 import asyncpg
 import pytest
-from dlightrag_rag.ports import CorpusSchemaError
 
 from dlightrag.adapters.postgres import pg_metadata_index, web_conversations, workspaces
 from dlightrag.adapters.postgres._migrations import (
@@ -40,6 +39,7 @@ from dlightrag.adapters.postgres.answer_runs import (
     PGAnswerRunStore,
 )
 from dlightrag.config import DlightragConfig, EmbeddingConfig
+from dlightrag.rag.ports import CorpusSchemaError
 
 pytestmark = [
     pytest.mark.integration,

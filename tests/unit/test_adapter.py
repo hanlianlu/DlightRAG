@@ -3,7 +3,8 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dlightrag_rag.lightrag_models import adapt_completion_for_lightrag
+
+from dlightrag.rag.lightrag_models import adapt_completion_for_lightrag
 
 
 class TestAdaptForLightrag:

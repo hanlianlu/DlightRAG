@@ -4,14 +4,15 @@
 from typing import Any, cast
 
 import pytest
-from dlightrag_ai.embedding_inputs import (
+
+from dlightrag.ai.embedding_inputs import (
     ImageEmbeddingInput,
     MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
-from dlightrag_ai.providers import embed_providers
-from dlightrag_ai.providers.embed_base import EmbedProvider
-from dlightrag_ai.providers.embed_providers import (
+from dlightrag.ai.providers import embed_providers
+from dlightrag.ai.providers.embed_base import EmbedProvider
+from dlightrag.ai.providers.embed_providers import (
     GeminiEmbedProvider,
     JinaEmbedProvider,
     OllamaEmbedProvider,

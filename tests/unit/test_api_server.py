@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import jwt
 import pytest
-from dlightrag_rag.retrieval import RetrievalResult
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, Response
 
@@ -31,6 +30,7 @@ from dlightrag.config import (
 )
 from dlightrag.health import ApplicationHealth
 from dlightrag.model_settings import authentication_settings
+from dlightrag.rag.retrieval import RetrievalResult
 from dlightrag.runtime import AnswerRunRecord, RunCreation
 from dlightrag.services.answers import AnswerRuntimeUnavailableError
 from dlightrag.services.corpora import IngestSpec

@@ -8,14 +8,13 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
-from dlightrag_rag.ports import (
+from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
+from dlightrag.rag.ingestion.jobs import IngestJobCoordinator
+from dlightrag.rag.ports import (
     JOB_LEASE_SECONDS,
     JOB_ORPHAN_AFTER_SECONDS,
     JOB_RETENTION_SECONDS,
 )
-
-from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
 
 
 def _finished_status(row: dict[str, Any]) -> str:

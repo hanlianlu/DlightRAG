@@ -9,16 +9,16 @@ reply the model reads back.
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from dlightrag_agent.tools import AgentTool, ToolResult
-from dlightrag_rag.retrieval import RetrievalResult
 from pydantic import BaseModel, ConfigDict, Field
 
+from dlightrag.agent.tools import AgentTool, ToolResult
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.tools.web import (
     WebSearchResult,
     WebSearchUnavailable,
     web_context_rows,
 )
+from dlightrag.rag.retrieval import RetrievalResult
 
 KnowledgeRetrieval = Callable[[str], Awaitable[RetrievalResult]]
 WebSearch = Callable[[str], Awaitable[WebSearchResult]]

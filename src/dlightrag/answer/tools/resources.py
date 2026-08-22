@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from typing import cast
 
-from dlightrag_agent.tools import AgentTool, ToolResult
 from pydantic import BaseModel, ConfigDict, Field
 
+from dlightrag.agent.tools import AgentTool, ToolResult
 from dlightrag.answer.resources.formatting import (
     format_resource_read,
     resource_read_continuation,

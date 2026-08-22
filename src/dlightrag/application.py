@@ -19,19 +19,19 @@ from typing import TYPE_CHECKING, Any
 from dlightrag.config import DlightragConfig, get_config
 
 if TYPE_CHECKING:
-    from dlightrag_ai.embedding import MultimodalEmbedder
-    from dlightrag_ai.fingerprints import ModelFingerprint
-    from dlightrag_ai.scheduler import ModelScheduler
-    from dlightrag_ai.settings import ModelRole
-    from dlightrag_ai.telemetry import Telemetry
     from dlightrag_memory.postgres import PostgresMemoryStore
-    from dlightrag_rag.pool import WorkspacePool
 
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+    from dlightrag.ai.embedding import MultimodalEmbedder
+    from dlightrag.ai.fingerprints import ModelFingerprint
+    from dlightrag.ai.scheduler import ModelScheduler
+    from dlightrag.ai.settings import ModelRole
+    from dlightrag.ai.telemetry import Telemetry
     from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
     from dlightrag.answer.model_runtime import AnswerModelRuntime
     from dlightrag.health import ApplicationHealth
+    from dlightrag.rag.pool import WorkspacePool
     from dlightrag.runtime import RunCoordinator
     from dlightrag.runtime.cancellation import RunCancellationListener
     from dlightrag.services.answers import AnswerService
@@ -83,8 +83,7 @@ def _memory_embedder(
     config: DlightragConfig, *, scheduler: ModelScheduler, telemetry: Telemetry
 ) -> MultimodalEmbedder:
     """Build the Memory dense leg from DlightRAG's embedding endpoint."""
-    from dlightrag_ai.embedding import create_embedding_model
-
+    from dlightrag.ai.embedding import create_embedding_model
     from dlightrag.model_settings import embedding_settings
 
     return create_embedding_model(
@@ -108,19 +107,7 @@ def _actionable_error(exc: Exception) -> str:
 
 def _compose(config: DlightragConfig) -> _ApplicationComponents:
     """Construct this process's collaborators from one resolved configuration."""
-    from dlightrag_ai.fingerprints import model_fingerprint
-    from dlightrag_ai.media import MAX_DECODE_IMAGE_PIXELS
-    from dlightrag_ai.scheduler import ModelScheduler
-    from dlightrag_ai.telemetry import safe_log_text
-    from dlightrag_ai.vision import ModelImageCapabilities
     from dlightrag_memory.postgres import PostgresMemoryStore
-    from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
-    from dlightrag_rag.pool import WorkspacePool
-    from dlightrag_rag.ports import CorpusSchemaError, WorkspaceCorpusBackend
-    from dlightrag_rag.settings import RagSettings
-    from dlightrag_rag.source_download import SourceDownloadService
-    from dlightrag_rag.workspace_rag import WorkspaceRag
-    from dlightrag_rag.workspaces import normalize_workspace
     from PIL import Image
 
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
@@ -134,6 +121,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         AnswerQueryImagePreparer,
         AnswerRetrievalProjector,
     )
+    from dlightrag.ai.fingerprints import model_fingerprint
+    from dlightrag.ai.media import MAX_DECODE_IMAGE_PIXELS
+    from dlightrag.ai.scheduler import ModelScheduler
+    from dlightrag.ai.telemetry import safe_log_text
+    from dlightrag.ai.vision import ModelImageCapabilities
     from dlightrag.answer.capabilities import (
         AnswerCapabilityCoordinator,
         AnswerCapabilityView,
@@ -154,6 +146,13 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         retrieval_settings,
     )
     from dlightrag.observability import LangfuseTelemetry
+    from dlightrag.rag.ingestion.jobs import IngestJobCoordinator
+    from dlightrag.rag.pool import WorkspacePool
+    from dlightrag.rag.ports import CorpusSchemaError, WorkspaceCorpusBackend
+    from dlightrag.rag.settings import RagSettings
+    from dlightrag.rag.source_download import SourceDownloadService
+    from dlightrag.rag.workspace_rag import WorkspaceRag
+    from dlightrag.rag.workspaces import normalize_workspace
     from dlightrag.runtime import RunCoordinator
     from dlightrag.services.answers import AnswerService
     from dlightrag.services.corpora import CorpusAdmin
@@ -491,9 +490,8 @@ class Application:
 
     async def _validate_active_runs(self) -> None:
         """Reject a rolling deployment that cannot execute already accepted inputs."""
-        from dlightrag_ai.fingerprints import model_fingerprint
-        from dlightrag_ai.settings import MODEL_ROLE_NAMES
-
+        from dlightrag.ai.fingerprints import model_fingerprint
+        from dlightrag.ai.settings import MODEL_ROLE_NAMES
         from dlightrag.model_settings import model_settings_for_role
 
         if not self._runs_ready:
@@ -520,10 +518,9 @@ class Application:
 
     async def _warm_default_workspace(self) -> str | None:
         """Warm the default workspace; return the detail that degrades startup."""
-        from dlightrag_rag.pool import WorkspaceUnavailableError
-        from dlightrag_rag.ports import CorpusSchemaError
-        from dlightrag_rag.workspaces import normalize_workspace
-
+        from dlightrag.rag.pool import WorkspaceUnavailableError
+        from dlightrag.rag.ports import CorpusSchemaError
+        from dlightrag.rag.workspaces import normalize_workspace
         from dlightrag.services.errors import CorpusUnavailableError, StorageSchemaError
 
         workspace = normalize_workspace(self._config.workspace)
@@ -627,7 +624,7 @@ class Application:
         An ordinary close failure is logged so later cleanup still runs, while
         cancellation is deferred and re-raised once nothing is left to close.
         """
-        from dlightrag_rag.lifecycle import await_shared_cleanup
+        from dlightrag.rag.lifecycle import await_shared_cleanup
 
         close_task = self._close_task
         if close_task is None:
@@ -639,10 +636,9 @@ class Application:
 
     async def _close_components(self) -> None:
         """Run the one shared shutdown sequence every close caller joins."""
-        from dlightrag_rag.lifecycle import defer_cancellation
-
         from dlightrag.adapters.postgres._pool import pg_pool
         from dlightrag.observability import shutdown_tracing
+        from dlightrag.rag.lifecycle import defer_cancellation
 
         components = self._components
         cancellation: asyncio.CancelledError | None = None
@@ -674,9 +670,8 @@ def _require_compatible_run(
     current_fingerprints: Mapping[ModelRole, ModelFingerprint],
 ) -> None:
     """Fail startup when one accepted run cannot execute under this binary."""
-    from dlightrag_ai.capacity import CONTEXT_POLICY_REVISION
-    from dlightrag_ai.settings import MODEL_ROLE_NAMES
-
+    from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION
+    from dlightrag.ai.settings import MODEL_ROLE_NAMES
     from dlightrag.answer.executor import IncompatibleActiveRunError
     from dlightrag.answer.runs.execution import PinnedModelProfile
 

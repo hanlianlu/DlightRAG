@@ -7,20 +7,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag_rag.retrieval import ContextRow
-from dlightrag_rag.retrieval.bm25 import (
-    BM25_PROFILE_FALLBACK,
-    BM25Profile,
-    ProfiledBM25Search,
-    profile_languages,
-    profiles_from_config,
-)
-from dlightrag_rag.retrieval.language import (
-    BM25_FALLBACK_LANGUAGE,
-    BM25LanguageClassifier,
-    normalize_language_code,
-)
-
 from dlightrag.adapters.postgres._corpus_schema import (
     BM25_LANGUAGE_COLUMN,
     LIGHTRAG_CHUNKS_TABLE,
@@ -28,6 +14,19 @@ from dlightrag.adapters.postgres._corpus_schema import (
 from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.adapters.postgres.corpus_languages import update_chunk_bm25_languages
 from dlightrag.adapters.postgres.identifiers import pg_identifier, pg_qualified_identifier
+from dlightrag.rag.retrieval import ContextRow
+from dlightrag.rag.retrieval.bm25 import (
+    BM25_PROFILE_FALLBACK,
+    BM25Profile,
+    ProfiledBM25Search,
+    profile_languages,
+    profiles_from_config,
+)
+from dlightrag.rag.retrieval.language import (
+    BM25_FALLBACK_LANGUAGE,
+    BM25LanguageClassifier,
+    normalize_language_code,
+)
 
 BM25_INDEX_PREFIX = pg_identifier("idx_lightrag_doc_chunks_bm25")
 BM25_LANGUAGE_INDEX = pg_identifier("idx_lightrag_doc_chunks_dlightrag_bm25_language")

@@ -7,10 +7,10 @@ from typing import Any
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
-from dlightrag_ai.capacity import ModelProfile
-from dlightrag_ai.telemetry import NoopTelemetry
-from dlightrag_rag.retrieval import MetadataFilter, RetrievalResult
 
+from dlightrag.ai.capacity import ModelProfile
+from dlightrag.ai.telemetry import NoopTelemetry
+from dlightrag.rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag.services.errors import CorpusUnavailableError
 from dlightrag.services.retrieval import (
     ProjectedRetrieval,

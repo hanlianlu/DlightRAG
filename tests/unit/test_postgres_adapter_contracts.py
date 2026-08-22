@@ -9,7 +9,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _SOURCE_ROOTS = (_ROOT / "src", _ROOT / "packages")
 _POSTGRES_ADAPTER = _ROOT / "src/dlightrag/adapters/postgres"
 _MEMORY_PG_ADAPTER = _ROOT / "packages/memory/src/dlightrag_memory/_storage"
-_RAG_CORE = _ROOT / "packages/rag-core/src/dlightrag_rag"
+_RAG_CORE = _ROOT / "src/dlightrag/rag"
 _RAW_SQL_RE = re.compile(
     r"\b(?:SELECT\b.{0,500}\bFROM|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|"
     r"CREATE\s+(?:TABLE|INDEX)|ALTER\s+TABLE|DROP\s+INDEX)\b",
@@ -51,7 +51,7 @@ def test_asyncpg_is_private_to_the_postgres_adapter() -> None:
 
 def test_owner_modules_do_not_import_the_postgres_adapter() -> None:
     owner_roots = (
-        _ROOT / "packages/rag-core/src/dlightrag_rag",
+        _ROOT / "src/dlightrag/rag",
         _ROOT / "src/dlightrag/runtime",
     )
     owner_files = [path for root in owner_roots for path in root.rglob("*.py")]

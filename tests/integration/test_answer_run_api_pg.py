@@ -23,14 +23,14 @@ from unittest.mock import MagicMock
 
 import asyncpg
 import pytest
-from dlightrag_ai.capacity import ModelProfile
-from dlightrag_ai.fingerprints import ModelFingerprint
-from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.access import UserContext, owner_id_from_user
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
+from dlightrag.ai.capacity import ModelProfile
+from dlightrag.ai.fingerprints import ModelFingerprint
+from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app

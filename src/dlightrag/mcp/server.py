@@ -12,9 +12,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
 
-from dlightrag_rag.contracts import SourceType
-from dlightrag_rag.retrieval import MetadataFilter
-from dlightrag_rag.workspaces import normalize_workspace, normalize_workspace_ids
 from mcp import MCPError
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -70,6 +67,9 @@ from dlightrag.mcp.contracts import (
     RetrieveInput,
 )
 from dlightrag.model_settings import access_settings
+from dlightrag.rag.contracts import SourceType
+from dlightrag.rag.retrieval import MetadataFilter
+from dlightrag.rag.workspaces import normalize_workspace, normalize_workspace_ids
 from dlightrag.runtime import AnswerRunRecord, IdempotencyKeyConflict
 from dlightrag.services.answers import AnswerRequest as ServiceAnswerRequest
 from dlightrag.services.answers import AnswerRuntimeUnavailableError

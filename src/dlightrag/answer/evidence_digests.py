@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag_agent.session.effects import canonical_json
+from dlightrag.agent.session.effects import canonical_json
 
 
 def canonical_content_digest(content: Any) -> str:

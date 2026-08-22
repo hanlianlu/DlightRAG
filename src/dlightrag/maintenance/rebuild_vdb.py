@@ -8,17 +8,6 @@ import os
 from types import SimpleNamespace
 from typing import Any, Literal
 
-from dlightrag_ai.embedding import create_embedding_model
-from dlightrag_ai.scheduler import ModelScheduler
-from dlightrag_ai.telemetry import Telemetry
-from dlightrag_rag.ingestion.document_embedding import (
-    build_document_embedder,
-    resolve_direct_image_embedding_enabled,
-)
-from dlightrag_rag.ingestion.engine import UnifiedIngestionEngine
-from dlightrag_rag.lightrag_models import build_lightrag_embedding
-from dlightrag_rag.lightrag_stores import LightRAGStores
-from dlightrag_rag.settings import RagSettings
 from lightrag.base import DocStatus
 from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 from lightrag.kg import STORAGE_ENV_REQUIREMENTS
@@ -27,10 +16,21 @@ from lightrag.tools.rebuild_vdb import DEFAULT_BATCH_SIZE, RebuildTool
 from lightrag.utils import get_env_value
 
 from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
+from dlightrag.ai.embedding import create_embedding_model
+from dlightrag.ai.scheduler import ModelScheduler
+from dlightrag.ai.telemetry import Telemetry
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.maintenance.rebuild_bm25 import run_rebuild_bm25
 from dlightrag.model_settings import embedding_settings, rag_settings
 from dlightrag.observability import LangfuseTelemetry
+from dlightrag.rag.ingestion.document_embedding import (
+    build_document_embedder,
+    resolve_direct_image_embedding_enabled,
+)
+from dlightrag.rag.ingestion.engine import UnifiedIngestionEngine
+from dlightrag.rag.lightrag_models import build_lightrag_embedding
+from dlightrag.rag.lightrag_stores import LightRAGStores
+from dlightrag.rag.settings import RagSettings
 
 logger = logging.getLogger(__name__)
 

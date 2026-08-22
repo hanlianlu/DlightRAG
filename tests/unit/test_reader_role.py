@@ -126,9 +126,8 @@ _SERVICE_WRITE_CALLS = [
 
 @pytest.mark.parametrize(("method", "args", "kwargs"), _SERVICE_WRITE_CALLS)
 async def test_service_write_guards_reject_reader(method, args, kwargs) -> None:
-    from dlightrag_rag.workspace_rag import WorkspaceRag
-
     from dlightrag.model_settings import rag_settings
+    from dlightrag.rag.workspace_rag import WorkspaceRag
 
     service = object.__new__(WorkspaceRag)
     service.settings = rag_settings(_config(service_role="reader"))
@@ -213,14 +212,13 @@ def _required_domain_scopes() -> list[
     turns carry a foreign key into ``dlightrag_answer_runs``, so a reader whose
     run schema is absent must fail there as well.
     """
-    from dlightrag_rag.ports import CorpusSchemaError
-
     from dlightrag.adapters.postgres import (
         answer_runs,
         pg_metadata_index,
         web_conversations,
         workspaces,
     )
+    from dlightrag.rag.ports import CorpusSchemaError
     from dlightrag.runtime import RunSchemaError
     from dlightrag.web.conversation_models import WebConversationSchemaError
 

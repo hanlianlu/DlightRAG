@@ -6,22 +6,23 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dlightrag_rag.ingestion.document_embedding import (
-    DocumentEmbeddingInput,
-    DocumentEmbeddingTrace,
-    DocumentEmbeddingVector,
-)
-from dlightrag_rag.ingestion.engine import (
-    PreparedIngestFile,
-    UnifiedIngestionEngine,
-    _prepare_ingest_item,
-    _raw_path_source_uri,
-)
 from lightrag.base import DocStatus
 from lightrag.parser.routing import FilenameParserHintError
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 from PIL import Image
+
+from dlightrag.rag.ingestion.document_embedding import (
+    DocumentEmbeddingInput,
+    DocumentEmbeddingTrace,
+    DocumentEmbeddingVector,
+)
+from dlightrag.rag.ingestion.engine import (
+    PreparedIngestFile,
+    UnifiedIngestionEngine,
+    _prepare_ingest_item,
+    _raw_path_source_uri,
+)
 
 
 def _sha256(content: bytes) -> str:
@@ -1337,7 +1338,7 @@ async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:
 async def test_reingest_hash_check_runs_off_event_loop(tmp_path: Path, monkeypatch) -> None:
     import asyncio
 
-    import dlightrag_rag.ingestion.engine as engine_module
+    import dlightrag.rag.ingestion.engine as engine_module
 
     source = tmp_path / "sample[mineru-iteP].pdf"
     source.write_bytes(b"%PDF-1.4")

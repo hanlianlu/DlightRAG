@@ -6,17 +6,17 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from dlightrag_ai.scheduler import ModelScheduler
-from dlightrag_ai.settings import (
+from dlightrag.ai.scheduler import ModelScheduler
+from dlightrag.ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
     ModelSettings,
     RerankSettings,
 )
-from dlightrag_ai.telemetry import NoopTelemetry
-from dlightrag_rag.ports import WorkspaceCorpusBackend
-from dlightrag_rag.settings import RagSettings
-from dlightrag_rag.workspace_rag import WorkspaceRag
+from dlightrag.ai.telemetry import NoopTelemetry
+from dlightrag.rag.ports import WorkspaceCorpusBackend
+from dlightrag.rag.settings import RagSettings
+from dlightrag.rag.workspace_rag import WorkspaceRag
 
 _FAKE_STORAGE_ATTRS = ("full_docs", "chunks_vdb", "doc_status")
 
@@ -99,7 +99,7 @@ class TestAresetPhase0:
     async def test_cancels_worker_pools(self) -> None:
         service = _make_service()
         with patch(
-            "dlightrag_rag.reset.shutdown_lightrag_worker_pools",
+            "dlightrag.rag.reset.shutdown_lightrag_worker_pools",
             new_callable=AsyncMock,
             return_value=2,
         ) as shutdown:

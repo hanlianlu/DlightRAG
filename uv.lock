@@ -9,10 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "dlightrag",
-    "dlightrag-agent-core",
-    "dlightrag-ai",
     "dlightrag-memory",
-    "dlightrag-rag-core",
 ]
 
 [[package]]
@@ -784,28 +781,34 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "1.9.2"
+version = "2.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiobotocore" },
+    { name = "aiofiles" },
+    { name = "anthropic" },
     { name = "asyncpg" },
+    { name = "azure-storage-blob" },
     { name = "bcrypt" },
     { name = "bm25s" },
+    { name = "botocore" },
     { name = "charset-normalizer" },
     { name = "defusedxml" },
-    { name = "dlightrag-agent-core" },
-    { name = "dlightrag-ai", extra = ["all"] },
     { name = "dlightrag-memory" },
-    { name = "dlightrag-rag-core" },
     { name = "fastapi" },
+    { name = "google-genai" },
     { name = "httpx" },
+    { name = "json-repair" },
     { name = "langchain-text-splitters" },
     { name = "langfuse" },
     { name = "lightrag-hku" },
+    { name = "lingua-language-detector" },
     { name = "markdown-it-py", extra = ["plugins"] },
     { name = "markitdown", extra = ["docx", "pdf", "pptx", "xlsx"] },
     { name = "mcp" },
     { name = "nh3" },
     { name = "numpy" },
+    { name = "openai" },
     { name = "openpyxl" },
     { name = "pgvector" },
     { name = "pillow" },
@@ -842,25 +845,31 @@ eval = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiobotocore", specifier = ">=3.9.0" },
+    { name = "aiofiles", specifier = ">=24.1.0" },
+    { name = "anthropic", specifier = ">=1.0.0" },
     { name = "asyncpg", specifier = ">=0.31.0" },
+    { name = "azure-storage-blob", specifier = ">=12.28.0" },
     { name = "bcrypt" },
     { name = "bm25s", specifier = ">=0.3.10" },
+    { name = "botocore", specifier = ">=1.43.3" },
     { name = "charset-normalizer", specifier = ">=3.4.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
-    { name = "dlightrag-agent-core", editable = "packages/agent-core" },
-    { name = "dlightrag-ai", extras = ["all"], editable = "packages/ai" },
     { name = "dlightrag-memory", editable = "packages/memory" },
-    { name = "dlightrag-rag-core", editable = "packages/rag-core" },
     { name = "fastapi", specifier = ">=0.141.1" },
-    { name = "httpx", specifier = ">=0.28.0" },
+    { name = "google-genai", specifier = ">=2.19.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "json-repair", specifier = ">=0.62.0" },
     { name = "langchain-text-splitters" },
     { name = "langfuse", specifier = ">=4.14.3" },
     { name = "lightrag-hku", specifier = ">=1.5.6" },
+    { name = "lingua-language-detector", specifier = ">=2.2.0" },
     { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
     { name = "markitdown", extras = ["docx", "pdf", "pptx", "xlsx"], specifier = ">=0.1.4" },
     { name = "mcp", specifier = ">=2.0.0" },
     { name = "nh3", specifier = ">=0.2" },
     { name = "numpy", specifier = ">=2.5.0" },
+    { name = "openai", specifier = ">=2.54.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pgvector", specifier = ">=0.5.0" },
     { name = "pillow", specifier = ">=12.3.0" },
@@ -894,65 +903,8 @@ dev = [
 eval = [{ name = "lightrag-hku", extras = ["evaluation"], specifier = ">=1.5.6" }]
 
 [[package]]
-name = "dlightrag-agent-core"
-version = "1.9.2"
-source = { editable = "packages/agent-core" }
-dependencies = [
-    { name = "dlightrag-ai" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "dlightrag-ai", editable = "packages/ai" },
-    { name = "pydantic", specifier = ">=2.11.0" },
-]
-
-[[package]]
-name = "dlightrag-ai"
-version = "1.9.2"
-source = { editable = "packages/ai" }
-dependencies = [
-    { name = "httpx" },
-    { name = "json-repair" },
-    { name = "pillow" },
-    { name = "pydantic" },
-]
-
-[package.optional-dependencies]
-all = [
-    { name = "anthropic" },
-    { name = "google-genai" },
-    { name = "openai" },
-]
-anthropic = [
-    { name = "anthropic" },
-]
-gemini = [
-    { name = "google-genai" },
-]
-openai = [
-    { name = "openai" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anthropic", marker = "extra == 'all'", specifier = ">=1.0.0" },
-    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=1.0.0" },
-    { name = "google-genai", marker = "extra == 'all'", specifier = ">=2.19.0" },
-    { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=2.19.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "json-repair", specifier = ">=0.62.0" },
-    { name = "openai", marker = "extra == 'all'", specifier = ">=2.54.0" },
-    { name = "openai", marker = "extra == 'openai'", specifier = ">=2.54.0" },
-    { name = "pillow", specifier = ">=12.3.0" },
-    { name = "pydantic", specifier = ">=2.11.0" },
-]
-provides-extras = ["openai", "anthropic", "gemini", "all"]
-
-[[package]]
 name = "dlightrag-memory"
-version = "1.9.2"
+version = "2.0.0"
 source = { editable = "packages/memory" }
 dependencies = [
     { name = "asyncpg" },
@@ -964,39 +916,6 @@ dependencies = [
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "mcp", specifier = ">=2.0.0" },
-    { name = "pydantic", specifier = ">=2.11.0" },
-]
-
-[[package]]
-name = "dlightrag-rag-core"
-version = "1.9.2"
-source = { editable = "packages/rag-core" }
-dependencies = [
-    { name = "aiobotocore" },
-    { name = "aiofiles" },
-    { name = "azure-storage-blob" },
-    { name = "botocore" },
-    { name = "dlightrag-ai" },
-    { name = "httpx" },
-    { name = "lightrag-hku" },
-    { name = "lingua-language-detector" },
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiobotocore", specifier = ">=3.9.0" },
-    { name = "aiofiles", specifier = ">=24.1.0" },
-    { name = "azure-storage-blob", specifier = ">=12.28.0" },
-    { name = "botocore", specifier = ">=1.43.3" },
-    { name = "dlightrag-ai", editable = "packages/ai" },
-    { name = "httpx", specifier = ">=0.28.0" },
-    { name = "lightrag-hku", specifier = ">=1.5.6" },
-    { name = "lingua-language-detector", specifier = ">=2.2.0" },
-    { name = "numpy", specifier = ">=2.5.0" },
-    { name = "pillow", specifier = ">=12.3.0" },
     { name = "pydantic", specifier = ">=2.11.0" },
 ]
 

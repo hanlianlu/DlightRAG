@@ -2,8 +2,9 @@
 """Tests for context projection records and compaction validity checks."""
 
 import pytest
-from dlightrag_agent.session.ids import ProjectionId
-from dlightrag_agent.session.projection import (
+
+from dlightrag.agent.session.ids import ProjectionId
+from dlightrag.agent.session.projection import (
     AgentInputOverflowError,
     CompactionSummary,
     ContextProjection,
@@ -18,7 +19,7 @@ from dlightrag_agent.session.projection import (
     token_anchor_from_usage,
     validate_projection_commit,
 )
-from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
+from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
 
 PROFILE = ModelProfile(context_window_tokens=100_000)
 

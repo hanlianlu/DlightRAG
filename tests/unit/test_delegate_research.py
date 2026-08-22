@@ -6,15 +6,14 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from dlightrag_agent.environment.access import PathAccess
-from dlightrag_agent.session.effects import EffectIntent
-from dlightrag_agent.session.ids import IntentId, SessionId
-from dlightrag_agent.session.memory import InMemoryAgentSessionStore
-from dlightrag_agent.tools.context import bind_tool_call, reset_tool_call
-from dlightrag_ai.capacity import CONTEXT_POLICY
-from dlightrag_ai.messages import AssistantTurn
-from dlightrag_ai.telemetry import NOOP_TELEMETRY
-
+from dlightrag.agent.environment.access import PathAccess
+from dlightrag.agent.session.effects import EffectIntent
+from dlightrag.agent.session.ids import IntentId, SessionId
+from dlightrag.agent.session.memory import InMemoryAgentSessionStore
+from dlightrag.agent.tools.context import bind_tool_call, reset_tool_call
+from dlightrag.ai.capacity import CONTEXT_POLICY
+from dlightrag.ai.messages import AssistantTurn
+from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.executor import JournalRunBoundaries, _seed_child_session, run_child_session

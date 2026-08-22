@@ -217,7 +217,7 @@ def test_manifest_reports_link_without_size_until_read() -> None:
 
 
 async def test_url_fetch_is_lazy(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     client = _LinkClient(content=b"remote body")
     registry = ResourceRegistry(url_client=client)
     resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
@@ -232,7 +232,7 @@ async def test_url_fetch_is_lazy(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_discovered_link_materialization_shares_the_request_total(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     client = _LinkClient(content=b"12345")
     registry = ResourceRegistry(
         max_attachment_bytes=10,
@@ -264,7 +264,7 @@ async def test_read_revalidates_host_resolution_each_read(
         ip = "93.184.216.34" if calls["n"] <= 2 else "10.0.0.5"
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
 
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", resolver)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", resolver)
     registry = ResourceRegistry(url_client=_LinkClient(content=b"safe"))
     resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
 
@@ -393,7 +393,7 @@ async def test_cursor_pages_do_not_rebuild_whole_resource_windows(
 
 
 async def test_read_continues_within_single_oversized_line() -> None:
-    from dlightrag_ai.tokens import estimate_tokens
+    from dlightrag.ai.tokens import estimate_tokens
 
     registry = ResourceRegistry()
     # A minified single-line JSON payload with no newline, far over one budget.
@@ -513,7 +513,7 @@ async def test_ensure_path_materializes_temp_and_aclose_cleans_up() -> None:
 async def test_cancellation_during_fetch_propagates_and_cleans_up(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     client = _LinkClient(fail=asyncio.CancelledError)
     registry = ResourceRegistry(url_client=client)
     resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
@@ -619,7 +619,7 @@ class _CountingFallback:
 async def test_direct_success_skips_url_text_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     fallback = _CountingFallback("EXA TEXT")
     registry = ResourceRegistry(
         url_client=_LinkClient(content=b"good body"),
@@ -636,7 +636,7 @@ async def test_direct_success_skips_url_text_fallback(
 async def test_direct_decode_failure_uses_one_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     fallback = _CountingFallback("recovered text\nsecond line")
     registry = ResourceRegistry(
         url_client=_LinkClient(content=b"\x00\x01\x02\x03binary\x00\x00"),
@@ -655,7 +655,7 @@ async def test_direct_decode_failure_uses_one_fallback(
 
 
 async def test_direct_empty_triggers_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     fallback = _CountingFallback("exa body text")
     registry = ResourceRegistry(
         url_client=_LinkClient(content=b""),
@@ -675,7 +675,7 @@ async def test_invalid_private_url_never_calls_fallback(
     def private(host: str, port: int, *args: object, **kwargs: object):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port))]
 
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", private)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", private)
     fallback = _CountingFallback("should never appear")
     registry = ResourceRegistry(
         url_client=_LinkClient(content=b"x"),
@@ -693,7 +693,7 @@ async def test_fallback_empty_preserves_direct_error_and_caches_failure(
 ) -> None:
     from dlightrag.answer.resources.models import ResourceDecodeError
 
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     fallback = _CountingFallback(None)
     registry = ResourceRegistry(
         url_client=_LinkClient(content=b"\x00\x01\x02\x03binary\x00\x00"),
@@ -713,7 +713,7 @@ async def test_fallback_empty_preserves_direct_error_and_caches_failure(
 async def test_fallback_text_windows_are_cursor_paginated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     big = "\n".join(f"line {index} " + "x" * 30 for index in range(2000))
     fallback = _CountingFallback(big)
     registry = ResourceRegistry(
@@ -741,7 +741,7 @@ async def test_fallback_text_windows_are_cursor_paginated(
 async def test_fetched_link_bytes_count_toward_total(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     registry = ResourceRegistry(
         max_attachment_bytes=100,
         max_total_attachment_bytes=8,
@@ -757,7 +757,7 @@ async def test_fetched_link_bytes_count_toward_total(
 async def test_url_and_loader_together_cross_total(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
 
     async def loader() -> bytes:
         return b"loaderbytes"
@@ -782,7 +782,7 @@ async def test_url_and_loader_together_cross_total(
 async def test_concurrent_reads_same_link_charged_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     client = _LinkClient(content=b"0123456789")
     registry = ResourceRegistry(
         max_attachment_bytes=100,
@@ -805,7 +805,7 @@ async def test_concurrent_reads_same_link_charged_once(
 async def test_concurrent_different_links_cannot_exceed_total(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     registry = ResourceRegistry(
         max_attachment_bytes=100,
         max_total_attachment_bytes=15,
@@ -830,7 +830,7 @@ async def test_concurrent_different_links_cannot_exceed_total(
 async def test_inline_plus_fetched_crosses_total(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     registry = ResourceRegistry(
         max_attachment_bytes=100,
         max_total_attachment_bytes=12,
@@ -848,7 +848,7 @@ async def test_inline_plus_fetched_crosses_total(
 async def test_over_limit_fetch_leaves_no_cached_bytes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr("dlightrag.rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     client = _LinkClient(content=b"0123456789")
     registry = ResourceRegistry(
         max_attachment_bytes=100,

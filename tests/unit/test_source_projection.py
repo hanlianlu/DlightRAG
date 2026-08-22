@@ -4,9 +4,9 @@
 import logging
 
 import pytest
-from dlightrag_rag.retrieval import RetrievalResult
 
 from dlightrag.answer.citations.schemas import ChunkSnippet, SourceReference
+from dlightrag.rag.retrieval import RetrievalResult
 
 
 def _internal_source(*, chunks: list[ChunkSnippet] | None = None) -> SourceReference:

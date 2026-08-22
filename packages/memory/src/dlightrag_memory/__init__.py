@@ -7,7 +7,7 @@ eligibility, and where recalled text sits in the model context; recalled
 records are never Evidence and never citable.
 """
 
-__version__ = "1.9.2"
+__version__ = "2.0.0"
 
 from dlightrag_memory.errors import MemoryUnavailableError, MemoryWriteRejectedError
 from dlightrag_memory.memory import Memory, RecallResult

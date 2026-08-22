@@ -24,16 +24,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from dlightrag_ai.media import verify_web_image_bytes
-from dlightrag_ai.tokens import estimate_tokens
-from dlightrag_rag.sourcing.source_contract import safe_source_filename
-from dlightrag_rag.sourcing.url import (
-    afetch_public_https_bytes,
-    avalidate_public_https_url,
-    normalize_https_url_identity,
-    validate_public_https_url,
-)
 
+from dlightrag.ai.media import verify_web_image_bytes
+from dlightrag.ai.tokens import estimate_tokens
 from dlightrag.answer.resources.converters import (
     ExtractedVisual,
     convert_resource,
@@ -53,6 +46,13 @@ from dlightrag.answer.resources.models import (
     VisualHandle,
 )
 from dlightrag.answer.resources.text import build_text_windows, decode_text
+from dlightrag.rag.sourcing.source_contract import safe_source_filename
+from dlightrag.rag.sourcing.url import (
+    afetch_public_https_bytes,
+    avalidate_public_https_url,
+    normalize_https_url_identity,
+    validate_public_https_url,
+)
 
 _DEFAULT_MAX_ATTACHMENTS = 6
 _DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024

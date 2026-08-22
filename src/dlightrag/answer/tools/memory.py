@@ -6,7 +6,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from dlightrag_agent.tools import AgentTool, ToolResult
 from dlightrag_memory import (
     Memory,
     MemoryProvenance,
@@ -15,6 +14,7 @@ from dlightrag_memory import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
+from dlightrag.agent.tools import AgentTool, ToolResult
 from dlightrag.answer.memory import memory_owner_allowed
 
 MemoryKindInput = Literal["preference", "fact"]

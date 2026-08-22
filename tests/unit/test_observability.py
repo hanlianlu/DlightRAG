@@ -8,9 +8,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from dlightrag_ai.telemetry import NoopTelemetry
 
 from dlightrag import observability
+from dlightrag.ai.telemetry import NoopTelemetry
 from dlightrag.observability import langfuse as langfuse_state
 from dlightrag.observability import tracing as tracing_module
 from dlightrag.observability.masking import mask_langfuse_payload

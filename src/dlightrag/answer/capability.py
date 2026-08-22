@@ -11,8 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dlightrag_ai.vision import ImageCapabilityStatus
-
+from dlightrag.ai.vision import ImageCapabilityStatus
 from dlightrag.answer.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     CURRENT_IMAGES_UNSUPPORTED,

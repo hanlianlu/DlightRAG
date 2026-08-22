@@ -11,21 +11,21 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
-from dlightrag_ai.scheduler import ModelScheduler
-from dlightrag_ai.telemetry import NoopTelemetry
-from dlightrag_rag.ingestion.document_embedding import (
+
+from dlightrag.ai.scheduler import ModelScheduler
+from dlightrag.ai.telemetry import NoopTelemetry
+from dlightrag.config import DlightragConfig
+from dlightrag.model_settings import rag_settings
+from dlightrag.rag.ingestion.document_embedding import (
     RobustDocumentEmbedder,
     build_document_embedder,
     resolve_direct_image_embedding_enabled,
 )
-from dlightrag_rag.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
-from dlightrag_rag.ingestion.paths import iter_ingestable_files, stage_input_file
-from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
-from dlightrag_rag.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
-from dlightrag_rag.workspaces import normalize_workspace
-
-from dlightrag.config import DlightragConfig
-from dlightrag.model_settings import rag_settings
+from dlightrag.rag.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
+from dlightrag.rag.ingestion.paths import iter_ingestable_files, stage_input_file
+from dlightrag.rag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag.rag.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
+from dlightrag.rag.workspaces import normalize_workspace
 
 
 def _service(
@@ -318,7 +318,7 @@ class TestWorkspaceRagClose:
         service._lightrag = lightrag
 
         with patch(
-            "dlightrag_rag.workspace_rag.shutdown_lightrag_worker_pools",
+            "dlightrag.rag.workspace_rag.shutdown_lightrag_worker_pools",
             new_callable=AsyncMock,
             return_value=3,
         ) as shutdown:
@@ -363,7 +363,7 @@ class TestWorkspaceRagRetrieve:
     """Test aretrieve delegation to RetrievalEngine."""
 
     def _make_retrieval_service(self, config: DlightragConfig) -> tuple[WorkspaceRag, MagicMock]:
-        from dlightrag_rag.retrieval import RetrievalResult
+        from dlightrag.rag.retrieval import RetrievalResult
 
         service = _service(config)
         service._initialized = True
@@ -379,7 +379,7 @@ class TestWorkspaceRagRetrieve:
         orchestrator.aretrieve.assert_awaited_once()
 
     async def test_aretrieve_tags_all_context_rows_with_workspace(self, test_config) -> None:
-        from dlightrag_rag.retrieval import RetrievalResult
+        from dlightrag.rag.retrieval import RetrievalResult
 
         service, orchestrator = self._make_retrieval_service(test_config)
         service._lightrag_stores = None
@@ -433,7 +433,7 @@ class TestWorkspaceRagRetrieve:
     async def test_aretrieve_reranks_after_hydrating_fused_chunks(
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):
-        from dlightrag_rag.retrieval import RetrievalResult
+        from dlightrag.rag.retrieval import RetrievalResult
 
         service, orchestrator = self._make_retrieval_service(test_config)
         orchestrator.aretrieve.return_value = RetrievalResult(
@@ -459,7 +459,7 @@ class TestWorkspaceRagRetrieve:
 
         service._rerank_func = rerank_func
         monkeypatch.setattr(
-            "dlightrag_rag.retrieval.provenance.hydrate_lightrag_chunk_provenance",
+            "dlightrag.rag.retrieval.provenance.hydrate_lightrag_chunk_provenance",
             hydrate,
         )
 
@@ -471,7 +471,7 @@ class TestWorkspaceRagRetrieve:
     async def test_aretrieve_caps_fused_chunks_when_rerank_disabled(
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):
-        from dlightrag_rag.retrieval import RetrievalResult
+        from dlightrag.rag.retrieval import RetrievalResult
 
         service, orchestrator = self._make_retrieval_service(test_config)
         orchestrator.aretrieve.return_value = RetrievalResult(
@@ -487,7 +487,7 @@ class TestWorkspaceRagRetrieve:
 
         service._rerank_func = None  # reranker disabled
         monkeypatch.setattr(
-            "dlightrag_rag.retrieval.provenance.hydrate_lightrag_chunk_provenance",
+            "dlightrag.rag.retrieval.provenance.hydrate_lightrag_chunk_provenance",
             hydrate,
         )
 
@@ -501,7 +501,7 @@ class TestWorkspaceRagRetrieve:
     async def test_aretrieve_rerank_failure_keeps_hydrated_rrf_top_k(
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):
-        from dlightrag_rag.retrieval import RetrievalResult
+        from dlightrag.rag.retrieval import RetrievalResult
 
         service, orchestrator = self._make_retrieval_service(test_config)
         orchestrator.aretrieve.return_value = RetrievalResult(
@@ -524,7 +524,7 @@ class TestWorkspaceRagRetrieve:
 
         service._rerank_func = fail_rerank
         monkeypatch.setattr(
-            "dlightrag_rag.retrieval.provenance.hydrate_lightrag_chunk_provenance",
+            "dlightrag.rag.retrieval.provenance.hydrate_lightrag_chunk_provenance",
             hydrate,
         )
 
@@ -542,7 +542,7 @@ class TestWorkspaceRagRetrieve:
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):
         """Text reranker: image bytes are read only for chunks that survive rerank."""
-        from dlightrag_rag.retrieval import RetrievalResult
+        from dlightrag.rag.retrieval import RetrievalResult
 
         service, orchestrator = self._make_retrieval_service(test_config)
         service._rerank_consumes_images = False  # text-only reranker
@@ -572,7 +572,7 @@ class TestWorkspaceRagRetrieve:
 
         service._rerank_func = rerank_func
         monkeypatch.setattr(
-            "dlightrag_rag.retrieval.provenance.hydrate_lightrag_chunk_provenance",
+            "dlightrag.rag.retrieval.provenance.hydrate_lightrag_chunk_provenance",
             hydrate,
         )
 
@@ -786,7 +786,7 @@ class TestDirectImageEmbeddingCapability:
         expected = MagicMock()
 
         with patch(
-            "dlightrag_rag.ingestion.document_embedding.RobustDocumentEmbedder",
+            "dlightrag.rag.ingestion.document_embedding.RobustDocumentEmbedder",
             return_value=expected,
         ) as constructor:
             result = build_document_embedder(
@@ -834,7 +834,7 @@ class TestWorkspaceRagLightRAGMainPath:
             lambda self, *, force=False: events.append("runtime"),
         )
         monkeypatch.setattr(
-            "dlightrag_rag._lightrag_patches.apply",
+            "dlightrag.rag._lightrag_patches.apply",
             lambda **_kwargs: events.append("patches"),
         )
         monkeypatch.setattr(
@@ -884,40 +884,40 @@ class TestWorkspaceRagLightRAGMainPath:
                 call_order.append("provider_verify")
 
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.LightRagChatModels",
+            "dlightrag.rag.workspace_rag.LightRagChatModels",
             _FakeChatModels,
         )
-        monkeypatch.setattr("dlightrag_rag.workspace_rag.build_rerank_func", lambda *_a, **_k: None)
+        monkeypatch.setattr("dlightrag.rag.workspace_rag.build_rerank_func", lambda *_a, **_k: None)
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.create_embedding_model",
+            "dlightrag.rag.workspace_rag.create_embedding_model",
             lambda *_args, **_kwargs: object(),
         )
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.build_lightrag_embedding", lambda *_args: object()
+            "dlightrag.rag.workspace_rag.build_lightrag_embedding", lambda *_args: object()
         )
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.resolve_direct_image_embedding_enabled",
+            "dlightrag.rag.workspace_rag.resolve_direct_image_embedding_enabled",
             AsyncMock(return_value=False),
         )
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.build_document_embedder",
+            "dlightrag.rag.workspace_rag.build_document_embedder",
             lambda *args, **kwargs: object(),
         )
         monkeypatch.setattr(
             WorkspaceRag, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
         )
-        monkeypatch.setattr("dlightrag_rag.workspace_rag.LightRAGContractGuard", FakeGuard)
+        monkeypatch.setattr("dlightrag.rag.workspace_rag.LightRAGContractGuard", FakeGuard)
 
         with (
-            patch("dlightrag_rag.workspace_rag.rerank_consumes_images", return_value=False),
+            patch("dlightrag.rag.workspace_rag.rerank_consumes_images", return_value=False),
             patch(
-                "dlightrag_rag.retrieval.filtering.FilteredVectorStorage",
+                "dlightrag.rag.retrieval.filtering.FilteredVectorStorage",
                 side_effect=lambda **kwargs: kwargs["original"],
             ),
-            patch("dlightrag_rag.lightrag_stores.LightRAGStores", return_value=object()),
-            patch("dlightrag_rag.visual_assets.ThumbnailCache", return_value=object()),
-            patch("dlightrag_rag.visual_assets.VisualAssetResolver", return_value=object()),
-            patch("dlightrag_rag.retrieval.retriever.UnifiedRetriever", return_value=object()),
+            patch("dlightrag.rag.lightrag_stores.LightRAGStores", return_value=object()),
+            patch("dlightrag.rag.visual_assets.ThumbnailCache", return_value=object()),
+            patch("dlightrag.rag.visual_assets.VisualAssetResolver", return_value=object()),
+            patch("dlightrag.rag.retrieval.retriever.UnifiedRetriever", return_value=object()),
         ):
             await service._do_initialize_unified()
             await asyncio.sleep(0)
@@ -943,36 +943,36 @@ class TestWorkspaceRagLightRAGMainPath:
                 return None
 
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.LightRagChatModels",
+            "dlightrag.rag.workspace_rag.LightRagChatModels",
             _FakeChatModels,
         )
-        monkeypatch.setattr("dlightrag_rag.workspace_rag.build_rerank_func", lambda *_a, **_k: None)
+        monkeypatch.setattr("dlightrag.rag.workspace_rag.build_rerank_func", lambda *_a, **_k: None)
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.create_embedding_model",
+            "dlightrag.rag.workspace_rag.create_embedding_model",
             lambda *_args, **_kwargs: object(),
         )
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.build_lightrag_embedding", lambda *_args: object()
+            "dlightrag.rag.workspace_rag.build_lightrag_embedding", lambda *_args: object()
         )
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.resolve_direct_image_embedding_enabled",
+            "dlightrag.rag.workspace_rag.resolve_direct_image_embedding_enabled",
             AsyncMock(return_value=False),
         )
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.build_document_embedder",
+            "dlightrag.rag.workspace_rag.build_document_embedder",
             lambda *args, **kwargs: object(),
         )
         monkeypatch.setattr(
             WorkspaceRag, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
         )
-        monkeypatch.setattr("dlightrag_rag.workspace_rag.LightRAGContractGuard", FakeGuard)
+        monkeypatch.setattr("dlightrag.rag.workspace_rag.LightRAGContractGuard", FakeGuard)
 
         with (
-            patch("dlightrag_rag.workspace_rag.rerank_consumes_images", return_value=False),
-            patch("dlightrag_rag.lightrag_stores.LightRAGStores", return_value=object()),
-            patch("dlightrag_rag.visual_assets.ThumbnailCache", return_value=object()),
-            patch("dlightrag_rag.visual_assets.VisualAssetResolver", return_value=object()),
-            patch("dlightrag_rag.retrieval.retriever.UnifiedRetriever", return_value=object()),
+            patch("dlightrag.rag.workspace_rag.rerank_consumes_images", return_value=False),
+            patch("dlightrag.rag.lightrag_stores.LightRAGStores", return_value=object()),
+            patch("dlightrag.rag.visual_assets.ThumbnailCache", return_value=object()),
+            patch("dlightrag.rag.visual_assets.VisualAssetResolver", return_value=object()),
+            patch("dlightrag.rag.retrieval.retriever.UnifiedRetriever", return_value=object()),
         ):
             with pytest.raises(RuntimeError, match="reader attach drift"):
                 await service._do_initialize_unified()
@@ -1005,40 +1005,40 @@ class TestWorkspaceRagLightRAGMainPath:
         runtime.attach.side_effect = _fake_attach
 
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.LightRagChatModels",
+            "dlightrag.rag.workspace_rag.LightRagChatModels",
             _FakeChatModels,
         )
-        monkeypatch.setattr("dlightrag_rag.workspace_rag.build_rerank_func", lambda *_a, **_k: None)
+        monkeypatch.setattr("dlightrag.rag.workspace_rag.build_rerank_func", lambda *_a, **_k: None)
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.create_embedding_model",
+            "dlightrag.rag.workspace_rag.create_embedding_model",
             lambda *_args, **_kwargs: object(),
         )
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.build_lightrag_embedding", lambda *_args: object()
+            "dlightrag.rag.workspace_rag.build_lightrag_embedding", lambda *_args: object()
         )
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.resolve_direct_image_embedding_enabled",
+            "dlightrag.rag.workspace_rag.resolve_direct_image_embedding_enabled",
             AsyncMock(return_value=False),
         )
         monkeypatch.setattr(
-            "dlightrag_rag.workspace_rag.build_document_embedder",
+            "dlightrag.rag.workspace_rag.build_document_embedder",
             lambda *args, **kwargs: object(),
         )
         monkeypatch.setattr(
             WorkspaceRag, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
         )
-        monkeypatch.setattr("dlightrag_rag.workspace_rag.LightRAGContractGuard", FakeGuard)
+        monkeypatch.setattr("dlightrag.rag.workspace_rag.LightRAGContractGuard", FakeGuard)
 
         with (
-            patch("dlightrag_rag.workspace_rag.rerank_consumes_images", return_value=False),
+            patch("dlightrag.rag.workspace_rag.rerank_consumes_images", return_value=False),
             patch(
-                "dlightrag_rag.retrieval.filtering.FilteredVectorStorage",
+                "dlightrag.rag.retrieval.filtering.FilteredVectorStorage",
                 side_effect=lambda **kwargs: kwargs["original"],
             ),
-            patch("dlightrag_rag.lightrag_stores.LightRAGStores", return_value=object()),
-            patch("dlightrag_rag.visual_assets.ThumbnailCache", return_value=object()),
-            patch("dlightrag_rag.visual_assets.VisualAssetResolver", return_value=object()),
-            patch("dlightrag_rag.retrieval.retriever.UnifiedRetriever", return_value=object()),
+            patch("dlightrag.rag.lightrag_stores.LightRAGStores", return_value=object()),
+            patch("dlightrag.rag.visual_assets.ThumbnailCache", return_value=object()),
+            patch("dlightrag.rag.visual_assets.VisualAssetResolver", return_value=object()),
+            patch("dlightrag.rag.retrieval.retriever.UnifiedRetriever", return_value=object()),
         ):
             await service._do_initialize_unified()
 
@@ -1162,7 +1162,7 @@ class TestWorkspaceRagLightRAGMainPath:
         )
         mock_source.aclose = AsyncMock()
 
-        with patch("dlightrag_rag.sourcing.aws_s3.S3DataSource", return_value=mock_source):
+        with patch("dlightrag.rag.sourcing.aws_s3.S3DataSource", return_value=mock_source):
             result = await service.aingest(
                 source_type="s3",
                 bucket="my-bucket",
@@ -1223,7 +1223,7 @@ class TestWorkspaceRagLightRAGMainPath:
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Recovered remote jobs resume from the next unfinished source window."""
-        monkeypatch.setattr("dlightrag_rag.workspace_rag._REMOTE_INGEST_BATCH_SIZE", 2)
+        monkeypatch.setattr("dlightrag.rag.workspace_rag._REMOTE_INGEST_BATCH_SIZE", 2)
 
         class StreamingS3Source:
             def __init__(self) -> None:
@@ -1598,7 +1598,7 @@ class TestWorkspaceRagLightRAGMainPath:
         service._initialized = True
         service._ingestion_engine = MagicMock()
 
-        with caplog.at_level(logging.INFO, logger="dlightrag_rag.workspace_rag"):
+        with caplog.at_level(logging.INFO, logger="dlightrag.rag.workspace_rag"):
             result = await service.aingest_source(
                 BynderSource(),
                 source_type="bynder",
@@ -1967,7 +1967,7 @@ class TestWorkspaceRagLightRAGMainPath:
         mock_source.download_uri_for_key = lambda key: "https://api.bynder.com/docs/getting-started"
         mock_source.aclose = AsyncMock()
 
-        with patch("dlightrag_rag.sourcing.url.URLDataSource", return_value=mock_source) as cls:
+        with patch("dlightrag.rag.sourcing.url.URLDataSource", return_value=mock_source) as cls:
             result = await service.aingest(
                 source_type="url",
                 url="https://api.bynder.com/docs/getting-started",
@@ -2035,7 +2035,7 @@ class TestWorkspaceRagLightRAGMainPath:
         mock_source.source_uri_for_key = MagicMock()
         mock_source.download_uri_for_key = MagicMock()
 
-        with patch("dlightrag_rag.sourcing.url.URLDataSource", return_value=mock_source) as cls:
+        with patch("dlightrag.rag.sourcing.url.URLDataSource", return_value=mock_source) as cls:
             await service.aingest(source_type="url", **request_fields)
 
         constructor_call = cls.call_args
@@ -2282,7 +2282,7 @@ class TestWorkspaceRagLightRAGMainPath:
 
     async def test_aretrieve_unified_delegates(self, test_config: DlightragConfig) -> None:
         """aretrieve delegates directly to the retrieval orchestrator."""
-        from dlightrag_rag.retrieval import RetrievalResult
+        from dlightrag.rag.retrieval import RetrievalResult
 
         expected = RetrievalResult(
             contexts={"chunks": []},
@@ -2302,7 +2302,7 @@ class TestWorkspaceRagLightRAGMainPath:
         self, test_config: DlightragConfig
     ) -> None:
         """Case folding belongs to the SQL comparison, not to the value in flight."""
-        from dlightrag_rag.retrieval import MetadataFilter
+        from dlightrag.rag.retrieval import MetadataFilter
 
         service = _service(test_config)
         service._metadata_index = AsyncMock()
@@ -2317,7 +2317,7 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_metadata_enrichment_uses_full_doc_id_without_path_fallback(
         self, test_config: DlightragConfig
     ) -> None:
-        from dlightrag_rag.retrieval import RetrievalResult
+        from dlightrag.rag.retrieval import RetrievalResult
 
         service = _service(test_config)
         service._metadata_index = AsyncMock()
@@ -2364,7 +2364,7 @@ class TestWorkspaceRagLightRAGMainPath:
     async def test_metadata_enrichment_surfaces_distinct_source_contract(
         self, test_config: DlightragConfig
     ) -> None:
-        from dlightrag_rag.retrieval import RetrievalResult
+        from dlightrag.rag.retrieval import RetrievalResult
 
         service = _service(test_config)
         service._metadata_index = AsyncMock()
@@ -2596,7 +2596,7 @@ class TestWorkspaceRagLightRAGMainPath:
         )
         source.aclose = AsyncMock()
 
-        with patch("dlightrag_rag.sourcing.url.URLDataSource", return_value=source):
+        with patch("dlightrag.rag.sourcing.url.URLDataSource", return_value=source):
             result = await service._aingest_download_locator(  # type: ignore[attr-defined]
                 "bynder://asset/1",
                 "https://cdn.example.com/assets/1",
@@ -3055,7 +3055,7 @@ class TestWorkspaceRagLightRAGMainPath:
         source_kwargs: dict[str, str],
         document_field: tuple[str, str],
     ) -> None:
-        from dlightrag_rag.contracts import IngestDocument
+        from dlightrag.rag.contracts import IngestDocument
 
         service = _service(test_config)
         service._initialized = True

@@ -18,13 +18,13 @@
         <mxCell id="pkg_root" value="&lt;b&gt;dlightrag&lt;/b&gt;&lt;br&gt;composition &#183; transports &#183; PostgreSQL adapters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="440" y="128" width="400" height="48" as="geometry"/>
         </mxCell>
-        <mxCell id="pkg_rag" value="&lt;b&gt;dlightrag-rag-core&lt;/b&gt;&lt;br&gt;WorkspaceRag &#183; LightRAG adapters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="pkg_rag" value="&lt;b&gt;dlightrag.rag&lt;/b&gt;&lt;br&gt;WorkspaceRag &#183; LightRAG adapters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="270" y="198" width="280" height="48" as="geometry"/>
         </mxCell>
-        <mxCell id="pkg_agent" value="&lt;b&gt;dlightrag-agent-core&lt;/b&gt;&lt;br&gt;ToolTurnExecutor &#183; generic tools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="pkg_agent" value="&lt;b&gt;dlightrag.agent&lt;/b&gt;&lt;br&gt;ToolTurnExecutor &#183; generic tools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="730" y="198" width="280" height="48" as="geometry"/>
         </mxCell>
-        <mxCell id="pkg_ai" value="&lt;b&gt;dlightrag-ai&lt;/b&gt; &#183; ModelScheduler &#183; ModelProfile &#183; model lifecycles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="pkg_ai" value="&lt;b&gt;dlightrag.ai&lt;/b&gt; &#183; ModelScheduler &#183; ModelProfile &#183; model lifecycles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="510" y="264" width="260" height="40" as="geometry"/>
         </mxCell>
         <mxCell id="pkg_caption" value="enforced in source and installed wheels" style="text;html=1;strokeColor=none;fillColor=none;align=right;verticalAlign=middle;whiteSpace=wrap;fontFamily=Inter;fontSize=10;fontColor=#64748b;" vertex="1" parent="1">
@@ -46,7 +46,7 @@
         <mxCell id="orchestrator" value="&lt;b&gt;AnswerOrchestrator&lt;/b&gt;&lt;br&gt;fast path | research path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="750" y="370" width="200" height="72" as="geometry"/>
         </mxCell>
-        <mxCell id="tool_turn" value="&lt;b&gt;dlightrag-agent-core&lt;/b&gt;&lt;br&gt;ToolTurnExecutor &#183; peer tools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=7;" vertex="1" parent="1">
+        <mxCell id="tool_turn" value="&lt;b&gt;dlightrag.agent&lt;/b&gt;&lt;br&gt;ToolTurnExecutor &#183; peer tools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=7;" vertex="1" parent="1">
           <mxGeometry x="525" y="460" width="190" height="60" as="geometry"/>
         </mxCell>
         <mxCell id="synthesizer" value="&lt;b&gt;AnswerSynthesizer&lt;/b&gt;&lt;br&gt;Answer &#183; sources &#183; citations" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=7;" vertex="1" parent="1">

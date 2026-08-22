@@ -2,8 +2,8 @@
 """Tests for the answer-image capability guard."""
 
 import pytest
-from dlightrag_ai.vision import ImageCapabilityStatus
 
+from dlightrag.ai.vision import ImageCapabilityStatus
 from dlightrag.answer.capability import (
     AnswerImageCapability,
     check_answer_image_capability,

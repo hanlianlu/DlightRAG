@@ -4,15 +4,14 @@
 import json
 from typing import Any
 
-from dlightrag_rag.ports import (
+from dlightrag.adapters.postgres._migrations import Migration, apply_migrations
+from dlightrag.adapters.postgres._operations import PostgresOperationRunner
+from dlightrag.rag.ports import (
     JOB_ABANDONED_ERROR,
     JOB_ORPHAN_AFTER_SECONDS,
     JOB_RETENTION_SECONDS,
     IngestJobSchemaError,
 )
-
-from dlightrag.adapters.postgres._migrations import Migration, apply_migrations
-from dlightrag.adapters.postgres._operations import PostgresOperationRunner
 
 TABLE = "dlightrag_ingest_jobs"
 # Caps every bulk statement here, not just the pruning ones.

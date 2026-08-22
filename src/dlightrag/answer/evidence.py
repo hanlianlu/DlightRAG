@@ -8,12 +8,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
-from dlightrag_rag.retrieval import ContextRow, RetrievalContexts
-
 from dlightrag.answer.citations.indexer import CitationIndexer
 from dlightrag.answer.citations.utils import context_chunk_key
 from dlightrag.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.answer.images import AnswerImageBudget
+from dlightrag.rag.retrieval import ContextRow, RetrievalContexts
 
 _NO_KG = "No knowledge graph context available."
 
@@ -66,7 +65,7 @@ class EvidenceLedger:
         same order instead of storing a second copy of every visual. An empty
         ledger serializes as ``{}`` so settlement can skip a no-op write.
         """
-        from dlightrag_agent.session.effects import canonical_json
+        from dlightrag.agent.session.effects import canonical_json
 
         if not self.row_count and not self._source_ids:
             return canonical_json({})
@@ -331,7 +330,7 @@ class EvidenceLedger:
 
 
 def _chunk_evidence_cost(row: ContextRow) -> int:
-    from dlightrag_ai.tokens import estimate_tokens
+    from dlightrag.ai.tokens import estimate_tokens
 
     cost = estimate_tokens(str(row.get("content") or ""))
     if row.get("image_data"):

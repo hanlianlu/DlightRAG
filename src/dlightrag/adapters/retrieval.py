@@ -4,8 +4,6 @@
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from dlightrag_rag.retrieval import RetrievalResult
-
 from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
 from dlightrag.answer.citations.source_builder import build_sources
 from dlightrag.answer.model_runtime import AnswerModelRuntime
@@ -15,6 +13,7 @@ from dlightrag.answer.sources import (
     project_contexts_for_client,
     project_source_payloads,
 )
+from dlightrag.rag.retrieval import RetrievalResult
 from dlightrag.services.retrieval import (
     ProjectedRetrieval,
     RetrieveProjection,

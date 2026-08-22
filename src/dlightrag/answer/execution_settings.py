@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dlightrag_agent.environment import WORKSPACE_MAX_BYTES
+from dlightrag.agent.environment import WORKSPACE_MAX_BYTES
 
 DEFAULT_LOCAL_WORKSPACE_ROOT = Path.home() / ".dlightrag" / "agent_workspaces"
 

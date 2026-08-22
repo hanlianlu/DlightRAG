@@ -6,10 +6,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Literal
 
-from dlightrag_ai.structured import StructuredOutput
-from dlightrag_ai.tokens import estimate_messages_tokens
 from pydantic import BaseModel, ConfigDict
 
+from dlightrag.ai.structured import StructuredOutput
+from dlightrag.ai.tokens import estimate_messages_tokens
 from dlightrag.answer.mode import ModeResource, ResolvedMode
 
 _ROUTER_SYSTEM = (

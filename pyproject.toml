@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.9.2"
+version = "2.0.0"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -10,13 +10,20 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
-    # Workspace cores
-    "dlightrag-ai[all]==1.9.2",
-    "dlightrag-agent-core==1.9.2",
-    "dlightrag-memory==1.9.2",
-    "dlightrag-rag-core==1.9.2",
-    # Core RAG
+    # Standalone workspace package
+    "dlightrag-memory==2.0.0",
+    # Built-in model providers (batteries included)
+    "openai>=2.54.0",
+    "anthropic>=1.0.0",
+    "google-genai>=2.19.0",
+    "json-repair>=0.62.0",
+    # Built-in RAG and source capabilities
     "lightrag-hku>=1.5.6",
+    "aiofiles>=24.1.0",
+    "aiobotocore>=3.9.0",
+    "azure-storage-blob>=12.28.0",
+    "botocore>=1.43.3",
+    "lingua-language-detector>=2.2.0",
     # PostgreSQL
     "asyncpg>=0.31.0",
     "numpy>=2.5.0",
@@ -27,7 +34,7 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "pyyaml>=6.0",
     # Utils
-    "httpx>=0.28.0",
+    "httpx>=0.28.1",
     "pillow>=12.3.0",
     # Request-local lexical retrieval for Web Composer documents.
     "bm25s>=0.3.10",
@@ -94,13 +101,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.workspace]
-members = ["packages/ai", "packages/agent-core", "packages/memory", "packages/rag-core"]
+members = ["packages/memory"]
 
 [tool.uv.sources]
-dlightrag-ai = { workspace = true }
-dlightrag-agent-core = { workspace = true }
 dlightrag-memory = { workspace = true }
-dlightrag-rag-core = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dlightrag"]
@@ -129,7 +133,7 @@ markers = [
 ]
 
 [tool.importlinter]
-root_packages = ["dlightrag", "dlightrag_ai", "dlightrag_agent", "dlightrag_memory", "dlightrag_rag"]
+root_packages = ["dlightrag", "dlightrag_memory"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -139,23 +143,34 @@ type = "forbidden"
 source_modules = ["dlightrag_memory"]
 forbidden_modules = [
     "dlightrag",
-    "dlightrag_agent",
-    "dlightrag_ai",
-    "dlightrag_rag",
     "lightrag",
     "fastapi",
 ]
 
 [[tool.importlinter.contracts]]
-id = "ai-package-independence"
-name = "AI must remain provider-neutral and root-independent"
+id = "ai-module-independence"
+name = "AI remains provider-neutral and independent of product modules"
 type = "forbidden"
-source_modules = ["dlightrag_ai"]
+source_modules = ["dlightrag.ai"]
 forbidden_modules = [
-    "dlightrag",
-    "dlightrag_agent",
+    "dlightrag.access",
+    "dlightrag.adapters",
+    "dlightrag.agent",
+    "dlightrag.answer",
+    "dlightrag.api",
+    "dlightrag.application",
+    "dlightrag.config",
+    "dlightrag.health",
+    "dlightrag.maintenance",
+    "dlightrag.mcp",
+    "dlightrag.model_settings",
+    "dlightrag.observability",
+    "dlightrag.rag",
+    "dlightrag.runtime",
+    "dlightrag.sdk",
+    "dlightrag.services",
+    "dlightrag.web",
     "dlightrag_memory",
-    "dlightrag_rag",
     "lightrag",
     "asyncpg",
     "fastapi",
@@ -163,14 +178,28 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-id = "agent-package-independence"
-name = "Agent core may depend on AI but not product or RAG"
+id = "agent-module-independence"
+name = "Agent may depend on AI but not product or RAG modules"
 type = "forbidden"
-source_modules = ["dlightrag_agent"]
+source_modules = ["dlightrag.agent"]
 forbidden_modules = [
-    "dlightrag",
+    "dlightrag.access",
+    "dlightrag.adapters",
+    "dlightrag.answer",
+    "dlightrag.api",
+    "dlightrag.application",
+    "dlightrag.config",
+    "dlightrag.health",
+    "dlightrag.maintenance",
+    "dlightrag.mcp",
+    "dlightrag.model_settings",
+    "dlightrag.observability",
+    "dlightrag.rag",
+    "dlightrag.runtime",
+    "dlightrag.sdk",
+    "dlightrag.services",
+    "dlightrag.web",
     "dlightrag_memory",
-    "dlightrag_rag",
     "lightrag",
     "asyncpg",
     "fastapi",
@@ -178,13 +207,27 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-id = "rag-package-independence"
-name = "RAG core must remain storage-neutral and product-independent"
+id = "rag-module-independence"
+name = "RAG remains storage-neutral and independent of product modules"
 type = "forbidden"
-source_modules = ["dlightrag_rag"]
+source_modules = ["dlightrag.rag"]
 forbidden_modules = [
-    "dlightrag",
-    "dlightrag_agent",
+    "dlightrag.access",
+    "dlightrag.adapters",
+    "dlightrag.agent",
+    "dlightrag.answer",
+    "dlightrag.api",
+    "dlightrag.application",
+    "dlightrag.config",
+    "dlightrag.health",
+    "dlightrag.maintenance",
+    "dlightrag.mcp",
+    "dlightrag.model_settings",
+    "dlightrag.observability",
+    "dlightrag.runtime",
+    "dlightrag.sdk",
+    "dlightrag.services",
+    "dlightrag.web",
     "dlightrag_memory",
     "asyncpg",
     "fastapi",
@@ -216,19 +259,19 @@ type = "forbidden"
 allow_indirect_imports = true
 source_modules = ["dlightrag.api", "dlightrag.mcp", "dlightrag.web"]
 forbidden_modules = [
-    "dlightrag_rag.pool",
-    "dlightrag_rag.ports",
-    "dlightrag_rag.ingestion",
-    "dlightrag_rag.source_download",
-    "dlightrag_rag.federation",
-    "dlightrag_rag.lightrag_contract",
-    "dlightrag_rag.lightrag_models",
-    "dlightrag_rag.lightrag_stores",
-    "dlightrag_rag.rerank",
-    "dlightrag_rag.reset",
-    "dlightrag_rag.settings",
-    "dlightrag_rag.visual_assets",
-    "dlightrag_rag.workspace_rag",
+    "dlightrag.rag.pool",
+    "dlightrag.rag.ports",
+    "dlightrag.rag.ingestion",
+    "dlightrag.rag.source_download",
+    "dlightrag.rag.federation",
+    "dlightrag.rag.lightrag_contract",
+    "dlightrag.rag.lightrag_models",
+    "dlightrag.rag.lightrag_stores",
+    "dlightrag.rag.rerank",
+    "dlightrag.rag.reset",
+    "dlightrag.rag.settings",
+    "dlightrag.rag.visual_assets",
+    "dlightrag.rag.workspace_rag",
 ]
 
 [[tool.importlinter.contracts]]
@@ -260,7 +303,7 @@ forbidden_modules = [
     "dlightrag.mcp",
     "dlightrag.model_settings",
     "dlightrag.web",
-    "dlightrag_rag",
+    "dlightrag.rag",
     "asyncpg",
     "fastapi",
     "mcp",
@@ -276,7 +319,7 @@ forbidden_modules = [
     "dlightrag.api",
     "dlightrag.mcp",
     "dlightrag.web",
-    "dlightrag_rag",
+    "dlightrag.rag",
     "asyncpg",
     "fastapi",
     "mcp",
@@ -340,7 +383,7 @@ forbidden_modules = [
     "dlightrag.api",
     "dlightrag.mcp",
     "dlightrag.web",
-    "dlightrag_rag",
+    "dlightrag.rag",
     "asyncpg",
     "fastapi",
     "mcp",
@@ -382,7 +425,7 @@ forbidden_modules = [
     "dlightrag.api",
     "dlightrag.mcp",
     "dlightrag.web",
-    "dlightrag_rag",
+    "dlightrag.rag",
     "asyncpg",
     "fastapi",
     "mcp",

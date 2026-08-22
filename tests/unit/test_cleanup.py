@@ -4,7 +4,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from dlightrag_rag.ingestion.cleanup import (
+from dlightrag.rag.ingestion.cleanup import (
     DeletionContext,
     cascade_delete,
     collect_deletion_context,

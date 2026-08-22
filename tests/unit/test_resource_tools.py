@@ -8,11 +8,11 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_agent.tools import AgentTool
-from dlightrag_ai.tokens import estimate_tokens
 from PIL import Image
 from pydantic import ValidationError
 
+from dlightrag.agent.tools import AgentTool
+from dlightrag.ai.tokens import estimate_tokens
 from dlightrag.answer.resources.models import (
     EXTRACTION_TEXT,
     ResourceInput,

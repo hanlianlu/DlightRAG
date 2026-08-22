@@ -4,16 +4,17 @@
 from datetime import UTC, datetime
 
 import pytest
-from dlightrag_agent.session.effects import EffectSettlement
-from dlightrag_agent.session.entries import (
+
+from dlightrag.agent.session.effects import EffectSettlement
+from dlightrag.agent.session.entries import (
     EffectIntentEntry,
     EffectResultEntry,
     UserMessageEntry,
 )
-from dlightrag_agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
-from dlightrag_agent.session.memory import InMemoryAgentSessionStore
-from dlightrag_agent.session.projection import ContextProjection
-from dlightrag_agent.session.store import (
+from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
+from dlightrag.agent.session.memory import InMemoryAgentSessionStore
+from dlightrag.agent.session.projection import ContextProjection
+from dlightrag.agent.session.store import (
     EffectAlreadySettled,
     EffectCommit,
     EffectMissing,
@@ -34,7 +35,7 @@ def _user(session_id: SessionId, content: str) -> UserMessageEntry:
 
 
 def _intent(session_id: SessionId, *, intent_id: IntentId | None = None) -> EffectIntentEntry:
-    from dlightrag_agent.session.effects import EffectIntent
+    from dlightrag.agent.session.effects import EffectIntent
 
     return EffectIntentEntry(
         entry_id=EntryId.new(),
@@ -53,7 +54,7 @@ def _intent(session_id: SessionId, *, intent_id: IntentId | None = None) -> Effe
 
 
 def _settlement(intent_id: IntentId) -> EffectSettlement[NoHostUpdate]:
-    from dlightrag_agent.session.effects import ToolResultEntry
+    from dlightrag.agent.session.effects import ToolResultEntry
 
     result = ToolResultEntry(
         tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", content="found"
@@ -64,7 +65,7 @@ def _settlement(intent_id: IntentId) -> EffectSettlement[NoHostUpdate]:
 def _result_entry(
     session_id: SessionId, intent_id: IntentId, *, sequence: int = 0
 ) -> EffectResultEntry:
-    from dlightrag_agent.session.effects import ToolResultEntry
+    from dlightrag.agent.session.effects import ToolResultEntry
 
     return EffectResultEntry(
         entry_id=EntryId.new(),
@@ -192,7 +193,7 @@ async def test_sequences_are_contiguous_per_transaction() -> None:
 
 @pytest.mark.asyncio
 async def test_projection_commits_with_the_transaction() -> None:
-    from dlightrag_agent.session.projection import TokenAnchor
+    from dlightrag.agent.session.projection import TokenAnchor
 
     store = InMemoryAgentSessionStore()
     session_id = SessionId.new()

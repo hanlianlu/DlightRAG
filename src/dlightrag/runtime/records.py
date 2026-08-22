@@ -9,9 +9,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from dlightrag_agent.session.ids import SessionId
-from dlightrag_agent.session.store import AgentSessionStore
-
+from dlightrag.agent.session.ids import SessionId
+from dlightrag.agent.session.store import AgentSessionStore
 from dlightrag.runtime.contracts import AnswerRunPhase, AnswerRunStatus
 from dlightrag.runtime.policy import MAX_RECLAIMS_WITHOUT_PROGRESS
 from dlightrag.runtime.progress import RunProgressStore

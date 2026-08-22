@@ -4,7 +4,7 @@
 from collections.abc import Mapping
 from typing import Any
 
-from dlightrag_rag.retrieval import MetadataFilter
+from dlightrag.rag.retrieval import MetadataFilter
 
 
 def metadata_filter_from_payload(payload: Any | None) -> MetadataFilter | None:

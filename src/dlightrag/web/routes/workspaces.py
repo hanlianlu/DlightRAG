@@ -4,11 +4,11 @@
 import logging
 from typing import TYPE_CHECKING
 
-from dlightrag_rag.workspaces import normalize_workspace
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import JSONResponse
 
 from dlightrag.access import AccessAction, WorkspaceRecord
+from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.web.deps import (
     enforce_web_access,
     filter_web_workspace_records,

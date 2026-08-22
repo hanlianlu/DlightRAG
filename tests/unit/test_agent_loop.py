@@ -2,14 +2,15 @@
 """AgentLoop stop contract: silence, cancel, provider error, all-terminate."""
 
 import pytest
-from dlightrag_agent.loop import AgentLoop, LoopCancelled, LoopOutcome, LoopProviderError
-from dlightrag_agent.tools.contracts import (
+
+from dlightrag.agent.loop import AgentLoop, LoopCancelled, LoopOutcome, LoopProviderError
+from dlightrag.agent.tools.contracts import (
     ExecutedTurn,
     ToolExecution,
     ToolObservation,
     ToolResult,
 )
-from dlightrag_ai.messages import AssistantTurn, ToolCall
+from dlightrag.ai.messages import AssistantTurn, ToolCall
 
 
 def _turn(*names: str, terminate: bool = False) -> ExecutedTurn:
@@ -97,16 +98,18 @@ async def test_provider_error_ends_the_attempt() -> None:
 
 
 def test_loop_module_imports_no_product() -> None:
-    import dlightrag_agent.loop as loop
+    import dlightrag.agent.loop as loop
 
-    forbidden = ("dlightrag.", "asyncpg", "fastapi")
+    forbidden = (
+        "dlightrag.answer",
+        "dlightrag.rag",
+        "dlightrag.adapters",
+        "dlightrag.services",
+        "asyncpg",
+        "fastapi",
+    )
     source = loop.__file__
     assert source is not None
     text = open(source, encoding="utf-8").read()
-    for name in forbidden:
-        if name == "dlightrag.":
-            assert "dlightrag_agent" in text
-            assert "import dlightrag\n" not in text
-            assert "from dlightrag." not in text
-        else:
-            assert name not in text
+    assert "dlightrag.agent" in text
+    assert all(name not in text for name in forbidden)
