@@ -88,6 +88,14 @@ _Avoid_: Prepared-input hash
 An owner-scoped, non-citable remembered preference or fact that may be recalled across separate conversations. It is never Evidence and never a citation source.
 _Avoid_: Compaction Summary, Journal Entry, PriorTurns, Evidence, Artifact, remembered citation
 
+**Memory Subject**:
+The owner identity a Memory store scopes every operation to; bound by the host at launch (DlightRAG: JWT owner; stdio MCP: `--subject`) and never accepted from a model tool argument.
+_Avoid_: user id, tenant, namespace parameter
+
+**RecallResult**:
+The structured outcome of one query-aware Memory recall: selected records (exact matches pinned first, then chronological), the raw leg candidates the fusion consumed, degradation flags, and the recalled body character cost (rendering overhead excluded). Never a prompt fragment.
+_Avoid_: prompt text, standing block, packed string
+
 **Memory Write**:
 The only durable create, supersede, or forget of a Memory Record: a named remember or forget channel that passed a closed policy check.
 _Avoid_: Silent promotion, transcript scan, model aside, journal side effect

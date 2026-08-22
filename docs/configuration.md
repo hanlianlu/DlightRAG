@@ -966,6 +966,10 @@ set; those are secrets and belong in `.env`. The rest is non-secret and lives in
 Running the bundled local stack is covered in
 [operations.md](operations.md#local-langfuse-observability).
 
+Memory recall contributes usage accounting only: `memory_recall_record_count`
+and `memory_recall_chars` in the answer trace, with no record bodies and no
+separate log stream.
+
 ## Citations
 
 Citation validation is always part of answer finalization. Web source-panel

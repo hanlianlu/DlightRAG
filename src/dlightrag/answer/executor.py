@@ -663,6 +663,8 @@ class AnswerExecutor:
         )
         auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
         recall_allowed = True
+        memory_recall_record_count = 0
+        memory_recall_chars = 0
         if self._memory is not None and auth_mode == "jwt":
             recall_allowed = (
                 self._memory_recall_enabled is None
@@ -671,6 +673,10 @@ class AnswerExecutor:
             if recall_allowed:
                 recalled = await self._memory.recall(owner_id=session.owner_id, query=request.query)
                 run.orchestrator.bind_recall(render_auto_recall(recalled.records))
+                # Usage accounting only (industry pattern: Pi/Kimi record token
+                # cost, never retrieval-quality metadata). No record bodies.
+                memory_recall_record_count = len(recalled.records)
+                memory_recall_chars = recalled.content_chars
         stream: AsyncIterator[str] | None = None
         try:
             journal = session.execution.session_store
@@ -807,6 +813,8 @@ class AnswerExecutor:
                     )
                 trace = dict(getattr(stream, "trace", None) or {})
                 trace["query_image_description_count"] = len(run.image_descriptions)
+                trace["memory_recall_record_count"] = memory_recall_record_count
+                trace["memory_recall_chars"] = memory_recall_chars
                 images = answer_images_from_sources(finalized.sources, contexts=contexts)
                 pipeline_trace.update(
                     output=answer_trace_output(

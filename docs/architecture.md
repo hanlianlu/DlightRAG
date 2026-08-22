@@ -328,6 +328,25 @@ importing `dlightrag_ai` does not load OpenAI, Anthropic, or Gemini clients.
 Root `LangfuseTelemetry` is injected into core model operations; standalone
 cores use the explicit no-op adapter.
 
+### Memory package surface
+
+`dlightrag-memory` is host-neutral and independently installable. Storage is
+its own PostgreSQL schema (`dlightrag_memory_records`) with its own migration
+registry; PG is the only backend (`--dsn`), no SQLite. Recall fuses RRF(k=60)
+over exact (normalized btree), sparse (pg_textsearch BM25, both textsearch
+configs merged by best score), and dense (opt-in TextEmbedder) legs; time
+never enters the score — exact matches pin first, the rest follow
+chronologically, and no threshold means an empty result is simply not
+injected. Transport is `dlightrag-memory-mcp`, a stdio-only MCP server: the
+subject is bound at launch and never accepted from a tool argument, a
+launched server is authorized for its subject, and exactly three tools exist
+— `memory_recall(query)`, `memory_remember(kind, body, confidence,
+supersedes_id?)`, and `memory_forget(memory_id | body)` — with no browse, no
+observe, and no HTTP. Eligibility and rendering stay host concerns: the
+package never judges auth mode and never renders prompt fragments; the
+DlightRAG root owns the JWT gate and the low-authority user-role placement of
+the standing block.
+
 Inside the root product, modules still sit on a decreasing dependency stack: a
 module at a higher layer may import from lower layers, but lower layers must not
 import higher ones.
