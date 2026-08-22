@@ -105,7 +105,7 @@ _Avoid_: Silent promotion, transcript scan, model aside, journal side effect
 _Avoid_: TTL on active records, confidence decay, automatic consolidation, storage quota
 
 **Retention Floor**:
-The single deployment clock (`runtime.answer_run_retention_days`, default 365) that bounds how long terminal Answer runs, their event logs, and superseded Memory history stay durable. The sweep is best-effort: it may reclaim later, never earlier.
+The single deployment clock (`answer.runtime.answer_run_retention_days`, default 365) that bounds how long terminal Answer runs, their event logs, and superseded Memory history stay durable. The sweep is best-effort: it may reclaim later, never earlier.
 _Avoid_: deadline, SLA, per-aggregate TTL, inactivity expiry
 
 **Conversation Read Window**:

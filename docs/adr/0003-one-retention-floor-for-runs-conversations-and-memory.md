@@ -4,7 +4,8 @@ Durable state previously expired on three separate clocks: terminal Answer runs
 and event logs at 30 days (with a conversation-linked exemption), Web
 conversations on a 30-day inactivity TTL, and superseded Profile memory at 30
 days. Physical storage is cheap while durable session history is valuable, so
-we replaced all three with one deployment knob: `runtime.answer_run_retention_days`
+we replaced all three with one deployment knob:
+`answer.runtime.answer_run_retention_days`
 (default 365), a best-effort floor counted from `finished_at`.
 
 - Terminal runs prune after the floor regardless of conversation linkage; the

@@ -47,7 +47,7 @@ projected by status interfaces.
 
 | Path | Use this when | PostgreSQL | Parser endpoint | Security | Start here |
 |---|---|---|---|---|---|
-| Local Docker | Developer machine, Web UI, smoke tests | Compose PG18 | Host-native MinerU (default) or optional Docling profile | `auth_mode: none` on loopback | [Quick Start](#quick-start) |
+| Local Docker | Developer machine, Web UI, smoke tests | Compose PG18 | Host-native MinerU (default) or optional Docling profile | `access.auth_mode: none` on loopback | [Quick Start](#quick-start) |
 | Native API | API process runs on host, PostgreSQL stays in Docker | Compose PG18 | Any reachable configured MinerU or Docling endpoint | Local or explicit auth | [Native API Variant](#native-api-variant) |
 | Shared service | Remote users, agents, team workspace | Managed or self-hosted PG18 | Official MinerU API or independent parser service | `simple` or `jwt` | [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md), [Security](docs/security.md) |
 | Enterprise | Multi-user internal product | Managed PG18 | Independently operated parser service | `jwt` + JWKS, optional claim access control | [Security](docs/security.md), [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md) |
@@ -99,7 +99,7 @@ uv run prerequisite_setup.py
 
 It writes `config.yaml` and `.env` for you (with timestamped backups) and is safe
 to re-run. The wizard does not preserve the checked-in model choices: the minimum
-path writes only `llm.default` plus `embedding`, while the custom path replaces
+path writes only `models.chat.default` plus `models.embedding`, while the custom path replaces
 role-specific LLM blocks with the roles you choose. Prefer the manual steps below
 if you'd rather configure everything by hand.
 
@@ -244,7 +244,7 @@ channels take the same answer inputs: a query plus optional **attachments**
 (images, PDFs, Office documents, HTML/CSV, or HTTPS references). Attachments
 become request-local resources read on demand — deterministic text decoding and
 conversion first, focused VLM inspection for figures — and are bounded by
-`answer.max_attachments` (default 6), a per-attachment size cap (100 MiB), and a
+`answer.generation.max_attachments` (default 6), a per-attachment size cap (100 MiB), and a
 per-request total (128 MiB). Uploaded bytes are stored once as owner-scoped
 content-addressed artifacts owned by the run, and historical ones are
 re-registered lazily on follow-ups. The separate `/retrieve` path keeps its own
@@ -392,7 +392,7 @@ federate across multiple workspaces.
 **Ingestion sources.** Local files, Web uploads, S3, Azure Blob, public/signed
 HTTPS URLs, and SDK `AsyncDataSource` connectors flow through the same ingest
 contract. Web and REST uploads are staged under DlightRAG's managed
-`working_dir/inputs/<workspace>/` tree, then copied into the workspace input
+`deployment.working_dir/inputs/<workspace>/` tree, then copied into the workspace input
 root as retained local sources. Upload batch staging under `__uploads__/` is
 cleaned by the durable ingest job after the handoff.
 
@@ -405,7 +405,7 @@ provide `SourceDocument.download_uri` (or `download_uri_for_key`). DlightRAG
 rejects a document before materialization when this contract cannot be met; it
 never silently changes the caller's retention choice.
 
-**Runtime storage.** Docker Compose stores `working_dir` in the
+**Runtime storage.** Docker Compose stores `deployment.working_dir` in the
 `dlightrag_data` named volume mounted at `/app/dlightrag_storage`; the host
 `./dlightrag_storage` directory is only used by native, non-Docker runs.
 
@@ -426,7 +426,7 @@ Langfuse stack (`make langfuse-up`) and view traces, see
 
 ## Security Model
 
-Local loopback development can use `auth_mode: none`. Shared or exposed
+Local loopback development can use `access.auth_mode: none`. Shared or exposed
 deployments should enable auth:
 
 | Mode | Use case |
@@ -482,6 +482,8 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 
 ## Documentation Map
 
+- [CHANGELOG.md](CHANGELOG.md) - release notes and breaking changes.
+- [docs/migration-2.0.md](docs/migration-2.0.md) - package, import, and configuration migration from 1.x.
 - [docs/architecture.md](docs/architecture.md) - runtime ownership, storage topology, and code layering.
 - [docs/interfaces.md](docs/interfaces.md) - SDK, REST, MCP, and Web contracts.
 - [docs/security.md](docs/security.md) - auth, JWT/JWKS, IdP boundaries, and access control.

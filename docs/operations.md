@@ -56,7 +56,7 @@ concern rather than a request concern.
   older schema fails startup with a diagnostic instead of degrading.
 - **Shared artifacts.** Every process that serves KB images or retained source
   downloads must see the same POSIX artifact tree at the same absolute
-  `working_dir` path. Multi-host deployments need one shared mount (EFS, NFS,
+  `deployment.working_dir` path. Multi-host deployments need one shared mount (EFS, NFS,
   Azure Files); DlightRAG emulates no object store.
 - **Shutdown.** A graceful stop finalizes cancel-pending runs and fenced-requeues
   every other owned run so it is immediately reclaimable. A crash leaves the
@@ -64,7 +64,7 @@ concern rather than a request concern.
   Fast stages. Four consecutive reclaims without durable progress fail the
   run with `run_abandoned`.
 - **Retention.** Every run-owning process trims event logs and prunes terminal
-  runs past the `runtime.answer_run_retention_days` floor (default 365) hourly in
+  runs past the `answer.runtime.answer_run_retention_days` floor (default 365) hourly in
   bounded `SKIP LOCKED` batches. There is no
   knob and no separate cron job. A succeeded run a Web conversation still
   references survives until that conversation is deleted or expires; its event log
@@ -73,8 +73,9 @@ concern rather than a request concern.
 - **Storage.** Queued runs are never rejected for capacity, so bound and monitor
   PostgreSQL storage: `dlightrag_blobs`/`dlightrag_blob_chunks` hold uploaded and fetched
   bytes, and `dlightrag_answer_run_events` holds token batches until trimmed.
-  When `agent.execution_environment` is `local_trusted`, every Answer worker
-  including readers must mount the same RWX path at `agent.workspace_root`
+  When `answer.agent.execution_environment` is `local_trusted`, every Answer
+  worker including readers must mount the same RWX path at
+  `answer.agent.workspace_root`
   (Compose: `/app/dlightrag_agent_workspaces`).
 - **Probes.** Route traffic on unauthenticated `GET /ready` (database and corpus
   readiness, short-cached). `GET /health` is liveness only and never touches
@@ -120,7 +121,8 @@ It does not parse documents, call model providers, rebuild vectors, or modify
 source files.
 
 Run it after enabling workspace BM25 for an existing corpus or changing
-`bm25_profiles`, `bm25_k1`, or `bm25_b`:
+`corpus.retrieval.bm25_profiles`, `corpus.retrieval.bm25_k1`, or
+`corpus.retrieval.bm25_b`:
 
 ```bash
 # Stop API, MCP, ingest, and reader processes that use the same workspace.
@@ -130,8 +132,8 @@ uv run dlightrag-rebuild-bm25 --yes
 dlightrag-rebuild-bm25 --env-file /absolute/path/to/.env --yes
 ```
 
-The configured `service_role` must be `writer`, and `bm25_enabled` must be
-`true`. Restart writer and reader processes only after the command completes.
+The configured `deployment.service_role` must be `writer`, and
+`corpus.retrieval.bm25_enabled` must be `true`. Restart writer and reader processes only after the command completes.
 Use `--batch-size N` to bound each language-label update transaction.
 
 The `chunks` and `all` vector rebuild targets below invoke the same BM25
@@ -259,8 +261,10 @@ bundles a self-hosted Langfuse stack for local development so you do not need a
 Langfuse Cloud account. It runs as its own Docker Compose project on isolated
 ports and is wired to DlightRAG by two helper scripts under `scripts/langfuse/`.
 
-Non-secret SDK behavior (`observability.langfuse_host`, `langfuse_export_external_spans`,
-`langfuse_trace_sensitive_data`, `langfuse_environment`, sample rate, timeout) lives in
+Non-secret SDK behavior (`observability.langfuse_host`,
+`observability.langfuse_export_external_spans`,
+`observability.langfuse_trace_sensitive_data`, `observability.langfuse_environment`,
+sample rate, timeout) lives in
 [configuration.md](configuration.md). This section covers running the stack.
 
 Prerequisites: Docker and Compose. The Langfuse stack is separate from the

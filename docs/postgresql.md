@@ -21,7 +21,7 @@ and over any key of the `custom_metadata` JSONB column.
 
 Startup checks require PostgreSQL 18 or newer. Workspaces should not mix
 embedding models or dimensions after data has been indexed; changing
-`embedding.dim` requires clearing the workspace and rebuilding vector indexes.
+`models.embedding.dim` requires clearing the workspace and rebuilding vector indexes.
 
 The checked-in Docker Compose stack builds `dlightrag-postgres:pg18` from the
 local `postgres/` image definition and preloads `pg_textsearch,pg_jieba`.
@@ -185,7 +185,7 @@ Retention is fixed internal maintenance with no operator knob. Every run-owning
 process runs it hourly in bounded `SKIP LOCKED` batches, so it is safe on every
 host at once and needs no leader election:
 
-- **Event logs** are deleted after the `runtime.answer_run_retention_days` floor (default 365) counted from `finished_at` for every terminal run,
+- **Event logs** are deleted after the `answer.runtime.answer_run_retention_days` floor (default 365) counted from `finished_at` for every terminal run,
   even one a conversation still shows. That transaction sets `events_trimmed_at`,
   after which the run's event endpoint returns HTTP 410 and clients read the
   canonical result from the status endpoint instead.
@@ -229,7 +229,7 @@ workspace is a `DELETE`, and orphaned workspaces leave no schemas behind.
 ## PG Pool Architecture
 
 DlightRAG uses one configured PostgreSQL endpoint per service process, selected
-by `service_role`. Both roles target the **same primary endpoint**: a writer
+by `deployment.service_role`. Both roles target the **same primary endpoint**: a writer
 applies DlightRAG schema migrations and mutates the corpus, and a reader still
 writes DlightRAG operational state (see
 [Service roles and shared artifacts](#service-roles-and-shared-artifacts)).
@@ -289,7 +289,7 @@ Deployment requirements:
   200. `/ready` probes the database and short-caches its verdict; `GET /health`
   is liveness only and never touches PostgreSQL.
 - Every process serving KB images or retained source downloads must see the same
-  POSIX artifact tree at the **same absolute `working_dir` path**. Single host:
+  POSIX artifact tree at the **same absolute `deployment.working_dir` path**. Single host:
   the existing volume or a shared named volume. Multi-host: one shared POSIX
   mount such as EFS, NFS, or Azure Files. DlightRAG emulates no object store:
   LightRAG writes `file://` sidecar URIs under `INPUT_DIR/__parsed__` and its

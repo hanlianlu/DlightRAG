@@ -149,7 +149,7 @@ turns receive identity, tool-selection policy, trust boundaries, and stopping
 rules, but not the answer/citation contract. The last silent turn is the
 answer; citation finalization is programmatic. Fast never enters the Agent Loop.
 
-When `web_search.api_key` (Exa) is set, Exa Search is an optional peer
+When `answer.web_search.api_key` (Exa) is set, Exa Search is an optional peer
 capability. Its passages belong to no workspace and are packed beside corpus
 evidence; evidence-producing result URLs become inert request-local resource
 handles that the model may deep-read with `read`. Exa Contents is not a
@@ -242,7 +242,7 @@ parsed-chunk table, and no vector cache. Historical attachments are re-registere
 lazily as request-local resources on every follow-up, newest first up to the
 available attachment-count limit. An attachment-bearing conversation therefore
 remains on the research path. Browser thumbnails are derived on demand. Manual
-deletion and the shared `runtime.answer_run_retention_days` floor (default 365,
+deletion and the shared `answer.runtime.answer_run_retention_days` floor (default 365,
 counted from `finished_at`) delete the linked runs, cascade their events and
 references, and release blobs no surviving run references; a conversation row
 whose last turn aged out is reclaimed by the empty-conversation sweep.
@@ -289,7 +289,7 @@ Core storage is PostgreSQL 18:
 | BM25 | pg_textsearch |
 
 Every process serving KB images or source downloads must see the same POSIX
-artifact tree at the same absolute `working_dir` path. See
+artifact tree at the same absolute `deployment.working_dir` path. See
 [postgresql.md](postgresql.md#service-roles-and-shared-artifacts) for the
 complete role, migration-order, and shared-artifact contract.
 

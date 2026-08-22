@@ -153,8 +153,8 @@ current or next owner. It never tries to revive an expired lease. Blocking
 CPU work remains cancellation-cooperative at its existing settlement boundary;
 the stale worker cannot persist that result.
 
-A durable Answer run has no wall-clock execution deadline. `retrieval_timeout`
-bounds one caller-awaited inline Retrieval operation and does not wrap Answer
+A durable Answer run has no wall-clock execution deadline.
+`corpus.retrieval.timeout` bounds one caller-awaited inline Retrieval operation and does not wrap Answer
 execution. Each external LLM, embedding, rerank, URL-fetch, resource, and
 parser-sidecar call keeps its own provider, request, or stream-idle timeout, so
 one stalled awaited call cannot hold a slot forever. A run releases its slot on
@@ -256,14 +256,15 @@ cancel tool requests cancellation; MCP does not hold one tool call open for a
 tens-of-minutes run.
 
 Every transport derives the owner through one transport-neutral principal
-projection in Access. `auth_mode="none"` and `auth_mode="simple"` intentionally
-collapse callers into one deployment owner; `auth_mode="jwt"` is the tenant
+projection in Access. `access.auth_mode="none"` and
+`access.auth_mode="simple"` intentionally collapse callers into one deployment
+owner; `access.auth_mode="jwt"` is the tenant
 boundary. Trusted in-process callers pass an explicit owner id to
 `AnswerService` and may use the deployment owner when no tenant boundary exists.
 
 ### Reader role
 
-`service_role="reader"` means corpus-read-only, not process-read-only. A reader
+`deployment.service_role="reader"` means corpus-read-only, not process-read-only. A reader
 may create and execute answer runs and may write DlightRAG operational state,
 including runs, events, artifacts, and Web conversations.
 
@@ -538,12 +539,12 @@ LightRAG creates parser artifacts under `INPUT_DIR/__parsed__` and stores
 
 The supported topology is therefore:
 
-- default: the local `working_dir` volume;
+- default: the local `deployment.working_dir` volume;
 - multi-process, one host: a shared named volume;
 - multi-host: one shared POSIX mount such as EFS, NFS, or Azure Files mounted at
-  the same configured `working_dir` path in every process.
+  the same configured `deployment.working_dir` path in every process.
 
-`working_dir` is configurable, so there is no separate storage switch. Direct
+`deployment.working_dir` is configurable, so there is no separate storage switch. Direct
 object-storage support would require a LightRAG sidecar resolver or a DlightRAG
 materialization cache and is outside this contract.
 

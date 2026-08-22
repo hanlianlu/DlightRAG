@@ -16,7 +16,7 @@ For enterprise deployments, use an external identity provider or gateway to
 authenticate users and issue tokens. DlightRAG verifies those tokens and maps
 verified claims to workspace permissions when access control is enabled.
 The browser still pastes that bearer into an HttpOnly cookie when no
-`web_identity` edge is configured; the edge-asserted Web identity path is
+`access.web_identity` edge is configured; the edge-asserted Web identity path is
 described below.
 
 ## Edge-Asserted Web Identity

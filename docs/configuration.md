@@ -4,7 +4,9 @@ This page is for operators and SDK users deciding which settings to change. It
 owns configuration precedence, public field groups, defaults, and advanced
 overrides. Runtime architecture lives in [architecture.md](architecture.md);
 auth and access-control guidance lives in [security.md](security.md);
-interface payloads live in [interfaces.md](interfaces.md).
+interface payloads live in [interfaces.md](interfaces.md). Operators upgrading
+from the 1.x package and flat-settings layout should follow
+[migration-2.0.md](migration-2.0.md) before copying values into this reference.
 
 Root [config.yaml](../config.yaml) is intentionally curated. It should contain
 the product and deployment choices most operators actually change. The typed
@@ -176,7 +178,7 @@ an external deployment supplies its own reachable endpoint. Native DlightRAG
 processes use `127.0.0.1` endpoints when their parser runs on the same host.
 
 `corpus.sidecars.mineru.language` is MinerU's OCR language hint for scanned or
-image-based documents. It is separate from `extraction.language`, which controls
+image-based documents. It is separate from `corpus.extraction.language`, which controls
 LightRAG's KG extraction prompt language.
 
 `corpus.sidecars.mineru.backend` selects MinerU's parse engine and defaults to
@@ -1027,32 +1029,38 @@ default to no semantic highlights; pass `semantic_highlights=True` in Python or
 Advanced highlight controls:
 
 ```yaml
-citations:
-  highlights:
-    enabled: true
-    timeout: 10.0
-    max_concurrency: 8
-    batch_size: 8
-    max_input_chars: 4096
-    cache_size: 500
+answer:
+  citations:
+    highlights:
+      enabled: true
+      timeout: 10.0
+      max_concurrency: 8
+      batch_size: 8
+      max_input_chars: 4096
+      cache_size: 500
 ```
 
-Set `citations.highlights.enabled: false` to disable semantic highlight
+Set `answer.citations.highlights.enabled: false` to disable semantic highlight
 extraction for every interface.
 
 ## Conversation And Upload Limits
 
 ```yaml
-max_upload_bytes: 104857600
-max_upload_size_mb: 512
-ingest_timeout:
-retrieval_timeout: 300
+corpus:
+  ingestion:
+    max_upload_bytes: 104857600
+    timeout: null
+  retrieval:
+    timeout: 300
+interfaces:
+  max_upload_size_mb: 512
 ```
 
 ```yaml
-agent:
-  execution_environment: disabled   # or local_trusted
-  workspace_root: null              # optional; see below
+answer:
+  agent:
+    execution_environment: disabled   # or local_trusted
+    workspace_root: null              # optional; see below
 ```
 
 Path tools, Bash, and private spill are absent unless `execution_environment` is
@@ -1094,16 +1102,16 @@ memory policy. How many turns stay durable in PostgreSQL is decided by the
 shared retention floor, not a per-conversation window. The pinned model profiles
 and context policy decide how much reaches a model.
 
-`max_upload_bytes` is the per-file cap for REST multipart ingest and Web
-workspace/folder uploads. It also supplies the tighter receive-layer cap for
-`/ingest/blob`, with fixed multipart framing allowance. URL ingestion has its own
-`corpus.ingestion.url_max_bytes` download cap. Answer attachments use the separate
-`answer.generation.max_attachment_bytes` (100 MiB) per-attachment ceiling, not this ingest
-cap. `max_upload_size_mb` is the general receive-layer cap for multipart uploads
-and the per-request total cap for multi-file Web workspace uploads. Answer routes
-use their tighter answer attachment policy instead. `corpus.ingestion.timeout` limits how
-long the in-process `CorpusAdmin.ingest()` convenience method waits for its
-durable job. When it expires, the job keeps running and the method returns its
+`corpus.ingestion.max_upload_bytes` is the per-file cap for REST multipart ingest
+and Web workspace/folder uploads. It also supplies the tighter receive-layer cap
+for `/ingest/blob`, with fixed multipart framing allowance. URL ingestion has its
+own `corpus.ingestion.url_max_bytes` download cap. Answer attachments use the
+separate `answer.generation.max_attachment_bytes` (100 MiB) per-attachment
+ceiling, not this ingest cap. `interfaces.max_upload_size_mb` is the general
+receive-layer cap for multipart uploads and the per-request total cap for
+multi-file Web workspace uploads. Answer routes use their tighter answer
+attachment policy instead. `corpus.ingestion.timeout` limits how long the
+in-process `CorpusAdmin.ingest()` convenience method waits for its durable job. When it expires, the job keeps running and the method returns its
 current row instead of cancelling it. REST, Web, and MCP start jobs immediately
 and are not governed by this wait setting.
 
@@ -1119,17 +1127,23 @@ LightRAG's document status pipeline.
 ## LightRAG KG Internals
 
 ```yaml
-chunk_p_token_size: 2000
-kg_chunk_pick_method: VECTOR
-max_entity_tokens: 6000
-max_relation_tokens: 8000
-max_total_tokens: 40000
-vector_db_kwargs: {}
+corpus:
+  ingestion:
+    chunk_token_size: 2000
+  retrieval:
+    kg_chunk_pick_method: VECTOR
+    max_entity_tokens: 6000
+    max_relation_tokens: 8000
+    max_total_tokens: 40000
+storage:
+  lightrag:
+    vector_db_kwargs: {}
 ```
 
-`kg_entity_types` is public because it shapes domain extraction, but it is empty
-by default so DlightRAG defers to LightRAG's built-in general taxonomy
-(Person/Organization/Location/Event/Concept/Method/Content/Data/Artifact/
-NaturalObject/...). Set a domain list only to bias extraction toward a specific
-corpus. For stronger domain control, use `extraction.entity_type_prompt_file`
-with a file under `prompts/entity_type/`.
+`corpus.retrieval.kg_entity_types` is public because it shapes domain extraction,
+but it is empty by default so DlightRAG defers to LightRAG's built-in general
+taxonomy (Person/Organization/Location/Event/Concept/Method/Content/Data/
+Artifact/NaturalObject/...). Set a domain list only to bias extraction toward a
+specific corpus. For stronger domain control, use
+`corpus.extraction.entity_type_prompt_file` with a file under
+`prompts/entity_type/`.

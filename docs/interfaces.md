@@ -170,7 +170,7 @@ the requested retention policy.
 | `blob_path` | `string` | — | Specific blob (mutually exclusive with `prefix`) |
 | `prefix` | `string` | — | Blob/key prefix filter for `azure_blob`/`s3` batches; mutually exclusive with `blob_path`/`s3_key`. Omit (or pass `""`) to ingest the whole container/bucket. |
 | `bucket` | `string` | s3 | S3 bucket name. With neither `s3_key` nor `prefix`, ingests the whole bucket. |
-| `s3_region` | `string` | — | Optional S3 region for this ingest; falls back to the `s3_region` config setting or the AWS SDK environment/config defaults |
+| `s3_region` | `string` | — | Optional S3 region for this ingest; falls back to the `corpus.sources.s3_region` config setting or the AWS SDK environment/config defaults |
 | `s3_key` | `string` | — | S3 object key for a single object; mutually exclusive with `prefix` |
 | `url` | `string` | url | Single public or signed HTTPS document URL |
 | `urls` | `list[string]` | url | Multiple public or signed HTTPS document URLs; mutually exclusive with `url` |
@@ -325,8 +325,8 @@ containing the same single-file or staged batch response shown above. At most
 200 error messages are retained per job; `failed_items` remains
 the authoritative failed-item count and `errors_truncated` reports whether
 additional messages were omitted. REST, Web, and MCP start the job immediately and do not wait on
-`ingest_timeout`. The in-process `CorpusAdmin.ingest()` convenience method starts
-the same durable job, waits up to `ingest_timeout`, and returns either the
+`corpus.ingestion.timeout`. The in-process `CorpusAdmin.ingest()` convenience
+method starts the same durable job, waits up to `corpus.ingestion.timeout`, and returns either the
 completed result or the still-running job row without cancelling it.
 
 `POST /ingest/jobs/{job_id}/cancel` and MCP `cancel_ingest_job` stop a running
@@ -471,8 +471,9 @@ succeeded turns become model history.
 
 Answer attachment admission completes before `/web/api/answer` returns. Unsupported,
 empty, unsafe-name, per-attachment oversized, and over-count uploads return HTTP
-4xx before the run is accepted: a request exceeding `answer.max_attachments`,
-`answer.max_attachment_bytes`, or `answer.max_total_attachment_bytes` is rejected
+4xx before the run is accepted: a request exceeding
+`answer.generation.max_attachments`, `answer.generation.max_attachment_bytes`,
+or `answer.generation.max_total_attachment_bytes` is rejected
 with a stable limit message. Once a run is accepted, a resource that cannot be
 read produces a classified terminal `error` event; the answer does not silently
 drop evidence.
@@ -567,7 +568,7 @@ are no checkpoint error kinds.
 A saturated service does not refuse an answer: accepted runs queue until an
 execution slot frees or the caller cancels the run, with no queue timeout, queue
 depth cap, or capacity error. An answer request whose attachments exceed
-`answer.max_total_attachment_bytes` returns HTTP 413 before the route buffers the
+`answer.generation.max_total_attachment_bytes` returns HTTP 413 before the route buffers the
 body. Generic request-rate, connection, and volumetric limits are an ingress
 responsibility, not an application one — see
 [security.md](security.md#ingress-responsibilities).
@@ -662,8 +663,8 @@ async for event in application.answers.answer_stream(
 | `chunk_top_k` | `int \| None` | config default | Explicit chunk/visual candidates fetched for `/retrieve` and before `/answer` packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
 | `bm25_query` | `str \| None` | `None` | `retrieve` only. Optional workspace BM25 query override; when omitted, RetrievalPlanner supplies lexical terms or retrieval uses the main query. REST and MCP inputs are capped at 1,024 characters. |
 | `query_images` | `list[QueryImage]` | `None` | `retrieve` only. Current-request OpenAI-style `image_url` blocks for knowledge-base visual search: described by the VLM for semantic/BM25 retrieval and embedded directly for visual retrieval. Capped at 3. Answer calls do not accept this field. |
-| `attachments` | `list[AnswerAttachmentLink]` (SDK: `list[AnswerAttachment]` via `resources`) | `None` | `/answer` only. Files or HTTPS references read as request-local resources for one answer. JSON/MCP bodies carry HTTPS link descriptors (`{url, filename?}`, HTTPS-only, no credentials); REST multipart adds uploaded files; the SDK uses `AnswerAttachment.from_path/from_bytes/from_url`. Bounded by `answer.max_attachments` (6), `answer.max_attachment_bytes` (100 MiB), and `answer.max_total_attachment_bytes` (128 MiB). |
-| `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
+| `attachments` | `list[AnswerAttachmentLink]` (SDK: `list[AnswerAttachment]` via `resources`) | `None` | `/answer` only. Files or HTTPS references read as request-local resources for one answer. JSON/MCP bodies carry HTTPS link descriptors (`{url, filename?}`, HTTPS-only, no credentials); REST multipart adds uploaded files; the SDK uses `AnswerAttachment.from_path/from_bytes/from_url`. Bounded by `answer.generation.max_attachments` (6), `answer.generation.max_attachment_bytes` (100 MiB), and `answer.generation.max_total_attachment_bytes` (128 MiB). |
+| `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `answer.citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
 | `history` | `list[ConversationMessage] \| None` | `None` | `/answer` only. Optional caller-supplied prior turns as `role` (`user`/`assistant`) + `content` messages for multi-turn follow-ups. Stateless: never persisted, so the caller re-sends the turns it wants each request. Fast retrieval uses it for standalone-query rewrite and final generation uses the same bounded turns; research control and final generation see it, while agent-selected KB queries stay unchanged. Capped at 100 messages. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports `filename`, `file_extension`, `title`, `author`, `creation_date_from`/`creation_date_to`, and any `custom` key |
 
@@ -1145,7 +1146,8 @@ curl -X POST http://localhost:8100/retrieve \
 
 Answer-model image previews are quality-preserving. Budgeted JPEG, PNG, and WebP
 payloads pass through unchanged; oversized images are recompressed only down to
-the configured `answer.image_min_quality` and `answer.image_min_px` floors. If
+the configured `answer.generation.image_min_quality` and
+`answer.generation.image_min_px` floors. If
 an image still cannot fit, DlightRAG skips it rather than sending a degraded
 preview that could hurt visual understanding. Pure visual retrieved chunks
 whose image is skipped are also removed from the answer context; later text or

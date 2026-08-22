@@ -67,7 +67,7 @@ the vector closes that gap while keeping the native multimodal alignment. It
 does not create a second visual-only chunk, so the same VLM description is not
 exposed twice as independent retrieved evidence. The overwrite is skipped --
 leaving LightRAG's native VLM->text vector untouched -- when
-`embedding.input_modality` resolves to text or the provider cannot fuse text and
+`models.embedding.input_modality` resolves to text or the provider cannot fuse text and
 image into one vector. In auto mode, a failed native image probe produces the
 same safe downgrade; explicit multimodal mode instead treats probe failure as a
 startup error.
@@ -135,11 +135,12 @@ and one full-table `simple` fallback index. Query-time language detection routes
 Chinese, English, German, Swedish, Spanish, French, Italian, Portuguese, Dutch,
 Russian, Danish, and Finnish queries to the matching partial index;
 unsupported, unknown, or ambiguous queries use the `simple`
-fallback. `bm25_profiles`, `bm25_k1`, and `bm25_b` define the index signatures;
+fallback. `corpus.retrieval.bm25_profiles`, `corpus.retrieval.bm25_k1`, and
+`corpus.retrieval.bm25_b` define the index signatures;
 changing them for an existing corpus requires the offline workspace BM25
 rebuild before query workers attach. Each non-fallback BM25 profile maps to
 exactly one language; the fallback profile must not declare languages.
-`bm25_enabled` controls this workspace PostgreSQL lane only. The answer research
+`corpus.retrieval.bm25_enabled` controls this workspace PostgreSQL lane only. The answer research
 path reads attachments through request-local resources, whose lexical ranking is
 in-memory and has no workspace index or shared configuration.
 
@@ -207,7 +208,7 @@ DlightRAG keeps the native one.
 This is the `/retrieve` visual path (`query_images`). Text queries go through
 LightRAG `mix`, BM25, fused-candidate hydration, and reranking. Image-bearing
 queries add a direct image vector path only when the configured
-`embedding.input_modality` resolves to multimodal and its startup probe
+`models.embedding.input_modality` resolves to multimodal and its startup probe
 succeeds:
 
 ```text
@@ -230,7 +231,7 @@ provenance and avoiding duplicate VLM text exposure. The image->image query leg
 is lossless where the VLM-description text path is lossy, so partial overlap
 between the two is expected and resolved by RRF, dedup, and reranking.
 
-With `embedding.input_modality: text`, DlightRAG skips both image-vector
+With `models.embedding.input_modality: text`, DlightRAG skips both image-vector
 overwrite and query-image vector retrieval. Query images can still be described
 by the VLM for text/BM25/KG retrieval, and document images still follow
 LightRAG's native semantic multimodal path. Auto mode may make the same safe
@@ -240,7 +241,7 @@ the provider and modality matrix.
 
 ## Reranking
 
-`rerank.strategy` chooses the final ranker. DlightRAG does not pass
+`models.rerank.strategy` chooses the final ranker. DlightRAG does not pass
 `rerank_model_func` into LightRAG; it disables LightRAG query reranking and
 reranks the DlightRAG fused candidate set after provenance hydration. This lets
 BM25-only hits, direct image matches, and LightRAG `mix` chunks compete in one
@@ -248,7 +249,7 @@ list with page/image data already attached.
 
 | Strategy | How it works |
 |---|---|
-| `chat_llm_reranker` | Batched listwise scoring through the configured rerank model, or `llm.default` when no rerank model is set. With `input_modality: auto`, the selected scoring model reuses the startup vision probe: vision-capable models get bounded image payloads plus text; non-vision models get VLM text only. |
+| `chat_llm_reranker` | Batched listwise scoring through the configured rerank model, or `models.chat.default` when no rerank model is set. With `input_modality: auto`, the selected scoring model reuses the startup vision probe: vision-capable models get bounded image payloads plus text; non-vision models get VLM text only. |
 | `jina_reranker` | Calls Jina `/v1/rerank`. Default model `jina-reranker-v3` (text). Set `input_modality: multimodal` with `jina-reranker-m0` to send bounded image documents when chunks have `image_data`. |
 | `aliyun_reranker` | Calls Alibaba Model Studio rerank. `qwen3-rerank` uses the compatible text payload; `qwen3-vl-rerank` with `input_modality: multimodal` uses the DashScope multimodal payload. `base_url` must point at the matching workspace/region endpoint. |
 | `local_reranker` | Generic entry for any standard `/rerank` endpoint (self-hosted or hosted) in the `{model, query, documents, top_n} -> {results}` shape. `auto` is text; set `input_modality: multimodal` when the endpoint accepts image documents. |
@@ -256,7 +257,7 @@ list with page/image data already attached.
 | `cohere_reranker` | Calls Cohere `/v2/rerank` with text documents. |
 | `azure_cohere` | Calls Azure AI Services Cohere rerank with text documents. Model endpoint roots use `/v1/rerank`; Foundry project roots use `/providers/cohere/v2/rerank`; a full `/rerank` URL is used as-is. |
 
-When `rerank.score_threshold` is set, post-rerank filtering removes chunks below
+When `models.rerank.score_threshold` is set, post-rerank filtering removes chunks below
 that score. The threshold is hard: if every candidate in a workspace scores
 below it, that workspace contributes no reranked chunks to federated round-robin
 merge. When omitted, all strategies keep scored candidates before taking
@@ -395,7 +396,7 @@ resources registered for that request; nothing about them is persisted as a
 parsed chunk or vector.
 
 Answer generation uses one image transport budget for current attachment images
-and retrieved workspace visuals, bounded by `answer.max_images` and the answer
+and retrieved workspace visuals, bounded by `answer.generation.max_images` and the answer
 byte/geometry fields. Focused inspection is a separate VLM call; every inspection
 uses the same byte/geometry fields as per-call limits without consuming the final
 answer budget. Budgeted JPEG, PNG, and WebP payloads are preserved as-is. When
@@ -454,7 +455,7 @@ semantic highlights; pass `semantic_highlights=True` or
 `semantic_highlights: true` on an answer request to opt in. `/retrieve` never
 emits highlights because it has no finalized answer citations.
 
-`citations.highlights.enabled` is the global kill switch. When enabled, the
+`answer.citations.highlights.enabled` is the global kill switch. When enabled, the
 highlighter uses the keyword LLM role, runs with its own timeout/concurrency
 limits, and returns the original sources unchanged on timeout or failure.
 
@@ -513,7 +514,7 @@ the result as located, citable VLM evidence. It does not currently accept a
 bounding box or crop arbitrary regions. PDF page locators and embedded visual
 handles provide the narrower structural inspection paths.
 
-When `web_search.api_key` (Exa) is set, the research path can also call Exa
+When `answer.web_search.api_key` (Exa) is set, the research path can also call Exa
 Search as a peer tool. Exa passages come back already scored against the query;
 they belong to no workspace and are packed beside corpus evidence. Unique URLs
 that produced evidence become inert request-local handles, and only an explicit
