@@ -521,6 +521,17 @@ class AnswerResourceResolver:
         return await asyncio.to_thread(build)
 
 
+async def _memory_recall_allowed(
+    checker: Callable[..., Awaitable[bool]] | None, *, owner_id: str
+) -> bool:
+    """Whether answer injection may use this owner's memory.
+
+    A missing checker means the composition has no settings store and memory
+    stays enabled — the historical default.
+    """
+    return checker is None or await checker(owner_id=owner_id)
+
+
 class AnswerExecutor:
     """Execute durable Answer runs without composition or storage dependencies."""
 
@@ -666,9 +677,8 @@ class AnswerExecutor:
         memory_recall_record_count = 0
         memory_recall_chars = 0
         if self._memory is not None and auth_mode == "jwt":
-            recall_allowed = (
-                self._memory_recall_enabled is None
-                or await self._memory_recall_enabled(owner_id=session.owner_id)
+            recall_allowed = await _memory_recall_allowed(
+                self._memory_recall_enabled, owner_id=session.owner_id
             )
             if recall_allowed:
                 recalled = await self._memory.recall(owner_id=session.owner_id, query=request.query)

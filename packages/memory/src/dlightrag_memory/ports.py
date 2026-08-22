@@ -22,12 +22,14 @@ type Vector = Sequence[float]
 class TextEmbedder(Protocol):
     """Produce one embedding space for memory bodies.
 
-    ``fingerprint`` identifies the embedding model; an adapter stores it with
-    every vector so a model change invalidates the dense index instead of
-    silently comparing across spaces.
+    ``embedding_fingerprint`` identifies the embedding model; an adapter
+    stores it with every vector so a model change invalidates the dense index
+    instead of silently comparing across spaces.
     """
 
-    fingerprint: str
+    @property
+    def embedding_fingerprint(self) -> str: ...
+
     dim: int
 
     async def embed_documents(self, texts: Sequence[str]) -> Sequence[Vector]: ...
@@ -38,8 +40,14 @@ class TextEmbedder(Protocol):
 class NullEmbedder:
     """The zero-configuration embedder: dense recall stays off."""
 
-    fingerprint = "none"
     dim = 0
+
+    @property
+    def embedding_fingerprint(self) -> str:
+        return "none"
+
+    async def aclose(self) -> None:
+        return None
 
     async def embed_documents(self, texts: Sequence[str]) -> Sequence[Vector]:
         raise RuntimeError("NullEmbedder produces no vectors; disable the dense leg")

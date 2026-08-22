@@ -26,6 +26,7 @@ from dlightrag.answer.executor import (
     AnswerResourceSettings,
     OrchestratorRun,
     _close_execution_resources,
+    _memory_recall_allowed,
 )
 from dlightrag.answer.highlights import SemanticHighlightSettings
 from dlightrag.answer.runs.execution import (
@@ -97,6 +98,26 @@ def _png_bytes() -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (2, 2), "white").save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+async def test_memory_recall_allowed_gating() -> None:
+    """No settings checker keeps memory enabled; a false checker disables it."""
+    assert await _memory_recall_allowed(None, owner_id="o") is True
+
+    async def deny(**kwargs: Any) -> bool:
+        del kwargs
+        return False
+
+    assert await _memory_recall_allowed(deny, owner_id="o") is False
+
+    calls: list[str] = []
+
+    async def allow(**kwargs: Any) -> bool:
+        calls.append(kwargs["owner_id"])
+        return True
+
+    assert await _memory_recall_allowed(allow, owner_id="o") is True
+    assert calls == ["o"]
 
 
 async def test_child_model_calls_inherit_run_scheduler_ownership() -> None:

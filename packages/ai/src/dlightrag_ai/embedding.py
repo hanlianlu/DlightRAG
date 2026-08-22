@@ -131,6 +131,18 @@ class MultimodalEmbedder:
     async def embed_query(self, text: str) -> list[float]:
         return await self.embed_text(text)
 
+    @property
+    def embedding_fingerprint(self) -> str:
+        """One canonical identity string for the embedding space.
+
+        The ``TextEmbedder`` port declares ``fingerprint: str``; this property
+        is that string form of the structured ``ModelFingerprint`` so storage
+        adapters can persist it in a TEXT column.
+        """
+        endpoint = self.fingerprint.endpoint_fingerprint
+        base = f"{self.fingerprint.provider}:{self.fingerprint.model}"
+        return f"{base}@{endpoint}" if endpoint else base
+
     def _fused_input(self, description: str, image: Image.Image) -> MultimodalEmbeddingInput:
         data_uri = bounded_embedding_image_data_uri(image)
         parts: list[TextEmbeddingInput | ImageEmbeddingInput] = []

@@ -192,6 +192,10 @@ class PostgresMemoryStore:
             await operation(conn)
         self._initialized = True
 
+    def _embedder_fingerprint(self) -> str:
+        """One canonical embedding-space identity for TEXT persistence."""
+        return self._embedder.embedding_fingerprint
+
     async def insert(self, record: MemoryRecord) -> None:
         embedding = await self._embedding(record.body) if self._dense else None
 
@@ -346,7 +350,7 @@ class PostgresMemoryStore:
                 dense_rows = await conn.fetch(
                     _SEARCH_DENSE,
                     owner_id,
-                    self._embedder.fingerprint,
+                    self._embedder_fingerprint(),
                     _vector_text(vector),
                     cap,
                 )
@@ -387,7 +391,7 @@ def _insert_params(store: PostgresMemoryStore, *, record: MemoryRecord) -> tuple
         record.provenance.session_id or "",
         record.status,
         _uuid(record.supersedes_id, label="supersedes_id") if record.supersedes_id else None,
-        store._embedder.fingerprint if store._dense else None,  # noqa: SLF001
+        store._embedder_fingerprint() if store._dense else None,  # noqa: SLF001
         record.created_at,
         record.updated_at,
     )

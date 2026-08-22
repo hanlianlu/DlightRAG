@@ -19,8 +19,11 @@ from typing import TYPE_CHECKING, Any
 from dlightrag.config import DlightragConfig, get_config
 
 if TYPE_CHECKING:
+    from dlightrag_ai.embedding import MultimodalEmbedder
     from dlightrag_ai.fingerprints import ModelFingerprint
+    from dlightrag_ai.scheduler import ModelScheduler
     from dlightrag_ai.settings import ModelRole
+    from dlightrag_ai.telemetry import Telemetry
     from dlightrag_memory.postgres import PostgresMemoryStore
     from dlightrag_rag.pool import WorkspacePool
 
@@ -65,6 +68,7 @@ class _ApplicationComponents:
     answers: AnswerService
     memory: MemoryService
     memory_store: PostgresMemoryStore
+    memory_embedder: MultimodalEmbedder
     web_conversations: WebConversationService
 
 
@@ -73,6 +77,19 @@ def _operational_pool_factory() -> Any:
     from dlightrag.adapters.postgres._pool import pg_pool
 
     return pg_pool.get
+
+
+def _memory_embedder(
+    config: DlightragConfig, *, scheduler: ModelScheduler, telemetry: Telemetry
+) -> MultimodalEmbedder:
+    """Build the Memory dense leg from DlightRAG's embedding endpoint."""
+    from dlightrag_ai.embedding import create_embedding_model
+
+    from dlightrag.model_settings import embedding_settings
+
+    return create_embedding_model(
+        embedding_settings(config), scheduler=scheduler, telemetry=telemetry
+    )
 
 
 def _actionable_error(exc: Exception) -> str:
@@ -243,7 +260,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     run_store = PGAnswerRunStore(
         retention_seconds=config.runtime.answer_run_retention_days * 24 * 3600
     )
-    memory_store = PostgresMemoryStore(pool_factory=_operational_pool_factory())
+    memory_embedder = _memory_embedder(config, scheduler=scheduler, telemetry=telemetry)
+    memory_store = PostgresMemoryStore(
+        pool_factory=_operational_pool_factory(),
+        embedder=memory_embedder,
+    )
     memory_settings = PGMemorySettingsStore()
     memory = MemoryService(
         memory_store,
@@ -305,6 +326,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         answers=answers,
         memory=memory,
         memory_store=memory_store,
+        memory_embedder=memory_embedder,
         web_conversations=WebConversationService(
             store=web_store,
             answers=answers,
@@ -633,6 +655,7 @@ class Application:
             ("the Retrieval service", components.retrieval.aclose),
             ("the Answer model runtime", components.models.aclose),
             ("the workspace pool", components.pool.aclose),
+            ("the memory embedder", components.memory_embedder.aclose),
             ("the operational PostgreSQL pool", pg_pool.close),
         ):
             try:

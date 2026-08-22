@@ -44,6 +44,40 @@ def MultimodalEmbedder(**kwargs):
     )
 
 
+async def test_embedding_fingerprint_is_canonical_text_for_storage_ports() -> None:
+    embedder = MultimodalEmbedder(
+        model="test-model",
+        base_url="https://example.test/v1",
+        api_key="key",
+        dim=3,
+        provider=OpenAICompatibleEmbedProvider(),
+    )
+    try:
+        assert embedder.embedding_fingerprint == "test:test-model"
+    finally:
+        await embedder.aclose()
+
+
+async def test_embedding_fingerprint_includes_endpoint_identity() -> None:
+    embedder = _MultimodalEmbedder(
+        model="test-model",
+        base_url="https://example.test/v1",
+        api_key="key",
+        dim=3,
+        provider=OpenAICompatibleEmbedProvider(),
+        fingerprint=ModelFingerprint(
+            provider="test",
+            model="test-model",
+            endpoint_fingerprint="endpoint-hash",
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    try:
+        assert embedder.embedding_fingerprint == "test:test-model@endpoint-hash"
+    finally:
+        await embedder.aclose()
+
+
 async def test_embedding_error_text_is_redacted_when_sensitive_capture_is_disabled() -> None:
     class Observation:
         updates: list[dict[str, Any]] = []

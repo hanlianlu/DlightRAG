@@ -21,10 +21,11 @@ from dlightrag.application import (
     Application,
     ApplicationClosedError,
     _ApplicationComponents,
+    _memory_embedder,
 )
 from dlightrag.config import DlightragConfig
 from dlightrag.health import ApplicationHealth
-from dlightrag.model_settings import model_settings_for_role
+from dlightrag.model_settings import embedding_settings, model_settings_for_role
 from dlightrag.runtime import RunCoordinator, RunSchemaError
 from dlightrag.services.answers import AnswerService
 from dlightrag.services.corpora import CorpusAdmin
@@ -41,6 +42,7 @@ _CLOSE_ORDER = [
     "close:retrieval",
     "close:models",
     "close:pool",
+    "close:memory_embedder",
 ]
 
 
@@ -222,6 +224,7 @@ class _Parts:
         self.run_store = _RunStore(self.recorder)
         self.web_store = _WebStore(self.recorder)
         self.memory_store = _MemoryStore(self.recorder)
+        self.memory_embedder = _Collaborator(self.recorder, "memory_embedder")
         self.coordinator = _Coordinator(self.recorder)
         self.cancellation_listener = _CancellationListener(self.recorder)
         self.corpora = _Corpora(self.recorder)
@@ -251,6 +254,7 @@ class _Parts:
                 answers=cast(AnswerService, self.answers),
                 memory=cast(Any, self.answers),
                 memory_store=cast(Any, self.memory_store),
+                memory_embedder=cast(Any, self.memory_embedder),
                 web_conversations=cast(WebConversationService, self.web_conversations),
             ),
             web_enabled=web_enabled,
@@ -285,6 +289,35 @@ def _requirement(config: DlightragConfig, **overrides: Any) -> dict[str, Any]:
             for role in MODEL_ROLE_NAMES
         ],
         **overrides,
+    }
+
+
+def test_memory_dense_leg_reuses_root_embedding_settings(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+    expected = object()
+
+    def create(settings: Any, *, scheduler: Any, telemetry: Any) -> object:
+        captured.update(settings=settings, scheduler=scheduler, telemetry=telemetry)
+        return expected
+
+    monkeypatch.setattr("dlightrag_ai.embedding.create_embedding_model", create)
+    scheduler = object()
+    telemetry = object()
+
+    assert (
+        _memory_embedder(
+            test_config,
+            scheduler=cast(Any, scheduler),
+            telemetry=cast(Any, telemetry),
+        )
+        is expected
+    )
+    assert captured == {
+        "settings": embedding_settings(test_config),
+        "scheduler": scheduler,
+        "telemetry": telemetry,
     }
 
 
