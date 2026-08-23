@@ -9,6 +9,7 @@ import '../styles/files.css';
 import '../styles/sources.css';
 
 import './app.ts';
+import './run_dialogs.ts';
 import {setupAttachmentInputs} from './attachments.ts';
 import {setupAnswerModeMenu} from './answer_mode.ts';
 import {setupQueryForm} from './chat.ts';

@@ -2,7 +2,6 @@
 /** Run continuation and child-roster dialogs as first-class Lit components. */
 
 import {html} from 'lit';
-import {customElement} from 'lit/decorators.js';
 import {LightElement} from '../lib/lit_host.ts';
 
 export type ContinuationKind = 'follow-up' | 'fork';
@@ -12,7 +11,6 @@ export interface ContinuationResult {
   query: string | null;
 }
 
-@customElement('dl-continuation-dialog')
 export class DlContinuationDialog extends LightElement {
   kind: ContinuationKind = 'follow-up';
 
@@ -84,7 +82,6 @@ export interface ChildRosterEntry {
   child_session_id?: string;
 }
 
-@customElement('dl-children-roster')
 export class DlChildrenRoster extends LightElement {
   fetcher: (() => Promise<ChildRosterEntry[]>) | null = null;
 
@@ -144,3 +141,8 @@ declare global {
     'dl-children-roster': DlChildrenRoster;
   }
 }
+
+// Explicit registration: decorator emission is not stable across shared
+// chunk builds, and a registered-by-import element is a hard requirement.
+customElements.define('dl-continuation-dialog', DlContinuationDialog);
+customElements.define('dl-children-roster', DlChildrenRoster);
