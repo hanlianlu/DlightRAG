@@ -82,6 +82,10 @@ def _openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]
             for key in ("reasoning_content", "reasoning_details"):
                 if key in state:
                     native[key] = state[key]
+        # Empty tool-call arrays are invalid on strict OpenAI-compatible
+        # endpoints; drop them instead of forwarding an empty list.
+        if native.get("role") == "assistant" and native.get("tool_calls") == []:
+            native.pop("tool_calls", None)
         converted.append(native)
         attachments = message.get("attachments") or ()
         if message.get("role") == "tool" and attachments:

@@ -640,8 +640,9 @@ def _assistant_message(turn: AssistantTurn) -> dict[str, Any]:
     message: dict[str, Any] = {
         "role": "assistant",
         "content": turn.text,
-        "tool_calls": [_tool_call_message(call) for call in turn.tool_calls],
     }
+    if turn.tool_calls:
+        message["tool_calls"] = [_tool_call_message(call) for call in turn.tool_calls]
     if turn.provider_state is not None:
         message["provider_state"] = turn.provider_state
     return message

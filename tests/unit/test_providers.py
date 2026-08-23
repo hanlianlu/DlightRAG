@@ -10,6 +10,10 @@ import pytest
 from dlightrag.ai.messages import ToolDefinition
 from dlightrag.ai.providers import get_provider
 from dlightrag.ai.providers.base import CompletionOutput, CompletionProvider
+from dlightrag.ai.providers.openai_compatible import (
+    OpenAICompatibleProvider,
+    _openai_tool_messages,
+)
 
 
 class TestCompletionProviderABC:
@@ -352,8 +356,8 @@ class TestAnthropicProvider:
         assert tokens == ["hi"]
         assert holder == {"usage_details": {"input_tokens": 10, "output_tokens": 6}}
 
-    @pytest.mark.asyncio
     async def test_stream_tool_text_replays_native_tool_history(self):
+
         p = get_provider("anthropic", api_key="test-key")
 
         async def fake_stream():
@@ -1301,3 +1305,31 @@ class TestGeminiProvider:
             "cached_content_tokens": 80,
             "thoughts_tokens": 20,
         }
+
+
+async def test_empty_tool_calls_arrays_are_stripped_for_strict_endpoints():
+    OpenAICompatibleProvider(
+        api_key="test-key",
+        base_url="http://localhost:8888/v1",
+        timeout=10.0,
+        max_retries=1,
+    )
+    messages = [
+        {"role": "assistant", "content": "text", "tool_calls": []},
+        {
+            "role": "assistant",
+            "content": "tools",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }
+            ],
+        },
+    ]
+
+    converted = _openai_tool_messages(messages)
+
+    assert "tool_calls" not in converted[0]
+    assert converted[1]["tool_calls"] == messages[1]["tool_calls"]

@@ -77,12 +77,17 @@ def fold_tool_call(call: ToolCall) -> dict[str, Any]:
 
 
 def fold_assistant_message(entry: AssistantMessageEntry) -> dict[str, Any]:
-    """Project one complete assistant entry to its model-message shape."""
+    """Project one complete assistant entry to its model-message shape.
+
+    ``tool_calls`` is omitted when empty: OpenAI-compatible endpoints reject
+    empty tool-call arrays, and no provider requires them.
+    """
     message: dict[str, Any] = {
         "role": "assistant",
         "content": entry.content,
-        "tool_calls": [fold_tool_call(call) for call in entry.tool_calls],
     }
+    if entry.tool_calls:
+        message["tool_calls"] = [fold_tool_call(call) for call in entry.tool_calls]
     if entry.provider_state is not None:
         message["provider_state"] = entry.provider_state
     return message

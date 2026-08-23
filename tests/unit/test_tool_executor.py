@@ -194,7 +194,19 @@ async def test_model_and_tool_lifecycle_events_include_live_updates() -> None:
     assert update.data["snapshot"].text_content == "partial"
 
 
+async def test_assistant_message_omits_empty_tool_calls() -> None:
+    from dlightrag.agent.tools.executor import _assistant_message
+
+    turn = AssistantTurn(text="final answer", stop_reason="stop", tool_calls=())
+    message = _assistant_message(turn)
+
+    assert "tool_calls" not in message
+    assert message["role"] == "assistant"
+    assert message["content"] == "final answer"
+
+
 async def test_slow_update_sink_does_not_backpressure_tool_execution() -> None:
+
     update_arrived = asyncio.Event()
     release_sink = asyncio.Event()
     tool_continued = asyncio.Event()
