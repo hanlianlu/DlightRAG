@@ -706,6 +706,10 @@ body.conversation-sidebar-open .panel-split {
     margin-bottom: var(--space-tight);
 }
 
+.confirm-dialog .ui-dialog-checkbox {
+    font-size: var(--font-size-detail);
+}
+
 /* === Settings Drawer === */
 
 .settings-dialog {
