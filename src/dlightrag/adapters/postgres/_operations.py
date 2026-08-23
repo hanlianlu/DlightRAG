@@ -41,8 +41,9 @@ class PostgresOperationRunner:
                 yield piece
             return
         async with self._operation_pool.acquire() as connection:
-            async for piece in operation(connection):
-                yield piece
+            async with connection.transaction():
+                async for piece in operation(connection):
+                    yield piece
 
 
 __all__ = ["ConnectionPool", "PostgresOperationRunner"]

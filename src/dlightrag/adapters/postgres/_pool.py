@@ -200,12 +200,17 @@ class PGPool:
         self,
         operation: Callable[[Any], AsyncIterator[T]],
     ) -> AsyncIterator[T]:
-        """Stream a read through one pooled connection without retry."""
+        """Stream a read through one pooled connection without retry.
+
+        The transaction wrapper exists because asyncpg server-side cursors
+        require one; ordinary reads are unaffected.
+        """
         config = self._active_config()
         pool = await self.get()
         async with pool.acquire(timeout=config.storage.postgres.acquire_timeout) as conn:
-            async for piece in operation(conn):
-                yield piece
+            async with conn.transaction():
+                async for piece in operation(conn):
+                    yield piece
 
     async def close(
         self,
