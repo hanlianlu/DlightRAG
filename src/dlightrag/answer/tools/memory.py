@@ -14,7 +14,7 @@ from dlightrag_memory import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.agent.tools import AgentTool, ToolResult
+from dlightrag.agent.tools import AgentTool, ToolResult, current_tool_call
 from dlightrag.answer.memory import memory_owner_allowed
 
 MemoryKindInput = Literal["preference", "fact"]
@@ -58,7 +58,7 @@ def remember_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel) -> ToolResult:
         args = raw if isinstance(raw, RememberInput) else RememberInput.model_validate(raw)
         if not memory_owner_allowed(host.auth_mode):
-            return ToolResult(content="Long-term memory requires a JWT owner.")
+            return ToolResult(content="Long-term memory requires a personal or local owner.")
         if not host.enabled:
             return ToolResult(content="Memory is disabled for this owner.")
         try:
@@ -69,6 +69,7 @@ def remember_tool(*, host: MemoryHost) -> AgentTool:
                 confidence=args.confidence,
                 provenance=MemoryProvenance(run_id=host.run_id, session_id=host.session_id),
                 supersedes_id=args.supersedes_id,
+                proposal_id=_proposal_id(host),
             )
         except MemoryWriteRejectedError as exc:
             return ToolResult(content=str(exc.public_message))
@@ -92,7 +93,7 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel) -> ToolResult:
         args = raw if isinstance(raw, ForgetInput) else ForgetInput.model_validate(raw)
         if not memory_owner_allowed(host.auth_mode):
-            return ToolResult(content="Long-term memory requires a JWT owner.")
+            return ToolResult(content="Long-term memory requires a personal or local owner.")
         if not host.enabled:
             return ToolResult(content="Memory is disabled for this owner.")
         try:
@@ -108,7 +109,7 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
 
     return AgentTool(
         "forget",
-        "Permanently delete one remembered preference or fact.",
+        "Idempotently forget one remembered preference or fact with a tombstone.",
         ForgetInput,
         execute,
         replay_policy="safe",
@@ -121,7 +122,7 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
         if host.memory is None:
             return ToolResult(content="Memory store is not bound.")
         if not memory_owner_allowed(host.auth_mode):
-            return ToolResult(content="Long-term memory requires a JWT owner.")
+            return ToolResult(content="Long-term memory requires a personal or local owner.")
         if not host.enabled:
             return ToolResult(content="Memory is disabled for this owner.")
         result = await host.memory.recall(owner_id=host.owner_id, query=args.query)
@@ -137,6 +138,12 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
         execute,
         replay_policy="safe",
     )
+
+
+def _proposal_id(host: MemoryHost) -> str:
+    call = current_tool_call()
+    call_id = call.call_id if call is not None else "direct"
+    return f"{host.run_id}:{host.session_id}:{call_id}"
 
 
 def _memory(host: MemoryHost) -> Memory:

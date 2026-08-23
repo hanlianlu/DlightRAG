@@ -26,7 +26,7 @@ import pytest
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
 from dlightrag.agent.session.fold import PriorTurns
-from dlightrag.agent.session.fold import SessionEpisode as _RunEpisode
+from dlightrag.agent.session.fold import WorkingContextProjection as _RunWorking
 from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.ai.telemetry import NOOP_TELEMETRY
@@ -70,8 +70,8 @@ _REQUEST_FINGERPRINT = answer_run_request_fingerprint(_REQUEST)
 _VISUAL_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("ascii")
 
 
-def _episode() -> _RunEpisode:
-    return _RunEpisode(retained_tail_tokens=20_000)
+def _episode() -> _RunWorking:
+    return _RunWorking(retained_tail_tokens=20_000)
 
 
 def _answer_run_input() -> AnswerRunInput:

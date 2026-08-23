@@ -175,6 +175,7 @@ class AnswerRunRequest:
     query: str
     workspaces: tuple[str, ...] = ()
     history: tuple[Mapping[str, Any], ...] = ()
+    episodic_summary: str = ""
     top_k: int | None = None
     chunk_top_k: int | None = None
     filters: Mapping[str, Any] | None = None
@@ -183,12 +184,15 @@ class AnswerRunRequest:
     attachments: tuple[AttachmentReference, ...] = ()
     history_attachments: tuple[AttachmentReference, ...] = ()
     mode: str = "auto"
+    parent_run_id: str | None = None
+    continuation_kind: str | None = None
 
     def as_request(self) -> dict[str, Any]:
         return {
             "query": self.query,
             "workspaces": list(self.workspaces),
             "history": [dict(message) for message in self.history],
+            "episodic_summary": self.episodic_summary,
             "top_k": self.top_k,
             "chunk_top_k": self.chunk_top_k,
             "filters": dict(self.filters) if self.filters else None,
@@ -197,6 +201,8 @@ class AnswerRunRequest:
             "attachments": [item.as_json() for item in self.attachments],
             "history_attachments": [item.as_json() for item in self.history_attachments],
             "mode": canonical_answer_mode(self.mode),
+            "parent_run_id": self.parent_run_id,
+            "continuation_kind": self.continuation_kind,
         }
 
     @classmethod
@@ -207,6 +213,7 @@ class AnswerRunRequest:
             query=str(request.get("query") or ""),
             workspaces=tuple(str(value) for value in request.get("workspaces") or ()),
             history=tuple(dict(message) for message in request.get("history") or ()),
+            episodic_summary=str(request.get("episodic_summary") or ""),
             top_k=_optional_int(request.get("top_k")),
             chunk_top_k=_optional_int(request.get("chunk_top_k")),
             filters=dict(filters) if isinstance(filters, Mapping) else None,
@@ -215,6 +222,10 @@ class AnswerRunRequest:
             attachments=_attachment_references(request.get("attachments")),
             history_attachments=_attachment_references(request.get("history_attachments")),
             mode=str(request.get("mode") or "auto"),
+            parent_run_id=(str(request["parent_run_id"]) if request.get("parent_run_id") else None),
+            continuation_kind=(
+                str(request["continuation_kind"]) if request.get("continuation_kind") else None
+            ),
         )
 
 
@@ -234,6 +245,7 @@ class AnswerRunInput:
     idempotency_fingerprint: str
     workspaces: tuple[str, ...] = ()
     history: tuple[Mapping[str, Any], ...] = ()
+    episodic_summary: str = ""
     top_k: int | None = None
     chunk_top_k: int | None = None
     filters: Mapping[str, Any] | None = None
@@ -248,6 +260,8 @@ class AnswerRunInput:
     session_id: str = ""
     #: The accepted resource manifest, present for research runs.
     resource_manifest: tuple[Mapping[str, Any], ...] = ()
+    parent_run_id: str | None = None
+    continuation_kind: str | None = None
 
     def as_request(self) -> dict[str, Any]:
         return {
@@ -261,6 +275,7 @@ class AnswerRunInput:
             "links": [item.as_json() for item in self.links],
             "attachments": [item.as_json() for item in self.attachments],
             "history_attachments": [item.as_json() for item in self.history_attachments],
+            "episodic_summary": self.episodic_summary,
             "pinned_models": [item.as_json() for item in self.pinned_models],
             "context_policy_revision": self.context_policy_revision,
             "model_catalog_revision": self.model_catalog_revision,
@@ -268,6 +283,8 @@ class AnswerRunInput:
             "image_descriptions": list(self.image_descriptions),
             "session_id": self.session_id,
             "resource_manifest": [dict(item) for item in self.resource_manifest],
+            "parent_run_id": self.parent_run_id,
+            "continuation_kind": self.continuation_kind,
         }
 
     @classmethod
@@ -297,6 +314,7 @@ class AnswerRunInput:
             idempotency_fingerprint=idempotency_fingerprint,
             workspaces=tuple(str(value) for value in request.get("workspaces") or ()),
             history=tuple(dict(message) for message in request.get("history") or ()),
+            episodic_summary=str(request.get("episodic_summary") or ""),
             top_k=_optional_int(request.get("top_k")),
             chunk_top_k=_optional_int(request.get("chunk_top_k")),
             filters=dict(filters) if isinstance(filters, Mapping) else None,
@@ -307,6 +325,10 @@ class AnswerRunInput:
             image_descriptions=tuple(str(item) for item in request.get("image_descriptions") or ()),
             session_id=str(request.get("session_id") or ""),
             resource_manifest=tuple(dict(item) for item in request.get("resource_manifest") or ()),
+            parent_run_id=(str(request["parent_run_id"]) if request.get("parent_run_id") else None),
+            continuation_kind=(
+                str(request["continuation_kind"]) if request.get("continuation_kind") else None
+            ),
         )
 
     @classmethod

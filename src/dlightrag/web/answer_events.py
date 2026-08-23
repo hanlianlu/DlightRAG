@@ -44,6 +44,8 @@ def render_done_event(
     handle = projected.get("primary_report")
     return AnswerDoneEvent(
         status="succeeded",
+        usage=dict(projected.get("usage") or {}),
+        evidence=dict(projected.get("evidence") or {}),
         presentation=build_answer_presentation(
             answer=answer,
             sources=projected["sources"],

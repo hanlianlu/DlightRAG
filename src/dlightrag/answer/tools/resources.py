@@ -191,13 +191,20 @@ def make_resource_reader(
 ):
     """Adapt the registry into the agent-core resource-read callback."""
 
-    async def read_registered(resource_id: str, cursor: str | None) -> str:
+    async def read_registered(resource_id: str, cursor: str | None) -> ToolResult:
         result = await registry.read(
             resource_id,
             max_window_tokens=text_window_budget.tokens,
             cursor=cursor,
         )
-        return format_resource_read(result)
+        return ToolResult(
+            content=format_resource_read(result),
+            details={
+                "resource_id": result.resource_id,
+                **registry.evidence_source(result.resource_id),
+            },
+            protected_suffix=resource_read_continuation(result),
+        )
 
     return read_registered
 

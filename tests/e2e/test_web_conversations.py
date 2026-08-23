@@ -474,7 +474,9 @@ def test_delete_all_conversations_is_quiet_accessible_and_returns_to_new_chat(
     assert len(state.conversations) == 3
 
     trigger = page.get_by_role("button", name="Delete all conversations")
-    retention = trigger.get_by_text("Inactive conversations expire after 30 days.")
+    retention = trigger.get_by_text(
+        "Conversation turns stay until run retention (default 365 days) reclaims them."
+    )
     danger_label = trigger.get_by_text("Delete all conversations", exact=True)
     assert retention.is_visible()
     assert float(danger_label.evaluate("element => getComputedStyle(element).opacity")) == 0

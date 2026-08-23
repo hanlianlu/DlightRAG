@@ -8,13 +8,14 @@ identities only, and each authenticated read projects fresh URLs from them.
 """
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -48,6 +49,12 @@ router = APIRouter()
 
 _ALLOWED_ANSWER_PARTS = {"request", "attachments"}
 _MAX_ANSWER_FORM_FIELDS = 8
+
+
+class _AgentControlBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    content: str = Field(min_length=1, max_length=20_000)
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,13 +231,16 @@ def _service_request(
 
 
 def _descriptor(record: AnswerRunRecord) -> dict[str, Any]:
-    """Project the owner-scoped URLs of one run; they are never stored."""
+    """Project owner-scoped URLs and durable continuation lineage."""
+    accepted = record.request_input()
     return {
         "run_id": record.run_id,
         "status": record.status,
         "status_url": f"/answer/{record.run_id}",
         "events_url": f"/answer/{record.run_id}/events",
         "cancel_url": f"/answer/{record.run_id}",
+        "parent_run_id": accepted.get("parent_run_id"),
+        "continuation_kind": accepted.get("continuation_kind"),
     }
 
 
@@ -423,6 +433,137 @@ async def get_answer_run(
     """Return one owned run's status and, once it succeeded, its result."""
     application = get_application(request)
     record = await application.answers.get(owner_id=owner_id_from_user(user), run_id=run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    return await _status_payload(request, user, record)
+
+
+@router.post("/answer/{run_id}/steer", status_code=202)
+async def steer_answer_run(
+    run_id: str,
+    body: _AgentControlBody,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    receipt = await get_application(request).answers.steer(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        instruction=body.content,
+    )
+    if receipt is None:
+        raise HTTPException(status_code=409, detail="Run is not a live Research session")
+    return {
+        "run_id": receipt.run_id,
+        "control_sequence": receipt.control_sequence,
+        "kind": receipt.kind,
+    }
+
+
+async def _continue_answer_run(
+    *,
+    operation: str,
+    run_id: str,
+    body: _AgentControlBody,
+    request: Request,
+    user: UserContext,
+) -> dict[str, Any]:
+    answers = get_application(request).answers
+    owner_id = owner_id_from_user(user)
+    parent = await answers.get(owner_id=owner_id, run_id=run_id)
+    authorized_workspaces: Sequence[str] | None = None
+    if parent is not None and parent.terminal:
+        authorized_workspaces = await resolve_authorized_query_workspaces(
+            request,
+            user,
+            workspaces=[str(item) for item in parent.request_input().get("workspaces") or ()],
+            all_workspaces=False,
+        )
+    method = answers.follow_up if operation == "follow-up" else answers.fork
+    try:
+        creation = await method(
+            owner_id=owner_id,
+            run_id=run_id,
+            query=body.content,
+            idempotency_key=_idempotency_key(request),
+            auth_mode=user.auth_mode,
+            authorized_workspaces=authorized_workspaces,
+        )
+    except IdempotencyKeyConflict:
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency-Key was reused with a different continuation",
+        ) from None
+    if creation is None:
+        raise HTTPException(status_code=409, detail="Continuation requires a terminal owned run")
+    return _descriptor(creation.run)
+
+
+@router.post("/answer/{run_id}/follow-up", status_code=202)
+async def follow_up_answer_run(
+    run_id: str,
+    body: _AgentControlBody,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    return await _continue_answer_run(
+        operation="follow-up", run_id=run_id, body=body, request=request, user=user
+    )
+
+
+@router.post("/answer/{run_id}/fork", status_code=202)
+async def fork_answer_run(
+    run_id: str,
+    body: _AgentControlBody,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    return await _continue_answer_run(
+        operation="fork", run_id=run_id, body=body, request=request, user=user
+    )
+
+
+@router.get("/answer/{run_id}/transcript")
+async def answer_run_transcript(
+    run_id: str,
+    request: Request,
+    limit: int = 20,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    transcript = await get_application(request).answers.transcript_tail(
+        owner_id=owner_id_from_user(user), run_id=run_id, limit=limit
+    )
+    if transcript is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    return {
+        "run_id": transcript.run_id,
+        "status": transcript.status,
+        "messages": list(transcript.messages),
+    }
+
+
+@router.get("/answer/{run_id}/children")
+async def answer_run_children(
+    run_id: str,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    children = await get_application(request).answers.children(
+        owner_id=owner_id_from_user(user), run_id=run_id
+    )
+    if children is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    return {"run_id": run_id, "children": [dict(child) for child in children]}
+
+
+@router.post("/answer/{run_id}/resume")
+async def resume_answer_run(
+    run_id: str,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    record = await get_application(request).answers.resume(
+        owner_id=owner_id_from_user(user), run_id=run_id
+    )
     if record is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
     return await _status_payload(request, user, record)

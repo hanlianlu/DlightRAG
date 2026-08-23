@@ -21,6 +21,7 @@ class LinkedTurn:
     submission_id: str
     created_at: datetime.datetime
     run: AnswerRunRecord
+    conversation_id: str = ""
 
     @property
     def answer_run_id(self) -> str:
@@ -91,6 +92,8 @@ class ConversationTurn(ClientContractModel):
     assistant_text: str
     user_attachments: list[ConversationAttachmentReference] = Field(default_factory=list)
     presentation: AnswerPresentation | None = None
+    usage: dict[str, Any] = Field(default_factory=dict)
+    evidence: dict[str, Any] = Field(default_factory=dict)
     error_kind: str | None = None
     error_message: str | None = None
     created_at: datetime.datetime
@@ -109,6 +112,8 @@ class AnswerRunDescriptor(ClientContractModel):
     status_url: str
     cancel_url: str
     conversation: ConversationSummary
+    parent_run_id: str | None = None
+    continuation_kind: str | None = None
 
 
 class ConversationHistory(ClientContractModel):

@@ -270,8 +270,58 @@ class TestCoordinatorLoop:
         assert summary.paths == ["./notes.txt"]
         assert trace["compactions"][0]["hierarchical"] is False
         assert trace["compactions"][0]["summary_chars"] > 0
-        # The summarizer call is one thinking-off attempt capped at max_output.
-        assert stream_calls == [{"thinking": "off", "model_kwargs": {"max_tokens": 128_000}}]
+        # The summarizer call is one thinking-off attempt capped below the
+        # physical context remainder, not at the profile's impossible 128k max.
+        assert len(stream_calls) == 1
+        assert stream_calls[0]["thinking"] == "off"
+        assert 0 < stream_calls[0]["model_kwargs"]["max_tokens"] < 100_000
+
+    async def test_repeated_compaction_replaces_summary_and_drops_stale_anchors(self) -> None:
+        _session_id, entries = _two_exchange_entries()
+        boundary = _FakeBoundary(entries)
+        await boundary.seed(projection=_seed_projection())
+        coordinator = CompactionCoordinator(
+            model_profile=_profile(),
+            context_policy=CONTEXT_POLICY,
+            stream_model=_stream_once(_MARKDOWN),
+        )
+
+        async def remeasure() -> int:
+            return 10_000
+
+        first = await coordinator.ensure_fits(
+            boundaries=boundary,
+            remeasure=remeasure,
+            trace={},
+            force=True,
+        )
+        assert first is not None
+        snapshot = await boundary.store.load(boundary.session_id)
+        commit = await boundary.store.append(
+            session_id=boundary.session_id,
+            expected_version=snapshot.version,
+            entries=[
+                _assistant(boundary.session_id, "new " + "x" * 80_000),
+                _intent(boundary.session_id, '{"path": "./new.txt"}'),
+                _result(boundary.session_id, "new result"),
+                _assistant(boundary.session_id, "latest angle"),
+                _intent(boundary.session_id, '{"path": "./latest.txt"}'),
+                _result(boundary.session_id, "latest result"),
+            ],
+        )
+        assert isinstance(commit, SessionCommit)
+
+        second = await coordinator.ensure_fits(
+            boundaries=boundary,
+            remeasure=remeasure,
+            trace={},
+            force=True,
+        )
+
+        assert second is not None
+        assert len(boundary.commits) == 2
+        assert boundary.commits[-1]["token_anchors"] == ()
+        assert boundary.commits[-1]["summary_json"] is not None
 
     async def test_exhausted_attempts_fail_loudly(self) -> None:
         boundary = _FakeBoundary([_user(SessionId.new(), "question")])
@@ -302,7 +352,7 @@ class TestCoordinatorLoop:
         trace: dict[str, Any] = {}
 
         async def remeasure() -> int:
-            return 40_000  # under the trigger
+            return 30_000  # under the explicit observation-reserve trigger
 
         outcome = await coordinator.ensure_fits(
             boundaries=boundary, remeasure=remeasure, trace=trace, force=True

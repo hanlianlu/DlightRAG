@@ -4,19 +4,15 @@
 import asyncio
 from typing import Any
 
-from dlightrag.agent.session.fold import PriorTurns, SessionEpisode
+from dlightrag.agent.context import ContextContribution, ContextProjector
+from dlightrag.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag.ai.tokens import estimate_messages_tokens
 from dlightrag.answer.citations.indexer import CitationIndexer
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.memory import standing_memory_message
-from dlightrag.answer.prompts import (
-    CONTROL_TURN_INSTRUCTION,
-    FINAL_TURN_INSTRUCTION,
-    agent_control_prompt,
-    answer_core,
-)
+from dlightrag.answer.prompts import CONTROL_TURN_INSTRUCTION, agent_control_prompt
 from dlightrag.answer.resources.models import ResourceManifestEntry
 from dlightrag.rag.sourcing.source_contract import safe_source_filename
 
@@ -24,11 +20,9 @@ from dlightrag.rag.sourcing.source_contract import safe_source_filename
 class ContextAssembler:
     """Build each turn of one request from the stores, never by extending the last turn.
 
-    A control turn replays the episode and packs the ledger; the answer turn
-    swaps in the answer prompt and carries one exchange instead of the episode,
-    so it packs more evidence into the same window. Both shed the oldest
-    conversation turns first: those are the only part a request can drop without
-    losing evidence or the question itself.
+    Each control turn replays the active Agent Session projection and packs the
+    ledger. The terminal in-loop assistant text is the Research answer; citation
+    and source finalization remain deterministic outside model generation.
     """
 
     def __init__(
@@ -41,6 +35,7 @@ class ContextAssembler:
         query_images: list[dict[str, Any]] | None,
         resource_manifest: tuple[ResourceManifestEntry, ...],
         memory_text: str = "",
+        contributions: tuple[ContextContribution, ...] = (),
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
@@ -49,37 +44,30 @@ class ContextAssembler:
         self._history = history
         self._question = _question_message(query, query_images, resource_manifest)
         self._memory_text = memory_text
+        self._contributions = contributions
 
     async def control_turn(
         self,
         *,
         evidence: EvidenceLedger,
-        episode: SessionEpisode,
+        working: WorkingContextProjection,
         tool_schema_tokens: int,
     ) -> list[dict[str, Any]]:
         return await asyncio.to_thread(
             self._build_control_turn,
             evidence,
-            episode,
+            working,
             tool_schema_tokens,
         )
-
-    async def answer_turn(
-        self,
-        *,
-        evidence: EvidenceLedger,
-        episode: SessionEpisode,
-    ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        return await asyncio.to_thread(self._build_answer_turn, evidence, episode)
 
     def measure_control_input(
         self,
         *,
         evidence: EvidenceLedger,
-        episode: SessionEpisode,
+        working: WorkingContextProjection,
     ) -> int:
         """Measure the exact control-turn messages without enforcing the limit."""
-        return estimate_messages_tokens(self._compose_control_turn(evidence, episode))
+        return estimate_messages_tokens(self._compose_control_turn(evidence, working))
 
     def observation_residual(
         self,
@@ -142,7 +130,7 @@ class ContextAssembler:
     def _build_control_turn(
         self,
         evidence: EvidenceLedger,
-        episode: SessionEpisode,
+        working: WorkingContextProjection,
         tool_schema_tokens: int,
     ) -> list[dict[str, Any]]:
         # The orchestrator owns the proactive H trigger and compacts before
@@ -150,69 +138,109 @@ class ContextAssembler:
         # ``output_allowance`` / ``control_output_allowance``.
         return self._compose_control_turn(
             evidence,
-            episode,
+            working,
             tool_schema_tokens=tool_schema_tokens,
         )
 
     def _compose_control_turn(
         self,
         evidence: EvidenceLedger,
-        episode: SessionEpisode,
+        working: WorkingContextProjection,
         *,
         tool_schema_tokens: int = 0,
     ) -> list[dict[str, Any]]:
         system = {"role": "system", "content": agent_control_prompt()}
-        head = self._head(system, episode.messages())
-        messages = list(head)
+        head = self._head(system, working.messages())
+        tail: list[ContextContribution] = []
         if evidence.row_count:
             blocks, _ = self._pack(
                 evidence,
                 head=head,
-                final=False,
                 tool_schema_tokens=tool_schema_tokens,
             )
-            messages.append({"role": "user", "content": blocks})
+            tail.append(
+                ContextContribution(
+                    source="answer.evidence",
+                    authority="evidence",
+                    messages=({"role": "user", "content": blocks},),
+                    citable=True,
+                )
+            )
         memory_message = standing_memory_message(self._memory_text)
         if memory_message is not None:
-            messages.append(memory_message)
-        return messages
-
-    def _build_answer_turn(
-        self,
-        evidence: EvidenceLedger,
-        episode: SessionEpisode,
-    ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        system = {"role": "system", "content": answer_core()}
-        head = self._head(system, episode.last_exchange)
-        blocks, indexer = self._pack(evidence, head=head, final=True)
-        messages = [*head, {"role": "user", "content": blocks}]
-        memory_message = standing_memory_message(self._memory_text)
-        if memory_message is not None:
-            messages.append(memory_message)
-        self._check(messages)
-        return messages, indexer
+            tail.append(
+                ContextContribution(
+                    source="profile.memory",
+                    authority="profile",
+                    messages=(memory_message,),
+                )
+            )
+        tail.extend(self._contributions)
+        return [*head, *ContextProjector().project(tail).messages]
 
     def _head(
         self,
         system: dict[str, Any],
         carried: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        return [system, *self._history.messages, self._question, *carried]
+        contributions = [
+            ContextContribution(
+                source="answer.system",
+                authority="system",
+                messages=(system,),
+                compressible=False,
+            )
+        ]
+        if self._history.episodic_summary:
+            contributions.append(
+                ContextContribution(
+                    source="conversation.episodic",
+                    authority="conversation",
+                    messages=(
+                        {
+                            "role": "user",
+                            "content": self._history.episodic_summary,
+                        },
+                    ),
+                )
+            )
+        if self._history.messages:
+            contributions.append(
+                ContextContribution(
+                    source="conversation.tail",
+                    authority="conversation",
+                    messages=tuple(self._history.messages),
+                )
+            )
+        contributions.extend(
+            (
+                ContextContribution(
+                    source="answer.question",
+                    authority="user",
+                    messages=(self._question,),
+                    compressible=False,
+                ),
+                ContextContribution(
+                    source="agent.session",
+                    authority="working",
+                    messages=tuple(carried),
+                ),
+            )
+        )
+        return list(ContextProjector().project(contributions).messages)
 
     def _pack(
         self,
         evidence: EvidenceLedger,
         *,
         head: list[dict[str, Any]],
-        final: bool,
         tool_schema_tokens: int = 0,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        instruction = FINAL_TURN_INSTRUCTION if final else CONTROL_TURN_INSTRUCTION
-        instruction_block = {"type": "text", "text": instruction}
+        instruction_block = {"type": "text", "text": CONTROL_TURN_INSTRUCTION}
         fixed_input_tokens = estimate_messages_tokens(
             [*head, {"role": "user", "content": [instruction_block]}]
         )
-        target = self._input_limit if final else self._control_target
+        target = self._control_target
         residual = max(0, target - tool_schema_tokens - fixed_input_tokens)
         while True:
             blocks, indexer = evidence.transform(residual_tokens=residual)
@@ -228,9 +256,6 @@ class ContextAssembler:
                     "Fixed research evidence handles exceed the resolved model input target"
                 )
             residual = max(0, residual - (rendered_tokens - target))
-
-    def _check(self, messages: list[dict[str, Any]]) -> None:
-        self._check_input_tokens(estimate_messages_tokens(messages))
 
     def _check_input_tokens(self, input_tokens: int) -> None:
         if input_tokens > self._input_limit:

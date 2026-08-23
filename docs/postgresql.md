@@ -155,15 +155,21 @@ and verifies the empty database. See
 
 ## Durable Answer Run State
 
-Every answer is one durable run. Four DlightRAG-owned tables hold that state
-under the `answer_runs` migration scope:
+Every answer is one durable run. DlightRAG-owned tables under the `answer_runs`
+migration scope separate lifecycle, routing, session, controls, children, and
+blob references:
 
 | Table | Key | Holds |
 | --- | --- | --- |
 | `dlightrag_answer_runs` | `(owner_id, run_id)` | status, phase, durable progress, stop reason, cancellation, lease, fencing epoch, reclaim-without-progress count, event sequence, event-trim timestamp, Prepared Input, canonical result or terminal error |
 | `dlightrag_answer_run_events` | `(owner_id, run_id, event_sequence)` | gap-free `progress` / `token` / `reset` / `done` / `error` events |
 | `dlightrag_blobs` | `(owner_id, digest)` | immutable content-addressed blob metadata within one owner |
-| `dlightrag_answer_run_artifacts` | `(owner_id, run_id, resource_id)` | ordered run inputs and fetched resources, referencing a digest |
+| `dlightrag_answer_run_artifacts` | `(owner_id, run_id, resource_id)` | ordered run inputs, fetched resources, spill/publication references |
+| `dlightrag_answer_run_routing` | `(owner_id, run_id)` | requested/valid/resolved mode, model fingerprints, Research Session id |
+| `dlightrag_agent_sessions` / `dlightrag_agent_session_entries` / `dlightrag_agent_context_projections` | Session id / sequence | canonical typed linear journal, its derived parent-linked view, and active projection |
+| `dlightrag_agent_effects` / `dlightrag_answer_evidence` / resource tables | intent/result identity | at-most-once effect outcomes and atomic durable Evidence/resource state |
+| `dlightrag_answer_child_sessions` | parent run + child Session id | parent/call/intent lineage, child status, objective, model/context/tools, inclusive usage |
+| `dlightrag_agent_controls` | run + control sequence | ordered steer inbox and append-before-ack state |
 
 `run_id` is a UUIDv7. A partial unique index makes one idempotency key unique per
 owner, and a second one allows exactly one terminal event per run. The
@@ -181,9 +187,9 @@ exist.
 
 ### Retention
 
-Retention is fixed internal maintenance with no operator knob. Every run-owning
-process runs it hourly in bounded `SKIP LOCKED` batches, so it is safe on every
-host at once and needs no leader election:
+Retention uses `answer.runtime.answer_run_retention_days` (default 365). Every
+run-owning process sweeps hourly in bounded `SKIP LOCKED` batches, so it is safe
+on every host and needs no leader election:
 
 - **Event logs** are deleted after the `answer.runtime.answer_run_retention_days` floor (default 365) counted from `finished_at` for every terminal run,
   even one a conversation still shows. That transaction sets `events_trimmed_at`,
@@ -196,9 +202,9 @@ host at once and needs no leader election:
   references the digest for that owner. A digest a concurrent run adopted is left
   alone and released when that run is itself deleted.
 
-Conversation deletion, conversation-TTL pruning, and window trimming all delete
-the linked runs before the conversation rows, which is the same lock order run
-retention takes; the reverse order deadlocks against a concurrent prune.
+Conversation deletion removes linked runs before the conversation row, matching
+the retention lock order. The 100-turn conversation snapshot is only a read
+window and never trims durable rows.
 
 ## Graph Storage
 

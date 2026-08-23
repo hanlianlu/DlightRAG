@@ -37,6 +37,7 @@ jobs:
       - run: make typecheck
       - run: make architecture-check
       - run: make shellcheck-all
+      - run: make release-check
       - run: make frontend-install
       - run: npx playwright install --with-deps chromium
         working-directory: frontend

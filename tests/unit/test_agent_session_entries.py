@@ -15,6 +15,7 @@ from dlightrag.agent.session.entries import (
     EffectIntentEntry,
     EffectResultEntry,
     ProfileFactEntry,
+    RunSegmentEntry,
     SessionTerminalEntry,
     UserMessageEntry,
     entry_type_of,
@@ -66,8 +67,9 @@ class TestCanonicalIds:
 
 
 class TestEntryUnion:
-    def test_union_is_finite_and_matches_m3_variants(self) -> None:
+    def test_union_is_finite_and_matches_agent_session_variants(self) -> None:
         assert set(ENTRY_TYPE_TO_CLASS) == {
+            "run_segment",
             "user_message",
             "assistant_message",
             "effect_intent",
@@ -81,6 +83,16 @@ class TestEntryUnion:
     def test_unknown_entry_type_raises_before_store_use(self) -> None:
         with pytest.raises(ValueError):
             new_session_entry(entry_type="workspace", session_id=SessionId.new(), **{})
+
+    def test_run_segment_records_selected_parent_head(self) -> None:
+        entry = RunSegmentEntry(
+            **_entry(),
+            segment_id=EntryId.new().value,
+            kind="resume",
+            parent_head_id=EntryId.new().value,
+        )
+        assert entry.canonical_payload()["kind"] == "resume"
+        assert entry.canonical_payload()["parent_head_id"] is not None
 
     def test_user_message_canonical_payload(self) -> None:
         entry = UserMessageEntry(**_entry(), content="what is the state?")

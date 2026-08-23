@@ -10,7 +10,7 @@ from typing import Any
 from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.ai.completion import CompletionModel
 from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import ModelRoleSettings
+from dlightrag.ai.settings import ModelRole, ModelRoleSettings
 from dlightrag.ai.telemetry import Telemetry
 from dlightrag.ai.tool_model import ToolModel
 from dlightrag.answer.images import AnswerImagePolicy
@@ -54,7 +54,7 @@ class AnswerModelRuntime:
         self._vlm_profile = vlm_profile
         self._answer_synthesizers: dict[ModelProfile, AnswerSynthesizer] = {}
         self._answer_model: CompletionModel | None = None
-        self._query_tool_model: ToolModel | None = None
+        self._tool_models: dict[ModelRole, ToolModel] = {}
         self._vlm_model: CompletionModel | None = None
         self._web_search: ExaSearch | None = None
         self._closed = False
@@ -80,15 +80,19 @@ class AnswerModelRuntime:
         self._answer_synthesizers[profile] = synthesizer
         return synthesizer
 
-    def query_tool_model(self) -> ToolModel:
+    def tool_model(self, role: ModelRole) -> ToolModel:
+        """Return the configured tool wrapper for a selected child/model role."""
         self._ensure_open()
-        if self._query_tool_model is None:
-            self._query_tool_model = ToolModel(
-                self._settings.model_roles.resolve("query"),
+        if role not in self._tool_models:
+            self._tool_models[role] = ToolModel(
+                self._settings.model_roles.resolve(role),
                 scheduler=self._scheduler,
                 telemetry=self._telemetry,
             )
-        return self._query_tool_model
+        return self._tool_models[role]
+
+    def query_tool_model(self) -> ToolModel:
+        return self.tool_model("query")
 
     def vlm_func(self) -> Callable[..., Any]:
         self._ensure_open()
@@ -143,12 +147,12 @@ class AnswerModelRuntime:
 
     async def _close_components(self) -> asyncio.CancelledError | None:
         components = (
-            self._query_tool_model,
+            *self._tool_models.values(),
             self._answer_model,
             self._vlm_model,
             self._web_search,
         )
-        self._query_tool_model = None
+        self._tool_models.clear()
         self._answer_model = None
         self._vlm_model = None
         self._web_search = None

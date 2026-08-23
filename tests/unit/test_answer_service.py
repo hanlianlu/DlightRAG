@@ -52,6 +52,7 @@ def _record(
     result: Mapping[str, Any] | None = None,
     error_kind: str | None = None,
     error_message: str | None = None,
+    accepted_input: Mapping[str, Any] | None = None,
 ) -> AnswerRunRecord:
     return AnswerRunRecord(
         owner_id=_OWNER,
@@ -77,6 +78,7 @@ def _record(
         updated_at=_NOW,
         started_at=None,
         finished_at=None,
+        accepted_input=accepted_input,
     )
 
 
@@ -99,6 +101,9 @@ class _Store:
         self.replay_calls = 0
         self.cancellations: list[tuple[str, str]] = []
         self.artifact_reads: list[tuple[str, str]] = []
+        self.controls: list[dict[str, Any]] = []
+        self.child_rows: tuple[Mapping[str, Any], ...] = ()
+        self.transcript_rows: tuple[Mapping[str, Any], ...] = ()
 
     async def create_run(
         self,
@@ -152,6 +157,35 @@ class _Store:
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> CancellationOutcome:
         self.cancellations.append((owner_id, run_id))
         return CancellationOutcome(outcome="cancelled", run=self._run)
+
+    async def enqueue_agent_control(
+        self, *, owner_id: str, run_id: str, kind: str, content: str
+    ) -> Mapping[str, Any] | None:
+        if owner_id != _OWNER or run_id != self._run.run_id or self._run.terminal:
+            return None
+        row = {
+            "run_id": run_id,
+            "control_sequence": len(self.controls) + 1,
+            "kind": kind,
+            "content": content,
+        }
+        self.controls.append(row)
+        return row
+
+    async def list_child_sessions(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[Mapping[str, Any], ...]:
+        if owner_id != _OWNER or run_id != self._run.run_id:
+            return ()
+        return self.child_rows
+
+    async def load_agent_transcript(
+        self, *, owner_id: str, run_id: str, session_id: str, limit: int
+    ) -> tuple[Mapping[str, Any], ...]:
+        del session_id
+        if owner_id != _OWNER or run_id != self._run.run_id:
+            return ()
+        return self.transcript_rows[-limit:]
 
     async def list_run_artifacts(
         self, *, owner_id: str, run_id: str
@@ -764,3 +798,145 @@ async def test_capabilities_exposes_the_public_immutable_snapshot() -> None:
 
     assert await service.capabilities() is snapshot
     assert view.reads == 1
+
+
+async def test_agent_controls_share_ordered_service_interface() -> None:
+    store = _Store(run=_record(status="running"))
+    service = _service(store=store)
+
+    first = await service.steer(owner_id=_OWNER, run_id="run-1", instruction="focus on risks")
+    second = await service.steer(owner_id=_OWNER, run_id="run-1", instruction="compare dates")
+
+    assert first is not None and first.control_sequence == 1
+    assert second is not None and second.control_sequence == 2
+    assert [item["content"] for item in store.controls] == ["focus on risks", "compare dates"]
+    assert await service.resume(owner_id=_OWNER, run_id="run-1") == store._run
+
+
+async def test_transcript_and_child_roster_are_owner_scoped() -> None:
+    record = _record(
+        status="succeeded",
+        result={"answer": "final answer"},
+        accepted_input={
+            "query": "parent question",
+            "workspaces": ["finance"],
+            "session_id": "0199a0a0-0000-7000-8000-000000000099",
+        },
+    )
+    store = _Store(run=record)
+    store.transcript_rows = (
+        {"role": "assistant", "content": "checking", "tool_calls": [{"id": "call-1"}]},
+        {"role": "tool", "tool_call_id": "call-1", "content": "found"},
+        {"role": "user", "content": "steer: compare dates"},
+    )
+    store.child_rows = ({"child_session_id": "child-1", "status": "succeeded"},)
+    service = _service(store=store)
+
+    transcript = await service.transcript_tail(owner_id=_OWNER, run_id="run-1")
+    children = await service.children(owner_id=_OWNER, run_id="run-1")
+
+    assert transcript is not None
+    assert transcript.messages == store.transcript_rows
+    assert children == store.child_rows
+    assert await service.children(owner_id="other", run_id="run-1") is None
+
+
+async def test_continuation_content_limit_is_transport_neutral() -> None:
+    terminal = _record(
+        status="succeeded",
+        accepted_input={"query": "parent", "workspaces": ["finance"]},
+    )
+    service = _service(store=_Store(run=terminal))
+
+    with pytest.raises(ValueError, match="20000"):
+        await service.continuation_request(
+            owner_id=_OWNER,
+            run_id="run-1",
+            query="x" * 20_001,
+            include_result=True,
+            authorized_workspaces=("finance",),
+        )
+
+
+async def test_follow_up_and_fork_reenter_one_acceptance_interface() -> None:
+    terminal = _record(
+        status="succeeded",
+        result={"answer": "parent answer"},
+        accepted_input={
+            "query": "parent question",
+            "workspaces": ["finance"],
+            "history": [
+                {"role": "user", "content": "ancestor question"},
+                {"role": "assistant", "content": "ancestor answer"},
+            ],
+            "episodic_summary": "Older accepted context.",
+            "top_k": 7,
+            "chunk_top_k": 11,
+            "filters": {"author": "Ada"},
+            "semantic_highlights": True,
+            "history_attachments": [
+                {
+                    "ordinal": 0,
+                    "digest": "a" * 64,
+                    "filename": "ancestor.txt",
+                    "mime_type": "text/plain",
+                    "byte_size": 8,
+                }
+            ],
+            "attachments": [
+                {
+                    "ordinal": 0,
+                    "digest": "b" * 64,
+                    "filename": "parent.txt",
+                    "mime_type": "text/plain",
+                    "byte_size": 6,
+                }
+            ],
+            "mode": "research",
+        },
+    )
+    service = _service(store=_Store(run=terminal))
+    created = RunCreation(run=_record(run_id="next"), replayed=False)
+    service.create = AsyncMock(return_value=created)  # type: ignore[method-assign]
+
+    follow = await service.follow_up(
+        owner_id=_OWNER,
+        run_id="run-1",
+        query="next question",
+        authorized_workspaces=("finance",),
+    )
+    assert service.create.await_args is not None
+    follow_request = service.create.await_args.kwargs["request"]
+    fork = await service.fork(
+        owner_id=_OWNER,
+        run_id="run-1",
+        query="other branch",
+        authorized_workspaces=("finance",),
+    )
+    assert service.create.await_args is not None
+    fork_request = service.create.await_args.kwargs["request"]
+
+    assert follow == created and fork == created
+    assert follow_request.history == (
+        {"role": "user", "content": "ancestor question"},
+        {"role": "assistant", "content": "ancestor answer"},
+        {"role": "user", "content": "parent question"},
+        {"role": "assistant", "content": "parent answer"},
+    )
+    assert fork_request.history == (
+        {"role": "user", "content": "ancestor question"},
+        {"role": "assistant", "content": "ancestor answer"},
+    )
+    assert follow_request.episodic_summary == "Older accepted context."
+    assert follow_request.top_k == 7
+    assert follow_request.chunk_top_k == 11
+    assert follow_request.semantic_highlights is True
+    assert [item.reference_kind for item in follow_request.history_resources] == [
+        "history_attachment",
+        "current_attachment",
+    ]
+    assert follow_request.workspaces == ("finance",)
+    assert follow_request.parent_run_id == "run-1"
+    assert follow_request.continuation_kind == "follow_up"
+    assert fork_request.parent_run_id == "run-1"
+    assert fork_request.continuation_kind == "fork"

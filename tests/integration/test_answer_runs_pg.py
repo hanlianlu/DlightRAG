@@ -181,6 +181,7 @@ class TestSchema:
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",
             "dlightrag_answer_child_sessions",
+            "dlightrag_agent_controls",
             "dlightrag_answer_memory_settings",
         }
 
@@ -1316,3 +1317,102 @@ def _fetched(
         filename=f"{resource_id}.html",
         mime_type="text/html",
     )
+
+
+class TestAgentControlsAndChildren:
+    async def test_controls_are_ordered_and_consumed_under_the_run_lease(self, store) -> None:
+        creation = await store.create_run(
+            owner_id=_OWNER,
+            request=_request(mode="research"),
+        )
+        first = await store.enqueue_agent_control(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            kind="steer",
+            content="first",
+        )
+        second = await store.enqueue_agent_control(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            kind="steer",
+            content="second",
+        )
+        claim = await _claimed(store)
+
+        controls = await store.load_pending_agent_controls(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        acknowledged = await store.acknowledge_agent_controls(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            control_sequences=tuple(int(item["control_sequence"]) for item in controls or ()),
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        replay = await store.load_pending_agent_controls(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+
+        assert acknowledged
+        assert first is not None and first["control_sequence"] == 1
+        assert second is not None and second["control_sequence"] == 2
+        assert [item["content"] for item in controls or ()] == ["first", "second"]
+        assert replay == ()
+
+    async def test_one_spawn_call_persists_multiple_child_lineages(self, store) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        parent_id = str(uuid.uuid7())
+        children = (str(uuid.uuid7()), str(uuid.uuid7()))
+        parent_intent_id = str(uuid.uuid7())
+
+        for position, child_id in enumerate(children):
+            held = await store.upsert_child_session(
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                child_session_id=child_id,
+                parent_session_id=parent_id,
+                parent_call_id="one-call",
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+                parent_intent_id=parent_intent_id,
+                objective=f"child {position}",
+                context_mode="parent",
+                model_role="extract",
+                tools=("search_knowledge_base",),
+            )
+            assert held
+            # Tool execution repeats the roster upsert after the intent-bound
+            # precreate. It must not lose the parent intent or lease.
+            assert await store.upsert_child_session(
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                child_session_id=child_id,
+                parent_session_id=parent_id,
+                parent_call_id="one-call",
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+            )
+            assert await store.finish_child_session(
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                child_session_id=child_id,
+                status="succeeded",
+                summary="done",
+                usage={"input_tokens": 10 + position},
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+            )
+
+        roster = await store.list_child_sessions(owner_id=_OWNER, run_id=creation.run.run_id)
+        assert {item["child_session_id"] for item in roster} == set(children)
+        assert {item["parent_session_id"] for item in roster} == {parent_id}
+        assert {item["parent_intent_id"] for item in roster} == {parent_intent_id}
+        assert [item["objective"] for item in roster] == ["child 0", "child 1"]
+        assert [item["usage"]["input_tokens"] for item in roster] == [10, 11]

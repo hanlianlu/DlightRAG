@@ -271,7 +271,7 @@ class TestSettingsResolution:
         config = {
             "answer": {
                 "agent": {
-                    "execution_environment": "local_trusted",
+                    "execution_environment": "trust",
                     "workspace_root": "relative/workspaces",
                 }
             }

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Generic read/write/edit/grep/bash factories over a LocalExecutionEnvironment."""
+"""Generic read/write/edit/grep/bash factories over an ExecutionEnvironment."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from dlightrag.agent.environment.access import (
     AccessScheduler,
-    AllAccess,
     PathAccess,
+    WorkspaceAccess,
 )
 from dlightrag.agent.environment.child import build_child_environment
 from dlightrag.agent.environment.errors import (
@@ -23,11 +23,12 @@ from dlightrag.agent.environment.errors import (
     PathRejected,
     WorkspaceQuotaExceeded,
 )
-from dlightrag.agent.environment.local import DirectoryEntry, LocalExecutionEnvironment
+from dlightrag.agent.environment.execution import ExecutionEnvironment
+from dlightrag.agent.environment.local import DirectoryEntry
 from dlightrag.agent.environment.text import decode_workspace_text, encode_workspace_text
 from dlightrag.agent.tools.contracts import AgentTool, ToolResult
 
-type ResourceReader = Callable[[str, str | None], Awaitable[str]]
+type ResourceReader = Callable[[str, str | None], Awaitable[ToolResult]]
 type SpillWriter = Callable[[str], Awaitable[Mapping[str, object]]]
 
 
@@ -105,7 +106,7 @@ async def preview_or_spill(
 
 
 def path_tools(
-    environment: LocalExecutionEnvironment,
+    environment: ExecutionEnvironment,
     *,
     scheduler: AccessScheduler,
     ripgrep: str = "rg",
@@ -123,7 +124,7 @@ def path_tools(
 
 
 def read_tool(
-    environment: LocalExecutionEnvironment | None,
+    environment: ExecutionEnvironment | None,
     scheduler: AccessScheduler,
     *,
     resource_reader: ResourceReader | None = None,
@@ -137,8 +138,7 @@ def read_tool(
             if resource_reader is None:
                 return ToolResult(content="resource read is not available")
             async with scheduler.hold(PathAccess(path=args.resource_id, kind="read")):
-                text = await resource_reader(args.resource_id, args.cursor)
-            return ToolResult(content=text)
+                return await resource_reader(args.resource_id, args.cursor)
         if environment is None or args.path is None:
             return ToolResult(content="path read requires an execution environment")
         path = environment.resolve(args.path)
@@ -171,7 +171,7 @@ def read_tool(
     )
 
 
-def write_tool(environment: LocalExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
+def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
     async def execute(args: BaseModel) -> ToolResult:
         args = cast(WriteArgs, args)
         path = environment.resolve(args.path)
@@ -196,7 +196,7 @@ def write_tool(environment: LocalExecutionEnvironment, scheduler: AccessSchedule
     )
 
 
-def edit_tool(environment: LocalExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
+def edit_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
     async def execute(args: BaseModel) -> ToolResult:
         args = cast(EditArgs, args)
         if args.old_string == args.new_string:
@@ -231,7 +231,7 @@ def edit_tool(environment: LocalExecutionEnvironment, scheduler: AccessScheduler
 
 
 def grep_tool(
-    environment: LocalExecutionEnvironment,
+    environment: ExecutionEnvironment,
     scheduler: AccessScheduler,
     *,
     ripgrep: str,
@@ -265,7 +265,7 @@ def grep_tool(
 
 
 def bash_tool(
-    environment: LocalExecutionEnvironment,
+    environment: ExecutionEnvironment,
     scheduler: AccessScheduler,
     *,
     spill: SpillWriter | None = None,
@@ -275,7 +275,7 @@ def bash_tool(
         home = environment.root / "tmp" / "home"
         tmp = environment.root / "tmp"
         home.mkdir(parents=True, exist_ok=True)
-        async with scheduler.hold(AllAccess()):
+        async with scheduler.hold(WorkspaceAccess()):
             completed = await environment.run(
                 ["/bin/bash", "-lc", args.command],
                 env=build_child_environment(home=home, tmp=tmp),

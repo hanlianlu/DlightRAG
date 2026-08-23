@@ -117,6 +117,8 @@ class AnswerResponse(RetrievalResponse):
     references: list[ReferenceSummary] = Field(default_factory=list)
     answer_images: list[dict[str, Any]] = Field(default_factory=list)
     answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
+    usage: dict[str, Any] = Field(default_factory=dict)
+    evidence: dict[str, Any] = Field(default_factory=dict)
     primary_report: str | None = None
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -129,6 +131,8 @@ class AnswerRunDescriptor(ClientContractModel):
     status_url: str
     events_url: str
     cancel_url: str
+    parent_run_id: str | None = None
+    continuation_kind: str | None = None
 
 
 class AnswerRunStatusResponse(AnswerRunDescriptor):

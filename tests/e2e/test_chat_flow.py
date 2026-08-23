@@ -59,6 +59,19 @@ def test_chat_answer_shows_text(page):
 
 
 @pytest.mark.e2e
+def test_terminal_answer_exposes_minimal_agent_branch_controls(page):
+    page.goto("/web/")
+    page.locator(".composer-input").fill("Show controls")
+    page.click(".composer-send")
+    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
+
+    actions = page.locator('[class*="runActions"]').last
+    assert actions.get_by_role("button", name="Follow up").is_visible()
+    assert actions.get_by_role("button", name="Fork").is_visible()
+    assert actions.get_by_role("button", name="Child agents").is_visible()
+
+
+@pytest.mark.e2e
 def test_chat_history_appends_turns(page):
     """Verify that submitting a second query adds another user-message to the DOM."""
     page.goto("/web/")

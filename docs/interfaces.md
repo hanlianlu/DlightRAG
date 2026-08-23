@@ -350,8 +350,8 @@ LightRAG's document status and DlightRAG's content-hash guard.
 | In-process Application | `application.retrieval.retrieve()` | `application.answers.answer()` | `application.answers.subscribe()` yields durable events |
 | Python SDK | — | `AnswerRunClient.answer()` waits for the result | `AnswerRunClient.events()` yields reconnectable durable events |
 | REST API | JSON object | HTTP 202 run descriptor | reconnectable SSE at `/answer/{run_id}/events` |
-| MCP Server | JSON text | descriptor-only, returns immediately | `get_answer_run` / `cancel_answer_run` tools |
-| Web UI | — | HTTP 202 run descriptor | rendered events at `/web/api/answer/{run_id}/events` |
+| MCP Server | JSON text | descriptor-only, returns immediately | status, steer, follow-up, cancel, resume, fork, transcript, and child-roster tools |
+| Web UI | — | HTTP 202 run descriptor | rendered events plus applicable run/control/branch routes under `/web/api/answer/{run_id}` |
 | CLI (`scripts/cli.py`) | JSON object printed to stdout | Terminal text; `answer_blocks` image refs render as image URL lines | follows the run, then falls back to status |
 
 ### Contract Terms
@@ -363,6 +363,9 @@ LightRAG's document status and DlightRAG's content-hash guard.
 | `references` | Compact document-level citation summary for answers, derived from validated inline citations. |
 | `answer_images` | Registry of cited visual assets available for rendering. Entries reference image routes, not inline document image bytes. |
 | `answer_blocks` | Display plan for answers: markdown text blocks plus `image_ref` blocks that point into `answer_images`. |
+| `usage` | Provider-reported root usage plus child and inclusive usage when Research spawned children. |
+| `evidence` | Transport-neutral counts for admitted chunks, entities, relationships, and cited sources. |
+| `parent_run_id`, `continuation_kind` | Durable lineage for follow-up and fork runs. |
 
 ### Durable Answer Runs
 
@@ -387,7 +390,13 @@ ephemeral answer mode and no `stream` request field.
 | `POST /answer` | 202 with the descriptor. An idempotent replay returns 202 with the run's current status. Reusing a key with different normalized input returns 409. |
 | `GET /answer/{run_id}` | `queued` / `running` / `succeeded` / `failed` / `cancelled`, whether cancellation was requested, current phase (`routing` \| `planning` \| `searching` \| `researching` \| `generating`), `durable_progress_version`, the canonical result once succeeded, and one public `error_kind` + `error_message` for a terminal failure. |
 | `GET /answer/{run_id}/events` | Reconnectable SSE. Each durable sequence is the SSE `id`; resume with `Last-Event-ID` or the integer `after` query parameter. Supplying both with different values returns 400. Without a cursor, replay starts at sequence 1. A quiet run sends a comment keepalive every 10s, which consumes no sequence. |
-| `DELETE /answer/{run_id}` | Requests cancellation. 200 when it completed or found a terminal transition, 202 while a running worker must still observe it. Cancelling a terminal run is an idempotent no-op. |
+| `POST /answer/{run_id}/steer` | Queue an ordered instruction for a live Research run. |
+| `POST /answer/{run_id}/follow-up` | Start a new run that includes the selected terminal answer as context. |
+| `POST /answer/{run_id}/fork` | Start a sibling branch from the selected run's accepted context. |
+| `POST /answer/{run_id}/resume` | Return current state before reattaching to events. |
+| `GET /answer/{run_id}/transcript` | Return a bounded transport-neutral transcript tail. |
+| `GET /answer/{run_id}/children` | Return the foreground Child Session roster and usage. |
+| `DELETE /answer/{run_id}` | Explicit cancellation. 200 when complete/terminal, 202 while a worker must observe it. |
 
 Durable event types are exactly `progress`, `token`, `reset`, `done`, and
 `error`. `progress` carries the core phases `routing`, `planning`, `searching`,
@@ -403,10 +412,11 @@ REST, an `idempotency_key` argument for MCP and Python, and the browser's
 `submission_id` for Web. Creation without a key always creates a new run.
 
 Owner scope is uniform: unknown runs, pruned runs, and another owner's runs are
-indistinguishable and all return 404 from status, events, and cancellation. An
-authorized terminal run whose 30-day event log was trimmed returns **410** from
-the events endpoint; its canonical result stays available from the status
-endpoint. Stored events and results carry transport-neutral source identities;
+indistinguishable and all return 404 from status, events, controls, and
+cancellation. An authorized run whose configured-retention event log was
+trimmed returns **410** from the events endpoint; its canonical result remains
+available while the run row exists. Stored events and results carry
+transport-neutral source identities;
 each authenticated read projects fresh download URLs without modifying an event.
 
 Client disconnect never cancels a run. Closing an event subscriber or cancelling
@@ -478,17 +488,20 @@ with a stable limit message. Once a run is accepted, a resource that cannot be
 read produces a classified terminal `error` event; the answer does not silently
 drop evidence.
 
-Web conversations retain up to 100 complete turns with 30-day inactivity
-retention. Uploaded answer attachments are stored once as owner-scoped
+Web conversation snapshots return up to 100 recent turns; this is a read
+window, not retention. Web also exposes resume/cancel, live Research steering,
+child roster, follow-up, and fork. A fork atomically opens a new conversation
+branch and every continuation descriptor exposes parent lineage. Uploaded answer
+attachments are stored once as owner-scoped
 content-addressed blobs owned by the run, not by a Web-owned table. Historical
 attachments are re-registered lazily as request-local resources when a follow-up
 is answered, newest first up to the available attachment-count limit. An
 attachment-bearing conversation therefore remains on the research path, and
 browser thumbnails are derived on demand. There is no parsed-chunk table and no
 vector cache: the research path reads each attachment fresh from its stored
-bytes. Manual delete, TTL pruning, and window trimming delete the linked runs,
-which cascades their events and references and releases blobs no surviving run
-still references.
+bytes. Manual deletion and the shared run-retention floor delete linked runs,
+cascade their events/references, and release blobs no surviving run references.
+The 100-turn read window never trims storage.
 
 `AnswerOrchestrator` owns every answer. Callers set `mode` to `auto`, `fast`, or
 `research` (omitted means `auto`). Capability resolves a Valid Mode Set; routing
@@ -505,13 +518,14 @@ After generation, citation/source/media finalization is deterministic. Provider
 and resource lifetimes are request-local; nothing is shared across turns except
 the durable attachment blobs the run owns.
 
-REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
-accept an optional caller-supplied `history` of prior `role`/`content` turns for
-multi-turn follow-ups, but DlightRAG never persists it: the client owns
-conversation storage and re-sends the turns it wants on each request. They do not
-accept a server `conversation_id`; historical files are re-sent as current
-`attachments` when a follow-up depends on them. Public answer calls take no
-`query_images`; that field belongs to `/retrieve` only.
+REST, MCP, and Python answer/retrieve creation does not require a server
+conversation id. Callers may submit explicit `history`, or use the durable
+follow-up/fork controls on a terminal run. DlightRAG persists the accepted
+history and attachment identities needed by those controls; every continuation
+is accepted as a new ordinary run and rechecks current workspace authorization.
+The client still owns conversation navigation outside the optional Web
+conversation surface. Public answer calls take no `query_images`; that field
+belongs to `/retrieve` only.
 
 The REST API uses resource-oriented verbs (for example `POST /workspaces`,
 `DELETE /workspaces/{workspace}`), while the internal `/web/api/*` surface serves
@@ -648,7 +662,18 @@ async for event in application.answers.answer_stream(
   owner_id=DEPLOYMENT_OWNER_ID,
 ):
     print(event.event_type, event.payload)
+
+# The same AnswerService owns controls and lineage.
+await application.answers.steer(owner_id=DEPLOYMENT_OWNER_ID, run_id=run_id, instruction="Focus on risks")
+children = await application.answers.children(owner_id=DEPLOYMENT_OWNER_ID, run_id=run_id)
+continuation = await application.answers.follow_up(
+  owner_id=DEPLOYMENT_OWNER_ID, run_id=run_id, query="What changed?"
+)
 ```
+
+Remote Python callers use `AnswerRunClient`; its matching methods are `create`,
+`status`, `events`, `steer`, `follow_up`, `cancel`, `resume`, `fork`,
+`transcript`, and `children`.
 
 **Parameters**:
 
@@ -665,7 +690,7 @@ async for event in application.answers.answer_stream(
 | `query_images` | `list[QueryImage]` | `None` | `retrieve` only. Current-request OpenAI-style `image_url` blocks for knowledge-base visual search: described by the VLM for semantic/BM25 retrieval and embedded directly for visual retrieval. Capped at 3. Answer calls do not accept this field. |
 | `attachments` | `list[AnswerAttachmentLink]` (SDK: `list[AnswerAttachment]` via `resources`) | `None` | `/answer` only. Files or HTTPS references read as request-local resources for one answer. JSON/MCP bodies carry HTTPS link descriptors (`{url, filename?}`, HTTPS-only, no credentials); REST multipart adds uploaded files; the SDK uses `AnswerAttachment.from_path/from_bytes/from_url`. Bounded by `answer.generation.max_attachments` (6), `answer.generation.max_attachment_bytes` (100 MiB), and `answer.generation.max_total_attachment_bytes` (128 MiB). |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `answer.citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
-| `history` | `list[ConversationMessage] \| None` | `None` | `/answer` only. Optional caller-supplied prior turns as `role` (`user`/`assistant`) + `content` messages for multi-turn follow-ups. Stateless: never persisted, so the caller re-sends the turns it wants each request. Fast retrieval uses it for standalone-query rewrite and final generation uses the same bounded turns; research control and final generation see it, while agent-selected KB queries stay unchanged. Capped at 100 messages. |
+| `history` | `list[ConversationMessage] \| None` | `None` | `/answer` only. Optional caller-supplied prior turns as `role` (`user`/`assistant`) + `content` messages. The accepted run durably pins the bounded projection for recovery and server-owned follow-up/fork; a new independent request still sends the history it wants. Fast retrieval uses it for standalone-query rewrite and generation; Research control sees the same bounded turns, while agent-selected KB queries stay unchanged. Capped at 100 messages. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports `filename`, `file_extension`, `title`, `author`, `creation_date_from`/`creation_date_to`, and any `custom` key |
 
 ### REST API
@@ -836,10 +861,11 @@ JSON for clients that consume text-only tool results. Expected validation or
 authorization failures set `isError: true`; protocol-level `MCPError` responses
 remain JSON-RPC errors. The server exposes these tools:
 
-`retrieve`, `answer`, `get_answer_run`, `cancel_answer_run`, `ingest`,
-`get_ingest_job`, `cancel_ingest_job`, `list_files`, `delete_files`,
-`list_workspaces`, `create_workspace`, `delete_workspace`, `list_memories`,
-`forget_memory`, and `get_capabilities`.
+`retrieve`, `answer`, `get_answer_run`, `cancel_answer_run`,
+`steer_answer_run`, `follow_up_answer_run`, `fork_answer_run`,
+`resume_answer_run`, `get_answer_transcript`, `list_answer_children`,
+`list_answer_runs`, artifact operations, ingest/corpus operations,
+`list_memories`, `forget_memory`, and `get_capabilities`.
 
 MCP `answer` is deliberately descriptor-only: it creates the durable run and
 returns immediately rather than holding one tool call open for a run that may
@@ -854,7 +880,9 @@ Answer payloads keep `sources` at top level:
   "references": [{"id": "1", "title": "report.pdf"}],
   "sources": [...],
   "answer_images": [...],
-  "answer_blocks": [...]
+  "answer_blocks": [...],
+  "usage": {"usage_details": {...}},
+  "evidence": {"chunks": 8, "sources": 3}
 }
 ```
 

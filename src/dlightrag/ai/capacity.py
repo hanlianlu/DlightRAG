@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-CONTEXT_POLICY_REVISION = "m1-v1"
+CONTEXT_POLICY_REVISION = "agent-v3-reserves"
 type ModelInputOverflowKind = Literal[
     "hard_input_limit_exceeded",
     "context_exhausted",
@@ -63,27 +63,65 @@ class ModelProfile:
 
 @dataclass(frozen=True, slots=True)
 class ContextPolicy:
-    """Current revision of DlightRAG's model-input capacity arithmetic."""
+    """Explicit model input/output/observation reserves.
 
+    Provider limits remain physical facts. Absolute reserves express the
+    product request instead of multiplying opaque percentages; small profiles
+    clamp reserves so a usable minimum input remains.
+    """
+
+    requested_output_reserve_tokens: int = 16_384
+    observation_reserve_tokens: int = 32_768
+    safety_reserve_tokens: int = 1_024
+    retained_tail_tokens: int = 20_000
+    episodic_summary_tokens: int = 8_000
+    minimum_input_tokens: int = 1_024
     revision: str = field(default=CONTEXT_POLICY_REVISION, init=False)
 
+    def __post_init__(self) -> None:
+        for name in (
+            "requested_output_reserve_tokens",
+            "observation_reserve_tokens",
+            "safety_reserve_tokens",
+            "retained_tail_tokens",
+            "episodic_summary_tokens",
+            "minimum_input_tokens",
+        ):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} cannot be negative")
+
+    def _reserved_output(self, profile: ModelProfile) -> int:
+        if profile.max_output_tokens is None:
+            return self.requested_output_reserve_tokens
+        return min(profile.max_output_tokens, self.requested_output_reserve_tokens)
+
     def hard_input_limit(self, profile: ModelProfile) -> int:
-        """Return the hard request-input ceiling for one model profile."""
-        physical_margin = profile.context_window_tokens * 85 // 100
+        """Return provider input capacity after explicit output and safety reserves."""
         provider_limit = profile.max_input_tokens or profile.context_window_tokens
-        return min(provider_limit, physical_margin)
+        context = profile.context_window_tokens
+        floor = min(self.minimum_input_tokens, provider_limit, context)
+        output = min(self._reserved_output(profile), max(0, context - floor))
+        safety = min(
+            self.safety_reserve_tokens,
+            max(0, context - output - floor),
+        )
+        context_input_limit = max(1, context - output - safety)
+        return min(provider_limit, context_input_limit)
 
     def compaction_trigger(self, profile: ModelProfile) -> int:
-        """Return the proactive Research compaction threshold."""
-        return self.hard_input_limit(profile) * 85 // 100
+        """Reserve room for the next model/tool observation batch."""
+        hard_limit = self.hard_input_limit(profile)
+        floor = min(self.minimum_input_tokens, hard_limit)
+        reserve = min(self.observation_reserve_tokens, max(0, hard_limit - floor))
+        return hard_limit - reserve
 
     def history_allowance_cap(self, profile: ModelProfile) -> int:
-        """Return the maximum shared-history allowance before envelope fitting."""
-        return self.hard_input_limit(profile) * 20 // 100
+        """Let each reachable call allocate history from its actual residual."""
+        return self.compaction_trigger(profile)
 
     def retained_tail_target(self, profile: ModelProfile) -> int:
-        """Return the recent Research exchange target retained verbatim."""
-        return self.hard_input_limit(profile) * 20 // 100
+        """Return the absolute recent Research exchange target retained verbatim."""
+        return min(self.retained_tail_tokens, self.hard_input_limit(profile))
 
     def classify_input(
         self,
@@ -106,7 +144,7 @@ class ContextPolicy:
         *,
         input_tokens: int,
     ) -> int | None:
-        """Return a required output cap, or None when the provider permits omission."""
+        """Return the requested cap bounded by the physical context remainder."""
         overflow = self.classify_input(profile, input_tokens=input_tokens)
         if overflow is not None:
             limit = (
@@ -119,12 +157,13 @@ class ContextPolicy:
                 input_tokens=input_tokens,
                 input_limit_tokens=limit,
             )
-        if profile.max_output_tokens is None:
-            return None
-        return min(
-            profile.max_output_tokens,
-            profile.context_window_tokens - input_tokens,
+        physical_remainder = profile.context_window_tokens - input_tokens
+        requested = (
+            profile.max_output_tokens
+            if profile.max_output_tokens is not None
+            else self.requested_output_reserve_tokens
         )
+        return min(requested, physical_remainder)
 
 
 CONTEXT_POLICY = ContextPolicy()

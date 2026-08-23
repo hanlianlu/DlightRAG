@@ -1,11 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Fold session entries into model context, plus working-memory episode replay.
+"""Fold canonical session entries into one derived working context.
 
-One pure fold reconstructs the active model context for live execution and for
-replay; derived model messages are never persisted separately. The episode
-record keeps the pre-journal working exchanges for the M2-era orchestrator and
-replays them with the same retained-tail policy the old in-memory episode used,
-so live behavior does not change until the journal-based orchestration lands.
+Durable Research rebuilds this projection from the selected session head before
+every provider call. In-process callers without a journal may append exchanges
+to the same bounded projection directly.
 """
 
 from __future__ import annotations
@@ -20,6 +18,7 @@ from dlightrag.agent.session.entries import (
     ContextInjectionEntry,
     EffectResultEntry,
     ProfileFactEntry,
+    RunSegmentEntry,
     SessionEntry,
     SessionTerminalEntry,
     UserMessageEntry,
@@ -34,10 +33,16 @@ from dlightrag.ai.tokens import (
 
 
 class PriorTurns:
-    """Earlier caller-supplied turns, replayed once per request."""
+    """Earlier caller turns plus a bounded continuation for omitted pairs."""
 
-    def __init__(self, messages: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        messages: list[dict[str, Any]] | None = None,
+        *,
+        episodic_summary: str = "",
+    ) -> None:
         self._messages = list(messages or [])
+        self._episodic_summary = episodic_summary.strip()
 
     def __len__(self) -> int:
         return len(self._messages)
@@ -45,6 +50,10 @@ class PriorTurns:
     @property
     def messages(self) -> list[dict[str, Any]]:
         return list(self._messages)
+
+    @property
+    def episodic_summary(self) -> str:
+        return self._episodic_summary
 
 
 def fold_tool_call(call: ToolCall) -> dict[str, Any]:
@@ -90,11 +99,11 @@ def fold_tool_message(entry: EffectResultEntry) -> dict[str, Any]:
 
 
 def fold_entries(entries: Sequence[SessionEntry]) -> list[dict[str, Any]]:
-    """Fold ordered journal entries into the active model-context messages.
+    """Fold ordered non-projection entries into model-context messages.
 
-    Accounting entries (profile facts, session terminal) produce no model
-    message. A compaction entry renders its typed summary deterministically at
-    its sequence position, so live and replay folds are byte-for-byte equal.
+    Compaction entries are audit facts, not chronological messages. The active
+    projection is materialized once by ``project_session_messages`` before its
+    retained suffix.
     """
     messages: list[dict[str, Any]] = []
     for entry in entries:
@@ -106,15 +115,40 @@ def fold_entries(entries: Sequence[SessionEntry]) -> list[dict[str, Any]]:
             messages.append(fold_tool_message(entry))
         elif isinstance(entry, ContextInjectionEntry):
             messages.append({"role": "user", "content": entry.content})
-        elif isinstance(entry, CompactionEntry):
-            messages.append(
-                {
-                    "role": "user",
-                    "content": render_compaction_summary(entry.summary),
-                }
-            )
-        elif isinstance(entry, (ProfileFactEntry, SessionTerminalEntry)):
+        elif isinstance(
+            entry,
+            (CompactionEntry, ProfileFactEntry, RunSegmentEntry, SessionTerminalEntry),
+        ):
             continue
+    return messages
+
+
+def project_session_messages(
+    entries: Sequence[SessionEntry],
+    projection: object | None,
+) -> list[dict[str, Any]]:
+    """Materialize one active summary before its retained non-compaction suffix."""
+    if projection is None:
+        return fold_entries(entries)
+    from dlightrag.agent.session.projection import ContextProjection
+
+    if not isinstance(projection, ContextProjection):
+        raise TypeError("active projection must be a ContextProjection")
+    retained = [
+        entry
+        for entry in entries
+        if entry.sequence >= projection.first_retained_sequence
+        and not isinstance(entry, CompactionEntry)
+    ]
+    messages: list[dict[str, Any]] = []
+    if projection.summary is not None:
+        messages.append(
+            {
+                "role": "user",
+                "content": render_compaction_summary(projection.summary),
+            }
+        )
+    messages.extend(fold_entries(retained))
     return messages
 
 
@@ -218,7 +252,7 @@ def _without_reasoning(message: dict[str, Any]) -> dict[str, Any]:
     return reduced
 
 
-class SessionEpisode:
+class WorkingContextProjection:
     """Every assistant/tool exchange one session produced, newest first to replay.
 
     Provider-native reasoning is what makes an exchange expensive and is valid
@@ -226,8 +260,9 @@ class SessionEpisode:
     older exchanges keep just the call and its result: a later turn still sees
     which angle was spent without paying for the thinking behind it.
 
-    The episode is pre-journal working memory; its canonical codec carries the
-    same exchanges until journal-based orchestration replaces it.
+    In durable Research it is only a projection cache rebuilt from the active
+    session graph before each provider call. In-process callers may append to it
+    directly because they have no journal.
     """
 
     def __init__(self, *, retained_tail_tokens: int) -> None:
@@ -253,21 +288,17 @@ class SessionEpisode:
         state: Mapping[str, Any],
         *,
         retained_tail_tokens: int,
-    ) -> SessionEpisode:
-        """Rebuild an episode from its canonical exchanges."""
+    ) -> WorkingContextProjection:
+        """Rebuild a derived working projection from canonical exchanges."""
         exchanges = state.get("exchanges")
         if not isinstance(exchanges, Sequence):
-            raise ValueError("episode state has no exchanges")
-        episode = cls(retained_tail_tokens=retained_tail_tokens)
-        episode._exchanges = [
+            raise ValueError("working projection state has no exchanges")
+        projection = cls(retained_tail_tokens=retained_tail_tokens)
+        projection._exchanges = [
             [dict(cast(Mapping[str, Any], message)) for message in cast(Sequence[Any], exchange)]
             for exchange in exchanges
         ]
-        return episode
-
-    @property
-    def last_exchange(self) -> list[dict[str, Any]]:
-        return list(self._exchanges[-1]) if self._exchanges else []
+        return projection
 
     def messages(self) -> list[dict[str, Any]]:
         if not self._exchanges:
@@ -291,12 +322,13 @@ class SessionEpisode:
 
 __all__ = [
     "PriorTurns",
-    "SessionEpisode",
+    "WorkingContextProjection",
     "exchange_starts",
     "fold_assistant_message",
     "fold_entries",
     "fold_tool_call",
     "fold_tool_message",
     "head_tail_text",
+    "project_session_messages",
     "select_compaction_boundary",
 ]

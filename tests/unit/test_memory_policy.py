@@ -37,7 +37,7 @@ def test_owner_eligibility_is_root_policy() -> None:
     from dlightrag.answer.memory import memory_owner_allowed
 
     assert memory_owner_allowed("jwt")
-    assert not memory_owner_allowed("none")
+    assert memory_owner_allowed("none")
     assert not memory_owner_allowed("simple")
 
 
@@ -83,7 +83,7 @@ def test_render_auto_recall_keeps_the_framing() -> None:
     assert render_auto_recall(()) == ""
 
 
-def test_acceptance_reserves_full_recall_only_for_jwt() -> None:
+def test_acceptance_reserves_full_recall_for_personal_and_local_identity() -> None:
     reserved = reserved_auto_recall_text()
     # The façade caps packed bodies at RECALL_CHAR_BUDGET (4000) -> at most
     # eight 500-char records; the reservation renders exactly that worst case,
@@ -91,5 +91,5 @@ def test_acceptance_reserves_full_recall_only_for_jwt() -> None:
     assert reserved.count("- (") == 8
     assert len(reserved) >= RECALL_CHAR_BUDGET
     assert standing_memory_for_acceptance("jwt") == reserved
-    assert standing_memory_for_acceptance("none") == ""
+    assert standing_memory_for_acceptance("none") == reserved
     assert standing_memory_for_acceptance("simple") == ""

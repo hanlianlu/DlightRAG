@@ -6,8 +6,9 @@ from dlightrag.config import DlightragConfig
 
 
 def clone_config(config: DlightragConfig) -> DlightragConfig:
-    """Revalidate a frozen config into an independent test instance."""
-    return DlightragConfig.model_validate(config.model_dump())
+    """Revalidate a config through Pydantic's unredacted base serializer."""
+    values = super(DlightragConfig, config).model_dump()
+    return DlightragConfig.model_validate(values)
 
 
 def replace_config(config: DlightragConfig, path: str, value: Any) -> DlightragConfig:

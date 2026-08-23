@@ -237,20 +237,44 @@ class RuntimeConfig(BaseModel):
     )
 
 
-class AgentExecutionConfig(BaseModel):
-    """Optional trusted local execution for path tools and spill."""
+class OutboundMcpServerConfig(BaseModel):
+    """One thin deployment-configured outbound MCP endpoint."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    execution_environment: Literal["disabled", "local_trusted"] = Field(default="disabled")
+    name: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
+    transport: Literal["stdio", "streamable-http"]
+    tools: tuple[str, ...] = Field(min_length=1)
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    url: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_endpoint(self) -> OutboundMcpServerConfig:
+        if self.transport == "stdio" and (not self.command or self.url):
+            raise ValueError("stdio outbound MCP requires command and forbids url")
+        if self.transport == "streamable-http" and (not self.url or self.command):
+            raise ValueError("streamable-http outbound MCP requires url and forbids command")
+        if len(set(self.tools)) != len(self.tools):
+            raise ValueError("outbound MCP tool names must be unique")
+        return self
+
+
+class AgentExecutionConfig(BaseModel):
+    """Optional Agent execution; sandbox requires a trusted adapter extension."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    execution_environment: Literal["disabled", "trust", "sandbox"] = Field(default="disabled")
     workspace_root: str | None = Field(
         default=None,
         description=(
-            "Absolute Agent Workspace root. When local_trusted and unset, "
+            "Absolute Agent Workspace root. When trust or sandbox and unset, "
             "defaults to ~/.dlightrag/agent_workspaces. Multi-host deployments "
             "must set the same absolute path on every worker."
         ),
     )
+    outbound_mcp: tuple[OutboundMcpServerConfig, ...] = ()
 
 
 class WebConversationsConfig(BaseModel):

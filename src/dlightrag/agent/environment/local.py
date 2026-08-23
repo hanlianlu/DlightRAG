@@ -157,6 +157,10 @@ class LocalExecutionEnvironment:
                 stdout=_decode_output(stdout_bytes),
                 stderr=_decode_output(stderr_bytes),
             )
+        except asyncio.CancelledError:
+            self._terminate_group(process)
+            await asyncio.shield(process.communicate())
+            raise
         return CompletedProcess(
             returncode=process.returncode or 0,
             stdout=_decode_output(stdout_bytes),

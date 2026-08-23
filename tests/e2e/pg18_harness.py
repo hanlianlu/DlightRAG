@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 from PIL import Image
@@ -99,40 +99,50 @@ def make_e2e_config(
     conn_kwargs: Mapping[str, Any],
 ) -> DlightragConfig:
     """Create a compact config for the local fake-model E2E smoke."""
-    return cast(Any, DlightragConfig)(
+    return DlightragConfig(
         _env_file=None,
-        postgres_host=str(conn_kwargs["host"]),
-        postgres_port=int(conn_kwargs["port"]),
-        postgres_user=str(conn_kwargs["user"]),
-        postgres_password=str(conn_kwargs["password"]),
-        postgres_database=str(conn_kwargs["database"]),
-        postgres_pool_min_size=1,
-        postgres_pool_max_size=2,
-        workspace=workspace,
-        working_dir=str(working_dir),
-        chunk_p_token_size=128,
-        max_async=1,
-        embedding_func_max_async=1,
-        embedding_batch_num=2,
-        bm25_enabled=True,
-        rerank={"enabled": False},
-        llm=ModelRoleSettings(
-            default=ModelSettings(
-                provider="openai",
-                model="e2e-fake-llm",
+        deployment={"workspace": workspace, "working_dir": str(working_dir)},
+        storage={
+            "postgres": {
+                "host": str(conn_kwargs["host"]),
+                "port": int(conn_kwargs["port"]),
+                "user": str(conn_kwargs["user"]),
+                "password": str(conn_kwargs["password"]),
+                "database": str(conn_kwargs["database"]),
+                "pool_min_size": 1,
+                "pool_max_size": 2,
+            }
+        },
+        models={
+            "max_concurrency": 1,
+            "chat": ModelRoleSettings(
+                default=ModelSettings(
+                    provider="openai",
+                    model="e2e-fake-llm",
+                    api_key="e2e-fake-key",
+                    timeout=30,
+                )
+            ),
+            "embedding": EmbeddingSettings(
+                provider="voyage",
+                model="e2e-fake-multimodal",
                 api_key="e2e-fake-key",
-                timeout=30,
-            )
-        ),
-        embedding=EmbeddingSettings(
-            provider="voyage",
-            model="e2e-fake-multimodal",
-            api_key="e2e-fake-key",
-            dim=8,
-            max_token_size=1024,
-            asymmetric="auto",
-            startup_probe=False,
-        ),
+                dim=8,
+                max_token_size=1024,
+                max_concurrency=1,
+                batch_size=2,
+                asymmetric="auto",
+                startup_probe=False,
+            ),
+            "rerank": {"enabled": False},
+        },
+        corpus={
+            "ingestion": {
+                "chunk_token_size": 128,
+                "pipeline": {"max_concurrency": 1},
+            },
+            "retrieval": {"bm25_enabled": True},
+        },
     )
 
 

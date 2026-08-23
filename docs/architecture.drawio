@@ -1,106 +1,33 @@
-<mxfile host="app.diagrams.net" modified="2026-08-16T00:00:00.000Z" agent="DlightRAG" version="31.1.8" type="device">
-  <diagram id="dlightrag-architecture" name="Architecture">
-    <mxGraphModel dx="1280" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1280" pageHeight="900" math="0" shadow="0">
+<mxfile host="app.diagrams.net" modified="2026-08-23T00:00:00.000Z" agent="DlightRAG 3.0" version="28.2.9">
+  <diagram id="agent-3" name="DlightRAG 3.0">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
-
-        <mxCell id="title" value="DlightRAG Package Boundaries &amp; Runtime Flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Inter;fontSize=25;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
-          <mxGeometry x="56" y="22" width="900" height="34" as="geometry"/>
-        </mxCell>
-        <mxCell id="subtitle" value="Compile-time imports, runtime calls, provider admission, and persistence use distinct visual semantics." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Inter;fontSize=12;fontColor=#475569;" vertex="1" parent="1">
-          <mxGeometry x="56" y="64" width="1168" height="24" as="geometry"/>
-        </mxCell>
-
-        <mxCell id="band_packages" value="Compile-time package dependency" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="56" y="98" width="1168" height="220" as="geometry"/>
-        </mxCell>
-        <mxCell id="pkg_root" value="&lt;b&gt;dlightrag&lt;/b&gt;&lt;br&gt;composition &#183; transports &#183; PostgreSQL adapters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="440" y="128" width="400" height="48" as="geometry"/>
-        </mxCell>
-        <mxCell id="pkg_rag" value="&lt;b&gt;dlightrag.rag&lt;/b&gt;&lt;br&gt;WorkspaceRag &#183; LightRAG adapters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="270" y="198" width="280" height="48" as="geometry"/>
-        </mxCell>
-        <mxCell id="pkg_agent" value="&lt;b&gt;dlightrag.agent&lt;/b&gt;&lt;br&gt;ToolTurnExecutor &#183; generic tools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="730" y="198" width="280" height="48" as="geometry"/>
-        </mxCell>
-        <mxCell id="pkg_ai" value="&lt;b&gt;dlightrag.ai&lt;/b&gt; &#183; ModelScheduler &#183; ModelProfile &#183; model lifecycles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="510" y="264" width="260" height="40" as="geometry"/>
-        </mxCell>
-        <mxCell id="pkg_caption" value="enforced in source and installed wheels" style="text;html=1;strokeColor=none;fillColor=none;align=right;verticalAlign=middle;whiteSpace=wrap;fontFamily=Inter;fontSize=10;fontColor=#64748b;" vertex="1" parent="1">
-          <mxGeometry x="852" y="274" width="340" height="20" as="geometry"/>
-        </mxCell>
-
-        <mxCell id="band_runtime" value="Runtime control &amp; data flow" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="56" y="338" width="1168" height="320" as="geometry"/>
-        </mxCell>
-        <mxCell id="clients" value="&lt;b&gt;REST &#183; Web &#183; MCP &#183; SDK&lt;/b&gt;&lt;br&gt;auth &#183; uploads &#183; request contracts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="78" y="385" width="170" height="64" as="geometry"/>
-        </mxCell>
-        <mxCell id="manager" value="&lt;b&gt;Application&lt;/b&gt;&lt;br&gt;composition root&lt;br&gt;answers &#183; retrieval &#183; corpora" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="282" y="375" width="205" height="84" as="geometry"/>
-        </mxCell>
-        <mxCell id="run_coordinator" value="&lt;b&gt;RunCoordinator &#8635;&lt;/b&gt;&lt;br&gt;answer.runtime.answer_worker_concurrency&lt;br&gt;leases &#183; events &#183; checkpoints" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
-          <mxGeometry x="525" y="370" width="190" height="72" as="geometry"/>
-        </mxCell>
-        <mxCell id="orchestrator" value="&lt;b&gt;AnswerOrchestrator&lt;/b&gt;&lt;br&gt;fast path | research path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="750" y="370" width="200" height="72" as="geometry"/>
-        </mxCell>
-        <mxCell id="tool_turn" value="&lt;b&gt;dlightrag.agent&lt;/b&gt;&lt;br&gt;ToolTurnExecutor &#183; peer tools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=7;" vertex="1" parent="1">
-          <mxGeometry x="525" y="460" width="190" height="60" as="geometry"/>
-        </mxCell>
-        <mxCell id="synthesizer" value="&lt;b&gt;AnswerSynthesizer&lt;/b&gt;&lt;br&gt;Answer &#183; sources &#183; citations" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=7;" vertex="1" parent="1">
-          <mxGeometry x="750" y="460" width="200" height="60" as="geometry"/>
-        </mxCell>
-        <mxCell id="workspace_rag" value="&lt;b&gt;WorkspaceRag&lt;/b&gt;&lt;br&gt;canonical ingest &#183; retrieve &#183; reset&lt;br&gt;storage-neutral corpus capability" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
-          <mxGeometry x="525" y="540" width="190" height="70" as="geometry"/>
-        </mxCell>
-        <mxCell id="lightrag_main" value="&lt;b&gt;LightRAG main &#8635;&lt;/b&gt;&lt;br&gt;corpus.ingestion.pipeline.max_concurrency / workspace&lt;br&gt;parser &#183; chunks &#183; KG &#183; vectors &#183; mix" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
-          <mxGeometry x="750" y="540" width="200" height="70" as="geometry"/>
-        </mxCell>
-        <mxCell id="model_scheduler" value="&lt;b&gt;ModelScheduler &#8635;&lt;/b&gt;&lt;br&gt;models.max_concurrency / process&lt;br&gt;fair by durable run&lt;br&gt;&lt;br&gt;Completion &#183; Tool &#183; Embedding&lt;br&gt;Rerank &#183; capability probes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=9;" vertex="1" parent="1">
-          <mxGeometry x="990" y="370" width="190" height="240" as="geometry"/>
-        </mxCell>
-
-        <mxCell id="band_persistence" value="Persistence &amp; adapter boundary" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="56" y="680" width="1168" height="145" as="geometry"/>
-        </mxCell>
-        <mxCell id="storage_ports" value="&lt;b&gt;Storage-neutral ports&lt;/b&gt;&lt;br&gt;AnswerRunStore &#183; corpus backend&lt;br&gt;metadata &#183; jobs &#183; maintenance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="90" y="720" width="300" height="75" as="geometry"/>
-        </mxCell>
-        <mxCell id="postgres_adapters" value="&lt;b&gt;dlightrag.adapters.postgres&lt;/b&gt;&lt;br&gt;pools &#183; migrations &#183; SQL implementations" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="490" y="720" width="300" height="75" as="geometry"/>
-        </mxCell>
-        <mxCell id="postgres" value="&lt;b&gt;PostgreSQL 18&lt;/b&gt;&lt;br&gt;one write-capable endpoint&lt;br&gt;writer: migrations + corpus writes&lt;br&gt;reader: read-only corpus sessions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="890" y="710" width="300" height="95" as="geometry"/>
-        </mxCell>
-
-        <mxCell id="dep_root_rag" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748b;strokeWidth=1.2;dashed=1;endArrow=block;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="520" y="176" as="sourcePoint"/><mxPoint x="410" y="198" as="targetPoint"/><Array as="points"><mxPoint x="520" y="188"/><mxPoint x="410" y="188"/></Array></mxGeometry></mxCell>
-        <mxCell id="dep_root_agent" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748b;strokeWidth=1.2;dashed=1;endArrow=block;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="760" y="176" as="sourcePoint"/><mxPoint x="870" y="198" as="targetPoint"/><Array as="points"><mxPoint x="760" y="188"/><mxPoint x="870" y="188"/></Array></mxGeometry></mxCell>
-        <mxCell id="dep_root_ai" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748b;strokeWidth=1.2;dashed=1;endArrow=block;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="640" y="176" as="sourcePoint"/><mxPoint x="640" y="264" as="targetPoint"/></mxGeometry></mxCell>
-        <mxCell id="dep_rag_ai" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748b;strokeWidth=1.2;dashed=1;endArrow=block;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="410" y="246" as="sourcePoint"/><mxPoint x="580" y="264" as="targetPoint"/><Array as="points"><mxPoint x="410" y="254"/><mxPoint x="580" y="254"/></Array></mxGeometry></mxCell>
-        <mxCell id="dep_agent_ai" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748b;strokeWidth=1.2;dashed=1;endArrow=block;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="870" y="246" as="sourcePoint"/><mxPoint x="700" y="264" as="targetPoint"/><Array as="points"><mxPoint x="870" y="254"/><mxPoint x="700" y="254"/></Array></mxGeometry></mxCell>
-
-        <mxCell id="flow_clients_manager" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="248" y="417" as="sourcePoint"/><mxPoint x="282" y="417" as="targetPoint"/></mxGeometry></mxCell>
-        <mxCell id="flow_manager_run" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="487" y="406" as="sourcePoint"/><mxPoint x="525" y="406" as="targetPoint"/></mxGeometry></mxCell>
-        <mxCell id="flow_run_orchestrator" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="715" y="406" as="sourcePoint"/><mxPoint x="750" y="406" as="targetPoint"/></mxGeometry></mxCell>
-        <mxCell id="flow_manager_workspace" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="487" y="430" as="sourcePoint"/><mxPoint x="525" y="575" as="targetPoint"/><Array as="points"><mxPoint x="505" y="430"/><mxPoint x="505" y="575"/></Array></mxGeometry></mxCell>
-        <mxCell id="flow_orchestrator_tool" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="750" y="420" as="sourcePoint"/><mxPoint x="715" y="490" as="targetPoint"/><Array as="points"><mxPoint x="730" y="420"/><mxPoint x="730" y="490"/></Array></mxGeometry></mxCell>
-        <mxCell id="flow_orchestrator_synth" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="850" y="442" as="sourcePoint"/><mxPoint x="850" y="460" as="targetPoint"/></mxGeometry></mxCell>
-        <mxCell id="flow_orchestrator_workspace" value="retrieve" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.2;endArrow=block;endFill=1;fontFamily=Inter;fontSize=9;fontColor=#475569;labelBackgroundColor=#ffffff;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="750" y="430" as="sourcePoint"/><mxPoint x="715" y="560" as="targetPoint"/><Array as="points"><mxPoint x="730" y="430"/><mxPoint x="730" y="560"/></Array></mxGeometry></mxCell>
-        <mxCell id="flow_workspace_lightrag" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="715" y="575" as="sourcePoint"/><mxPoint x="750" y="575" as="targetPoint"/></mxGeometry></mxCell>
-
-        <mxCell id="admission_answer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;dashed=1;dashPattern=1 4;endArrow=open;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="950" y="400" as="sourcePoint"/><mxPoint x="990" y="400" as="targetPoint"/></mxGeometry></mxCell>
-        <mxCell id="admission_agent" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;dashed=1;dashPattern=1 4;endArrow=open;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="715" y="470" as="sourcePoint"/><mxPoint x="990" y="490" as="targetPoint"/><Array as="points"><mxPoint x="970" y="452"/><mxPoint x="970" y="490"/></Array></mxGeometry></mxCell>
-        <mxCell id="admission_rag" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;dashed=1;dashPattern=1 4;endArrow=open;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="950" y="575" as="sourcePoint"/><mxPoint x="990" y="575" as="targetPoint"/></mxGeometry></mxCell>
-
-        <mxCell id="flow_runtime_ports" value="uses" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.2;endArrow=block;endFill=1;fontFamily=Inter;fontSize=9;fontColor=#475569;labelBackgroundColor=#ffffff;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="385" y="459" as="sourcePoint"/><mxPoint x="240" y="720" as="targetPoint"/><Array as="points"><mxPoint x="385" y="670"/><mxPoint x="240" y="670"/></Array></mxGeometry></mxCell>
-        <mxCell id="implements_ports" value="implements" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#16a34a;strokeWidth=1.2;dashed=1;endArrow=open;endFill=0;fontFamily=Inter;fontSize=9;fontColor=#166534;labelBackgroundColor=#f8fafc;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="490" y="758" as="sourcePoint"/><mxPoint x="390" y="758" as="targetPoint"/></mxGeometry></mxCell>
-        <mxCell id="sql_postgres" value="SQL" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#16a34a;strokeWidth=1.4;endArrow=block;endFill=1;fontFamily=Inter;fontSize=9;fontColor=#166534;labelBackgroundColor=#f8fafc;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="790" y="758" as="sourcePoint"/><mxPoint x="890" y="758" as="targetPoint"/></mxGeometry></mxCell>
-
-        <mxCell id="legend" value="Solid slate = runtime call/use   &#183;   Dashed open = import or implements   &#183;   Dotted magenta = provider admission   &#183;   &#8635; = independent concurrency owner" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Inter;fontSize=10;fontColor=#475569;" vertex="1" parent="1">
-          <mxGeometry x="56" y="842" width="1168" height="28" as="geometry"/>
-        </mxCell>
+        <mxCell id="title" value="DlightRAG 3.0 — durable citation-first Agent architecture" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#172033;" vertex="1" parent="1"><mxGeometry x="300" y="20" width="1000" height="40" as="geometry"/></mxCell>
+        <mxCell id="clients" value="Clients&#xa;REST · Web · inbound MCP · Python SDK" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#5479B8;fontSize=16;" vertex="1" parent="1"><mxGeometry x="60" y="110" width="280" height="90" as="geometry"/></mxCell>
+        <mxCell id="app" value="Application / AnswerService&#xa;start · status · steer · follow-up · cancel&#xa;resume · fork · transcript · children" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F6EF;strokeColor=#448A67;fontSize=16;" vertex="1" parent="1"><mxGeometry x="430" y="100" width="370" height="110" as="geometry"/></mxCell>
+        <mxCell id="runtime" value="Durable Runtime&#xa;RunCoordinator · leases · fencing · events&#xa;Prepared Input · Fast stages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4D9;strokeColor=#B58A2D;fontSize=16;" vertex="1" parent="1"><mxGeometry x="900" y="100" width="340" height="110" as="geometry"/></mxCell>
+        <mxCell id="fast" value="Fast invocation&#xa;shared context · model · Evidence&#xa;citations · Memory · usage&#xa;no Agent Session" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4F0FF;strokeColor=#7656A6;fontSize=15;" vertex="1" parent="1"><mxGeometry x="310" y="300" width="300" height="120" as="geometry"/></mxCell>
+        <mxCell id="research" value="Research host&#xa;product-neutral AgentLoop + ToolRegistry&#xa;foreground Child Sessions&#xa;disabled · trust · sandbox adapter" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4F0FF;strokeColor=#7656A6;fontSize=15;" vertex="1" parent="1"><mxGeometry x="690" y="300" width="330" height="120" as="geometry"/></mxCell>
+        <mxCell id="session" value="Canonical Agent Session journal&#xa;typed append-only entries · derived linear graph · Run Segments&#xa;one active compaction projection · ordered controls" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FCEBEF;strokeColor=#B25870;fontSize=15;" vertex="1" parent="1"><mxGeometry x="1080" y="300" width="410" height="120" as="geometry"/></mxCell>
+        <mxCell id="context" value="Context Contribution plane&#xa;conversation · working · Evidence · Profile · Skills&#xa;trusted extension context" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F7FA;strokeColor=#4C8D9C;fontSize=15;" vertex="1" parent="1"><mxGeometry x="80" y="500" width="350" height="110" as="geometry"/></mxCell>
+        <mxCell id="rag" value="RAG / resources&#xa;LightRAG mix · BM25 · visual retrieval&#xa;read · inspect · Web search" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F7FA;strokeColor=#4C8D9C;fontSize=15;" vertex="1" parent="1"><mxGeometry x="500" y="500" width="320" height="110" as="geometry"/></mxCell>
+        <mxCell id="cap" value="Capabilities&#xa;Profile Memory package · progressive Skills&#xa;thin outbound MCP · trusted extensions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E9F7FA;strokeColor=#4C8D9C;fontSize=15;" vertex="1" parent="1"><mxGeometry x="890" y="500" width="350" height="110" as="geometry"/></mxCell>
+        <mxCell id="pg" value="PostgreSQL 18&#xa;runs · routing · controls · events · journal · children&#xa;Evidence · artifacts · Memory · corpus" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF1F5;strokeColor=#687486;fontSize=16;" vertex="1" parent="1"><mxGeometry x="470" y="700" width="600" height="100" as="geometry"/></mxCell>
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="clients" target="app"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="app" target="runtime"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="runtime" target="fast"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="runtime" target="research"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="research" target="session"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="fast" target="context"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="research" target="context"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="research" target="rag"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="research" target="cap"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="runtime" target="pg"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="session" target="pg"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="rag" target="pg"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;" edge="1" parent="1" source="cap" target="pg"><mxGeometry relative="1" as="geometry"/></mxCell>
       </root>
     </mxGraphModel>
   </diagram>

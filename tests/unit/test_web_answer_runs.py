@@ -57,7 +57,8 @@ _BODY = {
 def service() -> AsyncMock:
     created = AsyncMock()
     created.start_answer.return_value = web_answer_submission(conversation_id=_CID)
-    created.turn_for_run.return_value = linked_turn()
+    created.continue_answer.return_value = web_answer_submission(conversation_id=_CID)
+    created.turn_for_run.return_value = linked_turn(conversation_id=_CID)
     return created
 
 
@@ -68,6 +69,10 @@ def application_double() -> AsyncMock:
     created.answers = SimpleNamespace(
         capabilities=capability_view.read,
         cancel=AsyncMock(),
+        steer=AsyncMock(
+            return_value=SimpleNamespace(run_id=RUN_ID, control_sequence=1, kind="steer")
+        ),
+        children=AsyncMock(return_value=()),
         subscribe=MagicMock(),
     )
     created.corpora = SimpleNamespace(
@@ -220,6 +225,40 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
     store.create_answer_turn.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    ("kind", "same_conversation", "include_result"),
+    [("follow_up", True, True), ("fork", False, False)],
+)
+async def test_service_continuation_uses_shared_answer_contract_and_branch_target(
+    kind: str, same_conversation: bool, include_result: bool
+) -> None:
+    store = AsyncMock()
+    store.find_turn_by_run.return_value = linked_turn(
+        answer_run(status="succeeded"), conversation_id=_CID
+    )
+    answers = AsyncMock()
+    answers.continuation_request.return_value = SimpleNamespace()
+    marker = web_answer_submission(conversation_id=_CID)
+    answers.accept.return_value = marker
+    service = WebConversationService(store=store, answers=answers, max_attachments=6)
+
+    result = await service.continue_answer(
+        None,
+        parent_run_id=RUN_ID,
+        submission_id=SUBMISSION_ID,
+        query="What next?",
+        kind=kind,
+        authorized_workspaces=("default",),
+    )
+
+    assert result is marker
+    assert answers.continuation_request.await_args.kwargs["include_result"] is include_result
+    assert answers.continuation_request.await_args.kwargs["authorized_workspaces"] == ("default",)
+    acceptor = answers.accept.await_args.kwargs["acceptor"]
+    assert (acceptor.conversation_id == _CID) is same_conversation
+    assert acceptor.create_conversation is (not same_conversation)
+
+
 async def test_first_submission_uses_one_stable_server_conversation_and_atomic_store_write() -> (
     None
 ):
@@ -330,8 +369,48 @@ async def test_an_empty_question_is_rejected_before_acceptance(
 
 
 # ---------------------------------------------------------------------------
-# Status, cancellation, and events
+# Status, controls, continuation, cancellation, and events
 # ---------------------------------------------------------------------------
+
+
+async def test_web_projects_resume_steer_and_child_roster(
+    client: AsyncClient, application_double: AsyncMock
+) -> None:
+    resumed = await client.post(f"/web/api/answer/{RUN_ID}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["answer_run_id"] == RUN_ID
+
+    steered = await client.post(
+        f"/web/api/answer/{RUN_ID}/steer", json={"content": "Focus on risks"}
+    )
+    assert steered.status_code == 202
+    assert steered.json()["control_sequence"] == 1
+
+    children = await client.get(f"/web/api/answer/{RUN_ID}/children")
+    assert children.status_code == 200
+    assert children.json() == {"run_id": RUN_ID, "children": []}
+    application_double.answers.steer.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("operation", "kind"),
+    [("follow-up", "follow_up"), ("fork", "fork")],
+)
+async def test_web_continuations_return_a_linked_descriptor(
+    client: AsyncClient,
+    service: AsyncMock,
+    operation: str,
+    kind: str,
+) -> None:
+    response = await client.post(
+        f"/web/api/answer/{RUN_ID}/{operation}",
+        json={"content": "What next?", "submission_id": SUBMISSION_ID},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["conversation"]["conversation_id"] == _CID
+    assert service.continue_answer.await_args.kwargs["kind"] == kind
+    assert service.continue_answer.await_args.kwargs["parent_run_id"] == RUN_ID
 
 
 async def test_status_projects_the_linked_turn(client: AsyncClient) -> None:

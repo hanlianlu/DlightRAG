@@ -456,7 +456,25 @@ byte size can still be rejected if its internal expansion looks like a bomb.
 Images pass MIME and decoded-pixel checks before inspection.
 
 Full attachment bytes never enter model context: only bounded text windows,
-capped tool observations, and budgeted image blocks do. The optional Exa
+capped tool observations, and budgeted image blocks do. Research Context
+Contributions do not make Profile Memory, Skills, extension context, or child
+summaries citable; only rows admitted to the Evidence ledger can become
+sources. Child Evidence carries child-session and parent-call provenance before
+the parent spawn effect settles.
+
+The execution modes are exactly `disabled`, `trust`, and `sandbox`. Trust runs
+as the service user and Bash can access the host/container network and every
+path that user can reach; rooted file-tool checks are not a shell sandbox.
+Sandbox selection without a trusted backend fails explicitly. Trusted Python
+extensions are deployment code and have only tool, context, and execution
+adapter seams—there is no model-facing approval or permission system.
+
+Outbound MCP endpoints and tool names are deployment allowlists. Remote tools
+run in foreground sessions and receive only their declared arguments; DlightRAG
+does not provide endpoint discovery, OAuth token brokerage, or a management
+plane. Protect endpoint credentials and network egress at deployment level.
+
+The optional Exa
 web-search capability is gated solely by the presence of
 `DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY`; keep it in `.env`, and its absence removes the
 capability entirely.
@@ -470,6 +488,9 @@ bytes it originally fetched rather than whatever the page serves now. Workspace
 authorization is evaluated once before the run-creation transaction and only the
 resulting workspace set is stored, never a token or mutable claims; a later policy
 change does not revoke an already accepted run, and its owner may cancel it.
+Follow-up and fork are new ordinary runs, not mutations of that accepted run, so
+every REST, MCP, SDK, and Web continuation rechecks current `workspace.query`
+authorization before its own acceptance transaction.
 
 ## Deployment Posture
 

@@ -6,10 +6,11 @@ REST, Web, and MCP transports. They stay transport-neutral: no HTTP, browser,
 or MCP types may leak into these models, so every adapter projects them into
 its own surface instead of diverging.
 
-Caller-supplied conversation history is stateless: the client owns persistence
-and re-sends prior turns each request; DlightRAG never stores them. The message
-ceiling bounds request size (~50 prior turns); the planner independently
-truncates to the configured token budget before prompting the model.
+Independent requests re-send any caller-managed conversation history they need.
+An accepted Answer run pins its bounded history for recovery and server-owned
+continuation. The message ceiling bounds request size (~50 prior turns); the
+planner independently truncates to the configured token budget before prompting
+the model.
 """
 
 from collections.abc import Sequence

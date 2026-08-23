@@ -294,7 +294,7 @@ def test_write_config_rejects_legacy_schema_with_actionable_message(wiz, tmp_pat
     src = tmp_path / "config.yaml"
     src.write_text("llm:\n  default:\n    model: old\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="1.x config schema detected"):
+    with pytest.raises(ValueError, match="3.0 eight-section schema"):
         wiz.write_config_yaml(src, llm_default={"model": "new"})
 
 
@@ -333,6 +333,12 @@ def test_write_config_preserves_comments_and_updates(wiz, tmp_path):
     assert "# inline note" in text
     assert "deepseek-v4-flash" in text
     assert "old-model" not in text
+    data = wiz._yaml().load(text)
+    assert data["answer"]["agent"] == {
+        "execution_environment": "disabled",
+        "workspace_root": None,
+        "outbound_mcp": [],
+    }
 
 
 def test_write_config_replaces_stale_role_blocks_when_roles_are_explicit(wiz, tmp_path):

@@ -1,12 +1,14 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Project one pinned history across every reachable model call."""
 
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.agent.session.fold import PriorTurns
 from dlightrag.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
+from dlightrag.ai.tokens import truncate_to_estimated_tokens
 
 type HistoryInputMeasure = Callable[[list[dict[str, Any]]], int]
 
@@ -59,17 +61,31 @@ def project_history(
 ) -> PriorTurns:
     """Keep the newest contiguous complete pairs accepted by every target."""
     resolved = tuple(_resolve_target(target, context_policy) for target in targets)
-    if not resolved or any(target.allowance_tokens == 0 for target in resolved):
-        return PriorTurns()
-
     pairs = _complete_pairs(messages)
+    if not resolved:
+        return PriorTurns()
+    if any(target.allowance_tokens == 0 for target in resolved):
+        return PriorTurns(
+            episodic_summary=_episodic_summary(
+                pairs,
+                max_tokens=context_policy.episodic_summary_tokens,
+            )
+        )
+
     kept: list[dict[str, Any]] = []
     for pair in reversed(pairs):
         candidate = [*pair, *kept]
         if not all(_fits(candidate, target) for target in resolved):
             break
         kept = candidate
-    return PriorTurns(kept)
+    omitted_pairs = pairs[: len(pairs) - len(kept) // 2]
+    return PriorTurns(
+        kept,
+        episodic_summary=_episodic_summary(
+            omitted_pairs,
+            max_tokens=context_policy.episodic_summary_tokens,
+        ),
+    )
 
 
 def _resolve_target(
@@ -105,6 +121,23 @@ def _fits(messages: list[dict[str, Any]], resolved: _ResolvedTarget) -> bool:
         resolved.target.measure_input(messages) - resolved.fixed_input_tokens,
     )
     return history_tokens <= resolved.allowance_tokens
+
+
+def _episodic_summary(
+    pairs: Sequence[Sequence[dict[str, Any]]],
+    *,
+    max_tokens: int,
+) -> str:
+    if not pairs or max_tokens <= 0:
+        return ""
+    lines: list[str] = ["Earlier conversation (extractive continuation):"]
+    for pair in pairs:
+        for message in pair:
+            role = str(message.get("role") or "message")
+            content = message.get("content")
+            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+            lines.append(f"{role}: {text}")
+    return truncate_to_estimated_tokens("\n".join(lines), max_tokens)
 
 
 def _complete_pairs(messages: Sequence[dict[str, Any]]) -> list[list[dict[str, Any]]]:

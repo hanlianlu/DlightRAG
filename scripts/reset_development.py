@@ -155,7 +155,7 @@ def _workspace_root(
     execution = env.get("DLIGHTRAG_ANSWER__AGENT__EXECUTION_ENVIRONMENT") or agent.get(
         "execution_environment"
     )
-    if str(execution or "disabled").strip() != "local_trusted":
+    if str(execution or "disabled").strip() not in {"trust", "sandbox"}:
         return None
     configured = env.get("DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT") or agent.get("workspace_root")
     if configured is None or str(configured).strip() in {"", "null", "None", "~"}:
@@ -802,7 +802,7 @@ async def main(argv: list[str] | None = None) -> int:
             dry_run=False,
         )
         # Independent cleanup steps continue past earlier failures so one
-        # failure never hides the rest; every failure is reported (M3-D39).
+        # failure never hides the rest; every failure is reported.
         clear_runtime_dirs(working_dir, workspace_root, report)
         _print_report(report, verbose=args.verbose)
         print("Development reset complete." if report.ok else "Development reset FAILED.")
@@ -820,7 +820,7 @@ async def main(argv: list[str] | None = None) -> int:
 
     run_docker_reset(target, report, compose_project=compose_project)
     # Every invocation also clears the pre-validated host runtime roots so no
-    # half-reset environment can survive (M3-D36).
+    # half-reset environment can survive.
     if not report.failures:
         clear_runtime_dirs(working_dir, workspace_root, report)
     _print_report(report, verbose=args.verbose)

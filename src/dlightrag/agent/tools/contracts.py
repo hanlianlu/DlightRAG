@@ -3,7 +3,7 @@
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
@@ -13,9 +13,22 @@ from dlightrag.agent.session.effects import (
     ToolResultEntry,
     schema_digest,
 )
-from dlightrag.ai.messages import AssistantTurn, ToolCall, ToolDefinition
+from dlightrag.ai.messages import AssistantTurn, ToolCall, ToolChoice, ToolDefinition
 
-type ToolModelFunc = Callable[..., Awaitable[AssistantTurn]]
+
+class ToolModelFunc(Protocol):
+    """One provider-neutral tool-capable model turn."""
+
+    async def __call__(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[ToolDefinition],
+        tool_choice: ToolChoice = "auto",
+        max_tokens: int | None = None,
+    ) -> AssistantTurn: ...
+
+
 type ToolExecute = Callable[[BaseModel], Awaitable["ToolResult"]]
 
 
@@ -25,12 +38,13 @@ class ToolResultCapacityError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ToolResult:
-    """Text returned to the model plus transport-private details."""
+    """Text returned to the model plus transport-private execution facts."""
 
     content: str
     details: dict[str, Any] | None = None
     cached: bool = False
     protected_suffix: str = ""
+    is_error: bool = False
 
 
 @dataclass(frozen=True, slots=True)

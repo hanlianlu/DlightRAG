@@ -44,6 +44,8 @@ jobs:
           if mismatches:
               raise SystemExit(f"tag {expected} does not match workspace versions: {mismatches}")
           PY
+      - run: uv sync --locked --group dev
+      - run: make release-check
       - run: npm --prefix frontend ci
       - run: npm --prefix frontend run build
       - run: uv build --all-packages --out-dir dist

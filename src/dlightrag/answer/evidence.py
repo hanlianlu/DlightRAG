@@ -132,6 +132,40 @@ class EvidenceLedger:
     def add_rows(self, rows: list[ContextRow]) -> EvidenceDelta:
         return self.add_contexts({"chunks": rows})
 
+    def adopt_child_state(
+        self,
+        state: Mapping[str, Any],
+        *,
+        child_session_id: str,
+        parent_call_id: str,
+    ) -> EvidenceDelta:
+        """Admit child rows into the parent ledger with explicit lineage.
+
+        The caller invokes this before settling the parent spawn intent, so
+        the parent's ordinary fenced evidence settlement persists the adoption
+        atomically with the tool result.
+        """
+        contexts = state.get("contexts")
+        if not isinstance(contexts, Mapping):
+            raise ValueError("child evidence state has no contexts")
+        adopted: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
+        for key, raw_rows in cast(Mapping[str, Any], contexts).items():
+            rows: list[ContextRow] = []
+            for raw in cast(list[Any], raw_rows):
+                row = dict(cast(Mapping[str, Any], raw))
+                metadata = dict(cast(Mapping[str, Any], row.get("metadata") or {}))
+                metadata.update(
+                    {
+                        "adopted_from_child": True,
+                        "child_session_id": child_session_id,
+                        "parent_call_id": parent_call_id,
+                    }
+                )
+                row["metadata"] = metadata
+                rows.append(row)
+            adopted[key] = rows
+        return self.add_contexts(adopted)
+
     def add_contexts(self, contexts: RetrievalContexts) -> EvidenceDelta:
         new_chunks = 0
         for row in contexts.get("chunks", []):

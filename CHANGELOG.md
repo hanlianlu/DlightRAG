@@ -1,9 +1,32 @@
 # Changelog
 
-This file records user-visible changes to DlightRAG. The 2.0 migration guide
-covers the package and configuration layout immediately preceding 2.0.
+This file records user-visible changes to DlightRAG. Migration guides preserve
+the package/configuration contract for each breaking major.
 
-## 2.0.0 — Unreleased
+## 3.0.0 — Unreleased
+
+Agent 3.0 replaces the old Research orchestration and journal contract with a
+product-neutral event loop, run-local ToolRegistry, typed Session journal with a
+parent-linked derived view, Context Contributions, model-aware reserves, replay-stable compaction and
+controls, and deterministic terminal-answer finalization. Fast remains a
+lightweight durable invocation but now shares context, model, Evidence,
+citation, Profile Memory, and usage infrastructure without an Agent Session.
+
+Research gains foreground parallel Child Sessions with roster/status/wait/cancel,
+context/model/tool selection, inclusive usage, and transactional parent Evidence
+adoption. Execution modes are exactly `disabled`, `trust`, and `sandbox`; sandbox
+requires a trusted adapter. Progressive global/workspace Skills, three trusted
+Python extension seams, and thin allowlisted outbound MCP tools are available.
+
+Profile Memory adds stable proposal/commit, replay-stable recall, local
+single-user identity, timeout fallback, and idempotent tombstone forget. REST,
+inbound MCP, Python, and Web expose their applicable start/status/steer/follow-up/
+cancel/resume/fork, transcript, child, usage, Evidence, and lineage projections.
+Both distributions and the frontend are version `3.0.0`. Pre-3.0 Agent runs and
+schemas are intentionally incompatible; see
+[Migrating to DlightRAG 3.0](docs/migration-3.0.md).
+
+## 2.0.0 — Historical
 
 DlightRAG 2.0 is a hard-breaking package and configuration consolidation. It
 replaces four tightly coupled internal distributions with one root product

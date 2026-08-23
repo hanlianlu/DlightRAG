@@ -110,8 +110,8 @@ HistoryParam = Annotated[
     Field(
         max_length=MAX_HISTORY_MESSAGES,
         description=(
-            "Prior conversation turns as role/content messages. Caller-owned and "
-            "stateless: re-send each request; never stored server-side."
+            "Prior conversation turns as role/content messages. Independent requests "
+            "re-send the desired turns; accepted runs pin the bounded history for recovery."
         ),
     ),
 ]
@@ -140,11 +140,14 @@ def _owner_id() -> str:
 
 
 def _run_descriptor(record: AnswerRunRecord) -> dict[str, Any]:
-    """Project one run's identity and lifecycle state for an MCP caller."""
+    """Project one run's lifecycle and continuation lineage."""
+    accepted = record.request_input()
     return {
         "run_id": record.run_id,
         "status": record.status,
         "cancel_requested": record.cancel_requested,
+        "parent_run_id": accepted.get("parent_run_id"),
+        "continuation_kind": accepted.get("continuation_kind"),
         "created_at": record.created_at.isoformat(),
     }
 
@@ -589,6 +592,138 @@ async def cancel_answer_run_tool(
 
 
 @mcp_app.tool(
+    name="steer_answer_run",
+    description="Queue one ordered steering instruction for a live Research run.",
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=False),
+)
+async def steer_answer_run_tool(
+    run_id: Annotated[str, Field(description="Run id")],
+    instruction: Annotated[str, Field(min_length=1, max_length=20_000)],
+) -> dict[str, Any]:
+    receipt = await (await _ensure_application()).answers.steer(
+        owner_id=_owner_id(), run_id=run_id, instruction=instruction
+    )
+    if receipt is None:
+        raise ValueError("Run is not a live Research session")
+    return {
+        "run_id": receipt.run_id,
+        "control_sequence": receipt.control_sequence,
+        "kind": receipt.kind,
+    }
+
+
+async def _mcp_continuation(
+    run_id: str,
+    query: str,
+    *,
+    fork: bool,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    application = await _ensure_application()
+    owner_id = _owner_id()
+    parent = await application.answers.get(owner_id=owner_id, run_id=run_id)
+    authorized_workspaces: list[str] | None = None
+    if parent is not None and parent.terminal:
+        authorized_workspaces = await _resolve_authorized_query_workspaces(
+            application,
+            workspaces=[str(item) for item in parent.request_input().get("workspaces") or ()],
+            all_workspaces=False,
+        )
+    method = application.answers.fork if fork else application.answers.follow_up
+    try:
+        creation = await method(
+            owner_id=owner_id,
+            run_id=run_id,
+            query=query,
+            idempotency_key=idempotency_key,
+            auth_mode=current_request_scope().auth_mode,
+            authorized_workspaces=authorized_workspaces,
+        )
+    except IdempotencyKeyConflict:
+        raise ValueError("idempotency_key was already used for a different continuation") from None
+    if creation is None:
+        raise ValueError("Continuation requires a terminal owned run")
+    return _run_descriptor(creation.run)
+
+
+@mcp_app.tool(
+    name="follow_up_answer_run",
+    description="Start a continuation using one terminal run's answer as context.",
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=False),
+)
+async def follow_up_answer_run_tool(
+    run_id: Annotated[str, Field(description="Terminal run id")],
+    query: Annotated[str, Field(min_length=1, max_length=20_000, description="Follow-up question")],
+    idempotency_key: IdempotencyKeyParam = None,
+) -> dict[str, Any]:
+    return await _mcp_continuation(run_id, query, fork=False, idempotency_key=idempotency_key)
+
+
+@mcp_app.tool(
+    name="fork_answer_run",
+    description="Start a sibling branch from one terminal run's accepted context.",
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=False),
+)
+async def fork_answer_run_tool(
+    run_id: Annotated[str, Field(description="Terminal run id")],
+    query: Annotated[str, Field(min_length=1, max_length=20_000, description="Branch question")],
+    idempotency_key: IdempotencyKeyParam = None,
+) -> dict[str, Any]:
+    return await _mcp_continuation(run_id, query, fork=True, idempotency_key=idempotency_key)
+
+
+@mcp_app.tool(
+    name="get_answer_transcript",
+    description="Return the bounded transcript tail for one owned run.",
+    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+)
+async def get_answer_transcript_tool(
+    run_id: Annotated[str, Field(description="Run id")],
+    limit: Annotated[int, Field(default=20, ge=1, le=100)] = 20,
+) -> dict[str, Any]:
+    transcript = await (await _ensure_application()).answers.transcript_tail(
+        owner_id=_owner_id(), run_id=run_id, limit=limit
+    )
+    if transcript is None:
+        raise ValueError(f"Answer run not found: {run_id}")
+    return {
+        "run_id": transcript.run_id,
+        "status": transcript.status,
+        "messages": list(transcript.messages),
+    }
+
+
+@mcp_app.tool(
+    name="list_answer_children",
+    description="Return the foreground child roster for one owned run.",
+    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+)
+async def list_answer_children_tool(
+    run_id: Annotated[str, Field(description="Run id")],
+) -> dict[str, Any]:
+    children = await (await _ensure_application()).answers.children(
+        owner_id=_owner_id(), run_id=run_id
+    )
+    if children is None:
+        raise ValueError(f"Answer run not found: {run_id}")
+    return {"run_id": run_id, "children": [dict(child) for child in children]}
+
+
+@mcp_app.tool(
+    name="resume_answer_run",
+    description="Reattach to one durable run; use get_answer_run for full status.",
+    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+)
+async def resume_answer_run_tool(
+    run_id: Annotated[str, Field(description="Run id")],
+) -> dict[str, Any]:
+    record = await (await _ensure_application()).answers.resume(owner_id=_owner_id(), run_id=run_id)
+    if record is None:
+        raise ValueError(f"Answer run not found: {run_id}")
+    return _run_descriptor(record)
+
+
+@mcp_app.tool(
     name="list_answer_runs",
     description="List this caller's durable answer runs, oldest first.",
     annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
@@ -653,7 +788,7 @@ async def list_memories_tool() -> dict[str, Any]:
 
 @mcp_app.tool(
     name="forget_memory",
-    description="Permanently delete one stored memory by id.",
+    description="Idempotently forget one stored memory by id.",
     annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
 )
 async def forget_memory_tool(

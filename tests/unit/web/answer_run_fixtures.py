@@ -174,13 +174,16 @@ def answer_run(
     )
 
 
-def linked_turn(run: AnswerRunRecord | None = None, *, turn_number: int = 1) -> LinkedTurn:
+def linked_turn(
+    run: AnswerRunRecord | None = None, *, turn_number: int = 1, conversation_id: str = ""
+) -> LinkedTurn:
     return LinkedTurn(
         turn_id=TURN_ID,
         turn_number=turn_number,
         submission_id=SUBMISSION_ID,
         created_at=NOW,
         run=run if run is not None else answer_run(),
+        conversation_id=conversation_id,
     )
 
 
@@ -200,7 +203,7 @@ def answer_turn_creation(
     replayed: bool = False,
 ) -> AnswerTurnCreation:
     return AnswerTurnCreation(
-        turn=linked_turn(run),
+        turn=linked_turn(run, conversation_id=conversation_id),
         summary=conversation_summary(conversation_id).model_dump(),
         replayed=replayed,
     )
@@ -236,5 +239,7 @@ def stored_result(answer: str = "Revenue increased [1].") -> dict[str, Any]:
         ],
         "answer_images": [],
         "trace": {},
+        "usage": {"usage_details": {"total_tokens": 42}},
+        "evidence": {"chunks": 1, "entities": 0, "relationships": 0, "sources": 1},
         "image_descriptions": [],
     }

@@ -1,4 +1,4 @@
-# DlightRAG 2.0 canonical configuration
+# DlightRAG 3.0 canonical configuration
 # Priority: env > .env > config.yaml > defaults
 
 models:
@@ -96,7 +96,10 @@ answer:
     max_attachment_bytes: 104857600
     max_total_attachment_bytes: 134217728
   agent:
+    # disabled | trust | sandbox. Sandbox requires an installed trusted adapter.
     execution_environment: disabled
     workspace_root: null
+    # Explicit remote tools only; see docs/configuration.md for endpoint examples.
+    outbound_mcp: []
 observability:
   langfuse_host: http://host.docker.internal:3300

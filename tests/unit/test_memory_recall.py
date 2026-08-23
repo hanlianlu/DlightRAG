@@ -88,6 +88,27 @@ async def test_recall_returns_empty_on_no_match() -> None:
     assert result.strategy == "query_search"
 
 
+async def test_recall_timeout_falls_back_to_recent_active_records(monkeypatch) -> None:
+    import asyncio
+
+    store = InMemoryMemoryStore()
+    memory = Memory(store)
+    await store.insert(_record(memory_id="recent", kind="fact", body="recent profile"))
+
+    async def timeout(**_kwargs):
+        await asyncio.sleep(0.02)
+        return ()
+
+    monkeypatch.setattr(store, "search_candidates", timeout)
+    monkeypatch.setattr("dlightrag_memory.memory._SEARCH_DEADLINE_SECONDS", 0.001)
+
+    result = await memory.recall(owner_id="alpha", query="anything")
+
+    assert [record.memory_id for record in result.records] == ["recent"]
+    assert result.strategy == "recent_fallback"
+    assert result.degraded == ("search_timeout",)
+
+
 async def test_recall_budget_caps_top_k() -> None:
     store = InMemoryMemoryStore()
     memory = Memory(store)

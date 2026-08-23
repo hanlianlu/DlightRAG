@@ -13,8 +13,12 @@ An owner-scoped durable execution accepted once and observable through status, e
 _Avoid_: Request, job, task
 
 **Answer Service**:
-The product capability that owns the complete Answer Run lifecycle, including acceptance, following, cancellation, and terminal projection.
-_Avoid_: Answer manager, runtime service
+The product capability that owns start, status, events, steer, follow-up, cancel, resume, fork, transcript tail, child roster, and terminal projection through one transport-neutral interface.
+_Avoid_: Answer manager, transport-specific runtime service
+
+**Continuation**:
+A new durable Answer Run with `parent_run_id` and kind `follow_up` or `fork`. Follow-up includes the selected answer as context; fork starts a sibling branch from its accepted context.
+_Avoid_: in-place run mutation, session checkout, hidden conversation copy
 
 **Retrieval**:
 A caller-awaited corpus-evidence use case implemented with asynchronous I/O that returns one result without creating an Answer Run.
@@ -63,12 +67,12 @@ A durable research conversation within one Answer Run, reconstructed from its so
 _Avoid_: Run, thread
 
 **Child Session**:
-A durable Agent Session namespace inside the same Answer Run, created by Delegate Research, with parent provenance and no lease of its own.
-_Avoid_: child run, queued sub-job, recursive Answer Run
+A first-class foreground Agent Session inside the same Answer Run. It has durable parent/call lineage, bounded depth and concurrency, selected context/model/tools, inclusive usage, and no independent lease.
+_Avoid_: child run, detached job, mission, background swarm
 
-**Delegate Research**:
-The Answer-owned foreground tool that creates or recovers one Child Session and returns a distilled summary plus evidence handles, never child prose as Evidence.
-_Avoid_: background swarm, nested Answer Run, write/edit/bash
+**Subagent Roster**:
+The status/wait/cancel projection for Child Sessions created by `spawn_agent`. Child Evidence is admitted into the parent ledger before the parent effect settles.
+_Avoid_: Delegate Research, workflow engine, child queue
 
 **Prepared Input**:
 The immutable, bounded execution description accepted for a new Answer Run after authorization, capability resolution, and profile pinning. Resolve never rewrites it.
@@ -89,8 +93,8 @@ An owner-scoped, non-citable remembered preference or fact that may be recalled 
 _Avoid_: Compaction Summary, Journal Entry, PriorTurns, Evidence, Artifact, remembered citation
 
 **Memory Subject**:
-The owner identity a Memory store scopes every operation to; bound by the host at launch (DlightRAG: JWT owner; stdio MCP: `--subject`) and never accepted from a model tool argument.
-_Avoid_: user id, tenant, namespace parameter
+The owner identity a Memory store scopes every operation to; bound by the host (DlightRAG: JWT owner or stable local single-user owner; stdio MCP: `--subject`) and never accepted from a model tool argument. Shared simple-auth callers are not personal Memory subjects.
+_Avoid_: caller-selected namespace, conversation id, Agent Session
 
 **RecallResult**:
 The structured outcome of one query-aware Memory recall: selected records (exact matches pinned first, then chronological), the raw leg candidates the fusion consumed, degradation flags, and the recalled body character cost (rendering overhead excluded). Never a prompt fragment.
@@ -101,8 +105,8 @@ The only durable create, supersede, or forget of a Memory Record: a named rememb
 _Avoid_: Silent promotion, transcript scan, model aside, journal side effect
 
 **Memory Record Lifecycle**:
-`active → superseded → purged`, plus hard-delete by `forget` or `clear`. Active records never expire on a timer; superseded history is purged after the shared retention floor. Growth is absorbed by supersede folding, explicit forget/clear, natural write rates (every write costs model inference), and cheap storage — no fixed record ceiling, no quota (Pi, Kimi, MemMachine bound nothing).
-_Avoid_: TTL on active records, confidence decay, automatic consolidation, storage quota
+`active → superseded` or `active → forgotten`. Forget is idempotent and leaves a non-recallable tombstone; superseded history follows the shared retention floor. Formation may be proposed without mutation and committed idempotently by proposal id.
+_Avoid_: hard-delete forget, silent transcript promotion, confidence decay
 
 **Retention Floor**:
 The single deployment clock (`answer.runtime.answer_run_retention_days`, default 365) that bounds how long terminal Answer runs, their event logs, and superseded Memory history stay durable. The sweep is best-effort: it may reclaim later, never earlier.
@@ -119,8 +123,12 @@ An immutable source fact in an Agent Session whose ordered fold reconstructs act
 _Avoid_: Message when the fact may be an intent, result, compaction, or terminal outcome
 
 **Context Projection**:
-The bounded continuation state that selects a journal suffix and, when needed, summarizes a contiguous older prefix.
-_Avoid_: Checkpoint, transcript snapshot
+The bounded model-facing projection of the selected head in the canonical linear Agent Session journal. The parent-linked graph is a derived view; 3.0 does not persist alternate heads. Exactly one active compaction summary precedes the retained non-compaction suffix; historical summaries remain audit facts.
+_Avoid_: authority, checkpoint, transcript snapshot
+
+**Context Contribution**:
+A typed model-ready contribution with source, authority, citable and compressible facts. It unifies projection ordering without merging the contributor's storage ownership.
+_Avoid_: global prompt registry, second state authority
 
 **Compaction Summary**:
 Typed continuation memory for one contiguous journal prefix, validated and rendered by the framework but never treated as citable Evidence.
@@ -177,14 +185,22 @@ The fenced terminal transaction that makes staged Agent Workspace files owner-vi
 _Avoid_: Staging, Spill settlement, a second model call
 
 **Agent Loop**:
-The Answer-owned research turn cycle that stops when the model emits no tool call or durable cancellation is observed; provider errors fail the attempt.
-_Avoid_: AgentLoop class, max_agent_turns, READY protocol, Fast Answer
+The product-neutral event-driven turn cycle that stops when the model emits no tool call or cancellation is observed; provider errors produce an error stop. Research hosts it through durable boundaries; Fast does not enter it.
+_Avoid_: workflow engine, max-agent-turn policy, READY protocol, Fast Answer
 
 ## Execution And Workspace
 
 **Execution Environment**:
-The optional file-and-process host that makes path tools, Spill, and workspace staging possible.
-_Avoid_: Sandbox, container runtime
+The adapter behind exactly three modes: `disabled`, host-trusted `trust`, and `sandbox`. Sandbox is a seam with explicit unavailable failure unless trusted host code supplies a backend.
+_Avoid_: implicit downgrade, permission catalog, approval prompt
+
+**Agent Skill**:
+A progressively disclosed `SKILL.md` package discovered globally or in the Agent Workspace. Metadata is projected first; contained references are read only through `load_skill` and Skill code is never executed.
+_Avoid_: owner Profile Memory, marketplace plugin, arbitrary extension
+
+**Outbound MCP Tool**:
+A deployment-declared and allowlisted remote tool invoked through a foreground stdio or streamable-HTTP MCP session.
+_Avoid_: MCP registry, marketplace, OAuth platform
 
 **Agent Workspace**:
 The model-visible filesystem rooted at the active Workspace Epoch's workspace directory.

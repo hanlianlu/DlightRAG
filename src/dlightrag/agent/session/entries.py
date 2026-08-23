@@ -1,9 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The finite M3 journal entry union with canonical serialization.
+"""The finite Agent Session entry union with canonical serialization.
 
-Each concrete entry is immutable and carries the common identity fields plus a
-typed payload. Only variants with M3 writers exist here (M3-D1); later
-milestones extend the closed union together with their first writers.
+Each concrete entry is immutable and carries common identity fields plus a
+typed payload. The closed union grows only together with a real writer.
 
 ``to_canonical_json`` returns the exact ``payload_json`` a durable store keeps;
 ``canonical_entry_json`` wraps it with the common columns for tests and
@@ -26,6 +25,7 @@ from dlightrag.ai.messages import ToolCall
 SESSION_ENTRY_SCHEMA_VERSION = 1
 
 SessionTerminalReason = Literal["completed", "cancelled", "abandoned"]
+RunSegmentKind = Literal["start", "resume"]
 
 
 def _utc_now() -> datetime:
@@ -70,6 +70,29 @@ class SessionEntry:
             "timestamp": self.timestamp.isoformat(),
             "schema_version": self.schema_version,
             "payload": self.canonical_payload(),
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RunSegmentEntry(SessionEntry):
+    """One start or resume interval over a selected Agent Session head."""
+
+    segment_id: str
+    kind: RunSegmentKind
+    parent_head_id: str | None = None
+
+    entry_type: ClassVar[str] = "run_segment"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not self.segment_id.strip():
+            raise ValueError("run segment id cannot be empty")
+
+    def canonical_payload(self) -> JsonValue:
+        return {
+            "segment_id": self.segment_id,
+            "kind": self.kind,
+            "parent_head_id": self.parent_head_id,
         }
 
 
@@ -228,7 +251,7 @@ class CompactionEntry(SessionEntry):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ProfileFactEntry(SessionEntry):
-    """One pinned profile or capability fact from prepared-input construction."""
+    """One pinned run/session fact recorded for audit and recovery inspection."""
 
     key: str
     value: JsonValue
@@ -261,7 +284,8 @@ class SessionTerminalEntry(SessionEntry):
 
 
 type SessionEntryKind = (
-    UserMessageEntry
+    RunSegmentEntry
+    | UserMessageEntry
     | AssistantMessageEntry
     | EffectIntentEntry
     | EffectResultEntry
@@ -275,6 +299,7 @@ type SessionEntryKind = (
 ENTRY_TYPE_TO_CLASS: dict[str, type[SessionEntry]] = {
     entry.entry_type: entry  # type: ignore[type-abstract]
     for entry in (
+        RunSegmentEntry,
         UserMessageEntry,
         AssistantMessageEntry,
         EffectIntentEntry,
@@ -332,6 +357,15 @@ def decode_entry_payload(
         "sequence": sequence,
         "timestamp": timestamp,
     }
+    if entry_type == "run_segment":
+        return RunSegmentEntry(
+            **common,
+            segment_id=str(payload["segment_id"]),
+            kind=payload["kind"],
+            parent_head_id=(
+                str(payload["parent_head_id"]) if payload.get("parent_head_id") else None
+            ),
+        )
     if entry_type == "user_message":
         return UserMessageEntry(**common, content=payload["content"])
     if entry_type == "assistant_message":
@@ -413,6 +447,8 @@ __all__ = [
     "EffectIntentEntry",
     "EffectResultEntry",
     "ProfileFactEntry",
+    "RunSegmentEntry",
+    "RunSegmentKind",
     "SessionEntry",
     "SessionEntryKind",
     "SessionTerminalEntry",

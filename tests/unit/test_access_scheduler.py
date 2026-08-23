@@ -1,11 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Access scheduler: overlapping writes wait; disjoint reads overlap; bash serializes."""
+"""Access scheduler: path conflicts serialize without blocking external retrieval."""
 
 import asyncio
 
 import pytest
 
-from dlightrag.agent.environment import AccessScheduler, AllAccess, PathAccess
+from dlightrag.agent.environment import (
+    AccessScheduler,
+    ExternalAccess,
+    PathAccess,
+    WorkspaceAccess,
+)
 
 
 @pytest.mark.asyncio
@@ -49,13 +54,13 @@ async def test_disjoint_reads_overlap() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bash_serializes_the_batch() -> None:
+async def test_workspace_access_serializes_path_operations() -> None:
     scheduler = AccessScheduler()
     order: list[str] = []
     started = asyncio.Event()
 
     async def bash() -> None:
-        async with scheduler.hold(AllAccess()):
+        async with scheduler.hold(WorkspaceAccess()):
             started.set()
             order.append("bash")
             await asyncio.sleep(0.02)
@@ -67,3 +72,22 @@ async def test_bash_serializes_the_batch() -> None:
 
     await asyncio.gather(bash(), reader())
     assert order == ["bash", "read"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_access_does_not_block_external_retrieval() -> None:
+    scheduler = AccessScheduler()
+    workspace_started = asyncio.Event()
+    external_finished = asyncio.Event()
+
+    async def workspace() -> None:
+        async with scheduler.hold(WorkspaceAccess()):
+            workspace_started.set()
+            await asyncio.wait_for(external_finished.wait(), timeout=1)
+
+    async def external() -> None:
+        await workspace_started.wait()
+        async with scheduler.hold(ExternalAccess()):
+            external_finished.set()
+
+    await asyncio.gather(workspace(), external())

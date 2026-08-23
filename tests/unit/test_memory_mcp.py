@@ -3,12 +3,12 @@
 
 import pytest
 from dlightrag_memory import (
-    InMemoryMemoryStore,
     Memory,
     MemoryProvenance,
     MemoryWriteRejectedError,
 )
 from dlightrag_memory.mcp_server import _forget, _recall, _remember, build_memory_server
+from dlightrag_memory.store import InMemoryMemoryStore
 
 
 async def _memory() -> Memory:
@@ -40,11 +40,24 @@ async def test_remember_writes_with_mcp_provenance() -> None:
         body="Project uses ruff.",
         confidence=1.0,
         supersedes_id=None,
+        idempotency_key="write-1",
     )
 
     assert stored["stored"] is True
     (record,) = await memory.list_active(owner_id="pi-user")
     assert record.provenance.run_id == "mcp:pi-user"
+
+    replay = await _remember(
+        memory,
+        subject="pi-user",
+        kind="fact",
+        body="Project uses ruff.",
+        confidence=1.0,
+        supersedes_id=None,
+        idempotency_key="write-1",
+    )
+    assert replay["memory_id"] == stored["memory_id"]
+    assert len(await memory.list_active(owner_id="pi-user")) == 1
 
 
 async def test_remember_rejects_oversized_bodies() -> None:
@@ -58,6 +71,7 @@ async def test_remember_rejects_oversized_bodies() -> None:
             body="x" * 501,
             confidence=1.0,
             supersedes_id=None,
+            idempotency_key="oversized-1",
         )
 
 

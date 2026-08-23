@@ -4,8 +4,10 @@
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, aclosing
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
+from dlightrag.agent.tools import AgentTool
+from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.ai.capacity import (
     CONTEXT_POLICY,
     CONTEXT_POLICY_REVISION,
@@ -17,7 +19,11 @@ from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.answer.agent.orchestrator import research_history_input_measure
 from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.answer.capability import AnswerImageCapability
-from dlightrag.answer.errors import AnswerInputOverflowError, UnsupportedAnswerModeError
+from dlightrag.answer.errors import (
+    AnswerInputOverflowError,
+    InvalidToolConfigurationError,
+    UnsupportedAnswerModeError,
+)
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.executor import ResolvedAnswerResources
 from dlightrag.answer.history import (
@@ -74,6 +80,7 @@ _INPUT_REFERENCE_KINDS: tuple[ArtifactReferenceKind, ...] = (
     "current_attachment",
     "history_attachment",
 )
+_AGENT_CONTROL_CONTENT_LIMIT = 20_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +93,7 @@ class AnswerHistoryResource:
     filename: str
     mime_type: str
     byte_size: int
+    reference_kind: ArtifactReferenceKind = "current_attachment"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +108,7 @@ class AnswerRequest:
     query: str
     workspaces: tuple[str, ...]
     history: tuple[Mapping[str, Any], ...] = ()
+    episodic_summary: str = ""
     top_k: int | None = None
     chunk_top_k: int | None = None
     filters: MetadataFilter | None = None
@@ -107,6 +116,8 @@ class AnswerRequest:
     resources: tuple[ResourceInput, ...] = ()
     history_resources: tuple[AnswerHistoryResource, ...] = ()
     mode: str | None = None
+    parent_run_id: str | None = None
+    continuation_kind: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +130,24 @@ class AnswerInputArtifact:
     mime_type: str
     digest: str
     content: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class AgentControlReceipt:
+    """One ordered control accepted for a live Research session."""
+
+    run_id: str
+    control_sequence: int
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTranscriptTail:
+    """Bounded application projection shared by every transport."""
+
+    run_id: str
+    status: str
+    messages: tuple[Mapping[str, Any], ...]
 
 
 class AnswerRuntimeUnavailableError(RuntimeError):
@@ -160,6 +189,18 @@ class _AnswerRunRepository(AnswerRunAcceptor[RunCreation], Protocol):
     ) -> tuple[AnswerRunRecord, ...]: ...
 
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> CancellationOutcome: ...
+
+    async def enqueue_agent_control(
+        self, *, owner_id: str, run_id: str, kind: str, content: str
+    ) -> Mapping[str, Any] | None: ...
+
+    async def list_child_sessions(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[Mapping[str, Any], ...]: ...
+
+    async def load_agent_transcript(
+        self, *, owner_id: str, run_id: str, session_id: str, limit: int
+    ) -> tuple[Mapping[str, Any], ...]: ...
 
     async def list_run_artifacts(
         self, *, owner_id: str, run_id: str
@@ -259,6 +300,7 @@ class _AnswerResourcePreparer(Protocol):
 @dataclass(frozen=True, slots=True)
 class _AcceptanceProjection:
     history: tuple[Mapping[str, Any], ...]
+    episodic_summary: str
     image_descriptions: tuple[str, ...]
     pinned_models: tuple[PinnedModelProfile, ...]
 
@@ -276,6 +318,7 @@ def _prepared_input_payload(
 
     payload = dict(run_input.as_request())
     payload["auth_mode"] = auth_mode
+    payload["mode"] = requested_mode
     if requested_mode == "research":
         payload["session_id"] = str(payload.get("session_id") or "") or SessionId.new().value
     else:
@@ -348,6 +391,7 @@ def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
         query=request.query,
         workspaces=workspaces,
         history=tuple(dict(message) for message in request.history),
+        episodic_summary=request.episodic_summary,
         top_k=request.top_k,
         chunk_top_k=request.chunk_top_k,
         filters=(
@@ -357,6 +401,8 @@ def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
         links=tuple(links),
         attachments=tuple(attachments),
         mode=request.mode or "auto",
+        parent_run_id=request.parent_run_id,
+        continuation_kind=request.continuation_kind,
         history_attachments=tuple(
             AttachmentReference(
                 digest=resource.digest,
@@ -411,6 +457,7 @@ class AnswerService:
         models: _QueryImageRuntime,
         resources: _AnswerResourcePreparer,
         model_fingerprint_for_role: Callable[[ModelRole], ModelFingerprint],
+        research_tool_supplements: Callable[[], Sequence[AgentTool]] | None = None,
     ) -> None:
         self._store = store
         self._coordinator = coordinator
@@ -420,6 +467,7 @@ class AnswerService:
         self._models = models
         self._resources = resources
         self._model_fingerprint_for_role = model_fingerprint_for_role
+        self._research_tool_supplements = research_tool_supplements or (lambda: ())
 
     async def create(
         self,
@@ -590,6 +638,7 @@ class AnswerService:
                 owner_id=owner_id,
                 run_id=resource.run_id,
                 ordinal=resource.source_ordinal,
+                reference_kind=resource.reference_kind,
             )
             if artifact is None:
                 raise AnswerRuntimeUnavailableError("Accepted answer input artifact is unavailable")
@@ -671,6 +720,229 @@ class AnswerService:
     async def get(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
         """Read one owned run; unknown and foreign identifiers both return ``None``."""
         return await self._store.get_run(owner_id=owner_id, run_id=run_id)
+
+    async def steer(
+        self, *, owner_id: str, run_id: str, instruction: str
+    ) -> AgentControlReceipt | None:
+        """Queue one ordered steering instruction for a live Research session."""
+        text = instruction.strip()
+        if not text:
+            raise ValueError("steer instruction cannot be empty")
+        if len(text) > _AGENT_CONTROL_CONTENT_LIMIT:
+            raise ValueError("steer instruction exceeds 20000 characters")
+        row = await self._store.enqueue_agent_control(
+            owner_id=owner_id,
+            run_id=run_id,
+            kind="steer",
+            content=text,
+        )
+        if row is None:
+            return None
+        return AgentControlReceipt(
+            run_id=run_id,
+            control_sequence=int(row["control_sequence"]),
+            kind=str(row["kind"]),
+        )
+
+    async def children(self, *, owner_id: str, run_id: str) -> tuple[Mapping[str, Any], ...] | None:
+        """Return the foreground child roster, or None for an unknown run."""
+        if await self.get(owner_id=owner_id, run_id=run_id) is None:
+            return None
+        return await self._store.list_child_sessions(owner_id=owner_id, run_id=run_id)
+
+    async def transcript_tail(
+        self, *, owner_id: str, run_id: str, limit: int = 20
+    ) -> AgentTranscriptTail | None:
+        """Return a bounded transport-neutral transcript projection."""
+        record = await self.get(owner_id=owner_id, run_id=run_id)
+        if record is None:
+            return None
+        request = record.request_input()
+        cap = max(1, min(int(limit), 100))
+        session_id = str(request.get("session_id") or "")
+        if not session_id:
+            load_routing = getattr(self._store, "load_routing", None)
+            if callable(load_routing):
+                routing_loader = cast(Callable[..., Awaitable[Any]], load_routing)
+                routing = await routing_loader(owner_id=owner_id, run_id=run_id)
+                session_id = str(getattr(routing, "research_session_id", "") or "")
+        load_transcript = getattr(self._store, "load_agent_transcript", None)
+        if session_id and callable(load_transcript):
+            loader = cast(
+                Callable[..., Awaitable[Sequence[Mapping[str, Any]]]],
+                load_transcript,
+            )
+            canonical = await loader(
+                owner_id=owner_id,
+                run_id=run_id,
+                session_id=session_id,
+                limit=cap,
+            )
+            if canonical:
+                return AgentTranscriptTail(
+                    run_id=run_id,
+                    status=record.status,
+                    messages=tuple(dict(message) for message in canonical),
+                )
+        # Fast has no Agent Session. Project its accepted invocation and final
+        # result through the same transport-neutral message shape.
+        messages = [
+            dict(message)
+            for message in request.get("history") or ()
+            if isinstance(message, Mapping)
+        ]
+        query = str(request.get("query") or "")
+        if query:
+            messages.append({"role": "user", "content": query})
+        result = record.result or {}
+        answer = str(result.get("answer") or "")
+        if answer:
+            messages.append({"role": "assistant", "content": answer})
+        return AgentTranscriptTail(
+            run_id=run_id,
+            status=record.status,
+            messages=tuple(messages[-cap:]),
+        )
+
+    async def resume(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
+        """Reattach to one durable run; event replay resumes by sequence separately."""
+        return await self.get(owner_id=owner_id, run_id=run_id)
+
+    async def follow_up(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        query: str,
+        idempotency_key: str | None = None,
+        auth_mode: str = "none",
+        authorized_workspaces: Sequence[str] | None,
+    ) -> RunCreation | None:
+        """Start a continuation from one terminal result through normal acceptance."""
+        request = await self.continuation_request(
+            owner_id=owner_id,
+            run_id=run_id,
+            query=query,
+            include_result=True,
+            authorized_workspaces=authorized_workspaces,
+        )
+        if request is None:
+            return None
+        return await self.create(
+            request=request,
+            owner_id=owner_id,
+            idempotency_key=idempotency_key,
+            auth_mode=auth_mode,
+        )
+
+    async def fork(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        query: str,
+        idempotency_key: str | None = None,
+        auth_mode: str = "none",
+        authorized_workspaces: Sequence[str] | None,
+    ) -> RunCreation | None:
+        """Start a sibling branch from the selected run's accepted context."""
+        request = await self.continuation_request(
+            owner_id=owner_id,
+            run_id=run_id,
+            query=query,
+            include_result=False,
+            authorized_workspaces=authorized_workspaces,
+        )
+        if request is None:
+            return None
+        return await self.create(
+            request=request,
+            owner_id=owner_id,
+            idempotency_key=idempotency_key,
+            auth_mode=auth_mode,
+        )
+
+    async def continuation_request(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        query: str,
+        include_result: bool,
+        authorized_workspaces: Sequence[str] | None,
+    ) -> AnswerRequest | None:
+        """Build the selected accepted context after transport authorization."""
+        text = query.strip()
+        if not text:
+            raise ValueError("continuation query cannot be empty")
+        if len(text) > _AGENT_CONTROL_CONTENT_LIMIT:
+            raise ValueError("continuation query exceeds 20000 characters")
+        record = await self.get(owner_id=owner_id, run_id=run_id)
+        if record is None or not record.terminal:
+            return None
+        if authorized_workspaces is None:
+            raise ValueError("continuation requires a currently authorized workspace set")
+        accepted = record.request_input()
+        history: list[Mapping[str, Any]] = [
+            dict(message)
+            for message in accepted.get("history") or ()
+            if isinstance(message, Mapping)
+        ]
+        if include_result:
+            parent_query = str(accepted.get("query") or "")
+            if parent_query:
+                history.append({"role": "user", "content": parent_query})
+            parent_answer = str((record.result or {}).get("answer") or "")
+            if parent_answer:
+                history.append({"role": "assistant", "content": parent_answer})
+
+        history_resources: list[AnswerHistoryResource] = []
+        for reference_kind, items in (
+            ("history_attachment", accepted.get("history_attachments") or ()),
+            ("current_attachment", accepted.get("attachments") or ()),
+        ):
+            history_resources.extend(
+                AnswerHistoryResource(
+                    run_id=run_id,
+                    source_ordinal=int(item.get("ordinal") or 0),
+                    digest=str(item.get("digest") or ""),
+                    filename=str(item.get("filename") or "attachment"),
+                    mime_type=str(item.get("mime_type") or "application/octet-stream"),
+                    byte_size=int(item.get("byte_size") or 0),
+                    reference_kind=reference_kind,  # type: ignore[arg-type]
+                )
+                for item in items
+                if isinstance(item, Mapping) and item.get("digest")
+            )
+        link_resources = tuple(
+            ResourceInput(
+                url=str(item.get("url") or ""),
+                filename=(str(item["filename"]) if item.get("filename") else None),
+                declared_mime=(str(item["mime_type"]) if item.get("mime_type") else None),
+            )
+            for item in accepted.get("links") or ()
+            if isinstance(item, Mapping) and item.get("url")
+        )
+        filters = accepted.get("filters")
+        return AnswerRequest(
+            query=text,
+            workspaces=tuple(str(item) for item in authorized_workspaces),
+            history=tuple(history),
+            episodic_summary=str(accepted.get("episodic_summary") or ""),
+            top_k=(int(accepted["top_k"]) if accepted.get("top_k") is not None else None),
+            chunk_top_k=(
+                int(accepted["chunk_top_k"]) if accepted.get("chunk_top_k") is not None else None
+            ),
+            filters=(
+                MetadataFilter.model_validate(filters) if isinstance(filters, Mapping) else None
+            ),
+            semantic_highlights=bool(accepted.get("semantic_highlights")),
+            resources=link_resources,
+            history_resources=tuple(history_resources),
+            mode=str(accepted.get("mode") or "auto"),
+            parent_run_id=run_id,
+            continuation_kind="follow_up" if include_result else "fork",
+        )
 
     async def cancel(self, *, owner_id: str, run_id: str) -> CancellationOutcome:
         """Request cancellation; only this mutates a run on a caller's behalf.
@@ -754,7 +1026,12 @@ class AnswerService:
         return await self._capability_view.read()
 
     async def read_input_artifact(
-        self, *, owner_id: str, run_id: str, ordinal: int
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        ordinal: int,
+        reference_kind: ArtifactReferenceKind | None = None,
     ) -> AnswerInputArtifact | None:
         """Read one owned run's accepted input upload by its ordinal.
 
@@ -766,7 +1043,9 @@ class AnswerService:
         reference = next(
             (
                 item
-                for kind in _INPUT_REFERENCE_KINDS
+                for kind in (
+                    (reference_kind,) if reference_kind is not None else _INPUT_REFERENCE_KINDS
+                )
                 for item in references
                 if item.reference_kind == kind and item.ordinal == ordinal
             ),
@@ -814,6 +1093,7 @@ class AnswerService:
             query=request.query,
             workspaces=request.workspaces,
             history=projection.history,
+            episodic_summary=projection.episodic_summary,
             top_k=request.top_k,
             chunk_top_k=request.chunk_top_k,
             filters=request.filters,
@@ -826,6 +1106,8 @@ class AnswerService:
             model_catalog_revision=MODEL_CATALOG_REVISION,
             idempotency_fingerprint=idempotency_fingerprint,
             image_descriptions=projection.image_descriptions,
+            parent_run_id=request.parent_run_id,
+            continuation_kind=request.continuation_kind,
         )
 
     async def _project_acceptance(
@@ -900,6 +1182,12 @@ class AnswerService:
                         else None
                     ),
                 )
+                try:
+                    tools = list(
+                        ToolRegistry([*tools, *self._research_tool_supplements()]).resolve()
+                    )
+                except DuplicateToolError as exc:
+                    raise InvalidToolConfigurationError(exc.names) from exc
                 measure = research_history_input_measure(
                     model_profile=models.query,
                     context_policy=CONTEXT_POLICY,
@@ -910,6 +1198,7 @@ class AnswerService:
                     tools=tools,
                     retained_tail_tokens=CONTEXT_POLICY.retained_tail_target(models.query),
                     memory_text=memory_text,
+                    episodic_summary=request.episodic_summary,
                 )
                 targets.append(
                     HistoryProjectionTarget(
@@ -930,7 +1219,11 @@ class AnswerService:
                     HistoryProjectionTarget(
                         "fast_generation",
                         models.query,
-                        synthesizer.history_input_measure(request.query, memory_text=memory_text),
+                        synthesizer.history_input_measure(
+                            request.query,
+                            memory_text=memory_text,
+                            episodic_summary=request.episodic_summary,
+                        ),
                     )
                 )
             if requested_mode == "auto" and allowed_modes >= {"fast", "research"}:
@@ -966,8 +1259,14 @@ class AnswerService:
                 if exc.target == "router":
                     raise UnsupportedAnswerModeError("auto") from exc
                 raise AnswerInputOverflowError(str(exc)) from exc
+            episodic_parts = [
+                item.strip()
+                for item in (request.episodic_summary, history.episodic_summary)
+                if item.strip()
+            ]
             return _AcceptanceProjection(
                 history=tuple(dict(message) for message in history.messages),
+                episodic_summary="\n\n".join(dict.fromkeys(episodic_parts)),
                 image_descriptions=image_descriptions,
                 pinned_models=self._pin_model_profiles(model_profiles),
             )

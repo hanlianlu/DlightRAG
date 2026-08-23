@@ -20,8 +20,9 @@ Clients
   -> REST / Web / MCP / SDK adapters
   -> Application (composition)
       -> WorkspaceRag -> LightRAG main -> corpus storage
-      -> dlightrag.runtime RunCoordinator -> Answer executor + root PG adapter
-      -> dlightrag.rag corpus ports -> root PG corpus adapter
+      -> AnswerService -> RunCoordinator -> Fast invocation or Research AgentLoop
+      -> Agent Session graph + Context Contributions + Evidence + Profile Memory
+      -> dlightrag.rag corpus ports -> root PostgreSQL corpus adapter
       -> ApplicationHealth -> liveness/readiness projection
   -> PostgreSQL 18 storage ecosystem
 ```
@@ -216,16 +217,18 @@ route-driven state. It supports workspace selection, file/folder upload,
 durable principal-scoped conversations and answer attachments, citations,
 source/report panels, and semantic highlights. Desktop panel resizing uses the
 Web Awesome Split Panel component behind DlightRAG tokens and persisted-width
-state; compact layouts retain the native modal overlay behavior. The
-Web-only conversation lifecycle provides New chat, select, rename, delete, and
-reload persistence with 30-day inactivity retention. `Search in: All authorized
+state; compact layouts retain the native modal overlay behavior. The Web-only
+conversation lifecycle provides New chat, select, rename, delete, reload,
+durable resume/cancel, Research steering and child status, and minimal
+follow-up/fork controls. Its recent-turn read window is not retention: linked
+runs follow the configured retention floor. `Search in: All authorized
 workspaces` is the answer default; the independent `Files in` selector remains a
 single-workspace file-management target.
 
-REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
-accept an optional caller-supplied `history` of prior turns for multi-turn
-follow-ups, but never a Web conversation ID or server-stored history: the client
-owns conversation storage and re-sends the turns it wants on each request. All
+REST, MCP, and Python answer/retrieve calls require no Web conversation ID.
+Answer calls accept optional caller-supplied `history`; an independent request
+re-sends the turns it wants, while the accepted run pins that bounded history
+for recovery and server-owned follow-up/fork. All
 channels take the same answer inputs: a query plus optional **attachments**
 (images, PDFs, Office documents, HTML/CSV, or HTTPS references). Attachments
 become request-local resources read on demand — deterministic text decoding and
@@ -242,12 +245,12 @@ Every answer is one durable run with one identifier and one lifecycle, shared by
 REST, MCP, Web, the SDK, the CLI, and evaluation. `POST /answer` returns HTTP 202
 with the run's status, events, and cancel URLs; the run outlives its creating
 request, so a disconnected client only detaches. Events are reconnectable SSE
-resumed by durable sequence, a process restart resumes from the latest completed
-control turn, and `DELETE /answer/{run_id}` is the only client action that
-cancels. Event logs are always trimmed 30 days after a run finishes, and the
-events endpoint then answers 410 while the result stays readable from the status
-endpoint; the terminal run row is pruned at the same age, except a succeeded run
-a Web conversation still shows, whose row survives while that conversation does.
+resumed by durable sequence, and a restart folds the selected Agent Session head
+or restarts an unfinished Fast stage. Clients may inspect status, usage,
+evidence, and child lineage; steer a live Research run; start follow-up or fork
+continuations; resume observation; or explicitly cancel. Event logs and
+terminal rows follow `answer.runtime.answer_run_retention_days` (default 365);
+an expired event log returns 410 while an unpruned result remains readable.
 See [docs/durable-answer-runs.md](docs/durable-answer-runs.md).
 
 ### REST
@@ -362,10 +365,9 @@ DLIGHTRAG_INTERFACES__MCP__HOST=127.0.0.1 \
 dlightrag-mcp
 ```
 
-MCP tools include `retrieve`, `answer`, `ingest`, `get_ingest_job`,
-`cancel_ingest_job`, `list_files`, `delete_files`, `list_workspaces`,
-`create_workspace`, and `delete_workspace`, plus `get_capabilities` for image
-and metadata-filter capability discovery. See
+MCP tools include retrieval, durable Answer start/status/cancel, steer,
+follow-up, fork, resume, transcript and child-roster operations, plus corpus and
+ingest administration and `get_capabilities`. See
 [docs/interfaces.md](docs/interfaces.md#mcp-server)
 for the authoritative tool-result contract.
 
@@ -469,7 +471,8 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 ## Documentation Map
 
 - [CHANGELOG.md](CHANGELOG.md) - release notes and breaking changes.
-- [docs/migration-2.0.md](docs/migration-2.0.md) - package, import, and configuration migration from 1.x.
+- [docs/migration-3.0.md](docs/migration-3.0.md) - breaking Agent, controls, Memory, configuration, and reset migration from 2.x.
+- [docs/migration-2.0.md](docs/migration-2.0.md) - historical package, import, and configuration migration from 1.x.
 - [docs/architecture.md](docs/architecture.md) - runtime ownership, storage topology, and code layering.
 - [docs/interfaces.md](docs/interfaces.md) - SDK, REST, MCP, and Web contracts.
 - [docs/security.md](docs/security.md) - auth, JWT/JWKS, IdP boundaries, and access control.

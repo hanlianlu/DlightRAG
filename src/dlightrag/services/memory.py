@@ -4,7 +4,8 @@
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from dlightrag_memory import Memory, default_purge_cutoff
+from dlightrag_memory import Memory
+from dlightrag_memory.store import default_purge_cutoff
 
 from dlightrag.answer.errors import MemoryUnavailableError
 from dlightrag.answer.memory import (
@@ -92,7 +93,7 @@ class MemoryService:
         await self._settings.set_enabled(owner_id=owner_id, enabled=enabled)
 
     async def clear(self, *, owner_id: str, auth_mode: str) -> None:
-        """Idempotently hard-delete every record; enablement is untouched."""
+        """Idempotently tombstone every record; enablement is untouched."""
         if not memory_owner_allowed(auth_mode):
             raise MemoryUnavailableError()
         await self._memory.forget(owner_id=owner_id, all=True)

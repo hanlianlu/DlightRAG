@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Agent Workspace layout and epoch handoff for local trusted execution."""
+"""Agent Workspace layout and epoch handoff for configured execution adapters."""
 
 from __future__ import annotations
 
@@ -10,7 +10,11 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from dlightrag.agent.environment import LocalExecutionEnvironment
+from dlightrag.agent.environment import (
+    ExecutionEnvironment,
+    ExecutionEnvironmentAdapter,
+    TrustExecutionAdapter,
+)
 from dlightrag.runtime.workspace import HandoffCommit, WorkspaceStore
 
 
@@ -29,7 +33,7 @@ class RunWorkspace:
     epoch: int
     workspace: Path
     spill_dir: Path
-    environment: LocalExecutionEnvironment
+    environment: ExecutionEnvironment
 
 
 def owner_shard(owner_id: str) -> str:
@@ -53,9 +57,11 @@ async def bind_run_workspace(
     fencing_epoch: int,
     recorded_epoch: int | None,
     store: WorkspaceStore | None,
+    execution_adapter: ExecutionEnvironmentAdapter | None = None,
 ) -> RunWorkspace:
     """Create or recover the active epoch and return a rooted environment."""
     root = run_root(workspace_root, owner_id, run_id)
+    adapter = execution_adapter or TrustExecutionAdapter()
     source_epoch = recorded_epoch
     destination = fencing_epoch
     if source_epoch is None:
@@ -68,7 +74,7 @@ async def bind_run_workspace(
             epoch=destination,
             workspace=workspace,
             spill_dir=spill,
-            environment=LocalExecutionEnvironment(workspace),
+            environment=adapter.create(workspace),
         )
     if source_epoch != destination:
         await copy_epoch_verified(root, source_epoch, destination, store)
@@ -86,7 +92,7 @@ async def bind_run_workspace(
         epoch=destination,
         workspace=workspace,
         spill_dir=spill,
-        environment=LocalExecutionEnvironment(workspace),
+        environment=adapter.create(workspace),
     )
 
 

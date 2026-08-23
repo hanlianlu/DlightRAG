@@ -18,7 +18,7 @@ from dlightrag.ai.catalog import (
 from dlightrag.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
 
 
-def test_context_policy_applies_hard_limit_and_compaction_formulas() -> None:
+def test_context_policy_applies_explicit_model_aware_reserves() -> None:
     profile = ModelProfile(
         context_window_tokens=200_000,
         max_input_tokens=180_000,
@@ -29,11 +29,11 @@ def test_context_policy_applies_hard_limit_and_compaction_formulas() -> None:
     )
     policy = ContextPolicy()
 
-    assert policy.revision == "m1-v1"
-    assert policy.hard_input_limit(profile) == 170_000
-    assert policy.compaction_trigger(profile) == 144_500
-    assert policy.history_allowance_cap(profile) == 34_000
-    assert policy.retained_tail_target(profile) == 34_000
+    assert policy.revision == "agent-v3-reserves"
+    assert policy.hard_input_limit(profile) == 180_000
+    assert policy.compaction_trigger(profile) == 147_232
+    assert policy.history_allowance_cap(profile) == 147_232
+    assert policy.retained_tail_target(profile) == 20_000
     with pytest.raises(FrozenInstanceError):
         profile.context_window_tokens = 1  # type: ignore[misc]
 
@@ -91,16 +91,30 @@ def test_unknown_model_requires_an_explicit_profile_override() -> None:
 def test_policy_classifies_overflow_and_caps_required_output_to_physical_remainder() -> None:
     profile = ModelProfile(
         context_window_tokens=1_000,
+        max_input_tokens=850,
         max_output_tokens=300,
     )
+    policy = ContextPolicy(
+        requested_output_reserve_tokens=0,
+        observation_reserve_tokens=0,
+        safety_reserve_tokens=0,
+        minimum_input_tokens=0,
+    )
 
-    assert CONTEXT_POLICY.output_allowance(profile, input_tokens=800) == 200
+    assert policy.output_allowance(profile, input_tokens=800) == 200
     with pytest.raises(ModelInputOverflowError) as hard_limit:
-        CONTEXT_POLICY.output_allowance(profile, input_tokens=851)
+        policy.output_allowance(profile, input_tokens=851)
     assert hard_limit.value.kind == "hard_input_limit_exceeded"
     with pytest.raises(ModelInputOverflowError) as exhausted:
-        CONTEXT_POLICY.output_allowance(profile, input_tokens=1_000)
+        policy.output_allowance(profile, input_tokens=1_000)
     assert exhausted.value.kind == "context_exhausted"
 
     uncapped = ModelProfile(context_window_tokens=1_000)
-    assert CONTEXT_POLICY.output_allowance(uncapped, input_tokens=800) is None
+    assert CONTEXT_POLICY.output_allowance(uncapped, input_tokens=800) == 200
+
+
+def test_unknown_output_profile_still_reserves_and_caps_requested_output() -> None:
+    profile = ModelProfile(context_window_tokens=100_000, max_input_tokens=95_000)
+
+    assert CONTEXT_POLICY.hard_input_limit(profile) == 82_592
+    assert CONTEXT_POLICY.output_allowance(profile, input_tokens=80_000) == 16_384

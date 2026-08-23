@@ -89,7 +89,10 @@ async def test_pg_supersede_and_forget(store: PostgresMemoryStore) -> None:
     assert superseded is not None
     assert superseded.status == "superseded"
     assert await store.forget(owner_id="alpha", memory_id=new.memory_id) is True
-    assert await store.get(owner_id="alpha", memory_id=new.memory_id) is None
+    tombstone = await store.get(owner_id="alpha", memory_id=new.memory_id)
+    assert tombstone is not None
+    assert tombstone.status == "forgotten"
+    assert await store.forget(owner_id="alpha", memory_id=new.memory_id) is False
     assert await store.forget(owner_id="beta", memory_id=old.memory_id) is False
 
 

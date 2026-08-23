@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Literal
 
 MemoryKind = Literal["preference", "fact"]
-MemoryStatus = Literal["active", "superseded"]
+MemoryStatus = Literal["active", "superseded", "forgotten"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,8 +52,18 @@ class MemoryWrite:
     supersedes_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class MemoryProposal:
+    """A validated formation decision before any storage mutation."""
+
+    proposal_id: str
+    write: MemoryWrite
+    proposed_at: datetime
+
+
 __all__ = [
     "MemoryKind",
+    "MemoryProposal",
     "MemoryProvenance",
     "MemoryRecord",
     "MemoryStatus",

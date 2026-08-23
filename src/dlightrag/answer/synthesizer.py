@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
+from dlightrag.agent.context import ContextContribution, ContextProjector
 from dlightrag.agent.session.fold import PriorTurns
 from dlightrag.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag.ai.tokens import estimate_content_tokens, estimate_messages_tokens
@@ -92,6 +93,7 @@ class AnswerSynthesizer:
         self,
         query: str,
         memory_text: str = "",
+        episodic_summary: str = "",
     ) -> Callable[[list[dict[str, Any]]], int]:
         """Return the exact zero-evidence final-call serializer for history fitting."""
 
@@ -117,6 +119,7 @@ class AnswerSynthesizer:
                 prepared.user_prompt,
                 excerpt_blocks,
                 history_messages=history,
+                episodic_summary=episodic_summary,
                 memory_text=memory_text,
             )
             return estimate_messages_tokens(messages)
@@ -162,9 +165,12 @@ class AnswerSynthesizer:
             query[:60],
         )
 
+        usage: dict[str, Any] = {}
+        prepared.trace["usage"] = usage
         call_kwargs: dict[str, Any] = {
             "messages": prepared.messages,
             "stream": True,
+            "usage_holder": usage,
         }
         if prepared.max_output_tokens is not None:
             call_kwargs["max_tokens"] = prepared.max_output_tokens
@@ -190,7 +196,8 @@ class AnswerSynthesizer:
         conversation_history: PriorTurns | None = None,
         memory_text: str = "",
     ) -> _PreparedModelCall:
-        original_history = list((conversation_history or PriorTurns()).messages)
+        prior_turns = conversation_history or PriorTurns()
+        original_history = list(prior_turns.messages)
 
         def build(history: list[dict[str, Any]]) -> tuple[_PreparedModelCall, int, int]:
             budget = self._image_policy.new_budget()
@@ -211,6 +218,7 @@ class AnswerSynthesizer:
                 prepared.user_prompt,
                 excerpt_blocks,
                 history_messages=history,
+                episodic_summary=prior_turns.episodic_summary,
                 memory_text=memory_text,
             )
             evidence_tokens = estimate_content_tokens(excerpt_blocks) + estimate_content_tokens(
@@ -261,6 +269,7 @@ class AnswerSynthesizer:
         excerpt_blocks: list[dict[str, Any]],
         *,
         history_messages: list[dict[str, Any]],
+        episodic_summary: str = "",
         memory_text: str = "",
     ) -> list[dict[str, Any]]:
         """Place budgeted image blocks into the final message structure.
@@ -271,16 +280,49 @@ class AnswerSynthesizer:
         content: list[dict[str, Any]] = []
         content.extend(excerpt_blocks)
         content.append({"type": "text", "text": user_prompt})
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
+        contributions = [
+            ContextContribution(
+                source="answer.system",
+                authority="system",
+                messages=({"role": "system", "content": system_prompt},),
+                compressible=False,
+            )
         ]
+        if episodic_summary:
+            contributions.append(
+                ContextContribution(
+                    source="conversation.episodic",
+                    authority="conversation",
+                    messages=({"role": "user", "content": episodic_summary},),
+                )
+            )
         if history_messages:
-            messages.extend(history_messages)
-        messages.append({"role": "user", "content": content})
+            contributions.append(
+                ContextContribution(
+                    source="conversation.tail",
+                    authority="conversation",
+                    messages=tuple(history_messages),
+                )
+            )
+        contributions.append(
+            ContextContribution(
+                source="answer.evidence" if excerpt_blocks else "answer.question",
+                authority="evidence" if excerpt_blocks else "user",
+                messages=({"role": "user", "content": content},),
+                citable=bool(excerpt_blocks),
+                compressible=False,
+            )
+        )
         memory_message = standing_memory_message(memory_text)
         if memory_message is not None:
-            messages.append(memory_message)
-        return messages
+            contributions.append(
+                ContextContribution(
+                    source="profile.memory",
+                    authority="profile",
+                    messages=(memory_message,),
+                )
+            )
+        return list(ContextProjector().project(contributions).messages)
 
     @staticmethod
     def _apply_image_trace(
@@ -304,7 +346,15 @@ class AnswerSynthesizer:
         if image_budget is None:
             image_budget = self._image_policy.new_budget()
         packed = AnswerContextPacker().pack(contexts, image_budget=image_budget)
-        indexer = self._build_citation_indexer(packed.contexts)
+        # Fast and Research use the same Evidence ledger for citation identity;
+        # Fast remains a lightweight invocation and never creates an Agent Session.
+        from dlightrag.answer.evidence import EvidenceLedger
+
+        evidence = EvidenceLedger()
+        evidence.add_contexts(packed.contexts)
+        _blocks, indexer = evidence.render_blocks(
+            image_blocks_by_context_key=packed.image_blocks_by_context_key
+        )
         kg_context = self._format_kg_context(packed.contexts, indexer=indexer)
         user_prompt = "\n\n".join(
             [

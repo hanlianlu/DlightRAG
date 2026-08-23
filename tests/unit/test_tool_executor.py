@@ -76,12 +76,32 @@ async def _run_turn(
         max_tokens=kwargs.pop("max_tokens", None),
     )
     observation_budget = kwargs.pop("observation_budget", None)
+    on_result = kwargs.pop("on_result", None)
     assert not kwargs
     return await executor.execute_prepared(
         prepared,
         tools,
         observation_budget=observation_budget,
+        on_result=on_result,
     )
+
+
+async def test_tool_result_error_flag_reaches_execution_and_transcript() -> None:
+    async def execute(_args: BaseModel) -> ToolResult:
+        return ToolResult(content="remote failed", is_error=True)
+
+    call = ToolCall(id="call-error", name="remote", arguments={"query": "x"})
+    executor = ToolTurnExecutor(ScriptedModel(_turn(call)).complete_turn)  # type: ignore[arg-type]
+
+    turn = await _run_turn(
+        executor,
+        [{"role": "user", "content": "go"}],
+        [AgentTool("remote", "Remote tool.", SearchArgs, execute)],
+    )
+
+    assert turn.results[0].is_error is True
+    assert turn.results[0].observation.is_error is True
+    assert turn.messages[-1]["is_error"] is True
 
 
 async def test_valid_calls_execute_in_parallel_and_results_replay_in_source_order() -> None:
@@ -150,6 +170,37 @@ async def test_parallel_results_share_the_current_request_residual_budget() -> N
     assert sum(estimate_tokens(result.result.content) for result in executed.results) <= 150
     assert 0 < len(executed.results[0].result.content) < 400
     assert 0 < len(executed.results[1].result.content) < 400
+
+
+async def test_durable_callback_receives_fitted_error_preserving_results() -> None:
+    async def execute(args: BaseModel) -> ToolResult:
+        assert isinstance(args, SearchArgs)
+        if args.query == "error":
+            raise RuntimeError("failed " + "x" * 400)
+        return ToolResult(content="y" * 800)
+
+    settled: list[Any] = []
+
+    async def on_result(_intent: Any, execution: Any, _is_last: bool) -> None:
+        settled.append(execution)
+
+    model = ScriptedModel(
+        _turn(
+            ToolCall(id="1", name="search", arguments={"query": "ok"}),
+            ToolCall(id="2", name="search", arguments={"query": "error"}),
+        )
+    )
+    executed = await _run_turn(
+        ToolTurnExecutor(model.complete_turn),
+        [{"role": "user", "content": "q"}],
+        [AgentTool("search", "Search.", SearchArgs, execute)],
+        observation_budget=lambda _transcript: 80,
+        on_result=on_result,
+    )
+
+    assert settled == list(executed.results)
+    assert settled[1].is_error is True
+    assert sum(estimate_tokens(item.result.content) for item in settled) <= 80
 
 
 async def test_parallel_result_fitting_preserves_every_continuation_suffix() -> None:

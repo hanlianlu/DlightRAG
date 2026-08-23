@@ -228,10 +228,15 @@ class TestPlanWithLLM:
         assert await_args.kwargs["max_tokens"] == 73
 
     async def test_llm_call_uses_messages_first_contract(self):
-        calls: list[tuple[list[dict[str, object]], StructuredOutput]] = []
+        calls: list[tuple[list[dict[str, object]], StructuredOutput, int]] = []
 
-        async def llm(*, messages: list[dict[str, object]], structured_output: StructuredOutput):
-            calls.append((messages, structured_output))
+        async def llm(
+            *,
+            messages: list[dict[str, object]],
+            structured_output: StructuredOutput,
+            max_tokens: int,
+        ):
+            calls.append((messages, structured_output, max_tokens))
             return json.dumps({"standalone_query": "messages-first", "filters": {}})
 
         planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
@@ -240,7 +245,7 @@ class TestPlanWithLLM:
 
         assert plan.standalone_query == "what is X"
         assert len(calls) == 1
-        messages, structured_output = calls[0]
+        messages, structured_output, max_tokens = calls[0]
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
         assert isinstance(messages[0]["content"], str)
@@ -249,6 +254,7 @@ class TestPlanWithLLM:
             "content": '{"query":"what is X","preserve_query":true}',
         }
         assert isinstance(structured_output, StructuredOutput)
+        assert max_tokens > 0
 
     async def test_lightrag_prompt_style_callable_is_not_planner_contract(self):
         async def llm(

@@ -4,7 +4,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from dlightrag_memory import InMemoryMemoryStore, commit_memory_write
+from dlightrag_memory.store import InMemoryMemoryStore, commit_memory_write
 
 from dlightrag.answer.errors import MemoryWriteRejectedError
 from dlightrag.answer.memory import (
@@ -53,7 +53,7 @@ async def test_owners_cannot_read_each_other() -> None:
     assert [row.body for row in beta] == ["Other."]
 
 
-async def test_supersede_hides_old_and_forget_hard_deletes() -> None:
+async def test_supersede_hides_old_and_forget_leaves_tombstone() -> None:
     store = InMemoryMemoryStore()
     await store.insert(_record(memory_id="old"))
     replacement = _record(memory_id="new", body="Use chat only.")
@@ -64,7 +64,10 @@ async def test_supersede_hides_old_and_forget_hard_deletes() -> None:
     assert superseded is not None
     assert superseded.status == "superseded"
     assert await store.forget(owner_id="alpha", memory_id="new") is True
-    assert await store.get(owner_id="alpha", memory_id="new") is None
+    forgotten = await store.get(owner_id="alpha", memory_id="new")
+    assert forgotten is not None
+    assert forgotten.status == "forgotten"
+    assert await store.forget(owner_id="alpha", memory_id="new") is False
 
 
 async def test_commit_remember() -> None:
@@ -72,6 +75,26 @@ async def test_commit_remember() -> None:
     written = await commit_memory_write(store, _remember())
     assert written is not None
     assert written.body == "No email."
+
+
+async def test_proposal_commit_is_replay_idempotent() -> None:
+    from dlightrag_memory import Memory
+
+    memory = Memory(InMemoryMemoryStore())
+    proposal = memory.propose_remember(
+        owner_id="alpha",
+        kind="fact",
+        body="Stable.",
+        confidence=1.0,
+        provenance=MemoryProvenance(run_id="r", session_id="s"),
+        proposal_id="turn-1-call-1",
+    )
+
+    first = await memory.commit(proposal)
+    replay = await memory.commit(proposal)
+
+    assert first is not None
+    assert replay == first
 
 
 async def test_supersede_missing_id_is_a_public_reject() -> None:

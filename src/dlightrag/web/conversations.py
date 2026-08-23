@@ -439,6 +439,60 @@ class WebConversationService:
             ),
         )
 
+    async def continue_answer(
+        self,
+        user: UserContext | None,
+        *,
+        parent_run_id: str,
+        submission_id: str,
+        query: str,
+        kind: str,
+        authorized_workspaces: Sequence[str] | None,
+    ) -> WebAnswerSubmission | None:
+        """Start a linked follow-up or a new conversation branch."""
+        if kind not in {"follow_up", "fork"}:
+            raise ValueError(f"unsupported continuation kind: {kind}")
+        principal_id = owner_id_from_user(user)
+        parent = await self.turn_for_run(user, parent_run_id)
+        if parent is None or not parent.conversation_id:
+            return None
+        request = await self._answers.continuation_request(
+            owner_id=principal_id,
+            run_id=parent_run_id,
+            query=query,
+            include_result=kind == "follow_up",
+            authorized_workspaces=authorized_workspaces,
+        )
+        if request is None:
+            return None
+        create_conversation = kind == "fork"
+        conversation_id = (
+            _new_conversation_id(principal_id, submission_id)
+            if create_conversation
+            else parent.conversation_id
+        )
+        fingerprint = answer_run_request_fingerprint(
+            {
+                "conversation_id": conversation_id,
+                "parent_run_id": parent_run_id,
+                "continuation_kind": kind,
+                "query": query.strip(),
+            }
+        )
+        return await self._answers.accept(
+            request=request,
+            owner_id=principal_id,
+            idempotency_key=submission_id,
+            idempotency_fingerprint=fingerprint,
+            auth_mode=(user.auth_mode if user is not None else "none"),
+            acceptor=_WebAnswerAcceptor(
+                store=self._store,
+                conversation_id=conversation_id,
+                title_hint=_auto_title(query),
+                create_conversation=create_conversation,
+            ),
+        )
+
     async def _snapshot(
         self,
         principal_id: str,
@@ -634,6 +688,8 @@ def project_conversation_turn(
             for attachment in request.attachments
         ],
         presentation=presentation,
+        usage=dict((run.result or {}).get("usage") or {}),
+        evidence=dict((run.result or {}).get("evidence") or {}),
         error_kind=run.error_kind,
         error_message=run.error_message,
         created_at=turn.created_at,

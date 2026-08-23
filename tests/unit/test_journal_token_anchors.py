@@ -15,7 +15,7 @@ from dlightrag.agent.session.projection import (
 from dlightrag.agent.session.store import SessionCommit
 from dlightrag.agent.tools.contracts import ExecutedTurn
 from dlightrag.ai.messages import AssistantTurn
-from dlightrag.answer.executor import JournalRunBoundaries
+from dlightrag.answer.executor import FetchedResourceBuffer, JournalRunBoundaries
 from tests.in_memory_session_store import InMemoryAgentSessionStore
 
 
@@ -71,7 +71,7 @@ async def _seeded_boundaries(
         session_id=session_id,
         tools_by_name={},
         ledger_state=lambda: "{}",
-        fetched_buffer=[],
+        fetched_buffer=FetchedResourceBuffer(),
         run_id=str(session_id.value),
         initial_version=snapshot.version,
         last_sequence=snapshot.entries[-1].sequence,
@@ -93,7 +93,7 @@ def _turn(*, usage: dict[str, int] | None) -> ExecutedTurn:
     )
 
 
-async def test_commit_turn_records_measured_anchor_at_assistant_sequence() -> None:
+async def test_commit_turn_anchors_usage_at_the_pre_call_sequence() -> None:
     store, session_id, bounds = await _seeded_boundaries()
     await bounds.commit_turn(
         _turn(usage={"prompt_tokens": 80, "completion_tokens": 12}),
@@ -106,7 +106,7 @@ async def test_commit_turn_records_measured_anchor_at_assistant_sequence() -> No
         entry.sequence for entry in snapshot.entries if entry.entry_type == "assistant_message"
     )
     assert live_anchor(projection, last_retained_sequence=assistant_sequence) == TokenAnchor(
-        through_sequence=assistant_sequence,
+        through_sequence=1,
         measured_input_tokens=80,
         measured_output_tokens=12,
     )
@@ -131,8 +131,9 @@ async def test_accounted_input_prefers_the_live_measured_anchor() -> None:
         _turn(usage={"prompt_tokens": 80, "completion_tokens": 12}),
         turn_number=1,
     )
-    # No tail entries follow the anchor, so the measured reading stands alone.
-    assert bounds.accounted_input(1_000) == 80
+    # The new assistant follows the pre-call anchor and remains in the
+    # estimated unanchored tail.
+    assert bounds.accounted_input(1_000) > 80
     snapshot = await store.load(session_id)
     assert snapshot.active_projection is not None
 

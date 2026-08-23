@@ -59,6 +59,8 @@ class AnswerResult:
     answer_blocks: list[dict[str, Any]] = field(default_factory=list)
     trace: dict[str, Any] = field(default_factory=dict)
     image_descriptions: list[str] = field(default_factory=list)
+    usage: dict[str, Any] = field(default_factory=dict)
+    evidence: dict[str, Any] = field(default_factory=dict)
 
 
 def store_answer_result(
@@ -80,6 +82,7 @@ def store_answer_result(
     derived on read instead of stored twice.
     """
     workspaces = _image_workspaces(sources)
+    usage = trace.get("usage")
     return {
         "answer": answer,
         "contexts": dict(contexts),
@@ -88,6 +91,8 @@ def store_answer_result(
             _store_answer_image(image, workspaces=workspaces) for image in answer_images
         ],
         "trace": dict(trace),
+        "usage": dict(usage) if isinstance(usage, Mapping) else {},
+        "evidence": _evidence_summary(contexts, source_count=len(sources)),
         "image_descriptions": list(image_descriptions),
         "primary_report": primary_report,
         "artifacts": [dict(item) for item in artifacts],
@@ -117,6 +122,8 @@ def restore_answer_result(stored: Mapping[str, Any]) -> AnswerResult:
         answer_blocks=answer_blocks_from_markdown(answer, images),
         trace=dict(stored.get("trace") or {}),
         image_descriptions=list(stored.get("image_descriptions") or ()),
+        usage=dict(stored.get("usage") or {}),
+        evidence=dict(stored.get("evidence") or {}),
     )
 
 
@@ -162,6 +169,8 @@ def project_answer_result(
         "answer_images": images,
         "answer_blocks": answer_blocks_from_markdown(answer, images),
         "trace": dict(stored.get("trace") or {}),
+        "usage": dict(stored.get("usage") or {}),
+        "evidence": dict(stored.get("evidence") or {}),
         "image_descriptions": list(stored.get("image_descriptions") or ()),
         "primary_report": primary_report,
         "artifacts": [
@@ -174,6 +183,18 @@ def project_answer_result(
             for item in stored.get("artifacts") or ()
             if isinstance(item, Mapping)
         ],
+    }
+
+
+def _evidence_summary(
+    contexts: Mapping[str, Sequence[Mapping[str, Any]]], *, source_count: int
+) -> dict[str, int]:
+    """Return the transport-neutral evidence counts every surface exposes."""
+    return {
+        "chunks": len(contexts.get("chunks") or ()),
+        "entities": len(contexts.get("entities") or ()),
+        "relationships": len(contexts.get("relationships") or ()),
+        "sources": source_count,
     }
 
 

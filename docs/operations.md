@@ -47,10 +47,13 @@ running deployment. Neither command imports or delegates to the other.
 Every answer is a durable PostgreSQL-owned run, so operating them is a database
 concern rather than a request concern.
 
-- **Rolling upgrades.** All Answer workers sharing one database must run a
-  compatible revision and the same effective model-role, Answer image-policy, and
-  agent-limit configuration. Drain or cancel active and queued runs before an
-  incompatible rolling change; heterogeneous execution is unsupported.
+- **3.0 upgrade.** There is no pre-3.0 Agent-run compatibility reader. Drain or
+  cancel active/queued runs, back up business data, apply the writer first, then
+  start readers. Development deployments use the full reset above. See
+  [migration-3.0.md](migration-3.0.md).
+- **Rolling upgrades.** All workers sharing one database must run a compatible
+  revision and the same model roles, execution adapters, extension set, outbound
+  MCP allowlists, and Answer policies; heterogeneous execution is unsupported.
 - **Migration order.** A writer applies migrations; readers validate the migrated
   schema and issue no DDL. Roll the writer first, then readers. A reader on an
   older schema fails startup with a diagnostic instead of degrading.
@@ -73,10 +76,11 @@ concern rather than a request concern.
 - **Storage.** Queued runs are never rejected for capacity, so bound and monitor
   PostgreSQL storage: `dlightrag_blobs`/`dlightrag_blob_chunks` hold uploaded and fetched
   bytes, and `dlightrag_answer_run_events` holds token batches until trimmed.
-  When `answer.agent.execution_environment` is `local_trusted`, every Answer
-  worker including readers must mount the same RWX path at
-  `answer.agent.workspace_root`
-  (Compose: `/app/dlightrag_agent_workspaces`).
+  When `answer.agent.execution_environment` is `trust` or `sandbox`, every
+  Answer worker including readers must mount the same RWX
+  `answer.agent.workspace_root` (Compose:
+  `/app/dlightrag_agent_workspaces`). Trust is host/network capable; sandbox
+  requires an installed adapter and never falls back to trust.
 - **Probes.** Route traffic on unauthenticated `GET /ready` (database and corpus
   readiness, short-cached). `GET /health` is liveness only and never touches
   PostgreSQL.

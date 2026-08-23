@@ -53,6 +53,7 @@ class TestMigrationDeclaration:
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",
             "dlightrag_answer_child_sessions",
+            "dlightrag_agent_controls",
             "dlightrag_answer_memory_settings",
         }
 
@@ -99,7 +100,7 @@ class TestFixedRuntimeBounds:
     def test_workers_heartbeat_well_inside_their_lease(self) -> None:
         assert 0 < RUN_HEARTBEAT_SECONDS <= ANSWER_RUN_LEASE_SECONDS // 2
 
-    def test_accepted_input_envelope_keeps_only_public_fields(self) -> None:
+    def test_accepted_input_envelope_keeps_continuation_context_not_model_facts(self) -> None:
         from dlightrag.runtime.records import accepted_input_envelope
 
         envelope = accepted_input_envelope(
@@ -117,9 +118,20 @@ class TestFixedRuntimeBounds:
         assert envelope == {
             "query": "why",
             "workspaces": ["alpha", "beta"],
+            "history": [{"role": "user", "content": "secret"}],
+            "episodic_summary": "",
+            "top_k": None,
+            "chunk_top_k": None,
+            "filters": None,
+            "semantic_highlights": False,
             "mode": "research",
+            "links": [],
             "attachments": [{"ordinal": 1, "digest": "d" * 64}],
+            "history_attachments": [],
+            "session_id": "",
         }
+        assert "pinned_models" not in envelope
+        assert "resource_manifest" not in envelope
 
     def test_request_input_prefers_the_accepted_envelope(self) -> None:
         from dlightrag.runtime import AnswerRunRecord

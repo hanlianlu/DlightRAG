@@ -593,6 +593,11 @@ class PGJournalStore:
                 await self._write_evidence(conn, write)
             for resource in update.resources:
                 await self._write_evidence_resource(conn, resource)
+            for fetched in update.fetched:
+                await self._write_complete_blob(conn, fetched.complete_blob)
+                await self._write_fetched_resource(conn, fetched.resource)
+                for write in fetched.evidence:
+                    await self._write_evidence(conn, write)
             return _host_update_digest(update)
         if isinstance(update, FetchedResourceSettlementUpdate):
             await self._write_complete_blob(conn, update.complete_blob)
@@ -1092,6 +1097,24 @@ def _host_update_digest(update: M3HostUpdate) -> str:
                     "locator_digest": r.locator_digest,
                 }
                 for r in update.resources
+            ],
+            "fetched": [
+                {
+                    "resource_id": item.resource.resource_id,
+                    "blob_digest": item.resource.blob_digest,
+                    "source_locator_digest": item.resource.source_locator_digest,
+                    "evidence": [
+                        {
+                            "session_id": w.session_id,
+                            "intent_id": w.intent_id,
+                            "result_ordinal": w.result_ordinal,
+                            "content_digest": w.content_digest,
+                            "locator_digest": w.locator_digest,
+                        }
+                        for w in item.evidence
+                    ],
+                }
+                for item in update.fetched
             ],
         }
     elif isinstance(update, FetchedResourceSettlementUpdate):

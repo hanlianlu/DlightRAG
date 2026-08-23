@@ -14,7 +14,7 @@ the database. This is the reference shape for a Pi extension.
 
 3. The model gets three tools:
    memory_recall(query)          — low-authority context, never citable
-   memory_remember(kind, body, confidence, supersedes_id?)
+   memory_remember(kind, body, confidence, idempotency_key, supersedes_id?)
    memory_forget(memory_id | body)
 ```
 

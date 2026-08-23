@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image
 
+from dlightrag.agent.session.entries import ContextInjectionEntry
 from dlightrag.agent.session.fold import PriorTurns
 from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
@@ -24,6 +25,8 @@ from dlightrag.answer.executor import (
     AnswerExecutorSettings,
     AnswerResourceResolver,
     AnswerResourceSettings,
+    FetchedResourceBuffer,
+    JournalRunBoundaries,
     OrchestratorRun,
     _close_execution_resources,
     _memory_recall_allowed,
@@ -63,6 +66,51 @@ def _executor() -> AnswerExecutor:
         ),
         telemetry=NOOP_TELEMETRY,
     )
+
+
+def test_acceptance_research_tools_include_every_configured_non_resource_surface() -> None:
+    from pydantic import BaseModel
+
+    from dlightrag.agent.tools import AgentTool, ToolResult
+
+    class Args(BaseModel):
+        value: str
+
+    async def external(_args: BaseModel) -> ToolResult:
+        return ToolResult(content="unused")
+
+    executor = AnswerExecutor(
+        store=MagicMock(),
+        pool=MagicMock(),
+        retrieve=AsyncMock(),
+        models=MagicMock(),
+        capabilities=MagicMock(),
+        resources=MagicMock(),
+        settings=_executor()._settings,
+        telemetry=NOOP_TELEMETRY,
+        execution_environment="trust",
+        memory_store=MagicMock(),
+        external_tools=(AgentTool("remote_lookup", "Remote lookup.", Args, external),),
+    )
+
+    names = {tool.name for tool in executor.acceptance_research_tools()}
+
+    assert {
+        "read",
+        "write",
+        "edit",
+        "grep",
+        "bash",
+        "spawn_agent",
+        "subagent_status",
+        "wait_subagent",
+        "cancel_subagent",
+        "remember",
+        "forget",
+        "recall_memory",
+        "load_skill",
+        "remote_lookup",
+    } <= names
 
 
 def _resource_resolver() -> AnswerResourceResolver:
@@ -292,11 +340,15 @@ async def test_stream_close_failure_does_not_skip_registry_close(
     assert "Failed to close Answer stream" in caplog.text
 
 
-async def test_research_run_seeds_the_pinned_session_journal() -> None:
+async def test_research_run_seeds_facts_without_duplicating_pinned_history() -> None:
     profile = ModelProfile(context_window_tokens=10_000, supports_tools=True)
     request = AnswerRunInput(
         query="resume",
         workspaces=("default",),
+        history=(
+            {"role": "user", "content": "earlier question"},
+            {"role": "assistant", "content": "earlier answer"},
+        ),
         pinned_models=tuple(
             PinnedModelProfile(
                 role=role,
@@ -359,10 +411,12 @@ async def test_research_run_seeds_the_pinned_session_journal() -> None:
 
     assert result["answer"] == ""
     snapshot = await journal.load(SessionId(request.session_id))
-    assert snapshot.version == 1
+    assert snapshot.version == 2
     kinds = {entry.__class__.__name__ for entry in snapshot.entries}
     assert "ProfileFactEntry" in kinds
-    assert "UserMessageEntry" not in kinds  # no history turns
+    assert "RunSegmentEntry" in kinds
+    assert "UserMessageEntry" not in kinds  # pinned history is a contribution, not journal
+    assert any(getattr(entry, "key", "") == "profile_memory_snapshot" for entry in snapshot.entries)
     orchestrator.answer_stream.assert_awaited_once()
 
 
@@ -388,6 +442,7 @@ async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -
 
     from dlightrag.agent.session.entries import (
         AssistantMessageEntry,
+        RunSegmentEntry,
         UserMessageEntry,
     )
     from dlightrag.agent.session.ids import EntryId, SessionId
@@ -416,7 +471,7 @@ async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -
     prepared = MagicMock(
         tools=[],
         evidence=MagicMock(ledger_state_json=lambda: "{}"),
-        episode=MagicMock(
+        working=MagicMock(
             record=MagicMock(side_effect=lambda exchange: recovered.append("record"))
         ),
     )
@@ -466,4 +521,401 @@ async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -
 
     assert result["answer"] == ""
     assert "recovered" in recovered
+    resumed = await journal.load(session_id)
+    segment = next(entry for entry in resumed.entries if isinstance(entry, RunSegmentEntry))
+    assert segment.kind == "resume"
+    assert segment.parent_head_id is not None
     orchestrator.answer_stream.assert_awaited_once()
+
+
+async def test_journal_boundaries_apply_ordered_agent_controls() -> None:
+    from dlightrag.agent.session.ids import SessionId
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
+
+    journal = InMemoryAgentSessionStore()
+    session_id = SessionId.new()
+    controls = (
+        {"control_sequence": 1, "kind": "steer", "content": "first"},
+        {"control_sequence": 2, "kind": "follow_up", "content": "second"},
+    )
+    reader = AsyncMock(side_effect=[controls, ()])
+    acknowledge = AsyncMock(return_value=True)
+    boundaries = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+        control_reader=reader,
+        control_ack=acknowledge,
+    )
+
+    assert await boundaries.apply_controls() is True
+    assert await boundaries.apply_controls() is False
+    snapshot = await journal.load(session_id)
+    injections = [entry for entry in snapshot.entries if isinstance(entry, ContextInjectionEntry)]
+    assert [entry.content for entry in injections] == ["first", "second"]
+    assert [entry.label for entry in injections] == [
+        "control:steer:1",
+        "control:follow_up:2",
+    ]
+    acknowledge.assert_awaited_once_with((1, 2))
+
+
+def test_fetched_resource_batches_are_atomic_and_session_scoped() -> None:
+    from dlightrag.agent.session.effects import EffectIntent
+    from dlightrag.agent.session.ids import IntentId, SessionId
+    from dlightrag.agent.tools.context import (
+        bind_tool_call,
+        bind_tool_execution_scope,
+        reset_tool_call,
+        reset_tool_execution_scope,
+    )
+    from dlightrag.answer.resources.registry import FetchedResourceBytes
+    from dlightrag.runtime.settlements import EvidenceSettlementUpdate
+
+    buffer = FetchedResourceBuffer()
+    parent = SessionId.new()
+    child = SessionId.new()
+
+    def append(scope: SessionId, resource_id: str) -> None:
+        scope_token = bind_tool_execution_scope(scope.value)
+        call_token = bind_tool_call("call-1", "read")
+        try:
+            buffer.append(
+                FetchedResourceBytes(
+                    resource_id=resource_id,
+                    ordinal=0,
+                    filename=f"{resource_id}.txt",
+                    mime_type="text/plain",
+                    url=f"https://example.com/{resource_id}",
+                    content=resource_id.encode(),
+                )
+            )
+        finally:
+            reset_tool_call(call_token)
+            reset_tool_execution_scope(scope_token)
+
+    append(parent, "parent-a")
+    append(parent, "parent-b")
+    append(child, "child-a")
+    intent = EffectIntent(
+        intent_id=IntentId.new(),
+        tool_name="read",
+        replay_policy="safe",
+        contract_version=1,
+        input_schema_digest="a" * 64,
+        canonical_input="{}",
+        source_call_id="call-1",
+    )
+    boundaries = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=MagicMock(),  # type: ignore[arg-type]
+        session_id=parent,
+        tools_by_name={},
+        ledger_state=lambda: '{"chunks": []}',
+        fetched_buffer=buffer,
+        run_id="run-1",
+    )
+
+    update = boundaries._host_update(intent)
+
+    assert isinstance(update, EvidenceSettlementUpdate)
+    assert len(update.evidence) == 1
+    assert [item.resource.resource_id for item in update.fetched] == [
+        "parent-a",
+        "parent-b",
+    ]
+    assert [item.resource_id for item in buffer.drain(scope=child.value, call_id="call-1")] == [
+        "child-a"
+    ]
+
+
+async def test_non_last_spawn_settlement_carries_adopted_evidence() -> None:
+    from dlightrag.agent.session.effects import EffectIntent
+    from dlightrag.agent.session.ids import IntentId, SessionId
+    from dlightrag.agent.session.store import EffectCommit
+    from dlightrag.agent.tools import ToolExecution, ToolResult
+    from dlightrag.agent.tools.contracts import ToolObservation
+    from dlightrag.ai.messages import ToolCall
+    from dlightrag.runtime.settlements import EvidenceSettlementUpdate
+
+    session_id = SessionId.new()
+    intent = EffectIntent(
+        intent_id=IntentId.new(),
+        tool_name="spawn_agent",
+        replay_policy="safe",
+        contract_version=1,
+        input_schema_digest="a" * 64,
+        canonical_input="{}",
+        source_call_id="spawn-call",
+    )
+    journal = AsyncMock()
+    journal.settle_effect.return_value = EffectCommit(
+        version=1,
+        appended_sequences=(1,),
+        intent_id=intent.intent_id,
+        outcome="succeeded",
+    )
+    boundaries = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,
+        session_id=session_id,
+        tools_by_name={},
+        ledger_state=lambda: '{"chunks": [{"child_session_id": "child-1"}]}',
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+    )
+    execution = ToolExecution(
+        call=ToolCall(id="spawn-call", name="spawn_agent", arguments={}),
+        result=ToolResult(content="child complete"),
+        observation=ToolObservation(
+            tool="spawn_agent",
+            call_id="spawn-call",
+            outcome="ok",
+            duration_ms=1,
+            cached=False,
+            is_error=False,
+            content_chars=14,
+        ),
+    )
+
+    await boundaries.settle_intent(intent, execution, turn_number=1, is_last=False)
+
+    settlement = journal.settle_effect.await_args.kwargs["settlement"]
+    assert isinstance(settlement.host_update, EvidenceSettlementUpdate)
+    assert len(settlement.host_update.evidence) == 1
+    assert b"child-1" in settlement.host_update.evidence[0].content
+
+
+async def test_durable_tool_error_folds_as_error_after_settlement() -> None:
+    from dlightrag.agent.session.effects import EffectIntent
+    from dlightrag.agent.session.fold import fold_entries
+    from dlightrag.agent.session.ids import IntentId, SessionId
+    from dlightrag.agent.tools import (
+        PreparedToolTurn,
+        ToolExecution,
+        ToolPreflight,
+        ToolResult,
+    )
+    from dlightrag.agent.tools.contracts import ToolObservation
+    from dlightrag.ai.messages import AssistantTurn, ToolCall
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
+
+    journal = InMemoryAgentSessionStore()
+    session_id = SessionId.new()
+    call = ToolCall(id="call-error", name="broken", arguments={})
+    intent = EffectIntent(
+        intent_id=IntentId.new(),
+        tool_name="broken",
+        replay_policy="safe",
+        contract_version=1,
+        input_schema_digest="a" * 64,
+        canonical_input="{}",
+        source_call_id=call.id,
+    )
+    boundaries = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+    )
+    prepared = PreparedToolTurn(
+        assistant=AssistantTurn(text="", tool_calls=(call,), stop_reason="tool_use"),
+        preflight=ToolPreflight(intents=(intent,), validation_results=()),
+        transcript=[],
+    )
+    await boundaries.commit_intents(prepared)
+    execution = ToolExecution(
+        call=call,
+        result=ToolResult(content="Tool failed"),
+        observation=ToolObservation(
+            tool="broken",
+            call_id=call.id,
+            outcome="failed",
+            duration_ms=1,
+            cached=False,
+            is_error=True,
+            content_chars=11,
+        ),
+        is_error=True,
+    )
+
+    await boundaries.settle_intent(intent, execution, turn_number=1, is_last=True)
+
+    messages = fold_entries((await journal.load(session_id)).entries)
+    assert messages[-1]["is_error"] is True
+
+
+async def test_safe_effect_recovery_fits_oversized_observation() -> None:
+    from pydantic import BaseModel
+
+    from dlightrag.agent.session.effects import EffectIntent
+    from dlightrag.agent.session.entries import EffectResultEntry
+    from dlightrag.agent.session.ids import IntentId, SessionId
+    from dlightrag.agent.tools import AgentTool, PreparedToolTurn, ToolPreflight, ToolResult
+    from dlightrag.ai.capacity import CONTEXT_POLICY
+    from dlightrag.ai.messages import AssistantTurn, ToolCall
+    from dlightrag.ai.tokens import estimate_tokens
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
+
+    class EmptyArgs(BaseModel):
+        pass
+
+    payload = "x" * 200_000
+
+    async def execute(_args: BaseModel) -> ToolResult:
+        return ToolResult(content=payload)
+
+    tool = AgentTool("large", "Large safe result.", EmptyArgs, execute)
+    journal = InMemoryAgentSessionStore()
+    session_id = SessionId.new()
+    call = ToolCall(id="call-large", name=tool.name, arguments={})
+    intent = EffectIntent(
+        intent_id=IntentId.new(),
+        tool_name=tool.name,
+        replay_policy=tool.replay_policy,
+        contract_version=tool.contract_version,
+        input_schema_digest=tool.input_schema_digest,
+        canonical_input="{}",
+        source_call_id=call.id,
+    )
+    initial = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+    )
+    await initial.commit_intents(
+        PreparedToolTurn(
+            assistant=AssistantTurn(text="", tool_calls=(call,), stop_reason="tool_use"),
+            preflight=ToolPreflight(intents=(intent,), validation_results=()),
+            transcript=[],
+        )
+    )
+    snapshot = await journal.load(session_id)
+    recovered = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={tool.name: tool},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+        initial_version=snapshot.version,
+        last_sequence=snapshot.entries[-1].sequence,
+        entries=snapshot.entries,
+        active_projection=snapshot.active_projection,
+    )
+
+    await recovered.recover_pending_intents(snapshot)
+
+    result = next(
+        entry
+        for entry in (await journal.load(session_id)).entries
+        if isinstance(entry, EffectResultEntry)
+    )
+    assert len(result.result.content) < len(payload)
+    assert estimate_tokens(result.result.content) <= CONTEXT_POLICY.observation_reserve_tokens
+
+
+async def test_durable_child_usage_aggregates_roster_rows() -> None:
+    from dlightrag.answer.executor import _durable_child_usage
+
+    store = MagicMock()
+    store.list_child_sessions = AsyncMock(
+        return_value=(
+            {"usage": {"input_tokens": 3, "output_tokens": 2}},
+            {"usage": {"input_tokens": 5, "output_tokens": 1}},
+            {"usage": None},
+        )
+    )
+
+    assert await _durable_child_usage(store, owner_id="owner", run_id="run-1") == {
+        "input_tokens": 8,
+        "output_tokens": 3,
+    }
+
+
+async def test_profile_memory_recall_snapshot_is_replay_stable() -> None:
+    from dlightrag.agent.session.ids import SessionId
+    from dlightrag.answer.executor import _resolve_profile_memory_snapshot
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
+
+    journal = InMemoryAgentSessionStore()
+    session_id = SessionId.new()
+    memory = AsyncMock()
+    memory.recall.return_value = MagicMock(records=(), content_chars=0)
+    snapshot = await journal.load(session_id)
+
+    first = await _resolve_profile_memory_snapshot(
+        memory=memory,
+        journal=journal,  # type: ignore[arg-type]
+        snapshot=snapshot,
+        session_id=session_id,
+        owner_id="owner",
+        query="question",
+    )
+    second = await _resolve_profile_memory_snapshot(
+        memory=memory,
+        journal=journal,  # type: ignore[arg-type]
+        snapshot=first[3],
+        session_id=session_id,
+        owner_id="owner",
+        query="different replay query",
+    )
+
+    assert first[:3] == second[:3]
+    memory.recall.assert_awaited_once()
+
+
+async def test_control_replay_deduplicates_after_append_before_ack() -> None:
+    from dlightrag.agent.session.ids import SessionId
+    from dlightrag.runtime import LeaseLostError
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
+
+    journal = InMemoryAgentSessionStore()
+    session_id = SessionId.new()
+    control = ({"control_sequence": 7, "kind": "steer", "content": "stable"},)
+    first = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+        control_reader=AsyncMock(return_value=control),
+        control_ack=AsyncMock(return_value=False),
+    )
+    with pytest.raises(LeaseLostError):
+        await first.apply_controls()
+    snapshot = await journal.load(session_id)
+    replay_ack = AsyncMock(return_value=True)
+    replay = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+        initial_version=snapshot.version,
+        last_sequence=snapshot.entries[-1].sequence,
+        entries=snapshot.entries,
+        active_projection=snapshot.active_projection,
+        control_reader=AsyncMock(return_value=control),
+        control_ack=replay_ack,
+    )
+
+    assert await replay.apply_controls() is False
+    assert len((await journal.load(session_id)).entries) == 1
+    replay_ack.assert_awaited_once_with((7,))

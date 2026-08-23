@@ -20,12 +20,12 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from dlightrag_memory import (
-    MEMORY_BODY_LIMIT,
     Memory,
     MemoryProvenance,
     MemoryWriteRejectedError,
     __version__,
 )
+from dlightrag_memory.policy import MEMORY_BODY_LIMIT
 from dlightrag_memory.postgres import PostgresMemoryStore
 
 SERVER_NAME = "dlightrag-memory"
@@ -55,6 +55,7 @@ async def _remember(
     body: str,
     confidence: float,
     supersedes_id: str | None,
+    idempotency_key: str,
 ) -> dict[str, Any]:
     record = await memory.remember(
         owner_id=subject,
@@ -65,6 +66,7 @@ async def _remember(
             run_id=f"{_MCP_PROVENANCE_PREFIX}:{subject}", session_id=_MCP_PROVENANCE_PREFIX
         ),
         supersedes_id=supersedes_id,
+        proposal_id=f"mcp:{subject}:{idempotency_key}",
     )
     if record is None:  # pragma: no cover - remember always returns the record
         raise RuntimeError("remember returned no record")
@@ -111,6 +113,14 @@ def build_memory_server(memory: Memory, *, subject: str) -> MCPServer:
         supersedes_id: Annotated[
             str | None, Field(default=None, description="Memory id this replaces.")
         ],
+        idempotency_key: Annotated[
+            str,
+            Field(
+                min_length=1,
+                max_length=255,
+                description="Stable mutation key reused verbatim when retrying this write.",
+            ),
+        ],
     ) -> dict[str, Any]:
         try:
             return await _remember(
@@ -120,21 +130,22 @@ def build_memory_server(memory: Memory, *, subject: str) -> MCPServer:
                 body=body,
                 confidence=confidence,
                 supersedes_id=supersedes_id,
+                idempotency_key=idempotency_key,
             )
         except MemoryWriteRejectedError as exc:
             raise ValueError(exc.public_message) from exc
 
     @server.tool(
         name="memory_forget",
-        description="Permanently delete one remembered preference or fact.",
+        description="Idempotently tombstone one remembered preference or fact.",
     )
     async def memory_forget(
         memory_id: Annotated[
-            str | None, Field(default=None, description="Id of the memory to delete.")
+            str | None, Field(default=None, description="Id of the memory to forget.")
         ],
         body: Annotated[
             str | None,
-            Field(default=None, description="Exact body to delete if id is unknown."),
+            Field(default=None, description="Exact body to forget if id is unknown."),
         ],
     ) -> str:
         try:

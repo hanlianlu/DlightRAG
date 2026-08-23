@@ -6,7 +6,9 @@ rendered answer, its images, and its sources are derived from the run's
 canonical result when the terminal event is projected for this reader.
 """
 
-from typing import Literal
+from typing import Any, Literal
+
+from pydantic import Field
 
 from dlightrag.answer.client_contracts import ClientContractModel
 from dlightrag.runtime import AnswerRunPhase
@@ -20,6 +22,8 @@ class AnswerProgressEvent(ClientContractModel):
 class AnswerDoneEvent(ClientContractModel):
     status: Literal["succeeded", "cancelled"]
     presentation: AnswerPresentation | None = None
+    usage: dict[str, Any] = Field(default_factory=dict)
+    evidence: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerErrorEvent(ClientContractModel):

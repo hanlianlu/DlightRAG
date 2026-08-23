@@ -11,14 +11,20 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from dlightrag_memory.fusion import rrf_fuse
-from dlightrag_memory.models import MemoryProvenance, MemoryRecord, MemoryWrite
+from dlightrag_memory.models import (
+    MemoryProposal,
+    MemoryProvenance,
+    MemoryRecord,
+    MemoryWrite,
+)
 from dlightrag_memory.policy import RECALL_CHAR_BUDGET, RECALL_TOP_K
 from dlightrag_memory.ports import SearchCandidate
 from dlightrag_memory.recall import recall_recency
-from dlightrag_memory.store import MemoryStore, commit_memory_write
+from dlightrag_memory.store import MemoryStore, commit_memory_proposal
 
 _MANAGEMENT_PROVENANCE = MemoryProvenance(run_id="management", session_id="management")
 _SEARCH_DEADLINE_SECONDS = 2.0
@@ -52,6 +58,40 @@ class Memory:
     def __init__(self, store: MemoryStore) -> None:
         self._store = store
 
+    def propose_remember(
+        self,
+        *,
+        owner_id: str,
+        kind: str,
+        body: str,
+        confidence: float,
+        provenance: MemoryProvenance,
+        supersedes_id: str | None = None,
+        proposal_id: str | None = None,
+    ) -> MemoryProposal:
+        """Validate and return a mutation-free formation proposal."""
+        from dlightrag_memory.policy import evaluate_memory_write
+
+        write = MemoryWrite(
+            owner_id=owner_id,
+            kind=kind,  # type: ignore[arg-type]
+            body=body,
+            confidence=confidence,
+            provenance=provenance,
+            action="remember",
+            supersedes_id=supersedes_id,
+        )
+        evaluate_memory_write(write)
+        return MemoryProposal(
+            proposal_id=(proposal_id or str(uuid4())),
+            write=write,
+            proposed_at=datetime.now(UTC),
+        )
+
+    async def commit(self, proposal: MemoryProposal) -> MemoryRecord | None:
+        """Commit one proposal idempotently by its stable proposal id."""
+        return await commit_memory_proposal(self._store, proposal)
+
     async def remember(
         self,
         *,
@@ -61,19 +101,19 @@ class Memory:
         confidence: float,
         provenance: MemoryProvenance,
         supersedes_id: str | None = None,
+        proposal_id: str | None = None,
     ) -> MemoryRecord | None:
-        """Store one preference or fact, optionally superseding an older record."""
-        return await commit_memory_write(
-            self._store,
-            MemoryWrite(
+        """Form then commit one preference or fact."""
+        return await self.commit(
+            self.propose_remember(
                 owner_id=owner_id,
-                kind=kind,  # type: ignore[arg-type]
+                kind=kind,
                 body=body,
                 confidence=confidence,
                 provenance=provenance,
-                action="remember",
                 supersedes_id=supersedes_id,
-            ),
+                proposal_id=proposal_id,
+            )
         )
 
     async def forget(
@@ -85,7 +125,7 @@ class Memory:
         all: bool = False,
         provenance: MemoryProvenance | None = None,
     ) -> None:
-        """Hard-delete one record by id, every record with an exact body, or all.
+        """Idempotently tombstone one record, an exact body, or all records.
 
         The three selectors are mutually exclusive: one of ``memory_id``,
         ``body``, or ``all`` must be given.
@@ -96,16 +136,21 @@ class Memory:
         if all:
             await self._store.forget_all(owner_id=owner_id)
             return
-        await commit_memory_write(
+        now = datetime.now(UTC)
+        await commit_memory_proposal(
             self._store,
-            MemoryWrite(
-                owner_id=owner_id,
-                kind="preference",
-                body=body or "",
-                confidence=1.0,
-                provenance=provenance or _MANAGEMENT_PROVENANCE,
-                action="forget",
-                supersedes_id=memory_id,
+            MemoryProposal(
+                proposal_id=f"forget:{owner_id}:{memory_id or body}",
+                write=MemoryWrite(
+                    owner_id=owner_id,
+                    kind="preference",
+                    body=body or "",
+                    confidence=1.0,
+                    provenance=provenance or _MANAGEMENT_PROVENANCE,
+                    action="forget",
+                    supersedes_id=memory_id,
+                ),
+                proposed_at=now,
             ),
         )
 
@@ -145,7 +190,15 @@ class Memory:
                 timeout=_SEARCH_DEADLINE_SECONDS,
             )
         except TimeoutError:
-            return RecallResult(records=(), strategy="query_search", degraded=("search_timeout",))
+            recent = list(await self._store.list_active(owner_id=owner_id))[:cap]
+            recent = _truncate_to_budget(recent, budget=budget)
+            recent.sort(key=lambda record: (recall_recency(record), record.memory_id))
+            return RecallResult(
+                records=tuple(recent),
+                strategy="recent_fallback",
+                degraded=("search_timeout",),
+                content_chars=sum(len(record.body) for record in recent),
+            )
 
         # Per-leg ordered rankings of memory ids (candidates arrive in rank
         # order; each ranking is unique per id so RRF never double-counts).

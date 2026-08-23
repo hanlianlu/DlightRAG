@@ -340,13 +340,16 @@ class CompactionCoordinator:
         summary = _with_framework_fields(parsed, paths=paths, durable_handles=handles)
         summary_json = summary.canonical_json()
 
-        anchors = tuple(
-            anchor for anchor in previous.token_anchors if anchor.through_sequence >= first_retained
-        )
+        # Replacing the active summary changes every provider input represented
+        # by the prior measured anchors. They cannot remain live after this
+        # projection even when their sequence lies in the retained suffix.
+        anchors: tuple[Any, ...] = ()
         accounted_after = self._estimate_retained(entries, first_retained, summary_json)
-        # The previous CompactionEntry (sequence == previous.first_retained) is
-        # still in the retained set and its fold already renders the old summary.
-        estimated_before = self._estimate_retained(entries, previous.first_retained_sequence, None)
+        estimated_before = self._estimate_retained(
+            entries,
+            previous.first_retained_sequence,
+            previous.summary,
+        )
         candidate = ContextProjection(
             projection_id=ProjectionId.new(),
             first_retained_sequence=first_retained,
@@ -405,10 +408,16 @@ class CompactionCoordinator:
                 ),
             },
         ]
-        # One single-attempt, thinking-off call capped at the profile output.
+        # One single-attempt, thinking-off call bounded by the same physical
+        # input/output policy as every other provider call.
+        input_tokens = estimate_messages_tokens(messages)
+        max_tokens = self._context_policy.output_allowance(
+            self._model_profile,
+            input_tokens=input_tokens,
+        )
         kwargs: dict[str, Any] = {}
-        if self._model_profile.max_output_tokens is not None:
-            kwargs["max_tokens"] = self._model_profile.max_output_tokens
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         stream = self._stream_model(messages=messages, model_kwargs=kwargs, thinking="off")  # type: ignore[call-arg]
         chunks: list[str] = []
         async for chunk in stream:

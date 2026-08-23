@@ -235,13 +235,19 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "get_ingest_job",
         "ingest",
         "forget_memory",
+        "follow_up_answer_run",
+        "fork_answer_run",
+        "get_answer_transcript",
         "list_answer_artifacts",
+        "list_answer_children",
         "list_answer_runs",
         "list_memories",
         "list_files",
         "list_workspaces",
         "read_answer_artifact",
+        "resume_answer_run",
         "retrieve",
+        "steer_answer_run",
     }
     answer_tool = next(tool for tool in tools if tool.name == "answer")
     answer_props = answer_tool.input_schema["properties"]
@@ -724,6 +730,8 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
         "run_id": _RUN_ID,
         "status": "queued",
         "cancel_requested": False,
+        "parent_run_id": None,
+        "continuation_kind": None,
         "created_at": _CREATED_AT.isoformat(),
     }
     # The tool call never holds the run open, so no answer text is returned here.

@@ -6,12 +6,11 @@ only fragment shared across calls. This facade exports the complete prompts.
 """
 
 from .agent import CONTROL_TURN_INSTRUCTION, agent_control_prompt
-from .answer import FINAL_TURN_INSTRUCTION, answer_core
+from .answer import answer_core
 from .highlight import HIGHLIGHT_BATCH_USER_PROMPT, HIGHLIGHT_SYSTEM_PROMPT
 
 __all__ = [
     "CONTROL_TURN_INSTRUCTION",
-    "FINAL_TURN_INSTRUCTION",
     "HIGHLIGHT_BATCH_USER_PROMPT",
     "HIGHLIGHT_SYSTEM_PROMPT",
     "agent_control_prompt",

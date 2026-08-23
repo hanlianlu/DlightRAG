@@ -18,14 +18,13 @@ search and every `top_k`/`chunk_top_k`/`direct_visual`/KG/BM25/RRF/rerank contro
 Fast and Research are resolved from that selector and the Valid Mode Set;
 configuring Web Search does not by itself force Research.
 
-REST, MCP, and Python answer/retrieve calls remain stateless: each call owns
-only its current query, attachments (answers) or images (retrieve), search scope,
-and any optional caller-supplied `history` of prior turns that answer calls fold
-into planning and generation. DlightRAG persists none of it. The Web-only
-conversation lifecycle is a principal-scoped adapter around the same answer
-pipeline. It loads server-owned text history, persists complete successful turns
-and their raw answer attachments, and applies 30-day inactivity retention without
-changing retrieval or ingest storage.
+REST, MCP, and Python answer/retrieve calls require no client-managed conversation ID.
+Each accepted Answer run durably pins its query, bounded caller-supplied history,
+resources, search scope, and execution facts so recovery and server-owned
+follow-up/fork remain equivalent. The Web conversation lifecycle is a
+principal-scoped adapter around the same Answer pipeline. It loads server-owned
+text history and run-owned attachments; its 100-turn snapshot is a read window,
+while run retention follows the shared configured floor.
 
 ## Ingestion Shape
 
@@ -281,26 +280,23 @@ unbounded data URIs.
 
 One `AnswerOrchestrator` executes the durable Resolved Mode:
 
-- **Fast Answer** — requested or routed `fast`. DlightRAG runs retrieval planning,
-  knowledge-base retrieval, and one `AnswerSynthesizer` call. There is no Agent
-  Session, no research workspace, and no publication. JWT owners auto-recall a
-  bounded non-citable Memory Record set.
-- **Research** — requested or routed `research`. The Agent Loop selects from the
-  composed peer tools (`search_knowledge_base`, `read`, `inspect`, optional
-  `search_web`, optional `delegate_research`, optional path tools, parent-only
-  `remember` / `forget` / `recall_memory`). Selected tools append to an
-  `EvidenceLedger`. Control turns replay the `SessionEpisode`: the newest
-  exchanges keep provider-native reasoning; older exchanges keep the call and
-  result. Acceptance stores one `PriorTurns` projection by value; workers never
-  trim it independently. Evidence-producing Web URLs become opaque request-local
-  resource ids for a later `read`. A turn with no tool calls ends research. The
-  last silent turn is the answer; optional `artifacts/report.md` publishes as a
-  handle-only Primary Report.
+- **Fast Answer** — requested or routed `fast`. Planning, KB retrieval, and one
+  lightweight model invocation use shared Context Contribution, Evidence,
+  citation, Profile Memory, model-call, and usage infrastructure. Fast creates
+  no Agent Session, workspace, tools, or publication.
+- **Research** — requested or routed `research`. The product-neutral AgentLoop
+  projects the canonical linear journal as a parent-linked selected-head view and selects from the
+  run-local ToolRegistry: KB/resource/Web tools, optional path tools, parent
+  Profile Memory tools, progressive `load_skill`, outbound MCP tools, and
+  `spawn_agent` plus child status/wait/cancel. Foreground children may run in
+  parallel with selected context/model/inherited tools; adopted Evidence is
+  parent-citable and persists before spawn settlement. A no-tool assistant turn
+  ends Research and its text is the answer. There is no hidden finalizer model
+  call. Optional `artifacts/report.md` publishes as a handle-only report.
 
-Both paths converge on the same `AnswerSynthesizer` generation and deterministic
-finalization, so citation validation, `sources`, `answer_images`, and
-`answer_blocks` are identical across paths. Resource reads are deterministic
-first: `read` decodes UTF-8/CSV
+Both paths use deterministic citation/source finalization and expose the same
+result shape, including `sources`, `answer_images`, `usage`, and Evidence counts.
+Resource reads are deterministic first: `read` decodes UTF-8/CSV
 directly and converts HTML/PDF/DOCX/PPTX/XLSX through selected MarkItDown
 converters (plugins disabled, no network, OOXML zip-bomb preflight).
 `inspect` performs focused VLM inspection through the VLM role (or the
@@ -309,17 +305,14 @@ exact source/page/sheet/cell locator. Full resource bytes never enter model
 context — only bounded text windows, capped tool observations, and budgeted image
 blocks do.
 
-Each model call uses the immutable profile pinned for its normalized endpoint
-and the run's pinned context-policy revision. The hard input limit is the lower
-of a published input limit and 85 percent of the physical context window.
-Evidence, resource reads, and parallel tool observations share the request's
-measured residual capacity. Before parallel tools execute, the exact next-control
-residual is divided by the number of calls. A resource read fits its complete
-model-visible result — locator, text, visual handles, and mandatory continuation
-cursor — inside that per-call share before advancing the cursor. When a model
-publishes an output limit, generation is capped by the smaller of that limit and
-the physical context remaining after input. Unknown endpoint capacity fails
-before the run is accepted.
+Each model call uses the immutable profile pinned for its normalized endpoint.
+The Context Policy reserves output, observations, safety, retained tail,
+episodic continuation, and minimum input directly; a provider input limit is
+respected independently rather than nested under percentages. Evidence,
+resource reads, schemas, history, and parallel observations share the measured
+request residual. Before parallel tools execute, the exact next-control residual
+is divided by call count. Provider output is capped by its own limit and
+physical remaining context. Unknown endpoint capacity fails before acceptance.
 
 ## Answer Generation
 
@@ -533,6 +526,6 @@ table. There is no parsed-chunk table and no vector cache. Historical attachment
 are re-registered as lazy request-local resources on every follow-up, newest
 first up to the available attachment-count limit. An attachment-bearing
 conversation therefore remains on the research path. Browser thumbnails are
-derived on demand from the stored bytes. Manual delete, TTL pruning, and 30-day
-run retention delete the linked runs and release blobs no surviving run
-references; nothing crosses a conversation or principal boundary.
+derived on demand. Manual delete and the shared run-retention floor delete
+linked runs and release blobs no surviving run references; nothing crosses a
+conversation or principal boundary.

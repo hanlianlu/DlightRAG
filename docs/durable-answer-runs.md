@@ -24,17 +24,18 @@ persists from Runtime. No `dlightrag.storage` compatibility package exists.
   final result.
 - Durability does not change retrieval, citation, workspace, or round-robin
   semantics.
-- Durability adds no orchestration framework and reuses the ingest-job lease,
-  recovery, sweep, and prune mechanics. DlightRAG keeps its custom agent loop,
-  `EvidenceLedger`, `SessionEpisode`, and tools-disabled final synthesis.
+- Durability adds no workflow framework. Research hosts the product-neutral
+  event-driven AgentLoop over a typed linear journal with a parent-linked projection, while Fast uses
+  deterministic stages without fabricating an Agent Session.
 
 ## Non-Goals
 
 - Exactly-once execution for an in-progress read-only tool batch.
 - Exactly-once token generation across a process crash.
-- LangGraph, LangChain, or pi runtime adoption.
-- Human-in-the-loop, steering queues, sub-agents, or a global tool registry.
-- An object-storage shim for LightRAG parser sidecars.
+- LangGraph, LangChain, or Pi runtime adoption.
+- Detached/background agents, workflows, missions, councils, worktrees, tool
+  approvals, or a permission platform.
+- A bundled sandbox backend, MCP registry/OAuth platform, or object-storage shim.
 
 ## Query-Time Core
 
@@ -180,13 +181,17 @@ for validation, authorization, or persistence errors, but execution-slot
 exhaustion is not one of them. No queue timeout, queue-depth, retry, or
 sweep-interval setting exists.
 
-`GET /answer/{run_id}` returns:
+`GET /answer/{run_id}` returns lifecycle status, cancellation, phase, durable
+progress, continuation lineage, terminal error, and the final payload. The
+payload includes canonical answer material plus transport-neutral usage and
+Evidence counts. Additional owner-scoped operations are:
 
-- `queued`, `running`, `succeeded`, `failed`, or `cancelled`;
-- whether cancellation has been requested for a running run;
-- current phase and durable progress version;
-- the final answer payload for `succeeded`;
-- one public error kind and message for terminal failures.
+- `POST /answer/{run_id}/steer` for an ordered live Research instruction;
+- `POST /answer/{run_id}/follow-up` and `/fork` for new lineage-linked runs;
+- `POST /answer/{run_id}/resume` to reattach to current state;
+- `GET /answer/{run_id}/transcript` and `/children` for bounded transcript and
+  foreground child roster; and
+- `DELETE /answer/{run_id}` for explicit cancellation.
 
 `GET /answer/{run_id}/events` is reconnectable SSE. Each durable sequence is the
 SSE `id`. The `Last-Event-ID` header or integer `after` query parameter resumes
@@ -315,20 +320,12 @@ One row owns the run:
 - created, updated, started, and finished timestamps.
 
 Queued and expired-running rows are reclaimable. Active workers renew a lease.
-Terminal rows are retained for 30 days after `finished_at` and then pruned in
-bounded, `SKIP LOCKED` batches. A run referenced by a committed Web turn is
-exempt: its lifetime is owned by the conversation and it is deleted only when
-that conversation is deleted or expires. Pruning checks the turn reference in
-the same transaction.
-
-Event rows have their own retention. All events for any terminal run are
-deleted 30 days after `finished_at`, even when a successful run row remains for
-a Web conversation. The pruning transaction sets `events_trimmed_at` on the run
-after deleting its event rows. The canonical result remains on that run; its
-event endpoint returns 410 only when `events_trimmed_at` is set. Before trimming,
-a cursor equal to or greater than the terminal event sequence opens and closes
-immediately with no replay rather than returning 410. This prevents token and
-derived-final payloads from becoming a second conversation-lifetime copy.
+Terminal rows and event logs follow the single
+`answer.runtime.answer_run_retention_days` floor (default 365) from
+`finished_at`, using bounded `SKIP LOCKED` batches. Conversation turns are read
+windows over those runs, not a separate inactivity clock. When a run row still
+exists but its events were trimmed, `events_trimmed_at` makes the event endpoint
+return 410 and the canonical result remains available from status.
 
 `run_id` is a UUIDv7. Run creation takes one optional idempotency key unique per
 owner. REST uses the `Idempotency-Key` header, MCP and Python expose an
@@ -353,10 +350,10 @@ to the public fields it carries the selected history projection, each role's
 endpoint fingerprint and effective `ModelProfile`, context-policy and catalog
 revisions, and accepted image descriptions. Workers use those pinned profile
 values for request arithmetic and never substitute current catalog facts.
-All workers must still run a compatible software revision and the same model
-endpoint configuration because provider credentials remain deployment state.
-Startup aborts while an active run pins another endpoint or context-policy
-revision; operators drain or owner-cancel those runs before deployment.
+Workers must use the pinned model endpoint facts and compatible session/schema
+contracts; provider credentials remain deployment state. Capacity is recalculated
+from the immutable pinned profile instead of rejecting a run solely because the
+global arithmetic-policy revision changed.
 
 The run row is the sole authority for lifecycle status, phase, durable
 progress, stop reason, cancellation, lease, final result, and terminal error.
@@ -467,9 +464,20 @@ pass may retry a blob that remained because of that race.
 
 ## Journal And Recovery
 
-Research reconstructs model context by folding the append-only Agent Session
-journal. There is no per-turn checkpoint JSON, no restored exact-call cache, and
-no `checkpoint_*` error kinds.
+Research reconstructs model context by folding the canonical append-only typed
+journal through its parent-linked linear view. The durable selected head is the
+latest committed entry; alternate Session heads are not persisted in 3.0. Each
+start/resume Run Segment records its parent head. Model context is a projection,
+never a second authority. Historical compaction entries remain
+audit facts; exactly one active summary is rendered before the retained suffix.
+There is no legacy session-schema reader.
+
+Steer controls enter an ordered run inbox. Before the next provider call the
+worker appends each instruction as a typed Context Injection, then acknowledges
+the sequence. Recovery deduplicates an append-before-ack crash by sequence.
+
+There is no per-turn checkpoint JSON, restored exact-call cache, or
+`checkpoint_*` error kind.
 
 Image blocks stay as Resource Handle and corpus sidecar identities, never data
 URIs. Claim-time rehydration restores those blocks before the first model call.
@@ -482,10 +490,11 @@ entries, replays unsettled `safe` intents only when the tool contract still
 matches, and settles interrupted `never` intents without executing them.
 Changed tool contracts settle `tool_contract_changed`.
 
-Fast has no Agent Session. Unfinished Fast stages re-execute from immutable
-Prepared Input. Interrupted generation appends `reset` and regenerates from
-pinned input and restored evidence. Subscribers clear the partial draft after
-`reset`. DlightRAG does not claim exactly-once token generation.
+Fast has no Agent Session. It shares the same model-call wrapper, Context
+Contribution projection, Evidence identity/citation ledger, Profile Memory
+placement, and usage/result projection as Research. Unfinished Fast stages
+re-execute from immutable Prepared Input. Interrupted generation appends
+`reset`; DlightRAG does not claim exactly-once token generation.
 
 If the process dies during a read-only tool batch, that batch may run again.
 
@@ -509,18 +518,15 @@ Conversation reads return every linked turn in conversation order. Queued and
 running turns are pending entries carrying `answer_run_id`, status, and
 cancellation-request state, which lets a reloaded browser resubscribe without
 remembering the original 202 response. Failed and cancelled turns remain
-visible with their public terminal error or status until their normal 30-day
-run pruning; they are not fed back to the model as conversation history.
+visible until their run reaches the configured retention floor; they are never
+fed back to the model as conversation history.
 
-The conversation-turn reference to a run uses `ON DELETE CASCADE`. Pruning a
-failed or cancelled run therefore deletes its visible terminal turn in the same
-transaction; no dangling history entry remains after day 30.
-
-A linked turn becomes committed conversation history only when its run is
-`succeeded`. Its user input, answer text, and canonical source snapshot are read
-from the run instead of copied into a second execution record. Only succeeded
-turns are included in model history. A successful linked turn exempts its run
-from 30-day pruning for the conversation's lifetime.
+The conversation-turn reference uses `ON DELETE CASCADE`, so run pruning cannot
+leave a dangling entry. A linked turn becomes model history only when its run
+succeeds; user input, answer, usage, Evidence summary, and source snapshot are
+projected from the run instead of copied into another execution record.
+Follow-up adds a turn to the current conversation. Fork atomically creates a
+new conversation branch whose first run carries parent lineage.
 
 Conversation deletion deletes its linked runs in one transaction; lease-fenced
 workers can no longer append after the run row disappears. Cascades remove

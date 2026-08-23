@@ -95,7 +95,8 @@ import asyncio
 import importlib
 import pkgutil
 import dlightrag_memory
-from dlightrag_memory import InMemoryMemoryStore, Memory, MemoryProvenance
+from dlightrag_memory import Memory, MemoryProvenance
+from dlightrag_memory.store import InMemoryMemoryStore
 
 for module in pkgutil.walk_packages(dlightrag_memory.__path__, prefix='dlightrag_memory.'):
     importlib.import_module(module.name)
@@ -106,19 +107,26 @@ async def main():
         run_id='11111111-1111-1111-1111-111111111111',
         session_id='11111111-1111-1111-1111-111111111111',
     )
-    record = await Memory(store).remember(
+    memory = Memory(store)
+    proposal = memory.propose_remember(
         owner_id='owner-1',
         kind='preference',
         body='Installed memory works.',
         confidence=1.0,
         provenance=provenance,
+        proposal_id='installed-wheel-proposal',
     )
+    record = await memory.commit(proposal)
     assert record is not None and record.status == 'active'
+    assert await memory.commit(proposal) == record
     records = await Memory(store).list_active(owner_id='owner-1')
     assert [item.body for item in records] == ['Installed memory works.']
-    recalled = await Memory(store).recall(owner_id='owner-1', query='memory works')
+    recalled = await memory.recall(owner_id='owner-1', query='memory works')
     assert recalled.records
-    server = dlightrag_memory.mcp_server.build_memory_server(Memory(store), subject='owner-1')
+    await memory.forget(owner_id='owner-1', memory_id=record.memory_id)
+    await memory.forget(owner_id='owner-1', memory_id=record.memory_id)
+    assert await memory.list_active(owner_id='owner-1') == ()
+    server = dlightrag_memory.mcp_server.build_memory_server(memory, subject='owner-1')
     assert {tool.name for tool in await server.list_tools()} == {
         'memory_recall', 'memory_remember', 'memory_forget'
     }
@@ -819,6 +827,7 @@ def _smoke_root_interfaces() -> None:
     import dlightrag
     from dlightrag import Application
     from dlightrag.access import DEPLOYMENT_OWNER_ID
+    from dlightrag.agent import AgentLoop, ContextContribution, ToolRegistry
     from dlightrag.ai.settings import ModelsSettings
     from dlightrag.ai.telemetry import NoopTelemetry
     from dlightrag.config import AnswerSectionSettings, DlightragConfig, RuntimeConfig
@@ -977,6 +986,28 @@ def _smoke_root_interfaces() -> None:
         raise ValueError("installed Access package did not expose a SHA-256 owner id")
     if AnswerRunClient.__module__ != "dlightrag.sdk.client":
         raise ValueError("installed SDK did not expose the durable Answer client")
+    if not all(
+        hasattr(AnswerRunClient, name)
+        for name in (
+            "create",
+            "status",
+            "steer",
+            "follow_up",
+            "cancel",
+            "resume",
+            "fork",
+            "children",
+        )
+    ):
+        raise ValueError("installed SDK is missing the Agent 3.0 Answer controls")
+    if AgentLoop.__module__ != "dlightrag.agent.loop":
+        raise ValueError("installed Agent kernel did not expose AgentLoop")
+    ToolRegistry()
+    ContextContribution(
+        source="wheel.smoke",
+        authority="reference",
+        messages=({"role": "user", "content": "installed"},),
+    )
     if dlightrag.DlightragConfig is not DlightragConfig:
         raise ValueError("installed root package did not expose its config owner")
     if dlightrag.Application is not Application:
@@ -1232,6 +1263,13 @@ def main() -> int:
         print(f"workspace wheel verification failed: {exc}", file=sys.stderr)
         return 1
     print("workspace wheel verification passed")
+    if args.installed:
+        # This is a disposable isolated smoke process. Some optional native
+        # dependencies race during interpreter teardown on macOS and can turn
+        # an already-passed verification into a spurious libc++ abort.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
     return 0
 
 

@@ -18,10 +18,11 @@ from dlightrag.agent.session.entries import (
     UserMessageEntry,
 )
 from dlightrag.agent.session.fold import (
-    SessionEpisode,
+    WorkingContextProjection,
     exchange_starts,
     fold_entries,
     head_tail_text,
+    project_session_messages,
     select_compaction_boundary,
 )
 from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
@@ -143,18 +144,23 @@ def test_error_results_fold_with_is_error() -> None:
     assert message["is_error"] is True
 
 
-def test_compaction_entry_renders_deterministically_at_its_position() -> None:
-    from dlightrag.agent.session.projection import CompactionSummary
+def test_active_compaction_summary_projects_once_before_retained_tail() -> None:
+    from dlightrag.agent.session.projection import CompactionSummary, ContextProjection
 
     session_id = SessionId.new()
     summary = CompactionSummary(goal="answer q", progress="found sources").canonical_json()
     entries = [
         UserMessageEntry(
-            entry_id=EntryId.new(), session_id=session_id, timestamp=_now(), content="q1"
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            sequence=1,
+            timestamp=_now(),
+            content="q1",
         ),
         CompactionEntry(
             entry_id=EntryId.new(),
             session_id=session_id,
+            sequence=2,
             timestamp=_now(),
             projection_id=ProjectionId.new(),
             summary=summary,
@@ -162,13 +168,25 @@ def test_compaction_entry_renders_deterministically_at_its_position() -> None:
             first_retained_sequence=2,
         ),
         UserMessageEntry(
-            entry_id=EntryId.new(), session_id=session_id, timestamp=_now(), content="q2"
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            sequence=3,
+            timestamp=_now(),
+            content="q2",
         ),
     ]
-    messages = fold_entries(entries)
-    assert messages[1]["role"] == "user"
-    assert "answer q" in messages[1]["content"]
-    assert fold_entries(entries) == fold_entries(tuple(entries))
+    projection = ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=2,
+        covered_through_sequence=1,
+        summary=summary,
+    )
+
+    assert [message["content"] for message in fold_entries(entries)] == ["q1", "q2"]
+    messages = project_session_messages(entries, projection)
+    assert "answer q" in messages[0]["content"]
+    assert messages[1]["content"] == "q2"
+    assert sum("answer q" in str(message["content"]) for message in messages) == 1
 
 
 def test_accounting_entries_produce_no_model_messages() -> None:
@@ -249,10 +267,10 @@ def test_head_tail_text_bounds_oversized_bodies() -> None:
     assert head_tail_text(short, head_tokens=20, tail_tokens=20) == short
 
 
-class TestSessionEpisode:
+class TestWorkingContextProjection:
     def test_replays_recent_tail_verbatim_and_trims_older_reasoning(self) -> None:
-        episode = SessionEpisode(retained_tail_tokens=1)
-        episode.record(
+        working = WorkingContextProjection(retained_tail_tokens=1)
+        working.record(
             [
                 {"role": "assistant", "content": "old", "provider_state": {"reason": 1}},
                 {
@@ -262,49 +280,49 @@ class TestSessionEpisode:
                 },
             ]
         )
-        episode.record(
+        working.record(
             [
                 {"role": "assistant", "content": "new", "provider_state": {"reason": 2}},
             ]
         )
-        messages = episode.messages()
+        messages = working.messages()
         assert messages[-1]["content"] == "new"
         assert messages[-1]["provider_state"] == {"reason": 2}
         assert messages[0]["content"] == "old"
         assert "provider_state" not in messages[0]
 
     def test_canonical_round_trip_preserves_exchanges(self) -> None:
-        episode = SessionEpisode(retained_tail_tokens=2000)
-        episode.record([{"role": "assistant", "content": "a"}])
-        state = episode.canonical_json()
+        working = WorkingContextProjection(retained_tail_tokens=2000)
+        working.record([{"role": "assistant", "content": "a"}])
+        state = working.canonical_json()
         state["exchanges"][0][0]["content"] = "mutated"  # callers may adapt copies
-        rebuilt = SessionEpisode.from_canonical_json(state, retained_tail_tokens=2000)
+        rebuilt = WorkingContextProjection.from_canonical_json(state, retained_tail_tokens=2000)
         assert rebuilt.messages()[0]["content"] == "mutated"
 
     def test_rejects_non_sequence_state(self) -> None:
         with pytest.raises(ValueError):
-            SessionEpisode.from_canonical_json(
+            WorkingContextProjection.from_canonical_json(
                 {"exchanges": "not-a-sequence"}, retained_tail_tokens=10
             )
 
 
-class TestSessionEpisodeReplayBudget:
+class TestWorkingContextProjectionReplayBudget:
     def test_a_short_run_replays_every_exchange_in_full(self) -> None:
-        episode = SessionEpisode(retained_tail_tokens=20_000)
-        episode.record(_exchange("first", reasoning="short"))
-        episode.record(_exchange("second", reasoning="short"))
+        working = WorkingContextProjection(retained_tail_tokens=20_000)
+        working.record(_exchange("first", reasoning="short"))
+        working.record(_exchange("second", reasoning="short"))
 
-        assistants = [m for m in episode.messages() if m["role"] == "assistant"]
+        assistants = [m for m in working.messages() if m["role"] == "assistant"]
 
         assert [m["tool_calls"][0]["id"] for m in assistants] == ["first", "second"]
         assert all("provider_state" in m for m in assistants)
 
     def test_exchange_past_budget_keeps_call_without_reasoning(self) -> None:
-        episode = SessionEpisode(retained_tail_tokens=20_000)
-        episode.record(_exchange("first", reasoning="short"))
-        episode.record(_exchange("second", reasoning="n" * 200_000))
+        working = WorkingContextProjection(retained_tail_tokens=20_000)
+        working.record(_exchange("first", reasoning="short"))
+        working.record(_exchange("second", reasoning="n" * 200_000))
 
-        older, newer = (m for m in episode.messages() if m["role"] == "assistant")
+        older, newer = (m for m in working.messages() if m["role"] == "assistant")
 
         assert "provider_state" not in older
         assert "thought_signature" not in older["tool_calls"][0]

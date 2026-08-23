@@ -9,7 +9,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.access import UserContext
@@ -88,6 +88,8 @@ class _RunApplication:
         self.cancellation = CancellationOutcome(outcome="pending", run=_record(status="running"))
         self.closed_subscribers = 0
         self.artifact_bytes: bytes | None = None
+        self.controls: list[str] = []
+        self.continuations: list[dict[str, Any]] = []
 
     async def artifact_size(self, *, owner_id: str, run_id: str, resource_id: str) -> int | None:
         del owner_id, run_id, resource_id
@@ -138,6 +140,37 @@ class _RunApplication:
         return RunCreation(run=record, replayed=self.replayed)
 
     async def get(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
+        del owner_id, run_id
+        return self.record
+
+    async def steer(self, *, owner_id: str, run_id: str, instruction: str) -> Any:
+        del owner_id
+        self.controls.append(instruction)
+        return SimpleNamespace(run_id=run_id, control_sequence=len(self.controls), kind="steer")
+
+    async def follow_up(self, **kwargs: Any) -> RunCreation:
+        self.controls.append(f"follow:{kwargs['query']}")
+        self.continuations.append(dict(kwargs))
+        return RunCreation(run=self.record or _record(), replayed=False)
+
+    async def fork(self, **kwargs: Any) -> RunCreation:
+        self.controls.append(f"fork:{kwargs['query']}")
+        self.continuations.append(dict(kwargs))
+        return RunCreation(run=self.record or _record(), replayed=False)
+
+    async def transcript_tail(self, *, owner_id: str, run_id: str, limit: int) -> Any:
+        del owner_id, limit
+        return SimpleNamespace(
+            run_id=run_id,
+            status=(self.record or _record()).status,
+            messages=({"role": "user", "content": "hi"},),
+        )
+
+    async def children(self, *, owner_id: str, run_id: str) -> tuple[dict[str, Any], ...]:
+        del owner_id, run_id
+        return ({"child_session_id": "child-1", "status": "running"},)
+
+    async def resume(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
         del owner_id, run_id
         return self.record
 
@@ -228,6 +261,8 @@ class TestCreate:
             "status_url": f"/answer/{_RUN_ID}",
             "events_url": f"/answer/{_RUN_ID}/events",
             "cancel_url": f"/answer/{_RUN_ID}",
+            "parent_run_id": None,
+            "continuation_kind": None,
         }
         assert run_application.created[0]["request"].query == "hello"
 
@@ -804,3 +839,48 @@ async def test_unknown_artifact_is_404(
     response = await client.get(f"/answer/{_RUN_ID}/artifacts/missing")
 
     assert response.status_code == 404
+
+
+class TestAgentControls:
+    async def test_rest_projects_shared_agent_controls(
+        self, client: AsyncClient, run_application: _RunApplication
+    ) -> None:
+        steer = await client.post(f"/answer/{_RUN_ID}/steer", json={"content": "focus"})
+        follow = await client.post(f"/answer/{_RUN_ID}/follow-up", json={"content": "next"})
+        fork = await client.post(f"/answer/{_RUN_ID}/fork", json={"content": "branch"})
+        resume = await client.post(f"/answer/{_RUN_ID}/resume")
+        transcript = await client.get(f"/answer/{_RUN_ID}/transcript")
+        children = await client.get(f"/answer/{_RUN_ID}/children")
+
+        assert steer.status_code == 202
+        assert steer.json()["control_sequence"] == 1
+        assert follow.status_code == 202
+        assert fork.status_code == 202
+        assert resume.status_code == 200
+        assert transcript.json()["messages"] == [{"role": "user", "content": "hi"}]
+        assert children.json()["children"][0]["child_session_id"] == "child-1"
+        assert run_application.controls == ["focus", "follow:next", "fork:branch"]
+
+    async def test_continuation_rechecks_current_workspace_authorization(
+        self,
+        client: AsyncClient,
+        run_application: _RunApplication,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.api.routes import answer_runs
+
+        run_application.record = _record(
+            status="succeeded",
+            accepted_input={"query": "q", "workspaces": ["revoked"]},
+        )
+        resolver = AsyncMock(side_effect=HTTPException(status_code=403, detail="forbidden"))
+        monkeypatch.setattr(answer_runs, "resolve_authorized_query_workspaces", resolver)
+
+        response = await client.post(
+            f"/answer/{_RUN_ID}/follow-up",
+            json={"content": "next"},
+        )
+
+        assert response.status_code == 403
+        resolver.assert_awaited_once()
+        assert run_application.continuations == []

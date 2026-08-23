@@ -57,6 +57,14 @@ export interface AnswerPresentation {
   primary_report?: string | null;
 }
 
+export interface AgentChildStatus {
+  child_session_id: string;
+  status: string;
+  objective?: string;
+  model_role?: string;
+  usage?: Record<string, number> | null;
+}
+
 export interface ConversationTurn {
   turn_id: string;
   turn_number: number;
@@ -68,6 +76,8 @@ export interface ConversationTurn {
   assistant_text: string;
   user_attachments: ConversationAttachmentReference[];
   presentation: AnswerPresentation | null;
+  usage: Record<string, unknown>;
+  evidence: Record<string, number>;
   error_kind: string | null;
   error_message: string | null;
   created_at: string;
@@ -83,6 +93,8 @@ export interface AnswerRunDescriptor {
   events_url: string;
   status_url: string;
   cancel_url: string;
+  parent_run_id?: string | null;
+  continuation_kind?: string | null;
   conversation: ConversationSummary;
 }
 
@@ -189,6 +201,64 @@ export async function getAnswerRun(
 }
 
 /** Ask the server to stop a run; disconnecting never does this on its own. */
+export async function steerAnswerRun(
+  runId: string,
+  instruction: string,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const id = encodeURIComponent(runId);
+  const response = await fetch(`/web/api/answer/${id}/steer`, {
+    method: 'POST',
+    headers: csrfHeaders('application/json'),
+    body: JSON.stringify({content: instruction}),
+    signal,
+  });
+  return responseJson<Record<string, unknown>>(response, 'Failed to steer the answer');
+}
+
+export async function getAnswerRunChildren(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<AgentChildStatus[]> {
+  const id = encodeURIComponent(runId);
+  const response = await fetch(`/web/api/answer/${id}/children`, {signal});
+  const payload = await responseJson<{children: AgentChildStatus[]}>(
+    response,
+    'Failed to load child agents',
+  );
+  return payload.children;
+}
+
+export async function continueAnswerRun(
+  runId: string,
+  operation: 'follow-up' | 'fork',
+  content: string,
+  submissionId: string,
+  signal?: AbortSignal,
+): Promise<AnswerRunDescriptor> {
+  const id = encodeURIComponent(runId);
+  const response = await fetch(`/web/api/answer/${id}/${operation}`, {
+    method: 'POST',
+    headers: csrfHeaders('application/json'),
+    body: JSON.stringify({content, submission_id: submissionId}),
+    signal,
+  });
+  return responseJson<AnswerRunDescriptor>(response, `Failed to ${operation} the answer`);
+}
+
+export async function resumeAnswerRun(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<ConversationTurn> {
+  const id = encodeURIComponent(runId);
+  const response = await fetch(`/web/api/answer/${id}/resume`, {
+    method: 'POST',
+    headers: csrfHeaders(),
+    signal,
+  });
+  return responseJson<ConversationTurn>(response, 'Failed to resume the answer');
+}
+
 export async function cancelAnswerRun(
   runId: string,
   signal?: AbortSignal,

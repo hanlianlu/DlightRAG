@@ -6,9 +6,11 @@ from collections.abc import Mapping
 from dataclasses import replace
 from functools import partial
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.access import AccessAction, owner_id_from_user
 from dlightrag.answer.runs.results import project_answer_result, project_report_sources
@@ -41,6 +43,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 page_router = APIRouter()
+
+
+class _WebAgentControl(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class _WebContinuation(_WebAgentControl):
+    submission_id: UUID
 
 
 @page_router.get("/", response_class=FileResponse)
@@ -126,6 +138,123 @@ async def answer_run_status(
     downloadable, visual = await _projection_workspaces(request, turn.run.request_input())
     return project_conversation_turn(
         turn, downloadable_workspaces=downloadable, visual_workspaces=visual
+    )
+
+
+@router.post("/answer/{run_id}/resume", response_model=ConversationTurn)
+async def resume_answer_run(
+    run_id: str,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> ConversationTurn:
+    """Reattach through the same authoritative Web turn projection."""
+    return await answer_run_status(run_id, request, conversation_service)
+
+
+@router.post("/answer/{run_id}/steer", status_code=202)
+async def steer_answer_run(
+    run_id: str,
+    body: _WebAgentControl,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> dict[str, Any]:
+    user = getattr(request.state, "user_context", None)
+    if await conversation_service.turn_for_run(user, run_id) is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    receipt = await get_application(request).answers.steer(
+        owner_id=owner_id_from_user(user), run_id=run_id, instruction=body.content
+    )
+    if receipt is None:
+        raise HTTPException(status_code=409, detail="Run is not a live Research session")
+    return {
+        "run_id": receipt.run_id,
+        "control_sequence": receipt.control_sequence,
+        "kind": receipt.kind,
+    }
+
+
+@router.get("/answer/{run_id}/children")
+async def answer_run_children(
+    run_id: str,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> dict[str, Any]:
+    user = getattr(request.state, "user_context", None)
+    if await conversation_service.turn_for_run(user, run_id) is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    children = await get_application(request).answers.children(
+        owner_id=owner_id_from_user(user), run_id=run_id
+    )
+    if children is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    return {"run_id": run_id, "children": [dict(child) for child in children]}
+
+
+async def _continue_answer_run(
+    *,
+    kind: str,
+    run_id: str,
+    body: _WebContinuation,
+    request: Request,
+    conversation_service: WebConversationService,
+) -> AnswerRunDescriptor:
+    user = getattr(request.state, "user_context", None)
+    parent = await conversation_service.turn_for_run(user, run_id)
+    authorized_workspaces: list[str] | None = None
+    if parent is not None and parent.run.terminal:
+        authorized_workspaces = [
+            str(item) for item in parent.run.request_input().get("workspaces") or ()
+        ]
+        for workspace_id in authorized_workspaces:
+            await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, workspace_id)
+    try:
+        submission = await conversation_service.continue_answer(
+            user,
+            parent_run_id=run_id,
+            submission_id=str(body.submission_id),
+            query=body.content,
+            kind=kind,
+            authorized_workspaces=authorized_workspaces,
+        )
+    except ConversationSubmissionConflict, IdempotencyKeyConflict:
+        raise HTTPException(
+            status_code=409,
+            detail="This submission id was already used for a different continuation",
+        ) from None
+    if submission is None:
+        raise HTTPException(status_code=409, detail="Continuation requires a terminal answer")
+    return answer_run_descriptor(submission)
+
+
+@router.post("/answer/{run_id}/follow-up", status_code=202)
+async def follow_up_answer_run(
+    run_id: str,
+    body: _WebContinuation,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> AnswerRunDescriptor:
+    return await _continue_answer_run(
+        kind="follow_up",
+        run_id=run_id,
+        body=body,
+        request=request,
+        conversation_service=conversation_service,
+    )
+
+
+@router.post("/answer/{run_id}/fork", status_code=202)
+async def fork_answer_run(
+    run_id: str,
+    body: _WebContinuation,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> AnswerRunDescriptor:
+    return await _continue_answer_run(
+        kind="fork",
+        run_id=run_id,
+        body=body,
+        request=request,
+        conversation_service=conversation_service,
     )
 
 
@@ -241,6 +370,7 @@ async def answer_run_events(
 def answer_run_descriptor(submission: WebAnswerSubmission) -> AnswerRunDescriptor:
     """Project the owner-scoped links one accepted submission is followed by."""
     run_id = submission.run.run_id
+    accepted = submission.run.request_input()
     return AnswerRunDescriptor(
         run_id=run_id,
         status=submission.run.status,
@@ -252,6 +382,8 @@ def answer_run_descriptor(submission: WebAnswerSubmission) -> AnswerRunDescripto
         status_url=f"/web/api/answer/{run_id}",
         cancel_url=f"/web/api/answer/{run_id}",
         conversation=submission.conversation,
+        parent_run_id=accepted.get("parent_run_id"),
+        continuation_kind=accepted.get("continuation_kind"),
     )
 
 

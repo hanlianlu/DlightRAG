@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from dlightrag.agent.tools import ToolTurnExecutor
 from dlightrag.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag.ai.settings import ModelSettings
@@ -43,7 +44,31 @@ async def test_ai_tool_model_accepts_settings_and_owns_provider(monkeypatch) -> 
     assert provider.complete_tool_turn.await_args.kwargs["model_kwargs"] == {
         "reasoning": {"enabled": True}
     }
+    assert provider.complete_tool_turn.await_args.kwargs["max_tokens"] is None
     provider.aclose.assert_awaited_once()
+
+
+async def test_tool_turn_executor_uses_the_production_model_output_contract(monkeypatch) -> None:
+    provider = AsyncMock()
+    provider.complete_tool_turn.return_value = AssistantTurn(
+        text="done",
+        tool_calls=(),
+        stop_reason="stop",
+    )
+    monkeypatch.setattr(
+        "dlightrag.ai.tool_model.get_provider",
+        lambda *_args, **_kwargs: provider,
+    )
+    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
+
+    prepared = await ToolTurnExecutor(model).prepare_turn(
+        [{"role": "user", "content": "research"}],
+        [],
+        max_tokens=2_048,
+    )
+
+    assert prepared.assistant.text == "done"
+    assert provider.complete_tool_turn.await_args.kwargs["max_tokens"] == 2_048
 
 
 async def test_tool_model_error_uses_privacy_safe_status(monkeypatch) -> None:
@@ -155,6 +180,7 @@ async def test_query_tool_model_owns_query_role_provider_and_closes_it(monkeypat
         messages=[{"role": "user", "content": "q"}],
         tools=[tool],
         tool_choice="required",
+        max_tokens=4096,
     )
     await model.aclose()
 
@@ -167,6 +193,7 @@ async def test_query_tool_model_owns_query_role_provider_and_closes_it(monkeypat
         tools=[tool],
         tool_choice="required",
         temperature=0.2,
+        max_tokens=4096,
         model_kwargs={"enable_thinking": True},
     )
     assert settings.model_kwargs == {"enable_thinking": False}

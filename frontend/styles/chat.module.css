@@ -76,6 +76,37 @@
   text-underline-offset: 0.15em;
 }
 
+.runActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-tight);
+  margin-top: var(--space-tight);
+}
+
+.runActions:empty {
+  display: none;
+}
+
+.runActions button {
+  background: transparent;
+  border: 0;
+  color: var(--color-accent-action);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  padding: 0;
+}
+
+.runActions button:hover {
+  color: var(--color-accent-emphasis);
+}
+
+.runSummary {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
 /* === Streaming Indicator === */
 
 @keyframes pulse {

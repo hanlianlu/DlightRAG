@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from dlightrag.agent.environment import SandboxUnavailableError
 from dlightrag.answer.execution_settings import (
     default_local_workspace_root,
     validate_agent_execution,
@@ -34,9 +35,9 @@ def test_disabled_ignores_workspace_root(tmp_path: Path) -> None:
     )
 
 
-def test_local_trusted_without_root_uses_home_default(tmp_path: Path) -> None:
+def test_trust_without_root_uses_home_default(tmp_path: Path) -> None:
     resolved = validate_agent_execution(
-        execution_environment="local_trusted",
+        execution_environment="trust",
         workspace_root=None,
         working_dir=str(tmp_path / "corpus"),
     )
@@ -45,11 +46,20 @@ def test_local_trusted_without_root_uses_home_default(tmp_path: Path) -> None:
     assert resolved.is_dir()
 
 
-def test_local_trusted_rejects_a_relative_root(tmp_path: Path) -> None:
+def test_trust_rejects_a_relative_root(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="absolute path"):
         validate_agent_execution(
-            execution_environment="local_trusted",
+            execution_environment="trust",
             workspace_root="relative/workspaces",
+            working_dir=str(tmp_path / "corpus"),
+        )
+
+
+def test_sandbox_without_adapter_fails_explicitly(tmp_path: Path) -> None:
+    with pytest.raises(SandboxUnavailableError, match="requires a configured sandbox adapter"):
+        validate_agent_execution(
+            execution_environment="sandbox",
+            workspace_root=str(tmp_path / "sandbox"),
             working_dir=str(tmp_path / "corpus"),
         )
 
@@ -63,7 +73,7 @@ def test_workspace_root_must_not_overlap_working_dir(tmp_path: Path) -> None:
         },
         answer={
             "agent": AgentExecutionConfig(
-                execution_environment="local_trusted", workspace_root=str(corpus / "nested")
+                execution_environment="trust", workspace_root=str(corpus / "nested")
             ),
         },
     )
@@ -72,6 +82,34 @@ def test_workspace_root_must_not_overlap_working_dir(tmp_path: Path) -> None:
             execution_environment=config.answer.agent.execution_environment,
             workspace_root=config.answer.agent.workspace_root,
             working_dir=config.deployment.working_dir,
+        )
+
+
+def test_outbound_mcp_requires_explicit_transport_shape() -> None:
+    config = AgentExecutionConfig.model_validate(
+        {
+            "outbound_mcp": [
+                {
+                    "name": "docs",
+                    "transport": "streamable-http",
+                    "url": "https://mcp.example.test",
+                    "tools": ["search"],
+                }
+            ]
+        }
+    )
+    assert config.outbound_mcp[0].tools == ("search",)
+    with pytest.raises(ValidationError, match="requires url"):
+        AgentExecutionConfig.model_validate(
+            {
+                "outbound_mcp": [
+                    {
+                        "name": "docs",
+                        "transport": "streamable-http",
+                        "tools": ["search"],
+                    }
+                ]
+            }
         )
 
 

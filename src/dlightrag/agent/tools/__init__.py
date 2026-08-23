@@ -13,6 +13,7 @@ from dlightrag.agent.tools.executor import (
     PreparedToolTurn,
     ToolPreflight,
     ToolTurnExecutor,
+    fit_tool_result_content,
     preflight_tool_calls,
 )
 from dlightrag.agent.tools.files import (
@@ -24,19 +25,23 @@ from dlightrag.agent.tools.files import (
     read_tool,
     write_tool,
 )
+from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
 
 __all__ = [
     "AgentTool",
+    "DuplicateToolError",
     "ExecutedTurn",
     "PreparedToolTurn",
     "ToolExecution",
     "ToolPreflight",
     "ToolResult",
+    "ToolRegistry",
     "ToolResultCapacityError",
     "ToolTurnExecutor",
     "current_tool_call",
     "bash_tool",
     "edit_tool",
+    "fit_tool_result_content",
     "grep_tool",
     "path_tools",
     "preflight_tool_calls",

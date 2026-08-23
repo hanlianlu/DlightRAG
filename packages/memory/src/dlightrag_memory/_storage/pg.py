@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_memory_records (
     CONSTRAINT dlightrag_memory_records_kind_check
         CHECK (kind IN ('preference', 'fact')),
     CONSTRAINT dlightrag_memory_records_status_check
-        CHECK (status IN ('active', 'superseded')),
+        CHECK (status IN ('active', 'superseded', 'forgotten')),
     CONSTRAINT dlightrag_memory_records_body_check
         CHECK (char_length(body) BETWEEN 1 AND 500),
     CONSTRAINT dlightrag_memory_records_confidence_check
@@ -155,6 +155,15 @@ class PostgresMemoryStore:
     async def initialize(self) -> None:
         async def operation(conn: PGConnection) -> None:
             await conn.execute(_RECORDS_TABLE)
+            await conn.execute(
+                "ALTER TABLE dlightrag_memory_records "
+                "DROP CONSTRAINT IF EXISTS dlightrag_memory_records_status_check"
+            )
+            await conn.execute(
+                "ALTER TABLE dlightrag_memory_records "
+                "ADD CONSTRAINT dlightrag_memory_records_status_check "
+                "CHECK (status IN ('active', 'superseded', 'forgotten'))"
+            )
             for statement in _RECORD_INDEXES:
                 await conn.execute(statement)
             for statement in extension_bootstrap_sql():
@@ -209,6 +218,11 @@ class PostgresMemoryStore:
                         *_insert_params(self, record=record),
                         _vector_text(embedding),
                     )
+                current = await conn.fetchrow(
+                    _SELECT_ONE, record.owner_id, _uuid(record.memory_id, label="memory_id")
+                )
+                if current is None or _row(current) != record:
+                    raise ValueError("memory id already exists with different content")
 
         await self._write(operation)
 
@@ -414,6 +428,7 @@ INSERT INTO dlightrag_memory_records (
     status, supersedes_id, embedding_fingerprint, created_at, updated_at
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+ON CONFLICT (owner_id, memory_id) DO NOTHING
 """
 
 _INSERT_WITH_EMBEDDING = """
@@ -422,6 +437,7 @@ INSERT INTO dlightrag_memory_records (
     status, supersedes_id, embedding_fingerprint, embedding, created_at, updated_at
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $14::halfvec, $12, $13)
+ON CONFLICT (owner_id, memory_id) DO NOTHING
 """
 
 _MARK_SUPERSEDED = """
@@ -431,18 +447,21 @@ WHERE owner_id = $1 AND memory_id = $2 AND status = 'active'
 """
 
 _DELETE = """
-DELETE FROM dlightrag_memory_records
-WHERE owner_id = $1 AND memory_id = $2
+UPDATE dlightrag_memory_records
+SET status = 'forgotten', updated_at = NOW()
+WHERE owner_id = $1 AND memory_id = $2 AND status != 'forgotten'
 """
 
 _DELETE_BODY = """
-DELETE FROM dlightrag_memory_records
-WHERE owner_id = $1 AND body = $2
+UPDATE dlightrag_memory_records
+SET status = 'forgotten', updated_at = NOW()
+WHERE owner_id = $1 AND body = $2 AND status != 'forgotten'
 """
 
 _DELETE_ALL = """
-DELETE FROM dlightrag_memory_records
-WHERE owner_id = $1
+UPDATE dlightrag_memory_records
+SET status = 'forgotten', updated_at = NOW()
+WHERE owner_id = $1 AND status != 'forgotten'
 """
 
 _SELECT_ONE = f"""

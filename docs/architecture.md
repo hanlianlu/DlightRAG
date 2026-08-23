@@ -87,15 +87,30 @@ workspace, LightRAG storage, or a durable cache:
 answer request (query + optional attachments + mode auto|fast|research)
   -> Access + capability → Valid Mode Set; Prepared Input pins profiles
   -> Routing Record stores requested / valid / nullable resolved mode
-  -> Fast: planner + retrieval + AnswerSynthesizer
-       JWT owners auto-recall a bounded Memory Record set (non-citable)
-  -> Research: Agent Loop until the model emits no tool call
-       peer tools include search_knowledge_base, read, inspect,
-       optional search_web, optional delegate_research, optional path tools,
-       and parent-only remember / forget / recall_memory
-       a selected KB search uses the same canonical retrieval
+  -> Fast invocation: planner + retrieval + shared Context/Evidence/model/usage
+       no Agent Session, workspace, tools, or publication
+  -> Research: product-neutral AgentLoop over the selected linear journal head
+       Context Contributions project conversation, working state, Evidence,
+       Profile Memory, Skills metadata, and trusted extension context
+       run-local ToolRegistry exposes every configured tool
+       foreground spawn_agent children inherit tools except spawn, run in
+       parallel under the parent lease, and adopt citable Evidence atomically
        optional artifacts/report.md publishes as a Primary Report handle
 ```
+
+The execution setting is exactly `disabled | trust | sandbox`. Trust binds a
+rooted local adapter; Bash is intentionally host/network capable while rooted
+file tools reject traversal and symlink escape. Sandbox is only an adapter seam
+and fails explicitly when no trusted backend is installed. The access scheduler
+uses Path, Workspace, and External claims: Bash conflicts with workspace file
+operations but not independent retrieval. Trusted Python extensions may only
+register tools, contribute context, or supply an execution adapter.
+
+Skills are progressively disclosed from `~/.agents/skills/` and the Agent
+Workspace `.agents/skills/`; initial context carries metadata only and
+`load_skill` reads contained files on demand. Deployment-declared outbound MCP
+endpoints become thin foreground tools with explicit allowlists; no registry,
+OAuth service, or management plane is introduced.
 
 Resource reads are deterministic first. `read` decodes UTF-8/CSV text
 directly and converts HTML, PDF, DOCX, PPTX, and XLSX through selected MarkItDown
@@ -124,11 +139,12 @@ has an immutable `ModelProfile`: context window (`C`), optional provider input
 limit (`I`), optional output limit (`O`), and capability flags. Facts resolve by
 normalized provider/model/endpoint identity from an explicit root override, a
 trusted adapter, or the versioned AI catalog; an unknown identity fails closed.
-The revisioned `ContextPolicy` derives one hard input limit
-`L = min(I if known else C, floor(0.85C))`, proactive research compaction at
-`floor(0.85L)`, and output allowance `min(O, C - input)` when `O` is known.
-Evidence, resource windows, and tool observations consume the actual residual
-of the model request rather than independent global token caps.
+The revisioned `ContextPolicy` reserves output, observation, safety, retained
+tail, episodic continuation, and minimum input directly from the pinned model
+facts. Its provider input ceiling is `min(I if known else C, C)`; output is
+bounded independently by the provider output limit and physical remaining
+context. Evidence, resource windows, history, tool schemas, and observations
+consume the measured residual rather than nested percentages.
 
 `RetrievalPlanner` is an internal node of the canonical retrieval operation; the
 answer workflow never creates or injects a plan. It never receives attachment
@@ -144,10 +160,12 @@ Workspace resolution stays at each interface's Access boundary. Retrieval starts
 workspace initialization before retrieval planning for retrieve-only, fast-answer,
 and research-answer requests; the later retrieval joins those same services.
 
-Research control and final generation use separate system prompts. Control
-turns receive identity, tool-selection policy, trust boundaries, and stopping
-rules, but not the answer/citation contract. The last silent turn is the
-answer; citation finalization is programmatic. Fast never enters the Agent Loop.
+Research control turns receive identity, tool-selection policy, trust
+boundaries, and stopping rules. The last no-tool assistant text is the answer;
+citation/source finalization is deterministic and never makes a hidden second
+LLM call. Fast never enters the AgentLoop, but uses the same model-call,
+Context Contribution, Evidence identity, citation, Profile Memory, and usage
+infrastructure without fabricating an Agent Session.
 
 When `answer.web_search.api_key` (Exa) is set, Exa Search is an optional peer
 capability. Its passages belong to no workspace and are packed beside corpus
@@ -171,8 +189,12 @@ finish        -> canonical result + exactly one terminal event, same txn
 recover       -> expired lease reclaimed; journal fold or Fast stage replay
 ```
 
-A process restart folds the Agent Session journal (Research) or unfinished Fast
-stages. Interrupted generation emits `reset` and regenerates from pinned input.
+A process restart folds the canonical Research journal. Its immutable entries
+form a parent-linked in-memory view of the selected linear head; durable
+alternate Session heads are not a 3.0 feature. Fast instead replays unfinished
+stages. Interrupted generation emits `reset` and
+regenerates from pinned input. Ordered steer controls are journaled before
+acknowledgement; follow-up and fork create ordinary runs with parent lineage.
 See [durable-answer-runs.md](durable-answer-runs.md) for the contract and
 [postgresql.md](postgresql.md#durable-answer-run-state) for the schema.
 
@@ -330,8 +352,8 @@ Pydantic settings from the lowest owning module: AI owns model, embedding, and
 rerank settings; RAG owns corpus settings; root modules own product-only
 sections. Runtime code consumes those canonical values or narrow derived
 policies—there is no second dataclass snapshot of model or corpus fields. The
-2.0 schema is intentionally strict: removed flat YAML and environment names are
-rejected rather than aliased.
+3.0 schema is strict: removed Agent aliases, flat YAML, and old environment
+names are rejected rather than emulated.
 
 ### Memory package surface
 
@@ -346,11 +368,13 @@ injected. Transport is `dlightrag-memory-mcp`, a stdio-only MCP server: the
 subject is bound at launch and never accepted from a tool argument, a
 launched server is authorized for its subject, and exactly three tools exist
 — `memory_recall(query)`, `memory_remember(kind, body, confidence,
-supersedes_id?)`, and `memory_forget(memory_id | body)` — with no browse, no
-observe, and no HTTP. Eligibility and rendering stay host concerns: the
-package never judges auth mode and never renders prompt fragments; the
-DlightRAG root owns the JWT gate and the low-authority user-role placement of
-the standing block.
+idempotency_key, supersedes_id?)`, and `memory_forget(memory_id | body)` — with no browse, no
+observe, and no HTTP. Callers reuse the required remember idempotency key on
+retry. Remember formation may be proposed then committed
+idempotently; forget writes a tombstone. Eligibility and rendering stay host
+concerns: the package never judges auth mode or renders prompts. DlightRAG binds
+a JWT owner or stable local single-user owner, rejects shared simple-auth
+personalization, and places recalled facts as low-authority non-citable context.
 
 Inside the root product, modules still sit on a decreasing dependency stack: a
 module at a higher layer may import from lower layers, but lower layers must not

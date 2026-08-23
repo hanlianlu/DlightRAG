@@ -38,6 +38,8 @@ class AnswerRunDescriptor:
     status_url: str
     events_url: str
     cancel_url: str
+    parent_run_id: str | None = None
+    continuation_kind: str | None = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> AnswerRunDescriptor:
@@ -48,6 +50,10 @@ class AnswerRunDescriptor:
             status_url=str(payload.get("status_url") or f"/answer/{run_id}"),
             events_url=str(payload.get("events_url") or f"/answer/{run_id}/events"),
             cancel_url=str(payload.get("cancel_url") or f"/answer/{run_id}"),
+            parent_run_id=(str(payload["parent_run_id"]) if payload.get("parent_run_id") else None),
+            continuation_kind=(
+                str(payload["continuation_kind"]) if payload.get("continuation_kind") else None
+            ),
         )
 
 
@@ -149,6 +155,68 @@ class AnswerRunClient:
         response = await self._client.get(self._url(f"/answer/{run_id}"), headers=self._headers)
         response.raise_for_status()
         return dict(response.json())
+
+    async def steer(self, run_id: str, instruction: str) -> dict[str, Any]:
+        """Queue one ordered steering instruction for a live Research run."""
+        response = await self._client.post(
+            self._url(f"/answer/{run_id}/steer"),
+            json={"content": instruction},
+            headers=self._headers,
+        )
+        response.raise_for_status()
+        return dict(response.json())
+
+    async def follow_up(
+        self, run_id: str, query: str, *, idempotency_key: str | None = None
+    ) -> AnswerRunDescriptor:
+        return await self._continuation(run_id, "follow-up", query, idempotency_key)
+
+    async def fork(
+        self, run_id: str, query: str, *, idempotency_key: str | None = None
+    ) -> AnswerRunDescriptor:
+        return await self._continuation(run_id, "fork", query, idempotency_key)
+
+    async def _continuation(
+        self,
+        run_id: str,
+        operation: str,
+        query: str,
+        idempotency_key: str | None,
+    ) -> AnswerRunDescriptor:
+        headers = dict(self._headers)
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        response = await self._client.post(
+            self._url(f"/answer/{run_id}/{operation}"),
+            json={"content": query},
+            headers=headers,
+        )
+        response.raise_for_status()
+        return AnswerRunDescriptor.from_payload(response.json())
+
+    async def resume(self, run_id: str) -> dict[str, Any]:
+        """Reattach to a durable run; pass its event cursor to events separately."""
+        response = await self._client.post(
+            self._url(f"/answer/{run_id}/resume"), headers=self._headers
+        )
+        response.raise_for_status()
+        return dict(response.json())
+
+    async def transcript(self, run_id: str, *, limit: int = 20) -> dict[str, Any]:
+        response = await self._client.get(
+            self._url(f"/answer/{run_id}/transcript"),
+            params={"limit": limit},
+            headers=self._headers,
+        )
+        response.raise_for_status()
+        return dict(response.json())
+
+    async def children(self, run_id: str) -> list[dict[str, Any]]:
+        response = await self._client.get(
+            self._url(f"/answer/{run_id}/children"), headers=self._headers
+        )
+        response.raise_for_status()
+        return list(response.json().get("children") or [])
 
     async def cancel(self, run_id: str) -> dict[str, Any]:
         """Request cancellation; repeating it on a terminal run is a no-op."""

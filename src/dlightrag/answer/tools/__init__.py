@@ -2,23 +2,27 @@
 """DlightRAG tool adapters and per-run composition."""
 
 from dlightrag.answer.tools.composition import compose_research_tools
-from dlightrag.answer.tools.delegate import (
-    ChildOutcome,
-    DelegateHost,
-    child_session_id,
-    delegate_research_tool,
-)
 from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.tools.search import KnowledgeRetrieval, SearchInput, WebSearch
+from dlightrag.answer.tools.subagents import (
+    ChildOutcome,
+    ChildRequest,
+    SpawnAgentInput,
+    SubagentHost,
+    child_session_id,
+    subagent_tools,
+)
 
 __all__ = [
-    "KnowledgeRetrieval",
-    "SearchInput",
-    "WebSearch",
     "ChildOutcome",
-    "DelegateHost",
+    "ChildRequest",
+    "KnowledgeRetrieval",
     "MemoryHost",
-    "compose_research_tools",
+    "SearchInput",
+    "SpawnAgentInput",
+    "SubagentHost",
+    "WebSearch",
     "child_session_id",
-    "delegate_research_tool",
+    "compose_research_tools",
+    "subagent_tools",
 ]

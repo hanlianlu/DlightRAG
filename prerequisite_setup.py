@@ -352,9 +352,14 @@ def write_config_yaml(
     unknown = set(data) - canonical_sections
     if unknown:
         raise ValueError(
-            "DlightRAG 1.x config schema detected or unknown top-level fields; replace it with the "
-            f"2.0 eight-section schema before running setup (unknown: {sorted(unknown)})"
+            "Legacy or unknown DlightRAG config fields were found; replace them with the "
+            f"3.0 eight-section schema before running setup (unknown: {sorted(unknown)})"
         )
+    answer = data.setdefault("answer", {})
+    agent = answer.setdefault("agent", {})
+    agent.setdefault("execution_environment", "disabled")
+    agent.setdefault("workspace_root", None)
+    agent.setdefault("outbound_mcp", [])
     models = data.setdefault("models", {})
     chat = models.setdefault("chat", {})
     if llm_default is not None:

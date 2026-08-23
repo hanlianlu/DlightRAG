@@ -8,26 +8,29 @@ owner eligibility policy and rendering the non-citable standing block.
 """
 
 from dlightrag_memory import (
-    MEMORY_BODY_LIMIT,
-    MEMORY_SUPERSEDE_RETENTION_DAYS,
-    RECALL_CHAR_BUDGET,
-    RECALL_TOP_K,
     MemoryKind,
     MemoryProvenance,
     MemoryRecord,
     MemoryStatus,
     MemoryWrite,
-    evaluate_memory_write,
 )
 from dlightrag_memory.errors import MemoryUnavailableError
+from dlightrag_memory.policy import (
+    MEMORY_BODY_LIMIT,
+    MEMORY_SUPERSEDE_RETENTION_DAYS,
+    RECALL_CHAR_BUDGET,
+    RECALL_TOP_K,
+    evaluate_memory_write,
+)
 
 
 def memory_owner_allowed(auth_mode: str) -> bool:
-    """JWT principals may write and auto-recall; deployment buckets may not.
+    """Allow JWT owners and the stable local single-user deployment owner.
 
+    ``simple`` remains a shared password bucket and is not a personal identity.
     Eligibility is root product policy, not package behaviour.
     """
-    return auth_mode == "jwt"
+    return auth_mode in {"jwt", "none"}
 
 
 def render_auto_recall(records: tuple[MemoryRecord, ...]) -> str:

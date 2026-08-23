@@ -378,6 +378,7 @@ class TestAnswerSynthesizerStream:
         call_kwargs = model_func.call_args.kwargs
         assert "response_format" not in call_kwargs
         assert call_kwargs.get("stream") is True
+        assert isinstance(call_kwargs.get("usage_holder"), dict)
 
     @pytest.mark.asyncio
     async def test_generate_stream_passes_messages_and_indexer(self) -> None:
@@ -417,6 +418,24 @@ class TestAnswerSynthesizerCapacity:
         reserved = synth.history_input_measure("query", memory_text=reserved_auto_recall_text())
         assert reserved([]) > empty([])
 
+    def test_fast_prompt_projects_accepted_episodic_summary_before_tail(self) -> None:
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+        )
+
+        prepared = synth._prepare_model_call(
+            "question",
+            _text_contexts(),
+            conversation_history=PriorTurns(
+                [{"role": "user", "content": "recent turn"}],
+                episodic_summary="older accepted turns",
+            ),
+        )
+
+        contents = [message.get("content") for message in prepared.messages]
+        assert contents.index("older accepted turns") < contents.index("recent turn")
+
     def test_evidence_capacity_uses_the_full_residual_model_input(self) -> None:
         synth = AnswerSynthesizer(
             image_policy=answer_image_policy(),
@@ -431,9 +450,9 @@ class TestAnswerSynthesizerCapacity:
             "question", _text_contexts(), conversation_history=PriorTurns()
         )
 
-        assert prepared.trace["answer_input_limit_tokens"] == 8_500
-        assert prepared.trace["context_policy_revision"] == "m1-v1"
-        assert prepared.trace["answer_evidence_capacity_tokens"] == 8_500 - (
+        assert prepared.trace["answer_input_limit_tokens"] == 7_976
+        assert prepared.trace["context_policy_revision"] == "agent-v3-reserves"
+        assert prepared.trace["answer_evidence_capacity_tokens"] == 7_976 - (
             prepared.trace["answer_input_tokens"] - prepared.trace["answer_evidence_tokens"]
         )
         assert prepared.trace["answer_evidence_capacity_tokens"] > 6_000
@@ -493,7 +512,7 @@ class TestAnswerSynthesizerCapacity:
 
         history = PriorTurns(
             [
-                {"role": "user", "content": "OLD-HISTORY " + ("old " * 200)},
+                {"role": "user", "content": "OLD-HISTORY " + ("old " * 1_000)},
                 {"role": "assistant", "content": "old answer " * 60},
                 {"role": "user", "content": "RECENT-HISTORY follow-up"},
                 {"role": "assistant", "content": "recent answer"},

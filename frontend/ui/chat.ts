@@ -7,7 +7,13 @@ import {clearAttachments, getPendingAttachments} from './attachments.ts';
 import {createSSEParser} from '../lib/sse.ts';
 import {buildAnswerRequest} from '../lib/answer_request.ts';
 import {readStoredAnswerMode} from './answer_mode.ts';
-import {cancelAnswerRun, getAnswerRun} from '../api/conversations.ts';
+import {
+    cancelAnswerRun,
+    continueAnswerRun,
+    getAnswerRun,
+    getAnswerRunChildren,
+    steerAnswerRun,
+} from '../api/conversations.ts';
 import type {
     AnswerRunDescriptor,
     ConversationAttachmentReference,
@@ -358,8 +364,8 @@ export async function submitQuery(query: string): Promise<void> {
         } else {
             conversationStore.upsertSummary(descriptor.conversation);
         }
-        markAnswerPending(turn, descriptor.cancel_requested);
         turn.aiDiv.dataset.runId = descriptor.run_id;
+        markAnswerPending(turn, descriptor.cancel_requested);
         beginFollowing(controller, descriptor.run_id, descriptor.cancel_requested);
         following = true;
         finished = await followAnswerRun(turn, conversationId, descriptor.run_id, controller);
@@ -374,6 +380,54 @@ export async function submitQuery(query: string): Promise<void> {
     }
 }
 
+async function handleRunAction(action: string, runId: string): Promise<void> {
+    if (!runId) return;
+    if (action === 'children') {
+        try {
+            const children = await getAnswerRunChildren(runId);
+            const summary = children.length
+                ? children.map((child) => `${child.status}: ${child.objective || child.child_session_id}`).join('\n')
+                : 'No child agents were started.';
+            window.alert(summary);
+        } catch (_) {
+            window.alert('Child agent status is unavailable.');
+        }
+        return;
+    }
+    if (action === 'steer') {
+        const instruction = window.prompt('Steering instruction for the active Research run:');
+        if (!instruction?.trim()) return;
+        try {
+            await steerAnswerRun(runId, instruction.trim());
+        } catch (_) {
+            window.alert('This run can no longer be steered.');
+        }
+        return;
+    }
+    if (action !== 'follow-up' && action !== 'fork') return;
+    const query = window.prompt(action === 'fork' ? 'Start a branch with:' : 'Follow up with:');
+    if (!query?.trim()) return;
+    try {
+        const descriptor = await continueAnswerRun(
+            runId,
+            action,
+            query.trim(),
+            crypto.randomUUID(),
+        );
+        conversationStore.upsertSummary(descriptor.conversation);
+        if (action === 'fork') {
+            await webRouter.navigate(conversationRoute(descriptor.conversation.conversation_id));
+        } else {
+            await conversationStore.open(descriptor.conversation.conversation_id, {
+                showLoading: false,
+                preserveOnError: true,
+            });
+        }
+    } catch (_) {
+        window.alert('The continuation could not be started.');
+    }
+}
+
 export function setupQueryForm(): void {
     const form = document.getElementById('query-form') as HTMLFormElement | null;
     if (!form) return;
@@ -382,6 +436,11 @@ export function setupQueryForm(): void {
     const queryForm = form;
     const queryInput = textarea;
     const sendBtn = form.querySelector('.composer-send') as HTMLButtonElement | null;
+
+    document.addEventListener('answer-run-action', function(event: Event) {
+        const detail = (event as CustomEvent<{action?: string; runId?: string}>).detail;
+        void handleRunAction(String(detail?.action || ''), String(detail?.runId || ''));
+    });
 
     function toggleSendButton() {
         if (!sendBtn) return;

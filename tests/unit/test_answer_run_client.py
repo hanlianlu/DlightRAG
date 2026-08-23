@@ -356,3 +356,38 @@ async def test_cancel_is_a_plain_delete() -> None:
         assert (await runs.cancel("run-1"))["status"] == "cancelled"
 
     assert seen == {"method": "DELETE", "path": "/answer/run-1"}
+
+
+async def test_agent_control_methods_project_the_shared_rest_contract() -> None:
+    seen: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path.endswith(("/follow-up", "/fork")):
+            return httpx.Response(202, json=_DESCRIPTOR)
+        if request.url.path.endswith("/children"):
+            return httpx.Response(200, json={"children": [{"child_session_id": "c"}]})
+        if request.url.path.endswith("/transcript"):
+            return httpx.Response(200, json={"run_id": "run-1", "messages": []})
+        if request.url.path.endswith("/steer"):
+            return httpx.Response(202, json={"run_id": "run-1", "control_sequence": 1})
+        return httpx.Response(200, json={"run_id": "run-1", "status": "running"})
+
+    http, runs = _client(handler)
+    async with http:
+        await runs.steer("run-1", "focus")
+        await runs.follow_up("run-1", "next")
+        await runs.fork("run-1", "branch")
+        await runs.resume("run-1")
+        await runs.transcript("run-1")
+        children = await runs.children("run-1")
+
+    assert children == [{"child_session_id": "c"}]
+    assert seen == [
+        ("POST", "/answer/run-1/steer"),
+        ("POST", "/answer/run-1/follow-up"),
+        ("POST", "/answer/run-1/fork"),
+        ("POST", "/answer/run-1/resume"),
+        ("GET", "/answer/run-1/transcript"),
+        ("GET", "/answer/run-1/children"),
+    ]

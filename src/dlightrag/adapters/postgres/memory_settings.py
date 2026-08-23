@@ -3,7 +3,7 @@
 
 Root product state: the Memory package owns records and recall; whether an
 owner's memory is enabled for answer injection is product policy. ``clear`` is
-an operation, not a stored flag — it hard-deletes the owner's records and
+an operation, not a stored flag — it tombstones the owner's records and
 leaves ``enabled`` untouched.
 """
 

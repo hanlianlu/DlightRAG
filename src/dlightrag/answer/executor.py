@@ -6,14 +6,18 @@ import base64
 import inspect
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from dlightrag_memory import Memory, MemoryStore
 
-from dlightrag.agent.environment.local import LocalExecutionEnvironment
+from dlightrag.agent.environment import (
+    ExecutionEnvironment,
+    resolve_execution_adapter,
+)
+from dlightrag.agent.extensions import TrustedExtensions
 from dlightrag.agent.session.effects import (
     EffectIntent,
     EffectSettlement,
@@ -23,12 +27,13 @@ from dlightrag.agent.session.effects import (
 from dlightrag.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
+    ContextInjectionEntry,
     EffectIntentEntry,
     EffectResultEntry,
     ProfileFactEntry,
+    RunSegmentEntry,
     SessionEntry,
     SessionTerminalEntry,
-    UserMessageEntry,
 )
 from dlightrag.agent.session.fold import PriorTurns, fold_entries
 from dlightrag.agent.session.ids import EntryId, ProjectionId, SessionId, StageIntentId
@@ -58,8 +63,9 @@ from dlightrag.agent.tools import (
     PreparedToolTurn,
     ToolExecution,
     ToolPreflight,
+    fit_tool_result_content,
 )
-from dlightrag.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.ai.messages import AssistantTurn
 from dlightrag.ai.scheduler import model_call_scope
 from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
@@ -81,7 +87,7 @@ from dlightrag.answer.errors import (
 from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import answer_images_from_sources
-from dlightrag.answer.memory import render_auto_recall
+from dlightrag.answer.memory import memory_owner_allowed, render_auto_recall
 from dlightrag.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.answer.model_runtime import AnswerModelRuntime
 from dlightrag.answer.publication import is_empty_answer
@@ -104,9 +110,14 @@ from dlightrag.answer.runs.execution import (
 )
 from dlightrag.answer.runs.results import store_answer_result
 from dlightrag.answer.sources import project_contexts_for_client
-from dlightrag.answer.tools.delegate import ChildOutcome, DelegateHost
 from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.tools.resources import build_resource_tools, make_resource_reader
+from dlightrag.answer.tools.subagents import (
+    ChildOutcome,
+    ChildRequest,
+    SpawnAgentInput,
+    SubagentHost,
+)
 from dlightrag.answer.tools.web import ExaSearch
 from dlightrag.answer.workspace import (
     WorkspaceIntegrityError,
@@ -521,6 +532,57 @@ class AnswerResourceResolver:
         return await asyncio.to_thread(build)
 
 
+async def _resolve_profile_memory_snapshot(
+    *,
+    memory: Memory | None,
+    journal: AgentSessionStore[M3HostUpdate],
+    snapshot: Any,
+    session_id: SessionId,
+    owner_id: str,
+    query: str,
+) -> tuple[str, int, int, Any]:
+    """Load or durably pin one replay-stable Profile Memory contribution."""
+    for entry in snapshot.entries:
+        if isinstance(entry, ProfileFactEntry) and entry.key == "profile_memory_snapshot":
+            value = entry.value if isinstance(entry.value, dict) else {}
+            return (
+                str(value.get("text") or ""),
+                int(value.get("record_count") or 0),
+                int(value.get("content_chars") or 0),
+                snapshot,
+            )
+    text = ""
+    count = 0
+    content_chars = 0
+    if memory is not None:
+        recalled = await memory.recall(owner_id=owner_id, query=query)
+        text = render_auto_recall(recalled.records)
+        count = len(recalled.records)
+        content_chars = recalled.content_chars
+    commit = await journal.append(
+        session_id=session_id,
+        expected_version=snapshot.version,
+        entries=[
+            ProfileFactEntry(
+                entry_id=EntryId.new(),
+                session_id=session_id,
+                timestamp=_entry_timestamp(),
+                key="profile_memory_snapshot",
+                value={
+                    "text": text,
+                    "record_count": count,
+                    "content_chars": content_chars,
+                },
+            )
+        ],
+    )
+    if not isinstance(commit, SessionCommit):
+        raise RunExecutionError(
+            "run_execution_failed", "Cannot pin the Profile Memory recall snapshot."
+        )
+    return text, count, content_chars, await journal.load(session_id)
+
+
 async def _memory_recall_allowed(
     checker: Callable[..., Awaitable[bool]] | None, *, owner_id: str
 ) -> bool:
@@ -551,6 +613,9 @@ class AnswerExecutor:
         working_dir: str = "./dlightrag_storage",
         memory_store: MemoryStore | None = None,
         memory_recall_enabled: Callable[..., Awaitable[bool]] | None = None,
+        external_tools: tuple[AgentTool, ...] = (),
+        trusted_extensions: TrustedExtensions | None = None,
+        skills_global_root: Path | None = None,
     ) -> None:
         self._store = store
         self._pool = pool
@@ -566,6 +631,63 @@ class AnswerExecutor:
         self._memory_store = memory_store
         self._memory = Memory(memory_store) if memory_store is not None else None
         self._memory_recall_enabled = memory_recall_enabled
+        self._external_tools = external_tools
+        self._trusted_extensions = trusted_extensions or TrustedExtensions()
+        self._skills_global_root = skills_global_root
+        if execution_environment not in {"disabled", "trust", "sandbox"}:
+            raise ValueError(f"unknown agent execution mode: {execution_environment}")
+        mode = execution_environment
+        extension_adapter = self._trusted_extensions.execution_adapter(mode)  # type: ignore[arg-type]
+        self._execution_adapter = resolve_execution_adapter(
+            mode,  # type: ignore[arg-type]
+            trust=extension_adapter if mode == "trust" else None,
+            sandbox=extension_adapter if mode == "sandbox" else None,
+        )
+
+    def acceptance_research_tools(self) -> tuple[AgentTool, ...]:
+        """Return non-resource definitions execution may expose to Research.
+
+        Acceptance combines these exact factories with request-specific search
+        and resource tools. The execute closures are never invoked here.
+        """
+        from dlightrag.agent.environment import AccessScheduler
+        from dlightrag.agent.environment.local import LocalExecutionEnvironment
+        from dlightrag.agent.skills import SkillCatalog, SkillMetadata, load_skill_tool
+        from dlightrag.agent.tools.files import path_tools, read_tool
+        from dlightrag.agent.tools.registry import ToolRegistry
+        from dlightrag.answer.tools.memory import forget_tool, recall_memory_tool, remember_tool
+        from dlightrag.answer.tools.subagents import subagent_tools
+
+        access = AccessScheduler()
+        # Resource reads exist independently of local execution and use the
+        # same ReadArgs schema as the runtime's registry-backed read tool.
+        tools: list[AgentTool] = [read_tool(None, access), *self._external_tools]
+        if self._execution_adapter is not None:
+            tools.extend(
+                tool
+                for tool in path_tools(
+                    LocalExecutionEnvironment(Path.cwd()),
+                    scheduler=access,
+                )
+                if tool.name != "read"
+            )
+        tools.extend(subagent_tools(host=SubagentHost()))
+        if self._memory_store is not None:
+            host = MemoryHost()
+            tools.extend(
+                (remember_tool(host=host), forget_tool(host=host), recall_memory_tool(host=host))
+            )
+        if self._skills_global_root is not None or self._execution_adapter is not None:
+            placeholder = SkillMetadata(
+                name="__acceptance__",
+                description="Schema-only acceptance placeholder.",
+                root=Path.cwd(),
+                source="global",
+            )
+            tools.append(load_skill_tool(SkillCatalog((placeholder,))))
+        registry = ToolRegistry(tools)
+        self._trusted_extensions.register_tools(registry)
+        return registry.resolve()
 
     async def execute(self, session: RunSession) -> Mapping[str, Any]:
         with model_call_scope((session.owner_id, session.run_id)):
@@ -653,12 +775,15 @@ class AnswerExecutor:
         await session.enter_phase("routing")
         resolved_mode, research_session_id = await self._ensure_resolved_mode(session, request)
         await session.enter_phase("planning")
-        projected_history = PriorTurns([dict(message) for message in request.history])
+        projected_history = PriorTurns(
+            [dict(message) for message in request.history],
+            episodic_summary=request.episodic_summary,
+        )
 
         boundaries: JournalRunBoundaries | None = None
         fast_boundaries: FastRunBoundaries | None = None
 
-        fetched_buffer: list[FetchedResourceBytes] = []
+        fetched_buffer = FetchedResourceBuffer()
 
         run = await self.prepare_orchestrated_run(
             workspaces=list(request.workspaces),
@@ -676,17 +801,10 @@ class AnswerExecutor:
         recall_allowed = True
         memory_recall_record_count = 0
         memory_recall_chars = 0
-        if self._memory is not None and auth_mode == "jwt":
+        if self._memory is not None and memory_owner_allowed(auth_mode):
             recall_allowed = await _memory_recall_allowed(
                 self._memory_recall_enabled, owner_id=session.owner_id
             )
-            if recall_allowed:
-                recalled = await self._memory.recall(owner_id=session.owner_id, query=request.query)
-                run.orchestrator.bind_recall(render_auto_recall(recalled.records))
-                # Usage accounting only (industry pattern: Pi/Kimi record token
-                # cost, never retrieval-quality metadata). No record bodies.
-                memory_recall_record_count = len(recalled.records)
-                memory_recall_chars = recalled.content_chars
         stream: AsyncIterator[str] | None = None
         try:
             journal = session.execution.session_store
@@ -698,6 +816,11 @@ class AnswerExecutor:
                     execution_environment=self._execution_environment,
                     workspace_root=self._workspace_root_setting,
                     working_dir=self._working_dir,
+                    sandbox_adapter=(
+                        self._execution_adapter
+                        if self._execution_environment == "sandbox"
+                        else None
+                    ),
                 )
                 if root is not None:
                     try:
@@ -708,6 +831,7 @@ class AnswerExecutor:
                             fencing_epoch=session.execution.fencing_epoch,
                             recorded_epoch=session.workspace_epoch,
                             store=session.execution.workspace_store,
+                            execution_adapter=self._execution_adapter,
                         )
                     except WorkspaceRecoveryFailed as exc:
                         raise RunExecutionError("workspace_recovery_failed", str(exc)) from exc
@@ -726,7 +850,7 @@ class AnswerExecutor:
                     store=self._memory_store,
                     enabled=recall_allowed,
                 )
-                run.orchestrator.bind_delegate(
+                run.orchestrator.bind_subagents(
                     parent_session_id=session_id,
                     run_id=session.run_id,
                     owner_id=session.owner_id,
@@ -741,16 +865,33 @@ class AnswerExecutor:
                         parent_session_id=session_id,
                     ),
                 )
+                snapshot = await journal.load(session_id)
+                is_new_session = snapshot.version == 0
+                if is_new_session:
+                    snapshot = await self._seed_session(journal, session_id, request, snapshot)
+                else:
+                    snapshot = await self._resume_session(journal, session_id, snapshot)
+                (
+                    memory_text,
+                    memory_recall_record_count,
+                    memory_recall_chars,
+                    snapshot,
+                ) = await _resolve_profile_memory_snapshot(
+                    memory=self._memory if recall_allowed else None,
+                    journal=journal,
+                    snapshot=snapshot,
+                    session_id=session_id,
+                    owner_id=session.owner_id,
+                    query=request.query,
+                )
+                run.orchestrator.bind_recall(memory_text)
                 prepared_early = run.orchestrator.prepare_run(
                     request.query,
                     conversation_history=run.history,
                     query_images=run.query_images,
                     registry=run.registry,
                 )
-                snapshot = await journal.load(session_id)
-                if snapshot.version == 0:
-                    snapshot = await self._seed_session(journal, session_id, request, snapshot)
-                else:
+                if not is_new_session:
                     await run.orchestrator.recover_from_fold(prepared_early, snapshot)
                     await _adopt_durable_evidence(prepared_early, journal, session_id)
                 boundaries = JournalRunBoundaries(
@@ -765,9 +906,11 @@ class AnswerExecutor:
                     last_sequence=_last_entry_sequence(snapshot),
                     active_projection=snapshot.active_projection,
                     entries=snapshot.entries,
-                    link_delegate_intent=_fenced_child_writer(
-                        store, "bind_child_parent_intent", session
+                    persist_child_intent=_fenced_child_writer(
+                        store, "upsert_child_session", session
                     ),
+                    control_reader=_fenced_control_reader(store, session),
+                    control_ack=_fenced_control_ack(store, session),
                 )
                 if snapshot.version > 0:
                     await boundaries.recover_pending_intents(snapshot)
@@ -784,6 +927,14 @@ class AnswerExecutor:
                     },
                 )
                 await fast_boundaries.settle_planner()
+                if self._memory is not None and recall_allowed:
+                    recalled = await self._memory.recall(
+                        owner_id=session.owner_id,
+                        query=request.query,
+                    )
+                    run.orchestrator.bind_recall(render_auto_recall(recalled.records))
+                    memory_recall_record_count = len(recalled.records)
+                    memory_recall_chars = recalled.content_chars
 
             async with self._telemetry.observe(
                 "answer_orchestration",
@@ -804,7 +955,7 @@ class AnswerExecutor:
                     request.query,
                     conversation_history=run.history,
                     run=prepared,
-                    boundaries=limit,  # type: ignore[arg-type]
+                    boundaries=limit,
                 )
                 answer_parts: list[str] = []
                 if stream is not None:
@@ -822,6 +973,27 @@ class AnswerExecutor:
                         model_factory=self._models.new_highlight_model,
                     )
                 trace = dict(getattr(stream, "trace", None) or {})
+                if boundaries is not None:
+                    root_usage = _usage_from_snapshot(await boundaries.load_snapshot()) or {}
+                    child_usage = await _durable_child_usage(
+                        self._store,
+                        owner_id=session.owner_id,
+                        run_id=session.run_id,
+                    )
+                    if not child_usage:
+                        child_usage = {
+                            str(key): int(value)
+                            for key, value in (trace.get("child_usage") or {}).items()
+                            if isinstance(value, int)
+                        }
+                    inclusive = dict(root_usage)
+                    for key, value in child_usage.items():
+                        inclusive[key] = inclusive.get(key, 0) + value
+                    trace["usage"] = {
+                        "usage_details": root_usage,
+                        "child_usage_details": child_usage,
+                        "inclusive_usage_details": inclusive,
+                    }
                 trace["query_image_description_count"] = len(run.image_descriptions)
                 trace["memory_recall_record_count"] = memory_recall_record_count
                 trace["memory_recall_chars"] = memory_recall_chars
@@ -871,26 +1043,26 @@ class AnswerExecutor:
         request: AnswerRunInput,
         snapshot: Any,
     ) -> Any:
-        """Append pinned history, objective, and profile facts atomically (M3-D25)."""
+        """Append immutable facts without duplicating conversation messages.
+
+        Projected conversation history is one context contribution. The journal
+        owns only messages produced inside this Agent Session.
+        """
         entries: list[SessionEntry] = [
-            UserMessageEntry(
+            RunSegmentEntry(
                 entry_id=EntryId.new(),
                 session_id=session_id,
                 timestamp=_entry_timestamp(),
-                content={"text": turn.get("content", "")},
-            )
-            for turn in request.history
-        ]
-        entries.append(
+                segment_id=EntryId.new().value,
+                kind="start",
+            ),
             ProfileFactEntry(
                 entry_id=EntryId.new(),
                 session_id=session_id,
                 timestamp=_entry_timestamp(),
                 key="objective",
                 value=request.query,
-            )
-        )
-        entries.append(
+            ),
             ProfileFactEntry(
                 entry_id=EntryId.new(),
                 session_id=session_id,
@@ -901,8 +1073,8 @@ class AnswerExecutor:
                     "context_policy_revision": request.context_policy_revision,
                     "model_catalog_revision": request.model_catalog_revision,
                 },
-            )
-        )
+            ),
+        ]
         initial = _initial_projection()
         commit = await journal.append(
             session_id=session_id, expected_version=0, entries=entries, projection=initial
@@ -910,6 +1082,35 @@ class AnswerExecutor:
         if not isinstance(commit, SessionCommit):
             raise RunExecutionError(
                 "run_execution_failed", "Cannot seed the pinned research session journal."
+            )
+        return await journal.load(session_id)
+
+    async def _resume_session(
+        self,
+        journal: AgentSessionStore[M3HostUpdate],
+        session_id: SessionId,
+        snapshot: Any,
+    ) -> Any:
+        """Append one immutable resume segment at the currently selected head."""
+        graph = snapshot.graph
+        head = graph.head_entry_id
+        commit = await journal.append(
+            session_id=session_id,
+            expected_version=snapshot.version,
+            entries=[
+                RunSegmentEntry(
+                    entry_id=EntryId.new(),
+                    session_id=session_id,
+                    timestamp=_entry_timestamp(),
+                    segment_id=EntryId.new().value,
+                    kind="resume",
+                    parent_head_id=head.value if head is not None else None,
+                )
+            ],
+        )
+        if not isinstance(commit, SessionCommit):
+            raise RunExecutionError(
+                "run_execution_failed", "Cannot resume the research Agent Session."
             )
         return await journal.load(session_id)
 
@@ -925,7 +1126,7 @@ class AnswerExecutor:
         pinned_image_descriptions: tuple[str, ...],
         projected_history: PriorTurns,
         model_profiles: Mapping[ModelRole, ModelProfile],
-        environment: LocalExecutionEnvironment | None = None,
+        environment: ExecutionEnvironment | None = None,
         resolved_mode: ResolvedMode,
     ) -> OrchestratorRun:
         history = projected_history
@@ -970,6 +1171,18 @@ class AnswerExecutor:
                 model_func = tool_model
                 stream_model_func = tool_model.stream_text
 
+            def resolve_child_model(
+                role: str,
+            ) -> tuple[Callable[..., Any], Callable[..., AsyncIterator[str]], ModelProfile]:
+                if role not in {"query", "extract"}:
+                    raise ValueError(f"unknown child model role: {role}")
+                selected_role: ModelRole = role  # type: ignore[assignment]
+                profile = models.query if role == "query" else models.extract
+                if not profile.supports_tools:
+                    raise ValueError(f"child model role is not tool-capable: {role}")
+                selected = self._models.tool_model(selected_role)
+                return selected, selected.stream_text, profile
+
             orchestrator = AnswerOrchestrator(
                 synthesizer=self._models.answer_synthesizer(query_profile),
                 retrieve_knowledge_base=retrieve_knowledge_base,
@@ -978,7 +1191,7 @@ class AnswerExecutor:
                 ),
                 model_func=model_func,
                 stream_model_func=stream_model_func,
-                resource_tools=resolved.resource_tools,
+                resource_tools=[*resolved.resource_tools, *self._external_tools],
                 resource_manifest=resolved.resource_manifest,
                 register_web_source=(
                     resolved.registry.register_discovered_link
@@ -992,7 +1205,7 @@ class AnswerExecutor:
                 telemetry=self._telemetry,
                 environment=environment,
                 resolved_mode=resolved_mode,
-                delegate_host=DelegateHost() if resolved_mode == "research" else None,
+                subagent_host=SubagentHost() if resolved_mode == "research" else None,
                 memory_host=(
                     MemoryHost()
                     if resolved_mode == "research" and self._memory_store is not None
@@ -1003,6 +1216,9 @@ class AnswerExecutor:
                     if resolved.registry is not None
                     else None
                 ),
+                child_model_resolver=resolve_child_model,
+                trusted_extensions=self._trusted_extensions,
+                skills_global_root=self._skills_global_root,
             )
             return OrchestratorRun(
                 orchestrator=orchestrator,
@@ -1076,11 +1292,9 @@ class AnswerExecutor:
     def validate_pinned_model_profiles(
         request: AnswerRunInput,
     ) -> dict[ModelRole, ModelProfile]:
-        if request.context_policy_revision != CONTEXT_POLICY_REVISION:
-            raise IncompatibleActiveRunError(
-                "answer run context policy revision does not match this binary; "
-                "drain active runs before deployment"
-            )
+        # Capacity is recalculated from the pinned model facts for each segment.
+        # A global arithmetic revision is not a reason to strand an otherwise
+        # replayable run.
         pinned = {item.role: item for item in request.pinned_models}
         if len(request.pinned_models) != len(MODEL_ROLE_NAMES) or set(pinned) != set(
             MODEL_ROLE_NAMES
@@ -1091,10 +1305,32 @@ class AnswerExecutor:
         return {role: pinned[role].profile for role in MODEL_ROLE_NAMES}
 
 
-def _buffered_fetched_bytes_sink(
-    buffer: list[FetchedResourceBytes],
-) -> FetchedBytesSink:
-    """Buffer fetched bytes until the turn's settlements make them durable."""
+class FetchedResourceBuffer:
+    """Fetched bytes partitioned by durable Session and model tool call."""
+
+    def __init__(self) -> None:
+        self._items: dict[tuple[str, str], list[FetchedResourceBytes]] = {}
+
+    def append(self, fetched: FetchedResourceBytes) -> None:
+        from dlightrag.agent.tools.context import (
+            current_tool_call,
+            current_tool_execution_scope,
+        )
+
+        call = current_tool_call()
+        key = (current_tool_execution_scope(), call.call_id if call is not None else "")
+        self._items.setdefault(key, []).append(fetched)
+
+    def drain(self, *, scope: str, call_id: str) -> tuple[FetchedResourceBytes, ...]:
+        fetched = [*self._items.pop((scope, call_id), ())]
+        # Acceptance-time fetches happen before a tool task has a scope. Bind
+        # them to the first durable settlement rather than sharing a live list.
+        fetched.extend(self._items.pop(("", ""), ()))
+        return tuple(fetched)
+
+
+def _buffered_fetched_bytes_sink(buffer: FetchedResourceBuffer) -> FetchedBytesSink:
+    """Buffer fetched bytes until their owning intent settles."""
 
     async def persist(fetched: FetchedResourceBytes) -> None:
         buffer.append(fetched)
@@ -1119,13 +1355,15 @@ class JournalRunBoundaries:
         session_id: SessionId,
         tools_by_name: Mapping[str, AgentTool],
         ledger_state: Callable[[], str],
-        fetched_buffer: list[FetchedResourceBytes],
+        fetched_buffer: FetchedResourceBuffer,
         run_id: str,
         initial_version: int = 0,
         last_sequence: int = 0,
         active_projection: ContextProjection | None = None,
         entries: Sequence[SessionEntry] = (),
-        link_delegate_intent: Callable[..., Awaitable[Any]] | None = None,
+        persist_child_intent: Callable[..., Awaitable[Any]] | None = None,
+        control_reader: Callable[[], Awaitable[tuple[Mapping[str, Any], ...]]] | None = None,
+        control_ack: Callable[[tuple[int, ...]], Awaitable[bool]] | None = None,
     ) -> None:
         self._session = session
         self._journal = journal
@@ -1137,8 +1375,14 @@ class JournalRunBoundaries:
         self._version = initial_version
         self._last_sequence = last_sequence
         self._active_projection = active_projection
-        self._link_delegate_intent = link_delegate_intent
+        self._persist_child_intent = persist_child_intent
+        self._control_reader = control_reader
+        self._control_ack = control_ack
         self._tail_tokens = _initial_tail_tokens(entries, active_projection, last_sequence)
+
+    @property
+    def tool_execution_scope(self) -> str:
+        return self._session_id.value
 
     def accounted_input(self, estimated_input_tokens: int) -> int:
         """Correct a full estimate with the newest live measured anchor."""
@@ -1206,6 +1450,9 @@ class JournalRunBoundaries:
             intent = entry.intent
             if intent.intent_id in settled_ids:
                 continue
+            # A crash may land the journal append before roster precreation.
+            # Rebind deterministic child rows before replaying the spawn effect.
+            await self._bind_subagents_parent_intents((intent,))
             tool = self._tools_by_name.get(intent.tool_name)
             contract_matches = (
                 tool is not None
@@ -1218,9 +1465,15 @@ class JournalRunBoundaries:
                 if tool is None:
                     raise RuntimeError("matched contract lost its tool")
                 try:
-                    from dlightrag.agent.tools.context import bind_tool_call, reset_tool_call
+                    from dlightrag.agent.tools.context import (
+                        bind_tool_call,
+                        bind_tool_execution_scope,
+                        reset_tool_call,
+                        reset_tool_execution_scope,
+                    )
 
                     arguments = tool.input_model.model_validate(_json.loads(intent.canonical_input))
+                    scope_token = bind_tool_execution_scope(self.tool_execution_scope)
                     token = bind_tool_call(
                         intent.source_call_id or intent.intent_id.value, intent.tool_name
                     )
@@ -1228,25 +1481,36 @@ class JournalRunBoundaries:
                         result = await tool.execute(arguments)
                     finally:
                         reset_tool_call(token)
-                    outcome = "succeeded"
-                    content = result.content
+                        reset_tool_execution_scope(scope_token)
+                    effect_outcome = "succeeded"
+                    result_outcome = "failed" if result.is_error else "succeeded"
+                    content = fit_tool_result_content(
+                        result,
+                        max_tokens=CONTEXT_POLICY.observation_reserve_tokens,
+                    )
                     cached = result.cached
                 except Exception as exc:
-                    outcome = "succeeded"
+                    # The safe effect ran and settled, but its provider-visible
+                    # result remains an error on every replay.
+                    effect_outcome = "succeeded"
+                    result_outcome = "failed"
                     content = f'Tool "{intent.tool_name}" failed: {exc}'
                     cached = False
                 progress = "live"
             elif intent.replay_policy == "safe":
-                outcome = "tool_contract_changed"
+                effect_outcome = "tool_contract_changed"
+                result_outcome = "tool_contract_changed"
                 content = f'Tool "{intent.tool_name}" contract changed; result discarded.'
                 cached = False
             else:
-                outcome = "interrupted"
+                effect_outcome = "interrupted"
+                result_outcome = "interrupted"
                 content = f'Tool "{intent.tool_name}" was interrupted before it settled.'
                 cached = False
             await self._settle_intent_recovery(
                 intent,
-                outcome=outcome,
+                effect_outcome=effect_outcome,
+                result_outcome=result_outcome,
                 content=content,
                 cached=cached,
                 progress=progress,
@@ -1256,7 +1520,8 @@ class JournalRunBoundaries:
         self,
         intent: EffectIntent,
         *,
-        outcome: str,
+        effect_outcome: str,
+        result_outcome: str,
         content: str,
         cached: bool,
         progress: Literal["live", "prelude"],
@@ -1269,7 +1534,7 @@ class JournalRunBoundaries:
             result=ToolResultEntry(
                 tool_name=intent.tool_name,
                 call_id=intent.source_call_id or "",
-                outcome=outcome,  # type: ignore[arg-type]
+                outcome=result_outcome,  # type: ignore[arg-type]
                 content=content,
                 cached=cached,
             ),
@@ -1279,9 +1544,9 @@ class JournalRunBoundaries:
             expected_version=self._version,
             intent_id=intent.intent_id,
             settlement=EffectSettlement(
-                outcome=outcome,  # type: ignore[arg-type]
+                outcome=effect_outcome,  # type: ignore[arg-type]
                 result=result_entry.result,
-                host_update=EvidenceSettlementUpdate(),
+                host_update=self._host_update(intent),
             ),
             entries=[result_entry],
             progress=progress,
@@ -1292,25 +1557,38 @@ class JournalRunBoundaries:
             appended_tokens=estimate_messages_tokens(fold_entries([result_entry])),
         )
 
-    async def _bind_delegate_parent_intents(self, intents: Sequence[EffectIntent]) -> None:
-        if self._link_delegate_intent is None:
+    async def _bind_subagents_parent_intents(self, intents: Sequence[EffectIntent]) -> None:
+        """Create each child roster row with its parent intent before execution."""
+        if self._persist_child_intent is None:
             return
-        from dlightrag.answer.tools.delegate import child_session_id
+        from dlightrag.answer.tools.subagents import child_session_id
 
         for intent in intents:
-            if intent.tool_name != "delegate_research" or not intent.source_call_id:
+            if intent.tool_name != "spawn_agent" or not intent.source_call_id:
                 continue
-            child_id = child_session_id(
-                run_id=self._run_id,
-                parent_session_id=self._session_id,
-                call_id=intent.source_call_id,
-            )
-            await self._link_delegate_intent(
-                owner_id=self._session.owner_id,
-                run_id=self._run_id,
-                child_session_id=child_id.value,
-                parent_intent_id=intent.intent_id.value,
-            )
+            try:
+                spawn = SpawnAgentInput.model_validate_json(intent.canonical_input)
+            except ValueError:
+                continue
+            for position, request in enumerate(spawn.children):
+                child_id = child_session_id(
+                    run_id=self._run_id,
+                    parent_session_id=self._session_id,
+                    call_id=intent.source_call_id,
+                    position=position,
+                )
+                await self._persist_child_intent(
+                    owner_id=self._session.owner_id,
+                    run_id=self._run_id,
+                    child_session_id=child_id.value,
+                    parent_session_id=self._session_id.value,
+                    parent_call_id=intent.source_call_id,
+                    parent_intent_id=intent.intent_id.value,
+                    objective=request.objective,
+                    context_mode=request.context,
+                    model_role=request.model_role,
+                    tools=request.tools,
+                )
 
     @property
     def version(self) -> int:
@@ -1321,6 +1599,53 @@ class JournalRunBoundaries:
 
     async def check_cancelled(self) -> None:
         await self._session.check_cancelled()
+
+    async def apply_controls(self) -> bool:
+        """Drain ordered run controls into the canonical session journal."""
+        if self._control_reader is None:
+            return False
+        controls = await self._control_reader()
+        if not controls:
+            return False
+        snapshot = await self._journal.load(self._session_id)
+        existing = {
+            entry.label
+            for entry in snapshot.entries
+            if isinstance(entry, ContextInjectionEntry) and entry.label is not None
+        }
+        entries: list[ContextInjectionEntry] = []
+        sequences: list[int] = []
+        for control in controls:
+            sequence = int(control.get("control_sequence") or 0)
+            kind = str(control.get("kind") or "steer")
+            label = f"control:{kind}:{sequence}"
+            sequences.append(sequence)
+            if label in existing:
+                continue
+            entries.append(
+                ContextInjectionEntry(
+                    entry_id=EntryId.new(),
+                    session_id=self._session_id,
+                    timestamp=_entry_timestamp(),
+                    label=label,
+                    content=str(control.get("content") or ""),
+                )
+            )
+        if entries:
+            commit = await self._journal.append(
+                session_id=self._session_id,
+                expected_version=self._version,
+                entries=entries,
+            )
+            if not isinstance(commit, SessionCommit):
+                raise LeaseLostError
+            self._version = commit.version
+            if commit.appended_sequences:
+                self._last_sequence = commit.appended_sequences[-1]
+            self._tail_tokens += estimate_messages_tokens(fold_entries(entries))
+        if self._control_ack is not None and not await self._control_ack(tuple(sequences)):
+            raise LeaseLostError
+        return bool(entries)
 
     async def commit_intents(self, prepared: PreparedToolTurn) -> None:
         """Durably append one prepared turn's assistant entry and its intents.
@@ -1350,8 +1675,10 @@ class JournalRunBoundaries:
         )
         next_projection = None
         if self._active_projection is not None:
+            # Provider input usage covers the pre-call head, not the assistant
+            # response that this commit is about to append.
             anchor = token_anchor_from_usage(
-                self._last_sequence + 1,
+                self._last_sequence,
                 prepared.assistant.usage_details,
             )
             if anchor is not None:
@@ -1368,12 +1695,12 @@ class JournalRunBoundaries:
         self._last_sequence = commit.appended_sequences[-1]
         if next_projection is not None:
             self._active_projection = next_projection
-            tail_messages = fold_entries((*intents, *validation))
+            tail_messages = fold_entries((assistant, *intents, *validation))
             self._tail_tokens = estimate_messages_tokens(tail_messages) if tail_messages else 0
         else:
             batch_messages = fold_entries((assistant, *intents, *validation))
             self._tail_tokens += estimate_messages_tokens(batch_messages) if batch_messages else 0
-        await self._bind_delegate_parent_intents(prepared.preflight.intents)
+        await self._bind_subagents_parent_intents(prepared.preflight.intents)
 
     async def settle_intent(
         self,
@@ -1385,11 +1712,13 @@ class JournalRunBoundaries:
     ) -> None:
         """Settle one already-persisted intent with its execution, or as interrupted."""
         if execution is None:
-            outcome: str = "interrupted"
+            effect_outcome: str = "interrupted"
+            result_outcome: str = "interrupted"
             content = f'Tool "{intent.tool_name}" was interrupted before it settled.'
             cached = False
         else:
-            outcome = "succeeded"
+            effect_outcome = "succeeded"
+            result_outcome = "failed" if execution.is_error else "succeeded"
             content = execution.result.content
             cached = execution.result.cached
         result_entry = EffectResultEntry(
@@ -1400,16 +1729,16 @@ class JournalRunBoundaries:
             result=ToolResultEntry(
                 tool_name=intent.tool_name,
                 call_id=intent.source_call_id or "",
-                outcome="succeeded" if outcome == "succeeded" else "interrupted",
+                outcome=result_outcome,  # type: ignore[arg-type]
                 content=content,
                 details=None if execution is None else execution.result.details,
                 cached=cached,
             ),
         )
         settlement = EffectSettlement(
-            outcome=outcome,  # type: ignore[arg-type]
+            outcome=effect_outcome,  # type: ignore[arg-type]
             result=result_entry.result,
-            host_update=self._host_update(intent, is_last=is_last),
+            host_update=self._host_update(intent),
         )
         committed = await self._journal.settle_effect(
             session_id=self._session_id,
@@ -1453,30 +1782,29 @@ class JournalRunBoundaries:
                 is_last=position == len(intents) - 1,
             )
 
-    def _host_update(self, intent: EffectIntent, *, is_last: bool) -> M3HostUpdate:
-        if not is_last:
-            return EvidenceSettlementUpdate()
-        updates: list[M3HostUpdate] = []
-        if self._ledger_state() != "{}":
-            content = self._ledger_state().encode("utf-8")
-            updates.append(
-                EvidenceSettlementUpdate(
-                    evidence=(
-                        OpaqueEvidenceWrite(
-                            session_id=self._session_id.value,
-                            intent_id=intent.intent_id.value,
-                            result_ordinal=0,
-                            content_digest=blob_digest(content),
-                            locator_digest=blob_digest(b"{}"),
-                            content=content,
-                            locator=b"{}",
-                        ),
-                    )
-                )
+    def _host_update(self, intent: EffectIntent) -> M3HostUpdate:
+        evidence: tuple[OpaqueEvidenceWrite, ...] = ()
+        ledger_state = self._ledger_state()
+        if ledger_state != "{}":
+            content = ledger_state.encode("utf-8")
+            evidence = (
+                OpaqueEvidenceWrite(
+                    session_id=self._session_id.value,
+                    intent_id=intent.intent_id.value,
+                    result_ordinal=0,
+                    content_digest=blob_digest(content),
+                    locator_digest=blob_digest(b"{}"),
+                    content=content,
+                    locator=b"{}",
+                ),
             )
-        for fetched in self._fetched_buffer:
+        fetched_updates: list[FetchedResourceSettlementUpdate] = []
+        for fetched in self._fetched_buffer.drain(
+            scope=self.tool_execution_scope,
+            call_id=intent.source_call_id or "",
+        ):
             plan = plan_blob(fetched.content)
-            updates.append(
+            fetched_updates.append(
                 FetchedResourceSettlementUpdate(
                     resource=OpaqueFetchedResourceWrite(
                         resource_id=fetched.resource_id,
@@ -1498,15 +1826,10 @@ class JournalRunBoundaries:
                     ),
                 )
             )
-        self._fetched_buffer.clear()
-        if len(updates) == 1:
-            return updates[0]
-        if len(updates) > 1:
-            raise RunExecutionError(
-                "run_execution_failed",
-                "A turn settlement cannot carry both evidence and fetched resources",
-            )
-        return EvidenceSettlementUpdate()
+        return EvidenceSettlementUpdate(
+            evidence=evidence,
+            fetched=tuple(fetched_updates),
+        )
 
     async def _handle_settlement(
         self,
@@ -1587,17 +1910,19 @@ def _bound_child_runner(
     orchestrator: AnswerOrchestrator,
     journal: AgentSessionStore[M3HostUpdate],
     session: RunSession,
-    fetched_buffer: list[FetchedResourceBytes],
+    fetched_buffer: FetchedResourceBuffer,
     parent_session_id: SessionId,
-) -> Callable[[SessionId, str, str], Awaitable[ChildOutcome]]:
-    async def run_child(child_id: SessionId, objective: str, parent_call_id: str) -> ChildOutcome:
+) -> Callable[[SessionId, ChildRequest, str], Awaitable[ChildOutcome]]:
+    async def run_child(
+        child_id: SessionId, request: ChildRequest, parent_call_id: str
+    ) -> ChildOutcome:
         return await run_child_session(
             orchestrator=orchestrator,
             journal=journal,
             session=session,
             fetched_buffer=fetched_buffer,
             child_id=child_id,
-            objective=objective,
+            request=request,
             parent_call_id=parent_call_id,
             parent_session_id=parent_session_id,
         )
@@ -1610,22 +1935,25 @@ async def run_child_session(
     orchestrator: AnswerOrchestrator,
     journal: AgentSessionStore[M3HostUpdate],
     session: RunSession,
-    fetched_buffer: list[FetchedResourceBytes],
+    fetched_buffer: FetchedResourceBuffer,
     child_id: SessionId,
-    objective: str,
+    request: ChildRequest,
     parent_call_id: str,
     parent_session_id: SessionId,
 ) -> ChildOutcome:
     """Run or resume one child Agent Session under the parent lease."""
-    prepared = orchestrator.prepare_child_session(objective)
+    prepared = orchestrator.prepare_child_session(request, child_session_id=child_id.value)
     snapshot = await journal.load(child_id)
     if snapshot.version == 0:
         snapshot = await _seed_child_session(
             journal,
             child_id,
-            objective=objective,
+            objective=request.objective,
             parent_session_id=parent_session_id,
             parent_call_id=parent_call_id,
+            context_mode=request.context,
+            model_role=request.model_role,
+            tool_names=request.tools,
         )
     else:
         await orchestrator.recover_from_fold(prepared, snapshot)
@@ -1649,12 +1977,18 @@ async def run_child_session(
     if snapshot.version > 0:
         await boundaries.recover_pending_intents(snapshot)
     try:
-        async with AsyncExitStack() as stack:
-            if orchestrator.has_execution_environment:
-                await stack.enter_async_context(orchestrator.hold_workspace_read())
-            await orchestrator.research_until_stopped(prepared, boundaries=boundaries)
+        await orchestrator.research_until_stopped(prepared, boundaries=boundaries)
         status, journal_reason = _child_status(prepared.stop_reason)
         summary = _child_summary(prepared, status)
+    except asyncio.CancelledError:
+        await _append_child_terminal(
+            journal,
+            child_id,
+            version=boundaries.version,
+            reason="cancelled",
+            summary="Child session cancelled.",
+        )
+        raise
     except LeaseLostError:
         raise
     except Exception as exc:
@@ -1674,6 +2008,7 @@ async def run_child_session(
         usage=_usage_from_snapshot(await journal.load(child_id)),
         delta=_delta_from_ledger(prepared.evidence),
         child_session_id=child_id.value,
+        evidence_state=prepared.evidence.durable_state(),
     )
 
 
@@ -1684,8 +2019,18 @@ async def _seed_child_session(
     objective: str,
     parent_session_id: SessionId,
     parent_call_id: str,
+    context_mode: str = "isolated",
+    model_role: str = "query",
+    tool_names: tuple[str, ...] | None = None,
 ) -> Any:
     entries: list[SessionEntry] = [
+        RunSegmentEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=_entry_timestamp(),
+            segment_id=EntryId.new().value,
+            kind="start",
+        ),
         ProfileFactEntry(
             entry_id=EntryId.new(),
             session_id=session_id,
@@ -1701,6 +2046,17 @@ async def _seed_child_session(
             value={
                 "session_id": parent_session_id.value,
                 "call_id": parent_call_id,
+            },
+        ),
+        ProfileFactEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=_entry_timestamp(),
+            key="child_invocation",
+            value={
+                "context": context_mode,
+                "model_role": model_role,
+                "tools": list(tool_names) if tool_names is not None else None,
             },
         ),
     ]
@@ -1765,6 +2121,7 @@ def _outcome_from_terminal(
         usage=_usage_from_snapshot(snapshot),
         delta=_delta_from_ledger(prepared.evidence),
         child_session_id=child_id.value,
+        evidence_state=prepared.evidence.durable_state(),
     )
 
 
@@ -1828,18 +2185,6 @@ class FastRunBoundaries:
 
     async def check_cancelled(self) -> None:
         await self._session.check_cancelled()
-
-    async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None:
-        raise AssertionError("Fast Answers never commit agent turns")
-
-    def accounted_input(self, estimated_input_tokens: int) -> int:
-        return estimated_input_tokens
-
-    async def load_snapshot(self) -> Any:
-        raise AssertionError("Fast Answers have no agent session journal")
-
-    async def commit_compaction(self, *, projection: ContextProjection) -> Any:
-        raise AssertionError("Fast Answers never compact")
 
     async def settle_planner(self) -> None:
         stage_id = StageIntentId.deterministic(run_id=self._run_id, name="fast:planner:0")
@@ -1983,6 +2328,70 @@ def _async_store_method(store: object, name: str) -> Any | None:
     if inspect.iscoroutinefunction(method):
         return method
     return None
+
+
+async def _durable_child_usage(
+    store: object,
+    *,
+    owner_id: str,
+    run_id: str,
+) -> dict[str, int]:
+    """Aggregate settled child usage so recovery matches uninterrupted execution."""
+    method = _async_store_method(store, "list_child_sessions")
+    if method is None:
+        return {}
+    rows = await method(owner_id=owner_id, run_id=run_id)
+    aggregate: dict[str, int] = {}
+    for row in rows or ():
+        usage = row.get("usage") if isinstance(row, Mapping) else None
+        if not isinstance(usage, Mapping):
+            continue
+        for key, value in usage.items():
+            if isinstance(value, int):
+                name = str(key)
+                aggregate[name] = aggregate.get(name, 0) + value
+    return aggregate
+
+
+def _fenced_control_reader(
+    store: object, session: RunSession
+) -> Callable[[], Awaitable[tuple[Mapping[str, Any], ...]]] | None:
+    method = _async_store_method(store, "load_pending_agent_controls")
+    if method is None:
+        return None
+
+    async def read() -> tuple[Mapping[str, Any], ...]:
+        controls = await method(
+            owner_id=session.owner_id,
+            run_id=session.run_id,
+            worker_id=session.worker_id,
+            fencing_epoch=session.fencing_epoch,
+        )
+        if controls is None:
+            raise LeaseLostError
+        return tuple(controls)
+
+    return read
+
+
+def _fenced_control_ack(
+    store: object, session: RunSession
+) -> Callable[[tuple[int, ...]], Awaitable[bool]] | None:
+    method = _async_store_method(store, "acknowledge_agent_controls")
+    if method is None:
+        return None
+
+    async def acknowledge(sequences: tuple[int, ...]) -> bool:
+        held = await method(
+            owner_id=session.owner_id,
+            run_id=session.run_id,
+            control_sequences=sequences,
+            worker_id=session.worker_id,
+            fencing_epoch=session.fencing_epoch,
+        )
+        return bool(held)
+
+    return acknowledge
 
 
 def _fenced_child_writer(store: object, name: str, session: RunSession) -> Any | None:

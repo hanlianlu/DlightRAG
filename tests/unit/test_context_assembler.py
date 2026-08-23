@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.agent.session.fold import PriorTurns, SessionEpisode
+from dlightrag.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.ai.tokens import estimate_messages_tokens
 from dlightrag.answer.agent.context import ContextAssembler
@@ -60,13 +60,42 @@ def _ledger(passages: int, *, chars: int = 2_000) -> EvidenceLedger:
     return evidence
 
 
+async def test_history_contribution_preserves_roles_and_precedes_current_question() -> None:
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW),
+        query="current question",
+        history=PriorTurns(
+            [
+                {"role": "user", "content": "earlier question"},
+                {"role": "assistant", "content": "earlier answer"},
+            ],
+            episodic_summary="older decisions",
+        ),
+        query_images=None,
+        resource_manifest=(),
+    )
+
+    messages = await assembler.control_turn(
+        evidence=EvidenceLedger(),
+        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        tool_schema_tokens=0,
+    )
+
+    assert [(message["role"], message["content"]) for message in messages[1:5]] == [
+        ("user", "older decisions"),
+        ("user", "earlier question"),
+        ("assistant", "earlier answer"),
+        ("user", "current question"),
+    ]
+
+
 async def test_a_long_pinned_conversation_is_not_locally_trimmed() -> None:
     # The assembler composes the full pinned history; the proactive compaction
     # trigger belongs to the orchestrator, not the composition.
     history = _long_history(40)
     messages = await _assembler(history).control_turn(
         evidence=_ledger(0),
-        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
         tool_schema_tokens=0,
     )
     rendered = str(messages)
@@ -76,9 +105,9 @@ async def test_a_long_pinned_conversation_is_not_locally_trimmed() -> None:
 
 async def test_evidence_uses_the_residual_after_pinned_conversation_history() -> None:
     evidence = _ledger(5)
-    messages = await _assembler(_long_history(25)).control_turn(
+    messages = await _assembler(_long_history(10)).control_turn(
         evidence=evidence,
-        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
         tool_schema_tokens=0,
     )
 
@@ -94,7 +123,7 @@ async def test_control_evidence_and_tool_schemas_stop_at_compaction_threshold() 
 
     messages = await assembler.control_turn(
         evidence=_ledger(100, chars=4_000),
-        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
         tool_schema_tokens=tool_schema_tokens,
     )
 
@@ -223,14 +252,9 @@ async def test_research_turn_packing_runs_off_the_event_loop(
 
     await assembler.control_turn(
         evidence=_ledger(3),
-        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
         tool_schema_tokens=0,
     )
-    await assembler.answer_turn(
-        evidence=_ledger(3),
-        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
-    )
-
     assert estimator_threads and loop_thread not in estimator_threads
 
 
@@ -262,7 +286,7 @@ async def test_control_turn_carries_non_citable_memory() -> None:
     )
     messages = await assembler.control_turn(
         evidence=EvidenceLedger(),
-        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
         tool_schema_tokens=0,
     )
     system = str(messages[0]["content"])

@@ -4,7 +4,8 @@
 from dataclasses import replace
 
 import pytest
-from dlightrag_memory import InMemoryMemoryStore, Memory, commit_memory_write
+from dlightrag_memory import Memory
+from dlightrag_memory.store import InMemoryMemoryStore, commit_memory_write
 
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.memory import MemoryProvenance, MemoryWrite
@@ -24,7 +25,7 @@ async def _retrieve(_query: str) -> object:
     raise RuntimeError("unused")
 
 
-def test_parent_research_gets_memory_tools_child_does_not() -> None:
+def test_child_inherits_parent_memory_tools() -> None:
     host = MemoryHost()
     parent = compose_research_tools(
         evidence=EvidenceLedger(),
@@ -46,10 +47,10 @@ def test_parent_research_gets_memory_tools_child_does_not() -> None:
         child=True,
     )
     assert {"remember", "forget", "recall_memory"} <= {tool.name for tool in parent}
-    assert {"remember", "forget", "recall_memory"}.isdisjoint({tool.name for tool in child})
+    assert {"remember", "forget", "recall_memory"} <= {tool.name for tool in child}
 
 
-async def test_forget_miss_is_reported() -> None:
+async def test_forget_miss_is_idempotent() -> None:
     store = InMemoryMemoryStore()
     host = MemoryHost(
         owner_id="o",
@@ -60,7 +61,7 @@ async def test_forget_miss_is_reported() -> None:
     )
     tool = forget_tool(host=host)
     result = await tool.execute(ForgetInput(memory_id="33333333-3333-3333-3333-333333333333"))
-    assert "No matching memory" in result.content
+    assert result.content == "Forgotten."
 
 
 async def test_remember_then_forget() -> None:
@@ -79,11 +80,14 @@ async def test_remember_then_forget() -> None:
     memory_id = str(remembered.details["memory_id"])
     forgotten = await forget_tool(host=host).execute(ForgetInput(memory_id=memory_id))
     assert forgotten.content == "Forgotten."
-    assert await store.get(owner_id="o", memory_id=memory_id) is None
+    tombstone = await store.get(owner_id="o", memory_id=memory_id)
+    assert tombstone is not None
+    assert tombstone.status == "forgotten"
 
 
 async def test_recall_tool_returns_relevant_records() -> None:
-    from dlightrag_memory import InMemoryMemoryStore, Memory
+    from dlightrag_memory import Memory
+    from dlightrag_memory.store import InMemoryMemoryStore
 
     store = InMemoryMemoryStore()
     host = MemoryHost(
@@ -114,7 +118,8 @@ async def test_recall_tool_returns_relevant_records() -> None:
 
 async def test_disabled_memory_rejects_model_tools() -> None:
     """Disabled stops model writes and recall; the rejection is explicit."""
-    from dlightrag_memory import InMemoryMemoryStore, Memory
+    from dlightrag_memory import Memory
+    from dlightrag_memory.store import InMemoryMemoryStore
 
     host = MemoryHost(
         owner_id="o",

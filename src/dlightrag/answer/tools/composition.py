@@ -2,18 +2,18 @@
 """The peer tools one research run offers, composed per run and never globally."""
 
 import hashlib
-from collections import Counter
 from typing import Any
 
 from pydantic import BaseModel
 
 from dlightrag.agent.environment import AccessScheduler
-from dlightrag.agent.environment.local import LocalExecutionEnvironment
+from dlightrag.agent.environment.execution import ExecutionEnvironment
+from dlightrag.agent.skills import SkillCatalog, load_skill_tool
 from dlightrag.agent.tools import AgentTool, ToolResult
 from dlightrag.agent.tools.files import path_tools, read_tool
+from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.answer.errors import InvalidToolConfigurationError
 from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.answer.tools.delegate import DelegateHost, delegate_research_tool
 from dlightrag.answer.tools.memory import MemoryHost, forget_tool, recall_memory_tool, remember_tool
 from dlightrag.answer.tools.search import (
     KnowledgeRetrieval,
@@ -22,6 +22,7 @@ from dlightrag.answer.tools.search import (
     knowledge_base_search_tool,
     web_search_tool,
 )
+from dlightrag.answer.tools.subagents import SubagentHost, subagent_tools
 
 
 def compose_research_tools(
@@ -33,13 +34,15 @@ def compose_research_tools(
     resource_tools: list[AgentTool],
     register_web_source: RegisterWebSource | None,
     resource_reader: Any | None = None,
-    environment: LocalExecutionEnvironment | None = None,
+    environment: ExecutionEnvironment | None = None,
     scheduler: AccessScheduler | None = None,
     spill: Any | None = None,
     ripgrep: str = "rg",
-    delegate_host: DelegateHost | None = None,
+    subagent_host: SubagentHost | None = None,
     memory_host: MemoryHost | None = None,
+    skill_catalog: SkillCatalog | None = None,
     child: bool = False,
+    tool_names: tuple[str, ...] | None = None,
 ) -> list[AgentTool]:
     """Bind one run's tools to its ledger. Path tools appear only with an environment."""
     access = scheduler or AccessScheduler()
@@ -60,7 +63,12 @@ def compose_research_tools(
             )
         )
     if resource_reader is not None:
-        tools.append(read_tool(environment, access, resource_reader=resource_reader, spill=spill))
+        tools.append(
+            _ledger_backed(
+                read_tool(environment, access, resource_reader=resource_reader, spill=spill),
+                evidence,
+            )
+        )
     else:
         tools.extend(
             _ledger_backed(tool, evidence) for tool in resource_tools if tool.name == "read"
@@ -68,17 +76,14 @@ def compose_research_tools(
     tools.extend(
         _ledger_backed(tool, evidence) for tool in resource_tools if tool.name == "inspect"
     )
+    tools.extend(tool for tool in resource_tools if tool.name not in {"read", "inspect"})
     if environment is not None:
         path = path_tools(environment, scheduler=access, ripgrep=ripgrep, spill=spill)
-        if child:
-            keep = {"read", "grep"} if resource_reader is None else {"grep"}
-            extras = [tool for tool in path if tool.name in keep]
-        else:
-            extras = [tool for tool in path if tool.name != "read"]
-        tools.extend(extras)
-    if delegate_host is not None and not child:
-        tools.append(delegate_research_tool(host=delegate_host))
-    if memory_host is not None and not child:
+        existing_names = {tool.name for tool in tools}
+        tools.extend(tool for tool in path if tool.name not in existing_names)
+    if subagent_host is not None:
+        tools.extend(subagent_tools(host=subagent_host))
+    if memory_host is not None:
         tools.extend(
             (
                 remember_tool(host=memory_host),
@@ -86,15 +91,18 @@ def compose_research_tools(
                 recall_memory_tool(host=memory_host),
             )
         )
-    _reject_duplicate_names(tools)
-    return tools
-
-
-def _reject_duplicate_names(tools: list[AgentTool]) -> None:
-    counts = Counter(tool.name for tool in tools)
-    duplicates = tuple(name for name, count in counts.items() if count > 1)
-    if duplicates:
-        raise InvalidToolConfigurationError(duplicates)
+    if skill_catalog is not None and skill_catalog.metadata:
+        tools.append(load_skill_tool(skill_catalog))
+    try:
+        registry = ToolRegistry(tools)
+        return list(
+            registry.resolve(
+                tool_names,
+                exclude={"spawn_agent"} if child else (),
+            )
+        )
+    except DuplicateToolError as exc:
+        raise InvalidToolConfigurationError(exc.names) from exc
 
 
 def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger) -> AgentTool:

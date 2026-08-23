@@ -328,6 +328,30 @@ def test_empty_ledger_state_is_empty_object() -> None:
     assert EvidenceLedger().ledger_state_json() == "{}"
 
 
+def test_child_evidence_adoption_is_citable_idempotent_and_records_lineage() -> None:
+    child = EvidenceLedger()
+    child.add_rows([_corpus_row(chunk="child-c1", content="child finding")])
+    parent = EvidenceLedger()
+
+    first = parent.adopt_child_state(
+        child.durable_state(),
+        child_session_id="child-session",
+        parent_call_id="spawn-call",
+    )
+    second = parent.adopt_child_state(
+        child.durable_state(),
+        child_session_id="child-session",
+        parent_call_id="spawn-call",
+    )
+
+    assert first.new_chunks == 1
+    assert second.new_chunks == 0
+    row = parent.contexts["chunks"][0]
+    assert row["metadata"]["child_session_id"] == "child-session"
+    assert row["metadata"]["parent_call_id"] == "spawn-call"
+    assert parent.render_blocks()[1].get_chunk_id("1", 1) == "child-c1"
+
+
 def test_ledger_state_round_trips_identities_without_image_bytes() -> None:
     import json
 

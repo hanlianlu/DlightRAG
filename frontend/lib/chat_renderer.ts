@@ -25,11 +25,14 @@ export interface ChatTurn {
   chatArea: HTMLElement;
   aiDiv: HTMLDivElement;
   contentDiv: HTMLDivElement;
+  actionsDiv: HTMLDivElement;
 }
 
 export interface DonePayload {
   status: 'succeeded' | 'cancelled';
   presentation: AnswerPresentation | null;
+  usage?: Record<string, unknown>;
+  evidence?: Record<string, number>;
 }
 
 interface ProgressPayload {
@@ -163,6 +166,10 @@ export function createChatTurn(
   contentDiv.appendChild(streamingDot);
   aiDiv.appendChild(contentDiv);
 
+  const actionsDiv = document.createElement('div');
+  actionsDiv.className = chatStyles.runActions;
+  aiDiv.appendChild(actionsDiv);
+
   const liveStatus = document.createElement('span');
   liveStatus.className = 'sr-only';
   liveStatus.setAttribute('role', 'status');
@@ -172,7 +179,7 @@ export function createChatTurn(
   chatMessages.appendChild(aiDiv);
   pruneOldMessages(chatMessages);
 
-  const turn: ChatTurn = {chatArea, aiDiv, contentDiv};
+  const turn: ChatTurn = {chatArea, aiDiv, contentDiv, actionsDiv};
   scrollToBottom(turn);
   return turn;
 }
@@ -180,6 +187,8 @@ export function createChatTurn(
 function applyFinalAnswer(
   turn: ChatTurn,
   presentation: AnswerPresentation,
+  usage: Record<string, unknown> = {},
+  evidence: Record<string, number> = {},
 ): void {
   const element = document.createElement('answer-presentation') as AnswerPresentationElement;
   element.presentation = presentation;
@@ -189,6 +198,55 @@ function applyFinalAnswer(
     turn.aiDiv.dataset.runId || '',
     presentation.primary_report,
   );
+  renderRunActions(turn, 'terminal', usage, evidence);
+}
+
+function runActionButton(turn: ChatTurn, action: string, label: string): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.dataset.runAction = action;
+  button.addEventListener('click', function() {
+    turn.aiDiv.dispatchEvent(new CustomEvent('answer-run-action', {
+      bubbles: true,
+      detail: {action, runId: turn.aiDiv.dataset.runId || ''},
+    }));
+  });
+  return button;
+}
+
+function renderRunActions(
+  turn: ChatTurn,
+  state: 'running' | 'terminal',
+  usage: Record<string, unknown> = {},
+  evidence: Record<string, number> = {},
+): void {
+  turn.actionsDiv.replaceChildren();
+  if (!turn.aiDiv.dataset.runId) return;
+  if (state === 'running') {
+    turn.actionsDiv.append(
+      runActionButton(turn, 'steer', 'Steer'),
+      runActionButton(turn, 'children', 'Child agents'),
+    );
+    return;
+  }
+  turn.actionsDiv.append(
+    runActionButton(turn, 'follow-up', 'Follow up'),
+    runActionButton(turn, 'fork', 'Fork'),
+    runActionButton(turn, 'children', 'Child agents'),
+  );
+  const evidenceCount = Number(evidence.chunks || 0);
+  const usageDetails = usage.usage_details as Record<string, unknown> | undefined;
+  const tokenCount = Number(usageDetails?.total_tokens || 0);
+  if (evidenceCount || tokenCount) {
+    const summary = document.createElement('span');
+    summary.className = chatStyles.runSummary;
+    summary.textContent = [
+      evidenceCount ? `${evidenceCount} evidence chunks` : '',
+      tokenCount ? `${tokenCount} tokens` : '',
+    ].filter(Boolean).join(' · ');
+    turn.actionsDiv.appendChild(summary);
+  }
 }
 
 
@@ -232,7 +290,9 @@ export function renderStoredTurn(turn: ChatTurn, stored: ConversationTurn): void
   clearAnswerReconnect(turn);
   turn.aiDiv.dataset.runId = stored.answer_run_id;
   if (stored.status === 'succeeded') {
-    if (stored.presentation) applyFinalAnswer(turn, stored.presentation);
+    if (stored.presentation) {
+      applyFinalAnswer(turn, stored.presentation, stored.usage, stored.evidence);
+    }
     else setAnswerError(turn, 'Stored answer presentation is unavailable.');
     return;
   }
@@ -256,6 +316,7 @@ export function markAnswerPending(turn: ChatTurn, cancelRequested = false): void
     cancelRequested ? 'Stopping...' : 'Generating answer...',
   );
   turn.contentDiv.replaceChildren(indicator);
+  renderRunActions(turn, 'running');
 }
 
 function renderConversationState(message: string, isError: boolean): HTMLElement | null {
@@ -309,6 +370,7 @@ export function renderConversationUnavailable(
 export function setAnswerError(turn: ChatTurn, message: unknown): void {
   turn.contentDiv.textContent = typeof message === 'string' ? message : 'Service error. Please try again.';
   turn.contentDiv.classList.add(chatStyles.textError);
+  renderRunActions(turn, 'terminal');
 }
 
 /** A recoverable connection failure: the run continues, so offer a reattach. */
@@ -345,6 +407,7 @@ export function markAnswerStopped(turn: ChatTurn): void {
   note.className = chatStyles.stoppedNote;
   note.textContent = 'Stopped';
   turn.contentDiv.appendChild(note);
+  renderRunActions(turn, 'terminal');
 }
 
 export function createAnswerRenderer(turn: ChatTurn) {
@@ -425,7 +488,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
       return;
     }
     fullAnswer = payload.presentation.answer_text;
-    applyFinalAnswer(turn, payload.presentation);
+    applyFinalAnswer(turn, payload.presentation, payload.usage, payload.evidence);
     const live = turn.aiDiv.querySelector('.sr-only');
     if (live) live.textContent = 'Answer ready';
   }

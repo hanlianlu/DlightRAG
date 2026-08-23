@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Behavioral invariants retained by the canonical 2.0 configuration."""
+"""Behavioral invariants retained by the canonical 3.0 configuration."""
 
 from __future__ import annotations
 

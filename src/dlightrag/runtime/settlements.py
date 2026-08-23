@@ -94,20 +94,26 @@ class CompleteBlobDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
-class EvidenceSettlementUpdate:
-    """Evidence plus evidence-backed source handles for one settlement."""
-
-    evidence: Sequence[OpaqueEvidenceWrite] = ()
-    resources: Sequence[OpaqueEvidenceResourceWrite] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class FetchedResourceSettlementUpdate:
     """One fetched blob resource, its evidence, and the complete blob."""
 
     resource: OpaqueFetchedResourceWrite
     complete_blob: CompleteBlobDescriptor
     evidence: Sequence[OpaqueEvidenceWrite] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceSettlementUpdate:
+    """All Evidence and fetched resources made durable by one settlement.
+
+    A tool call may legally admit Evidence and fetch several resources. Keeping
+    that complete batch in one host update lets the journal adapter commit it
+    atomically with the model-visible result.
+    """
+
+    evidence: Sequence[OpaqueEvidenceWrite] = ()
+    resources: Sequence[OpaqueEvidenceResourceWrite] = ()
+    fetched: Sequence[FetchedResourceSettlementUpdate] = ()
 
 
 @dataclass(frozen=True, slots=True)

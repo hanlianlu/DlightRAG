@@ -176,18 +176,18 @@ class ToolTurnExecutor:
         tools: list[AgentTool],
         *,
         observation_budget: Callable[[list[dict[str, Any]]], int] | None = None,
+        execution_scope: str = "",
         on_result: (
             Callable[[EffectIntent, ToolExecution | None, bool], Awaitable[None]] | None
         ) = None,
     ) -> ExecutedTurn:
         """Execute one prepared turn's tool batch and settle in source order.
 
-        Tools still run in parallel; ``on_result`` is awaited per intent in
-        assistant source order as each call's result becomes available, so a
-        host can settle durable EffectIntents incrementally (first-completed
-        settles first, but never out of order). A missing execution settles
-        as interrupted. Validation failures and length-stop fabrications never
-        reach ``on_result`` because they carry no intent.
+        Tools run in parallel. Their complete batch is fitted to the shared
+        observation residual before ``on_result`` receives the model-visible
+        results, so durable replay stores exactly the same bounded content as
+        the live next turn. Validation failures and length-stop fabrications
+        never reach ``on_result`` because they carry no intent.
         """
         assistant = prepared.assistant
         transcript = prepared.transcript
@@ -229,28 +229,37 @@ class ToolTurnExecutor:
                 max_observation_tokens,
             )
 
-        tasks = {
-            call.id: asyncio.create_task(_execute_call(call, tools_by_name, self._telemetry))
-            for call in assistant.tool_calls
-        }
-        executions: dict[str, ToolExecution] = {}
+        from dlightrag.agent.tools.context import (
+            bind_tool_execution_scope,
+            reset_tool_execution_scope,
+        )
+
+        scope_token = bind_tool_execution_scope(execution_scope)
+        try:
+            tasks = {
+                call.id: asyncio.create_task(_execute_call(call, tools_by_name, self._telemetry))
+                for call in assistant.tool_calls
+            }
+        finally:
+            reset_tool_execution_scope(scope_token)
         completed = False
         try:
-            for position, intent in enumerate(intents):
-                task = tasks.get(intent.source_call_id or "")
-                execution = None
-                if task is not None:
-                    execution = await task
-                    executions[intent.source_call_id or ""] = execution
-                if on_result is not None:
-                    await on_result(intent, execution, position == len(intents) - 1)
-            ordered: list[ToolExecution] = []
-            for call in assistant.tool_calls:
-                execution = executions.get(call.id)
-                if execution is None:
-                    execution = await tasks[call.id]
-                    executions[call.id] = execution
-                ordered.append(execution)
+            ordered = tuple(
+                await asyncio.gather(*(tasks[call.id] for call in assistant.tool_calls))
+            )
+            fitted = (
+                _fit_results(ordered, max_tokens=max_observation_tokens)
+                if max_observation_tokens is not None
+                else ordered
+            )
+            by_call_id = {execution.call.id: execution for execution in fitted}
+            if on_result is not None:
+                for position, intent in enumerate(intents):
+                    await on_result(
+                        intent,
+                        by_call_id.get(intent.source_call_id or ""),
+                        position == len(intents) - 1,
+                    )
             completed = True
         finally:
             if not completed:
@@ -260,9 +269,9 @@ class ToolTurnExecutor:
         return _assemble_turn(
             assistant,
             transcript,
-            tuple(ordered),
+            fitted,
             prepared.preflight,
-            max_observation_tokens,
+            None,
         )
 
 
@@ -296,7 +305,7 @@ def _fit_results(
     for index, execution in enumerate(results):
         result_count = len(results) - index
         allowance = remaining // result_count
-        content = _fit_result_content(execution.result, max_tokens=allowance)
+        content = fit_tool_result_content(execution.result, max_tokens=allowance)
         remaining = max(0, remaining - estimate_tokens(content))
         if content == execution.result.content:
             fitted.append(execution)
@@ -311,7 +320,8 @@ def _fit_results(
     return tuple(fitted)
 
 
-def _fit_result_content(result: ToolResult, *, max_tokens: int) -> str:
+def fit_tool_result_content(result: ToolResult, *, max_tokens: int) -> str:
+    """Fit one result with the same protected-suffix policy used by live batches."""
     if estimate_tokens(result.content) <= max_tokens:
         return result.content
     if max_tokens < 1:
@@ -391,12 +401,13 @@ async def _dispatch_call(
         result=result,
         observation=_observe(
             call,
-            outcome="cached" if result.cached else "ok",
+            outcome=("failed" if result.is_error else "cached" if result.cached else "ok"),
             started=started,
             cached=result.cached,
-            is_error=False,
+            is_error=result.is_error,
             content=result.content,
         ),
+        is_error=result.is_error,
     )
 
 

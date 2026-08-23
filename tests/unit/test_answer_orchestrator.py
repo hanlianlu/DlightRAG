@@ -21,6 +21,7 @@ from dlightrag.answer.errors import (
     AnswerInputOverflowError,
     InvalidToolConfigurationError,
 )
+from dlightrag.answer.executor import FetchedResourceBuffer
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.answer.runs.results import AnswerResult
@@ -58,7 +59,7 @@ class ScriptedAgent:
         messages: list[dict[str, Any]],
         **kwargs: Any,
     ) -> AsyncIterator[str]:
-        """Tools-disabled final stream the orchestrator must route through."""
+        """Tools-disabled stream used only by compaction tests."""
         self.final_calls.append(messages)
         self.final_call_kwargs.append({"messages": messages, **kwargs})
         text = self._final_text
@@ -131,12 +132,7 @@ def _web_result(text: str = "web fact", *, url: str = "https://example.com/a") -
 
 
 def _research_synthesizer(model_profile: ModelProfile | None = None) -> AnswerSynthesizer:
-    """Real synthesizer that owns research finalization via injected callables.
-
-    Its own ``model_func`` stays ``None``: the research path must generate the
-    final answer through the injected tools-disabled callables, never through
-    the synthesizer's fast-path ``generate`` model function.
-    """
+    """Unused Fast synthesizer dependency for a Research-only orchestrator."""
     return AnswerSynthesizer(
         image_policy=answer_image_policy(),
         model_profile=model_profile or answer_model_profile(),
@@ -428,7 +424,7 @@ async def test_provider_overflow_compacts_then_retries_the_same_turn_once() -> N
         session_id=session_id,
         tools_by_name={},
         ledger_state=lambda: "{}",
-        fetched_buffer=[],
+        fetched_buffer=FetchedResourceBuffer(),
         run_id="run-1",
         initial_version=snapshot.version,
         last_sequence=snapshot.entries[-1].sequence,
@@ -494,7 +490,7 @@ async def test_intents_persist_before_any_tool_executes() -> None:
         session_id=session_id,
         tools_by_name={},
         ledger_state=lambda: "{}",
-        fetched_buffer=[],
+        fetched_buffer=FetchedResourceBuffer(),
         run_id="run-1",
     )
 
@@ -601,7 +597,7 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
     control_messages = str(agent.turn_calls[0]["messages"])
     assert "att-1" in control_messages
     assert "report.pdf" in control_messages
-    # The final answer comes from one distinct tools-disabled synthesis call.
+    # The no-tool Research assistant turn is final; there is no second model call.
     assert len(agent.final_calls) == 0
     assert result.answer == "From the attachment [1-1]."
     assert "cursor=volatile" not in result.answer
@@ -1003,6 +999,42 @@ async def test_every_model_visible_tool_field_describes_itself() -> None:
         assert properties, f"{tool.name} exposes no arguments"
         for field, schema in properties.items():
             assert schema.get("description"), f"{tool.name}.{field} has no description"
+
+
+async def test_production_resource_reader_admits_citable_evidence() -> None:
+    from dlightrag.answer.evidence import EvidenceLedger
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    async def read_resource(_resource_id: str, _cursor: str | None) -> ToolResult:
+        return ToolResult(
+            content="bounded attachment text",
+            details={
+                "resource_id": "attachment-1",
+                "source_type": "web_attachment",
+                "source_uri": "attachment-1",
+                "title": "notes.txt",
+            },
+        )
+
+    evidence = EvidenceLedger()
+    tools = compose_research_tools(
+        evidence=evidence,
+        trace={},
+        retrieve_knowledge_base=retrieve,
+        search_web=None,
+        resource_tools=[],
+        register_web_source=None,
+        resource_reader=read_resource,
+    )
+    read = next(tool for tool in tools if tool.name == "read")
+
+    result = await read.execute(read.input_model(resource_id="attachment-1"))
+
+    assert result.content == "bounded attachment text"
+    assert [row["content"] for row in evidence.contexts["chunks"]] == ["bounded attachment text"]
+    assert evidence.citation_handles() == ["[1] notes.txt"]
 
 
 async def test_each_tool_execution_emits_one_safe_observation() -> None:
@@ -1457,11 +1489,11 @@ async def test_streaming_no_tool_turn_starts_distinct_native_final_stream() -> N
 
 
 # ---------------------------------------------------------------------------
-# The research path routes its final answer through the AnswerSynthesizer.
+# The no-tool Research assistant turn is the final answer.
 # ---------------------------------------------------------------------------
 
 
-async def test_research_final_answer_is_a_distinct_tools_disabled_synthesis() -> None:
+async def test_research_no_tool_turn_is_the_final_cited_answer() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()
 
@@ -1481,7 +1513,7 @@ async def test_research_final_answer_is_a_distinct_tools_disabled_synthesis() ->
     assert [source.id for source in result.sources] == ["1", "2"]
 
 
-async def test_research_stream_final_flows_through_synthesizer_no_context() -> None:
+async def test_research_no_context_streams_the_terminal_turn_directly() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return RetrievalResult(contexts={"chunks": [], "entities": [], "relationships": []})
 

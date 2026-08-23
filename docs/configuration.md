@@ -4,9 +4,9 @@ This page is for operators and SDK users deciding which settings to change. It
 owns configuration precedence, public field groups, defaults, and advanced
 overrides. Runtime architecture lives in [architecture.md](architecture.md);
 auth and access-control guidance lives in [security.md](security.md);
-interface payloads live in [interfaces.md](interfaces.md). Operators upgrading
-from the 1.x package and flat-settings layout should follow
-[migration-2.0.md](migration-2.0.md) before copying values into this reference.
+interface payloads live in [interfaces.md](interfaces.md). Operators upgrading from 2.x should follow
+[migration-3.0.md](migration-3.0.md). The preserved
+[migration-2.0.md](migration-2.0.md) is only the historical 1.x upgrade guide.
 
 Root [config.yaml](../config.yaml) is intentionally curated. It should contain
 the product and deployment choices most operators actually change. The typed
@@ -22,7 +22,7 @@ constructor args > environment variables > .env > config.yaml > code defaults
 
 ## Public Configuration Boundary
 
-DlightRAG 2.0 has exactly eight top-level sections: `deployment`, `storage`,
+DlightRAG 3.0 keeps exactly eight top-level sections: `deployment`, `storage`,
 `models`, `corpus`, `answer`, `access`, `interfaces`, and `observability`.
 Nested environment variables use the same path with `__` separators. Removed
 1.x flat names are rejected rather than aliased.
@@ -454,12 +454,13 @@ those separate limits. Capability flags default to `false`; set them from
 trusted endpoint documentation. Duplicate normalized endpoint identities and
 an input limit greater than the context window are configuration errors.
 
-Capacity arithmetic is owned by one immutable, revisioned policy. Its hard
-input limit is `L = min(I if known else C, floor(0.85C))`; research compacts
-proactively at `floor(0.85L)`. A request with known `O` receives at most
-`min(O, C - input)` output tokens. Capacity is not configured under `answer`;
-there is no evidence ratio, fixed generation reserve, or fixed tool-observation
-token cap.
+Capacity arithmetic is owned by one immutable, revisioned policy. It applies
+explicit output (16,384), observation (32,768), safety (1,024), retained-tail
+(20,000), episodic-summary (8,000), and minimum-input (1,024) token reserves,
+clamped for small profiles. The provider input limit and physical context remain
+independent ceilings; a known output limit is capped by physical context left.
+Capacity is not configured under `answer`, and there are no nested percentages
+or independent evidence ratios.
 
 ### LLM Structured Output
 
@@ -890,8 +891,10 @@ share an answer budget.
 Answer images arrive only as attachments/resources. `answer.generation.max_attachment_bytes`
 governs original upload admission, `answer.generation.max_images` is capability-clamped at
 runtime, and the `answer.generation.image_*` fields bound the compressed payload sent to a
-model. Public REST, MCP, CLI, and Python answer/retrieve calls remain stateless;
-durable conversation attachments belong only to the Web conversation store:
+model. Public REST, MCP, CLI, and Python calls require no client-managed
+conversation ID, but each accepted Answer run durably pins its bounded history
+and resources for recovery and follow-up/fork. Web additionally owns the
+principal-scoped conversation index:
 
 ```yaml
 corpus:
@@ -1038,8 +1041,12 @@ Running the bundled local stack is covered in
 [operations.md](operations.md#local-langfuse-observability).
 
 Memory recall contributes usage accounting only: `memory_recall_record_count`
-and `memory_recall_chars` in the answer trace, with no record bodies and no
-separate log stream.
+and `memory_recall_chars` in the answer trace, with no record bodies in logs.
+The exact rendered Profile facts are journaled before a Research model call so
+recovery is replay-stable. JWT owners and the stable local single-user owner
+(`auth_mode: none`) are eligible; shared simple-auth callers are not. Forget is
+idempotent and leaves a tombstone. Hosts may form a proposal and commit it
+separately with a stable proposal id.
 
 ## Citations
 
@@ -1083,41 +1090,64 @@ interfaces:
 ```yaml
 answer:
   agent:
-    execution_environment: disabled   # or local_trusted
-    workspace_root: null              # optional; see below
+    execution_environment: disabled   # disabled | trust | sandbox
+    workspace_root: null
+    outbound_mcp: []
 ```
 
-Path tools, Bash, and private spill are absent unless `execution_environment` is
-`local_trusted`. That value is an operator assertion, not a sandbox.
+`disabled` exposes no path, Bash, spill, or publication tools. `trust` runs the
+rooted local adapter as the service user; rooted file tools prevent traversal
+but Bash can reach the host/container filesystem and network. `sandbox` requires
+a trusted Python ExecutionEnvironment adapter and fails explicitly if none is
+installed. It never downgrades to trust.
 
-When `local_trusted` and `workspace_root` is unset, native processes use
-`~/.dlightrag/agent_workspaces` (outside the repo, never `deployment.working_dir`). An
-explicit value must be an absolute path. The root must not overlap
-`deployment.working_dir` and must have headroom for one 2 GiB epoch copy. Multi-host
-deployments must set the same absolute path on every worker; do not rely on `~`.
+For `trust` or `sandbox`, an omitted root defaults to
+`~/.dlightrag/agent_workspaces`. An explicit root must be absolute, must not
+overlap `deployment.working_dir`, and must be the same shared RWX path on every
+worker. Compose supplies `/app/dlightrag_agent_workspaces`; set
+`DLIGHTRAG_ANSWER__AGENT__EXECUTION_ENVIRONMENT=trust` to opt in.
 
-Official Compose already sets
-`DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT=/app/dlightrag_agent_workspaces` on the named
-volume. In that stack you only need `execution_environment: local_trusted` (or
-`DLIGHTRAG_ANSWER__AGENT__EXECUTION_ENVIRONMENT=local_trusted`); leave `workspace_root`
-null so the Compose env wins. If you remove that env var, the container falls
-back to the service user's `~/.dlightrag/agent_workspaces`, which is **not** the
-named volume.
+Outbound MCP is explicit and allowlisted:
+
+```yaml
+answer:
+  agent:
+    outbound_mcp:
+      - name: analytics
+        transport: streamable-http
+        url: https://mcp.example.com/mcp
+        tools: [lookup_metric]
+      - name: local_helper
+        transport: stdio
+        command: uvx
+        args: [helper-mcp]
+        tools: [read_catalog]
+```
+
+Each remote call owns a foreground MCP session and closes it before returning.
+There is no endpoint discovery, registry, marketplace, OAuth service, or MCP
+management plane. Configure endpoint authentication outside this thin adapter.
+
+Research discovers Agent Skills from `~/.agents/skills/` and the active Agent
+Workspace's `.agents/skills/`, with workspace precedence. Initial context gets
+name, description, and global/workspace source metadata only. `load_skill` reads `SKILL.md` or a contained
+reference on demand and never executes Skill code.
+
+Trusted in-process composition accepts only three extension seams: run-local
+tool registration, Context Contributions, and an ExecutionEnvironment adapter.
+These are trusted host-code constructor inputs, not YAML-loaded user plugins.
 
 Research ends when the model writes the answer and makes no tool call, or when
 the run is cancelled or the provider fails. There is no turn cap.
 
-Conversation history is projected once when an answer run is accepted. The
-projector keeps the newest contiguous complete user/assistant pairs that fit
-every reachable planner, research, and synthesis request. For each target, its
-allowance is the smaller of 20 percent of that model's hard input limit and the
-residual after fixed input; research targets use their proactive compaction
-threshold. The resulting history and resolved model profiles are pinned in the
-durable run, so planner, research control, and final generation cannot disagree
-about which prior turns exist. Research KB tool queries are already formulated
-by the agent, so their internal RetrievalPlanner receives the pinned history for
-lexical/filter inference while `preserve_query` keeps the agent's semantic query
-unchanged.
+Conversation history is projected once when a run is accepted. The projector
+keeps the newest contiguous complete user/assistant pairs that fit every
+reachable planner, Research, and Fast invocation after fixed input and explicit
+reserves. Older omitted pairs become a separate extractive episodic
+continuation. The projected tail, episodic continuation, and model profiles are
+pinned, so planner and generation cannot disagree about prior turns. Research
+KB tool queries receive that pinned history for lexical/filter inference while
+`preserve_query` keeps the Agent's semantic query unchanged.
 
 Transport and retention limits answer different questions.
 `MAX_HISTORY_MESSAGES` and `MAX_HISTORY_CONTENT_CHARS` are transport contracts

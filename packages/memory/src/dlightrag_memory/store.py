@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
 from dlightrag_memory.errors import MemoryWriteRejectedError
-from dlightrag_memory.models import MemoryRecord, MemoryWrite
+from dlightrag_memory.models import MemoryProposal, MemoryRecord, MemoryWrite
 from dlightrag_memory.normalize import normalized_body
 from dlightrag_memory.policy import MEMORY_SUPERSEDE_RETENTION_DAYS, evaluate_memory_write
 from dlightrag_memory.ports import SearchCandidate
@@ -59,7 +60,11 @@ class InMemoryMemoryStore:
         self._rows: dict[tuple[str, str], MemoryRecord] = {}
 
     async def insert(self, record: MemoryRecord) -> None:
-        self._rows[(record.owner_id, record.memory_id)] = record
+        key = (record.owner_id, record.memory_id)
+        current = self._rows.get(key)
+        if current is not None and current != record:
+            raise ValueError("memory id already exists with different content")
+        self._rows[key] = record
 
     async def supersede(self, *, owner_id: str, old_id: str, new: MemoryRecord) -> None:
         if new.owner_id != owner_id:
@@ -83,23 +88,36 @@ class InMemoryMemoryStore:
         self._rows[(new.owner_id, new.memory_id)] = new
 
     async def forget(self, *, owner_id: str, memory_id: str) -> bool:
-        return self._rows.pop((owner_id, memory_id), None) is not None
+        key = (owner_id, memory_id)
+        current = self._rows.get(key)
+        if current is None or current.status == "forgotten":
+            return False
+        self._rows[key] = replace(current, status="forgotten", updated_at=datetime.now(UTC))
+        return True
 
     async def forget_matching(self, *, owner_id: str, body: str) -> int:
         target = body.strip()
         victims = [
             key
             for key, record in self._rows.items()
-            if record.owner_id == owner_id and record.body.strip() == target
+            if record.owner_id == owner_id
+            and record.status != "forgotten"
+            and record.body.strip() == target
         ]
+        now = datetime.now(UTC)
         for key in victims:
-            del self._rows[key]
+            self._rows[key] = replace(self._rows[key], status="forgotten", updated_at=now)
         return len(victims)
 
     async def forget_all(self, *, owner_id: str) -> int:
-        victims = [key for key, record in self._rows.items() if record.owner_id == owner_id]
+        victims = [
+            key
+            for key, record in self._rows.items()
+            if record.owner_id == owner_id and record.status != "forgotten"
+        ]
+        now = datetime.now(UTC)
         for key in victims:
-            del self._rows[key]
+            self._rows[key] = replace(self._rows[key], status="forgotten", updated_at=now)
         return len(victims)
 
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None:
@@ -191,33 +209,37 @@ class InMemoryMemoryStore:
         return len(victims)
 
 
-async def commit_memory_write(store: MemoryStore, write: MemoryWrite) -> MemoryRecord | None:
-    """Run the checklist, then insert, supersede, or hard-delete."""
+async def commit_memory_proposal(
+    store: MemoryStore, proposal: MemoryProposal
+) -> MemoryRecord | None:
+    """Commit one validated proposal idempotently, leaving tombstones on forget."""
+    write = proposal.write
     evaluate_memory_write(write)
     if write.action == "forget":
         if (write.supersedes_id or "").strip():
-            removed = await store.forget(
-                owner_id=write.owner_id, memory_id=write.supersedes_id or ""
-            )
-            if not removed:
-                raise MemoryWriteRejectedError("No matching memory to forget.")
+            await store.forget(owner_id=write.owner_id, memory_id=write.supersedes_id or "")
             return None
-        deleted = await store.forget_matching(owner_id=write.owner_id, body=write.body)
-        if deleted == 0:
-            raise MemoryWriteRejectedError("No matching memory to forget.")
+        await store.forget_matching(owner_id=write.owner_id, body=write.body)
         return None
-    now = datetime.now(UTC)
+    memory_id = str(
+        uuid5(NAMESPACE_URL, f"dlightrag-memory:{write.owner_id}:{proposal.proposal_id}")
+    )
+    existing = await store.get(owner_id=write.owner_id, memory_id=memory_id)
+    if existing is not None:
+        if _same_proposal(existing, write):
+            return existing
+        raise MemoryWriteRejectedError("Memory proposal id was reused with different content.")
     record = MemoryRecord(
         owner_id=write.owner_id,
-        memory_id=str(uuid4()),
+        memory_id=memory_id,
         kind=write.kind,
         body=write.body.strip(),
         confidence=write.confidence,
         provenance=write.provenance,
         status="active",
         supersedes_id=write.supersedes_id,
-        created_at=now,
-        updated_at=now,
+        created_at=proposal.proposed_at,
+        updated_at=proposal.proposed_at,
     )
     if (write.supersedes_id or "").strip():
         try:
@@ -225,10 +247,43 @@ async def commit_memory_write(store: MemoryStore, write: MemoryWrite) -> MemoryR
                 owner_id=write.owner_id, old_id=write.supersedes_id or "", new=record
             )
         except KeyError:
+            replay = await store.get(owner_id=write.owner_id, memory_id=memory_id)
+            if replay is not None and _same_proposal(replay, write):
+                return replay
             raise MemoryWriteRejectedError("No matching memory to replace.") from None
     else:
-        await store.insert(record)
+        try:
+            await store.insert(record)
+        except ValueError:
+            replay = await store.get(owner_id=write.owner_id, memory_id=memory_id)
+            if replay is not None and _same_proposal(replay, write):
+                return replay
+            raise MemoryWriteRejectedError(
+                "Memory proposal id was reused with different content."
+            ) from None
     return record
+
+
+async def commit_memory_write(store: MemoryStore, write: MemoryWrite) -> MemoryRecord | None:
+    """Compatibility-free convenience for hosts without an external proposal id."""
+    now = datetime.now(UTC)
+    proposal = MemoryProposal(
+        proposal_id=str(uuid5(NAMESPACE_URL, f"{write.owner_id}:{write}:{now.isoformat()}")),
+        write=write,
+        proposed_at=now,
+    )
+    return await commit_memory_proposal(store, proposal)
+
+
+def _same_proposal(record: MemoryRecord, write: MemoryWrite) -> bool:
+    return (
+        record.owner_id == write.owner_id
+        and record.kind == write.kind
+        and record.body == write.body.strip()
+        and record.confidence == write.confidence
+        and record.provenance == write.provenance
+        and record.supersedes_id == write.supersedes_id
+    )
 
 
 def default_purge_cutoff(days: int = MEMORY_SUPERSEDE_RETENTION_DAYS) -> datetime:
@@ -238,6 +293,7 @@ def default_purge_cutoff(days: int = MEMORY_SUPERSEDE_RETENTION_DAYS) -> datetim
 __all__ = [
     "InMemoryMemoryStore",
     "MemoryStore",
+    "commit_memory_proposal",
     "commit_memory_write",
     "default_purge_cutoff",
 ]

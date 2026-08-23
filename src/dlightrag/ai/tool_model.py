@@ -48,12 +48,14 @@ class ToolModel:
         messages: list[dict[str, Any]],
         tools: list[ToolDefinition],
         tool_choice: ToolChoice = "auto",
+        max_tokens: int | None = None,
     ) -> AssistantTurn:
         return await self._scheduler.run(
             lambda: self._complete_tool_turn(
                 messages=messages,
                 tools=tools,
                 tool_choice=tool_choice,
+                max_tokens=max_tokens,
             )
         )
 
@@ -63,6 +65,7 @@ class ToolModel:
         messages: list[dict[str, Any]],
         tools: list[ToolDefinition],
         tool_choice: ToolChoice,
+        max_tokens: int | None,
     ) -> AssistantTurn:
         async with self._telemetry.observe(
             "agent_model_turn",
@@ -84,6 +87,7 @@ class ToolModel:
                     tools=tools,
                     tool_choice=tool_choice,
                     temperature=self.settings.temperature,
+                    max_tokens=max_tokens,
                     model_kwargs=self._agentic_model_kwargs,
                 )
             except asyncio.CancelledError:

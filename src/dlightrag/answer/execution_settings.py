@@ -6,7 +6,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dlightrag.agent.environment import WORKSPACE_MAX_BYTES
+from dlightrag.agent.environment import (
+    WORKSPACE_MAX_BYTES,
+    ExecutionEnvironmentAdapter,
+    resolve_execution_adapter,
+)
 
 DEFAULT_LOCAL_WORKSPACE_ROOT = Path.home() / ".dlightrag" / "agent_workspaces"
 
@@ -21,8 +25,15 @@ def validate_agent_execution(
     execution_environment: str,
     workspace_root: str | None,
     working_dir: str,
+    sandbox_adapter: ExecutionEnvironmentAdapter | None = None,
 ) -> Path | None:
-    """Reject unsafe local_trusted settings before the coordinator starts."""
+    """Validate disabled/trust/sandbox without silently downgrading sandbox."""
+    if execution_environment not in {"disabled", "trust", "sandbox"}:
+        raise ValueError(f"unknown agent execution mode: {execution_environment}")
+    resolve_execution_adapter(  # validates sandbox availability before creating paths
+        execution_environment,  # type: ignore[arg-type]
+        sandbox=sandbox_adapter,
+    )
     if execution_environment == "disabled":
         return None
     raw = (workspace_root or "").strip()
@@ -32,7 +43,7 @@ def validate_agent_execution(
         root = Path(raw).expanduser()
         if not root.is_absolute():
             raise ValueError(
-                "agent.workspace_root must be an absolute path when execution is local_trusted"
+                "agent.workspace_root must be an absolute path when execution is trust or sandbox"
             )
     root.mkdir(parents=True, exist_ok=True)
     working = Path(working_dir).expanduser().resolve()

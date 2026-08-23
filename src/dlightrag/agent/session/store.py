@@ -14,6 +14,7 @@ from typing import Literal, Protocol
 
 from dlightrag.agent.session.effects import EffectSettlement, HostUpdateT
 from dlightrag.agent.session.entries import SessionEntry
+from dlightrag.agent.session.graph import AgentSessionGraph
 from dlightrag.agent.session.ids import IntentId, SessionId
 from dlightrag.agent.session.projection import ContextProjection
 
@@ -91,12 +92,17 @@ type SettleCommit = (
 
 @dataclass(frozen=True, slots=True)
 class AgentSessionSnapshot:
-    """One session's folded facts: entries, version, and active projection."""
+    """One session's canonical entries, version, head, and active projection."""
 
     session_id: SessionId
     version: int
     entries: tuple[SessionEntry, ...]
     active_projection: ContextProjection | None
+
+    @property
+    def graph(self) -> AgentSessionGraph:
+        """Return the canonical parent-linked view selected by this snapshot."""
+        return AgentSessionGraph.from_linear_entries(self.session_id, self.entries)
 
 
 class AgentSessionStore[HostUpdateT](Protocol):

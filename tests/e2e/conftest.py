@@ -472,9 +472,8 @@ def e2e_base_url(
 ) -> Generator[str, Any]:
     """Start one real FastAPI server for the E2E session on a random port."""
     working_directory = tempfile.TemporaryDirectory(prefix="dlightrag-e2e-")
-    application_config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
-        # type: ignore[call-arg]
-        working_dir=working_directory.name,
+    application_config = DlightragConfig(
+        deployment={"working_dir": working_directory.name},
         models={
             "chat": ModelRoleSettings(default=ModelSettings(model="gpt-5.4-mini", api_key="test")),
             "capacity_overrides": [
@@ -496,16 +495,12 @@ def e2e_base_url(
             ),
         },
     )
-    mutate_config(
-        application_config, "answer.generation.generation.image_max_pixels", MODEL_IMAGE_MAX_PIXELS
-    )
-    mutate_config(application_config, "answer.generation.generation.max_attachments", 6)
-    mutate_config(
-        application_config, "answer.generation.generation.max_attachment_bytes", 100 * 1024 * 1024
-    )
+    mutate_config(application_config, "answer.generation.image_max_pixels", MODEL_IMAGE_MAX_PIXELS)
+    mutate_config(application_config, "answer.generation.max_attachments", 6)
+    mutate_config(application_config, "answer.generation.max_attachment_bytes", 100 * 1024 * 1024)
     mutate_config(
         application_config,
-        "answer.generation.generation.max_total_attachment_bytes",
+        "answer.generation.max_total_attachment_bytes",
         128 * 1024 * 1024,
     )
     set_config(application_config)

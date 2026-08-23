@@ -405,6 +405,7 @@ def _linked_turn(row: Any) -> LinkedTurn:
         submission_id=str(row["submission_id"]),
         created_at=row["turn_created_at"],
         run=answer_run_record(row),
+        conversation_id=str(row["turn_conversation_id"]),
     )
 
 
@@ -733,6 +734,7 @@ class PGWebConversationStore(PostgresOperationRunner):
                         submission_id=submission_id,
                         created_at=creation.run.created_at,
                         run=creation.run,
+                        conversation_id=conversation_id,
                     ),
                     summary=_row_dict(touched if touched is not None else summary_row),
                     replayed=creation.replayed,

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
-_VERSION = "2.0.0"
+_VERSION = "3.0.0"
 _BATTERIES = (
     "aiofiles>=24.1.0",
     "aiobotocore>=3.9.0",
@@ -308,13 +308,13 @@ def test_workspace_wheel_verifier_requires_memory_dependency(tmp_path: Path) -> 
 def test_workspace_wheel_verifier_requires_lockstep_memory_pin(tmp_path: Path) -> None:
     _write_workspace_artifacts(
         tmp_path,
-        root_requires=("dlightrag-memory>=2.0.0", *_BATTERIES),
+        root_requires=("dlightrag-memory>=3.0.0", *_BATTERIES),
     )
 
     completed = _verify_wheels(tmp_path)
 
     assert completed.returncode == 1
-    assert "dependency must be pinned as dlightrag-memory==2.0.0" in completed.stderr
+    assert "dependency must be pinned as dlightrag-memory==3.0.0" in completed.stderr
 
 
 def test_workspace_wheel_verifier_requires_batteries_in_wheel_metadata(tmp_path: Path) -> None:

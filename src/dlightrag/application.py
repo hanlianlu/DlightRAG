@@ -14,6 +14,7 @@ import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from dlightrag.config import DlightragConfig, get_config
@@ -264,23 +265,41 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         settings_store=memory_settings,
         superseded_retention_days=config.answer.runtime.answer_run_retention_days,
     )
+    from dlightrag.adapters.mcp_tools import OutboundMcpServer, outbound_mcp_tools
+
+    outbound_tools = outbound_mcp_tools(
+        tuple(
+            OutboundMcpServer(
+                name=server.name,
+                transport=server.transport,
+                tools=server.tools,
+                command=server.command,
+                args=server.args,
+                url=server.url,
+            )
+            for server in config.answer.agent.outbound_mcp
+        )
+    )
+    answer_executor = AnswerExecutor(
+        store=run_store,
+        pool=pool,
+        retrieve=retrieval.retrieve_result,
+        models=models,
+        capabilities=capabilities,
+        resources=resources,
+        settings=answer_executor_settings(config),
+        telemetry=telemetry,
+        execution_environment=config.answer.agent.execution_environment,
+        workspace_root=config.answer.agent.workspace_root,
+        working_dir=config.deployment.working_dir,
+        memory_store=memory_store,
+        memory_recall_enabled=memory.recall_enabled,
+        external_tools=outbound_tools,
+        skills_global_root=Path.home() / ".agents" / "skills",
+    )
     coordinator = RunCoordinator(
         store=run_store,
-        executor=AnswerExecutor(
-            store=run_store,
-            pool=pool,
-            retrieve=retrieval.retrieve_result,
-            models=models,
-            capabilities=capabilities,
-            resources=resources,
-            settings=answer_executor_settings(config),
-            telemetry=telemetry,
-            execution_environment=config.answer.agent.execution_environment,
-            workspace_root=config.answer.agent.workspace_root,
-            working_dir=config.deployment.working_dir,
-            memory_store=memory_store,
-            memory_recall_enabled=memory.recall_enabled,
-        ),
+        executor=answer_executor,
         answer_worker_concurrency=config.answer.runtime.answer_worker_concurrency,
     )
 
@@ -303,6 +322,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         model_fingerprint_for_role=lambda role: model_fingerprint(
             model_settings_for_role(config, role)
         ),
+        research_tool_supplements=answer_executor.acceptance_research_tools,
     )
     web_store = PGWebConversationStore(run_store=run_store)
     return _ApplicationComponents(

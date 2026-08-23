@@ -3,7 +3,7 @@
 
 import pytest
 
-from dlightrag.ai.capacity import ModelProfile
+from dlightrag.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.answer.history import (
     HistoryProjectionOverflowError,
     HistoryProjectionTarget,
@@ -18,6 +18,14 @@ def _measure(fixed: int):
     return measure
 
 
+_POLICY = ContextPolicy(
+    requested_output_reserve_tokens=0,
+    observation_reserve_tokens=13,
+    safety_reserve_tokens=15,
+    minimum_input_tokens=0,
+)
+
+
 def _history() -> list[dict[str, object]]:
     return [
         {"role": "user", "content": "old"},
@@ -28,7 +36,7 @@ def _history() -> list[dict[str, object]]:
     ]
 
 
-def test_projector_keeps_newest_complete_pairs_within_every_call_allowance() -> None:
+def test_projector_keeps_newest_pairs_and_summarizes_omitted_history() -> None:
     profile = ModelProfile(context_window_tokens=100)
     projected = project_history(
         _history(),
@@ -36,23 +44,28 @@ def test_projector_keeps_newest_complete_pairs_within_every_call_allowance() -> 
             HistoryProjectionTarget("planner", profile, _measure(0)),
             HistoryProjectionTarget("fast", profile, _measure(76)),
         ),
+        context_policy=_POLICY,
     )
 
     assert projected.messages == [
         {"role": "user", "content": "new"},
         {"role": "assistant", "content": "answer"},
     ]
+    assert "user: old" in projected.episodic_summary
+    assert "assistant: reply" in projected.episodic_summary
 
 
-def test_zero_allowance_produces_empty_history() -> None:
+def test_zero_allowance_produces_only_episodic_continuation() -> None:
     profile = ModelProfile(context_window_tokens=100)
 
     projected = project_history(
         _history(),
         targets=(HistoryProjectionTarget("planner", profile, _measure(85)),),
+        context_policy=_POLICY,
     )
 
     assert projected.messages == []
+    assert "new" in projected.episodic_summary
 
 
 def test_research_seed_uses_compaction_trigger_as_acceptance_target() -> None:
@@ -68,6 +81,7 @@ def test_research_seed_uses_compaction_trigger_as_acceptance_target() -> None:
                 proactive_compaction=True,
             ),
         ),
+        context_policy=_POLICY,
     )
 
     assert projected.messages == [
@@ -83,6 +97,7 @@ def test_fixed_envelope_overflow_names_the_failing_call() -> None:
         project_history(
             _history(),
             targets=(HistoryProjectionTarget("planner", profile, _measure(86)),),
+            context_policy=_POLICY,
         )
 
     assert caught.value.target == "planner"

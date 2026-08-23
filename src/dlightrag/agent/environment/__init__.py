@@ -3,10 +3,10 @@
 
 from dlightrag.agent.environment.access import (
     AccessScheduler,
-    AllAccess,
     ExternalAccess,
     PathAccess,
     ToolAccess,
+    WorkspaceAccess,
 )
 from dlightrag.agent.environment.child import build_child_environment, looks_like_secret_name
 from dlightrag.agent.environment.errors import (
@@ -17,6 +17,14 @@ from dlightrag.agent.environment.errors import (
     FullOutputUnavailable,
     PathRejected,
     WorkspaceQuotaExceeded,
+)
+from dlightrag.agent.environment.execution import (
+    ExecutionEnvironment,
+    ExecutionEnvironmentAdapter,
+    ExecutionMode,
+    SandboxUnavailableError,
+    TrustExecutionAdapter,
+    resolve_execution_adapter,
 )
 from dlightrag.agent.environment.local import (
     CompletedProcess,
@@ -30,16 +38,22 @@ __all__ = [
     "WORKSPACE_MAX_BYTES",
     "WORKSPACE_MAX_ENTRIES",
     "AccessScheduler",
-    "AllAccess",
+    "WorkspaceAccess",
     "CompletedProcess",
     "DirectoryEntry",
+    "ExecutionEnvironment",
+    "ExecutionEnvironmentAdapter",
+    "ExecutionMode",
     "ExternalAccess",
     "FullOutputUnavailable",
     "LocalExecutionEnvironment",
     "PathAccess",
     "PathRejected",
+    "SandboxUnavailableError",
     "ToolAccess",
+    "TrustExecutionAdapter",
     "WorkspaceQuotaExceeded",
     "build_child_environment",
     "looks_like_secret_name",
+    "resolve_execution_adapter",
 ]
