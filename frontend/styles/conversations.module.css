@@ -262,6 +262,10 @@
     font-weight: 600;
 }
 
+:global(body.settings-open #settings-btn) {
+    color: var(--color-text-primary);
+}
+
 :global(#settings-btn:disabled) {
     cursor: not-allowed;
     opacity: 0.46;

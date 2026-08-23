@@ -15,8 +15,10 @@ function openSettings(): Promise<string> {
   if (!dialog) return Promise.resolve('');
   dialog.returnValue = '';
   dialog.showModal();
+  document.body.classList.add('settings-open');
   return new Promise(function(resolve) {
     dialog.addEventListener('close', function() {
+      document.body.classList.remove('settings-open');
       resolve(dialog.returnValue);
     }, {once: true});
   });
@@ -26,6 +28,13 @@ export function setupSettings(onDeleteAll: () => void): void {
   const trigger = document.getElementById(SETTINGS_BUTTON_ID);
   const dialog = document.getElementById(SETTINGS_DIALOG_ID) as HTMLDialogElement | null;
   if (!trigger || !(trigger instanceof HTMLButtonElement) || !dialog) return;
+
+  // Scrim clicks are retargeted to the dialog element itself by the browser;
+  // clicks anywhere inside the drawer body land on inner nodes and never
+  // dismiss, matching the right-panel light-dismiss semantics.
+  dialog.addEventListener('click', function(event) {
+    if (event.target === dialog) dialog.close();
+  });
 
   trigger.addEventListener('click', async () => {
     try {

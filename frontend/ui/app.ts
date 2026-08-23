@@ -352,26 +352,31 @@ export class DlApp extends LightElement {
       </dialog>
       <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
         <form id="settings-form" method="dialog">
-          <h2 id="settings-title">Settings</h2>
-          <section class="settings-section">
-            <h3 id="settings-memory">Profile Memory</h3>
-            <label class="ui-dialog-checkbox">
-              <input type="checkbox" id="memory-enabled-toggle" />
-              Use remembered preferences and facts in answers
-            </label>
-            <p id="memory-active-count" aria-live="polite"></p>
-            <div class="settings-row-actions">
-              <button type="button" id="memory-clear-btn" class="settings-secondary-danger">Clear memory</button>
+          <div class="settings-drawer-body">
+            <div class="settings-header">
+              <h2 id="settings-title">Settings</h2>
+              <button class="panel-close settings-close" type="submit" value="close-settings"
+                      aria-label="Close settings">✕</button>
             </div>
-          </section>
-          <section class="settings-section">
-            <h3 id="settings-data">Conversation History</h3>
-            <p class="settings-note">Conversation turns stay until run retention (default 365 days) reclaims them.</p>
-            <div class="ui-dialog-actions">
-              <button type="submit" value="close-settings">Done</button>
-              <button type="submit" value="delete-all" class="ui-dialog-danger">Delete all conversations</button>
-            </div>
-          </section>
+            <section class="settings-section">
+              <h3 id="settings-memory">Profile Memory</h3>
+              <label class="ui-dialog-checkbox">
+                <input type="checkbox" id="memory-enabled-toggle" />
+                Activate profile memories
+              </label>
+              <p id="memory-active-count" aria-live="polite"></p>
+              <div class="settings-actions">
+                <button type="button" id="memory-clear-btn" class="settings-secondary-danger">Clear memory</button>
+              </div>
+            </section>
+            <section class="settings-section">
+              <h3 id="settings-data">Conversation History</h3>
+              <p class="settings-note">Conversation turns stay until run retention (default 365 days) reclaims them.</p>
+              <div class="settings-actions">
+                <button type="submit" value="delete-all" class="settings-secondary-danger">Delete all conversations</button>
+              </div>
+            </section>
+          </div>
         </form>
       </dialog>
       <dialog id="discard-draft-dialog" aria-labelledby="discard-draft-title">
