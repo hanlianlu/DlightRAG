@@ -137,16 +137,11 @@ def test_compose_preloads_postgres_extensions() -> None:
 
 
 def test_compose_postgres_endpoint_is_env_overridable() -> None:
-    """A hardcoded endpoint would silently beat config.yaml: env outranks YAML."""
+    """The container wires the service host while env still outranks YAML."""
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
-    assert (
-        "DLIGHTRAG_STORAGE__POSTGRES__HOST: ${DLIGHTRAG_STORAGE__POSTGRES__HOST:-postgres}"
-        in compose
-    )
-    assert (
-        'DLIGHTRAG_STORAGE__POSTGRES__PORT: "${DLIGHTRAG_STORAGE__POSTGRES__PORT:-5432}"' in compose
-    )
+    assert "DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres" in compose
+    assert "DLIGHTRAG_STORAGE__POSTGRES__PORT" not in compose
 
 
 def test_compose_postgres_performance_knobs_are_env_overridable() -> None:
