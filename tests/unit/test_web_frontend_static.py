@@ -34,7 +34,8 @@ def test_lit_app_owns_the_final_conversation_shell() -> None:
         'id="conversation-sidebar-toggle"',
         'id="conversation-sidebar-open"',
         'id="delete-conversation-dialog"',
-        'id="delete-all-conversations-btn"',
+        'id="settings-btn"',
+        'id="delete-all-btn"',
         'id="delete-all-conversations-dialog"',
         'id="discard-draft-dialog"',
     ):
@@ -147,7 +148,7 @@ def test_web_static_js_build_has_no_orphan_chunks() -> None:
     )
     html = "\n".join(
         (app_root / filename).read_text(encoding="utf-8")
-        for filename in ("index.html", "login.html")
+        for filename in ("index.html", "login.html", "design-system.html")
     )
     roots = set(re.findall(r'/static/app/assets/([^"/]+\.js)', html))
     expected = {path.name for path in assets.glob("*.js")}

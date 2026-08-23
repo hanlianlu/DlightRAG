@@ -64,10 +64,6 @@
     color: var(--color-text-primary);
 }
 
-.ui-btn-danger-text:hover:not(:disabled) {
-    color: var(--color-danger-text);
-}
-
 .ui-dialog-actions .ui-dialog-danger {
     background: var(--color-danger-bg);
     border-color: transparent;
