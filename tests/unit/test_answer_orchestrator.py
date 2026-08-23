@@ -266,7 +266,6 @@ async def test_research_calls_receive_exact_model_output_allowance() -> None:
         context_window_tokens=100_000,
         max_input_tokens=85_000,
         max_output_tokens=777,
-        supports_tools=True,
     )
     orchestrator = _research(
         agent,
@@ -309,7 +308,6 @@ async def test_tool_schema_overflow_fails_before_research_model_call() -> None:
             context_window_tokens=50_000,
             max_input_tokens=42_500,
             max_output_tokens=1_000,
-            supports_tools=True,
         ),
         resource_tools=[oversized_tool],
         resource_manifest=(

@@ -4,7 +4,7 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
-from dlightrag.ai.capacity import ModelCapabilityError, ModelProfile
+from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole, ModelSettings
 from dlightrag.ai.vision import ImageCapabilityStatus, ImageProbeOutcome, ModelImageCapabilities
 from dlightrag.answer.capability import (
@@ -151,8 +151,9 @@ class AnswerCapabilityCoordinator:
         )
 
     def validate_startup(self) -> None:
-        if self._settings.web_search_enabled and not self.model_profile("query").supports_tools:
-            raise ModelCapabilityError(role="query", capability="tool calling")
+        # Every modern model is assumed tool-capable (the field was removed
+        # from the profile schema); no capability gate remains here.
+        return None
 
     async def probe_all(self) -> None:
         await self.probe_answer()

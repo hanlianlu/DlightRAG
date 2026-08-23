@@ -620,7 +620,6 @@ class AnswerService:
         allowed = valid_modes(
             resources=tuple(resources),
             capability=ModeCapability(
-                query_supports_tools=query.supports_tools,
                 query_supports_images=query.supports_images,
                 inspect_available=vlm.supports_images,
             ),

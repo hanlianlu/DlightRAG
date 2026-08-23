@@ -139,7 +139,6 @@ def test_root_resolves_model_profiles_independently_per_role() -> None:
                     context_window_tokens=262_144,
                     max_input_tokens=200_000,
                     max_output_tokens=32_768,
-                    supports_tools=True,
                     supports_reasoning=True,
                 )
             ],
@@ -152,13 +151,17 @@ def test_root_resolves_model_profiles_independently_per_role() -> None:
     query = model_profile_for_role(config, "query")
     assert query.context_window_tokens == 262_144
     assert query.max_input_tokens == 200_000
-    assert query.supports_tools is True
 
 
 def test_root_consults_adapter_profile_before_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter_profile = ModelProfile(context_window_tokens=123_456, supports_tools=True)
+    adapter_profile = ModelProfile(
+        context_window_tokens=200_000,
+        max_output_tokens=8_192,
+        supports_images=True,
+        supports_reasoning=True,
+    )
     metadata = MagicMock(return_value=adapter_profile)
     monkeypatch.setattr("dlightrag.model_settings.get_adapter_model_profile", metadata)
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]

@@ -73,7 +73,6 @@ _E2E_PROFILE = ModelProfile(
     context_window_tokens=1_000_000,
     max_output_tokens=128_000,
     supports_images=True,
-    supports_tools=True,
     supports_reasoning=True,
 )
 
@@ -483,7 +482,6 @@ def e2e_base_url(
                     context_window_tokens=400_000,
                     max_output_tokens=128_000,
                     supports_images=True,
-                    supports_tools=True,
                     supports_reasoning=True,
                 )
             ],

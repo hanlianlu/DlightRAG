@@ -279,7 +279,6 @@ def ask_model_capacity_override(prompter: Prompter, block: dict) -> dict:
         "max_input_tokens": max_input,
         "max_output_tokens": max_output,
         "supports_images": prompter.confirm("Does this model accept image input?"),
-        "supports_tools": prompter.confirm("Does this model support tool calling?"),
         "supports_reasoning": prompter.confirm("Does this model support reasoning tokens?"),
     }
 

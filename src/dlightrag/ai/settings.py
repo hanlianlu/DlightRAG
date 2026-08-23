@@ -172,7 +172,6 @@ class ModelCapacityOverrideSettings(FrozenSettings):
     max_input_tokens: int | None = Field(default=None, ge=1)
     max_output_tokens: int | None = Field(default=None, ge=1)
     supports_images: bool = False
-    supports_tools: bool = False
     supports_reasoning: bool = False
 
     @field_validator("provider", mode="before")

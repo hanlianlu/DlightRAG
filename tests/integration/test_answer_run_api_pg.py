@@ -63,7 +63,6 @@ _PROFILE = ModelProfile(
     context_window_tokens=200_000,
     max_input_tokens=180_000,
     max_output_tokens=16_000,
-    supports_tools=True,
 )
 
 

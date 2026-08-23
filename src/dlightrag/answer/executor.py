@@ -83,7 +83,6 @@ from dlightrag.answer.citations.finalization import finalize_answer
 from dlightrag.answer.citations.streaming import aclose_answer_stream
 from dlightrag.answer.errors import (
     AnswerInputError,
-    AnswerModelCapabilityError,
     AnswerResourceAdmissionError,
     CurrentImagePayloadError,
     InvalidToolConfigurationError,
@@ -344,8 +343,6 @@ class AnswerResourceResolver:
         resolved_mode: ResolvedMode,
     ) -> ResolvedAnswerResources:
         """Resolve resource capabilities, manifests, tools, and image transport."""
-        if resources and not models.query.supports_tools:
-            raise AnswerModelCapabilityError()
         declared_image_count = sum(
             1
             for resource in resources or ()
@@ -1189,8 +1186,6 @@ class AnswerExecutor:
                     raise ValueError(f"unknown child model role: {role}")
                 selected_role: ModelRole = role  # type: ignore[assignment]
                 profile = models.query if role == "query" else models.extract
-                if not profile.supports_tools:
-                    raise ValueError(f"child model role is not tool-capable: {role}")
                 selected = self._models.tool_model(selected_role)
                 return selected, selected.stream_text, profile
 

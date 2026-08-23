@@ -137,7 +137,6 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
                     context_window_tokens=100_000,
                     max_output_tokens=10_000,
                     supports_images=True,
-                    supports_tools=True,
                 )
             ],
             "embedding": EmbeddingSettings(
@@ -190,7 +189,6 @@ def _reprobe_config() -> DlightragConfig:
                     context_window_tokens=1_048_576,
                     max_output_tokens=262_144,
                     supports_images=True,
-                    supports_tools=True,
                     supports_reasoning=True,
                 )
             ],
@@ -566,7 +564,6 @@ def _role_config(**roles: ModelSettings) -> DlightragConfig:
             context_window_tokens=100_000,
             max_output_tokens=10_000,
             supports_images=True,
-            supports_tools=True,
         )
     return DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         models={

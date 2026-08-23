@@ -46,7 +46,6 @@ class ModelProfile:
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     supports_images: bool = False
-    supports_tools: bool = False
     supports_reasoning: bool = False
 
     def __post_init__(self) -> None:

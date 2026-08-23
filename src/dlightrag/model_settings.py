@@ -170,7 +170,6 @@ def _profile_from_override(config: ModelCapacityOverrideSettings) -> ModelProfil
         max_input_tokens=config.max_input_tokens,
         max_output_tokens=config.max_output_tokens,
         supports_images=config.supports_images,
-        supports_tools=config.supports_tools,
         supports_reasoning=config.supports_reasoning,
     )
 

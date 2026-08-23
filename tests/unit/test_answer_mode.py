@@ -31,7 +31,7 @@ def test_omitted_mode_canonicalizes_to_auto_and_matches_explicit_auto_fingerprin
 def test_explicit_fast_with_pdf_is_unsupported_answer_mode() -> None:
     valid = valid_modes(
         resources=(ModeResource(role="document"),),
-        capability=ModeCapability(query_supports_tools=True, query_supports_images=True),
+        capability=ModeCapability(query_supports_images=False),
     )
     assert valid == frozenset({"research"})
     with pytest.raises(UnsupportedAnswerModeError) as caught:
@@ -43,7 +43,6 @@ def test_image_without_vision_or_inspect_is_unsupported_resource_capability() ->
     valid = valid_modes(
         resources=(ModeResource(role="image"),),
         capability=ModeCapability(
-            query_supports_tools=False,
             query_supports_images=False,
             inspect_available=False,
         ),
@@ -58,7 +57,6 @@ def test_web_search_does_not_remove_fast_from_a_text_only_request() -> None:
     valid = valid_modes(
         resources=(),
         capability=ModeCapability(
-            query_supports_tools=True,
             query_supports_images=False,
             inspect_available=False,
             web_search_available=True,

@@ -41,7 +41,6 @@ _NOW = datetime.datetime(2026, 8, 17, tzinfo=datetime.UTC)
 _PROFILE = ModelProfile(
     context_window_tokens=200_000,
     max_input_tokens=180_000,
-    supports_tools=True,
 )
 
 

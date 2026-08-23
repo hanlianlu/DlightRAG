@@ -144,7 +144,6 @@ def test_config(tmp_working_dir: Path) -> DlightragConfig:
                     context_window_tokens=400_000,
                     max_output_tokens=128_000,
                     supports_images=True,
-                    supports_tools=True,
                     supports_reasoning=True,
                 )
             ],

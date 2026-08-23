@@ -12,7 +12,7 @@ from dlightrag.ai.capacity import (
     ModelProfile,
 )
 from dlightrag.ai.catalog import (
-    UnknownModelProfileError,
+    FALLBACK_MODEL_PROFILE,
     resolve_model_profile,
 )
 from dlightrag.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
@@ -24,7 +24,6 @@ def test_context_policy_applies_explicit_model_aware_reserves() -> None:
         max_input_tokens=180_000,
         max_output_tokens=16_000,
         supports_images=True,
-        supports_tools=True,
         supports_reasoning=True,
     )
     policy = ContextPolicy()
@@ -48,13 +47,11 @@ def test_profile_resolution_prefers_the_complete_override_before_adapter_facts()
         context_window_tokens=90_000,
         max_output_tokens=10_000,
         supports_images=True,
-        supports_tools=True,
         supports_reasoning=True,
     )
     adapter = ModelProfile(
         context_window_tokens=80_000,
         supports_images=False,
-        supports_tools=True,
         supports_reasoning=False,
     )
 
@@ -71,21 +68,24 @@ def test_profile_resolution_prefers_the_complete_override_before_adapter_facts()
     assert catalog_profile.context_window_tokens == 1_050_000
     assert catalog_profile.max_output_tokens == 131_072
     assert catalog_profile.supports_images is True
-    assert catalog_profile.supports_tools is True
     assert catalog_profile.supports_reasoning is True
 
 
-def test_unknown_model_requires_an_explicit_profile_override() -> None:
+def test_unknown_model_resolves_to_the_fallback_profile() -> None:
     fingerprint = ModelFingerprint(
         provider="openai",
         model="private-model",
         endpoint_fingerprint="endpoint-hash",
     )
 
-    with pytest.raises(UnknownModelProfileError, match="capacity override") as caught:
-        resolve_model_profile(fingerprint)
+    resolved = resolve_model_profile(fingerprint)
 
-    assert caught.value.fingerprint == fingerprint
+    assert resolved == FALLBACK_MODEL_PROFILE
+    assert resolved.context_window_tokens == 1_048_576
+    assert resolved.max_output_tokens == 262_144
+    assert resolved.supports_images is True
+    assert resolved.supports_reasoning is True
+    assert not hasattr(resolved, "supports_tools")
 
 
 def test_policy_classifies_overflow_and_caps_required_output_to_physical_remainder() -> None:

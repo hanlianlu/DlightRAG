@@ -27,7 +27,6 @@ class ModeResource:
 class ModeCapability:
     """Pinned model/tool facts that decide which modes can run."""
 
-    query_supports_tools: bool
     query_supports_images: bool
     inspect_available: bool = False
     web_search_available: bool = False
@@ -66,7 +65,7 @@ def valid_modes(
     allowed: set[ResolvedMode] = set()
     if _fast_can_represent(resources, capability):
         allowed.add("fast")
-    if capability.query_supports_tools and _research_can_represent(resources, capability):
+    if _research_can_represent(resources, capability):
         allowed.add("research")
     return frozenset(allowed)
 

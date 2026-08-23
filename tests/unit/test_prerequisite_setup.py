@@ -162,7 +162,6 @@ def test_unknown_llm_prompts_for_one_complete_capacity_override(wiz):
             "200000",
             "32768",
             True,
-            True,
             False,
         ]
     )
@@ -175,7 +174,6 @@ def test_unknown_llm_prompts_for_one_complete_capacity_override(wiz):
         "max_input_tokens": 200_000,
         "max_output_tokens": 32_768,
         "supports_images": True,
-        "supports_tools": True,
         "supports_reasoning": False,
     }
 

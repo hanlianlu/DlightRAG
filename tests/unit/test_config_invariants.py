@@ -97,16 +97,14 @@ def test_invalid_model_settings_are_rejected(values: dict[str, Any]) -> None:
 
 
 def test_capacity_override_accepts_complete_facts_and_rejects_input_overflow() -> None:
-    settings = ModelCapacityOverrideSettings(
+    ModelCapacityOverrideSettings(
         provider="openai",
         model="private-model",
         context_window_tokens=262_144,
         max_input_tokens=200_000,
         max_output_tokens=32_768,
         supports_images=True,
-        supports_tools=True,
     )
-    assert settings.supports_images and settings.supports_tools
     with pytest.raises(ValidationError, match="max_input_tokens"):
         ModelCapacityOverrideSettings(
             model="invalid",

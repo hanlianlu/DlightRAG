@@ -135,7 +135,6 @@ class PinnedModelProfile:
                 "max_input_tokens": self.profile.max_input_tokens,
                 "max_output_tokens": self.profile.max_output_tokens,
                 "supports_images": self.profile.supports_images,
-                "supports_tools": self.profile.supports_tools,
                 "supports_reasoning": self.profile.supports_reasoning,
             },
         }
@@ -162,7 +161,6 @@ class PinnedModelProfile:
                 max_input_tokens=_optional_int(profile.get("max_input_tokens")),
                 max_output_tokens=_optional_int(profile.get("max_output_tokens")),
                 supports_images=bool(profile.get("supports_images")),
-                supports_tools=bool(profile.get("supports_tools")),
                 supports_reasoning=bool(profile.get("supports_reasoning")),
             ),
         )

@@ -341,7 +341,6 @@ async def test_stream_close_failure_does_not_skip_registry_close(
 
 
 async def test_research_run_seeds_facts_without_duplicating_pinned_history() -> None:
-    profile = ModelProfile(context_window_tokens=10_000, supports_tools=True)
     request = AnswerRunInput(
         query="resume",
         workspaces=("default",),
@@ -353,7 +352,12 @@ async def test_research_run_seeds_facts_without_duplicating_pinned_history() -> 
             PinnedModelProfile(
                 role=role,
                 fingerprint=ModelFingerprint("openai", f"test-{role}", None),
-                profile=profile,
+                profile=ModelProfile(
+                    context_window_tokens=262_144,
+                    max_output_tokens=32_768,
+                    supports_images=True,
+                    supports_reasoning=True,
+                ),
             )
             for role in ("extract", "keyword", "query", "vlm")
         ),
@@ -421,7 +425,6 @@ async def test_research_run_seeds_facts_without_duplicating_pinned_history() -> 
 
 
 async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -> None:
-    profile = ModelProfile(context_window_tokens=10_000, supports_tools=True)
     request = AnswerRunInput(
         query="resume",
         workspaces=("default",),
@@ -429,7 +432,12 @@ async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -
             PinnedModelProfile(
                 role=role,
                 fingerprint=ModelFingerprint("openai", f"test-{role}", None),
-                profile=profile,
+                profile=ModelProfile(
+                    context_window_tokens=262_144,
+                    max_output_tokens=32_768,
+                    supports_images=True,
+                    supports_reasoning=True,
+                ),
             )
             for role in ("extract", "keyword", "query", "vlm")
         ),
