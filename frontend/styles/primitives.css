@@ -127,6 +127,7 @@
 }
 
 .confirm-dialog .ui-dialog-checkbox {
+    color: var(--color-text-muted);
     font-size: var(--font-size-detail);
 }
 

@@ -39,6 +39,19 @@
         "supports_tools": true,
         "supports_reasoning": true
       }
+    },
+    {
+      "provider": "openai",
+      "model": "deepseek-v4-flash-vision-exp",
+      "base_url": "https://api.deepseek.com",
+      "profile": {
+        "context_window_tokens": 1048576,
+        "max_input_tokens": null,
+        "max_output_tokens": 393216,
+        "supports_images": true,
+        "supports_tools": true,
+        "supports_reasoning": true
+      }
     }
   ]
 }

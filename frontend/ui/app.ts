@@ -342,7 +342,7 @@ export class DlApp extends LightElement {
           <p id="delete-all-conversations-draft-warning" hidden>Draft and attachments will also be deleted.</p>
           <label class="ui-dialog-checkbox">
             <input type="checkbox" id="delete-all-also-clear-memory" />
-            Also clear Profile memory (remembered preferences and facts)
+            Also clear profile memories
           </label>
           <div class="ui-dialog-actions">
             <button type="submit" value="cancel">Cancel</button>
