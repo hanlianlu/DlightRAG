@@ -1,7 +1,18 @@
 # Roadmap
 
-No decided follow-up is pending. This page records completed commitments and
-explicit non-goals so they are not mistaken for open product promises.
+## Decided follow-ups
+
+These are decided but not scheduled; each lands with its own product contract
+when picked up.
+
+- **Answer output continuation.** When final answer generation stops with
+  `finish_reason=length` because the resolved `max_output_tokens`
+  underestimates the model, a continuation harness would issue a bounded
+  "continue from here" follow-up call and stitch the result before citation
+  finalization. Deferred: the fallback profile is deliberately generous on
+  output, the existing Research length-stop semantics (skip tool preflight)
+  must stay intact, and stitching across calls needs its own token budget and
+  citation-boundary contract.
 
 ## Completed
 
@@ -30,6 +41,10 @@ explicit non-goals so they are not mistaken for open product promises.
 - [x] **Durable context accounting.** Provider-measured anchors, dynamic model
   reserves, episodic conversation continuation, and exactly one active
   compaction projection.
+- [x] **Model capacity fallback.** Uncatalogued endpoints resolve to a shared
+  generous fallback profile instead of failing, with uncatalogued-use logging;
+  `supports_tools` was removed from the profile schema because every modern
+  model is tool-capable.
 
 ## Deliberate non-goals
 
