@@ -61,7 +61,7 @@ dependencies = [
     # Direct-text charset detection for answer resource reads.
     "charset-normalizer>=3.4.0",
     # Deterministic binary answer-resource readers (selected extras only).
-    "markitdown[docx,pdf,pptx,xlsx]>=0.1.4",
+    "markitdown[docx,pdf,pptx,xlsx]>=0.1.7",
     "pypdfium2>=5.13.0",
     "openpyxl>=3.1.5",
 ]

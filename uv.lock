@@ -865,7 +865,7 @@ requires-dist = [
     { name = "lightrag-hku", specifier = ">=1.5.6" },
     { name = "lingua-language-detector", specifier = ">=2.2.0" },
     { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
-    { name = "markitdown", extras = ["docx", "pdf", "pptx", "xlsx"], specifier = ">=0.1.4" },
+    { name = "markitdown", extras = ["docx", "pdf", "pptx", "xlsx"], specifier = ">=0.1.7" },
     { name = "mcp", specifier = ">=2.0.0" },
     { name = "nh3", specifier = ">=0.2" },
     { name = "numpy", specifier = ">=2.5.0" },
