@@ -63,6 +63,15 @@ models:
     input_modality: auto
     max_concurrency: 16
     batch_size: 64
+  # Capacity overrides pin trusted facts for catalog-unknown custom models.
+  capacity_overrides:
+    - provider: openai
+      model: deepseek/deepseek-v4-flash-vision-exp
+      base_url: https://openrouter.ai/api/v1
+      context_window_tokens: 131072
+      max_output_tokens: 16384
+      supports_images: true
+      supports_tools: true
   rerank:
     enabled: true
     strategy: voyage_reranker
