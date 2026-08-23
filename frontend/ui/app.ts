@@ -371,11 +371,22 @@ export class DlApp extends LightElement {
             </section>
             <section class="settings-section">
               <h3 id="settings-data">Conversation History</h3>
+              <p id="conversation-count" aria-live="polite"></p>
               <p class="settings-note">Conversation turns stay until run retention (default 365 days) reclaims them.</p>
               <div class="settings-actions">
                 <button type="submit" value="delete-all" class="settings-secondary-danger">Delete all conversations</button>
               </div>
             </section>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="clear-memory-dialog" aria-labelledby="clear-memory-title">
+        <form method="dialog">
+          <h2 id="clear-memory-title">Clear Profile memory?</h2>
+          <p>Remembered preferences and facts will be forgotten. Conversations are not affected.</p>
+          <div class="ui-dialog-actions">
+            <button type="submit" value="cancel">Cancel</button>
+            <button type="submit" value="clear" class="ui-dialog-danger">Clear memory</button>
           </div>
         </form>
       </dialog>

@@ -1,13 +1,24 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** Unified settings dialog: Profile Memory and Conversation History. */
+/** Unified settings drawer: Profile Memory and Conversation History. */
 
 import {clearMemory, putMemorySettings} from '../api/memory.ts';
+import {conversationStore} from '../stores/conversationStore.ts';
+import {dialogResult} from './conversations.ts';
 import {refreshMemorySettingsPanel} from './memory.ts';
 import {showToast} from './toast.ts';
 
 const SETTINGS_BUTTON_ID = 'settings-btn';
 const SETTINGS_DIALOG_ID = 'settings-dialog';
 const CLEAR_MEMORY_BUTTON_ID = 'memory-clear-btn';
+const CLEAR_MEMORY_DIALOG_ID = 'clear-memory-dialog';
+const CONVERSATION_COUNT_ID = 'conversation-count';
+
+function refreshConversationCount(): void {
+  const count = document.getElementById(CONVERSATION_COUNT_ID);
+  if (!count) return;
+  const total = conversationStore.conversations.length;
+  count.textContent = total === 1 ? '1 conversation' : `${total} conversations`;
+}
 
 /** Open Settings; resolve with the chosen submit value ('close-settings'|'delete-all'). */
 function openSettings(): Promise<string> {
@@ -37,6 +48,7 @@ export function setupSettings(onDeleteAll: () => void): void {
   });
 
   trigger.addEventListener('click', async () => {
+    refreshConversationCount();
     try {
       await refreshMemorySettingsPanel();
     } catch {
@@ -54,7 +66,10 @@ export function setupSettings(onDeleteAll: () => void): void {
     if (action === 'delete-all') onDeleteAll();
   });
 
-  document.getElementById(CLEAR_MEMORY_BUTTON_ID)?.addEventListener('click', async function() {
+  const clearButton = document.getElementById(CLEAR_MEMORY_BUTTON_ID);
+  clearButton?.addEventListener('click', async function() {
+    const confirm = document.getElementById(CLEAR_MEMORY_DIALOG_ID) as HTMLDialogElement | null;
+    if (confirm && await dialogResult(confirm, () => clearButton) !== 'clear') return;
     try {
       await clearMemory();
       await refreshMemorySettingsPanel();

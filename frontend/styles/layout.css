@@ -727,7 +727,12 @@ body.conversation-sidebar-open .panel-split {
 }
 
 .settings-close {
+    align-items: center;
+    display: inline-flex;
     flex: 0 0 auto;
+    justify-content: center;
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
+    line-height: 1;
 }
 
 .settings-actions {
@@ -766,6 +771,10 @@ body.conversation-sidebar-open .panel-split {
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1.5;
     margin-block: var(--space-tight);
+}
+
+.settings-note {
+    font-size: var(--font-size-caption);
 }
 
 
