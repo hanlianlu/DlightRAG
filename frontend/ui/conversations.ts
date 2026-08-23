@@ -416,9 +416,10 @@ async function requestDelete(conversationId: string): Promise<void> {
     await restoreStableFocus(resolveFinalFocus);
 }
 
-/** Delete every conversation after the shared confirmation (Settings entry point). */
-export async function requestDeleteAll(): Promise<void> {
-    if (pendingLifecycleAction || lifecycleBlocked()) return;
+/** Delete every conversation after the shared confirmation (Settings entry point).
+ * Returns true only when the deletion was actually carried out. */
+export async function requestDeleteAll(): Promise<boolean> {
+    if (pendingLifecycleAction || lifecycleBlocked()) return false;
     const trigger = resolveSurvivingConversation;
     const discardsDraft = hasUnsavedDraft();
     const dialog = document.getElementById(
@@ -433,8 +434,8 @@ export async function requestDeleteAll(): Promise<void> {
             dialog.removeAttribute('aria-describedby');
         }
     }
-    if (!dialog || await dialogResult(dialog, trigger) !== 'delete-all') return;
-    if (lifecycleBlocked()) return;
+    if (!dialog || await dialogResult(dialog, trigger) !== 'delete-all') return false;
+    if (lifecycleBlocked()) return false;
 
     const alsoClearMemory = (
         document.getElementById('delete-all-also-clear-memory') as HTMLInputElement | null
@@ -459,6 +460,7 @@ export async function requestDeleteAll(): Promise<void> {
     }
     setLifecyclePending(false);
     await restoreStableFocus(result === 'error' ? trigger : resolveNewConversationButton);
+    return result !== 'error';
 }
 
 export async function initializeConversations(): Promise<void> {

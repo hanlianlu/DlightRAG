@@ -374,7 +374,7 @@ export class DlApp extends LightElement {
               <p class="settings-note">Conversations retain 365 days</p>
               <p id="conversation-count" class="settings-count" aria-live="polite"></p>
               <div class="settings-actions">
-                <button type="submit" value="delete-all" class="settings-secondary-danger">Delete all conversations</button>
+                <button type="button" id="delete-all-btn" class="settings-secondary-danger">Delete all conversations</button>
               </div>
             </section>
           </div>

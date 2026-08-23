@@ -36,7 +36,7 @@ document.addEventListener('DOMContentLoaded', function() {
         setupSourcePanel();
         setupReportPanel();
         setupFilesPanel();
-        setupSettings(() => void requestDeleteAll());
+        setupSettings(requestDeleteAll);
         setupImageLightbox();
         setupAttachmentInputs();
         setupAnswerModeMenu();

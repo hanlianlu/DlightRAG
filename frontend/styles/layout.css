@@ -680,6 +680,8 @@ body.conversation-sidebar-open .panel-split {
     border-radius: var(--radius-dialog);
     box-shadow: var(--shadow-overlay);
     color: var(--color-text-secondary);
+    inset: 0;
+    margin: auto;
     max-width: min(420px, calc(100vw - 32px));
     padding: var(--space-section);
     width: min(380px, calc(100vw - 32px));
@@ -853,6 +855,8 @@ body.conversation-sidebar-open .panel-split {
     border-radius: var(--radius-dialog);
     box-shadow: var(--shadow-overlay);
     color: var(--color-text-secondary);
+    inset: 0;
+    margin: auto;
     max-width: clamp(320px, 32vw, 420px);
     padding: var(--space-section);
     width: min(380px, calc(100vw - 32px));

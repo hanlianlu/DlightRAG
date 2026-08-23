@@ -35,7 +35,7 @@ function openSettings(): Promise<string> {
   });
 }
 
-export function setupSettings(onDeleteAll: () => void): void {
+export function setupSettings(onDeleteAll: () => Promise<boolean>): void {
   const trigger = document.getElementById(SETTINGS_BUTTON_ID);
   const dialog = document.getElementById(SETTINGS_DIALOG_ID) as HTMLDialogElement | null;
   if (!trigger || !(trigger instanceof HTMLButtonElement) || !dialog) return;
@@ -54,7 +54,7 @@ export function setupSettings(onDeleteAll: () => void): void {
     } catch {
       showToast('Could not load memory settings.', 5000);
     }
-    const action = await openSettings();
+    await openSettings();
     const toggle = document.getElementById('memory-enabled-toggle') as HTMLInputElement | null;
     if (toggle) {
       try {
@@ -63,7 +63,14 @@ export function setupSettings(onDeleteAll: () => void): void {
         showToast('Could not save memory settings.', 5000);
       }
     }
-    if (action === 'delete-all') onDeleteAll();
+  });
+
+  // The drawer stays open behind the confirmation, exactly like Clear memory:
+  // it closes only after the deletion was actually carried out.
+  const deleteAllButton = document.getElementById('delete-all-btn');
+  deleteAllButton?.addEventListener('click', async function() {
+    const proceeded = await onDeleteAll();
+    if (proceeded) dialog.close();
   });
 
   const clearButton = document.getElementById(CLEAR_MEMORY_BUTTON_ID);
