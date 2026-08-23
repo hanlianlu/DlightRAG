@@ -88,8 +88,9 @@ PROVIDERS_LLM: dict[str, ProviderSpec] = {
     ),
 }
 
-# Embedding providers. Only multimodal models get a default: a text-only default
-# would silently switch off fused visual retrieval (see EMBEDDING_MODALITY_NOTE).
+# Embedding providers. Defaults are the current first-class model for each
+# wire protocol; Jina v4 remains intentional because v5 does not expose the
+# native single-vector text+image fusion DlightRAG's canonical chunk needs.
 PROVIDERS_EMBED: dict[str, ProviderSpec] = {
     "Voyage": ProviderSpec(
         "voyage",
@@ -99,14 +100,16 @@ PROVIDERS_EMBED: dict[str, ProviderSpec] = {
         gui_host="https://api.voyageai.com/v1",
     ),
     "OpenAI": ProviderSpec(
-        "openai_compatible",
+        "openai",
         "https://api.openai.com/v1",
+        default_model="text-embedding-3-large",
         gui_binding="openai",
         gui_host="https://api.openai.com/v1",
     ),
     "Gemini": ProviderSpec(
         "gemini",
-        None,
+        "https://generativelanguage.googleapis.com/v1beta",
+        default_model="gemini-embedding-2",
         gui_binding="gemini",
         gui_host="DEFAULT_GEMINI_ENDPOINT",
     ),
@@ -117,10 +120,25 @@ PROVIDERS_EMBED: dict[str, ProviderSpec] = {
         gui_binding="jina",
         gui_host="https://api.jina.ai/v1",
     ),
+    "Cohere": ProviderSpec(
+        "cohere",
+        "https://api.cohere.com",
+        default_model="embed-v4.0",
+        gui_binding="openai",
+        gui_host="https://api.cohere.ai/compatibility/v1",
+    ),
     "Azure OpenAI": ProviderSpec(
-        "openai_compatible",
+        "openai",
         None,
         requires_url=True,
+        gui_binding="openai",
+        gui_host="https://api.openai.com/v1",
+    ),
+    "Azure Cohere": ProviderSpec(
+        "azure_cohere",
+        None,
+        requires_url=True,
+        default_model="Cohere-embed-v4",
         gui_binding="openai",
         gui_host="https://api.openai.com/v1",
     ),
@@ -134,14 +152,15 @@ PROVIDERS_EMBED: dict[str, ProviderSpec] = {
     ),
 }
 
-# Known embedding model -> vector dim (pre-fill; asked otherwise).
+# Known first-class embedding model -> native output dimension.
 EMBED_DIMS: dict[str, int] = {
     "voyage-multimodal-3.5": 1024,
-    "voyage-3.5": 1024,
     "text-embedding-3-large": 3072,
     "text-embedding-3-small": 1536,
+    "gemini-embedding-2": 3072,
     "jina-embeddings-v4": 2048,
-    "jina-embeddings-v3": 1024,
+    "embed-v4.0": 1536,
+    "Cohere-embed-v4": 1536,
 }
 
 # Rerank menu label -> (strategy, needs its own API key, default model).
@@ -965,9 +984,9 @@ MODEL_MODE_PROMPT = "Model setup mode · 模型配置模式"
 # Shown before the embedding provider list: the choice silently decides whether
 # fused visual retrieval is available at all.
 EMBEDDING_MODALITY_NOTE = (
-    "[dim]A multimodal embedding model (e.g. Voyage voyage-multimodal-3.5, "
-    "Jina jina-embeddings-v4) lets DlightRAG embed charts and diagrams as fused "
-    "text+image vectors. A text-only model still works, but visual evidence is then "
+    "[dim]A native-fusion model (Voyage multimodal 3.5, Gemini Embedding 2, "
+    "Jina v4, or Cohere Embed v4) upgrades each visual chunk to one canonical "
+    "text+image vector. A text-only model still works, but visual evidence is then "
     "retrieved through its VLM description alone.[/dim]"
 )
 

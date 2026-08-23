@@ -217,10 +217,11 @@ query + images
 ```
 
 Sidecar visual chunks are embedded as fused (VLM description + image) document
-vectors at ingestion, batched into one provider request per group. Query images
-are embedded image-only with query context when the provider supports asymmetric
-embeddings. If the provider does not expose task-aware routing, LightRAG's
-symmetric embedding mode is used.
+vectors at ingestion. The executor splits them at provider input, token, and
+image-byte limits without changing order. Query images are embedded image-only.
+Known retrieval models always receive their official task semantics: provider
+query/document fields, Gemini text prefixes, or Cohere's image input type;
+symmetric protocols remain symmetric.
 
 Images also produce VLM semantic text through LightRAG's multimodal sidecar
 path. That text feeds BM25 and KG extraction. For successful drawing chunks,

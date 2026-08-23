@@ -36,6 +36,7 @@ dependencies = [
     # Utils
     "httpx>=0.28.1",
     "pillow>=12.3.0",
+    "tiktoken>=0.14.0",
     # Request-local lexical retrieval for Web Composer documents.
     "bm25s>=0.3.10",
     # LightRAG paragraph_semantic chunker fallback

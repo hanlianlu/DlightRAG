@@ -20,9 +20,12 @@ upgrade path.
 3. Remove Agent scopes, tool profiles, `delegate_research`, and any caller-side
    assumptions about the old journal. Every configured tool is available by
    default; child tool lists may only narrow inherited tools.
-4. Replace the native embedding provider value `ollama`. Supported embedding
-   transports are `voyage`, `gemini`, `jina`, and `openai_compatible`; the last
-   requires an endpoint that actually implements the OpenAI embeddings contract.
+4. Replace retired or overloaded embedding provider values. Supported wire
+   protocols are `openai`, `openai_compatible`, `voyage`, `gemini`, `jina`,
+   `cohere`, and `azure_cohere`. Official OpenAI/Azure OpenAI v1 uses `openai`;
+   `openai_compatible` is conservative text-only and never sends dimensions or
+   image data URIs. Remove the retired embedding `asymmetric` setting: known
+   retrieval models now always receive their official query/document mapping.
 5. Recreate the development Answer/Agent/Memory schema. There is no compatibility
    reader for old run/session rows. Production operators must drain incompatible
    active runs before rolling the writer.

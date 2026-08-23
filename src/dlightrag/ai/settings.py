@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from dlightrag.ai.contracts import AsymmetricMode, ChatProvider, InputModality
+from dlightrag.ai.contracts import ChatProvider, InputModality
 
 type ModelRole = Literal["extract", "keyword", "query", "vlm"]
 MODEL_ROLE_NAMES: tuple[ModelRole, ...] = ("extract", "keyword", "query", "vlm")
@@ -196,14 +196,21 @@ class ModelCapacityOverrideSettings(FrozenSettings):
 
 
 class EmbeddingSettings(FrozenSettings):
-    provider: Literal["voyage", "gemini", "jina", "openai_compatible"] = "voyage"
+    provider: Literal[
+        "azure_cohere",
+        "cohere",
+        "gemini",
+        "jina",
+        "openai",
+        "openai_compatible",
+        "voyage",
+    ] = "voyage"
     model: str = "voyage-multimodal-3.5"
     api_key: str | None = None
-    base_url: str | None = "https://api.voyageai.com/v1"
+    base_url: str | None = None
     dim: int = Field(default=1024, ge=1)
     max_token_size: int = Field(default=8192, ge=1)
     input_modality: InputModality = "auto"
-    asymmetric: AsymmetricMode = "auto"
     startup_probe: bool = True
     timeout: float = Field(default=120.0, gt=0)
     max_concurrency: int = Field(default=16, ge=1)

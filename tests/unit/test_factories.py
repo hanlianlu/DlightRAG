@@ -285,8 +285,9 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
     ]
 
 
-def test_root_maps_embedding_settings_into_ai_factory(monkeypatch) -> None:
+async def test_root_maps_embedding_settings_into_ai_factory() -> None:
     from dlightrag.ai import embedding
+    from dlightrag.ai.providers.embed_providers import VoyageEmbedProvider
 
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         models={
@@ -294,9 +295,8 @@ def test_root_maps_embedding_settings_into_ai_factory(monkeypatch) -> None:
                 provider="voyage",
                 model="voyage-multimodal-3.5",
                 api_key="embed-key",
-                dim=768,
+                dim=1024,
                 input_modality="multimodal",
-                asymmetric="require",
             ).model_copy(
                 update={
                     "timeout": 45,
@@ -304,9 +304,6 @@ def test_root_maps_embedding_settings_into_ai_factory(monkeypatch) -> None:
             ),
         },
     )
-    provider = MagicMock()
-    provider.request_headers.return_value = {}
-    monkeypatch.setattr(embedding, "get_embed_provider", lambda _name: provider)
 
     settings = config.models.embedding
     model = embedding.create_embedding_model(
@@ -315,8 +312,11 @@ def test_root_maps_embedding_settings_into_ai_factory(monkeypatch) -> None:
     )
 
     assert settings.timeout == 45
-    assert model.provider is provider
-    assert model.dim == 768
+    assert isinstance(model.provider, VoyageEmbedProvider)
+    assert model.base_url == "https://api.voyageai.com/v1"
+    assert model.fingerprint.endpoint_fingerprint is not None
+    assert model.dim == 1024
+    await model.aclose()
 
 
 def test_root_maps_rerank_settings_to_immutable_ai_value() -> None:

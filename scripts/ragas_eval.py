@@ -46,11 +46,10 @@ class EvalError(RuntimeError):
 # Auto-resolve eval credentials from DlightRAG config
 # ═══════════════════════════════════════════════════════════════════
 
-# OpenAI-compatible embedding providers — their api_key + base_url work
-# with langchain's OpenAIEmbeddings. Native transports (voyage, gemini,
-# jina) are excluded because they do not expose that contract.
+# OpenAI v1 embedding protocols — their api_key + base_url work with
+# langchain's OpenAIEmbeddings. Native transports are excluded.
 _OPENAI_COMPATIBLE_LLM_PROVIDERS = frozenset({"openai"})
-_OPENAI_COMPATIBLE_EMBED_PROVIDERS = frozenset({"openai_compatible"})
+_OPENAI_COMPATIBLE_EMBED_PROVIDERS = frozenset({"openai", "openai_compatible"})
 DEFAULT_RESULTS_DIR = Path("ragas_eval_results")
 
 

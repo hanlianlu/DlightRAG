@@ -311,7 +311,7 @@ async def main() -> None:
             )
         ),
             embedding=EmbeddingSettings(
-                provider="openai_compatible",
+                provider="openai",
                 model="text-embedding-3-large",
                 api_key=os.environ["OPENAI_API_KEY"],
                 base_url="https://api.openai.com/v1",

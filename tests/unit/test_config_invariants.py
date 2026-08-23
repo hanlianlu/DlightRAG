@@ -121,16 +121,34 @@ def test_invalid_embedding_bounds_are_rejected(values: dict[str, Any]) -> None:
         EmbeddingSettings(**values)
 
 
-def test_retired_ollama_embedding_provider_is_rejected() -> None:
+@pytest.mark.parametrize(
+    "provider",
+    [
+        "azure_cohere",
+        "cohere",
+        "gemini",
+        "jina",
+        "openai",
+        "openai_compatible",
+        "voyage",
+    ],
+)
+def test_embedding_wire_protocols_are_accepted(provider: str) -> None:
+    assert EmbeddingSettings(provider=provider).provider == provider  # type: ignore[arg-type]
+
+
+def test_retired_or_unknown_embedding_configuration_is_rejected() -> None:
     with pytest.raises(ValidationError, match="provider"):
         EmbeddingSettings(provider="ollama")  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match="asymmetric"):
+        EmbeddingSettings(asymmetric="disable")  # type: ignore[call-arg]
 
 
 def test_embedding_defaults_preserve_shipped_pipeline_contract() -> None:
     settings = EmbeddingSettings()
     assert settings.provider == "voyage"
     assert settings.model == "voyage-multimodal-3.5"
-    assert settings.base_url == "https://api.voyageai.com/v1"
+    assert settings.base_url is None  # the selected adapter owns its native default URL
     assert settings.dim == 1024
     assert settings.max_token_size == 8192
     assert settings.batch_size == 64

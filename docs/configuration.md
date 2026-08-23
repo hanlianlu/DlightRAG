@@ -220,81 +220,86 @@ multimodal analyze stage handles images, tables, and equations after parse.
 
 ## Embeddings
 
-Embedding configuration defines the vector space shared by ingestion and
-retrieval. `provider` selects an API protocol; `input_modality` independently
-controls whether DlightRAG may send raw images through that protocol. Provider
-selection is always explicit and is never inferred from a model name, URL, or
-port.
+Embedding configuration defines the one canonical vector space shared by
+LightRAG ingestion and every DlightRAG retrieval leg. `provider` names a wire
+protocol, not a company account or deployment type. DlightRAG never infers it
+from a model name, URL, or port.
 
 ### Provider matrix
 
-`base_url` is the root before the endpoint shown below. DlightRAG appends the
-endpoint itself.
+Each adapter owns its complete request URL, authentication, model capability
+table, payload, response ordering, and usage extraction.
 
-| `provider` | Endpoint appended to `base_url` | Image policy | Asymmetric | Authentication | `dim` behavior |
+| `provider` | First-class model | Request route | Canonical visual vector | Retrieval task mapping | `dim` wire behavior |
 |---|---|---|---|---|---|
-| `voyage` | `/multimodalembeddings` | Native | Yes | Bearer token | Sent as `output_dimension`; returned vectors are validated |
-| `gemini` | `/models/{model}:embedContent` | Native | No | `x-goog-api-key` | Sent as `output_dimensionality`; returned vectors are validated |
-| `jina` | `/v1/embeddings` | Native | Yes | Bearer token | Sent as `dimensions`; returned vectors are validated |
-| `openai_compatible` | `/embeddings` | Text by default; explicit image opt-in | No | Optional bearer token | Sent as `dimensions`; returned vectors are validated |
+| `openai` | `text-embedding-3-large` | `/embeddings` | Text only | Symmetric | `dimensions` for `text-embedding-3-*`; fixed models validate only |
+| `openai_compatible` | Caller-defined | `/embeddings` | Text only | Symmetric | Never sent; response dimension is validated |
+| `voyage` | `voyage-multimodal-3.5` | `/multimodalembeddings` | Native text+image fusion | `query` / `document` | `output_dimension` |
+| `gemini` | `gemini-embedding-2` | `/models/{model}:embedContent` | Native content aggregation | Official query/document text prefixes | `outputDimensionality` |
+| `jina` | `jina-embeddings-v4` | `/v1/embeddings` | Native text+image fusion | `retrieval.query` / `retrieval.passage` | `dimensions` |
+| `cohere` | `embed-v4.0` | `/v2/embed` | Native mixed-input fusion | Text uses `search_query` / `search_document`; image-bearing input uses `image` | `output_dimension` |
+| `azure_cohere` | `Cohere-embed-v4` | `/v1/embed` | Native mixed-input fusion | Text uses `search_query` / `search_document`; image-bearing input uses `image` | `output_dimension` |
 
-The supported provider values are exactly the four names above. For example,
-LM Studio is `openai_compatible` when it exposes an OpenAI-style
-`/v1/embeddings` API.
+Jina v4 is intentional: the newer Jina v5 Omni protocol exposes aligned image
+and text inputs but does not document one native fused text+image output. A
+DlightRAG multimodal provider must preserve the single canonical chunk-vector
+invariant; it cannot add a second visual-only document representation.
+
+Unknown model names are allowed for private deployments, but resolve
+conservatively to text-only operation with no upstream dimension narrowing.
+`openai_compatible` is deliberately minimal: model, text input, float response,
+and optional Bearer authentication. It does not accept image data URIs or
+invent vendor-specific dimension/task fields.
+
+`openai` also supports the Azure OpenAI v1 root ending in `/openai/v1`; Azure
+API-key endpoints receive the `api-key` header. `azure_cohere` accepts a full
+official URL ending in `/embed` as-is, otherwise appends `/v1/embed` to a known
+Azure Foundry deployment scoring root. Unknown Azure roots fail explicitly.
 
 ### Fields
 
 | Field | Default | Meaning |
 |---|---|---|
-| `provider` | Required | One transport from the matrix above. Unknown values fail configuration loading. |
-| `model` | Required | The exact model identifier expected by the remote or local server. |
-| `api_key` | None | Provider credential. Prefer `DLIGHTRAG_MODELS__EMBEDDING__API_KEY` in `.env`; omit it for unauthenticated local servers. |
-| `base_url` | OpenAI API root | API root before the appended endpoint. Include `/v1` only when that protocol expects it; configure this explicitly for non-OpenAI transports. |
-| `dim` | `1024` | Expected vector length. It is sent when the protocol supports a dimension parameter and is always checked against every returned vector. |
-| `max_token_size` | `8192` | Maximum input size advertised to LightRAG's embedding pipeline; it does not change the model's real context limit. |
-| `input_modality` | `auto` | Local routing policy: `auto`, `text`, or `multimodal`. It is never included in an upstream request. |
-| `asymmetric` | `auto` | `auto` enables query/document hints when supported; `require` fails for unsupported providers; `disable` forces symmetric embeddings. |
-| `startup_probe` | `true` | When image routing is active, send one in-memory 1x1 image at startup to verify the selected endpoint/model. The probe writes no storage or files. |
-| `timeout` | `120` | Per-request embedding timeout in seconds. |
-| `max_concurrency` | `16` | Concurrent embedding calls admitted within the global model scheduler. |
-| `batch_size` | `64` | Text inputs sent per embedding provider request. |
+| `provider` | `voyage` | One protocol from the matrix. Unknown values fail configuration loading. |
+| `model` | `voyage-multimodal-3.5` | Exact model or deployment identifier. |
+| `api_key` | None | Provider credential. Prefer `DLIGHTRAG_MODELS__EMBEDDING__API_KEY` in `.env`. |
+| `base_url` | Voyage v1 root | Protocol root or accepted complete endpoint. An omitted native URL uses the adapter default. |
+| `dim` | `1024` | Final vector/schema dimension. Known adapters decide whether to send it upstream; every response is validated. |
+| `max_token_size` | `8192` | Local per-input ceiling and LightRAG-advertised limit. The stricter provider/model limit always wins. |
+| `input_modality` | `auto` | `auto`, `text`, or `multimodal`. This local policy is never serialized upstream. |
+| `startup_probe` | `true` | When multimodal routing is active, verify both image-only query embedding and description+image fused document embedding. |
+| `timeout` | `120` | Per-request timeout in seconds. |
+| `max_concurrency` | `16` | Calls admitted through the process-wide model scheduler. |
+| `batch_size` | `64` | Local maximum. Execution also splits at provider input-count and total-token limits. |
 
-DlightRAG does not guess whether an arbitrary model accepts a particular
-dimension. Set `dim` to the model's real output size; a mismatch fails when a
-response is validated.
+OpenAI known models use `tiktoken` for exact local budgets. Other adapters use
+the shared estimator with a safety margin. An over-limit input fails locally;
+it is never silently truncated. Batches auto-split on input count, total tokens,
+and known combined inline-image limits (Cohere v4: 20 MB) while preserving input
+and response order. OpenAI-shaped responses require a complete, unique `index`
+cover and are reordered by that index.
+
+Connection failures, HTTP 408/409/429, and 5xx responses receive at most two
+retries. `Retry-After` wins over exponential backoff with jitter. Other 4xx,
+invalid input, schema, index, dimension, and vector-value failures are never
+retried. Numeric provider usage, request count, and retry count are attached to
+embedding telemetry.
 
 ### Input modality
 
-DlightRAG only pairs with unified multimodal embedding models, which embed text
-and images into one shared space AND fuse interleaved text+image into a single
-vector. `input_modality` is the whole capability signal -- there is no separate
-per-provider fusion table to maintain, and the startup probe verifies the live
-endpoint actually embeds an image.
-
-| Provider capability | `auto` | `text` | `multimodal` |
+| First-class model capability | `auto` | `text` | `multimodal` |
 |---|---|---|---|
-| Native multimodal (`voyage`, `gemini`, `jina`) | Enable both image paths (image->image query retrieval AND the fused visual-vector overwrite); run the startup probe | Disable both locally | Require image embedding; probe failure stops startup |
-| OpenAI-compatible extension (`openai_compatible`) | Conservative text only | Text only | Opt into the data-URI image payload; probe failure stops startup |
+| Native single-vector fusion (`voyage`, `gemini`, `jina` v4, `cohere`, `azure_cohere`) | Enable image-query retrieval and fused visual-vector overwrite | Disable both image paths | Require both paths; startup probe failure stops startup |
+| Text-only or conservative unknown model (`openai`, `openai_compatible`, unknown names) | Text only | Text only | Fail configuration/runtime construction |
 
-`text` guarantees the embedding provider receives text only. It disables both
-the document visual-vector overwrite and image->image query retrieval. Images,
-tables, and equations may still be described by the VLM; those descriptions
-remain ordinary text in LightRAG's semantic, BM25, and KG paths, and current
-query images are still described by the VLM to shape the query plan.
+`text` leaves LightRAG's VLM-description chunk vector intact and disables the
+raw-image query leg. `multimodal` upgrades that same canonical vector by
+replacing it with one native description+image fused vector; it never creates a
+second visual document vector. BM25, KG, provenance, chunk identity, filtering,
+and citations continue to use the original canonical chunk.
 
-Both DlightRAG image paths turn on together from this one signal. The
-**image->image query leg** embeds the query image and matches the index in the
-provider's shared text-image space, complementing the VLM-description text path.
-The **document visual-vector overwrite** replaces a drawing chunk's vector with
-one fused text+image vector, so the figure stays reachable by text queries.
-Because every supported multimodal model fuses, no provider is left with one
-path but not the other.
-
-`multimodal` is a capability assertion, not a hint. DlightRAG fails fast when
-the configured adapter cannot serialize images or when the live startup probe
-rejects them. In `auto`, a native multimodal provider may safely downgrade to
-the semantic text path if its live probe fails. `startup_probe: false` skips
-only the live request and trusts the resolved provider/modality combination.
+In `auto`, a failed live fusion probe safely leaves the LightRAG text vector in
+place. Explicit `multimodal` treats the same failure as fatal.
 
 ### Examples
 
@@ -309,17 +314,34 @@ models:
     dim: 1024
     max_token_size: 8192
     input_modality: auto
-    asymmetric: auto
     startup_probe: true
 ```
 
-Keep the Voyage key in `.env`:
+OpenAI official text embeddings:
 
-```dotenv
-DLIGHTRAG_MODELS__EMBEDDING__API_KEY=pa-...
+```yaml
+models:
+  embedding:
+    provider: openai
+    model: text-embedding-3-large
+    base_url: https://api.openai.com/v1
+    dim: 3072
+    input_modality: text
 ```
 
-LM Studio or another OpenAI-compatible text embedding server:
+Cohere Embed v4 native fusion:
+
+```yaml
+models:
+  embedding:
+    provider: cohere
+    model: embed-v4.0
+    base_url: https://api.cohere.com
+    dim: 1536
+    input_modality: auto
+```
+
+LM Studio or another conservative OpenAI-compatible text server:
 
 ```yaml
 models:
@@ -328,30 +350,11 @@ models:
     model: text-embedding-nomic-embed-text-v1.5
     base_url: http://127.0.0.1:1234/v1
     dim: 768
-    max_token_size: 8192
     input_modality: text
-    asymmetric: disable
 ```
 
-An OpenAI-compatible endpoint serving a multimodal Qwen3-VL embedding model
-uses the same provider and opts into images explicitly:
-
-```yaml
-models:
-  embedding:
-    provider: openai_compatible
-    model: qwen3-vl-embedding-2b
-    base_url: http://127.0.0.1:1234/v1
-    dim: 2048
-    max_token_size: 8192
-    input_modality: multimodal
-    asymmetric: disable
-    startup_probe: true
-```
-
-For LM Studio, `model` must match the identifier exposed by the running local
-server. The model itself must implement `/v1/embeddings`; loading a chat-only
-model is not sufficient.
+For local servers, `model` must match the identifier exposed by the running
+embedding endpoint; loading a chat-only model is insufficient.
 
 ### Docker host access
 
@@ -694,10 +697,11 @@ models:
     timeout: 120
 ```
 
-`models.embedding.batch_size` is the number of texts sent per embedding provider
-request. Raise it to match your provider's per-request cap (for example, Voyage
-accepts up to 1000 inputs and OpenAI up to 2048); a value too high for the
-configured provider surfaces as a request error during ingest, so lower it then.
+`models.embedding.batch_size` is a local upper bound, not a promise that one
+HTTP request carries that many inputs. The embedding executor automatically
+splits at the selected model's input-count and total-token limits (for example,
+Voyage accepts up to 1000 inputs, OpenAI 2048, Cohere 96, and synchronous
+Gemini Embedding 2 one). Result vectors are reassembled in original input order.
 
 ## BM25
 

@@ -116,11 +116,6 @@ class RobustDocumentEmbedder:
         return self._dimension
 
     @property
-    def asymmetric(self) -> bool:
-        """Return the provider's resolved asymmetric embedding mode."""
-        return bool(self._embedder.asymmetric)
-
-    @property
     def min_image_pixel(self) -> int:
         """Return the effective minimum image side admitted for fused embedding."""
         return self._min_image_pixel
@@ -416,7 +411,7 @@ async def resolve_direct_image_embedding_enabled(
     startup_probe: bool,
     require_image_support: bool,
 ) -> bool:
-    """Return whether direct visual embedding paths are safe to use."""
+    """Return whether image-query and fused-document paths are both safe."""
     if not getattr(embedder, "supports_images", False):
         if require_image_support:
             raise ValueError(
@@ -435,15 +430,15 @@ async def resolve_direct_image_embedding_enabled(
     except Exception as exc:  # noqa: BLE001
         if require_image_support:
             raise ValueError(
-                "embedding.input_modality='multimodal' requires working image embeddings, "
-                "but the startup probe failed"
+                "embedding.input_modality='multimodal' requires working image-query and "
+                "fused-document embeddings, but the startup probe failed"
             ) from exc
         logger.warning(
-            "Image embedding probe failed; using LightRAG semantic visual path only",
+            "Image/fusion embedding probe failed; using LightRAG semantic visual path only",
             exc_info=True,
         )
         return False
-    logger.info("Image embedding probe passed — direct-visual leg enabled")
+    logger.info("Image/fusion probes passed — fused overwrite and direct-visual leg enabled")
     return True
 
 

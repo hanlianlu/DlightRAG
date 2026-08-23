@@ -131,7 +131,6 @@ def make_e2e_config(
                 max_token_size=1024,
                 max_concurrency=1,
                 batch_size=2,
-                asymmetric="auto",
                 startup_probe=False,
             ),
             "rerank": {"enabled": False},

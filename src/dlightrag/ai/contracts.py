@@ -3,9 +3,8 @@
 
 from typing import Literal
 
-type AsymmetricMode = Literal["auto", "require", "disable"]
 type ChatProvider = Literal["openai", "anthropic", "gemini"]
 type InputModality = Literal["auto", "text", "multimodal"]
 type ResolvedInputModality = Literal["text", "multimodal"]
 
-__all__ = ["AsymmetricMode", "ChatProvider", "InputModality", "ResolvedInputModality"]
+__all__ = ["ChatProvider", "InputModality", "ResolvedInputModality"]

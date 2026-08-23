@@ -238,24 +238,27 @@ def test_ask_model_accepts_provider_default_model_and_url(wiz):
     )
 
 
-def test_embedding_defaults_are_multimodal_only(wiz):
-    """A text-only default would silently disable fused visual retrieval."""
+def test_embedding_defaults_are_first_class_models_with_known_dimensions(wiz):
     defaults = {
         name: spec.default_model for name, spec in wiz.PROVIDERS_EMBED.items() if spec.default_model
     }
     assert defaults == {
         "Voyage": "voyage-multimodal-3.5",
+        "OpenAI": "text-embedding-3-large",
+        "Gemini": "gemini-embedding-2",
         "Jina": "jina-embeddings-v4",
+        "Cohere": "embed-v4.0",
+        "Azure Cohere": "Cohere-embed-v4",
     }
-    # Every embedding default must carry a known dim, or the wizard still asks for it.
     assert all(wiz.EMBED_DIMS.get(model) for model in defaults.values())
 
 
-def test_tenant_specific_providers_have_no_default_model(wiz):
+def test_tenant_specific_models_are_explicit_except_fixed_azure_cohere_offer(wiz):
     for providers in (wiz.PROVIDERS_LLM, wiz.PROVIDERS_EMBED):
         for name, spec in providers.items():
-            if spec.requires_url:
+            if spec.requires_url and name != "Azure Cohere":
                 assert spec.default_model == "", name
+    assert wiz.PROVIDERS_EMBED["Azure Cohere"].default_model == "Cohere-embed-v4"
 
 
 def test_ask_model_reprompts_for_required_custom_url(wiz):

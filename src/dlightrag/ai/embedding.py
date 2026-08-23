@@ -1,62 +1,77 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Context-aware text and image embedding execution."""
+"""Budgeted, retrying execution for provider-owned embedding protocols."""
+
+from __future__ import annotations
 
 import asyncio
-import logging
 import math
-from collections.abc import Sequence
+import random
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
 from PIL import Image
 
-from dlightrag.ai.contracts import AsymmetricMode, InputModality, ResolvedInputModality
+from dlightrag.ai.contracts import InputModality, ResolvedInputModality
 from dlightrag.ai.embedding_inputs import (
     EmbeddingInput,
     ImageEmbeddingInput,
     MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
-from dlightrag.ai.fingerprints import ModelFingerprint, model_fingerprint
+from dlightrag.ai.fingerprints import ModelFingerprint, model_endpoint_fingerprint
 from dlightrag.ai.media import bounded_embedding_image_data_uri
-from dlightrag.ai.providers.embed_base import EmbeddingContext, EmbedProvider
+from dlightrag.ai.providers.embed_base import EmbeddingContext, EmbedProvider, input_image_bytes
 from dlightrag.ai.providers.embed_providers import get_embed_provider
 from dlightrag.ai.scheduler import ModelScheduler
 from dlightrag.ai.settings import EmbeddingSettings
 from dlightrag.ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
 
-logger = logging.getLogger(__name__)
+_RETRYABLE_STATUS_CODES = frozenset({408, 409, 429})
+_MAX_RETRIES = 2
+_RETRY_BASE_SECONDS = 0.5
+_RETRY_JITTER_SECONDS = 0.25
 
 
-def resolve_asymmetric(provider: EmbedProvider, mode: AsymmetricMode) -> bool:
-    """Resolve asymmetric config to the active runtime behavior."""
-    if mode == "disable":
-        return False
-    if provider.supports_asymmetric:
-        return True
-    if mode == "require":
-        raise ValueError(f"{provider.__class__.__name__} does not support asymmetric embeddings")
-    return False
+@dataclass(frozen=True, slots=True)
+class _EmbeddingRequest:
+    payload: dict[str, Any]
+    expected_count: int
+    estimated_tokens: int
+    estimated_image_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class _EmbeddingOutcome:
+    vectors: list[list[float]]
+    retries: int
+    usage: dict[str, int | float]
 
 
 def resolve_embedding_input_modality(
     provider: EmbedProvider,
+    model: str,
     mode: InputModality,
 ) -> ResolvedInputModality:
-    """Resolve configured input policy against one transport serializer."""
+    """Resolve local input policy against the selected model's fusion contract."""
     if mode == "text":
         return "text"
+    native_multimodal = provider.capabilities(model).native_multimodal
     if mode == "auto":
-        return "multimodal" if provider.image_input_capability == "native" else "text"
-    if provider.image_input_capability == "unsupported":
+        return "multimodal" if native_multimodal else "text"
+    if not native_multimodal:
         raise ValueError(
-            f"{provider.__class__.__name__} cannot satisfy input_modality='multimodal'"
+            f"{provider.__class__.__name__} model {model!r} cannot satisfy "
+            "input_modality='multimodal': native single-vector text+image fusion is required"
         )
     return "multimodal"
 
 
 class MultimodalEmbedder:
-    """Embed text and images in one provider-owned vector space."""
+    """Embed canonical text and fused visual chunks in one provider-owned space."""
 
     def __init__(
         self,
@@ -67,28 +82,41 @@ class MultimodalEmbedder:
         dim: int,
         provider: EmbedProvider,
         input_modality: InputModality = "auto",
-        asymmetric: AsymmetricMode = "auto",
+        max_token_size: int = 8192,
+        batch_size: int = 64,
         timeout: float = 120.0,
         fingerprint: ModelFingerprint,
         scheduler: ModelScheduler,
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
+        if dim < 1:
+            raise ValueError("Embedding dimension must be positive")
+        if max_token_size < 1:
+            raise ValueError("Embedding max_token_size must be positive")
+        if batch_size < 1:
+            raise ValueError("Embedding batch_size must be positive")
         self.model = model
-        self.base_url = base_url.rstrip("/") if base_url else "https://api.openai.com/v1"
-        self.dim = dim
         self.provider = provider
-        self.input_modality = resolve_embedding_input_modality(provider, input_modality)
+        self.base_url = (base_url or provider.default_base_url).rstrip("/")
+        if not self.base_url:
+            raise ValueError(f"{provider.__class__.__name__} requires an embedding base_url")
+        self.request_url = provider.request_url(self.base_url, model)
+        self.dim = dim
+        self._max_token_size = max_token_size
+        self._batch_size = batch_size
+        self._capabilities = provider.capabilities(model)
+        self._capabilities.output_dimension.request_value(dim, model=model)
+        self.input_modality = resolve_embedding_input_modality(provider, model, input_modality)
         self.supports_images = self.input_modality == "multimodal"
-        self.asymmetric = resolve_asymmetric(provider, asymmetric)
-        self.supports_asymmetric = self.asymmetric
+        self.supports_asymmetric = self._capabilities.asymmetric
         self.api_key = api_key
         self.fingerprint = fingerprint
         self._scheduler = scheduler
         self._telemetry = telemetry
         self._client = httpx.AsyncClient(
             timeout=timeout,
-            headers=provider.request_headers(api_key),
-            transport=httpx.AsyncHTTPTransport(retries=2),
+            headers=provider.request_headers(api_key, base_url=self.base_url),
+            transport=httpx.AsyncHTTPTransport(retries=0),
         )
 
     async def aclose(self) -> None:
@@ -96,49 +124,31 @@ class MultimodalEmbedder:
         await self._client.aclose()
 
     async def embed_texts(
-        self, texts: list[str], *, context: EmbeddingContext = "document"
+        self,
+        texts: list[str],
+        *,
+        context: EmbeddingContext = "document",
     ) -> list[list[float]]:
-        """Embed a batch of text inputs."""
-        if not texts:
-            return []
+        """Embed text inputs with provider and token-budget batch splitting."""
         inputs: list[EmbeddingInput] = [TextEmbeddingInput(text=text) for text in texts]
-        payload = self.provider.build_payload(
-            self.model,
-            inputs,
-            context=context,
-            asymmetric=self.asymmetric,
-            output_dimension=self.dim,
-        )
-        return await self._request_vectors(
-            payload,
-            expected_count=len(texts),
-            context=context,
-            modality="text",
-        )
+        return await self._embed_inputs(inputs, context=context, modality="text")
 
     async def embed_text(self, text: str) -> list[float]:
         """Embed one text input as a query-side vector."""
         (vector,) = await self.embed_texts([text], context="query")
         return vector
 
-    # Plain-text vector entry points: document and query batches over raw
-    # strings, so a host that owns this embedder can hand it to any text
-    # vector consumer (e.g. a storage adapter's dense leg) with no wrapper
-    # class — the consumer only needs the two methods plus dim.
     async def embed_documents(self, texts: Sequence[str]) -> Sequence[list[float]]:
+        """Expose the document side of the plain-text embedding port."""
         return await self.embed_texts(list(texts), context="document")
 
     async def embed_query(self, text: str) -> list[float]:
+        """Expose the query side of the plain-text embedding port."""
         return await self.embed_text(text)
 
     @property
     def embedding_fingerprint(self) -> str:
-        """One canonical identity string for the embedding space.
-
-        The ``TextEmbedder`` port declares ``fingerprint: str``; this property
-        is that string form of the structured ``ModelFingerprint`` so storage
-        adapters can persist it in a TEXT column.
-        """
+        """Return the canonical embedding-space identity for storage ports."""
         endpoint = self.fingerprint.endpoint_fingerprint
         base = f"{self.fingerprint.provider}:{self.fingerprint.model}"
         return f"{base}@{endpoint}" if endpoint else base
@@ -153,8 +163,12 @@ class MultimodalEmbedder:
         return MultimodalEmbeddingInput(parts=parts)
 
     def _build_fused_payload(
-        self, items: list[tuple[str, Image.Image]], *, context: EmbeddingContext
+        self,
+        items: list[tuple[str, Image.Image]],
+        *,
+        context: EmbeddingContext,
     ) -> dict[str, Any]:
+        """Build one provider batch for focused contract tests."""
         inputs: list[EmbeddingInput] = [
             self._fused_input(description, image) for description, image in items
         ]
@@ -162,37 +176,33 @@ class MultimodalEmbedder:
             self.model,
             inputs,
             context=context,
-            asymmetric=self.asymmetric,
             output_dimension=self.dim,
         )
 
-    async def embed_index_fused(self, items: list[tuple[str, Image.Image]]) -> list[list[float]]:
-        """Embed description-image pairs as fused document vectors."""
+    async def embed_index_fused(
+        self,
+        items: list[tuple[str, Image.Image]],
+    ) -> list[list[float]]:
+        """Embed description-image pairs as canonical fused document vectors."""
         self._ensure_image_support()
-        if not items:
-            return []
-        payload = await asyncio.to_thread(self._build_fused_payload, items, context="document")
-        return await self._request_vectors(
-            payload,
-            expected_count=len(items),
-            context="document",
-            modality="multimodal",
+        inputs: list[EmbeddingInput] = await asyncio.to_thread(
+            lambda: [self._fused_input(description, image) for description, image in items]
         )
+        return await self._embed_inputs(inputs, context="document", modality="multimodal")
 
     async def embed_query_images(self, images: list[Image.Image]) -> list[list[float]]:
-        """Embed query-side images in one batched provider request."""
+        """Embed query-side images with provider batch limits."""
         self._ensure_image_support()
-        if not images:
-            return []
-        payload = await asyncio.to_thread(self._build_query_image_payload, images)
-        return await self._request_vectors(
-            payload,
-            expected_count=len(images),
-            context="query",
-            modality="image",
+        inputs: list[EmbeddingInput] = await asyncio.to_thread(
+            lambda: [
+                ImageEmbeddingInput(data_uri=bounded_embedding_image_data_uri(image))
+                for image in images
+            ]
         )
+        return await self._embed_inputs(inputs, context="query", modality="image")
 
     def _build_query_image_payload(self, images: list[Image.Image]) -> dict[str, Any]:
+        """Build one provider image batch for focused contract tests."""
         inputs: list[EmbeddingInput] = [
             ImageEmbeddingInput(data_uri=bounded_embedding_image_data_uri(image))
             for image in images
@@ -201,34 +211,120 @@ class MultimodalEmbedder:
             self.model,
             inputs,
             context="query",
-            asymmetric=self.asymmetric,
             output_dimension=self.dim,
         )
 
     async def probe_image_embedding(self) -> None:
-        """Probe that the provider can embed an image."""
-        await self.embed_query_images([Image.new("RGB", (1, 1), "white")])
+        """Probe both image-query and native fused-document capabilities."""
+        image = Image.new("RGB", (1, 1), "white")
+        try:
+            await self.embed_query_images([image])
+            await self.embed_index_fused([("DlightRAG fusion probe", image)])
+        finally:
+            image.close()
 
-    async def _request_vectors(
+    async def _embed_inputs(
         self,
-        payload: dict[str, Any],
+        inputs: list[EmbeddingInput],
         *,
-        expected_count: int,
         context: EmbeddingContext,
         modality: str,
     ) -> list[list[float]]:
-        return await self._scheduler.run(
-            lambda: self._execute_request(
-                payload,
-                expected_count=expected_count,
-                context=context,
-                modality=modality,
-            )
+        requests = await asyncio.to_thread(self._plan_requests, inputs, context=context)
+        return await self._execute_requests(
+            requests,
+            expected_count=len(inputs),
+            context=context,
+            modality=modality,
         )
 
-    async def _execute_request(
+    def _plan_requests(
         self,
-        payload: dict[str, Any],
+        inputs: list[EmbeddingInput],
+        *,
+        context: EmbeddingContext,
+    ) -> list[_EmbeddingRequest]:
+        if not inputs:
+            raise ValueError("Embedding request requires at least one input")
+        capabilities = self._capabilities
+        max_inputs = min(self._batch_size, capabilities.max_inputs)
+        input_limit = min(
+            limit
+            for limit in (self._max_token_size, capabilities.max_tokens_per_input)
+            if limit is not None
+        )
+        token_counts: list[int] = []
+        image_byte_counts: list[int] = []
+        for index, item in enumerate(inputs):
+            estimated = self.provider.estimate_input_tokens(self.model, item)
+            if estimated > input_limit:
+                raise ValueError(
+                    f"Embedding input {index} for model {self.model!r} is over the token limit: "
+                    f"estimated {estimated}, limit {input_limit}"
+                )
+            image_bytes = input_image_bytes(item)
+            token_counts.append(estimated)
+            image_byte_counts.append(image_bytes)
+
+        batches: list[tuple[list[EmbeddingInput], int, int]] = []
+        current: list[EmbeddingInput] = []
+        current_tokens = 0
+        current_image_bytes = 0
+        request_limit = capabilities.max_tokens_per_request
+        image_request_limit = capabilities.max_image_bytes_per_request
+        for item, estimated, image_bytes in zip(
+            inputs,
+            token_counts,
+            image_byte_counts,
+            strict=True,
+        ):
+            if request_limit is not None and estimated > request_limit:
+                raise ValueError(
+                    f"One embedding input for model {self.model!r} exceeds the request token "
+                    f"limit: estimated {estimated}, limit {request_limit}"
+                )
+            if image_request_limit is not None and image_bytes > image_request_limit:
+                raise ValueError(
+                    f"One embedding input for model {self.model!r} exceeds the request image-byte "
+                    f"limit: estimated {image_bytes}, limit {image_request_limit}"
+                )
+            token_overflow = (
+                current and request_limit is not None and current_tokens + estimated > request_limit
+            )
+            image_overflow = (
+                current
+                and image_request_limit is not None
+                and current_image_bytes + image_bytes > image_request_limit
+            )
+            if current and (len(current) >= max_inputs or token_overflow or image_overflow):
+                batches.append((current, current_tokens, current_image_bytes))
+                current = []
+                current_tokens = 0
+                current_image_bytes = 0
+            current.append(item)
+            current_tokens += estimated
+            current_image_bytes += image_bytes
+        if current:
+            batches.append((current, current_tokens, current_image_bytes))
+
+        return [
+            _EmbeddingRequest(
+                payload=self.provider.build_payload(
+                    self.model,
+                    batch,
+                    context=context,
+                    output_dimension=self.dim,
+                ),
+                expected_count=len(batch),
+                estimated_tokens=estimated,
+                estimated_image_bytes=image_bytes,
+            )
+            for batch, estimated, image_bytes in batches
+        ]
+
+    async def _execute_requests(
+        self,
+        requests: list[_EmbeddingRequest],
         *,
         expected_count: int,
         context: EmbeddingContext,
@@ -243,12 +339,26 @@ class MultimodalEmbedder:
                 "modality": modality,
                 "provider": self.fingerprint.provider,
                 "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
+                "request_count": len(requests),
+                "estimated_input_tokens": sum(item.estimated_tokens for item in requests),
+                "inline_image_bytes": sum(item.estimated_image_bytes for item in requests),
             },
             model=self.fingerprint.model,
         ) as observation:
             try:
-                data = await self._post(payload)
-                vectors = self.provider.parse_response(data)
+                raw_outcomes = await asyncio.gather(
+                    *(
+                        self._scheduler.run(lambda request=request: self._execute_request(request))
+                        for request in requests
+                    ),
+                    return_exceptions=True,
+                )
+                outcomes: list[_EmbeddingOutcome] = []
+                for outcome in raw_outcomes:
+                    if isinstance(outcome, BaseException):
+                        raise outcome
+                    outcomes.append(outcome)
+                vectors = [vector for outcome in outcomes for vector in outcome.vectors]
                 self._validate_vectors(vectors, expected_count=expected_count)
             except Exception as exc:
                 observation.update(
@@ -256,37 +366,111 @@ class MultimodalEmbedder:
                     status_message=telemetry_error_message(self._telemetry, exc),
                 )
                 raise
-            observation.update(output={"embedding_count": len(vectors)})
+            usage = _merge_usage(outcome.usage for outcome in outcomes)
+            observation.update(
+                output={
+                    "embedding_count": len(vectors),
+                    "request_count": len(requests),
+                    "retry_count": sum(outcome.retries for outcome in outcomes),
+                    "usage": usage,
+                }
+            )
             return vectors
 
-    async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        url = f"{self.base_url}{self.provider.endpoint_for_model(self.model)}"
-        headers = self.provider.request_headers(self.api_key)
-        response = await self._client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-        return response.json()
+    async def _execute_request(self, request: _EmbeddingRequest) -> _EmbeddingOutcome:
+        data, retries = await self._post(request.payload)
+        vectors = self.provider.parse_response(data, expected_count=request.expected_count)
+        self._validate_vectors(vectors, expected_count=request.expected_count)
+        return _EmbeddingOutcome(
+            vectors=vectors,
+            retries=retries,
+            usage=self.provider.response_usage(data),
+        )
+
+    async def _post(self, payload: dict[str, Any]) -> tuple[Mapping[str, Any], int]:
+        for attempt in range(_MAX_RETRIES + 1):
+            response: httpx.Response | None = None
+            try:
+                response = await self._client.post(self.request_url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, Mapping):
+                    raise ValueError("Embedding response JSON must be an object")
+                return data, attempt
+            except httpx.TransportError:
+                if attempt >= _MAX_RETRIES:
+                    raise
+            except httpx.HTTPStatusError as exc:
+                if attempt >= _MAX_RETRIES or not _retryable_status(exc.response.status_code):
+                    raise
+                response = exc.response
+            delay = _retry_delay(response, attempt=attempt)
+            await asyncio.sleep(delay)
+        raise RuntimeError("Embedding retry loop exhausted")
 
     def _validate_vectors(
         self,
-        vectors: list[list[float]],
+        vectors: object,
         *,
         expected_count: int | None = None,
     ) -> None:
+        if not isinstance(vectors, list):
+            raise ValueError("Embedding vectors must be a list")
         if expected_count is not None and len(vectors) != expected_count:
             raise ValueError(f"Expected {expected_count} embedding vectors, got {len(vectors)}")
         for index, vector in enumerate(vectors):
-            if len(vector) != self.dim:
+            if not isinstance(vector, list) or len(vector) != self.dim:
+                actual = len(vector) if isinstance(vector, list) else "non-list"
                 raise ValueError(
-                    f"Expected embedding dim {self.dim}, got {len(vector)} at index {index}"
+                    f"Expected embedding dim {self.dim}, got {actual} at index {index}"
                 )
-            if not all(isinstance(value, int | float) and math.isfinite(value) for value in vector):
-                raise ValueError(f"Embedding vector at index {index} contains non-finite values")
+            if not all(
+                type(value) in {int, float} and math.isfinite(value)  # noqa: E721
+                for value in vector
+            ):
+                raise ValueError(f"Embedding vector at index {index} contains invalid values")
+            norm = math.hypot(*(float(value) for value in vector))
+            if not math.isfinite(norm) or norm == 0.0:
+                raise ValueError(f"Embedding vector at index {index} has invalid norm")
 
     def _ensure_image_support(self) -> None:
         if not self.supports_images:
             raise ValueError(
-                f"{self.provider.__class__.__name__} does not support image embeddings"
+                f"{self.provider.__class__.__name__} model {self.model!r} does not support "
+                "native fused image embeddings"
             )
+
+
+def _retryable_status(status_code: int) -> bool:
+    return status_code in _RETRYABLE_STATUS_CODES or 500 <= status_code <= 599
+
+
+def _retry_delay(response: httpx.Response | None, *, attempt: int) -> float:
+    if response is not None:
+        value = response.headers.get("Retry-After")
+        if value:
+            try:
+                return max(0.0, float(value))
+            except ValueError:
+                try:
+                    retry_at = parsedate_to_datetime(value)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=UTC)
+                    return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
+                except TypeError, ValueError, OverflowError:
+                    pass
+    return _RETRY_BASE_SECONDS * (2**attempt) + random.uniform(  # noqa: S311
+        0,
+        _RETRY_JITTER_SECONDS,
+    )
+
+
+def _merge_usage(values: Iterable[dict[str, int | float]]) -> dict[str, int | float]:
+    merged: dict[str, int | float] = {}
+    for usage in values:
+        for key, value in usage.items():
+            merged[key] = merged.get(key, 0) + value
+    return merged
 
 
 def create_embedding_model(
@@ -296,16 +480,23 @@ def create_embedding_model(
     telemetry: Telemetry = NOOP_TELEMETRY,
 ) -> MultimodalEmbedder:
     """Build a closeable embedding model from immutable settings."""
+    provider = get_embed_provider(settings.provider)
+    resolved_base_url = settings.base_url or provider.default_base_url
     return MultimodalEmbedder(
         model=settings.model,
         api_key=settings.api_key or "",
-        base_url=settings.base_url or "",
+        base_url=resolved_base_url,
         dim=settings.dim,
-        provider=get_embed_provider(settings.provider),
+        provider=provider,
         input_modality=settings.input_modality,
-        asymmetric=settings.asymmetric,
+        max_token_size=settings.max_token_size,
+        batch_size=settings.batch_size,
         timeout=settings.timeout,
-        fingerprint=model_fingerprint(settings),
+        fingerprint=model_endpoint_fingerprint(
+            settings.provider,
+            settings.model,
+            resolved_base_url,
+        ),
         scheduler=scheduler,
         telemetry=telemetry,
     )
@@ -314,6 +505,5 @@ def create_embedding_model(
 __all__ = [
     "MultimodalEmbedder",
     "create_embedding_model",
-    "resolve_asymmetric",
     "resolve_embedding_input_modality",
 ]
