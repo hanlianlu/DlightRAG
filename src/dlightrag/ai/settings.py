@@ -129,7 +129,7 @@ class ModelRoleSettings(FrozenSettings):
             model="z-ai/glm-5.2",
             base_url="https://openrouter.ai/api/v1",
             structured_output="json_schema",
-            temperature=0.4,
+            temperature=1.0,
         )
     )
     roles: ModelRoleOverrides = Field(default_factory=ModelRoleOverrides)
@@ -196,7 +196,7 @@ class ModelCapacityOverrideSettings(FrozenSettings):
 
 
 class EmbeddingSettings(FrozenSettings):
-    provider: Literal["voyage", "gemini", "jina", "openai_compatible", "ollama"] = "voyage"
+    provider: Literal["voyage", "gemini", "jina", "openai_compatible"] = "voyage"
     model: str = "voyage-multimodal-3.5"
     api_key: str | None = None
     base_url: str | None = "https://api.voyageai.com/v1"

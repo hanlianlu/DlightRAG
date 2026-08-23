@@ -121,6 +121,11 @@ def test_invalid_embedding_bounds_are_rejected(values: dict[str, Any]) -> None:
         EmbeddingSettings(**values)
 
 
+def test_retired_ollama_embedding_provider_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="provider"):
+        EmbeddingSettings(provider="ollama")  # type: ignore[arg-type]
+
+
 def test_embedding_defaults_preserve_shipped_pipeline_contract() -> None:
     settings = EmbeddingSettings()
     assert settings.provider == "voyage"

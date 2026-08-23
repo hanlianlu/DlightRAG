@@ -1,3 +1,0 @@
-# Reset development data for breaking schema changes
-
-DlightRAG is pre-release and does not preserve PostgreSQL or local runtime data across breaking schema redesigns. Milestone 3 rewrites the baseline Answer schema directly and requires a full development reset before the new binary starts; it ships no old-data transformer, dual write, legacy decoder, restore-point workflow, or compatibility branch. This deliberately trades all existing development corpus, Answer, Web, metadata, artifact, and migration-ledger state for a smaller and verifiable final design. Data-preserving migrations begin only after the project explicitly establishes a persistent-data compatibility contract.

@@ -188,7 +188,7 @@ def test_resolve_eval_env_uses_canonical_query_role_fallback(
     assert os.environ["EVAL_LLM_BINDING_HOST"] == "https://default.example/v1"
 
 
-def test_resolve_eval_env_does_not_reuse_native_ollama_as_openai_embeddings(
+def test_resolve_eval_env_does_not_reuse_native_jina_as_openai_embeddings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     query_cfg = SimpleNamespace(
@@ -201,9 +201,9 @@ def test_resolve_eval_env_does_not_reuse_native_ollama_as_openai_embeddings(
         models=SimpleNamespace(
             chat=SimpleNamespace(roles=SimpleNamespace(query=query_cfg), default=query_cfg),
             embedding=SimpleNamespace(
-                provider="ollama",
-                api_key="ollama-key",
-                base_url="http://127.0.0.1:11434",
+                provider="jina",
+                api_key="jina-key",
+                base_url="https://api.jina.ai/v1",
             ),
         ),
         interfaces=SimpleNamespace(api=SimpleNamespace(host="127.0.0.1", port=8100)),

@@ -15,7 +15,6 @@ from dlightrag.ai.providers.embed_base import EmbedProvider
 from dlightrag.ai.providers.embed_providers import (
     GeminiEmbedProvider,
     JinaEmbedProvider,
-    OllamaEmbedProvider,
     OpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
 )
@@ -148,7 +147,6 @@ def test_openai_compatible_payload_preserves_image_data_uri_without_task_hint() 
         ("gemini", GeminiEmbedProvider),
         ("jina", JinaEmbedProvider),
         ("openai_compatible", OpenAICompatibleEmbedProvider),
-        ("ollama", OllamaEmbedProvider),
     ],
 )
 def test_get_embed_provider_uses_explicit_registry(

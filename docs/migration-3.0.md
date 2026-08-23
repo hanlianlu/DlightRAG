@@ -20,10 +20,13 @@ upgrade path.
 3. Remove Agent scopes, tool profiles, `delegate_research`, and any caller-side
    assumptions about the old journal. Every configured tool is available by
    default; child tool lists may only narrow inherited tools.
-4. Recreate the development Answer/Agent/Memory schema. There is no compatibility
+4. Replace the native embedding provider value `ollama`. Supported embedding
+   transports are `voyage`, `gemini`, `jina`, and `openai_compatible`; the last
+   requires an endpoint that actually implements the OpenAI embeddings contract.
+5. Recreate the development Answer/Agent/Memory schema. There is no compatibility
    reader for old run/session rows. Production operators must drain incompatible
    active runs before rolling the writer.
-5. Update clients to the durable control surface. In addition to start, status,
+6. Update clients to the durable control surface. In addition to start, status,
    events, and cancel, REST, inbound MCP, and `AnswerRunClient` expose steer,
    follow-up, resume, fork, transcript tail, child roster, usage, evidence, and
    parent-run lineage. Web exposes the applicable controls and a minimal branch

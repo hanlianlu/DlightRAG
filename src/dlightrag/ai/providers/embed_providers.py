@@ -210,36 +210,11 @@ class GeminiEmbedProvider(EmbedProvider):
         return super().parse_response(data)
 
 
-class OllamaEmbedProvider(EmbedProvider):
-    """POST /api/embed for text-only local Ollama embeddings."""
-
-    endpoint = "/api/embed"
-    supports_asymmetric = False
-
-    def build_payload(
-        self,
-        model: str,
-        inputs: list[EmbeddingInput],
-        *,
-        context: EmbeddingContext,
-        asymmetric: bool = False,
-        output_dimension: int | None = None,
-    ) -> dict:
-        return {"model": model, "input": [_string_value(item) for item in inputs]}
-
-    def request_headers(self, api_key: str) -> dict[str, str]:
-        return {}
-
-    def parse_response(self, data: dict) -> list[list[float]]:
-        return data["embeddings"]
-
-
 _EMBED_REGISTRY: dict[str, type[EmbedProvider]] = {
     "voyage": VoyageEmbedProvider,
     "gemini": GeminiEmbedProvider,
     "jina": JinaEmbedProvider,
     "openai_compatible": OpenAICompatibleEmbedProvider,
-    "ollama": OllamaEmbedProvider,
 }
 
 

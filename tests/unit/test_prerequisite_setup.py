@@ -186,11 +186,6 @@ def test_embedding_mapping_prefills_dim(wiz):
     assert env_key == "DLIGHTRAG_MODELS__EMBEDDING__API_KEY"
 
 
-def test_compose_ollama_uses_the_host_gateway(wiz):
-    block, _ = wiz.resolve_embedding_choice("Ollama (local)", model="embed", base_url=None)
-    assert block["base_url"] == "http://host.docker.internal:11434"
-
-
 def test_azure_cohere_rerank_records_its_required_endpoint(wiz):
     block, env_key = wiz.resolve_rerank_choice(
         "Azure Cohere",
@@ -685,7 +680,7 @@ def test_models_step_writes_config_and_env(wiz, tmp_path, monkeypatch):
 def test_configured_embedding_dimension_honors_env_override(wiz, tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        "models:\n  embedding:\n    provider: ollama\n    model: embed\n    dim: 1024\n",
+        "models:\n  embedding:\n    provider: openai_compatible\n    model: embed\n    dim: 1024\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
@@ -701,7 +696,7 @@ def test_models_step_marks_embedding_dimension_change_for_required_reset(
     cfg.write_text(
         "models:\n"
         "  chat:\n    default:\n      provider: openai\n      model: old\n"
-        "  embedding:\n    provider: ollama\n    model: old\n    dim: 768\n",
+        "  embedding:\n    provider: openai_compatible\n    model: old\n    dim: 768\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
@@ -1381,9 +1376,9 @@ def test_is_configured_accepts_explicit_keyless_local_models(wiz, tmp_path):
         "      base_url: http://127.0.0.1:8888/v1\n"
         "      api_key: null\n"
         "  embedding:\n"
-        "    provider: ollama\n"
+        "    provider: openai_compatible\n"
         "    model: local-embed\n"
-        "    base_url: http://127.0.0.1:11434\n"
+        "    base_url: http://127.0.0.1:1234/v1\n"
         "    dim: 768\n"
         "    api_key: null\n",
         encoding="utf-8",
@@ -1408,7 +1403,7 @@ def test_read_config_summary_uses_effective_defaults_and_role_fallback(wiz, tmp_
         "        provider: openai\n"
         "        model: incomplete-query\n"
         "  embedding:\n"
-        "    provider: ollama\n"
+        "    provider: openai_compatible\n"
         "    model: local-embed\n"
         "    dim: 768\n"
         "    api_key: null\n",

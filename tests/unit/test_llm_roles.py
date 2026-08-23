@@ -189,7 +189,7 @@ async def test_rag_embedding_adapter_injects_context_and_numpy_shape() -> None:
     embedder.supports_asymmetric = True
     embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
     settings = EmbeddingSettings(
-        provider="ollama",
+        provider="openai_compatible",
         model="embed-model",
         dim=3,
         max_token_size=2048,

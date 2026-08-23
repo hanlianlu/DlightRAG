@@ -8,7 +8,7 @@ models:
       model: z-ai/glm-5.2
       base_url: https://openrouter.ai/api/v1
       structured_output: json_schema
-      temperature: 0.4
+      temperature: 1.0
       model_kwargs:
         reasoning:
           enabled: false
@@ -36,7 +36,7 @@ models:
             type: disabled
       query:
         provider: openai
-        model: xiaomi/mimo-v2.5
+        model: deepseek/deepseek-v4-flash-vision-exp
         base_url: https://openrouter.ai/api/v1
         structured_output: json_schema
         temperature: 0.4

@@ -17,6 +17,8 @@ context/model/tool selection, inclusive usage, and transactional parent Evidence
 adoption. Execution modes are exactly `disabled`, `trust`, and `sandbox`; sandbox
 requires a trusted adapter. Progressive global/workspace Skills, three trusted
 Python extension seams, and thin allowlisted outbound MCP tools are available.
+The native Ollama embedding transport is removed; OpenAI-compatible embedding
+endpoints remain available through the generic transport.
 
 Profile Memory adds stable proposal/commit, replay-stable recall, local
 single-user identity, timeout fallback, and idempotent tombstone forget. REST,

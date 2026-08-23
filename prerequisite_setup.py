@@ -81,7 +81,7 @@ PROVIDERS_LLM: dict[str, ProviderSpec] = {
         "openai", "https://openrouter.ai/api/v1", default_model="z-ai/glm-5.2"
     ),
     "Anthropic": ProviderSpec("anthropic", None, default_model="claude-sonnet-5"),
-    "Gemini": ProviderSpec("gemini", None, default_model="gemini-3.6-flash"),
+    "Gemini": ProviderSpec("gemini", None, default_model="gemini-3.7-flash"),
     "Azure OpenAI": ProviderSpec("openai", None, requires_url=True),
     "Other (OpenAI-compatible)": ProviderSpec(
         "openai", None, requires_url=True, requires_key=False
@@ -123,13 +123,6 @@ PROVIDERS_EMBED: dict[str, ProviderSpec] = {
         requires_url=True,
         gui_binding="openai",
         gui_host="https://api.openai.com/v1",
-    ),
-    "Ollama (local)": ProviderSpec(
-        "ollama",
-        "http://host.docker.internal:11434",
-        requires_key=False,
-        gui_binding="ollama",
-        gui_host="http://host.docker.internal:11434",
     ),
     "Other (OpenAI-compatible)": ProviderSpec(
         "openai_compatible",

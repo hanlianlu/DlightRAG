@@ -237,12 +237,10 @@ endpoint itself.
 | `gemini` | `/models/{model}:embedContent` | Native | No | `x-goog-api-key` | Sent as `output_dimensionality`; returned vectors are validated |
 | `jina` | `/v1/embeddings` | Native | Yes | Bearer token | Sent as `dimensions`; returned vectors are validated |
 | `openai_compatible` | `/embeddings` | Text by default; explicit image opt-in | No | Optional bearer token | Sent as `dimensions`; returned vectors are validated |
-| `ollama` | `/api/embed` | Text only | No | None | Not sent; returned vectors are still validated |
 
-The supported provider values are exactly the five names above. For example,
-LM Studio is `openai_compatible` because it exposes an OpenAI-style
-`/v1/embeddings` API. Ollama has a native provider because its embedding API is
-`/api/embed`, not `/v1/embeddings`.
+The supported provider values are exactly the four names above. For example,
+LM Studio is `openai_compatible` when it exposes an OpenAI-style
+`/v1/embeddings` API.
 
 ### Fields
 
@@ -276,7 +274,6 @@ endpoint actually embeds an image.
 | Provider capability | `auto` | `text` | `multimodal` |
 |---|---|---|---|
 | Native multimodal (`voyage`, `gemini`, `jina`) | Enable both image paths (image->image query retrieval AND the fused visual-vector overwrite); run the startup probe | Disable both locally | Require image embedding; probe failure stops startup |
-| Native text-only (`ollama`) | Text only | Text only | Fail before service initialization |
 | OpenAI-compatible extension (`openai_compatible`) | Conservative text only | Text only | Opt into the data-URI image payload; probe failure stops startup |
 
 `text` guarantees the embedding provider receives text only. It disables both
@@ -297,8 +294,7 @@ path but not the other.
 the configured adapter cannot serialize images or when the live startup probe
 rejects them. In `auto`, a native multimodal provider may safely downgrade to
 the semantic text path if its live probe fails. `startup_probe: false` skips
-only the live request and trusts the resolved provider/modality combination;
-static mismatches such as `ollama + multimodal` still fail.
+only the live request and trusts the resolved provider/modality combination.
 
 ### Examples
 
@@ -321,20 +317,6 @@ Keep the Voyage key in `.env`:
 
 ```dotenv
 DLIGHTRAG_MODELS__EMBEDDING__API_KEY=pa-...
-```
-
-Ollama's native text embedding endpoint:
-
-```yaml
-models:
-  embedding:
-    provider: ollama
-    model: nomic-embed-text
-    base_url: http://127.0.0.1:11434
-    dim: 768
-    max_token_size: 8192
-    input_modality: auto
-    asymmetric: disable
 ```
 
 LM Studio or another OpenAI-compatible text embedding server:
@@ -376,17 +358,11 @@ model is not sufficient.
 When DlightRAG runs directly on the host, local services normally use
 `127.0.0.1`. Inside this repository's Compose containers, `127.0.0.1` means the
 container itself. Compose configures the `host.docker.internal` alias for
-host-side services, so use:
+host-side services, so an LM Studio embedding endpoint on the host uses:
 
 ```yaml
-# Ollama from Compose
-base_url: http://host.docker.internal:11434
-
-# LM Studio from Compose
 base_url: http://host.docker.internal:1234/v1
 ```
-
-Notice that Ollama has no `/v1`, while LM Studio's OpenAI-compatible root does.
 
 ### Changing the vector space
 
