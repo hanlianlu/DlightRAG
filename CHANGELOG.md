@@ -61,8 +61,7 @@ single-user identity, timeout fallback, and idempotent tombstone forget. REST,
 inbound MCP, Python, and Web expose their applicable start/status/steer/follow-up/
 cancel/resume/fork, transcript, child, usage, Evidence, and lineage projections.
 Both distributions and the frontend are version `3.0.0`. Pre-3.0 Agent runs and
-schemas are intentionally incompatible; see
-[Migrating to DlightRAG 3.0](docs/migration-3.0.md).
+schemas are intentionally incompatible.
 
 ## 2.0.0 — Historical
 
@@ -138,9 +137,6 @@ bearer token is `DLIGHTRAG_ACCESS__API_TOKEN`.
 Canonical settings instances cannot be mutated after construction. Code that
 constructed `DlightragConfig` with 1.x fields or modified settings in place must
 construct the matching 2.0 section instead.
-
-See [Migrating to DlightRAG 2.0](docs/migration-2.0.md) for package commands,
-path mappings, environment examples, validation, rollout, and rollback.
 
 ### Internal simplification
 

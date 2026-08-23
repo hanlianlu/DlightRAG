@@ -4,9 +4,7 @@ This page is for operators and SDK users deciding which settings to change. It
 owns configuration precedence, public field groups, defaults, and advanced
 overrides. Runtime architecture lives in [architecture.md](architecture.md);
 auth and access-control guidance lives in [security.md](security.md);
-interface payloads live in [interfaces.md](interfaces.md). Operators upgrading from 2.x should follow
-[migration-3.0.md](migration-3.0.md). The preserved
-[migration-2.0.md](migration-2.0.md) is only the historical 1.x upgrade guide.
+interface payloads live in [interfaces.md](interfaces.md).
 
 Root [config.yaml](../config.yaml) is intentionally curated. It should contain
 the product and deployment choices most operators actually change. The typed

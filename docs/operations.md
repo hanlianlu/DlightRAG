@@ -49,8 +49,7 @@ concern rather than a request concern.
 
 - **3.0 upgrade.** There is no pre-3.0 Agent-run compatibility reader. Drain or
   cancel active/queued runs, back up business data, apply the writer first, then
-  start readers. Development deployments use the full reset above. See
-  [migration-3.0.md](migration-3.0.md).
+  start readers. Development deployments use the full reset above.
 - **Rolling upgrades.** All workers sharing one database must run a compatible
   revision and the same model roles, execution adapters, extension set, outbound
   MCP allowlists, and Answer policies; heterogeneous execution is unsupported.

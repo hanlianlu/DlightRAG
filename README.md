@@ -470,8 +470,6 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 ## Documentation Map
 
 - [CHANGELOG.md](CHANGELOG.md) - release notes and breaking changes.
-- [docs/migration-3.0.md](docs/migration-3.0.md) - breaking Agent, controls, Memory, configuration, and reset migration from 2.x.
-- [docs/migration-2.0.md](docs/migration-2.0.md) - historical package, import, and configuration migration from 1.x.
 - [docs/architecture.md](docs/architecture.md) - runtime ownership, storage topology, and code layering.
 - [docs/domain-language.md](docs/domain-language.md) - the project's shared vocabulary for domain terms.
 - [docs/interfaces.md](docs/interfaces.md) - SDK, REST, MCP, and Web contracts.
