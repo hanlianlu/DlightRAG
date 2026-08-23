@@ -33,6 +33,7 @@ from dlightrag.agent.environment.local import (
     LocalExecutionEnvironment,
     ProcessChunk,
     ProcessOutputSink,
+    TreeEntry,
 )
 
 __all__ = [
@@ -57,6 +58,7 @@ __all__ = [
     "ProcessOutputSink",
     "SandboxUnavailableError",
     "ToolAccess",
+    "TreeEntry",
     "TrustExecutionAdapter",
     "WorkspaceQuotaExceeded",
     "build_child_environment",

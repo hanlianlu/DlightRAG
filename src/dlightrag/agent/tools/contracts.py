@@ -159,6 +159,7 @@ class AgentTool:
     replay_policy: ReplayPolicy = "safe"
     contract_version: int = 2
     input_schema_digest: str = ""
+    guidance: str = ""
 
     def __post_init__(self) -> None:
         if self.contract_version < 1:

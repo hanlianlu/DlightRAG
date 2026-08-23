@@ -36,6 +36,7 @@ class ContextAssembler:
         resource_manifest: tuple[ResourceManifestEntry, ...],
         memory_text: str = "",
         contributions: tuple[ContextContribution, ...] = (),
+        tool_guidance: tuple[str, ...] = (),
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
@@ -45,6 +46,7 @@ class ContextAssembler:
         self._question = _question_message(query, query_images, resource_manifest)
         self._memory_text = memory_text
         self._contributions = contributions
+        self._tool_guidance = tool_guidance
 
     async def control_turn(
         self,
@@ -152,6 +154,25 @@ class ContextAssembler:
         system = {"role": "system", "content": agent_control_prompt()}
         head = self._head(system, working.messages())
         tail: list[ContextContribution] = []
+        if self._tool_guidance:
+            tail.append(
+                ContextContribution(
+                    source="answer.tools",
+                    authority="reference",
+                    messages=(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Tool usage guidance:\n"
+                                    + "\n".join(self._tool_guidance),
+                                }
+                            ],
+                        },
+                    ),
+                )
+            )
         if evidence.row_count:
             blocks, _ = self._pack(
                 evidence,

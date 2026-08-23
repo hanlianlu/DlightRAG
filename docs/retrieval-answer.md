@@ -287,7 +287,9 @@ One `AnswerOrchestrator` executes the durable Resolved Mode:
   no Agent Session, workspace, tools, or publication.
 - **Research** — requested or routed `research`. The product-neutral AgentLoop
   projects the canonical linear journal as a parent-linked selected-head view and selects from the
-  run-local ToolRegistry: KB/resource/Web tools, optional path tools, parent
+  run-local ToolRegistry: KB/resource/Web tools, the seven-tool filesystem set
+  (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, in Pi order with
+  metadata-only live tool progress), parent
   Profile Memory tools, progressive `load_skill`, outbound MCP tools, and
   `spawn_agent` plus child status/wait/cancel. Foreground children may run in
   parallel with selected context/model/inherited tools; adopted Evidence is

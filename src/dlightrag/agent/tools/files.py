@@ -4,8 +4,13 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
+import difflib
+import fnmatch
 import hashlib
+import json
 import os
+import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal, cast
@@ -27,7 +32,7 @@ from dlightrag.agent.environment.errors import (
     WorkspaceQuotaExceeded,
 )
 from dlightrag.agent.environment.execution import ExecutionEnvironment
-from dlightrag.agent.environment.local import DirectoryEntry, ProcessChunk
+from dlightrag.agent.environment.local import CompletedProcess, DirectoryEntry, ProcessChunk
 from dlightrag.agent.environment.text import decode_workspace_text, encode_workspace_text
 from dlightrag.agent.tools.contracts import (
     AgentTool,
@@ -76,17 +81,52 @@ class WriteArgs(BaseModel):
     content: str = Field(description="Full UTF-8 file contents.")
 
 
+class EditOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    old_text: str = Field(min_length=1, description="Unique exact text in the original file.")
+    new_text: str = Field(description="Replacement text.")
+
+
 class EditArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
     path: str = Field(description="Workspace-relative path to edit.")
-    old_string: str = Field(description="Exact text to replace.")
-    new_string: str = Field(description="Replacement text.")
-    replace_all: bool = Field(default=False, description="Replace every match.")
+    edits: list[EditOperation] = Field(
+        min_length=1,
+        description="Non-overlapping replacements, all matched against the original file.",
+    )
 
 
 class GrepArgs(BaseModel):
-    pattern: str = Field(description="ripgrep pattern.")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    pattern: str = Field(min_length=1, description="Regex (or literal with literal=true).")
     path: str = Field(default=".", description="Workspace path to search.")
     glob: str | None = Field(default=None, description="Optional glob filter.")
+    ignore_case: bool = Field(default=False, description="Case-insensitive matching.")
+    literal: bool = Field(
+        default=False, description="Treat pattern as a literal string, not a regex."
+    )
+    context: int | None = Field(
+        default=None, ge=0, description="Context lines shown around each match."
+    )
+    limit: int = Field(default=100, ge=1, description="Maximum matching lines to return.")
+
+
+class FindArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    pattern: str = Field(min_length=1, description="Glob pattern to match.")
+    path: str = Field(default=".", description="Workspace subtree to search.")
+    limit: int = Field(default=1000, ge=1, description="Maximum matches to return.")
+
+
+class LsArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    path: str = Field(default=".", description="Workspace directory to list.")
+    limit: int = Field(default=500, ge=1, description="Maximum entries to return.")
 
 
 class BashArgs(BaseModel):
@@ -140,15 +180,17 @@ def path_tools(
     """Return read/write/edit/grep/bash bound to one environment instance."""
     return [
         read_tool(environment, scheduler, resource_reader=resource_reader, spill=spill),
-        write_tool(environment, scheduler),
+        bash_tool(environment, scheduler, output_stage_factory=output_stage_factory),
         edit_tool(environment, scheduler),
+        write_tool(environment, scheduler),
         grep_tool(
             environment,
             scheduler,
             ripgrep=ripgrep,
             output_stage_factory=output_stage_factory,
         ),
-        bash_tool(environment, scheduler, output_stage_factory=output_stage_factory),
+        find_tool(environment, scheduler),
+        ls_tool(environment, scheduler),
     ]
 
 
@@ -165,7 +207,7 @@ def read_tool(
         args = cast(ReadArgs, args)
         if args.resource_id is not None:
             if resource_reader is None:
-                return ToolResult.text("resource read is not available")
+                return ToolResult.text("resource read is not available", is_error=True)
             async with scheduler.hold(PathAccess(path=args.resource_id, kind="read")):
                 return await resource_reader(
                     args.resource_id,
@@ -174,8 +216,13 @@ def read_tool(
                     runtime,
                 )
         if environment is None or args.path is None:
-            return ToolResult.text("path read requires an execution environment")
-        path = environment.resolve(args.path)
+            return ToolResult.text("path read requires an execution environment", is_error=True)
+        if blocked := _integrity_blocked(environment):
+            return blocked
+        try:
+            path = environment.resolve(args.path)
+        except PathRejected as exc:
+            return ToolResult.text(str(exc), is_error=True)
         async with scheduler.hold(PathAccess(path=str(path), kind="read")):
             kind = environment.stat_kind(path)
             if kind == "directory":
@@ -183,19 +230,24 @@ def read_tool(
                     _render_listing(environment.list_directory(path), args.cursor)
                 )
             if kind == "missing":
-                return ToolResult.text(f"file not found: {args.path}")
+                return ToolResult.text(f"file not found: {_escape_path(args.path)}", is_error=True)
             raw = environment.read_bytes(path)
             try:
                 decoded = decode_workspace_text(raw)
             except ValueError as exc:
-                return ToolResult.text(str(exc))
-            text = _slice_lines(decoded.text, offset=args.offset, limit=args.limit)
+                return ToolResult.text(str(exc), is_error=True)
+            body, continuation, remaining = _paginate_lines(
+                decoded.text, path=args.path, offset=args.offset, limit=args.limit
+            )
             note = ""
             if decoded.mixed_newlines:
                 note = "\n[mixed line endings preserved; not normalized]"
-            body, committed = await preview_or_spill(text + note, spill=spill, tool="read")
+            body, committed = await preview_or_spill(body + note, spill=spill, tool="read")
+            if continuation:
+                body = f"{body}\n[{remaining} more lines; {continuation}]"
             return ToolResult.text(
                 body,
+                protected_text=continuation,
                 effects=ToolEffects(
                     committed_outputs=((committed,) if committed is not None else ())
                 ),
@@ -207,20 +259,30 @@ def read_tool(
         input_model=ReadArgs,
         execute=execute,
         replay_policy="safe",
+        guidance=(
+            "read: one of path or resource_id; text pages default to 2000 lines and "
+            "carry an offset continuation; follow the printed continuation instead of "
+            "re-reading the whole file."
+        ),
     )
 
 
 def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
     async def execute(args: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(WriteArgs, args)
-        path = environment.resolve(args.path)
+        if blocked := _integrity_blocked(environment):
+            return blocked
+        try:
+            path = environment.resolve(args.path)
+        except PathRejected as exc:
+            return ToolResult.text(str(exc), is_error=True)
         async with scheduler.hold(PathAccess(path=str(path), kind="write")):
             try:
                 environment.write_bytes(path, args.content.encode("utf-8"))
             except WorkspaceQuotaExceeded as exc:
-                return ToolResult.text(str(exc))
+                return ToolResult.text(str(exc), is_error=True)
             except PathRejected as exc:
-                return ToolResult.text(str(exc))
+                return ToolResult.text(str(exc), is_error=True)
         return ToolResult.text(
             f"wrote {args.path} ({len(args.content.encode('utf-8'))} bytes)",
             effects=ToolEffects(workspace_inventory=_inventory_facts(environment.root, path)),
@@ -232,31 +294,67 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
         input_model=WriteArgs,
         execute=execute,
         replay_policy="never",
+        guidance="write: replaces the whole file; the success line reports UTF-8 byte size.",
     )
 
 
 def edit_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
     async def execute(args: BaseModel, _runtime: ToolRuntime) -> ToolResult:
-        args = cast(EditArgs, args)
-        if args.old_string == args.new_string:
-            return ToolResult.text("edit rejected: old_string and new_string are identical")
-        path = environment.resolve(args.path)
+        edit_args = cast(EditArgs, args)
+        if blocked := _integrity_blocked(environment):
+            return blocked
+        try:
+            path = environment.resolve(edit_args.path)
+        except PathRejected as exc:
+            return ToolResult.text(str(exc), is_error=True)
         async with scheduler.hold(PathAccess(path=str(path), kind="readwrite")):
             if environment.stat_kind(path) != "file":
-                return ToolResult.text(f"file not found: {args.path}")
-            decoded = decode_workspace_text(environment.read_bytes(path))
-            count = decoded.text.count(args.old_string)
-            if count == 0:
-                return ToolResult.text("old_string not found; re-read the file")
-            if count > 1 and not args.replace_all:
-                return ToolResult.text(f"old_string matches {count} times; set replace_all=true")
-            updated = decoded.text.replace(args.old_string, args.new_string)
+                return ToolResult.text(
+                    f"file not found: {_escape_path(edit_args.path)}",
+                    is_error=True,
+                )
+            try:
+                decoded = decode_workspace_text(environment.read_bytes(path))
+            except ValueError as exc:
+                return ToolResult.text(str(exc), is_error=True)
+            spans: list[tuple[int, int, str]] = []
+            for index, operation in enumerate(edit_args.edits, start=1):
+                if operation.old_text == operation.new_text:
+                    return ToolResult.text(
+                        f"edit {index} rejected: old_text and new_text are identical",
+                        is_error=True,
+                    )
+                count = decoded.text.count(operation.old_text)
+                if count != 1:
+                    return ToolResult.text(
+                        f"edit {index} old_text matches {count} times; each match must be unique",
+                        is_error=True,
+                    )
+                start = decoded.text.index(operation.old_text)
+                spans.append((start, start + len(operation.old_text), operation.new_text))
+            ordered = sorted(spans)
+            if any(left[1] > right[0] for left, right in zip(ordered, ordered[1:], strict=False)):
+                return ToolResult.text("edit ranges overlap in the original file", is_error=True)
+            updated = decoded.text
+            for start, end, replacement in reversed(ordered):
+                updated = updated[:start] + replacement + updated[end:]
             try:
                 environment.write_bytes(path, encode_workspace_text(decoded, updated))
-            except WorkspaceQuotaExceeded as exc:
-                return ToolResult.text(str(exc))
+            except (WorkspaceQuotaExceeded, PathRejected) as exc:
+                return ToolResult.text(str(exc), is_error=True)
+        patch = "\n".join(
+            difflib.unified_diff(
+                decoded.text.splitlines(),
+                updated.splitlines(),
+                fromfile=edit_args.path,
+                tofile=edit_args.path,
+                lineterm="",
+            )
+        )
+        first_line = decoded.text.count("\n", 0, ordered[0][0]) + 1
         return ToolResult.text(
-            f"edited {args.path} ({count} replacement(s))",
+            f"edited {_escape_path(edit_args.path)} ({len(ordered)} edits; "
+            f"first change line {first_line})\n{patch}",
             effects=ToolEffects(workspace_inventory=_inventory_facts(environment.root, path)),
         )
 
@@ -266,6 +364,10 @@ def edit_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> 
         input_model=EditArgs,
         execute=execute,
         replay_policy="never",
+        guidance=(
+            "edit: every old_text must match exactly once in the current file; all edits "
+            "apply atomically or none do. Read the file first when a match fails."
+        ),
     )
 
 
@@ -277,16 +379,53 @@ def grep_tool(
     output_stage_factory: OutputStageFactory | None = None,
 ) -> AgentTool:
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
-        args = cast(GrepArgs, args)
-        root = environment.resolve(args.path) if args.path != "." else environment.root
-        argv = [ripgrep, "--line-number", "--no-heading", "-e", args.pattern]
-        if args.glob:
-            argv.extend(["--glob", args.glob])
-        argv.append(str(root))
+        grep_args = cast(GrepArgs, args)
+        if blocked := _integrity_blocked(environment):
+            return blocked
+        try:
+            root = (
+                environment.root if grep_args.path == "." else environment.resolve(grep_args.path)
+            )
+        except PathRejected as exc:
+            return ToolResult.text(str(exc), is_error=True)
+        target = root.relative_to(environment.root).as_posix() if root != environment.root else "."
+        argv = [
+            ripgrep,
+            "--line-number",
+            "--no-heading",
+            "--hidden",
+            "--no-require-git",
+            "--glob",
+            "!.git",
+        ]
+        if grep_args.ignore_case:
+            argv.append("--ignore-case")
+        if grep_args.literal:
+            argv.append("--fixed-strings")
+        if grep_args.context is not None:
+            argv.extend(["--context", str(grep_args.context)])
+        if grep_args.glob:
+            argv.extend(["--glob", grep_args.glob])
+        argv.extend(["-e", grep_args.pattern])
+        if root != environment.root:
+            argv.append(target)
         output = _streaming_output("grep", output_stage_factory)
+        limiter = _GrepLineLimiter(limit=grep_args.limit)
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        limit_reached = False
+        completed: CompletedProcess | None = None
 
         async def capture(chunk: ProcessChunk) -> None:
-            output.append(chunk)
+            nonlocal limit_reached
+            if limiter.truncated:
+                raise _GrepLimitReached()
+            kept = limiter.feed(decoder.decode(chunk.data))
+            if kept:
+                output.append(ProcessChunk("stdout", kept.encode("utf-8")))
+            if limiter.truncated:
+                # Terminating rg once the limit is reached keeps large trees
+                # from being fully scanned; partial context is acceptable.
+                raise _GrepLimitReached()
 
         try:
             async with scheduler.hold(PathAccess(path=str(root), kind="search")):
@@ -299,7 +438,14 @@ def grep_tool(
                     cwd=environment.root,
                     on_output=capture,
                 )
-            if completed.returncode == 1 and output.snapshot().total_bytes == 0:
+        except _GrepLimitReached:
+            limit_reached = True
+        returncode = None if completed is None else completed.returncode
+        try:
+            kept = limiter.feed(decoder.decode(b"", final=True))
+            if kept:
+                output.append(ProcessChunk("stdout", kept.encode("utf-8")))
+            if returncode == 1 and output.snapshot().total_bytes == 0:
                 output.append(ProcessChunk("stdout", b"(no matches)"))
             final = await output.finish()
         except asyncio.CancelledError:
@@ -309,7 +455,16 @@ def grep_tool(
             output.abort()
             raise
         result = _stream_result("grep", final)
-        if completed.returncode not in {0, 1}:
+        if limiter.truncated:
+            marker = f"[limited to {grep_args.limit} matching lines]"
+            result = ToolResult.text(
+                f"{result.text_content}\n{marker}",
+                details=result.details,
+                protected_text=result.protected_text,
+                is_error=result.is_error,
+                effects=result.effects,
+            )
+        if returncode is not None and returncode not in {0, 1}:
             result = ToolResult.text(
                 result.text_content,
                 details=result.details,
@@ -325,6 +480,10 @@ def grep_tool(
         input_model=GrepArgs,
         execute=execute,
         replay_policy="safe",
+        guidance=(
+            "grep: regex by default (literal=true for plain text); limit caps matching "
+            "lines, not context lines; hidden files are searched while ignore rules apply."
+        ),
     )
 
 
@@ -361,6 +520,7 @@ def bash_tool(
                 )
             status = "timeout" if completed.timed_out else f"exit {completed.returncode}"
             output.append(ProcessChunk("stdout", f"\n{status}".encode()))
+            violations = environment.refresh_integrity()
             final = await output.finish()
         except asyncio.CancelledError:
             output.abort()
@@ -370,9 +530,17 @@ def bash_tool(
             raise
         streamed = _stream_result("bash", final)
         failed = completed.timed_out or completed.returncode != 0
+        body = streamed.text_content
+        if violations:
+            failed = True
+            listed = ", ".join(_escape_path(path) for path in violations[:20])
+            body = (
+                f"{body}\nbash left forbidden entries (symlink/FIFO/socket/device): "
+                f"{listed}; only bash may remove them"
+            )
         return ToolResult.text(
-            streamed.text_content,
-            details=streamed.details,
+            body,
+            details={**(streamed.details or {}), "integrity_violations": list(violations)},
             protected_text=streamed.protected_text,
             is_error=failed,
             effects=ToolEffects(
@@ -387,7 +555,161 @@ def bash_tool(
         input_model=BashArgs,
         execute=execute,
         replay_policy="never",
+        guidance=(
+            "bash: output streams live and stays bounded; timed-out or failing commands "
+            "still return partial output as errors. Never leave symlinks, FIFOs, sockets, "
+            "or device files behind: the workspace stays blocked until bash removes them."
+        ),
     )
+
+
+def _integrity_blocked(environment: ExecutionEnvironment) -> ToolResult | None:
+    violations = environment.integrity_violations
+    if not violations:
+        return None
+    listed = ", ".join(_escape_path(path) for path in violations[:20])
+    return ToolResult.text(
+        "workspace integrity blocked by forbidden entries left by bash: "
+        f"{listed}; remove them with bash before using other tools",
+        is_error=True,
+    )
+
+
+def find_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
+    async def execute(args: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+        find_args = cast(FindArgs, args)
+        if blocked := _integrity_blocked(environment):
+            return blocked
+        try:
+            root = (
+                environment.root if find_args.path == "." else environment.resolve(find_args.path)
+            )
+            if environment.stat_kind(root) != "directory":
+                return ToolResult.text(
+                    f"find path is not a directory: {_escape_path(find_args.path)}",
+                    is_error=True,
+                )
+            async with scheduler.hold(PathAccess(path=str(root), kind="search")):
+                entries = environment.scan_tree(root)
+        except (PathRejected, OSError) as exc:
+            return ToolResult.text(str(exc), is_error=True)
+        prefix = (
+            "" if root == environment.root else root.relative_to(environment.root).as_posix() + "/"
+        )
+        matches: list[str] = []
+        for entry in entries:
+            relative = entry.relative_path.removeprefix(prefix)
+            candidate = relative if "/" in find_args.pattern else relative.rsplit("/", 1)[-1]
+            if fnmatch.fnmatchcase(candidate, find_args.pattern):
+                matches.append(entry.relative_path)
+        matches.sort(key=lambda path: (path.casefold(), path))
+        shown = matches[: find_args.limit]
+        body = "\n".join(_escape_path(path) for path in shown) or "(no matches)"
+        if len(matches) > find_args.limit:
+            body += f"\n[limited to {find_args.limit} of {len(matches)} matches]"
+        return ToolResult.text(body)
+
+    return AgentTool(
+        name="find",
+        description="Find workspace paths recursively by glob without following symlinks.",
+        input_model=FindArgs,
+        execute=execute,
+        replay_policy="safe",
+        contract_version=1,
+        guidance=(
+            "find: glob matched against basenames (or full relative paths when the "
+            "pattern contains /); sorted case-insensitively; ignore rules apply."
+        ),
+    )
+
+
+def ls_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
+    async def execute(args: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+        ls_args = cast(LsArgs, args)
+        if blocked := _integrity_blocked(environment):
+            return blocked
+        try:
+            root = environment.root if ls_args.path == "." else environment.resolve(ls_args.path)
+            if environment.stat_kind(root) != "directory":
+                return ToolResult.text(
+                    f"ls path is not a directory: {_escape_path(ls_args.path)}",
+                    is_error=True,
+                )
+            async with scheduler.hold(PathAccess(path=str(root), kind="read")):
+                entries = environment.list_directory(root)
+        except (PathRejected, OSError) as exc:
+            return ToolResult.text(str(exc), is_error=True)
+        shown = entries[: ls_args.limit]
+        lines = [f"{entry.kind}\t{entry.size}\t{_escape_path(entry.name)}" for entry in shown]
+        if len(entries) > ls_args.limit:
+            lines.append(f"[limited to {ls_args.limit} of {len(entries)} entries]")
+        return ToolResult.text("\n".join(lines) or "(empty directory)")
+
+    return AgentTool(
+        name="ls",
+        description="List one workspace directory without following symlinks.",
+        input_model=LsArgs,
+        execute=execute,
+        replay_policy="safe",
+        contract_version=1,
+        guidance="ls: one directory level, kind/size/name per entry; symlinks listed, never followed.",
+    )
+
+
+def _escape_path(path: str) -> str:
+    return json.dumps(path, ensure_ascii=False)[1:-1]
+
+
+class _GrepLimitReached(Exception):
+    """Raised internally once the match limit is reached so rg is terminated."""
+
+
+class _GrepLineLimiter:
+    """Keep the first N matching lines (plus their context), protect line length."""
+
+    # rg --no-heading emits `path:NUM:content` (or bare `NUM:content` for a
+    # single search file) for matches and `path-NUM-content` for context lines.
+    _MATCH_LINE_RE = re.compile(r"^(?:.*?:)?\d+:")
+
+    def __init__(self, *, limit: int, max_line_chars: int = 2000) -> None:
+        self.limit = limit
+        self.max_line_chars = max_line_chars
+        self.matches = 0
+        self.truncated = False
+        self._buffer = ""
+
+    def feed(self, text: str) -> str:
+        self._buffer += text
+        kept: list[str] = []
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._keep(line + "\n", kept)
+        return "".join(kept)
+
+    def flush(self) -> str:
+        if not self._buffer:
+            return ""
+        kept: list[str] = []
+        self._keep(self._buffer, kept)
+        self._buffer = ""
+        return "".join(kept)
+
+    def _keep(self, raw_line: str, kept: list[str]) -> None:
+        body = raw_line.rstrip("\n")
+        remainder = raw_line[len(body) :]
+        # Matches are counted; context lines and non-rg output pass through
+        # uncounted; lines past the limit are dropped and flagged truncated.
+        if self._MATCH_LINE_RE.match(body):
+            if self.matches >= self.limit:
+                self.truncated = True
+                return
+            self.matches += 1
+        kept.append(self._clip(body) + remainder)
+
+    def _clip(self, line: str) -> str:
+        if len(line) <= self.max_line_chars:
+            return line
+        return line[: self.max_line_chars] + "…[line truncated]"
 
 
 def _streaming_output(
@@ -503,28 +825,45 @@ def _scan_inventory(root: object) -> WorkspaceInventoryFacts:
     return WorkspaceInventoryFacts(upserts=tuple(upserts), replace_all=True)
 
 
-def _slice_lines(text: str, *, offset: int | None, limit: int | None) -> str:
-    if offset is None and limit is None:
-        return text
+def _paginate_lines(
+    text: str,
+    *,
+    path: str,
+    offset: int | None,
+    limit: int | None,
+) -> tuple[str, str, int]:
+    """Return one bounded page, its continuation call, and remaining lines."""
     lines = text.splitlines()
     start = (offset or 1) - 1
-    end = start + limit if limit is not None else len(lines)
-    return "\n".join(lines[start:end])
+    page_size = limit if limit is not None else TOOL_RESULT_MAX_LINES
+    end = min(start + page_size, len(lines))
+    body = "\n".join(lines[start:end])
+    if end < len(lines):
+        return (
+            body,
+            f"read(path={_escape_path(path)!r}, offset={end + 1})",
+            len(lines) - end,
+        )
+    return body, "", 0
 
 
 def _render_listing(entries: Sequence[DirectoryEntry], cursor: str | None) -> str:
+    entries = list(entries)
     start = int(cursor) if cursor and cursor.isdigit() else 0
-    page = list(entries)[start : start + 200]
-    lines = [f"{entry.kind}\t{entry.size}\t{entry.name}" for entry in page]
-    if start + 200 < len(list(entries)):
-        lines.append(f"cursor={start + 200}")
+    page = entries[start : start + 500]
+    lines = [f"{entry.kind}\t{entry.size}\t{_escape_path(entry.name)}" for entry in page]
+    if start + 500 < len(entries):
+        lines.append(f"[{len(entries) - start - 500} more entries; cursor={start + 500}]")
     return "\n".join(lines) or "(empty directory)"
 
 
 __all__ = [
     "BashArgs",
     "EditArgs",
+    "EditOperation",
+    "FindArgs",
     "GrepArgs",
+    "LsArgs",
     "ReadArgs",
     "OutputStageFactory",
     "ResourceReader",
@@ -533,7 +872,9 @@ __all__ = [
     "bash_tool",
     "bound_tool_text",
     "edit_tool",
+    "find_tool",
     "grep_tool",
+    "ls_tool",
     "path_tools",
     "preview_or_spill",
     "read_tool",

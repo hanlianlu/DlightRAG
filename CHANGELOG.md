@@ -35,6 +35,17 @@ and one atomic host-effect settlement. Predictable tool failures now settle as
 errors, trusted extensions must declare contract v2, and Web streams expose only
 safe tool-progress metadata rather than raw process output.
 
+The filesystem tool set now matches the Pi baseline: `read`, `bash`, `edit`,
+`write`, `grep`, plus new `find` and `ls` (Python-side recursive scan honoring
+workspace ignore rules, symlinks listed but never followed, stable
+case-insensitive ordering). `edit` becomes an atomic batch of unique
+`old_text`/`new_text` replacements returning a unified patch; `read` paginates
+text at 2000 lines with protected continuations and restores `focus` for durable
+resources; `grep` gains `ignore_case`/`literal`/`context`/`limit` with
+match-count limiting; `bash` leaves the run integrity-blocked when it creates
+symlinks, FIFOs, sockets, or device files until a later `bash` removes them;
+every tool carries short usage guidance projected into the control context.
+
 Profile Memory adds stable proposal/commit, replay-stable recall, local
 single-user identity, timeout fallback, and idempotent tombstone forget. REST,
 inbound MCP, Python, and Web expose their applicable start/status/steer/follow-up/

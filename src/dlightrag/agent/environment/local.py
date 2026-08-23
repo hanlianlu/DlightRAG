@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Literal
 
 from dlightrag.agent.environment.errors import (
+    TREE_MAX_DEPTH,
+    TREE_MAX_ENTRIES,
     WORKSPACE_MAX_BYTES,
     WORKSPACE_MAX_ENTRIES,
     PathRejected,
@@ -26,6 +28,15 @@ class DirectoryEntry:
     """One listing row: relative name, type, and size in bytes."""
 
     name: str
+    kind: str
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class TreeEntry:
+    """One non-followed descendant represented by a relative POSIX path."""
+
+    relative_path: str
     kind: str
     size: int
 
@@ -58,10 +69,42 @@ class LocalExecutionEnvironment:
             raise ValueError("execution environment root must be absolute")
         resolved.mkdir(parents=True, exist_ok=True)
         self._root = resolved
+        self._integrity_violations = self._scan_special_entries()
 
     @property
     def root(self) -> Path:
         return self._root
+
+    @property
+    def integrity_violations(self) -> tuple[str, ...]:
+        """Forbidden entries (symlink/FIFO/socket/device) left by bash."""
+        return self._integrity_violations
+
+    def refresh_integrity(self) -> tuple[str, ...]:
+        """Rescan for forbidden entries and latch the result."""
+        self._integrity_violations = self._scan_special_entries()
+        return self._integrity_violations
+
+    def _scan_special_entries(self) -> tuple[str, ...]:
+        violations: list[str] = []
+        for current, dirnames, filenames in os.walk(self._root):
+            for name in (*dirnames, *filenames):
+                path = Path(current) / name
+                if path.is_symlink():
+                    violations.append(path.relative_to(self._root).as_posix())
+                    continue
+                try:
+                    mode = path.lstat().st_mode
+                except OSError:
+                    continue
+                if (
+                    stat.S_ISFIFO(mode)
+                    or stat.S_ISCHR(mode)
+                    or stat.S_ISBLK(mode)
+                    or stat.S_ISSOCK(mode)
+                ):
+                    violations.append(path.relative_to(self._root).as_posix())
+        return tuple(sorted(violations, key=lambda item: (item.casefold(), item)))
 
     def resolve(self, relative: str) -> Path:
         candidate = relative.strip()
@@ -76,9 +119,7 @@ class LocalExecutionEnvironment:
         for part in parts:
             current = current / part
             if current.is_symlink():
-                target = current.resolve()
-                if not target.is_relative_to(self._root):
-                    raise PathRejected("path must not follow a symlink out of the workspace")
+                raise PathRejected("path tools never follow symbolic links")
         resolved = (self._root / candidate).resolve()
         if not resolved.is_relative_to(self._root):
             raise PathRejected("path must stay inside the workspace")
@@ -108,12 +149,54 @@ class LocalExecutionEnvironment:
         if not path.is_dir():
             raise PathRejected("directory listing requires a directory")
         entries: list[DirectoryEntry] = []
-        for child in sorted(path.iterdir(), key=lambda item: item.name):
+        for child in path.iterdir():
             if child.is_symlink():
-                raise PathRejected("workspace listing rejects symbolic links")
-            kind = "directory" if child.is_dir() else "file"
-            size = child.stat().st_size if child.is_file() else 0
+                kind, size = "symlink", 0
+            elif child.is_dir():
+                kind, size = "directory", 0
+            elif child.is_file():
+                kind, size = "file", child.stat().st_size
+            else:
+                kind, size = "special", 0
             entries.append(DirectoryEntry(name=child.name, kind=kind, size=size))
+        entries.sort(key=lambda entry: (entry.name.casefold(), entry.name))
+        return tuple(entries)
+
+    def scan_tree(self, path: Path) -> tuple[TreeEntry, ...]:
+        """Iteratively enumerate with depth and entry budgets, honoring ignore rules."""
+        from pathspec import GitIgnoreSpec
+
+        ignore_file = self._root / ".gitignore"
+        spec = GitIgnoreSpec.from_lines(
+            ignore_file.read_text(encoding="utf-8").splitlines() if ignore_file.is_file() else ()
+        )
+        entries: list[TreeEntry] = []
+        # Iterative traversal with explicit budgets: deep trees cannot exhaust
+        # the interpreter's recursion limit, and huge trees stop early.
+        stack: list[tuple[Path, int]] = [(path, 0)]
+        while stack and len(entries) < TREE_MAX_ENTRIES:
+            directory, depth = stack.pop()
+            if depth >= TREE_MAX_DEPTH:
+                continue
+            for child in directory.iterdir():
+                relative = child.relative_to(self._root).as_posix()
+                if relative == ".git" or relative.startswith(".git/"):
+                    continue
+                is_directory = child.is_dir() and not child.is_symlink()
+                if spec.match_file(relative + ("/" if is_directory else "")):
+                    continue
+                if child.is_symlink():
+                    kind, size = "symlink", 0
+                elif is_directory:
+                    kind, size = "directory", 0
+                elif child.is_file():
+                    kind, size = "file", child.stat().st_size
+                else:
+                    kind, size = "special", 0
+                entries.append(TreeEntry(relative_path=relative, kind=kind, size=size))
+                if is_directory:
+                    stack.append((child, depth + 1))
+        entries.sort(key=lambda entry: (entry.relative_path.casefold(), entry.relative_path))
         return tuple(entries)
 
     def read_bytes(self, path: Path) -> bytes:
@@ -209,11 +292,11 @@ class LocalExecutionEnvironment:
             return
         try:
             os.killpg(pid, signal.SIGTERM)
-        except ProcessLookupError:
+        except ProcessLookupError, PermissionError:
             return
         try:
             os.killpg(pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except ProcessLookupError, PermissionError:
             return
 
     def _check_quota(self, destination: Path, new_size: int) -> None:
@@ -243,4 +326,5 @@ __all__ = [
     "LocalExecutionEnvironment",
     "ProcessChunk",
     "ProcessOutputSink",
+    "TreeEntry",
 ]

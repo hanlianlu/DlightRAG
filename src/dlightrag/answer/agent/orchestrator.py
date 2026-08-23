@@ -509,6 +509,7 @@ class AnswerOrchestrator:
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
                 contributions=self._context_contributions(skill_catalog),
+                tool_guidance=_tool_guidance(tools),
             ),
             tools=tools,
             evidence=evidence,
@@ -568,6 +569,7 @@ class AnswerOrchestrator:
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
                 contributions=self._context_contributions(skill_catalog),
+                tool_guidance=_tool_guidance(tools),
             ),
             tools=tools,
             evidence=evidence,
@@ -1027,6 +1029,11 @@ def _read_committed_spill(
     return ToolResult.text(body, protected_text=continuation)
 
 
+def _tool_guidance(tools: list[AgentTool]) -> tuple[str, ...]:
+    """Concatenate only the active tools' short usage guidance."""
+    return tuple(f"- {tool.guidance}" for tool in tools if tool.guidance)
+
+
 def _overflow_retry_error(accounted: int) -> AnswerInputOverflowError:
     return AnswerInputOverflowError(
         "Research overflowed the model context window again after one "
@@ -1090,6 +1097,7 @@ def research_history_input_measure(
             query_images=query_images,
             resource_manifest=resource_manifest,
             memory_text=memory_text,
+            tool_guidance=_tool_guidance(tools),
         )
         return (
             context.measure_control_input(

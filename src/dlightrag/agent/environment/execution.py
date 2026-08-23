@@ -17,6 +17,7 @@ from dlightrag.agent.environment.local import (
     DirectoryEntry,
     LocalExecutionEnvironment,
     ProcessOutputSink,
+    TreeEntry,
 )
 
 type ExecutionMode = Literal["disabled", "trust", "sandbox"]
@@ -28,11 +29,18 @@ class ExecutionEnvironment(Protocol):
     @property
     def root(self) -> Path: ...
 
+    @property
+    def integrity_violations(self) -> tuple[str, ...]: ...
+
+    def refresh_integrity(self) -> tuple[str, ...]: ...
+
     def resolve(self, relative: str) -> Path: ...
 
     def stat_kind(self, path: Path) -> str: ...
 
     def list_directory(self, path: Path) -> tuple[DirectoryEntry, ...]: ...
+
+    def scan_tree(self, path: Path) -> tuple[TreeEntry, ...]: ...
 
     def read_bytes(self, path: Path) -> bytes: ...
 
