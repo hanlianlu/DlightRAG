@@ -19,7 +19,7 @@ This is intentionally a system-context view: it shows DlightRAG as one system
 and does not mix internal modules, execution steps, package imports, or database
 entities into the same arrows.
 
-DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. The full runtime, deployment, and code-layer views are in
+DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. Research mode is a full agent loop with seven Pi-parity filesystem tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`), durable per-run workspaces, foreground child agents, streamed tool progress, and verified image snapshots attached straight into the model call. The full runtime, deployment, and code-layer views are in
 [docs/architecture.md](docs/architecture.md).
 
 The repository is one UV workspace with two lockstep distributions. The root
@@ -298,10 +298,10 @@ async def main() -> None:
             chat=ModelRoleSettings(
                 default=ModelSettings(
                 provider="openai",  # protocol family: openai | anthropic | gemini (vendor via base_url)
-                model="gpt-4.1-mini",
+                model="gpt-5.6-luna",
                 api_key=os.environ["OPENAI_API_KEY"],
-                temperature=0.2,
-            )
+                temperature=1.0,
+            ),
         ),
             embedding=EmbeddingSettings(
                 provider="openai",
@@ -398,7 +398,13 @@ per document.
 **Retrieval and answers.** DlightRAG uses LightRAG `mix` as the base retrieval
 mode, then adds metadata filtering, BM25, optional direct image retrieval, RRF
 fusion, reranking, answer packing, citations, and optional semantic highlights.
-The detailed mechanism is in [docs/retrieval-answer.md](docs/retrieval-answer.md).
+Research mode turns the answer into an agent run: the model works in a durable
+per-run workspace with the seven-tool filesystem set in Pi order (`read`,
+`bash`, `edit`, `write`, `grep`, `find`, `ls`), knowledge-base and web search,
+memory, skills, and spawnable child agents; tool progress streams to Web as
+metadata-only events, and reading a verified image attaches the original
+snapshot to the next model call. The detailed mechanism is in
+[docs/retrieval-answer.md](docs/retrieval-answer.md).
 
 **Observability.** Langfuse tracing is optional. Non-secret SDK behavior is set
 in [docs/configuration.md](docs/configuration.md). To run the bundled local
