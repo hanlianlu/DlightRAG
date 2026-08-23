@@ -185,7 +185,7 @@ def _reprobe_config() -> DlightragConfig:
             "capacity_overrides": [
                 ModelCapacityOverrideSettings(
                     provider="openai",
-                    model="z-ai/glm-5.2",
+                    model="google/gemini-3.7-flash",
                     base_url="https://openrouter.ai/api/v1",
                     context_window_tokens=1_048_576,
                     max_output_tokens=262_144,

@@ -115,7 +115,7 @@ def test_root_resolves_model_profiles_independently_per_role() -> None:
         models={
             "chat": ModelRoleSettings(
                 default=ModelSettings(
-                    model="z-ai/glm-5.2",
+                    model="google/gemini-3.7-flash",
                     base_url="https://openrouter.ai/api/v1",
                 ),
                 roles=ModelRoleOverrides(
@@ -165,7 +165,7 @@ def test_root_consults_adapter_profile_before_catalog(
         models={
             "chat": ModelRoleSettings(
                 default=ModelSettings(
-                    model="z-ai/glm-5.2",
+                    model="google/gemini-3.7-flash",
                     base_url="https://openrouter.ai/api/v1",
                 )
             ),
@@ -178,7 +178,7 @@ def test_root_consults_adapter_profile_before_catalog(
     assert profile is adapter_profile
     metadata.assert_called_once_with(
         "openai",
-        model="z-ai/glm-5.2",
+        model="google/gemini-3.7-flash",
         base_url="https://openrouter.ai/api/v1",
     )
 

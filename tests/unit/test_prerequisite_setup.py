@@ -130,7 +130,7 @@ def test_llm_azure_requires_user_base_url(wiz):
 def test_known_llm_resolves_capacity_from_shared_catalog(wiz):
     block, _ = wiz.resolve_llm_choice(
         "OpenRouter",
-        model="z-ai/glm-5.2",
+        model="google/gemini-3.7-flash",
         base_url=None,
     )
 
@@ -756,7 +756,7 @@ def test_models_step_custom_replaces_roles_and_writes_role_env(wiz, tmp_path, mo
         [
             "Custom · separate extraction/keyword models",
             "OpenRouter",
-            "z-ai/glm-5.2",
+            "google/gemini-3.7-flash",
             "",
             "sk-llm",
             "DeepSeek",

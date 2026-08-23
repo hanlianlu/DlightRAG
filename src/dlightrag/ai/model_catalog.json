@@ -16,7 +16,7 @@
     },
     {
       "provider": "openai",
-      "model": "z-ai/glm-5.2",
+      "model": "google/gemini-3.7-flash",
       "base_url": "https://openrouter.ai/api/v1",
       "profile": {
         "context_window_tokens": 1048576,

@@ -126,7 +126,7 @@ class ModelRoleSettings(FrozenSettings):
     default: ModelSettings = Field(
         default_factory=lambda: ModelSettings(
             provider="openai",
-            model="z-ai/glm-5.2",
+            model="google/gemini-3.7-flash",
             base_url="https://openrouter.ai/api/v1",
             structured_output="json_schema",
             temperature=1.0,

@@ -78,7 +78,7 @@ PROVIDERS_LLM: dict[str, ProviderSpec] = {
         "openai", "https://api.deepseek.com", default_model="deepseek-v4-flash"
     ),
     "OpenRouter": ProviderSpec(
-        "openai", "https://openrouter.ai/api/v1", default_model="z-ai/glm-5.2"
+        "openai", "https://openrouter.ai/api/v1", default_model="google/gemini-3.7-flash"
     ),
     "Anthropic": ProviderSpec("anthropic", None, default_model="claude-sonnet-5"),
     "Gemini": ProviderSpec("gemini", None, default_model="gemini-3.7-flash"),
