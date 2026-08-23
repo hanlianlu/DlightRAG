@@ -364,18 +364,18 @@ export class DlApp extends LightElement {
                 <input type="checkbox" id="memory-enabled-toggle" />
                 Activate profile memories
               </label>
-              <p id="memory-active-count" aria-live="polite"></p>
               <div class="settings-actions">
                 <button type="button" id="memory-clear-btn" class="settings-secondary-danger">Clear memory</button>
               </div>
+              <p id="memory-active-count" class="settings-count" aria-live="polite"></p>
             </section>
             <section class="settings-section">
-              <h3 id="settings-data">Conversation History</h3>
-              <p id="conversation-count" aria-live="polite"></p>
-              <p class="settings-note">Conversation turns stay until run retention (default 365 days) reclaims them.</p>
+              <h3 id="settings-data">Conversation Sessions</h3>
+              <p class="settings-note">Conversations retain 365 days</p>
               <div class="settings-actions">
                 <button type="submit" value="delete-all" class="settings-secondary-danger">Delete all conversations</button>
               </div>
+              <p id="conversation-count" class="settings-count" aria-live="polite"></p>
             </section>
           </div>
         </form>

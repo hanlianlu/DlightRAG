@@ -721,31 +721,46 @@ body.conversation-sidebar-open .panel-split {
     margin-bottom: var(--space-section);
 }
 
+.settings-dialog h2 {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-subhead);
+    font-weight: 600;
+    margin: 0;
+}
+
 .settings-header h2 {
     flex: 1;
-    margin-bottom: 0;
 }
 
 .settings-close {
     align-items: center;
-    display: inline-flex;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: var(--color-text-dim);
+    cursor: pointer;
+    display: flex;
     flex: 0 0 auto;
+    font-size: var(--font-size-body);
+    height: var(--size-button);
     justify-content: center;
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1;
+    margin-left: auto;
+    padding: 0;
+    transition: background 0.15s, color 0.15s;
+    width: var(--size-button);
+}
+
+.settings-close:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
 }
 
 .settings-actions {
     display: flex;
     justify-content: flex-end;
     margin-top: var(--space-component);
-}
-
-.settings-dialog h2 {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-subhead);
-    font-weight: 600;
-    margin-bottom: var(--space-section);
 }
 
 .settings-section {
@@ -780,19 +795,19 @@ body.conversation-sidebar-open .panel-split {
 
 .settings-secondary-danger {
     background: transparent;
-    border: 1px solid var(--color-danger-bg);
+    border: 0;
     border-radius: var(--radius-control);
     color: var(--color-danger-text);
     cursor: pointer;
     font: inherit;
-    font-size: var(--font-size-detail);
-    padding: var(--space-tight) var(--space-component);
+    font-size: var(--font-size-caption);
+    padding: var(--space-inline) var(--space-tight);
     transition: background 150ms, color 150ms;
 }
 
 .settings-secondary-danger:hover:not(:disabled) {
-    background: var(--color-danger-bg);
-    color: var(--color-on-danger);
+    background: var(--color-danger-surface);
+    color: var(--color-danger-text);
 }
 
 /* === Workspace Dialog === */
