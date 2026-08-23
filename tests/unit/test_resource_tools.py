@@ -199,13 +199,15 @@ async def test_read_tool_redacts_unexpected_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ResourceRegistry()
+    resource_id = registry.register(ResourceInput(filename="notes.txt", content=b"text"))
 
     async def fail(*_args, **_kwargs):
         raise RuntimeError("https://example.com/?token=secret")
 
+    monkeypatch.setattr(registry, "inspection_target", fail)
     monkeypatch.setattr(registry, "read", fail)
     (read_tool,) = build_resource_tools(registry)
-    args = read_tool.input_model.model_validate({"resource_id": "res-safe"})
+    args = read_tool.input_model.model_validate({"resource_id": resource_id})
 
     with pytest.raises(ResourceRegistryError, match="resource read failed") as failure:
         await read_tool.execute(args, tool_runtime())

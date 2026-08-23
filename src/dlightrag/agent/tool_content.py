@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -20,8 +21,11 @@ class ToolTextPart:
 class ToolResourceAttachmentPart:
     """A durable resource snapshot attached to a tool result.
 
-    The part carries identity and integrity metadata only. Raw bytes live in the
-    owner-scoped Blob store and are resolved only while projecting a model call.
+    The part carries identity and integrity metadata for the journal. Raw bytes
+    live in the owner-scoped Blob store durably and ride along only as the
+    transport-private ``data`` field, which is never journaled, logged, or
+    persisted by telemetry; providers encode it into their wire format at
+    projection time.
     """
 
     resource_id: str
@@ -30,6 +34,8 @@ class ToolResourceAttachmentPart:
     content_digest: str
     size_bytes: int
     type: Literal["resource_attachment"] = "resource_attachment"
+    #: Transport-private original bytes; excluded from every durable encoding.
+    data: bytes = b""
 
     def __post_init__(self) -> None:
         if not self.resource_id.strip():
@@ -63,16 +69,22 @@ def tool_content_message_fields(parts: ToolContent) -> dict[str, Any]:
     fields: dict[str, Any] = {"content": tool_content_text(parts)}
     attachments = tool_content_attachments(parts)
     if attachments:
-        fields["attachments"] = [
-            {
+        projected: list[dict[str, Any]] = []
+        for attachment in attachments:
+            item: dict[str, Any] = {
                 "resource_id": attachment.resource_id,
                 "safe_name": attachment.safe_name,
                 "media_type": attachment.media_type,
                 "content_digest": attachment.content_digest,
                 "size_bytes": attachment.size_bytes,
             }
-            for attachment in attachments
-        ]
+            if attachment.data:
+                item["data_url"] = (
+                    f"data:{attachment.media_type};base64,"
+                    f"{base64.b64encode(attachment.data).decode('ascii')}"
+                )
+            projected.append(item)
+        fields["attachments"] = projected
     return fields
 
 

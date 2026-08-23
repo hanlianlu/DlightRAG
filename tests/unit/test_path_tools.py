@@ -120,6 +120,44 @@ async def test_read_missing_file_is_a_true_error(tmp_path: Path) -> None:
     assert "file not found" in result.text_content
 
 
+async def test_read_image_path_attaches_the_original_snapshot(tmp_path: Path) -> None:
+    import io
+
+    from PIL import Image
+
+    env, scheduler = _env(tmp_path)
+    buffer = io.BytesIO()
+    Image.new("RGB", (16, 16), (30, 90, 200)).save(buffer, "PNG")
+    png = buffer.getvalue()
+    (tmp_path / "chart.png").write_bytes(png)
+
+    result = await read_tool(env, scheduler).execute(ReadArgs(path="chart.png"), tool_runtime())
+
+    assert result.is_error is False
+    from dlightrag.agent.tool_content import tool_content_attachments
+
+    (attachment,) = tool_content_attachments(result.parts)
+    assert attachment.media_type == "image/png"
+    assert attachment.data == png
+    assert attachment.size_bytes == len(png)
+    assert "image attachment" in result.text_content
+    (attached,) = result.effects.attached_resources
+    assert attached.resource_id == attachment.resource_id
+    assert attached.content == png
+    assert attached.mime_type == "image/png"
+
+
+async def test_read_corrupt_image_falls_back_to_text_decoding(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    (tmp_path / "fake.png").write_bytes(b"\x89PNG\r\n\x1a\nnot really a png")
+
+    result = await read_tool(env, scheduler).execute(ReadArgs(path="fake.png"), tool_runtime())
+
+    from dlightrag.agent.tool_content import tool_content_attachments
+
+    assert tool_content_attachments(result.parts) == ()
+
+
 @pytest.mark.asyncio
 async def test_oversized_result_without_spill_raises() -> None:
     with pytest.raises(FullOutputUnavailable):

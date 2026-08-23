@@ -429,7 +429,11 @@ def fit_tool_result(result: ToolResult, *, max_tokens: int) -> ToolResult:
                 break
             body_tokens -= 1
     attachments = tool_content_attachments(result.parts)
-    return replace(result, parts=(ToolTextPart(fitted_text), *attachments))
+    return replace(
+        result,
+        parts=(ToolTextPart(fitted_text), *attachments),
+        effects=result.effects,
+    )
 
 
 async def _execute_call(

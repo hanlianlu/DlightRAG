@@ -79,6 +79,28 @@ def _convert_content(content: str | list[Any]) -> str | list[Any]:
     return parts
 
 
+def _attachment_inline_parts(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """Inline attached tool images as their own user-turn parts."""
+    import re
+
+    parts: list[dict[str, Any]] = []
+    for attachment in message.get("attachments") or ():
+        if not (isinstance(attachment, dict) and attachment.get("data_url")):
+            continue
+        match = re.match(r"^data:([\w./+-]+);base64,(.*)$", str(attachment["data_url"]), re.S)
+        if match is None:
+            continue
+        parts.append(
+            {
+                "inline_data": {
+                    "mime_type": match.group(1),
+                    "data": match.group(2),
+                }
+            }
+        )
+    return parts
+
+
 def _gemini_tool_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     contents: list[dict[str, Any]] = []
     for message in messages:
@@ -120,14 +142,12 @@ def _gemini_tool_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]
                     },
                 }
             }
-            if (
-                contents
-                and contents[-1].get("role") == "user"
-                and all("function_response" in item for item in contents[-1].get("parts", []))
-            ):
-                contents[-1]["parts"].append(part)
-            else:
-                contents.append({"role": "user", "parts": [part]})
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [part, *_attachment_inline_parts(message)],
+                }
+            )
             continue
         contents.append(
             {

@@ -46,6 +46,16 @@ match-count limiting; `bash` leaves the run integrity-blocked when it creates
 symlinks, FIFOs, sockets, or device files until a later `bash` removes them;
 every tool carries short usage guidance projected into the control context.
 
+Reading a verified image now attaches the original snapshot directly to the
+next model call: `read(path)` sniffs and verifies PNG/JPEG/GIF/WebP and returns
+a typed resource-attachment part; `read(resource_id)` attaches a registered
+image resource in full. Provider projections carry the bytes natively —
+Anthropic inline image blocks inside `tool_result`, Gemini `inline_data` parts
+in the same user turn, OpenAI-compatible endpoints via an adjacent multimodal
+user message marked as untrusted tool data. Attachment originals settle durably
+as complete blobs inside the same EffectHostUpdate transaction; raw bytes never
+reach the journal, telemetry, or Web events.
+
 Profile Memory adds stable proposal/commit, replay-stable recall, local
 single-user identity, timeout fallback, and idempotent tombstone forget. REST,
 inbound MCP, Python, and Web expose their applicable start/status/steer/follow-up/

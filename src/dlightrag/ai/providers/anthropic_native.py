@@ -70,6 +70,17 @@ def _convert_content(content: str | list[Any]) -> str | list[dict[str, Any]]:
     return result
 
 
+def _attachment_image_block(data_url: str) -> dict[str, Any]:
+    """Encode one tool-attachment data URL as an Anthropic image block."""
+    m = _DATA_URI_RE.match(data_url)
+    if m:
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": m.group(1), "data": m.group(2)},
+        }
+    return {"type": "text", "text": "[unsupported attachment]"}
+
+
 def _anthropic_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     converted: list[dict[str, Any]] = []
     for message in messages:
@@ -109,12 +120,19 @@ def _anthropic_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, A
             converted.append({"role": "assistant", "content": blocks})
             continue
         if role == "tool":
-            block = {
+            block: dict[str, Any] = {
                 "type": "tool_result",
                 "tool_use_id": str(message.get("tool_call_id") or ""),
                 "content": str(message.get("content") or ""),
                 "is_error": bool(message.get("is_error", False)),
             }
+            for attachment in message.get("attachments") or ():
+                if isinstance(attachment, dict) and attachment.get("data_url"):
+                    block["content"] = [
+                        {"type": "text", "text": str(message.get("content") or "")},
+                        _attachment_image_block(str(attachment["data_url"])),
+                    ]
+                    break
             if (
                 converted
                 and converted[-1].get("role") == "user"

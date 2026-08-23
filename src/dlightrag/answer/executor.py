@@ -1877,9 +1877,35 @@ class JournalRunBoundaries:
                 )
             )
         inventory = tool_effects.workspace_inventory
+
+        def blob_descriptor(content: bytes) -> CompleteBlobDescriptor:
+            plan = plan_blob(content)
+            return CompleteBlobDescriptor(
+                digest=plan.digest,
+                total_bytes=plan.total_bytes,
+                chunks=tuple(plan.chunk(content, index) for index in range(plan.chunk_count)),
+            )
+
+        attached_updates = [
+            FetchedResourceSettlementUpdate(
+                resource=OpaqueFetchedResourceWrite(
+                    resource_id=attached.resource_id,
+                    safe_name=attached.filename,
+                    media_type=attached.mime_type,
+                    capabilities={"tool_attachment": True},
+                    blob_digest=blob_digest(attached.content),
+                    source_locator_digest=blob_digest(attached.source_locator.encode("utf-8")),
+                    source_locator=attached.source_locator.encode("utf-8"),
+                    session_id=self._session_id.value,
+                    intent_id=intent.intent_id.value,
+                ),
+                complete_blob=blob_descriptor(attached.content),
+            )
+            for attached in tool_effects.attached_resources
+        ]
         return EffectHostUpdate(
             evidence=evidence,
-            fetched=tuple(fetched_updates),
+            fetched=(*fetched_updates, *attached_updates),
             committed_outputs=tuple(
                 CommittedSpillUpdate(
                     resource_id=output.resource_id,

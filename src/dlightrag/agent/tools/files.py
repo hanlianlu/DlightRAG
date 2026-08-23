@@ -34,9 +34,11 @@ from dlightrag.agent.environment.errors import (
 from dlightrag.agent.environment.execution import ExecutionEnvironment
 from dlightrag.agent.environment.local import CompletedProcess, DirectoryEntry, ProcessChunk
 from dlightrag.agent.environment.text import decode_workspace_text, encode_workspace_text
+from dlightrag.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
 from dlightrag.agent.tools.contracts import (
     AgentTool,
     CommittedOutput,
+    ResourceAttachmentBytes,
     ToolEffects,
     ToolResult,
     ToolRuntime,
@@ -232,6 +234,13 @@ def read_tool(
             if kind == "missing":
                 return ToolResult.text(f"file not found: {_escape_path(args.path)}", is_error=True)
             raw = environment.read_bytes(path)
+            media_type = _sniff_image_media_type(raw)
+            if media_type is not None:
+                return _image_attachment_result(
+                    raw,
+                    media_type=media_type,
+                    path=args.path,
+                )
             try:
                 decoded = decode_workspace_text(raw)
             except ValueError as exc:
@@ -559,6 +568,74 @@ def bash_tool(
             "bash: output streams live and stays bounded; timed-out or failing commands "
             "still return partial output as errors. Never leave symlinks, FIFOs, sockets, "
             "or device files behind: the workspace stays blocked until bash removes them."
+        ),
+    )
+
+
+def _sniff_image_media_type(data: bytes) -> str | None:
+    """Return the original media type for a verified image snapshot, else None."""
+    if len(data) > 104_857_600:
+        return None
+    signatures = (
+        (b"\x89PNG\r\n\x1a\n", "image/png"),
+        (b"\xff\xd8\xff", "image/jpeg"),
+        (b"GIF87a", "image/gif"),
+        (b"GIF89a", "image/gif"),
+        (b"RIFF", "image/webp"),
+    )
+    media_type = next((mime for magic, mime in signatures if data.startswith(magic)), None)
+    if media_type is None:
+        return None
+    if media_type == "image/webp" and data[8:12] != b"WEBP":
+        return None
+    try:
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as image:
+            image.verify()
+        return media_type
+    except Exception:
+        return None
+
+
+def _image_attachment_result(
+    data: bytes,
+    *,
+    media_type: str,
+    path: str,
+) -> ToolResult:
+    """Attach one verified original image snapshot to the model-visible result."""
+    digest = hashlib.sha256(data).hexdigest()
+    resource_id = f"att_{digest[:32]}"
+    attachment = ToolResourceAttachmentPart(
+        resource_id=resource_id,
+        safe_name=path.rsplit("/", 1)[-1] or "image",
+        media_type=media_type,
+        content_digest=digest,
+        size_bytes=len(data),
+        data=data,
+    )
+    return ToolResult(
+        parts=(
+            ToolTextPart(
+                f"image attachment: {_escape_path(path)} ({media_type}, "
+                f"{len(data)} bytes, resource_id={resource_id!r}); "
+                "the original snapshot is attached to this message"
+            ),
+            attachment,
+        ),
+        effects=ToolEffects(
+            attached_resources=(
+                ResourceAttachmentBytes(
+                    resource_id=resource_id,
+                    filename=attachment.safe_name,
+                    mime_type=media_type,
+                    source_locator=path,
+                    content=data,
+                ),
+            )
         ),
     )
 

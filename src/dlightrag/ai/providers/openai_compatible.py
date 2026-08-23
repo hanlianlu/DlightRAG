@@ -75,7 +75,7 @@ def _openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]
         native = {
             key: value
             for key, value in message.items()
-            if key not in {"provider_state", "is_error"}
+            if key not in {"provider_state", "is_error", "attachments"}
         }
         state = message.get("provider_state")
         if message.get("role") == "assistant" and isinstance(state, dict):
@@ -83,6 +83,29 @@ def _openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]
                 if key in state:
                     native[key] = state[key]
         converted.append(native)
+        attachments = message.get("attachments") or ()
+        if message.get("role") == "tool" and attachments:
+            parts: list[dict[str, Any]] = []
+            if message.get("content"):
+                parts.append({"type": "text", "text": str(message["content"])})
+            for attachment in attachments:
+                if isinstance(attachment, dict) and attachment.get("data_url"):
+                    parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": str(attachment["data_url"])},
+                        }
+                    )
+            if parts:
+                converted.append(
+                    {
+                        "role": "user",
+                        "content": parts,
+                        # Multimodal tool data is never instructions; providers
+                        # that lack the field ignore it.
+                        "untrusted_tool_data": True,
+                    }
+                )
     return converted
 
 

@@ -75,12 +75,24 @@ class EvidenceSourceFact:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceAttachmentBytes:
+    """One verified original snapshot a tool attached to its result."""
+
+    resource_id: str
+    filename: str
+    mime_type: str
+    source_locator: str
+    content: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class ToolEffects:
     """Typed host facts emitted by a tool and consumed only at settlement."""
 
     committed_outputs: tuple[CommittedOutput, ...] = ()
     workspace_inventory: WorkspaceInventoryFacts | None = None
     evidence_sources: tuple[EvidenceSourceFact, ...] = ()
+    attached_resources: tuple[ResourceAttachmentBytes, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +243,7 @@ __all__ = [
     "CommittedOutput",
     "EvidenceSourceFact",
     "ExecutedTurn",
+    "ResourceAttachmentBytes",
     "ToolExecute",
     "ToolExecution",
     "ToolModelFunc",

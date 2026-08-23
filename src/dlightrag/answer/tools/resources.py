@@ -10,13 +10,16 @@ domain; that domain knows nothing about tools.
 
 from __future__ import annotations
 
+import hashlib
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dlightrag.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
 from dlightrag.agent.tools import (
     AgentTool,
     EvidenceSourceFact,
+    ResourceAttachmentBytes,
     ToolEffects,
     ToolResult,
     ToolRuntime,
@@ -148,6 +151,50 @@ def make_resource_reader(
         runtime: ToolRuntime,
     ) -> ToolResult:
         try:
+            target = await registry.inspection_target(
+                resource_id,
+                effect_owner=_effect_owner(runtime),
+            )
+        except ResourceRegistryError:
+            raise
+        except Exception as exc:
+            raise ResourceRegistryError("resource read failed") from exc
+        if target.kind == "image" and cursor is None:
+            # A verified original image snapshot goes straight to the query
+            # model as an attachment instead of a text window.
+            digest = hashlib.sha256(target.content).hexdigest()
+            attachment = ToolResourceAttachmentPart(
+                resource_id=resource_id,
+                safe_name=_registry_filename(registry, resource_id),
+                media_type=target.media_type or "image/png",
+                content_digest=digest,
+                size_bytes=len(target.content),
+                data=target.content,
+            )
+            evidence = _evidence_effects(resource_id, registry.evidence_source(resource_id))
+            return ToolResult(
+                parts=(
+                    ToolTextPart(
+                        f"image attachment: {attachment.safe_name} "
+                        f"({attachment.media_type}, {attachment.size_bytes} bytes); "
+                        "the original snapshot is attached to this message"
+                    ),
+                    attachment,
+                ),
+                effects=ToolEffects(
+                    evidence_sources=evidence.evidence_sources,
+                    attached_resources=(
+                        ResourceAttachmentBytes(
+                            resource_id=resource_id,
+                            filename=_registry_filename(registry, resource_id),
+                            mime_type=attachment.media_type,
+                            source_locator=resource_id,
+                            content=target.content,
+                        ),
+                    ),
+                ),
+            )
+        try:
             result = await registry.read(
                 resource_id,
                 max_window_tokens=text_window_budget.tokens,
@@ -169,6 +216,11 @@ def make_resource_reader(
         )
 
     return read_registered
+
+
+def _registry_filename(registry: ResourceRegistry, resource_id: str) -> str:
+    source = registry.evidence_source(resource_id)
+    return source.get("title") or "image"
 
 
 def _evidence_effects(resource_id: str, source: dict[str, str]) -> ToolEffects:
