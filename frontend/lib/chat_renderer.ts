@@ -236,9 +236,13 @@ function renderRunActions(
   const usageDetails = usage.usage_details as Record<string, unknown> | undefined;
   const tokenCount = Number(usageDetails?.total_tokens || 0);
   if (state === 'running') {
-    turn.actionsDiv.append(
-      runActionButton(turn, 'children', 'Child agents'),
-    );
+    // Child agents only appear once spawn_agent has actually been seen;
+    // a run that never spawns children shows no roster affordance.
+    if (turn.aiDiv.dataset.sawChildren === 'true') {
+      turn.actionsDiv.append(
+        runActionButton(turn, 'children', 'Child agents'),
+      );
+    }
     return;
   }
   turn.actionsDiv.append(
@@ -531,18 +535,22 @@ export function createAnswerRenderer(turn: ChatTurn) {
   function handleToolProgress(eventType: string, data: string): void {
     const info = parseData(data) as ToolProgressPayload;
     if (!info || typeof info.tool_name !== 'string') return;
-    if (info.tool_name === 'spawn_agent' && !turn.contentDiv.querySelector('.child-agent-chip')) {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = chatStyles.childAgentChip + ' child-agent-chip';
-      chip.textContent = 'Child agents working…';
-      chip.addEventListener('click', () => {
-        turn.aiDiv.dispatchEvent(new CustomEvent('answer-run-action', {
-          bubbles: true,
-          detail: {action: 'children', runId: turn.aiDiv.dataset.runId || ''},
-        }));
-      });
-      turn.contentDiv.prepend(chip);
+    if (info.tool_name === 'spawn_agent') {
+      turn.aiDiv.dataset.sawChildren = 'true';
+      renderRunActions(turn, 'running');
+      if (!turn.contentDiv.querySelector('.child-agent-chip')) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = chatStyles.childAgentChip + ' child-agent-chip';
+        chip.textContent = 'Child agents working…';
+        chip.addEventListener('click', () => {
+          turn.aiDiv.dispatchEvent(new CustomEvent('answer-run-action', {
+            bubbles: true,
+            detail: {action: 'children', runId: turn.aiDiv.dataset.runId || ''},
+          }));
+        });
+        turn.contentDiv.prepend(chip);
+      }
     }
     const elapsed = typeof info.duration_ms === 'number'
       ? info.duration_ms
