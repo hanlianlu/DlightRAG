@@ -795,18 +795,19 @@ body.conversation-sidebar-open .panel-split {
 
 .settings-secondary-danger {
     background: transparent;
-    border: 0;
+    border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-control);
     color: var(--color-danger-text);
     cursor: pointer;
     font: inherit;
-    font-size: var(--font-size-caption);
-    padding: var(--space-inline) var(--space-tight);
-    transition: background 150ms, color 150ms;
+    font-size: var(--font-size-detail);
+    padding: var(--space-tight) var(--space-component);
+    transition: background 150ms, border-color 150ms, color 150ms;
 }
 
 .settings-secondary-danger:hover:not(:disabled) {
-    background: var(--color-danger-surface);
+    background: var(--color-bg-hover);
+    border-color: var(--color-control-border-hover);
     color: var(--color-danger-text);
 }
 
