@@ -2,7 +2,9 @@
 
 import '../tokens/utopia.css';
 import '../styles/global.css';
+import '../styles/primitives.css';
 import '../styles/layout.css';
+import '../styles/panels.css';
 import '../styles/files.css';
 import '../styles/sources.css';
 

@@ -5,7 +5,9 @@ import {expect} from '@esm-bundle/chai';
 const stylesheets = [
   '../tokens/utopia.css',
   '../styles/global.css',
+  '../styles/primitives.css',
   '../styles/layout.css',
+  '../styles/panels.css',
   '../styles/files.css',
   '../styles/sources.css',
   '../styles/chat.module.css',

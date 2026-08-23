@@ -366,7 +366,7 @@ export class DlApp extends LightElement {
               </label>
               <p id="memory-active-count" class="settings-count" aria-live="polite"></p>
               <div class="settings-actions">
-                <button type="button" id="memory-clear-btn" class="settings-secondary-danger">Clear memory</button>
+                <button type="button" id="memory-clear-btn" class="ui-btn ui-btn-danger-text">Clear memory</button>
               </div>
             </section>
             <section class="settings-section">
@@ -374,7 +374,7 @@ export class DlApp extends LightElement {
               <p class="settings-note">Conversations retain 365 days</p>
               <p id="conversation-count" class="settings-count" aria-live="polite"></p>
               <div class="settings-actions">
-                <button type="button" id="delete-all-btn" class="settings-secondary-danger">Delete all conversations</button>
+                <button type="button" id="delete-all-btn" class="ui-btn ui-btn-danger-text">Delete all conversations</button>
               </div>
             </section>
           </div>
@@ -390,7 +390,7 @@ export class DlApp extends LightElement {
           </div>
         </form>
       </dialog>
-      <dialog id="discard-draft-dialog" aria-labelledby="discard-draft-title">
+      <dialog id="discard-draft-dialog" class="confirm-dialog" aria-labelledby="discard-draft-title">
         <form method="dialog">
           <h2 id="discard-draft-title">Discard draft?</h2>
           <p>Your unsent message and attachments will not move to another conversation.</p>

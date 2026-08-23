@@ -69,6 +69,12 @@ async def conversation_page(
     return app_html_response("index.html")
 
 
+@page_router.get("/design-system", response_class=FileResponse)
+async def design_system_page() -> FileResponse:
+    """Serve the application document for the shared-control reference page."""
+    return app_html_response("index.html")
+
+
 @router.post("/answer", status_code=202, response_model=AnswerRunDescriptor)
 async def start_answer_run(
     request: Request,

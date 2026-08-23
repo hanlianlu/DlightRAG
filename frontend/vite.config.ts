@@ -18,6 +18,8 @@ function devWebPageFallback(): Plugin {
         } else if (pathname === '/web' || pathname === '/web/'
             || /^\/web\/conversations\/[^/]+\/?$/.test(pathname)) {
           request.url = '/static/app/';
+        } else if (pathname === '/web/design-system') {
+          request.url = '/static/app/design-system.html';
         }
         next();
       });
@@ -36,7 +38,7 @@ function hashedThemeInit(): Plugin {
       if (!theme || theme.type !== 'chunk' || !options.dir) {
         throw new Error('Vite did not emit the pre-paint theme entry');
       }
-      for (const filename of ['index.html', 'login.html']) {
+      for (const filename of ['index.html', 'login.html', 'design-system.html']) {
         const path = resolve(options.dir, filename);
         const source = readFileSync(path, 'utf8');
         writeFileSync(path, source.replace('__THEME_INIT__', theme.fileName));
@@ -57,6 +59,7 @@ export default defineConfig({
       input: {
         app: resolve(__dirname, 'index.html'),
         login: resolve(__dirname, 'login.html'),
+        'design-system': resolve(__dirname, 'design-system.html'),
         'theme-init': resolve(__dirname, 'theme-init.ts'),
       },
       output: {

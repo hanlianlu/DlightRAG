@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --experimental-strip-types --test api/*.test.ts stores/*.test.ts lib/*.test.ts tokens/*.test.ts",
+    "test": "node --experimental-strip-types --test api/*.test.ts stores/*.test.ts lib/*.test.ts tokens/*.test.ts ui/components.structure.test.ts",
     "test:browser": "web-test-runner --config web-test-runner.config.mjs",
     "typecheck": "tsc --noEmit",
     "lint:css": "stylelint 'styles/**/*.css' 'styles/**/*.module.css'"
