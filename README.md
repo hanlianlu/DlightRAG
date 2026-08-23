@@ -4,8 +4,7 @@
 [![CI](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml/badge.svg)](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
 
-DlightRAG is a production ready multimodal RAG service built on LightRAG. It 
-offers superior context intelligence, great accuracy with citation / highlight grounding, and unified interfaces for REST, Web, MCP, and Python SDK clients. It is designed for developers, seasoned users and teams who need a reliable RAG core service with cutting edge features integrated into their workflows and products. 
+DlightRAG is a production-ready multimodal RAG service built on LightRAG. It offers superior context intelligence, great accuracy with citation / highlight grounding, and unified interfaces for REST, Web, MCP, and Python SDK clients. It is designed for developers, seasoned users and teams who need a reliable RAG core service with cutting edge features integrated into their workflows and products.
 
 Status: Python 3.14. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
 
@@ -165,6 +164,7 @@ docker compose ps
 ```
 
 This starts:
+
 | Service | Purpose | Host port |
 |---|---|---|
 | `dlightrag-api` | REST API + Web UI | `127.0.0.1:8100` |
@@ -235,7 +235,7 @@ re-registered lazily on follow-ups. The separate `/retrieve` path keeps its own
 ### Durable answers
 
 Every answer is one durable run with one identifier and one lifecycle, shared by
-REST, MCP, Web, the SDK, the CLI, and evaluation. `POST /answer` returns HTTP 202
+REST, MCP, Web, the SDK, and evaluation. `POST /answer` returns HTTP 202
 with the run's status, events, and cancel URLs; the run outlives its creating
 request, so a disconnected client only detaches. Events are reconnectable SSE
 resumed by durable sequence, and a restart folds the selected Agent Session head
@@ -297,12 +297,12 @@ async def main() -> None:
         models=ModelsSettings(
             chat=ModelRoleSettings(
                 default=ModelSettings(
-                provider="openai",  # protocol family: openai | anthropic | gemini (vendor via base_url)
-                model="gpt-5.6-luna",
-                api_key=os.environ["OPENAI_API_KEY"],
-                temperature=1.0,
+                    provider="openai",  # protocol family: openai | anthropic | gemini (vendor via base_url)
+                    model="gpt-5.6-luna",
+                    api_key=os.environ["OPENAI_API_KEY"],
+                    temperature=1.0,
+                ),
             ),
-        ),
             embedding=EmbeddingSettings(
                 provider="openai",
                 model="text-embedding-3-large",
@@ -319,11 +319,11 @@ async def main() -> None:
             IngestSpec(source_type="local", path="./docs"),
         )
         answer = await application.answers.answer(
-          AnswerRequest(
-            query="What are the key findings?",
-            workspaces=(workspace,),
-          ),
-          owner_id=DEPLOYMENT_OWNER_ID,
+            AnswerRequest(
+                query="What are the key findings?",
+                workspaces=(workspace,),
+            ),
+            owner_id=DEPLOYMENT_OWNER_ID,
         )
         print(answer.answer)
     finally:
@@ -473,6 +473,7 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 - [docs/migration-3.0.md](docs/migration-3.0.md) - breaking Agent, controls, Memory, configuration, and reset migration from 2.x.
 - [docs/migration-2.0.md](docs/migration-2.0.md) - historical package, import, and configuration migration from 1.x.
 - [docs/architecture.md](docs/architecture.md) - runtime ownership, storage topology, and code layering.
+- [docs/domain-language.md](docs/domain-language.md) - the project's shared vocabulary for domain terms.
 - [docs/interfaces.md](docs/interfaces.md) - SDK, REST, MCP, and Web contracts.
 - [docs/security.md](docs/security.md) - auth, JWT/JWKS, IdP boundaries, and access control.
 - [docs/roadmap.md](docs/roadmap.md) - decided follow-ups that are not a milestone yet.
