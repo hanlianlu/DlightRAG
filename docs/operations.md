@@ -225,13 +225,14 @@ storage volume:
 docker compose run --rm dlightrag-api dlightrag-rebuild-vdb --target check
 
 # Rebuild — stop writers first, then restart them afterward:
-docker compose stop dlightrag-api dlightrag-mcp lightrag-gui
+docker compose stop dlightrag-api dlightrag-mcp
 docker compose run --rm dlightrag-api dlightrag-rebuild-vdb --target all --yes
 docker compose up -d dlightrag-api dlightrag-mcp
 ```
 
-`lightrag-gui` only runs under `--profile gui`; omit it from the stop
-command unless you started it, and restart it with the others afterward.
+`lightrag-gui` (the optional graph browser overlay) runs only under
+`--profile gui` with `-f docker-compose.gui.yml`; stop and restart it with the
+same overlay flags if you started it.
 
 ### DlightRAG Chunk Post-Rebuild Maintenance
 
