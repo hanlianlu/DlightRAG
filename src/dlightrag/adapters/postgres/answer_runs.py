@@ -566,22 +566,13 @@ _M5_PUBLICATION_DDL = (
     "'primary_report', 'published_artifact'))",
 )
 
-_ADD_ACCEPTED_INPUT = """
-ALTER TABLE dlightrag_answer_runs
-ADD COLUMN IF NOT EXISTS accepted_input_json JSONB NOT NULL DEFAULT '{}'::jsonb
-"""
-
-# Memory owns its own schema and migration registry in dlightrag_memory since
-# the package extraction; the Answer-era tables are reclaimed on upgrade.
-_DROP_LEGACY_MEMORY_TABLES = (
-    "DROP TABLE IF EXISTS dlightrag_answer_memory_write_log",
-    "DROP TABLE IF EXISTS dlightrag_answer_memory_records",
-)
+# The single final baseline bakes every evolved column and constraint directly
+# into its CREATE statements; incremental migrations are gone by design.
 
 ANSWER_RUN_MIGRATIONS = (
     Migration(
         "0001_answer_runs",
-        "Create the final M3 Answer run, journal, evidence, resource, and blob state",
+        "Create the final Answer run, journal, tool-contract, evidence, and blob state",
         (
             _CREATE_RUNS,
             _CREATE_EVENTS,
@@ -602,65 +593,7 @@ ANSWER_RUN_MIGRATIONS = (
             *_CREATE_INDEXES,
             _M4_WORKSPACE_DDL[3],
             _M4_WORKSPACE_DDL[4],
-        ),
-    ),
-    Migration(
-        "0002_accepted_input_envelope",
-        "Add the terminal-surviving public accepted input envelope",
-        (_ADD_ACCEPTED_INPUT,),
-    ),
-    Migration(
-        "0003_drop_legacy_answer_memory_tables",
-        "Reclaim Answer-era memory tables now owned by dlightrag_memory",
-        _DROP_LEGACY_MEMORY_TABLES,
-    ),
-    Migration(
-        "0004_memory_settings",
-        "Owner-scoped Memory enablement settings",
-        MEMORY_SETTINGS_DDL,
-    ),
-    Migration(
-        "0005_agent_controls",
-        "Add ordered Agent controls and the Agent 3.0 run-segment entry",
-        (
-            _CREATE_AGENT_CONTROLS,
-            "DO $$ DECLARE item RECORD; BEGIN "
-            "FOR item IN SELECT conname FROM pg_constraint "
-            "WHERE conrelid = 'dlightrag_answer_child_sessions'::regclass "
-            "AND contype = 'u' LOOP "
-            "EXECUTE format('ALTER TABLE dlightrag_answer_child_sessions DROP CONSTRAINT %I', "
-            "item.conname); END LOOP; END $$",
-            "ALTER TABLE dlightrag_agent_session_entries "
-            "DROP CONSTRAINT IF EXISTS dlightrag_agent_session_entries_type_check",
-            "ALTER TABLE dlightrag_agent_session_entries "
-            "ADD CONSTRAINT dlightrag_agent_session_entries_type_check CHECK (entry_type IN ("
-            "'run_segment', 'user_message', 'assistant_message', 'effect_intent', "
-            "'effect_result', 'context_injection', 'compaction', 'profile_fact', "
-            "'session_terminal'))",
-        ),
-    ),
-    Migration(
-        "0006_agent_child_details",
-        "Persist foreground child invocation details and inclusive usage",
-        (
-            "ALTER TABLE dlightrag_answer_child_sessions ADD COLUMN IF NOT EXISTS objective TEXT",
-            "ALTER TABLE dlightrag_answer_child_sessions "
-            "ADD COLUMN IF NOT EXISTS context_mode TEXT",
-            "ALTER TABLE dlightrag_answer_child_sessions ADD COLUMN IF NOT EXISTS model_role TEXT",
-            "ALTER TABLE dlightrag_answer_child_sessions ADD COLUMN IF NOT EXISTS tools_json JSONB",
-            "ALTER TABLE dlightrag_answer_child_sessions ADD COLUMN IF NOT EXISTS usage_json JSONB",
-        ),
-    ),
-    Migration(
-        "0007_tool_lifecycle_events",
-        "Add metadata-only Tool Contract v2 lifecycle events",
-        (
-            "ALTER TABLE dlightrag_answer_run_events DROP CONSTRAINT IF EXISTS "
-            "dlightrag_answer_run_events_event_type_check",
-            "ALTER TABLE dlightrag_answer_run_events ADD CONSTRAINT "
-            "dlightrag_answer_run_events_event_type_check CHECK (event_type IN ("
-            "'progress', 'token', 'reset', 'tool_start', 'tool_progress', 'tool_end', "
-            "'done', 'error'))",
+            *MEMORY_SETTINGS_DDL,
         ),
     ),
 )
