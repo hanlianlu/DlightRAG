@@ -50,9 +50,8 @@ def verify_repository(root: Path = ROOT) -> None:
         raise ValueError("Memory runtime version is not lockstep")
 
     major = version.split(".", 1)[0]
-    migration = root / f"docs/migration-{major}.0.md"
-    if not migration.is_file():
-        raise ValueError(f"missing current migration guide: {migration.relative_to(root)}")
+    # Historical migration guides were retired: there are no external users
+    # and the single-baseline schema makes upgrade narration meaningless.
     config_text = (root / "config.yaml").read_text(encoding="utf-8")
     if not re.search(
         rf"^# DlightRAG {re.escape(major)}\.0 canonical configuration$", config_text, re.M

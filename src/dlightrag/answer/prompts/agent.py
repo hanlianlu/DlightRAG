@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Guidance for the capability-driven answer orchestrator's research loop."""
 
+from .answer import answer_grounding_guidance
 from .identity import core_identity
 
 _AGENT_GUIDANCE = """\
@@ -25,7 +26,9 @@ CONTROL_TURN_INSTRUCTION = (
 
 
 def agent_control_prompt() -> str:
-    return "\n\n".join([core_identity(), _AGENT_GUIDANCE])
+    # The grounding and citation contract is shared with the Fast answer
+    # prompt so a Research answer and a Fast answer cite identically.
+    return "\n\n".join([core_identity(), _AGENT_GUIDANCE, answer_grounding_guidance()])
 
 
 __all__ = ["CONTROL_TURN_INSTRUCTION", "agent_control_prompt"]
