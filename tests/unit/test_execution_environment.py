@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.agent.environment import LocalExecutionEnvironment, PathRejected
+from dlightrag.agent.environment import (
+    LocalExecutionEnvironment,
+    PathRejected,
+    ProcessChunk,
+)
 from dlightrag.agent.environment.text import decode_workspace_text, encode_workspace_text
 
 
@@ -53,6 +57,38 @@ def test_directory_listing_is_sorted_one_level(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("x", encoding="utf-8")
     names = [entry.name for entry in env.list_directory(tmp_path)]
     assert names == ["a.txt", "b"]
+
+
+async def test_process_run_streams_output_before_exit(tmp_path: Path) -> None:
+    env = LocalExecutionEnvironment(tmp_path)
+    first = asyncio.Event()
+    chunks: list[ProcessChunk] = []
+
+    async def record(chunk: ProcessChunk) -> None:
+        chunks.append(chunk)
+        if b"first" in chunk.data:
+            first.set()
+
+    task = asyncio.create_task(
+        env.run(
+            (
+                sys.executable,
+                "-c",
+                "import time; print('first', flush=True); time.sleep(0.2); print('second')",
+            ),
+            env=os.environ,
+            on_output=record,
+        )
+    )
+
+    await asyncio.wait_for(first.wait(), timeout=1)
+    assert not task.done()
+    completed = await task
+    assert completed.returncode == 0
+    assert completed.timed_out is False
+    assert b"first" in b"".join(chunk.data for chunk in chunks)
+    assert b"second" in b"".join(chunk.data for chunk in chunks)
+    assert {chunk.stream for chunk in chunks} == {"stdout"}
 
 
 async def test_cancelling_process_run_terminates_its_process_group(tmp_path: Path) -> None:

@@ -19,7 +19,7 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, RootModel
 
-from dlightrag.agent.tools import AgentTool, ToolResult
+from dlightrag.agent.tools import AgentTool, ToolResult, ToolRuntime
 
 _NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -62,14 +62,14 @@ def outbound_mcp_tools(servers: tuple[OutboundMcpServer, ...]) -> tuple[AgentToo
 
 
 def _proxy_tool(server: OutboundMcpServer, remote_name: str) -> AgentTool:
-    async def execute(raw: BaseModel) -> ToolResult:
+    async def execute(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(McpToolArguments, raw).root
         async with _session(server) as session:
             result = await session.call_tool(remote_name, arguments=args)
         content = _render_result(result)
         is_error = bool(getattr(result, "isError", False))
-        return ToolResult(
-            content=(f"Outbound MCP tool failed: {content}" if is_error else content),
+        return ToolResult.text(
+            (f"Outbound MCP tool failed: {content}" if is_error else content),
             details={
                 "mcp_server": server.name,
                 "mcp_tool": remote_name,

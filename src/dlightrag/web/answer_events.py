@@ -69,6 +69,20 @@ def _browser_payload(
             return str(payload.get("text") or "")
         case "reset":
             return {}
+        case "tool_start" | "tool_progress" | "tool_end":
+            allowed = {
+                "tool_name",
+                "call_id",
+                "source_position",
+                "update_sequence",
+                "outcome",
+                "duration_ms",
+                "elapsed_ms",
+                "output_bytes",
+                "spill_state",
+                "attachment_count",
+            }
+            return {key: value for key, value in payload.items() if key in allowed}
         case "done":
             return render_done_event(
                 payload,

@@ -1,11 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The M3 HostUpdate union: opaque settlement facts Runtime stores undecoded.
-
-Only these two discriminated M3 variants exist; spill, workspace inventory, and
-child-session variants arrive in M4/M6 with their first writers. Runtime stores
-identity, digests, and opaque payload bytes and never parses citations,
-locators, chunks, or resource policy (M3 HostUpdate contract).
-"""
+"""One atomic host-effect aggregate stored with each tool settlement."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -103,20 +97,6 @@ class FetchedResourceSettlementUpdate:
 
 
 @dataclass(frozen=True, slots=True)
-class EvidenceSettlementUpdate:
-    """All Evidence and fetched resources made durable by one settlement.
-
-    A tool call may legally admit Evidence and fetch several resources. Keeping
-    that complete batch in one host update lets the journal adapter commit it
-    atomically with the model-visible result.
-    """
-
-    evidence: Sequence[OpaqueEvidenceWrite] = ()
-    resources: Sequence[OpaqueEvidenceResourceWrite] = ()
-    fetched: Sequence[FetchedResourceSettlementUpdate] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class InventoryPathRecord:
     """One current-epoch path observation."""
 
@@ -163,23 +143,23 @@ class CommittedSpillUpdate:
             raise ValueError("spill size cannot be negative")
 
 
-type HostUpdate = (
-    EvidenceSettlementUpdate
-    | FetchedResourceSettlementUpdate
-    | CommittedSpillUpdate
-    | WorkspaceInventoryUpdate
-)
-type M3HostUpdate = HostUpdate
+@dataclass(frozen=True, slots=True)
+class EffectHostUpdate:
+    """Complete host-side effect batch committed with one model-visible result."""
+
+    evidence: Sequence[OpaqueEvidenceWrite] = ()
+    resources: Sequence[OpaqueEvidenceResourceWrite] = ()
+    fetched: Sequence[FetchedResourceSettlementUpdate] = ()
+    committed_outputs: Sequence[CommittedSpillUpdate] = ()
+    workspace_inventory: WorkspaceInventoryUpdate | None = None
 
 
 __all__ = [
     "CommittedSpillUpdate",
     "CompleteBlobDescriptor",
-    "EvidenceSettlementUpdate",
+    "EffectHostUpdate",
     "FetchedResourceSettlementUpdate",
-    "HostUpdate",
     "InventoryPathRecord",
-    "M3HostUpdate",
     "OpaqueEvidenceResourceWrite",
     "OpaqueEvidenceWrite",
     "OpaqueFetchedResourceWrite",

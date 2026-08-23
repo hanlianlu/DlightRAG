@@ -14,6 +14,7 @@ from hashlib import sha256
 from typing import Any, Literal, TypeVar
 
 from dlightrag.agent.session.ids import IntentId
+from dlightrag.agent.tool_content import ToolContent, tool_content_text
 
 type ReplayPolicy = Literal["safe", "never"]
 type EffectOutcome = Literal[
@@ -108,12 +109,12 @@ class EffectIntent:
 
 @dataclass(frozen=True, slots=True)
 class ToolResultEntry:
-    """One model-visible tool result, kept transport-private beyond its content."""
+    """One model-visible typed tool result plus transport-private facts."""
 
     tool_name: str
     call_id: str
     outcome: ToolResultOutcome
-    content: str
+    parts: ToolContent
     details: JsonValue | None = None
     cached: bool = False
 
@@ -122,6 +123,34 @@ class ToolResultEntry:
             raise ValueError("tool result tool name cannot be empty")
         if not self.call_id.strip():
             raise ValueError("tool result call id cannot be empty")
+
+    @classmethod
+    def text(
+        cls,
+        *,
+        tool_name: str,
+        call_id: str,
+        outcome: ToolResultOutcome,
+        text: str,
+        details: JsonValue | None = None,
+        cached: bool = False,
+    ) -> ToolResultEntry:
+        """Build the common text-only durable result."""
+        from dlightrag.agent.tool_content import ToolTextPart
+
+        return cls(
+            tool_name=tool_name,
+            call_id=call_id,
+            outcome=outcome,
+            parts=(ToolTextPart(text),),
+            details=details,
+            cached=cached,
+        )
+
+    @property
+    def text_content(self) -> str:
+        """Return the text projection used by logs and evidence adapters."""
+        return tool_content_text(self.parts)
 
 
 HostUpdateT = TypeVar("HostUpdateT")

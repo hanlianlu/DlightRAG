@@ -5,9 +5,7 @@ import pytest
 
 from dlightrag.runtime.settlements import (
     CommittedSpillUpdate,
-    EvidenceSettlementUpdate,
-    FetchedResourceSettlementUpdate,
-    HostUpdate,
+    EffectHostUpdate,
     InventoryPathRecord,
     WorkspaceInventoryUpdate,
 )
@@ -19,20 +17,22 @@ from dlightrag.runtime.workspace import (
 )
 
 
-def test_host_update_union_accepts_four_variants() -> None:
-    variants: list[HostUpdate] = [
-        EvidenceSettlementUpdate(),
-        WorkspaceInventoryUpdate(replace_all=True),
-        CommittedSpillUpdate(
-            resource_id="res_spill",
-            content_digest="a" * 64,
-            size_bytes=12,
-            session_id="s",
-            intent_id="i",
+def test_host_update_aggregates_spill_and_inventory() -> None:
+    update = EffectHostUpdate(
+        committed_outputs=(
+            CommittedSpillUpdate(
+                resource_id="res_spill",
+                content_digest="a" * 64,
+                size_bytes=12,
+                session_id="s",
+                intent_id="i",
+            ),
         ),
-    ]
-    assert len(variants) == 3
-    assert FetchedResourceSettlementUpdate.__name__ == "FetchedResourceSettlementUpdate"
+        workspace_inventory=WorkspaceInventoryUpdate(replace_all=True),
+    )
+    assert update.committed_outputs[0].resource_id == "res_spill"
+    assert update.workspace_inventory is not None
+    assert update.workspace_inventory.replace_all is True
 
 
 @pytest.mark.asyncio

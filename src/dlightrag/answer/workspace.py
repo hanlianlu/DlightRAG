@@ -9,12 +9,15 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 from dlightrag.agent.environment import (
     ExecutionEnvironment,
     ExecutionEnvironmentAdapter,
     TrustExecutionAdapter,
 )
+from dlightrag.agent.tools.contracts import CommittedOutput
+from dlightrag.agent.tools.output import OutputStage
 from dlightrag.runtime.workspace import HandoffCommit, WorkspaceStore
 
 
@@ -129,6 +132,46 @@ async def copy_epoch_verified(
         raise WorkspaceRecoveryFailed(str(exc)) from exc
 
 
+class FileOutputStage(OutputStage):
+    """Append-only staging file promoted atomically to a committed spill."""
+
+    def __init__(self, spill_dir: Path, resource_id: str) -> None:
+        spill_dir.mkdir(parents=True, exist_ok=True)
+        self._resource_id = resource_id
+        self._temporary = spill_dir / f".{resource_id}.staging"
+        self._committed = spill_dir / f"{resource_id}.txt"
+        self._file: BinaryIO | None = self._temporary.open("xb")
+        self._digest = hashlib.sha256()
+        self._size_bytes = 0
+
+    def append(self, data: bytes) -> None:
+        if self._file is None:
+            raise RuntimeError("output stage is closed")
+        self._file.write(data)
+        self._digest.update(data)
+        self._size_bytes += len(data)
+
+    async def commit(self) -> CommittedOutput:
+        if self._file is None:
+            raise RuntimeError("output stage is closed")
+        self._file.flush()
+        os.fsync(self._file.fileno())
+        self._file.close()
+        self._file = None
+        self._temporary.replace(self._committed)
+        return CommittedOutput(
+            resource_id=self._resource_id,
+            content_digest=self._digest.hexdigest(),
+            size_bytes=self._size_bytes,
+        )
+
+    def discard(self) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+        self._temporary.unlink(missing_ok=True)
+
+
 def write_spill_file(spill_dir: Path, resource_id: str, text: str) -> Path:
     spill_dir.mkdir(parents=True, exist_ok=True)
     path = spill_dir / f"{resource_id}.txt"
@@ -136,13 +179,13 @@ def write_spill_file(spill_dir: Path, resource_id: str, text: str) -> Path:
     return path
 
 
-def spill_receipt(resource_id: str, text: str) -> dict[str, object]:
+def spill_receipt(resource_id: str, text: str) -> CommittedOutput:
     data = text.encode("utf-8")
-    return {
-        "resource_id": resource_id,
-        "content_digest": hashlib.sha256(data).hexdigest(),
-        "size_bytes": len(data),
-    }
+    return CommittedOutput(
+        resource_id=resource_id,
+        content_digest=hashlib.sha256(data).hexdigest(),
+        size_bytes=len(data),
+    )
 
 
 def _prepare_epoch_dirs(root: Path, epoch: int) -> tuple[Path, Path]:

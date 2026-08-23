@@ -21,12 +21,15 @@ from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, Session
 from dlightrag.agent.session.projection import ContextProjection, TokenAnchor
 from dlightrag.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
 from dlightrag.runtime.settlements import (
+    CommittedSpillUpdate,
     CompleteBlobDescriptor,
-    EvidenceSettlementUpdate,
+    EffectHostUpdate,
     FetchedResourceSettlementUpdate,
+    InventoryPathRecord,
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
+    WorkspaceInventoryUpdate,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -145,8 +148,8 @@ def _intent_entry(session_id: SessionId, intent_id: IntentId) -> EffectIntentEnt
 
 
 def _settlement(intent_id: IntentId, update) -> EffectSettlement:
-    result = ToolResultEntry(
-        tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", content="found"
+    result = ToolResultEntry.text(
+        tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", text="found"
     )
     return EffectSettlement(outcome="succeeded", result=result, host_update=update)
 
@@ -157,8 +160,8 @@ def _result_entry(session_id: SessionId, intent_id: IntentId) -> EffectResultEnt
         session_id=session_id,
         timestamp=_now(),
         intent_id=intent_id,
-        result=ToolResultEntry(
-            tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", content="found"
+        result=ToolResultEntry.text(
+            tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", text="found"
         ),
     )
 
@@ -202,7 +205,7 @@ async def test_effect_settlement_commits_everything_atomically(pool) -> None:
     )
     assert first.__class__.__name__ == "SessionCommit"
 
-    update = EvidenceSettlementUpdate(evidence=(_evidence_write(),))
+    update = EffectHostUpdate(evidence=(_evidence_write(),))
     settlement = await store.settle_effect(
         session_id=session_id,
         expected_version=1,
@@ -254,7 +257,7 @@ async def test_version_conflict_rolls_back_every_write(pool) -> None:
         session_id=session_id,
         expected_version=0,
         intent_id=intent_id,
-        settlement=_settlement(intent_id, EvidenceSettlementUpdate(evidence=(_evidence_write(),))),
+        settlement=_settlement(intent_id, EffectHostUpdate(evidence=(_evidence_write(),))),
         entries=[_result_entry(session_id, intent_id)],
     )
     assert conflict.__class__.__name__ == "VersionConflict"
@@ -323,7 +326,7 @@ async def test_duplicate_evidence_identity_is_idempotent_only_with_equal_digests
         session_id=session_id,
         expected_version=1,
         intent_id=intent_id,
-        settlement=_settlement(intent_id, EvidenceSettlementUpdate(evidence=(write,))),
+        settlement=_settlement(intent_id, EffectHostUpdate(evidence=(write,))),
         entries=[_result_entry(session_id, intent_id)],
     )
     assert first.__class__.__name__ == "EffectCommit"
@@ -333,7 +336,7 @@ async def test_duplicate_evidence_identity_is_idempotent_only_with_equal_digests
         session_id=session_id,
         expected_version=2,
         intent_id=intent_id,
-        settlement=_settlement(intent_id, EvidenceSettlementUpdate(evidence=(write,))),
+        settlement=_settlement(intent_id, EffectHostUpdate(evidence=(write,))),
         entries=[_result_entry(session_id, intent_id)],
     )
     assert again.__class__.__name__ == "EffectAlreadySettled"
@@ -361,7 +364,7 @@ async def test_duplicate_evidence_identity_is_idempotent_only_with_equal_digests
         session_id=session_id,
         expected_version=3,
         intent_id=intent_two,
-        settlement=_settlement(intent_two, EvidenceSettlementUpdate(evidence=(different,))),
+        settlement=_settlement(intent_two, EffectHostUpdate(evidence=(different,))),
         entries=[_result_entry(session_id, intent_two)],
     )
     assert conflict.__class__.__name__ == "EvidenceConflict"
@@ -443,7 +446,7 @@ async def test_fetched_resource_settlement_writes_complete_blob_and_resource(poo
     snapshot = await store.load(session_id)
     last_entry = snapshot.entries[-1]
     assert last_entry.__class__.__name__ == "EffectResultEntry"
-    assert last_entry.result.content == "found"  # type: ignore[attr-defined]
+    assert last_entry.result.text_content == "found"  # type: ignore[attr-defined]
 
 
 async def test_unequal_existing_resource_is_rejected(pool) -> None:
@@ -471,9 +474,7 @@ async def test_unequal_existing_resource_is_rejected(pool) -> None:
         session_id=session_id,
         expected_version=1,
         intent_id=intent_id,
-        settlement=_settlement(
-            intent_id, EvidenceSettlementUpdate(evidence=(), resources=(resource,))
-        ),
+        settlement=_settlement(intent_id, EffectHostUpdate(evidence=(), resources=(resource,))),
         entries=[_result_entry(session_id, intent_id)],
     )
     assert first.__class__.__name__ == "EffectCommit"
@@ -498,9 +499,7 @@ async def test_unequal_existing_resource_is_rejected(pool) -> None:
         session_id=session_id,
         expected_version=3,
         intent_id=intent_two,
-        settlement=_settlement(
-            intent_two, EvidenceSettlementUpdate(evidence=(), resources=(unequal,))
-        ),
+        settlement=_settlement(intent_two, EffectHostUpdate(evidence=(), resources=(unequal,))),
         entries=[_result_entry(session_id, intent_two)],
     )
     assert conflict.__class__.__name__ == "EvidenceConflict"
@@ -704,7 +703,7 @@ async def test_live_settlement_advances_durable_progress(pool) -> None:
         session_id=session_id,
         expected_version=1,
         intent_id=intent_id,
-        settlement=_settlement(intent_id, EvidenceSettlementUpdate()),
+        settlement=_settlement(intent_id, EffectHostUpdate()),
         entries=[_result_entry(session_id, intent_id)],
     )
     assert settled.__class__.__name__ == "EffectCommit"
@@ -726,7 +725,7 @@ async def test_prelude_settlement_does_not_advance_durable_progress(pool) -> Non
         session_id=session_id,
         expected_version=1,
         intent_id=intent_id,
-        settlement=_settlement(intent_id, EvidenceSettlementUpdate()),
+        settlement=_settlement(intent_id, EffectHostUpdate()),
         entries=[_result_entry(session_id, intent_id)],
         progress="prelude",
     )
@@ -756,7 +755,7 @@ async def test_prelude_only_reclaims_still_abandon(pool) -> None:
         session_id=session_id,
         expected_version=1,
         intent_id=intent_id,
-        settlement=_settlement(intent_id, EvidenceSettlementUpdate()),
+        settlement=_settlement(intent_id, EffectHostUpdate()),
         entries=[_result_entry(session_id, intent_id)],
         progress="prelude",
     )
@@ -913,7 +912,7 @@ async def test_terminal_finish_deletes_spill_rows(pool) -> None:
     assert await workspace.load_spills() == ()
 
 
-async def test_result_details_commit_inventory_and_spill(pool) -> None:
+async def test_effect_host_update_commits_inventory_and_spill(pool) -> None:
     claimed = await _claim(pool)
     journal = claimed.execution.session_store
     session_id = SessionId.new()
@@ -928,31 +927,11 @@ async def test_result_details_commit_inventory_and_spill(pool) -> None:
         session_id=session_id,
         timestamp=_now(),
         intent_id=intent_id,
-        result=ToolResultEntry(
+        result=ToolResultEntry.text(
             tool_name="write",
             call_id="c1",
             outcome="succeeded",
-            content="wrote notes.md",
-            details={
-                "workspace_inventory": {
-                    "replace_all": False,
-                    "upserts": [
-                        {
-                            "relative_path": "notes.md",
-                            "entry_type": "file",
-                            "size_bytes": 5,
-                            "mode": 0o644,
-                            "content_digest": "e" * 64,
-                        }
-                    ],
-                    "deletes": [],
-                },
-                "committed_spill": {
-                    "resource_id": "spill_from_details",
-                    "content_digest": "f" * 64,
-                    "size_bytes": 12,
-                },
-            },
+            text="wrote notes.md",
         ),
     )
     settled = await journal.settle_effect(
@@ -962,7 +941,28 @@ async def test_result_details_commit_inventory_and_spill(pool) -> None:
         settlement=EffectSettlement(
             outcome="succeeded",
             result=result.result,
-            host_update=EvidenceSettlementUpdate(),
+            host_update=EffectHostUpdate(
+                committed_outputs=(
+                    CommittedSpillUpdate(
+                        resource_id="spill_from_details",
+                        content_digest="f" * 64,
+                        size_bytes=12,
+                        session_id=session_id.value,
+                        intent_id=intent_id.value,
+                    ),
+                ),
+                workspace_inventory=WorkspaceInventoryUpdate(
+                    upserts=(
+                        InventoryPathRecord(
+                            relative_path="notes.md",
+                            entry_type="file",
+                            size_bytes=5,
+                            mode=0o644,
+                            content_digest="e" * 64,
+                        ),
+                    ),
+                ),
+            ),
         ),
         entries=[result],
     )

@@ -30,6 +30,7 @@ from dlightrag.agent.session.ids import (
     deterministic_uuid,
     new_uuid7,
 )
+from dlightrag.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
 from dlightrag.ai.messages import ToolCall
 
 
@@ -152,12 +153,42 @@ class TestEntryUnion:
         terminal = SessionTerminalEntry(**_entry(), reason="cancelled")
         assert entry_type_of(terminal) == "session_terminal"
 
-    def test_effect_result_outcome_is_deterministic(self) -> None:
+    def test_effect_result_serializes_typed_content_parts(self) -> None:
         result = ToolResultEntry(
+            tool_name="read",
+            call_id="c-image",
+            outcome="succeeded",
+            parts=(
+                ToolTextPart("read image"),
+                ToolResourceAttachmentPart(
+                    resource_id="tool-resource",
+                    safe_name="chart.png",
+                    media_type="image/png",
+                    content_digest="a" * 64,
+                    size_bytes=123,
+                ),
+            ),
+        )
+        entry = EffectResultEntry(**_entry(), result=result)
+
+        assert entry.canonical_payload()["content"] == [
+            {"type": "text", "text": "read image"},
+            {
+                "type": "resource_attachment",
+                "resource_id": "tool-resource",
+                "safe_name": "chart.png",
+                "media_type": "image/png",
+                "content_digest": "a" * 64,
+                "size_bytes": 123,
+            },
+        ]
+
+    def test_effect_result_outcome_is_deterministic(self) -> None:
+        result = ToolResultEntry.text(
             tool_name="search_web",
             call_id="c2",
             outcome="unknown_tool",
-            content='Tool "search_web" is not available.',
+            text='Tool "search_web" is not available.',
         )
         entry = EffectResultEntry(**_entry(), result=result)
         assert entry.canonical_payload()["outcome"] == "unknown_tool"

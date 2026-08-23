@@ -20,6 +20,7 @@ from dlightrag.agent.session.effects import (
     ToolResultEntry,
 )
 from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
+from dlightrag.agent.tool_content import decode_tool_content, encode_tool_content
 from dlightrag.ai.messages import ToolCall
 
 SESSION_ENTRY_SCHEMA_VERSION = 1
@@ -196,7 +197,7 @@ class EffectResultEntry(SessionEntry):
             "tool_name": self.result.tool_name,
             "call_id": self.result.call_id,
             "outcome": self.result.outcome,
-            "content": self.result.content,
+            "content": encode_tool_content(self.result.parts),
             "details": self.result.details,
             "cached": self.result.cached,
         }
@@ -410,7 +411,7 @@ def decode_entry_payload(
                 tool_name=str(payload["tool_name"]),
                 call_id=str(payload["call_id"]),
                 outcome=payload["outcome"],
-                content=str(payload["content"]),
+                parts=decode_tool_content(payload["content"]),
                 details=payload.get("details"),
                 cached=bool(payload.get("cached") or False),
             ),

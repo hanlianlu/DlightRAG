@@ -100,8 +100,8 @@ def _result(session_id: SessionId, content: str) -> EffectResultEntry:
         session_id=session_id,
         timestamp=datetime.now(UTC),
         intent_id=IntentId.new(),
-        result=ToolResultEntry(
-            tool_name="read_file", call_id="c1", outcome="succeeded", content=content
+        result=ToolResultEntry.text(
+            tool_name="read_file", call_id="c1", outcome="succeeded", text=content
         ),
     )
 

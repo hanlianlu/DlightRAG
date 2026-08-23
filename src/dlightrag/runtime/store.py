@@ -55,6 +55,17 @@ class AnswerRunStore(Protocol):
         self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int
     ) -> int | None: ...
 
+    async def append_tool_event(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        event_type: str,
+        payload: Mapping[str, object],
+    ) -> int | None: ...
+
     async def finish_success(
         self,
         *,

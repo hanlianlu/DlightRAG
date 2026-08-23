@@ -24,6 +24,7 @@ from dlightrag.agent.session.entries import (
     UserMessageEntry,
 )
 from dlightrag.agent.session.projection import render_compaction_summary
+from dlightrag.agent.tool_content import tool_content_message_fields
 from dlightrag.ai.messages import ToolCall
 from dlightrag.ai.tokens import (
     estimate_messages_tokens,
@@ -93,7 +94,7 @@ def fold_tool_message(entry: EffectResultEntry) -> dict[str, Any]:
         "role": "tool",
         "tool_call_id": entry.result.call_id,
         "name": entry.result.tool_name,
-        "content": entry.result.content,
+        **tool_content_message_fields(entry.result.parts),
         "is_error": entry.result.outcome != "succeeded",
     }
 

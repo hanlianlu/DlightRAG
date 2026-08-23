@@ -11,7 +11,9 @@ import pytest
 from PIL import Image
 from pydantic import ValidationError
 
+from dlightrag.agent.environment import AccessScheduler
 from dlightrag.agent.tools import AgentTool
+from dlightrag.agent.tools.files import read_tool
 from dlightrag.ai.tokens import estimate_tokens
 from dlightrag.answer.resources.models import (
     EXTRACTION_TEXT,
@@ -23,11 +25,10 @@ from dlightrag.answer.resources.models import (
 from dlightrag.answer.resources.registry import ResourceRegistry
 from dlightrag.answer.resources.visual import ResourceInspectionError, ResourceInspector
 from dlightrag.answer.tools.resources import (
-    _legacy_resource_read_tool,
-)
-from dlightrag.answer.tools.resources import (
     build_resource_tools as _build_resource_tools,
 )
+from dlightrag.answer.tools.resources import make_resource_reader
+from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy
 
 
@@ -66,7 +67,13 @@ def build_resource_tools(
     visual_supported: bool = False,
 ) -> list[AgentTool]:
     budget = text_window_budget or TextWindowBudget(tokens=100)
-    return [_legacy_resource_read_tool(registry, budget)] + _build_resource_tools(
+    return [
+        read_tool(
+            None,
+            AccessScheduler(),
+            resource_reader=make_resource_reader(registry, budget),
+        )
+    ] + _build_resource_tools(
         registry,
         text_window_budget=budget,
         inspector=inspector,
@@ -104,8 +111,8 @@ def test_read_tool_schema_is_exact() -> None:
     registry = ResourceRegistry()
     (read_tool,) = build_resource_tools(registry)
     fields = read_tool.input_model.model_fields
-    assert set(fields) == {"resource_id", "focus", "cursor"}
-    assert fields["resource_id"].is_required()
+    assert set(fields) == {"path", "resource_id", "offset", "limit", "focus", "cursor"}
+    assert not fields["resource_id"].is_required()
     assert not fields["focus"].is_required()
     assert not fields["cursor"].is_required()
     assert read_tool.input_model.model_json_schema()["additionalProperties"] is False
@@ -141,12 +148,12 @@ async def test_read_tool_returns_text_and_handles() -> None:
         (read_tool,) = build_resource_tools(registry)
         args = read_tool.input_model.model_validate({"resource_id": resource_id})
 
-        result = await read_tool.execute(args)
+        result = await read_tool.execute(args, tool_runtime())
 
-    assert "alpha" in result.content
-    assert "gamma" in result.content
-    assert result.details is not None
-    assert result.details["source_type"] == "web_attachment"
+    assert "alpha" in result.text_content
+    assert "gamma" in result.text_content
+    assert result.effects.evidence_sources
+    assert result.effects.evidence_sources[0].source_type == "web_attachment"
 
 
 async def test_read_uses_the_current_turn_window_budget() -> None:
@@ -166,9 +173,9 @@ async def test_read_uses_the_current_turn_window_budget() -> None:
     (read_tool,) = build_resource_tools(registry, text_window_budget=budget)
     args = read_tool.input_model.model_validate({"resource_id": resource_id})
 
-    await read_tool.execute(args)
+    await read_tool.execute(args, tool_runtime())
     budget.update(3)
-    await read_tool.execute(args)
+    await read_tool.execute(args, tool_runtime())
 
     assert [call.kwargs["max_window_tokens"] for call in registry.read.await_args_list] == [10, 3]
 
@@ -181,11 +188,11 @@ async def test_read_formats_within_the_current_turn_budget() -> None:
     (read_tool,) = build_resource_tools(registry, text_window_budget=budget)
     args = read_tool.input_model.model_validate({"resource_id": resource_id})
 
-    result = await read_tool.execute(args)
+    result = await read_tool.execute(args, tool_runtime())
 
-    assert estimate_tokens(result.content) <= budget.tokens
-    assert "tool result truncated" not in result.content
-    assert result.protected_suffix
+    assert estimate_tokens(result.text_content) <= budget.tokens
+    assert "tool result truncated" not in result.text_content
+    assert result.protected_text
 
 
 async def test_read_tool_redacts_unexpected_failures(
@@ -201,7 +208,7 @@ async def test_read_tool_redacts_unexpected_failures(
     args = read_tool.input_model.model_validate({"resource_id": "res-safe"})
 
     with pytest.raises(ResourceRegistryError, match="resource read failed") as failure:
-        await read_tool.execute(args)
+        await read_tool.execute(args, tool_runtime())
 
     assert "secret" not in str(failure.value)
 
@@ -222,10 +229,10 @@ async def test_inspect_tool_returns_derived_evidence() -> None:
             {"resource_id": resource_id, "focus": "describe"}
         )
 
-        result = await inspect_tool.execute(args)
+        result = await inspect_tool.execute(args, tool_runtime())
 
-    assert "Ascending bars." in result.content
-    assert "derived_by_vlm" in result.content
+    assert "Ascending bars." in result.text_content
+    assert "derived_by_vlm" in result.text_content
 
 
 async def test_inspect_tool_propagates_vlm_failure() -> None:
@@ -243,4 +250,4 @@ async def test_inspect_tool_propagates_vlm_failure() -> None:
         )
 
         with pytest.raises(ResourceInspectionError):
-            await inspect_tool.execute(args)
+            await inspect_tool.execute(args, tool_runtime())

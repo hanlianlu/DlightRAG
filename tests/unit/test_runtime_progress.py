@@ -14,15 +14,11 @@ from dlightrag.runtime.records import (
     advance_reclaim,
 )
 from dlightrag.runtime.settlements import (
-    CommittedSpillUpdate,
     CompleteBlobDescriptor,
-    EvidenceSettlementUpdate,
-    FetchedResourceSettlementUpdate,
-    HostUpdate,
+    EffectHostUpdate,
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
-    WorkspaceInventoryUpdate,
 )
 
 
@@ -154,7 +150,7 @@ class TestRunExecutionContext:
         assert is_dataclass(RunExecutionContext)
 
 
-class TestM3HostUpdate:
+class TestEffectHostUpdate:
     def test_evidence_write_validates_digests_and_ordinal(self) -> None:
         with pytest.raises(ValueError):
             OpaqueEvidenceWrite(
@@ -181,13 +177,15 @@ class TestM3HostUpdate:
         with pytest.raises(ValueError):
             CompleteBlobDescriptor(digest="a" * 64, total_bytes=10, chunks=(b"abc",))
 
-    def test_union_has_exactly_four_current_variants(self) -> None:
-        variants = set(HostUpdate.__value__.__args__)
-        assert variants == {
-            EvidenceSettlementUpdate,
-            FetchedResourceSettlementUpdate,
-            CommittedSpillUpdate,
-            WorkspaceInventoryUpdate,
+    def test_aggregate_has_all_atomic_effect_channels(self) -> None:
+        from dataclasses import fields
+
+        assert {field.name for field in fields(EffectHostUpdate)} == {
+            "evidence",
+            "resources",
+            "fetched",
+            "committed_outputs",
+            "workspace_inventory",
         }
 
     def test_fetched_resource_write_validates_digests(self) -> None:

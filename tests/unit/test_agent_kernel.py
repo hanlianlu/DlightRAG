@@ -19,8 +19,8 @@ class _Input(BaseModel):
     value: str
 
 
-async def _execute(arguments: BaseModel) -> ToolResult:
-    return ToolResult(content=str(arguments))
+async def _execute(arguments: BaseModel, _runtime: object) -> ToolResult:
+    return ToolResult.text(str(arguments))
 
 
 def _tool(name: str) -> AgentTool:

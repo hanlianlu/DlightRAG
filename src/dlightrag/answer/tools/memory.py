@@ -14,7 +14,7 @@ from dlightrag_memory import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.agent.tools import AgentTool, ToolResult, current_tool_call
+from dlightrag.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.answer.memory import memory_owner_allowed
 
 MemoryKindInput = Literal["preference", "fact"]
@@ -55,12 +55,12 @@ class MemoryHost:
 
 
 def remember_tool(*, host: MemoryHost) -> AgentTool:
-    async def execute(raw: BaseModel) -> ToolResult:
+    async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = raw if isinstance(raw, RememberInput) else RememberInput.model_validate(raw)
         if not memory_owner_allowed(host.auth_mode):
-            return ToolResult(content="Long-term memory requires a personal or local owner.")
+            return ToolResult.text("Long-term memory requires a personal or local owner.")
         if not host.enabled:
-            return ToolResult(content="Memory is disabled for this owner.")
+            return ToolResult.text("Memory is disabled for this owner.")
         try:
             written = await _memory(host).remember(
                 owner_id=host.owner_id,
@@ -69,14 +69,14 @@ def remember_tool(*, host: MemoryHost) -> AgentTool:
                 confidence=args.confidence,
                 provenance=MemoryProvenance(run_id=host.run_id, session_id=host.session_id),
                 supersedes_id=args.supersedes_id,
-                proposal_id=_proposal_id(host),
+                proposal_id=_proposal_id(host, runtime),
             )
         except MemoryWriteRejectedError as exc:
-            return ToolResult(content=str(exc.public_message))
+            return ToolResult.text(str(exc.public_message))
         if written is None:
-            return ToolResult(content="Memory was not stored.")
-        return ToolResult(
-            content=f"Remembered {written.kind} {written.memory_id}.",
+            return ToolResult.text("Memory was not stored.")
+        return ToolResult.text(
+            f"Remembered {written.kind} {written.memory_id}.",
             details={"memory_id": written.memory_id, "kind": written.kind},
         )
 
@@ -90,12 +90,12 @@ def remember_tool(*, host: MemoryHost) -> AgentTool:
 
 
 def forget_tool(*, host: MemoryHost) -> AgentTool:
-    async def execute(raw: BaseModel) -> ToolResult:
+    async def execute(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = raw if isinstance(raw, ForgetInput) else ForgetInput.model_validate(raw)
         if not memory_owner_allowed(host.auth_mode):
-            return ToolResult(content="Long-term memory requires a personal or local owner.")
+            return ToolResult.text("Long-term memory requires a personal or local owner.")
         if not host.enabled:
-            return ToolResult(content="Memory is disabled for this owner.")
+            return ToolResult.text("Memory is disabled for this owner.")
         try:
             await _memory(host).forget(
                 owner_id=host.owner_id,
@@ -104,8 +104,8 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
                 provenance=MemoryProvenance(run_id=host.run_id, session_id=host.session_id),
             )
         except MemoryWriteRejectedError as exc:
-            return ToolResult(content=str(exc.public_message))
-        return ToolResult(content="Forgotten.")
+            return ToolResult.text(str(exc.public_message))
+        return ToolResult.text("Forgotten.")
 
     return AgentTool(
         "forget",
@@ -117,19 +117,19 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
 
 
 def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
-    async def execute(raw: BaseModel) -> ToolResult:
+    async def execute(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = raw if isinstance(raw, RecallInput) else RecallInput.model_validate(raw)
         if host.memory is None:
-            return ToolResult(content="Memory store is not bound.")
+            return ToolResult.text("Memory store is not bound.")
         if not memory_owner_allowed(host.auth_mode):
-            return ToolResult(content="Long-term memory requires a personal or local owner.")
+            return ToolResult.text("Long-term memory requires a personal or local owner.")
         if not host.enabled:
-            return ToolResult(content="Memory is disabled for this owner.")
+            return ToolResult.text("Memory is disabled for this owner.")
         result = await host.memory.recall(owner_id=host.owner_id, query=args.query)
         if not result.records:
-            return ToolResult(content="No relevant memories.")
+            return ToolResult.text("No relevant memories.")
         lines = [f"- ({row.kind}) {row.body}" for row in result.records]
-        return ToolResult(content="Relevant memories:\n" + "\n".join(lines))
+        return ToolResult.text("Relevant memories:\n" + "\n".join(lines))
 
     return AgentTool(
         "recall_memory",
@@ -140,10 +140,8 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
     )
 
 
-def _proposal_id(host: MemoryHost) -> str:
-    call = current_tool_call()
-    call_id = call.call_id if call is not None else "direct"
-    return f"{host.run_id}:{host.session_id}:{call_id}"
+def _proposal_id(host: MemoryHost, runtime: ToolRuntime) -> str:
+    return f"{host.run_id}:{host.session_id}:{runtime.call_id}"
 
 
 def _memory(host: MemoryHost) -> Memory:

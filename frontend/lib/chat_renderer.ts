@@ -39,6 +39,15 @@ interface ProgressPayload {
   phase: string;
 }
 
+interface ToolProgressPayload {
+  tool_name?: string;
+  outcome?: string;
+  elapsed_ms?: number;
+  duration_ms?: number;
+  output_bytes?: number;
+  spill_state?: string;
+}
+
 type PhaseLabel = 'routing' | 'planning' | 'searching' | 'researching' | 'generating';
 
 const PHASE_LABELS: Record<PhaseLabel, string> = {
@@ -510,6 +519,35 @@ export function createAnswerRenderer(turn: ChatTurn) {
     if (live) live.textContent = label || '';
   }
 
+  function handleToolProgress(eventType: string, data: string): void {
+    const info = parseData(data) as ToolProgressPayload;
+    if (!info || typeof info.tool_name !== 'string') return;
+    const elapsed = typeof info.duration_ms === 'number'
+      ? info.duration_ms
+      : info.elapsed_ms;
+    const status = eventType === 'tool_start'
+      ? 'running'
+      : eventType === 'tool_end'
+        ? (info.outcome || 'complete')
+        : 'working';
+    const metadata = [
+      info.tool_name,
+      status,
+      typeof elapsed === 'number' ? `${Math.round(elapsed)} ms` : '',
+      typeof info.output_bytes === 'number' ? `${info.output_bytes} bytes` : '',
+      info.spill_state && info.spill_state !== 'none' ? `spill: ${info.spill_state}` : '',
+    ].filter(Boolean).join(' · ');
+    const existing = turn.contentDiv.querySelector<HTMLElement>(
+      '.' + chatStyles.progressPhase + ', .' + chatStyles.streamingDot,
+    );
+    const indicator = existing ?? turn.contentDiv.appendChild(document.createElement('span'));
+    indicator.textContent = '';
+    indicator.className = chatStyles.streamingDot + ' ' + chatStyles.progressPhase;
+    indicator.setAttribute('data-phase', metadata);
+    const live = turn.aiDiv.querySelector('.sr-only');
+    if (live) live.textContent = metadata;
+  }
+
   return {
     handle(eventType: string, data: string): void {
       // Any durable event proves the reattach worked, so retire its offer.
@@ -518,6 +556,9 @@ export function createAnswerRenderer(turn: ChatTurn) {
       else if (eventType === 'reset') handleReset();
       else if (eventType === 'done') handleDone(data);
       else if (eventType === 'progress') handleProgress(data);
+      else if (eventType === 'tool_start' || eventType === 'tool_progress' || eventType === 'tool_end') {
+        handleToolProgress(eventType, data);
+      }
       else if (eventType === 'error') {
         failed = true;
         setAnswerError(turn, answerErrorMessage(parseData(data)));

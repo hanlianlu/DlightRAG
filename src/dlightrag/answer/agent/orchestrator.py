@@ -19,10 +19,11 @@ from dlightrag_memory import Memory
 
 from dlightrag.agent.context import ContextContribution
 from dlightrag.agent.environment.access import AccessScheduler
+from dlightrag.agent.environment.errors import TOOL_RESULT_MAX_BYTES, TOOL_RESULT_MAX_LINES
 from dlightrag.agent.environment.execution import ExecutionEnvironment
 from dlightrag.agent.events import AgentEvent
 from dlightrag.agent.extensions import TrustedExtensions
-from dlightrag.agent.loop import AgentLoop, AgentLoopCancelled
+from dlightrag.agent.loop import AgentLoop, AgentLoopCancelled, EventSink
 from dlightrag.agent.session.effects import EffectIntent
 from dlightrag.agent.session.fold import (
     PriorTurns,
@@ -42,10 +43,13 @@ from dlightrag.agent.tools import (
     ExecutedTurn,
     PreparedToolTurn,
     ToolExecution,
+    ToolResult,
     ToolResultCapacityError,
+    ToolRuntime,
     ToolTurnExecutor,
 )
 from dlightrag.agent.tools.contracts import ToolModelFunc
+from dlightrag.agent.tools.files import ResourceReader
 from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.ai.capacity import (
     CONTEXT_POLICY,
@@ -111,6 +115,8 @@ class RunBoundaries(PhaseBoundaries, Protocol):
 
     async def apply_controls(self) -> bool: ...
 
+    async def publish_agent_event(self, event: AgentEvent) -> None: ...
+
     def accounted_input(self, estimated_input_tokens: int) -> int: ...
 
     async def load_snapshot(self) -> Any: ...
@@ -147,6 +153,9 @@ class _NoBoundaries:
 
     async def check_cancelled(self) -> None:
         return None
+
+    async def publish_agent_event(self, event: AgentEvent) -> None:
+        del event
 
     async def apply_controls(self) -> bool:
         return False
@@ -200,6 +209,7 @@ class _ResearchLoopDriver:
     orchestrator: AnswerOrchestrator
     run: PreparedRun
     boundaries: RunBoundaries
+    on_event: EventSink
 
     async def check_cancelled(self) -> None:
         try:
@@ -220,6 +230,7 @@ class _ResearchLoopDriver:
                 self.run,
                 self.boundaries,
                 turn_number=turn_number,
+                on_event=self.on_event,
             )
         except Exception as exc:
             executed = await self.orchestrator._handle_overflow_retry(
@@ -227,6 +238,7 @@ class _ResearchLoopDriver:
                 self.run,
                 self.boundaries,
                 turn_number=turn_number,
+                on_event=self.on_event,
             )
         self.run.agent_turn_count = turn_number
         self.run.trace["agent_turns"] = turn_number
@@ -258,7 +270,7 @@ class AnswerOrchestrator:
         context_policy: ContextPolicy = CONTEXT_POLICY,
         telemetry: Telemetry,
         environment: ExecutionEnvironment | None = None,
-        resource_reader: object | None = None,
+        resource_reader: ResourceReader | None = None,
         resolved_mode: ResolvedMode,
         subagent_host: SubagentHost | None = None,
         memory_host: MemoryHost | None = None,
@@ -445,12 +457,13 @@ class AnswerOrchestrator:
                 {
                     "kind": event.kind,
                     "turn_number": event.turn_number,
-                    **event.data,
+                    **{key: value for key, value in event.data.items() if key != "snapshot"},
                 }
             )
+            await boundaries.publish_agent_event(event)
 
         result = await AgentLoop(on_event=record_event).run(
-            _ResearchLoopDriver(self, run, boundaries),
+            _ResearchLoopDriver(self, run, boundaries, on_event=record_event),
             starting_turn=run.agent_turn_count,
         )
         run.agent_turn_count = result.turn_count
@@ -653,10 +666,13 @@ class AnswerOrchestrator:
             search_web=self._search_web,
             resource_tools=self._resource_tools,
             register_web_source=self._register_web_source,
-            resource_reader=self._resource_reader,
+            resource_reader=self._resource_reader_for_run(),
             environment=self._environment,
             scheduler=self._access,
             spill=(None if self._workspace is None else self._spill_writer()),
+            output_stage_factory=(
+                None if self._workspace is None else self._output_stage_factory()
+            ),
             subagent_host=subagent_host,
             memory_host=memory_host,
             skill_catalog=skill_catalog,
@@ -674,6 +690,26 @@ class AnswerOrchestrator:
             )
         )
 
+    def _resource_reader_for_run(self) -> ResourceReader | None:
+        base_reader = self._resource_reader
+        if base_reader is None and self._workspace is None:
+            return None
+
+        async def read(
+            resource_id: str,
+            focus: str | None,
+            cursor: str | None,
+            runtime: ToolRuntime,
+        ) -> ToolResult:
+            workspace = self._workspace
+            if workspace is not None and resource_id.startswith("spill_"):
+                return _read_committed_spill(workspace.spill_dir, resource_id, cursor)
+            if base_reader is None:
+                return ToolResult.text("resource read is not available", is_error=True)
+            return await base_reader(resource_id, focus, cursor, runtime)
+
+        return read
+
     def _skill_catalog(self) -> SkillCatalog:
         workspace_root = self._environment.root if self._environment is not None else None
         return SkillCatalog.discover(
@@ -690,6 +726,21 @@ class AnswerOrchestrator:
             *((skill,) if skill is not None else ()),
         )
 
+    def _output_stage_factory(self) -> Any:
+        from dlightrag.answer.workspace import FileOutputStage
+
+        workspace = self._workspace
+        if workspace is None:
+            raise RuntimeError("output staging requires a bound workspace")
+
+        def create(tool: str) -> FileOutputStage:
+            return FileOutputStage(
+                workspace.spill_dir,
+                f"spill_{tool}_{uuid4().hex}",
+            )
+
+        return create
+
     def _spill_writer(self) -> Any:
         from dlightrag.answer.workspace import spill_receipt, write_spill_file
 
@@ -697,7 +748,7 @@ class AnswerOrchestrator:
         if workspace is None:
             raise RuntimeError("spill requires a bound workspace")
 
-        async def write(text: str) -> dict[str, object]:
+        async def write(text: str) -> Any:
             resource_id = f"spill_{uuid4().hex}"
             write_spill_file(workspace.spill_dir, resource_id, text)
             return spill_receipt(resource_id, text)
@@ -708,6 +759,8 @@ class AnswerOrchestrator:
         self,
         run: PreparedRun,
         boundaries: RunBoundaries,
+        *,
+        on_event: EventSink | None = None,
     ) -> _PreparedControlTurn:
         """Model call plus preflight; no tool has executed yet."""
         if not isinstance(boundaries, _NoBoundaries):
@@ -718,6 +771,7 @@ class AnswerOrchestrator:
         executor = ToolTurnExecutor(
             run.model_func,
             telemetry=self._telemetry,
+            on_event=on_event,
         )
         tool_schema_tokens = _tool_schema_tokens(run.tools)
         estimated = (
@@ -809,6 +863,7 @@ class AnswerOrchestrator:
         boundaries: RunBoundaries,
         *,
         turn_number: int,
+        on_event: EventSink | None = None,
     ) -> ExecutedTurn:
         """One journaled control turn: persist intents, then execute and settle.
 
@@ -816,7 +871,11 @@ class AnswerOrchestrator:
         leaves recoverable unsettled intents instead of effects with no durable
         trace (Blocker 2).
         """
-        holder = await self._prepare_control_turn(run, boundaries)
+        holder = await self._prepare_control_turn(
+            run,
+            boundaries,
+            on_event=on_event,
+        )
         await boundaries.commit_intents(holder.prepared)
         return await self._execute_prepared_turn(run, holder, boundaries, turn_number=turn_number)
 
@@ -878,6 +937,7 @@ class AnswerOrchestrator:
         boundaries: RunBoundaries,
         *,
         turn_number: int,
+        on_event: EventSink | None = None,
     ) -> ExecutedTurn:
         """Compact-and-retry one genuine provider overflow, then fail loudly."""
         if not is_provider_context_overflow(exc):
@@ -895,7 +955,11 @@ class AnswerOrchestrator:
             force=True,
         )
         try:
-            holder = await self._prepare_control_turn(run, boundaries)
+            holder = await self._prepare_control_turn(
+                run,
+                boundaries,
+                on_event=on_event,
+            )
             await boundaries.commit_intents(holder.prepared)
             executed = await self._execute_prepared_turn(
                 run, holder, boundaries, turn_number=turn_number
@@ -914,6 +978,53 @@ class AnswerOrchestrator:
             evidence=run.evidence, working=run.working
         ) + _tool_schema_tokens(run.tools)
         return boundaries.accounted_input(estimated)
+
+
+def _read_committed_spill(
+    spill_dir: Path,
+    resource_id: str,
+    cursor: str | None,
+) -> ToolResult:
+    if not resource_id.isascii() or not all(
+        character.isalnum() or character == "_" for character in resource_id
+    ):
+        return ToolResult.text("invalid spill resource id", is_error=True)
+    start = 0
+    if cursor is not None:
+        if not cursor.isdigit():
+            return ToolResult.text("invalid spill cursor", is_error=True)
+        start = int(cursor)
+    path = spill_dir / f"{resource_id}.txt"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ToolResult.text(f"resource not found: {resource_id}", is_error=True)
+    lines = text.splitlines(keepends=True)
+    if start < 0 or start > len(lines):
+        return ToolResult.text("spill cursor is outside the resource", is_error=True)
+    page: list[str] = []
+    page_bytes = 0
+    for line in lines[start : start + TOOL_RESULT_MAX_LINES]:
+        line_bytes = len(line.encode("utf-8"))
+        if page_bytes + line_bytes > TOOL_RESULT_MAX_BYTES - 512:
+            break
+        page.append(line)
+        page_bytes += line_bytes
+    if start < len(lines) and not page:
+        return ToolResult.text(
+            "next spill line exceeds the model-visible UTF-8 byte limit",
+            is_error=True,
+        )
+    next_start = start + len(page)
+    continuation = (
+        f"read(resource_id={resource_id!r}, cursor={str(next_start)!r})"
+        if next_start < len(lines)
+        else ""
+    )
+    body = "".join(page)
+    if continuation:
+        body = f"{body}\n[more output; {continuation}]"
+    return ToolResult.text(body, protected_text=continuation)
 
 
 def _overflow_retry_error(accounted: int) -> AnswerInputOverflowError:

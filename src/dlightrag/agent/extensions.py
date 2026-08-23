@@ -20,17 +20,26 @@ from dlightrag.agent.tools.registry import ToolRegistry
 class ToolExtension(Protocol):
     """Register model-visible tools into one run-local registry."""
 
+    @property
+    def contract_version(self) -> int: ...
+
     def register_tools(self, registry: ToolRegistry) -> None: ...
 
 
 class ContextExtension(Protocol):
     """Return immutable context contributions for one projection."""
 
+    @property
+    def contract_version(self) -> int: ...
+
     def context_contributions(self) -> tuple[ContextContribution, ...]: ...
 
 
 class ExecutionExtension(Protocol):
     """Provide an adapter for exactly one configured execution mode."""
+
+    @property
+    def contract_version(self) -> int: ...
 
     @property
     def execution_mode(self) -> ExecutionMode: ...
@@ -45,6 +54,11 @@ class TrustedExtensions:
     tools: tuple[ToolExtension, ...] = ()
     context: tuple[ContextExtension, ...] = ()
     execution: tuple[ExecutionExtension, ...] = ()
+
+    def __post_init__(self) -> None:
+        for extension in (*self.tools, *self.context, *self.execution):
+            if getattr(extension, "contract_version", None) != 2:
+                raise ValueError("trusted extensions must implement contract v2")
 
     def register_tools(self, registry: ToolRegistry) -> None:
         for extension in self.tools:

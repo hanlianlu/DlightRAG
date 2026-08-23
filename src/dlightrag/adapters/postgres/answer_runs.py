@@ -143,7 +143,11 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_events (
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_answer_run_events_type_check
-        CHECK (event_type IN ('progress', 'token', 'reset', 'done', 'error')),
+        CHECK (event_type IN (
+            'progress', 'token', 'reset',
+            'tool_start', 'tool_progress', 'tool_end',
+            'done', 'error'
+        )),
     CONSTRAINT dlightrag_answer_run_events_sequence_check
         CHECK (event_sequence >= 1)
 )
@@ -645,6 +649,18 @@ ANSWER_RUN_MIGRATIONS = (
             "ALTER TABLE dlightrag_answer_child_sessions ADD COLUMN IF NOT EXISTS model_role TEXT",
             "ALTER TABLE dlightrag_answer_child_sessions ADD COLUMN IF NOT EXISTS tools_json JSONB",
             "ALTER TABLE dlightrag_answer_child_sessions ADD COLUMN IF NOT EXISTS usage_json JSONB",
+        ),
+    ),
+    Migration(
+        "0007_tool_lifecycle_events",
+        "Add metadata-only Tool Contract v2 lifecycle events",
+        (
+            "ALTER TABLE dlightrag_answer_run_events DROP CONSTRAINT IF EXISTS "
+            "dlightrag_answer_run_events_event_type_check",
+            "ALTER TABLE dlightrag_answer_run_events ADD CONSTRAINT "
+            "dlightrag_answer_run_events_event_type_check CHECK (event_type IN ("
+            "'progress', 'token', 'reset', 'tool_start', 'tool_progress', 'tool_end', "
+            "'done', 'error'))",
         ),
     ),
 )
@@ -2837,6 +2853,28 @@ class PGAnswerRunStore(PostgresOperationRunner):
             phase=None,
             event_type="reset",
             payload={},
+        )
+
+    async def append_tool_event(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        event_type: str,
+        payload: Mapping[str, object],
+    ) -> int | None:
+        if event_type not in {"tool_start", "tool_progress", "tool_end"}:
+            raise ValueError("invalid tool event type")
+        return await self._append_event(
+            owner_id=owner_id,
+            run_id=run_id,
+            worker_id=worker_id,
+            fencing_epoch=fencing_epoch,
+            phase=None,
+            event_type=event_type,
+            payload=payload,
         )
 
     async def _append_event(

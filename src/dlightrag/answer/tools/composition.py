@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from dlightrag.agent.environment import AccessScheduler
 from dlightrag.agent.environment.execution import ExecutionEnvironment
 from dlightrag.agent.skills import SkillCatalog, load_skill_tool
-from dlightrag.agent.tools import AgentTool, ToolResult
+from dlightrag.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.agent.tools.files import path_tools, read_tool
 from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.answer.errors import InvalidToolConfigurationError
@@ -37,6 +37,7 @@ def compose_research_tools(
     environment: ExecutionEnvironment | None = None,
     scheduler: AccessScheduler | None = None,
     spill: Any | None = None,
+    output_stage_factory: Any | None = None,
     ripgrep: str = "rg",
     subagent_host: SubagentHost | None = None,
     memory_host: MemoryHost | None = None,
@@ -78,7 +79,13 @@ def compose_research_tools(
     )
     tools.extend(tool for tool in resource_tools if tool.name not in {"read", "inspect"})
     if environment is not None:
-        path = path_tools(environment, scheduler=access, ripgrep=ripgrep, spill=spill)
+        path = path_tools(
+            environment,
+            scheduler=access,
+            ripgrep=ripgrep,
+            spill=spill,
+            output_stage_factory=output_stage_factory,
+        )
         existing_names = {tool.name for tool in tools}
         tools.extend(tool for tool in path if tool.name not in existing_names)
     if subagent_host is not None:
@@ -106,8 +113,8 @@ def compose_research_tools(
 
 
 def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger) -> AgentTool:
-    async def execute(raw: BaseModel) -> ToolResult:
-        result = await tool.execute(raw)
+    async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        result = await tool.execute(raw, runtime)
         row = _resource_row(tool.name, result)
         if row is not None:
             evidence.add_rows([row])
@@ -125,19 +132,19 @@ def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger) -> AgentTool:
 
 
 def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
-    details = result.details or {}
-    resource_id = str(details.get("resource_id") or "")
-    if not resource_id or not result.content.strip():
+    if not result.effects.evidence_sources or not result.text_content.strip():
         return None
-    source_type = str(details.get("source_type") or "web_attachment")
-    source_uri = str(details.get("source_uri") or resource_id)
+    source = result.effects.evidence_sources[0]
+    resource_id = source.resource_id
+    source_type = source.source_type
+    source_uri = source.source_uri
     metadata = {
         "source_type": source_type,
         "source_uri": source_uri,
-        "source_download_locator": str(details.get("source_download_locator") or source_uri),
-        "title": str(details.get("title") or resource_id),
+        "source_download_locator": source_uri,
+        "title": source.title,
     }
-    evidence_key = result.content
+    evidence_key = result.text_content
     if tool_name == "read":
         content, marker, cursor = evidence_key.rpartition("\n[more text available; cursor=")
         if marker and cursor.endswith("]"):
@@ -148,7 +155,7 @@ def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
         "reference_id": resource_id,
         "full_doc_id": resource_id,
         "file_path": str(metadata.get("title") or resource_id),
-        "content": evidence_key if tool_name == "read" else result.content,
+        "content": evidence_key if tool_name == "read" else result.text_content,
         "page_number": None,
         "_workspace": "__web_search__" if source_type == "web_search" else "__attachment__",
         "_evidence_key": f"{tool_name}:{identity}",

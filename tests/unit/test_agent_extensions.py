@@ -18,14 +18,18 @@ class _Args(BaseModel):
 
 
 class _ToolExtension:
+    contract_version = 2
+
     def register_tools(self, registry: ToolRegistry) -> None:
-        async def execute(_raw: BaseModel) -> ToolResult:
-            return ToolResult(content="ok")
+        async def execute(_raw: BaseModel, _runtime: object) -> ToolResult:
+            return ToolResult.text("ok")
 
         registry.register(AgentTool("extension_tool", "trusted tool", _Args, execute))
 
 
 class _ContextExtension:
+    contract_version = 2
+
     def __init__(self, *, citable: bool = False) -> None:
         self._citable = citable
 
@@ -41,10 +45,22 @@ class _ContextExtension:
 
 
 class _ExecutionExtension:
+    contract_version = 2
     execution_mode = "trust"
 
     def execution_adapter(self) -> TrustExecutionAdapter:
         return TrustExecutionAdapter()
+
+
+def test_old_extension_contract_is_rejected_at_startup() -> None:
+    class LegacyToolExtension:
+        contract_version = 1
+
+        def register_tools(self, registry: ToolRegistry) -> None:
+            del registry
+
+    with pytest.raises(ValueError, match="contract v2"):
+        TrustedExtensions(tools=(LegacyToolExtension(),))  # type: ignore[arg-type]
 
 
 def test_trusted_extension_set_registers_only_declared_seams(tmp_path: Path) -> None:

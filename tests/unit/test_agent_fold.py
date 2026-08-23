@@ -63,8 +63,8 @@ def _result(
         session_id=session_id,
         timestamp=_now(),
         intent_id=intent_id,
-        result=ToolResultEntry(
-            tool_name=tool_name, call_id=call_id, outcome="succeeded", content=content
+        result=ToolResultEntry.text(
+            tool_name=tool_name, call_id=call_id, outcome="succeeded", text=content
         ),
     )
 
@@ -136,8 +136,8 @@ def test_error_results_fold_with_is_error() -> None:
         session_id=session_id,
         timestamp=_now(),
         intent_id=None,
-        result=ToolResultEntry(
-            tool_name="search_web", call_id="c2", outcome="failed", content="boom"
+        result=ToolResultEntry.text(
+            tool_name="search_web", call_id="c2", outcome="failed", text="boom"
         ),
     )
     (message,) = fold_entries([result])

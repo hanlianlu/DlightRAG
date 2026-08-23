@@ -8,9 +8,10 @@ import os
 import signal
 import stat
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from dlightrag.agent.environment.errors import (
     WORKSPACE_MAX_BYTES,
@@ -30,12 +31,22 @@ class DirectoryEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessChunk:
+    """One ordered stdout or stderr byte chunk from a child process."""
+
+    stream: Literal["stdout", "stderr"]
+    data: bytes
+
+
+type ProcessOutputSink = Callable[[ProcessChunk], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
 class CompletedProcess:
-    """One child-process result: exit code and captured text."""
+    """One child-process terminal status; output is delivered incrementally."""
 
     returncode: int
-    stdout: str
-    stderr: str
+    timed_out: bool = False
 
 
 class LocalExecutionEnvironment:
@@ -134,6 +145,7 @@ class LocalExecutionEnvironment:
         env: Mapping[str, str],
         cwd: Path | None = None,
         timeout_seconds: float | None = None,
+        on_output: ProcessOutputSink | None = None,
     ) -> CompletedProcess:
         if not argv:
             raise ValueError("process argv cannot be empty")
@@ -145,27 +157,51 @@ class LocalExecutionEnvironment:
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
         )
+
+        async def discard(_chunk: ProcessChunk) -> None:
+            return None
+
+        sink = on_output or discard
+
+        async def pump(
+            reader: asyncio.StreamReader | None,
+            stream: Literal["stdout", "stderr"],
+        ) -> None:
+            if reader is None:
+                return
+            while chunk := await reader.read(64 * 1024):
+                await sink(ProcessChunk(stream=stream, data=chunk))
+
+        tasks = (
+            asyncio.create_task(process.wait()),
+            asyncio.create_task(pump(process.stdout, "stdout")),
+            asyncio.create_task(pump(process.stderr, "stderr")),
+        )
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(), timeout=timeout_seconds
-            )
+            await asyncio.wait_for(asyncio.gather(*tasks), timeout=timeout_seconds)
         except TimeoutError:
             self._terminate_group(process)
-            stdout_bytes, stderr_bytes = await process.communicate()
+            await asyncio.shield(process.wait())
+            await asyncio.gather(*tasks[1:], return_exceptions=True)
             return CompletedProcess(
                 returncode=process.returncode or -signal.SIGKILL,
-                stdout=_decode_output(stdout_bytes),
-                stderr=_decode_output(stderr_bytes),
+                timed_out=True,
             )
         except asyncio.CancelledError:
             self._terminate_group(process)
-            await asyncio.shield(process.communicate())
+            await asyncio.shield(process.wait())
+            for task in tasks[1:]:
+                task.cancel()
+            await asyncio.gather(*tasks[1:], return_exceptions=True)
             raise
-        return CompletedProcess(
-            returncode=process.returncode or 0,
-            stdout=_decode_output(stdout_bytes),
-            stderr=_decode_output(stderr_bytes),
-        )
+        except BaseException:
+            self._terminate_group(process)
+            await asyncio.shield(process.wait())
+            for task in tasks[1:]:
+                task.cancel()
+            await asyncio.gather(*tasks[1:], return_exceptions=True)
+            raise
+        return CompletedProcess(returncode=process.returncode or 0)
 
     def _terminate_group(self, process: object) -> None:
         pid = getattr(process, "pid", None)
@@ -201,8 +237,10 @@ class LocalExecutionEnvironment:
             raise WorkspaceQuotaExceeded("workspace quota exceeded")
 
 
-def _decode_output(data: bytes) -> str:
-    return data.decode("utf-8", errors="replace")
-
-
-__all__ = ["CompletedProcess", "DirectoryEntry", "LocalExecutionEnvironment"]
+__all__ = [
+    "CompletedProcess",
+    "DirectoryEntry",
+    "LocalExecutionEnvironment",
+    "ProcessChunk",
+    "ProcessOutputSink",
+]

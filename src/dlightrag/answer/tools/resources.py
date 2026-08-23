@@ -14,7 +14,13 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.agent.tools import AgentTool, ToolResult
+from dlightrag.agent.tools import (
+    AgentTool,
+    EvidenceSourceFact,
+    ToolEffects,
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.answer.resources.formatting import (
     format_resource_read,
     resource_read_continuation,
@@ -23,20 +29,13 @@ from dlightrag.answer.resources.models import (
     ResourceRegistryError,
     TextWindowBudget,
 )
-from dlightrag.answer.resources.registry import ResourceRegistry
+from dlightrag.answer.resources.registry import ResourceEffectOwner, ResourceRegistry
 from dlightrag.answer.resources.visual import (
     InspectionLocator,
     ResourceInspectionResult,
     ResourceInspector,
 )
 
-_READ_DESCRIPTION = (
-    "Read bounded text from a registered resource. An "
-    "optional focus reranks the resource's windows so the most relevant one is "
-    "returned first; pass the returned cursor to continue with that same focus. The result "
-    "includes a structural locator, the text, any inspectable visual handles, and "
-    "a continuation cursor when more remains."
-)
 _INSPECT_DESCRIPTION = (
     "Visually inspect a registered resource for evidence that text extraction cannot give "
     "you: a source image, a PDF page, or an embedded figure by its visual handle. "
@@ -47,22 +46,6 @@ _INSPECT_DESCRIPTION = (
     "derived_by_vlm with the exact page/sheet/cell/visual locator — treat it as "
     "evidence to cite, never as the final answer."
 )
-
-
-class _ReadResourceArgs(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    resource_id: str = Field(min_length=1, description="Identifier of a registered resource.")
-    focus: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Optional query to rerank the resource's text windows.",
-    )
-    cursor: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Continuation cursor returned by a previous read.",
-    )
 
 
 class _InspectResourceArgs(BaseModel):
@@ -82,42 +65,8 @@ class _InspectResourceArgs(BaseModel):
     )
 
 
-def _legacy_resource_read_tool(
-    registry: ResourceRegistry,
-    text_window_budget: TextWindowBudget,
-) -> AgentTool:
-    async def execute(args: BaseModel) -> ToolResult:
-        read_args = cast(_ReadResourceArgs, args)
-        try:
-            result = await registry.read(
-                read_args.resource_id,
-                max_window_tokens=text_window_budget.tokens,
-                focus=read_args.focus,
-                cursor=read_args.cursor,
-            )
-        except ResourceRegistryError:
-            raise
-        except Exception as exc:
-            raise ResourceRegistryError("resource read failed") from exc
-        return ToolResult(
-            content=format_resource_read(result),
-            details={
-                "resource_id": result.resource_id,
-                **registry.evidence_source(result.resource_id),
-            },
-            protected_suffix=resource_read_continuation(result),
-        )
-
-    return AgentTool(
-        name="read",
-        description=_READ_DESCRIPTION,
-        input_model=_ReadResourceArgs,
-        execute=execute,
-    )
-
-
 def _inspect_tool(inspector: ResourceInspector) -> AgentTool:
-    async def execute(args: BaseModel) -> ToolResult:
+    async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
         inspect_args = cast(_InspectResourceArgs, args)
         try:
             result = await inspector.inspect(
@@ -125,18 +74,19 @@ def _inspect_tool(inspector: ResourceInspector) -> AgentTool:
                 inspect_args.focus,
                 locator=inspect_args.locator,
                 cursor=inspect_args.cursor,
+                effect_owner=_effect_owner(runtime),
             )
         except ResourceRegistryError:
             raise
         except Exception as exc:
             raise ResourceRegistryError("visual inspection failed") from exc
-        return ToolResult(
-            content=_format_inspection(result),
-            details={
-                "resource_id": result.resource_id,
-                **inspector.evidence_source(result.resource_id),
-            },
-            protected_suffix=_inspection_continuation(result),
+        return ToolResult.text(
+            _format_inspection(result),
+            protected_text=_inspection_continuation(result),
+            effects=_evidence_effects(
+                result.resource_id,
+                inspector.evidence_source(result.resource_id),
+            ),
         )
 
     return AgentTool(
@@ -191,22 +141,54 @@ def make_resource_reader(
 ):
     """Adapt the registry into the agent-core resource-read callback."""
 
-    async def read_registered(resource_id: str, cursor: str | None) -> ToolResult:
-        result = await registry.read(
-            resource_id,
-            max_window_tokens=text_window_budget.tokens,
-            cursor=cursor,
-        )
-        return ToolResult(
-            content=format_resource_read(result),
-            details={
-                "resource_id": result.resource_id,
-                **registry.evidence_source(result.resource_id),
-            },
-            protected_suffix=resource_read_continuation(result),
+    async def read_registered(
+        resource_id: str,
+        focus: str | None,
+        cursor: str | None,
+        runtime: ToolRuntime,
+    ) -> ToolResult:
+        try:
+            result = await registry.read(
+                resource_id,
+                max_window_tokens=text_window_budget.tokens,
+                focus=focus,
+                cursor=cursor,
+                effect_owner=_effect_owner(runtime),
+            )
+        except ResourceRegistryError:
+            raise
+        except Exception as exc:
+            raise ResourceRegistryError("resource read failed") from exc
+        return ToolResult.text(
+            format_resource_read(result),
+            protected_text=resource_read_continuation(result),
+            effects=_evidence_effects(
+                result.resource_id,
+                registry.evidence_source(result.resource_id),
+            ),
         )
 
     return read_registered
+
+
+def _evidence_effects(resource_id: str, source: dict[str, str]) -> ToolEffects:
+    return ToolEffects(
+        evidence_sources=(
+            EvidenceSourceFact(
+                resource_id=resource_id,
+                source_type=source.get("source_type", "unknown"),
+                source_uri=source.get("source_uri", resource_id),
+                title=source.get("title", resource_id),
+            ),
+        )
+    )
+
+
+def _effect_owner(runtime: ToolRuntime) -> ResourceEffectOwner:
+    return ResourceEffectOwner(
+        execution_scope=runtime.execution_scope,
+        call_id=runtime.call_id,
+    )
 
 
 __all__ = ["build_resource_tools", "make_resource_reader"]

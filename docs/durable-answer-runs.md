@@ -373,8 +373,16 @@ Events use a monotonically increasing sequence per run. Durable event types are:
 - `progress`;
 - `token`;
 - `reset`;
+- `tool_start`;
+- `tool_progress`;
+- `tool_end`;
 - `done`;
 - `error`.
+
+Tool lifecycle events contain metadata only: name, status, elapsed time, output
+byte count, spill state, call identity, and attachment count. Raw stdout and
+stderr remain transient tool data and are never written to the event log or
+displayed by Web.
 
 Token writes are coalesced into bounded text chunks rather than one row per
 provider token. A successful finalization transaction stores the canonical
@@ -396,7 +404,7 @@ queued-cancellation transaction and sweeper use the same row lock and terminal
 transition predicate, preventing a cancellation race from producing two
 terminal events. Deleting a run cascades its events.
 
-These five are the only durable event types. Intermediate contexts are not
+These eight are the only durable event types. Intermediate contexts are not
 published because research may still change them; clients receive the
 authoritative contexts and all other metadata in successful `done`. Status GET
 and create-and-wait return that same canonical result without a required

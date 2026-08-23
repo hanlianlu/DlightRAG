@@ -398,8 +398,11 @@ ephemeral answer mode and no `stream` request field.
 | `GET /answer/{run_id}/children` | Return the foreground Child Session roster and usage. |
 | `DELETE /answer/{run_id}` | Explicit cancellation. 200 when complete/terminal, 202 while a worker must observe it. |
 
-Durable event types are exactly `progress`, `token`, `reset`, `done`, and
-`error`. `progress` carries the core phases `routing`, `planning`, `searching`,
+Durable event types are exactly `progress`, `token`, `reset`, `tool_start`,
+`tool_progress`, `tool_end`, `done`, and `error`. Tool events carry only safe
+execution metadata: tool name, status, elapsed time, output byte count, spill
+state, call identity, and attachment count. Raw stdout and stderr are never
+stored or displayed. `progress` carries the core phases `routing`, `planning`, `searching`,
 `researching`, and `generating`. Successful `done` embeds the complete canonical
 result (answer, contexts, references, sources, answer-image metadata, trace,
 image descriptions); cancelled `done` carries `status="cancelled"` with no
@@ -601,30 +604,30 @@ from dlightrag.services.answers import AnswerRequest
 from dlightrag.services.retrieval import RetrieveRequest
 
 result = await application.retrieval.retrieve(
-  RetrieveRequest(
-    query="What are the key findings?",
-    workspaces=("default",),
-  )
+    RetrieveRequest(
+        query="What are the key findings?",
+        workspaces=("default",),
+    )
 )
 result.contexts  # RetrievalContexts: {"chunks": [...], "entities": [...], "relationships": [...]}
 result.sources  # client-safe source projections
 
 # Query a concrete, already-authorized workspace set
 all_contexts = await application.retrieval.retrieve(
-  RetrieveRequest(
-    query="What are the key findings?",
-    workspaces=("finance", "legal"),
-  )
+    RetrieveRequest(
+        query="What are the key findings?",
+        workspaces=("finance", "legal"),
+    )
 )
 
 # Answer: contexts + LLM-generated answer
 result = await application.answers.answer(
-  AnswerRequest(
-    query="What are the key findings?",
-    workspaces=("default",),
-    semantic_highlights=True,  # optional; default false outside Web
-  ),
-  owner_id=DEPLOYMENT_OWNER_ID,
+    AnswerRequest(
+        query="What are the key findings?",
+        workspaces=("default",),
+        semantic_highlights=True,  # optional; default false outside Web
+    ),
+    owner_id=DEPLOYMENT_OWNER_ID,
 )
 result.answer  # "The key findings are... [1-1] [2-3]"
 result.contexts  # same structure as retrieve, packed to what the answer model saw
@@ -641,33 +644,35 @@ from dlightrag.answer.resources.attachments import (
 )
 
 result = await application.answers.answer(
-  AnswerRequest(
-    query="Summarize the attached report and figure.",
-    workspaces=("default",),
-    resources=tuple(
-      resource_inputs_from_attachments(
-        [
-          AnswerAttachment.from_path("report.pdf"),
-          AnswerAttachment.from_url("https://cdn.example.com/figure.png"),
-        ]
-      )
+    AnswerRequest(
+        query="Summarize the attached report and figure.",
+        workspaces=("default",),
+        resources=tuple(
+            resource_inputs_from_attachments(
+                [
+                    AnswerAttachment.from_path("report.pdf"),
+                    AnswerAttachment.from_url("https://cdn.example.com/figure.png"),
+                ]
+            )
+        ),
     ),
-    ),
-  owner_id=DEPLOYMENT_OWNER_ID,
+    owner_id=DEPLOYMENT_OWNER_ID,
 )
 
 # Streaming answer
 async for event in application.answers.answer_stream(
-  AnswerRequest(query="What are the key findings?", workspaces=("default",)),
-  owner_id=DEPLOYMENT_OWNER_ID,
+    AnswerRequest(query="What are the key findings?", workspaces=("default",)),
+    owner_id=DEPLOYMENT_OWNER_ID,
 ):
     print(event.event_type, event.payload)
 
 # The same AnswerService owns controls and lineage.
-await application.answers.steer(owner_id=DEPLOYMENT_OWNER_ID, run_id=run_id, instruction="Focus on risks")
+await application.answers.steer(
+    owner_id=DEPLOYMENT_OWNER_ID, run_id=run_id, instruction="Focus on risks"
+)
 children = await application.answers.children(owner_id=DEPLOYMENT_OWNER_ID, run_id=run_id)
 continuation = await application.answers.follow_up(
-  owner_id=DEPLOYMENT_OWNER_ID, run_id=run_id, query="What changed?"
+    owner_id=DEPLOYMENT_OWNER_ID, run_id=run_id, query="What changed?"
 )
 ```
 
@@ -1136,16 +1141,14 @@ from dlightrag.answer.resources.attachments import (
 )
 
 result = await application.answers.answer(
-  AnswerRequest(
-    query="What does this diagram show?",
-    workspaces=("default",),
-    resources=tuple(
-      resource_inputs_from_attachments(
-        [AnswerAttachment.from_path("photo.png")]
-      )
+    AnswerRequest(
+        query="What does this diagram show?",
+        workspaces=("default",),
+        resources=tuple(
+            resource_inputs_from_attachments([AnswerAttachment.from_path("photo.png")])
+        ),
     ),
-    ),
-  owner_id=DEPLOYMENT_OWNER_ID,
+    owner_id=DEPLOYMENT_OWNER_ID,
 )
 ```
 

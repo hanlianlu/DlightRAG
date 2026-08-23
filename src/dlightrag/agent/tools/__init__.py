@@ -1,19 +1,22 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Provider-neutral tool contracts and deterministic turn execution."""
 
-from dlightrag.agent.tools.context import current_tool_call
+from dlightrag.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
 from dlightrag.agent.tools.contracts import (
     AgentTool,
+    EvidenceSourceFact,
     ExecutedTurn,
+    ToolEffects,
     ToolExecution,
     ToolResult,
     ToolResultCapacityError,
+    ToolRuntime,
 )
 from dlightrag.agent.tools.executor import (
     PreparedToolTurn,
     ToolPreflight,
     ToolTurnExecutor,
-    fit_tool_result_content,
+    fit_tool_result,
     preflight_tool_calls,
 )
 from dlightrag.agent.tools.files import (
@@ -30,18 +33,22 @@ from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
 __all__ = [
     "AgentTool",
     "DuplicateToolError",
+    "EvidenceSourceFact",
     "ExecutedTurn",
     "PreparedToolTurn",
+    "ToolEffects",
     "ToolExecution",
     "ToolPreflight",
+    "ToolResourceAttachmentPart",
     "ToolResult",
     "ToolRegistry",
     "ToolResultCapacityError",
+    "ToolRuntime",
+    "ToolTextPart",
     "ToolTurnExecutor",
-    "current_tool_call",
     "bash_tool",
     "edit_tool",
-    "fit_tool_result_content",
+    "fit_tool_result",
     "grep_tool",
     "path_tools",
     "preflight_tool_calls",

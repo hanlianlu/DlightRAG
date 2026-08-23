@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.agent.tools import AgentTool, ToolResult
+from dlightrag.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.tools.web import (
     WebSearchResult,
@@ -43,7 +43,7 @@ def knowledge_base_search_tool(
     evidence: EvidenceLedger,
     trace: dict[str, Any],
 ) -> AgentTool:
-    async def execute(raw: BaseModel) -> ToolResult:
+    async def execute(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = _as(raw, SearchInput)
         return await _search_corpus(retrieve, args.query, evidence, trace)
 
@@ -62,7 +62,7 @@ def web_search_tool(
     trace: dict[str, Any],
     register_web_source: RegisterWebSource | None,
 ) -> AgentTool:
-    async def execute(raw: BaseModel) -> ToolResult:
+    async def execute(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = _as(raw, SearchInput)
         return await _search_open_web(search, args.query, evidence, trace, register_web_source)
 
@@ -89,7 +89,7 @@ async def _search_corpus(
     retrievals = trace.setdefault("knowledge_base_retrievals", [])
     if isinstance(retrievals, list):
         retrievals.append({**result.trace, "query": query})
-    return ToolResult(content=f"Knowledge base added {delta.new_chunks} new passages.")
+    return ToolResult.text(f"Knowledge base added {delta.new_chunks} new passages.")
 
 
 async def _search_open_web(
@@ -127,7 +127,7 @@ async def _search_open_web(
             f"- {title} [resource: {resource_id}]"
             for resource_id, title in readable_sources.items()
         )
-    return ToolResult(content=content)
+    return ToolResult.text(content)
 
 
 def _as[T: BaseModel](value: BaseModel, expected: type[T]) -> T:

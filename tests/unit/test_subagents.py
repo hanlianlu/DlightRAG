@@ -10,7 +10,6 @@ from dlightrag.agent.session.effects import EffectIntent
 from dlightrag.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.agent.session.ids import IntentId, SessionId
 from dlightrag.agent.tools import AgentTool, PreparedToolTurn, ToolPreflight, ToolResult
-from dlightrag.agent.tools.context import bind_tool_call, reset_tool_call
 from dlightrag.ai.capacity import CONTEXT_POLICY
 from dlightrag.ai.messages import AssistantTurn
 from dlightrag.ai.telemetry import NOOP_TELEMETRY
@@ -36,6 +35,7 @@ from dlightrag.answer.tools.subagents import (
 )
 from dlightrag.runtime import RunCancelledError
 from tests.in_memory_session_store import InMemoryAgentSessionStore
+from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
@@ -96,18 +96,15 @@ async def test_spawn_many_runs_in_parallel_and_aggregates_usage() -> None:
         run_id=SessionId.new().value,
         run_child=run_child,
     )
-    token = bind_tool_call("parallel", "spawn_agent")
-    try:
-        result = await subagent_tools(host=host)[0].execute(
-            SpawnAgentInput(
-                children=(
-                    ChildRequest(objective="one"),
-                    ChildRequest(objective="two"),
-                )
+    result = await subagent_tools(host=host)[0].execute(
+        SpawnAgentInput(
+            children=(
+                ChildRequest(objective="one"),
+                ChildRequest(objective="two"),
             )
-        )
-    finally:
-        reset_tool_call(token)
+        ),
+        tool_runtime(call_id="parallel", tool_name="spawn_agent"),
+    )
 
     assert result.details is not None
     assert len(result.details["children"]) == 2
@@ -124,9 +121,11 @@ async def test_default_depth_one_rejects_recursive_spawn() -> None:
         run_child=runner,
     )
 
-    result = await subagent_tools(host=host)[0].execute(_spawn_input("too deep"))
+    result = await subagent_tools(host=host)[0].execute(
+        _spawn_input("too deep"), tool_runtime(tool_name="spawn_agent")
+    )
 
-    assert "depth limit" in result.content
+    assert "depth limit" in result.text_content
     runner.assert_not_awaited()
 
 
@@ -143,11 +142,12 @@ async def test_cancel_tool_joins_a_known_foreground_child() -> None:
     host = SubagentHost(tasks={"child-1": task})
 
     result = await subagent_tools(host=host)[3].execute(
-        ChildControlInput(child_session_id="child-1")
+        ChildControlInput(child_session_id="child-1"),
+        tool_runtime(tool_name="cancel_subagent"),
     )
 
     assert task.cancelled()
-    assert "[cancelled]" in result.content
+    assert "[cancelled]" in result.text_content
     assert host.outcomes["child-1"].status == "cancelled"
 
 
@@ -178,16 +178,15 @@ async def test_replay_returns_journal_outcome_not_sidecar_summary() -> None:
         run_child=run_child,
     )
     tool = subagent_tools(host=host)[0]
-    token = bind_tool_call("call-1", "spawn_agent")
-    try:
-        result = await tool.execute(_spawn_input("what happened?"))
-    finally:
-        reset_tool_call(token)
-    assert "Journaled child finding." in result.content
-    assert "[1] report.pdf" in result.content
+    result = await tool.execute(
+        _spawn_input("what happened?"),
+        tool_runtime(call_id="call-1", tool_name="spawn_agent"),
+    )
+    assert "Journaled child finding." in result.text_content
+    assert "[1] report.pdf" in result.text_content
     assert result.details is not None
     assert result.details["inclusive_usage"] == {"input_tokens": 8}
-    assert "Sidecar-only summary." not in result.content
+    assert "Sidecar-only summary." not in result.text_content
 
 
 async def test_spawn_reports_child_outcome_and_usage() -> None:
@@ -215,13 +214,12 @@ async def test_spawn_reports_child_outcome_and_usage() -> None:
         run_child=run_child,
     )
     tool = subagent_tools(host=host)[0]
-    token = bind_tool_call("call-9", "spawn_agent")
-    try:
-        result = await tool.execute(_spawn_input("summarize filings"))
-    finally:
-        reset_tool_call(token)
-    assert "Child summary." in result.content
-    assert "[1] Page A [resource: res-a]" in result.content
+    result = await tool.execute(
+        _spawn_input("summarize filings"),
+        tool_runtime(call_id="call-9", tool_name="spawn_agent"),
+    )
+    assert "Child summary." in result.text_content
+    assert "[1] Page A [resource: res-a]" in result.text_content
     assert result.details is not None
     assert result.details["inclusive_usage"] == {"input_tokens": 12, "output_tokens": 4}
     assert result.details["children"][0]["status"] == "succeeded"
@@ -259,13 +257,12 @@ async def test_spawn_adopts_child_evidence_before_returning_result() -> None:
         adopt_evidence=adopted,
     )
     tool = subagent_tools(host=host)[0]
-    token = bind_tool_call("call-adopt", "spawn_agent")
-    try:
-        result = await tool.execute(_spawn_input("find source"))
-    finally:
-        reset_tool_call(token)
+    result = await tool.execute(
+        _spawn_input("find source"),
+        tool_runtime(call_id="call-adopt", tool_name="spawn_agent"),
+    )
 
-    assert "[2] child source" in result.content
+    assert "[2] child source" in result.text_content
     adopted.assert_called_once()
     assert adopted.call_args.args[0] == child_state
     assert adopted.call_args.args[2] == "call-adopt"
@@ -289,11 +286,10 @@ async def test_failed_child_is_recorded_failed() -> None:
         run_child=run_child,
     )
     tool = subagent_tools(host=host)[0]
-    token = bind_tool_call("call-err", "spawn_agent")
-    try:
-        result = await tool.execute(_spawn_input("x"))
-    finally:
-        reset_tool_call(token)
+    result = await tool.execute(
+        _spawn_input("x"),
+        tool_runtime(call_id="call-err", tool_name="spawn_agent"),
+    )
     assert result.details is not None
     assert result.details["children"][0]["status"] == "failed"
     assert finish.call_args is not None
@@ -503,8 +499,8 @@ async def test_recovery_backfills_child_effect_intent_before_spawn_replay() -> N
     async def link(**kwargs: Any) -> None:
         seen.update({key: str(value) for key, value in kwargs.items()})
 
-    async def execute(_raw: BaseModel) -> ToolResult:
-        return ToolResult(content="child replayed")
+    async def execute(_raw: BaseModel, _runtime: object) -> ToolResult:
+        return ToolResult.text("child replayed")
 
     parent_id = SessionId.new()
     run_id = str(parent_id.value)

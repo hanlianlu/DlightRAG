@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from dlightrag.agent.skills import LoadSkillInput, SkillCatalog, load_skill_tool
+from tests.tool_helpers import tool_runtime
 
 
 def _skill(root: Path, directory: str, *, name: str, description: str, body: str) -> None:
@@ -51,10 +52,10 @@ async def test_load_skill_reads_body_on_demand_but_never_executes_it(tmp_path: P
     )
     catalog = SkillCatalog.discover(workspace_root=workspace, global_root=tmp_path / "none")
 
-    result = await load_skill_tool(catalog).execute(LoadSkillInput(name="safe"))
+    result = await load_skill_tool(catalog).execute(LoadSkillInput(name="safe"), tool_runtime())
 
-    assert "untrusted reference context" in result.content
-    assert "touch should-not-exist" in result.content
+    assert "untrusted reference context" in result.text_content
+    assert "touch should-not-exist" in result.text_content
     assert not (tmp_path / "should-not-exist").exists()
 
 

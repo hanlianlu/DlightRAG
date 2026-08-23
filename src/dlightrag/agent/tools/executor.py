@@ -11,12 +11,18 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from dlightrag.agent.events import AgentEvent
 from dlightrag.agent.session.effects import (
     EffectIntent,
     ToolResultEntry,
     canonical_json,
 )
 from dlightrag.agent.session.ids import IntentId
+from dlightrag.agent.tool_content import (
+    ToolTextPart,
+    tool_content_attachments,
+    tool_content_message_fields,
+)
 from dlightrag.agent.tools.contracts import (
     AgentTool,
     ExecutedTurn,
@@ -25,12 +31,48 @@ from dlightrag.agent.tools.contracts import (
     ToolObservation,
     ToolResult,
     ToolResultCapacityError,
+    ToolRuntime,
 )
 from dlightrag.ai.messages import AssistantTurn, ToolCall, ToolChoice
 from dlightrag.ai.telemetry import NOOP_TELEMETRY, Telemetry
 from dlightrag.ai.tokens import estimate_tokens, truncate_to_estimated_tokens
 
 logger = logging.getLogger(__name__)
+
+
+class _LatestToolUpdatePump:
+    """Deliver latest snapshots without applying sink backpressure to a tool."""
+
+    def __init__(self, sink: Callable[[AgentEvent], Awaitable[None]]) -> None:
+        self._sink = sink
+        self._wake = asyncio.Event()
+        self._pending: AgentEvent | None = None
+        self._closed = False
+        self._task = asyncio.create_task(self._run())
+
+    def publish(self, event: AgentEvent) -> None:
+        self._pending = event
+        self._wake.set()
+
+    async def close(self, *, wait: bool) -> None:
+        if not wait:
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            return
+        self._closed = True
+        self._wake.set()
+        await self._task
+
+    async def _run(self) -> None:
+        while True:
+            await self._wake.wait()
+            self._wake.clear()
+            event = self._pending
+            self._pending = None
+            if event is not None:
+                await self._sink(event)
+            if self._closed and self._pending is None:
+                return
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +109,7 @@ def preflight_tool_calls(
                     tool_name=call.name,
                     call_id=call.id,
                     outcome=outcome,  # type: ignore[arg-type]
-                    content=message,
+                    parts=(ToolTextPart(message),),
                 )
             )
             continue
@@ -136,9 +178,11 @@ class ToolTurnExecutor:
         model_func: ToolModelFunc,
         *,
         telemetry: Telemetry = NOOP_TELEMETRY,
+        on_event: Callable[[AgentEvent], Awaitable[None]] | None = None,
     ) -> None:
         self._model_func = model_func
         self._telemetry = telemetry
+        self._on_event = on_event
 
     async def prepare_turn(
         self,
@@ -161,7 +205,27 @@ class ToolTurnExecutor:
         }
         if max_tokens is not None:
             model_kwargs["max_tokens"] = max_tokens
-        assistant = await self._model_func(**model_kwargs)
+        await self._emit(
+            AgentEvent(
+                "model_start",
+                data={"tool_names": [tool.name for tool in tools]},
+            )
+        )
+        try:
+            assistant = await self._model_func(**model_kwargs)
+        except BaseException:
+            await self._emit(AgentEvent("model_end", data={"outcome": "error"}))
+            raise
+        await self._emit(
+            AgentEvent(
+                "model_end",
+                data={
+                    "outcome": "ok",
+                    "stop_reason": assistant.stop_reason,
+                    "tool_calls": len(assistant.tool_calls),
+                },
+            )
+        )
         transcript = [*messages, _assistant_message(assistant)]
         preflight = (
             ToolPreflight(intents=(), validation_results=())
@@ -229,19 +293,23 @@ class ToolTurnExecutor:
                 max_observation_tokens,
             )
 
-        from dlightrag.agent.tools.context import (
-            bind_tool_execution_scope,
-            reset_tool_execution_scope,
-        )
-
-        scope_token = bind_tool_execution_scope(execution_scope)
-        try:
-            tasks = {
-                call.id: asyncio.create_task(_execute_call(call, tools_by_name, self._telemetry))
-                for call in assistant.tool_calls
-            }
-        finally:
-            reset_tool_execution_scope(scope_token)
+        intents_by_call = {
+            intent.source_call_id: intent for intent in intents if intent.source_call_id is not None
+        }
+        tasks = {
+            call.id: asyncio.create_task(
+                _execute_call(
+                    call,
+                    tools_by_name,
+                    self._telemetry,
+                    intent=intents_by_call.get(call.id),
+                    execution_scope=execution_scope,
+                    source_position=position,
+                    on_event=self._emit,
+                )
+            )
+            for position, call in enumerate(assistant.tool_calls)
+        }
         completed = False
         try:
             ordered = tuple(
@@ -274,6 +342,14 @@ class ToolTurnExecutor:
             None,
         )
 
+    async def _emit(self, event: AgentEvent) -> None:
+        if self._on_event is None:
+            return
+        try:
+            await self._on_event(event)
+        except Exception:
+            logger.warning("Agent event sink failed", exc_info=True)
+
 
 def _assemble_turn(
     assistant: AssistantTurn,
@@ -305,64 +381,150 @@ def _fit_results(
     for index, execution in enumerate(results):
         result_count = len(results) - index
         allowance = remaining // result_count
-        content = fit_tool_result_content(execution.result, max_tokens=allowance)
-        remaining = max(0, remaining - estimate_tokens(content))
-        if content == execution.result.content:
+        result = fit_tool_result(execution.result, max_tokens=allowance)
+        remaining = max(0, remaining - estimate_tokens(result.text_content))
+        if result == execution.result:
             fitted.append(execution)
             continue
         fitted.append(
             replace(
                 execution,
-                result=replace(execution.result, content=content),
-                observation=replace(execution.observation, content_chars=len(content)),
+                result=result,
+                observation=replace(
+                    execution.observation,
+                    content_chars=len(result.text_content),
+                ),
             )
         )
     return tuple(fitted)
 
 
-def fit_tool_result_content(result: ToolResult, *, max_tokens: int) -> str:
-    """Fit one result with the same protected-suffix policy used by live batches."""
-    if estimate_tokens(result.content) <= max_tokens:
-        return result.content
+def fit_tool_result(result: ToolResult, *, max_tokens: int) -> ToolResult:
+    """Fit result text while preserving typed attachments and continuation."""
+    text = result.text_content
+    if estimate_tokens(text) <= max_tokens:
+        return result
     if max_tokens < 1:
         raise ToolResultCapacityError("tool result has no residual model input capacity")
     marker = "[tool result truncated to the shared model residual]"
-    suffix = result.protected_suffix.strip()
-    suffix_tokens = estimate_tokens(suffix)
-    if suffix and suffix_tokens > max_tokens:
+    protected = result.protected_text.strip()
+    protected_tokens = estimate_tokens(protected)
+    if protected and protected_tokens > max_tokens:
         raise ToolResultCapacityError("tool result continuation does not fit the model residual")
-    fixed = "\n".join(part for part in (marker, suffix) if part)
+    fixed = "\n".join(part for part in (marker, protected) if part)
     fixed_tokens = estimate_tokens(fixed)
     if fixed_tokens >= max_tokens:
-        return suffix or truncate_to_estimated_tokens(marker, max_tokens)
-    body = result.content
-    if suffix and body.endswith(result.protected_suffix):
-        body = body[: -len(result.protected_suffix)].rstrip()
-    body_tokens = max_tokens - fixed_tokens
-    while body_tokens >= 0:
-        truncated = truncate_to_estimated_tokens(body, body_tokens)
-        fitted = "\n".join(part for part in (truncated, fixed) if part)
-        if estimate_tokens(fitted) <= max_tokens:
-            return fitted
-        body_tokens -= 1
-    return suffix
+        fitted_text = protected or truncate_to_estimated_tokens(marker, max_tokens)
+    else:
+        body = text
+        if protected and body.endswith(result.protected_text):
+            body = body[: -len(result.protected_text)].rstrip()
+        body_tokens = max_tokens - fixed_tokens
+        fitted_text = protected
+        while body_tokens >= 0:
+            truncated = truncate_to_estimated_tokens(body, body_tokens)
+            candidate = "\n".join(part for part in (truncated, fixed) if part)
+            if estimate_tokens(candidate) <= max_tokens:
+                fitted_text = candidate
+                break
+            body_tokens -= 1
+    attachments = tool_content_attachments(result.parts)
+    return replace(result, parts=(ToolTextPart(fitted_text), *attachments))
 
 
 async def _execute_call(
     call: ToolCall,
     tools: dict[str, AgentTool],
     telemetry: Telemetry,
+    *,
+    intent: EffectIntent | None,
+    execution_scope: str,
+    source_position: int,
+    on_event: Callable[[AgentEvent], Awaitable[None]],
 ) -> ToolExecution:
-    """Execute one model tool call under exactly one observation span."""
+    """Execute one model tool call under one observation and event lifecycle."""
     started = time.perf_counter()
-    async with telemetry.observe(
-        "agent_tool",
-        as_type="tool",
-        metadata={"tool": call.name, "call_id": call.id},
-    ) as span:
-        execution = await _dispatch_call(call, tools, started=started)
-        span.update(output=execution.observation.as_dict())
-        return execution
+    update_sequence = 0
+    updates = _LatestToolUpdatePump(on_event)
+    await on_event(
+        AgentEvent(
+            "tool_start",
+            data={
+                "tool_name": call.name,
+                "call_id": call.id,
+                "source_position": source_position,
+            },
+        )
+    )
+
+    async def emit_update(result: ToolResult) -> None:
+        nonlocal update_sequence
+        update_sequence += 1
+        updates.publish(
+            AgentEvent(
+                "tool_update",
+                data={
+                    "tool_name": call.name,
+                    "call_id": call.id,
+                    "source_position": source_position,
+                    "update_sequence": update_sequence,
+                    "text_chars": len(result.text_content),
+                    "output_bytes": _output_bytes(result),
+                    "spill_state": _spill_state(result),
+                    "elapsed_ms": (time.perf_counter() - started) * 1000,
+                    "attachment_count": len(tool_content_attachments(result.parts)),
+                    "snapshot": result,
+                },
+            )
+        )
+
+    try:
+        async with telemetry.observe(
+            "agent_tool",
+            as_type="tool",
+            metadata={"tool": call.name, "call_id": call.id},
+        ) as span:
+            execution = await _dispatch_call(
+                call,
+                tools,
+                started=started,
+                intent=intent,
+                execution_scope=execution_scope,
+                emit_update=emit_update,
+            )
+            span.update(output=execution.observation.as_dict())
+    except BaseException as exc:
+        await updates.close(wait=False)
+        await on_event(
+            AgentEvent(
+                "tool_end",
+                data={
+                    "tool_name": call.name,
+                    "call_id": call.id,
+                    "source_position": source_position,
+                    "outcome": (
+                        "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
+                    ),
+                },
+            )
+        )
+        raise
+    await updates.close(wait=True)
+    await on_event(
+        AgentEvent(
+            "tool_end",
+            data={
+                "tool_name": call.name,
+                "call_id": call.id,
+                "source_position": source_position,
+                "outcome": execution.observation.outcome,
+                "duration_ms": execution.observation.duration_ms,
+                "output_bytes": _output_bytes(execution.result),
+                "spill_state": _spill_state(execution.result),
+            },
+        )
+    )
+    return execution
 
 
 async def _dispatch_call(
@@ -370,6 +532,9 @@ async def _dispatch_call(
     tools: dict[str, AgentTool],
     *,
     started: float,
+    intent: EffectIntent | None,
+    execution_scope: str,
+    emit_update: Callable[[ToolResult], Awaitable[None]],
 ) -> ToolExecution:
     tool, arguments, outcome, message = _validate_call(call, tools)
     if outcome is not None:
@@ -378,11 +543,17 @@ async def _dispatch_call(
         return _error(call, message, outcome=outcome, started=started)
     if tool is None or arguments is None:
         raise RuntimeError("valid tool call lost its tool or arguments")
-    from dlightrag.agent.tools.context import bind_tool_call, reset_tool_call
-
-    token = bind_tool_call(call.id, call.name)
+    if intent is None:
+        raise RuntimeError("valid tool call lost its effect intent")
+    runtime = ToolRuntime(
+        call_id=call.id,
+        tool_name=call.name,
+        intent_id=intent.intent_id,
+        execution_scope=execution_scope,
+        _update_sink=emit_update,
+    )
     try:
-        result = await tool.execute(arguments)
+        result = await tool.execute(arguments, runtime)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -394,8 +565,6 @@ async def _dispatch_call(
             outcome="failed",
             started=started,
         )
-    finally:
-        reset_tool_call(token)
     return ToolExecution(
         call=call,
         result=result,
@@ -405,16 +574,32 @@ async def _dispatch_call(
             started=started,
             cached=result.cached,
             is_error=result.is_error,
-            content=result.content,
+            content=result.text_content,
         ),
         is_error=result.is_error,
     )
 
 
+def _output_bytes(result: ToolResult) -> int:
+    if isinstance(result.details, dict):
+        value = result.details.get("output_bytes")
+        if isinstance(value, int) and value >= 0:
+            return value
+    return len(result.text_content.encode("utf-8"))
+
+
+def _spill_state(result: ToolResult) -> str:
+    if isinstance(result.details, dict):
+        value = result.details.get("spill_state")
+        if value in {"none", "staging", "committed"}:
+            return str(value)
+    return "committed" if result.effects.committed_outputs else "none"
+
+
 def _error(call: ToolCall, message: str, *, outcome: str, started: float) -> ToolExecution:
     return ToolExecution(
         call=call,
-        result=ToolResult(content=message),
+        result=ToolResult.text(message),
         observation=_observe(
             call,
             outcome=outcome,
@@ -481,7 +666,7 @@ def _tool_message(execution: ToolExecution) -> dict[str, Any]:
         "role": "tool",
         "tool_call_id": execution.call.id,
         "name": execution.call.name,
-        "content": execution.result.content,
+        **tool_content_message_fields(execution.result.parts),
         "is_error": execution.is_error,
     }
 

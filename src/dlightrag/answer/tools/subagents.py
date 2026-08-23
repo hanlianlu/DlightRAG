@@ -17,7 +17,7 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dlightrag.agent.session.ids import SessionId
-from dlightrag.agent.tools import AgentTool, ToolResult, current_tool_call
+from dlightrag.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.answer.evidence import EvidenceDelta
 
 type ChildStatus = Literal["running", "succeeded", "failed", "cancelled"]
@@ -102,16 +102,16 @@ class SubagentHost:
 def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     """Return spawn/status/wait/cancel tools over one foreground roster."""
 
-    async def spawn(raw: BaseModel) -> ToolResult:
+    async def spawn(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(SpawnAgentInput, raw)
-        return await _spawn(host, args)
+        return await _spawn(host, args, runtime)
 
-    async def status(raw: BaseModel) -> ToolResult:
+    async def status(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         outcome = await _status(host, args.child_session_id)
         return _single_result(outcome)
 
-    async def wait(raw: BaseModel) -> ToolResult:
+    async def wait(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         task = host.tasks.get(args.child_session_id)
         if task is not None:
@@ -120,7 +120,7 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             outcome = await _status(host, args.child_session_id)
         return _single_result(outcome)
 
-    async def cancel(raw: BaseModel) -> ToolResult:
+    async def cancel(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         task = host.tasks.get(args.child_session_id)
         if task is not None and not task.done():
@@ -168,17 +168,20 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     )
 
 
-async def _spawn(host: SubagentHost, args: SpawnAgentInput) -> ToolResult:
+async def _spawn(
+    host: SubagentHost,
+    args: SpawnAgentInput,
+    runtime: ToolRuntime,
+) -> ToolResult:
     if host.parent_session_id is None or not host.run_id:
         raise RuntimeError("spawn_agent is not bound to a parent session")
     if host.run_child is None:
         raise RuntimeError("spawn_agent has no child runner")
     if host.depth >= host.max_depth:
-        return ToolResult(content=f"Child depth limit reached ({host.max_depth}).")
+        return ToolResult.text(f"Child depth limit reached ({host.max_depth}).")
     parent_session_id = host.parent_session_id
     run_child = host.run_child
-    call = current_tool_call()
-    call_id = call.call_id if call is not None else "anonymous"
+    call_id = runtime.call_id
     semaphore = asyncio.Semaphore(max(1, host.max_concurrency))
     child_ids = [
         child_session_id(
@@ -335,8 +338,8 @@ def _many_result(outcomes: tuple[ChildOutcome, ...]) -> ToolResult:
                 "usage": dict(outcome.usage or {}),
             }
         )
-    return ToolResult(
-        content="\n".join(lines),
+    return ToolResult.text(
+        "\n".join(lines),
         details={"children": children, "inclusive_usage": inclusive_usage},
     )
 

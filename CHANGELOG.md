@@ -28,6 +28,13 @@ removed. Query/document task semantics are mandatory for known retrieval
 models, and multimodal startup probes verify both image-query and native fused
 document paths.
 
+Tool Contract v2 replaces string-only results and implicit call context with
+typed text/resource parts, explicit per-call runtime identity, model/tool
+lifecycle events, streamed process output, byte-and-line bounded durable spills,
+and one atomic host-effect settlement. Predictable tool failures now settle as
+errors, trusted extensions must declare contract v2, and Web streams expose only
+safe tool-progress metadata rather than raw process output.
+
 Profile Memory adds stable proposal/commit, replay-stable recall, local
 single-user identity, timeout fallback, and idempotent tombstone forget. REST,
 inbound MCP, Python, and Web expose their applicable start/status/steer/follow-up/

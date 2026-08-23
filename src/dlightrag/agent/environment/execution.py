@@ -16,6 +16,7 @@ from dlightrag.agent.environment.local import (
     CompletedProcess,
     DirectoryEntry,
     LocalExecutionEnvironment,
+    ProcessOutputSink,
 )
 
 type ExecutionMode = Literal["disabled", "trust", "sandbox"]
@@ -44,6 +45,7 @@ class ExecutionEnvironment(Protocol):
         env: Mapping[str, str],
         cwd: Path | None = None,
         timeout_seconds: float | None = None,
+        on_output: ProcessOutputSink | None = None,
     ) -> CompletedProcess: ...
 
 

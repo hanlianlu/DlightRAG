@@ -7,6 +7,11 @@ from typing import Any, Literal
 type AgentEventKind = Literal[
     "agent_start",
     "turn_start",
+    "model_start",
+    "model_end",
+    "tool_start",
+    "tool_update",
+    "tool_end",
     "turn_end",
     "agent_end",
 ]

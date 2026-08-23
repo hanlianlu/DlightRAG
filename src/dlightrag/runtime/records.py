@@ -14,10 +14,19 @@ from dlightrag.agent.session.store import AgentSessionStore
 from dlightrag.runtime.contracts import AnswerRunPhase, AnswerRunStatus
 from dlightrag.runtime.policy import MAX_RECLAIMS_WITHOUT_PROGRESS
 from dlightrag.runtime.progress import RunProgressStore
-from dlightrag.runtime.settlements import M3HostUpdate
+from dlightrag.runtime.settlements import EffectHostUpdate
 from dlightrag.runtime.workspace import WorkspaceStore
 
-type AnswerRunEventType = Literal["progress", "token", "reset", "done", "error"]
+type AnswerRunEventType = Literal[
+    "progress",
+    "token",
+    "reset",
+    "tool_start",
+    "tool_progress",
+    "tool_end",
+    "done",
+    "error",
+]
 type ArtifactReferenceKind = Literal[
     "current_attachment",
     "history_attachment",
@@ -234,7 +243,7 @@ class RunExecutionContext:
     worker_id: str
     lease_owner: str
     fencing_epoch: int
-    session_store: AgentSessionStore[M3HostUpdate]
+    session_store: AgentSessionStore[EffectHostUpdate]
     progress_store: RunProgressStore
     workspace_store: WorkspaceStore | None = None
 

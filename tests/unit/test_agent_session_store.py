@@ -55,8 +55,8 @@ def _intent(session_id: SessionId, *, intent_id: IntentId | None = None) -> Effe
 def _settlement(intent_id: IntentId) -> EffectSettlement[NoHostUpdate]:
     from dlightrag.agent.session.effects import ToolResultEntry
 
-    result = ToolResultEntry(
-        tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", content="found"
+    result = ToolResultEntry.text(
+        tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", text="found"
     )
     return EffectSettlement(outcome="succeeded", result=result, host_update=NoHostUpdate())
 
@@ -71,8 +71,8 @@ def _result_entry(
         session_id=session_id,
         timestamp=_now(),
         intent_id=intent_id,
-        result=ToolResultEntry(
-            tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", content="found"
+        result=ToolResultEntry.text(
+            tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", text="found"
         ),
     )
 

@@ -80,8 +80,19 @@ class FetchedResourceBytes:
     content: bytes
 
 
+@dataclass(frozen=True, slots=True)
+class ResourceEffectOwner:
+    """Explicit Agent effect identity for a resource materialization."""
+
+    execution_scope: str
+    call_id: str
+
+
 # Persist validated fetched bytes before their tool result settles on the journal.
-FetchedBytesSink = Callable[[FetchedResourceBytes], Awaitable[None]]
+FetchedBytesSink = Callable[
+    [FetchedResourceBytes, ResourceEffectOwner | None],
+    Awaitable[None],
+]
 
 
 @dataclass(frozen=True)
@@ -334,11 +345,21 @@ class ResourceRegistry:
             "title": safe_source_filename(resource.filename or source_uri),
         }
 
-    async def materialize(self, resource_id: str) -> bytes:
-        """Return the full bytes for a resource, fetching a link if needed."""
-        return await self._materialize_bytes(self._require(resource_id))
+    async def materialize(
+        self,
+        resource_id: str,
+        *,
+        effect_owner: ResourceEffectOwner | None = None,
+    ) -> bytes:
+        """Return full bytes, attributing any fetch to an explicit effect."""
+        return await self._materialize_bytes(self._require(resource_id), effect_owner=effect_owner)
 
-    async def ensure_path(self, resource_id: str) -> Path:
+    async def ensure_path(
+        self,
+        resource_id: str,
+        *,
+        effect_owner: ResourceEffectOwner | None = None,
+    ) -> Path:
         """Materialize a resource to a request-local temporary file and return it.
 
         Only binary readers that need a filesystem path call this; direct text
@@ -348,7 +369,7 @@ class ResourceRegistry:
         existing = self._paths.get(resource_id)
         if existing is not None:
             return existing
-        content = await self._materialize_bytes(resource)
+        content = await self._materialize_bytes(resource, effect_owner=effect_owner)
         if self._tempdir is None:
             self._tempdir = tempfile.TemporaryDirectory(prefix="dlrag-res-")
         name = safe_source_filename(resource.filename or resource_id)
@@ -364,6 +385,7 @@ class ResourceRegistry:
         max_window_tokens: int,
         focus: str | None = None,
         cursor: str | None = None,
+        effect_owner: ResourceEffectOwner | None = None,
     ) -> ResourceReadResult:
         """Return one page whose complete model-visible envelope fits the budget."""
         if max_window_tokens < 1:
@@ -377,7 +399,7 @@ class ResourceRegistry:
                 raise ResourceCursorError("cursor is not valid for this resource read")
             effective_focus = cursor_state.focus
 
-        view = await self._read_text_view(resource)
+        view = await self._read_text_view(resource, effect_owner=effect_owner)
         text = view.text
         resource_handles = view.handles
         if not text:
@@ -442,13 +464,18 @@ class ResourceRegistry:
             visual_handles=visual_handles,
         )
 
-    async def _read_text_view(self, resource: _Registered) -> _ConvertedResource:
+    async def _read_text_view(
+        self,
+        resource: _Registered,
+        *,
+        effect_owner: ResourceEffectOwner | None,
+    ) -> _ConvertedResource:
         if resource.url is not None:
-            return await self._read_link_text_view(resource)
+            return await self._read_link_text_view(resource, effect_owner=effect_owner)
         cached = self._text_views.get(resource.resource_id)
         if cached is not None:
             return cached
-        content = await self._materialize_bytes(resource)
+        content = await self._materialize_bytes(resource, effect_owner=effect_owner)
         return await self._text_view_from_content(resource, content)
 
     async def _text_view_from_content(
@@ -469,7 +496,12 @@ class ResourceRegistry:
             self._text_views[resource.resource_id] = view
         return view
 
-    async def _read_link_text_view(self, resource: _Registered) -> _ConvertedResource:
+    async def _read_link_text_view(
+        self,
+        resource: _Registered,
+        *,
+        effect_owner: ResourceEffectOwner | None,
+    ) -> _ConvertedResource:
         """Read a link, falling back to provider text only when direct fails/empty.
 
         Settled bytes already passed the complete fetch gate and
@@ -495,7 +527,9 @@ class ResourceRegistry:
             return cached
         try:
             content = await self._materialize_fetched(
-                resource.resource_id, lambda: self._fetch_link(url)
+                resource.resource_id,
+                lambda: self._fetch_link(url),
+                effect_owner=effect_owner,
             )
             view = await self._text_view_from_content(resource, content)
         except ResourceAdmissionError:
@@ -514,13 +548,17 @@ class ResourceRegistry:
         return view
 
     async def _ensure_converted(
-        self, resource: _Registered, content: bytes | None = None
+        self,
+        resource: _Registered,
+        content: bytes | None = None,
+        *,
+        effect_owner: ResourceEffectOwner | None = None,
     ) -> _ConvertedResource:
         cached = self._converted.get(resource.resource_id)
         if cached is not None:
             return cached
         if content is None:
-            content = await self._materialize_bytes(resource)
+            content = await self._materialize_bytes(resource, effect_owner=effect_owner)
         converted = await convert_resource(
             content, filename=resource.filename, declared_mime=resource.declared_mime
         )
@@ -535,10 +573,15 @@ class ResourceRegistry:
         self._converted[resource.resource_id] = entry
         return entry
 
-    async def inspection_target(self, resource_id: str) -> InspectionTarget:
+    async def inspection_target(
+        self,
+        resource_id: str,
+        *,
+        effect_owner: ResourceEffectOwner | None = None,
+    ) -> InspectionTarget:
         """Materialize a resource and classify how it can be visually inspected."""
         resource = self._require(resource_id)
-        content = await self._materialize_bytes(resource)
+        content = await self._materialize_bytes(resource, effect_owner=effect_owner)
         if _is_pdf(resource.filename, resource.declared_mime):
             return InspectionTarget(resource_id, "pdf", content, _PDF_MIME)
         if is_convertible(resource.filename, resource.declared_mime):
@@ -551,11 +594,17 @@ class ResourceRegistry:
             return InspectionTarget(resource_id, "image", content, media)
         return InspectionTarget(resource_id, "opaque", content, resource.declared_mime)
 
-    async def visual_asset(self, resource_id: str, handle_id: str) -> ExtractedVisual:
+    async def visual_asset(
+        self,
+        resource_id: str,
+        handle_id: str,
+        *,
+        effect_owner: ResourceEffectOwner | None = None,
+    ) -> ExtractedVisual:
         """Return an embedded visual asset by handle, converting on demand."""
         resource = self._require(resource_id)
         if is_convertible(resource.filename, resource.declared_mime):
-            await self._ensure_converted(resource)
+            await self._ensure_converted(resource, effect_owner=effect_owner)
         asset = self._visual_assets.get(handle_id)
         if asset is None:
             raise ResourceNotFoundError(f"unknown visual handle: {handle_id}")
@@ -600,7 +649,12 @@ class ResourceRegistry:
         except KeyError as exc:
             raise ResourceNotFoundError(f"unknown resource id: {resource_id}") from exc
 
-    async def _materialize_bytes(self, resource: _Registered) -> bytes:
+    async def _materialize_bytes(
+        self,
+        resource: _Registered,
+        *,
+        effect_owner: ResourceEffectOwner | None,
+    ) -> bytes:
         if resource.content is not None:
             # Inline bytes were charged against the total at registration and are
             # never re-counted on read.
@@ -609,14 +663,22 @@ class ResourceRegistry:
         if restored is not None:
             return restored
         if resource.loader is not None:
-            return await self._materialize_fetched(resource.resource_id, resource.loader)
+            return await self._materialize_fetched(
+                resource.resource_id,
+                resource.loader,
+                effect_owner=effect_owner,
+            )
         url = resource.url
         if url is None:  # pragma: no cover - a resource is always bytes or a link
             raise ResourceNotFoundError(f"resource {resource.resource_id} has no content")
         # Per-read SSRF revalidation: rerun full scheme/credential/host/DNS checks
         # even when bytes are already cached from an earlier read.
         await avalidate_public_https_url(url)
-        return await self._materialize_fetched(resource.resource_id, lambda: self._fetch_link(url))
+        return await self._materialize_fetched(
+            resource.resource_id,
+            lambda: self._fetch_link(url),
+            effect_owner=effect_owner,
+        )
 
     def _restored_bytes(self, resource_id: str) -> bytes | None:
         """Return settled bytes, which never re-enter the network path.
@@ -637,7 +699,11 @@ class ResourceRegistry:
         )
 
     async def _materialize_fetched(
-        self, resource_id: str, producer: Callable[[], Awaitable[bytes]]
+        self,
+        resource_id: str,
+        producer: Callable[[], Awaitable[bytes]],
+        *,
+        effect_owner: ResourceEffectOwner | None,
     ) -> bytes:
         """Fetch bytes once per resource and charge them against the total.
 
@@ -655,7 +721,13 @@ class ResourceRegistry:
                 return cached
             task = self._fetch_tasks.get(resource_id)
             if task is None:
-                task = asyncio.ensure_future(self._fetch_and_charge(resource_id, producer))
+                task = asyncio.ensure_future(
+                    self._fetch_and_charge(
+                        resource_id,
+                        producer,
+                        effect_owner=effect_owner,
+                    )
+                )
                 self._fetch_tasks[resource_id] = task
         try:
             data = await asyncio.shield(task)
@@ -670,7 +742,11 @@ class ResourceRegistry:
         return data
 
     async def _fetch_and_charge(
-        self, resource_id: str, producer: Callable[[], Awaitable[bytes]]
+        self,
+        resource_id: str,
+        producer: Callable[[], Awaitable[bytes]],
+        *,
+        effect_owner: ResourceEffectOwner | None,
     ) -> bytes:
         data = await producer()
         if len(data) > self._max_attachment_bytes:
@@ -680,10 +756,16 @@ class ResourceRegistry:
                 raise ResourceAdmissionError("total attachment bytes exceeded")
             self._total_bytes += len(data)
             self._fetched[resource_id] = data
-        await self._persist_fetched(resource_id, data)
+        await self._persist_fetched(resource_id, data, effect_owner=effect_owner)
         return data
 
-    async def _persist_fetched(self, resource_id: str, content: bytes) -> None:
+    async def _persist_fetched(
+        self,
+        resource_id: str,
+        content: bytes,
+        *,
+        effect_owner: ResourceEffectOwner | None,
+    ) -> None:
         """Bind validated web bytes to a durable replay slot before they are used.
 
         The sink runs after every HTTPS, redirect, DNS, SSRF, and byte check has
@@ -704,7 +786,8 @@ class ResourceRegistry:
                 mime_type=resource.declared_mime or "application/octet-stream",
                 url=resource.url,
                 content=content,
-            )
+            ),
+            effect_owner,
         )
 
     async def _fallback_text_view(
@@ -970,6 +1053,7 @@ __all__ = [
     "FetchedBytesSink",
     "FetchedResourceBytes",
     "InspectionTarget",
+    "ResourceEffectOwner",
     "ResourceRegistry",
     "ResourceRegistryClosedError",
     "ResourceStateMismatchError",

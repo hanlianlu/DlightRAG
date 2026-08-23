@@ -12,6 +12,7 @@ from dlightrag.adapters.mcp_tools import (
     OutboundMcpServer,
     outbound_mcp_tools,
 )
+from tests.tool_helpers import tool_runtime
 
 
 def test_outbound_mcp_requires_explicit_endpoint_and_tool_names() -> None:
@@ -58,12 +59,12 @@ async def test_declared_tool_calls_sdk_session_and_closes_before_return(monkeypa
         )
     )
 
-    result = await tool.execute(McpToolArguments({"query": "agent"}))
+    result = await tool.execute(McpToolArguments({"query": "agent"}), tool_runtime())
 
     assert tool.name == "mcp_docs_search"
     call_tool.assert_awaited_once_with("search", arguments={"query": "agent"})
-    assert "remote result" in result.content
-    assert '"count": 1' in result.content
+    assert "remote result" in result.text_content
+    assert '"count": 1' in result.text_content
     assert result.is_error is False
     assert closed
 
@@ -95,7 +96,7 @@ async def test_declared_tool_preserves_remote_error_semantics(monkeypatch) -> No
         )
     )
 
-    result = await tool.execute(McpToolArguments({"query": "agent"}))
+    result = await tool.execute(McpToolArguments({"query": "agent"}), tool_runtime())
 
     assert result.is_error is True
     assert result.details == {
@@ -103,4 +104,4 @@ async def test_declared_tool_preserves_remote_error_semantics(monkeypatch) -> No
         "mcp_tool": "search",
         "is_error": True,
     }
-    assert result.content == "Outbound MCP tool failed: permission denied"
+    assert result.text_content == "Outbound MCP tool failed: permission denied"

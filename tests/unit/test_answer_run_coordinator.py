@@ -219,6 +219,21 @@ class _MemoryStore:
             return None
         return self._append(row, "reset", {})
 
+    async def append_tool_event(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        event_type: str,
+        payload: Mapping[str, object],
+    ) -> int | None:
+        row = self.runs[run_id]
+        if not self._owns(row, worker_id, fencing_epoch):
+            return None
+        return self._append(row, event_type, dict(payload))
+
     async def finish_success(
         self,
         *,

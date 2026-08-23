@@ -39,6 +39,7 @@ from dlightrag.agent.session.store import (
     SettleCommit,
     VersionConflict,
 )
+from dlightrag.agent.tool_content import encode_tool_content
 from dlightrag.runtime.progress import (
     StageCommit,
     StageCommitResult,
@@ -49,16 +50,11 @@ from dlightrag.runtime.progress import (
     StageRecord,
 )
 from dlightrag.runtime.settlements import (
-    CommittedSpillUpdate,
     CompleteBlobDescriptor,
-    EvidenceSettlementUpdate,
-    FetchedResourceSettlementUpdate,
-    InventoryPathRecord,
-    M3HostUpdate,
+    EffectHostUpdate,
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
-    WorkspaceInventoryUpdate,
 )
 
 _LEASE_PREDICATE = """
@@ -390,7 +386,7 @@ class PGJournalStore:
         session_id: SessionId,
         expected_version: int,
         intent_id: IntentId,
-        settlement: EffectSettlement[M3HostUpdate],
+        settlement: EffectSettlement[EffectHostUpdate],
         entries: Sequence[SessionEntry],
         projection: ContextProjection | None = None,
         progress: SessionProgressClass = "live",
@@ -420,7 +416,7 @@ class PGJournalStore:
         session_id: SessionId,
         expected_version: int,
         intent_id: IntentId,
-        settlement: EffectSettlement[M3HostUpdate],
+        settlement: EffectSettlement[EffectHostUpdate],
         entries: Sequence[SessionEntry],
         projection: ContextProjection | None,
         progress: SessionProgressClass,
@@ -450,10 +446,6 @@ class PGJournalStore:
         host_update_digest = await self._write_host_update(
             conn, session_id, intent_id, settlement.host_update
         )
-        await self._write_result_workspace_facts(
-            conn, session_id, intent_id, settlement.result.details
-        )
-
         last_sequence = await conn.fetchval(
             "SELECT last_sequence FROM dlightrag_agent_sessions"
             " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
@@ -500,7 +492,7 @@ class PGJournalStore:
             _uuid(intent_id.value),
             settlement.outcome,
             sequences[0],
-            json.dumps(settlement.result.content, ensure_ascii=False),
+            json.dumps(encode_tool_content(settlement.result.parts), ensure_ascii=False),
             host_update_digest,
         )
         await conn.execute(
@@ -586,44 +578,39 @@ class PGJournalStore:
         conn: Any,
         session_id: SessionId,
         intent_id: IntentId,
-        update: M3HostUpdate,
+        update: EffectHostUpdate,
     ) -> str:
-        if isinstance(update, EvidenceSettlementUpdate):
-            for write in update.evidence:
+        for write in update.evidence:
+            await self._write_evidence(conn, write)
+        for resource in update.resources:
+            await self._write_evidence_resource(conn, resource)
+        for fetched in update.fetched:
+            await self._write_complete_blob(conn, fetched.complete_blob)
+            await self._write_fetched_resource(conn, fetched.resource)
+            for write in fetched.evidence:
                 await self._write_evidence(conn, write)
-            for resource in update.resources:
-                await self._write_evidence_resource(conn, resource)
-            for fetched in update.fetched:
-                await self._write_complete_blob(conn, fetched.complete_blob)
-                await self._write_fetched_resource(conn, fetched.resource)
-                for write in fetched.evidence:
-                    await self._write_evidence(conn, write)
-            return _host_update_digest(update)
-        if isinstance(update, FetchedResourceSettlementUpdate):
-            await self._write_complete_blob(conn, update.complete_blob)
-            await self._write_fetched_resource(conn, update.resource)
-            for write in update.evidence:
-                await self._write_evidence(conn, write)
-            return _host_update_digest(update)
-        if isinstance(update, CommittedSpillUpdate):
+
+        if update.committed_outputs:
             from dlightrag.adapters.postgres.workspace import _upsert_spill
             from dlightrag.runtime.workspace import CommittedSpillRecord
 
-            await _upsert_spill(
-                conn,
-                self._owner_id,
-                self._run_id,
-                CommittedSpillRecord(
-                    resource_id=update.resource_id,
-                    content_digest=update.content_digest,
-                    size_bytes=update.size_bytes,
-                    session_id=update.session_id,
-                    intent_id=update.intent_id,
-                ),
-            )
-            return _host_update_digest(update)
-        if isinstance(update, WorkspaceInventoryUpdate):
-            if update.replace_all:
+            for output in update.committed_outputs:
+                await _upsert_spill(
+                    conn,
+                    self._owner_id,
+                    self._run_id,
+                    CommittedSpillRecord(
+                        resource_id=output.resource_id,
+                        content_digest=output.content_digest,
+                        size_bytes=output.size_bytes,
+                        session_id=output.session_id,
+                        intent_id=output.intent_id,
+                    ),
+                )
+
+        inventory = update.workspace_inventory
+        if inventory is not None:
+            if inventory.replace_all:
                 await conn.execute(
                     "DELETE FROM dlightrag_answer_workspace_inventory"
                     " WHERE owner_id = $1 AND run_id = $2",
@@ -631,7 +618,7 @@ class PGJournalStore:
                     self._run_id,
                 )
             else:
-                for path in update.deletes:
+                for path in inventory.deletes:
                     await conn.execute(
                         "DELETE FROM dlightrag_answer_workspace_inventory"
                         " WHERE owner_id = $1 AND run_id = $2 AND relative_path = $3",
@@ -639,7 +626,7 @@ class PGJournalStore:
                         self._run_id,
                         path,
                     )
-            for record in update.upserts:
+            for record in inventory.upserts:
                 await conn.execute(
                     "INSERT INTO dlightrag_answer_workspace_inventory ("
                     " owner_id, run_id, relative_path, entry_type, mode, size_bytes, content_digest)"
@@ -655,56 +642,7 @@ class PGJournalStore:
                     record.size_bytes,
                     record.content_digest,
                 )
-            return _host_update_digest(update)
-        raise ValueError(f"unknown host update variant: {type(update).__name__}")
-
-    async def _write_result_workspace_facts(
-        self,
-        conn: Any,
-        session_id: SessionId,
-        intent_id: IntentId,
-        details: Any,
-    ) -> None:
-        if not isinstance(details, Mapping):
-            return
-        spill = details.get("committed_spill")
-        if isinstance(spill, Mapping):
-            from dlightrag.adapters.postgres.workspace import _upsert_spill
-            from dlightrag.runtime.workspace import CommittedSpillRecord
-
-            await _upsert_spill(
-                conn,
-                self._owner_id,
-                self._run_id,
-                CommittedSpillRecord(
-                    resource_id=str(spill["resource_id"]),
-                    content_digest=str(spill["content_digest"]),
-                    size_bytes=int(spill["size_bytes"]),
-                    session_id=str(session_id),
-                    intent_id=str(intent_id),
-                ),
-            )
-        inventory = details.get("workspace_inventory")
-        if isinstance(inventory, Mapping):
-            update = WorkspaceInventoryUpdate(
-                upserts=tuple(
-                    InventoryPathRecord(
-                        relative_path=str(item["relative_path"]),
-                        entry_type=str(item["entry_type"]),
-                        size_bytes=int(item["size_bytes"]),
-                        mode=int(item["mode"]) if item.get("mode") is not None else None,
-                        content_digest=(
-                            str(item["content_digest"])
-                            if item.get("content_digest") is not None
-                            else None
-                        ),
-                    )
-                    for item in inventory.get("upserts") or ()
-                ),
-                deletes=tuple(str(path) for path in inventory.get("deletes") or ()),
-                replace_all=bool(inventory.get("replace_all")),
-            )
-            await self._write_host_update(conn, session_id, intent_id, update)
+        return _host_update_digest(update)
 
     async def _write_evidence(self, conn: Any, write: OpaqueEvidenceWrite) -> None:
         await conn.execute(
@@ -1076,80 +1014,51 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _host_update_digest(update: M3HostUpdate) -> str:
-    payload: dict[str, Any]
-    if isinstance(update, EvidenceSettlementUpdate):
-        payload = {
-            "kind": "evidence",
-            "evidence": [
-                {
-                    "session_id": w.session_id,
-                    "intent_id": w.intent_id,
-                    "result_ordinal": w.result_ordinal,
-                    "content_digest": w.content_digest,
-                    "locator_digest": w.locator_digest,
-                }
-                for w in update.evidence
-            ],
-            "resources": [
-                {
-                    "resource_id": r.resource_id,
-                    "locator_digest": r.locator_digest,
-                }
-                for r in update.resources
-            ],
-            "fetched": [
-                {
-                    "resource_id": item.resource.resource_id,
-                    "blob_digest": item.resource.blob_digest,
-                    "source_locator_digest": item.resource.source_locator_digest,
-                    "evidence": [
-                        {
-                            "session_id": w.session_id,
-                            "intent_id": w.intent_id,
-                            "result_ordinal": w.result_ordinal,
-                            "content_digest": w.content_digest,
-                            "locator_digest": w.locator_digest,
-                        }
-                        for w in item.evidence
-                    ],
-                }
-                for item in update.fetched
-            ],
-        }
-    elif isinstance(update, FetchedResourceSettlementUpdate):
-        payload = {
-            "kind": "fetched_resource",
-            "resource_id": update.resource.resource_id,
-            "blob_digest": update.resource.blob_digest,
-            "source_locator_digest": update.resource.source_locator_digest,
-            "evidence": [
-                {
-                    "session_id": w.session_id,
-                    "intent_id": w.intent_id,
-                    "result_ordinal": w.result_ordinal,
-                    "content_digest": w.content_digest,
-                    "locator_digest": w.locator_digest,
-                }
-                for w in update.evidence
-            ],
-        }
-    elif isinstance(update, CommittedSpillUpdate):
-        payload = {
-            "kind": "committed_spill",
-            "resource_id": update.resource_id,
-            "content_digest": update.content_digest,
-            "size_bytes": update.size_bytes,
-        }
-    elif isinstance(update, WorkspaceInventoryUpdate):
-        payload = {
-            "kind": "workspace_inventory",
-            "replace_all": update.replace_all,
-            "upserts": [record.relative_path for record in update.upserts],
-            "deletes": list(update.deletes),
-        }
-    else:
-        raise ValueError(f"unknown host update variant: {type(update).__name__}")
+def _host_update_digest(update: EffectHostUpdate) -> str:
+    payload = {
+        "evidence": [
+            {
+                "session_id": write.session_id,
+                "intent_id": write.intent_id,
+                "result_ordinal": write.result_ordinal,
+                "content_digest": write.content_digest,
+                "locator_digest": write.locator_digest,
+            }
+            for write in update.evidence
+        ],
+        "resources": [
+            {
+                "resource_id": resource.resource_id,
+                "locator_digest": resource.locator_digest,
+            }
+            for resource in update.resources
+        ],
+        "fetched": [
+            {
+                "resource_id": item.resource.resource_id,
+                "blob_digest": item.resource.blob_digest,
+                "source_locator_digest": item.resource.source_locator_digest,
+            }
+            for item in update.fetched
+        ],
+        "committed_outputs": [
+            {
+                "resource_id": output.resource_id,
+                "content_digest": output.content_digest,
+                "size_bytes": output.size_bytes,
+            }
+            for output in update.committed_outputs
+        ],
+        "workspace_inventory": (
+            None
+            if update.workspace_inventory is None
+            else {
+                "replace_all": update.workspace_inventory.replace_all,
+                "upserts": [record.relative_path for record in update.workspace_inventory.upserts],
+                "deletes": list(update.workspace_inventory.deletes),
+            }
+        ),
+    }
     return _sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 

@@ -10,8 +10,9 @@ from dlightrag.agent.environment.access import (
 )
 from dlightrag.agent.environment.child import build_child_environment, looks_like_secret_name
 from dlightrag.agent.environment.errors import (
-    TOOL_RESULT_CHAR_LIMIT,
-    TOOL_RESULT_PREVIEW_CHARS,
+    TOOL_RESULT_MAX_BYTES,
+    TOOL_RESULT_MAX_LINES,
+    TOOL_RESULT_PREVIEW_BYTES,
     WORKSPACE_MAX_BYTES,
     WORKSPACE_MAX_ENTRIES,
     FullOutputUnavailable,
@@ -30,11 +31,14 @@ from dlightrag.agent.environment.local import (
     CompletedProcess,
     DirectoryEntry,
     LocalExecutionEnvironment,
+    ProcessChunk,
+    ProcessOutputSink,
 )
 
 __all__ = [
-    "TOOL_RESULT_CHAR_LIMIT",
-    "TOOL_RESULT_PREVIEW_CHARS",
+    "TOOL_RESULT_MAX_BYTES",
+    "TOOL_RESULT_MAX_LINES",
+    "TOOL_RESULT_PREVIEW_BYTES",
     "WORKSPACE_MAX_BYTES",
     "WORKSPACE_MAX_ENTRIES",
     "AccessScheduler",
@@ -49,6 +53,8 @@ __all__ = [
     "LocalExecutionEnvironment",
     "PathAccess",
     "PathRejected",
+    "ProcessChunk",
+    "ProcessOutputSink",
     "SandboxUnavailableError",
     "ToolAccess",
     "TrustExecutionAdapter",

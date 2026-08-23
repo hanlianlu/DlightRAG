@@ -76,8 +76,8 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
     class Args(BaseModel):
         value: str
 
-    async def external(_args: BaseModel) -> ToolResult:
-        return ToolResult(content="unused")
+    async def external(_args: BaseModel, _runtime: object) -> ToolResult:
+        return ToolResult.text("unused")
 
     executor = AnswerExecutor(
         store=MagicMock(),
@@ -567,36 +567,29 @@ async def test_journal_boundaries_apply_ordered_agent_controls() -> None:
 def test_fetched_resource_batches_are_atomic_and_session_scoped() -> None:
     from dlightrag.agent.session.effects import EffectIntent
     from dlightrag.agent.session.ids import IntentId, SessionId
-    from dlightrag.agent.tools.context import (
-        bind_tool_call,
-        bind_tool_execution_scope,
-        reset_tool_call,
-        reset_tool_execution_scope,
+    from dlightrag.agent.tools import ToolEffects
+    from dlightrag.answer.resources.registry import (
+        FetchedResourceBytes,
+        ResourceEffectOwner,
     )
-    from dlightrag.answer.resources.registry import FetchedResourceBytes
-    from dlightrag.runtime.settlements import EvidenceSettlementUpdate
+    from dlightrag.runtime.settlements import EffectHostUpdate
 
     buffer = FetchedResourceBuffer()
     parent = SessionId.new()
     child = SessionId.new()
 
     def append(scope: SessionId, resource_id: str) -> None:
-        scope_token = bind_tool_execution_scope(scope.value)
-        call_token = bind_tool_call("call-1", "read")
-        try:
-            buffer.append(
-                FetchedResourceBytes(
-                    resource_id=resource_id,
-                    ordinal=0,
-                    filename=f"{resource_id}.txt",
-                    mime_type="text/plain",
-                    url=f"https://example.com/{resource_id}",
-                    content=resource_id.encode(),
-                )
-            )
-        finally:
-            reset_tool_call(call_token)
-            reset_tool_execution_scope(scope_token)
+        buffer.append(
+            FetchedResourceBytes(
+                resource_id=resource_id,
+                ordinal=0,
+                filename=f"{resource_id}.txt",
+                mime_type="text/plain",
+                url=f"https://example.com/{resource_id}",
+                content=resource_id.encode(),
+            ),
+            ResourceEffectOwner(execution_scope=scope.value, call_id="call-1"),
+        )
 
     append(parent, "parent-a")
     append(parent, "parent-b")
@@ -620,9 +613,9 @@ def test_fetched_resource_batches_are_atomic_and_session_scoped() -> None:
         run_id="run-1",
     )
 
-    update = boundaries._host_update(intent)
+    update = boundaries._host_update(intent, ToolEffects())
 
-    assert isinstance(update, EvidenceSettlementUpdate)
+    assert isinstance(update, EffectHostUpdate)
     assert len(update.evidence) == 1
     assert [item.resource.resource_id for item in update.fetched] == [
         "parent-a",
@@ -640,7 +633,7 @@ async def test_non_last_spawn_settlement_carries_adopted_evidence() -> None:
     from dlightrag.agent.tools import ToolExecution, ToolResult
     from dlightrag.agent.tools.contracts import ToolObservation
     from dlightrag.ai.messages import ToolCall
-    from dlightrag.runtime.settlements import EvidenceSettlementUpdate
+    from dlightrag.runtime.settlements import EffectHostUpdate
 
     session_id = SessionId.new()
     intent = EffectIntent(
@@ -670,7 +663,7 @@ async def test_non_last_spawn_settlement_carries_adopted_evidence() -> None:
     )
     execution = ToolExecution(
         call=ToolCall(id="spawn-call", name="spawn_agent", arguments={}),
-        result=ToolResult(content="child complete"),
+        result=ToolResult.text("child complete"),
         observation=ToolObservation(
             tool="spawn_agent",
             call_id="spawn-call",
@@ -685,7 +678,7 @@ async def test_non_last_spawn_settlement_carries_adopted_evidence() -> None:
     await boundaries.settle_intent(intent, execution, turn_number=1, is_last=False)
 
     settlement = journal.settle_effect.await_args.kwargs["settlement"]
-    assert isinstance(settlement.host_update, EvidenceSettlementUpdate)
+    assert isinstance(settlement.host_update, EffectHostUpdate)
     assert len(settlement.host_update.evidence) == 1
     assert b"child-1" in settlement.host_update.evidence[0].content
 
@@ -733,7 +726,7 @@ async def test_durable_tool_error_folds_as_error_after_settlement() -> None:
     await boundaries.commit_intents(prepared)
     execution = ToolExecution(
         call=call,
-        result=ToolResult(content="Tool failed"),
+        result=ToolResult.text("Tool failed"),
         observation=ToolObservation(
             tool="broken",
             call_id=call.id,
@@ -769,8 +762,8 @@ async def test_safe_effect_recovery_fits_oversized_observation() -> None:
 
     payload = "x" * 200_000
 
-    async def execute(_args: BaseModel) -> ToolResult:
-        return ToolResult(content=payload)
+    async def execute(_args: BaseModel, _runtime: object) -> ToolResult:
+        return ToolResult.text(payload)
 
     tool = AgentTool("large", "Large safe result.", EmptyArgs, execute)
     journal = InMemoryAgentSessionStore()
@@ -823,8 +816,8 @@ async def test_safe_effect_recovery_fits_oversized_observation() -> None:
         for entry in (await journal.load(session_id)).entries
         if isinstance(entry, EffectResultEntry)
     )
-    assert len(result.result.content) < len(payload)
-    assert estimate_tokens(result.result.content) <= CONTEXT_POLICY.observation_reserve_tokens
+    assert len(result.result.text_content) < len(payload)
+    assert estimate_tokens(result.result.text_content) <= CONTEXT_POLICY.observation_reserve_tokens
 
 
 async def test_durable_child_usage_aggregates_roster_rows() -> None:

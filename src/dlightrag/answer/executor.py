@@ -17,6 +17,7 @@ from dlightrag.agent.environment import (
     ExecutionEnvironment,
     resolve_execution_adapter,
 )
+from dlightrag.agent.events import AgentEvent
 from dlightrag.agent.extensions import TrustedExtensions
 from dlightrag.agent.session.effects import (
     EffectIntent,
@@ -57,13 +58,17 @@ from dlightrag.agent.session.store import (
     SettleCommit,
     VersionConflict,
 )
+from dlightrag.agent.tool_content import ToolContent, ToolTextPart
 from dlightrag.agent.tools import (
     AgentTool,
     ExecutedTurn,
     PreparedToolTurn,
+    ToolEffects,
     ToolExecution,
     ToolPreflight,
-    fit_tool_result_content,
+    ToolResult,
+    ToolRuntime,
+    fit_tool_result,
 )
 from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.ai.messages import AssistantTurn
@@ -97,7 +102,11 @@ from dlightrag.answer.resources.models import (
     ResourceRegistryError,
     TextWindowBudget,
 )
-from dlightrag.answer.resources.registry import FetchedBytesSink, FetchedResourceBytes
+from dlightrag.answer.resources.registry import (
+    FetchedBytesSink,
+    FetchedResourceBytes,
+    ResourceEffectOwner,
+)
 from dlightrag.answer.resources.visual import ResourceInspector
 from dlightrag.answer.router import AnswerModeRouter, RoutingFailedError
 from dlightrag.answer.routing import AnswerRoutingStore, decide_resolved_mode
@@ -143,12 +152,14 @@ from dlightrag.runtime.blob_chunks import blob_digest, plan_blob
 from dlightrag.runtime.progress import RunProgressStore, StageCommit
 from dlightrag.runtime.records import PendingPublication, artifact_digest
 from dlightrag.runtime.settlements import (
+    CommittedSpillUpdate,
     CompleteBlobDescriptor,
-    EvidenceSettlementUpdate,
+    EffectHostUpdate,
     FetchedResourceSettlementUpdate,
-    M3HostUpdate,
+    InventoryPathRecord,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
+    WorkspaceInventoryUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -535,7 +546,7 @@ class AnswerResourceResolver:
 async def _resolve_profile_memory_snapshot(
     *,
     memory: Memory | None,
-    journal: AgentSessionStore[M3HostUpdate],
+    journal: AgentSessionStore[EffectHostUpdate],
     snapshot: Any,
     session_id: SessionId,
     owner_id: str,
@@ -1038,7 +1049,7 @@ class AnswerExecutor:
 
     async def _seed_session(
         self,
-        journal: AgentSessionStore[M3HostUpdate],
+        journal: AgentSessionStore[EffectHostUpdate],
         session_id: SessionId,
         request: AnswerRunInput,
         snapshot: Any,
@@ -1087,7 +1098,7 @@ class AnswerExecutor:
 
     async def _resume_session(
         self,
-        journal: AgentSessionStore[M3HostUpdate],
+        journal: AgentSessionStore[EffectHostUpdate],
         session_id: SessionId,
         snapshot: Any,
     ) -> Any:
@@ -1306,19 +1317,17 @@ class AnswerExecutor:
 
 
 class FetchedResourceBuffer:
-    """Fetched bytes partitioned by durable Session and model tool call."""
+    """Fetched bytes partitioned by explicit Session and model tool call."""
 
     def __init__(self) -> None:
         self._items: dict[tuple[str, str], list[FetchedResourceBytes]] = {}
 
-    def append(self, fetched: FetchedResourceBytes) -> None:
-        from dlightrag.agent.tools.context import (
-            current_tool_call,
-            current_tool_execution_scope,
-        )
-
-        call = current_tool_call()
-        key = (current_tool_execution_scope(), call.call_id if call is not None else "")
+    def append(
+        self,
+        fetched: FetchedResourceBytes,
+        owner: ResourceEffectOwner | None,
+    ) -> None:
+        key = (owner.execution_scope, owner.call_id) if owner is not None else ("", "")
         self._items.setdefault(key, []).append(fetched)
 
     def drain(self, *, scope: str, call_id: str) -> tuple[FetchedResourceBytes, ...]:
@@ -1330,10 +1339,13 @@ class FetchedResourceBuffer:
 
 
 def _buffered_fetched_bytes_sink(buffer: FetchedResourceBuffer) -> FetchedBytesSink:
-    """Buffer fetched bytes until their owning intent settles."""
+    """Buffer fetched bytes until their explicit owning intent settles."""
 
-    async def persist(fetched: FetchedResourceBytes) -> None:
-        buffer.append(fetched)
+    async def persist(
+        fetched: FetchedResourceBytes,
+        owner: ResourceEffectOwner | None,
+    ) -> None:
+        buffer.append(fetched, owner)
 
     return persist
 
@@ -1351,7 +1363,7 @@ class JournalRunBoundaries:
         self,
         *,
         session: RunSession,
-        journal: AgentSessionStore[M3HostUpdate],
+        journal: AgentSessionStore[EffectHostUpdate],
         session_id: SessionId,
         tools_by_name: Mapping[str, AgentTool],
         ledger_state: Callable[[], str],
@@ -1461,58 +1473,61 @@ class JournalRunBoundaries:
                 and tool.input_schema_digest == intent.input_schema_digest
             )
             progress: Literal["live", "prelude"] = "prelude"
+            tool_effects = ToolEffects()
             if intent.replay_policy == "safe" and contract_matches:
                 if tool is None:
                     raise RuntimeError("matched contract lost its tool")
                 try:
-                    from dlightrag.agent.tools.context import (
-                        bind_tool_call,
-                        bind_tool_execution_scope,
-                        reset_tool_call,
-                        reset_tool_execution_scope,
-                    )
-
                     arguments = tool.input_model.model_validate(_json.loads(intent.canonical_input))
-                    scope_token = bind_tool_execution_scope(self.tool_execution_scope)
-                    token = bind_tool_call(
-                        intent.source_call_id or intent.intent_id.value, intent.tool_name
+
+                    async def ignore_update(_result: ToolResult) -> None:
+                        return None
+
+                    runtime = ToolRuntime(
+                        call_id=intent.source_call_id or intent.intent_id.value,
+                        tool_name=intent.tool_name,
+                        intent_id=intent.intent_id,
+                        execution_scope=self.tool_execution_scope,
+                        _update_sink=ignore_update,
                     )
-                    try:
-                        result = await tool.execute(arguments)
-                    finally:
-                        reset_tool_call(token)
-                        reset_tool_execution_scope(scope_token)
+                    result = await tool.execute(arguments, runtime)
                     effect_outcome = "succeeded"
                     result_outcome = "failed" if result.is_error else "succeeded"
-                    content = fit_tool_result_content(
+                    parts = fit_tool_result(
                         result,
                         max_tokens=CONTEXT_POLICY.observation_reserve_tokens,
-                    )
+                    ).parts
                     cached = result.cached
+                    tool_effects = result.effects
                 except Exception as exc:
                     # The safe effect ran and settled, but its provider-visible
                     # result remains an error on every replay.
                     effect_outcome = "succeeded"
                     result_outcome = "failed"
-                    content = f'Tool "{intent.tool_name}" failed: {exc}'
+                    parts = (ToolTextPart(f'Tool "{intent.tool_name}" failed: {exc}'),)
                     cached = False
                 progress = "live"
             elif intent.replay_policy == "safe":
                 effect_outcome = "tool_contract_changed"
                 result_outcome = "tool_contract_changed"
-                content = f'Tool "{intent.tool_name}" contract changed; result discarded.'
+                parts = (
+                    ToolTextPart(f'Tool "{intent.tool_name}" contract changed; result discarded.'),
+                )
                 cached = False
             else:
                 effect_outcome = "interrupted"
                 result_outcome = "interrupted"
-                content = f'Tool "{intent.tool_name}" was interrupted before it settled.'
+                parts = (
+                    ToolTextPart(f'Tool "{intent.tool_name}" was interrupted before it settled.'),
+                )
                 cached = False
             await self._settle_intent_recovery(
                 intent,
                 effect_outcome=effect_outcome,
                 result_outcome=result_outcome,
-                content=content,
+                parts=parts,
                 cached=cached,
+                tool_effects=tool_effects,
                 progress=progress,
             )
 
@@ -1522,8 +1537,9 @@ class JournalRunBoundaries:
         *,
         effect_outcome: str,
         result_outcome: str,
-        content: str,
+        parts: ToolContent,
         cached: bool,
+        tool_effects: ToolEffects,
         progress: Literal["live", "prelude"],
     ) -> None:
         result_entry = EffectResultEntry(
@@ -1535,7 +1551,7 @@ class JournalRunBoundaries:
                 tool_name=intent.tool_name,
                 call_id=intent.source_call_id or "",
                 outcome=result_outcome,  # type: ignore[arg-type]
-                content=content,
+                parts=parts,
                 cached=cached,
             ),
         )
@@ -1546,7 +1562,7 @@ class JournalRunBoundaries:
             settlement=EffectSettlement(
                 outcome=effect_outcome,  # type: ignore[arg-type]
                 result=result_entry.result,
-                host_update=self._host_update(intent),
+                host_update=self._host_update(intent, tool_effects),
             ),
             entries=[result_entry],
             progress=progress,
@@ -1599,6 +1615,33 @@ class JournalRunBoundaries:
 
     async def check_cancelled(self) -> None:
         await self._session.check_cancelled()
+
+    async def publish_agent_event(self, event: AgentEvent) -> None:
+        event_type = {
+            "tool_start": "tool_start",
+            "tool_update": "tool_progress",
+            "tool_end": "tool_end",
+        }.get(event.kind)
+        if event_type is None:
+            return
+        allowed = {
+            "tool_name",
+            "call_id",
+            "source_position",
+            "update_sequence",
+            "outcome",
+            "duration_ms",
+            "elapsed_ms",
+            "output_bytes",
+            "spill_state",
+            "attachment_count",
+        }
+        payload = {
+            key: value
+            for key, value in event.data.items()
+            if key in allowed and isinstance(value, (str, int, float, bool))
+        }
+        await self._session.emit_tool_event(event_type, payload)
 
     async def apply_controls(self) -> bool:
         """Drain ordered run controls into the canonical session journal."""
@@ -1714,12 +1757,12 @@ class JournalRunBoundaries:
         if execution is None:
             effect_outcome: str = "interrupted"
             result_outcome: str = "interrupted"
-            content = f'Tool "{intent.tool_name}" was interrupted before it settled.'
+            parts = (ToolTextPart(f'Tool "{intent.tool_name}" was interrupted before it settled.'),)
             cached = False
         else:
             effect_outcome = "succeeded"
             result_outcome = "failed" if execution.is_error else "succeeded"
-            content = execution.result.content
+            parts = execution.result.parts
             cached = execution.result.cached
         result_entry = EffectResultEntry(
             entry_id=EntryId.new(),
@@ -1730,7 +1773,7 @@ class JournalRunBoundaries:
                 tool_name=intent.tool_name,
                 call_id=intent.source_call_id or "",
                 outcome=result_outcome,  # type: ignore[arg-type]
-                content=content,
+                parts=parts,
                 details=None if execution is None else execution.result.details,
                 cached=cached,
             ),
@@ -1738,7 +1781,10 @@ class JournalRunBoundaries:
         settlement = EffectSettlement(
             outcome=effect_outcome,  # type: ignore[arg-type]
             result=result_entry.result,
-            host_update=self._host_update(intent),
+            host_update=self._host_update(
+                intent,
+                ToolEffects() if execution is None else execution.result.effects,
+            ),
         )
         committed = await self._journal.settle_effect(
             session_id=self._session_id,
@@ -1782,7 +1828,11 @@ class JournalRunBoundaries:
                 is_last=position == len(intents) - 1,
             )
 
-    def _host_update(self, intent: EffectIntent) -> M3HostUpdate:
+    def _host_update(
+        self,
+        intent: EffectIntent,
+        tool_effects: ToolEffects,
+    ) -> EffectHostUpdate:
         evidence: tuple[OpaqueEvidenceWrite, ...] = ()
         ledger_state = self._ledger_state()
         if ledger_state != "{}":
@@ -1826,9 +1876,38 @@ class JournalRunBoundaries:
                     ),
                 )
             )
-        return EvidenceSettlementUpdate(
+        inventory = tool_effects.workspace_inventory
+        return EffectHostUpdate(
             evidence=evidence,
             fetched=tuple(fetched_updates),
+            committed_outputs=tuple(
+                CommittedSpillUpdate(
+                    resource_id=output.resource_id,
+                    content_digest=output.content_digest,
+                    size_bytes=output.size_bytes,
+                    session_id=self._session_id.value,
+                    intent_id=intent.intent_id.value,
+                )
+                for output in tool_effects.committed_outputs
+            ),
+            workspace_inventory=(
+                None
+                if inventory is None
+                else WorkspaceInventoryUpdate(
+                    upserts=tuple(
+                        InventoryPathRecord(
+                            relative_path=record.relative_path,
+                            entry_type=record.entry_type,
+                            size_bytes=record.size_bytes,
+                            mode=record.mode,
+                            content_digest=record.content_digest,
+                        )
+                        for record in inventory.upserts
+                    ),
+                    deletes=inventory.deletes,
+                    replace_all=inventory.replace_all,
+                )
+            ),
         )
 
     async def _handle_settlement(
@@ -1867,9 +1946,13 @@ class JournalRunBoundaries:
                         tool_name=intent.tool_name,
                         call_id=intent.source_call_id or "",
                         outcome="tool_contract_changed",
-                        content=f'Tool "{intent.tool_name}" contract changed; result discarded.',
+                        parts=(
+                            ToolTextPart(
+                                f'Tool "{intent.tool_name}" contract changed; result discarded.'
+                            ),
+                        ),
                     ),
-                    host_update=EvidenceSettlementUpdate(),
+                    host_update=EffectHostUpdate(),
                 ),
                 entries=[
                     EffectResultEntry(
@@ -1881,7 +1964,11 @@ class JournalRunBoundaries:
                             tool_name=intent.tool_name,
                             call_id=intent.source_call_id or "",
                             outcome="tool_contract_changed",
-                            content=f'Tool "{intent.tool_name}" contract changed; result discarded.',
+                            parts=(
+                                ToolTextPart(
+                                    f'Tool "{intent.tool_name}" contract changed; result discarded.'
+                                ),
+                            ),
                         ),
                     )
                 ],
@@ -1908,7 +1995,7 @@ class JournalRunBoundaries:
 def _bound_child_runner(
     *,
     orchestrator: AnswerOrchestrator,
-    journal: AgentSessionStore[M3HostUpdate],
+    journal: AgentSessionStore[EffectHostUpdate],
     session: RunSession,
     fetched_buffer: FetchedResourceBuffer,
     parent_session_id: SessionId,
@@ -1933,7 +2020,7 @@ def _bound_child_runner(
 async def run_child_session(
     *,
     orchestrator: AnswerOrchestrator,
-    journal: AgentSessionStore[M3HostUpdate],
+    journal: AgentSessionStore[EffectHostUpdate],
     session: RunSession,
     fetched_buffer: FetchedResourceBuffer,
     child_id: SessionId,
@@ -2013,7 +2100,7 @@ async def run_child_session(
 
 
 async def _seed_child_session(
-    journal: AgentSessionStore[M3HostUpdate],
+    journal: AgentSessionStore[EffectHostUpdate],
     session_id: SessionId,
     *,
     objective: str,
@@ -2072,7 +2159,7 @@ async def _seed_child_session(
 
 
 async def _append_child_terminal(
-    journal: AgentSessionStore[M3HostUpdate],
+    journal: AgentSessionStore[EffectHostUpdate],
     session_id: SessionId,
     *,
     version: int,

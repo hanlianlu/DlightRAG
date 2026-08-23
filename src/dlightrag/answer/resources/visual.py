@@ -23,7 +23,7 @@ import pypdfium2 as pdfium
 
 from dlightrag.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.answer.resources.models import ResourceNotFoundError, ResourceRegistryError
-from dlightrag.answer.resources.registry import ResourceRegistry
+from dlightrag.answer.resources.registry import ResourceEffectOwner, ResourceRegistry
 
 type VLMFunc = Callable[..., Awaitable[Any]]
 
@@ -89,6 +89,7 @@ class ResourceInspector:
         *,
         locator: str | None = None,
         cursor: str | None = None,
+        effect_owner: ResourceEffectOwner | None = None,
     ) -> ResourceInspectionResult:
         focus = (focus or "").strip()
         if not focus:
@@ -98,10 +99,18 @@ class ResourceInspector:
         if handle is not None and cursor is not None:
             raise ResourceInspectionError("locator and cursor are mutually exclusive")
         if handle and handle.startswith("vis-"):
-            return await self._inspect_visual(resource_id, focus, handle)
+            return await self._inspect_visual(
+                resource_id,
+                focus,
+                handle,
+                effect_owner=effect_owner,
+            )
         if handle is not None and _parse_page(handle) is None:
             raise ResourceInspectionError("locator must be a PDF page number or visual handle")
-        target = await self._registry.inspection_target(resource_id)
+        target = await self._registry.inspection_target(
+            resource_id,
+            effect_owner=effect_owner,
+        )
         if target.kind == "image":
             if handle is not None or cursor is not None:
                 raise ResourceInspectionError(
@@ -131,10 +140,19 @@ class ResourceInspector:
         return ResourceInspectionResult(resource_id, InspectionLocator(kind="image"), text)
 
     async def _inspect_visual(
-        self, resource_id: str, focus: str, handle_id: str
+        self,
+        resource_id: str,
+        focus: str,
+        handle_id: str,
+        *,
+        effect_owner: ResourceEffectOwner | None,
     ) -> ResourceInspectionResult:
         try:
-            asset = await self._registry.visual_asset(resource_id, handle_id)
+            asset = await self._registry.visual_asset(
+                resource_id,
+                handle_id,
+                effect_owner=effect_owner,
+            )
         except ResourceNotFoundError as exc:
             raise ResourceInspectionError(str(exc)) from exc
         budget = self._image_policy.new_budget()

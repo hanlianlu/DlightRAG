@@ -9,7 +9,13 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from dlightrag.agent.tools import AgentTool, ToolResult
+from dlightrag.agent.tools import (
+    AgentTool,
+    EvidenceSourceFact,
+    ToolEffects,
+    ToolResult,
+    ToolRuntime,
+)
 from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.ai.messages import AssistantTurn, ToolCall
 from dlightrag.ai.telemetry import NOOP_TELEMETRY
@@ -29,6 +35,7 @@ from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import SearchInput, compose_research_tools
 from dlightrag.answer.tools.web import WebSearchHit, WebSearchResult
 from dlightrag.rag.retrieval import RetrievalResult
+from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
@@ -197,16 +204,26 @@ def _fake_read_tool(
     calls: list[str] | None = None,
     evidence_source: dict[str, str] | None = None,
 ) -> AgentTool:
-    async def execute(raw: BaseModel) -> ToolResult:
+    async def execute(raw: BaseModel, _runtime: object) -> ToolResult:
         args = (
             raw if isinstance(raw, _ReadResourceInput) else _ReadResourceInput.model_validate(raw)
         )
         if calls is not None:
             calls.append(args.resource_id)
-        details: dict[str, Any] = {"resource_id": args.resource_id}
-        if evidence_source is not None:
-            details.update(evidence_source)
-        return ToolResult(content=content, details=details)
+        source = evidence_source or {}
+        return ToolResult.text(
+            content,
+            effects=ToolEffects(
+                evidence_sources=(
+                    EvidenceSourceFact(
+                        resource_id=args.resource_id,
+                        source_type=source.get("source_type", "web_attachment"),
+                        source_uri=source.get("source_uri", args.resource_id),
+                        title=source.get("title", args.resource_id),
+                    ),
+                )
+            ),
+        )
 
     return AgentTool("read", "Read a registered resource.", _ReadResourceInput, execute)
 
@@ -395,11 +412,11 @@ async def test_provider_overflow_compacts_then_retries_the_same_turn_once() -> N
             session_id=session_id,
             timestamp=now,
             intent_id=IntentId.new(),
-            result=ToolResultEntry(
+            result=ToolResultEntry.text(
                 tool_name="search_knowledge_base",
                 call_id="c1",
                 outcome="succeeded",
-                content="found",
+                text="found",
             ),
         ),
     ]
@@ -1007,15 +1024,24 @@ async def test_production_resource_reader_admits_citable_evidence() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()
 
-    async def read_resource(_resource_id: str, _cursor: str | None) -> ToolResult:
-        return ToolResult(
-            content="bounded attachment text",
-            details={
-                "resource_id": "attachment-1",
-                "source_type": "web_attachment",
-                "source_uri": "attachment-1",
-                "title": "notes.txt",
-            },
+    async def read_resource(
+        _resource_id: str,
+        _focus: str | None,
+        _cursor: str | None,
+        _runtime: ToolRuntime,
+    ) -> ToolResult:
+        return ToolResult.text(
+            "bounded attachment text",
+            effects=ToolEffects(
+                evidence_sources=(
+                    EvidenceSourceFact(
+                        resource_id="attachment-1",
+                        source_type="web_attachment",
+                        source_uri="attachment-1",
+                        title="notes.txt",
+                    ),
+                )
+            ),
         )
 
     evidence = EvidenceLedger()
@@ -1030,9 +1056,11 @@ async def test_production_resource_reader_admits_citable_evidence() -> None:
     )
     read = next(tool for tool in tools if tool.name == "read")
 
-    result = await read.execute(read.input_model(resource_id="attachment-1"))
+    result = await read.execute(
+        read.input_model(resource_id="attachment-1"), tool_runtime(tool_name="read")
+    )
 
-    assert result.content == "bounded attachment text"
+    assert result.text_content == "bounded attachment text"
     assert [row["content"] for row in evidence.contexts["chunks"]] == ["bounded attachment text"]
     assert evidence.citation_handles() == ["[1] notes.txt"]
 

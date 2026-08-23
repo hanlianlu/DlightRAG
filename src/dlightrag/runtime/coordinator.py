@@ -197,6 +197,24 @@ class RunSession:
             await self.flush_tokens()
             await self.check_cancelled()
 
+    async def emit_tool_event(
+        self,
+        event_type: str,
+        payload: Mapping[str, object],
+    ) -> None:
+        """Commit one metadata-only tool lifecycle event for SSE subscribers."""
+        await self.flush_tokens()
+        await self._fenced(
+            self._store.append_tool_event(
+                owner_id=self.owner_id,
+                run_id=self.run_id,
+                worker_id=self.worker_id,
+                fencing_epoch=self.fencing_epoch,
+                event_type=event_type,
+                payload=payload,
+            )
+        )
+
     async def flush_tokens(self) -> None:
         """Commit any buffered text; a reset clears the previous draft first."""
         if not self._pending_tokens:

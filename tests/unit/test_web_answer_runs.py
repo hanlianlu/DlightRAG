@@ -667,6 +667,32 @@ async def test_every_frame_carries_its_durable_sequence_as_the_sse_id() -> None:
     ]
 
 
+async def test_tool_progress_frame_projects_metadata_without_raw_output() -> None:
+    (frame,) = await _frames(
+        [
+            _event(
+                1,
+                "tool_progress",
+                {
+                    "tool_name": "bash",
+                    "elapsed_ms": 125.0,
+                    "output_bytes": 4096,
+                    "spill_state": "staging",
+                    "stdout": "secret output",
+                    "stderr": "secret error",
+                },
+            )
+        ]
+    )
+
+    assert json.loads(frame.split("data: ", 1)[1].strip()) == {
+        "tool_name": "bash",
+        "elapsed_ms": 125.0,
+        "output_bytes": 4096,
+        "spill_state": "staging",
+    }
+
+
 async def test_a_token_frame_carries_only_the_text() -> None:
     (frame,) = await _frames([_event(1, "token", {"text": "Rev"})])
 

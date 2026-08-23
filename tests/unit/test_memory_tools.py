@@ -19,6 +19,7 @@ from dlightrag.answer.tools.memory import (
     recall_memory_tool,
     remember_tool,
 )
+from tests.tool_helpers import tool_runtime
 
 
 async def _retrieve(_query: str) -> object:
@@ -60,8 +61,11 @@ async def test_forget_miss_is_idempotent() -> None:
         memory=Memory(store),
     )
     tool = forget_tool(host=host)
-    result = await tool.execute(ForgetInput(memory_id="33333333-3333-3333-3333-333333333333"))
-    assert result.content == "Forgotten."
+    result = await tool.execute(
+        ForgetInput(memory_id="33333333-3333-3333-3333-333333333333"),
+        tool_runtime(),
+    )
+    assert result.text_content == "Forgotten."
 
 
 async def test_remember_then_forget() -> None:
@@ -74,12 +78,15 @@ async def test_remember_then_forget() -> None:
         memory=Memory(store),
     )
     remembered = await remember_tool(host=host).execute(
-        RememberInput(kind="preference", body="No email.", confidence=0.9)
+        RememberInput(kind="preference", body="No email.", confidence=0.9),
+        tool_runtime(),
     )
     assert remembered.details is not None
     memory_id = str(remembered.details["memory_id"])
-    forgotten = await forget_tool(host=host).execute(ForgetInput(memory_id=memory_id))
-    assert forgotten.content == "Forgotten."
+    forgotten = await forget_tool(host=host).execute(
+        ForgetInput(memory_id=memory_id), tool_runtime()
+    )
+    assert forgotten.text_content == "Forgotten."
     tombstone = await store.get(owner_id="o", memory_id=memory_id)
     assert tombstone is not None
     assert tombstone.status == "forgotten"
@@ -107,13 +114,15 @@ async def test_recall_tool_returns_relevant_records() -> None:
         provenance=MemoryProvenance(run_id="r", session_id="s"),
     )
 
-    result = await recall_memory_tool(host=host).execute(RecallInput(query="email"))
+    result = await recall_memory_tool(host=host).execute(RecallInput(query="email"), tool_runtime())
 
-    assert "No email." in result.content
-    assert "Relevant memories" in result.content
+    assert "No email." in result.text_content
+    assert "Relevant memories" in result.text_content
 
-    miss = await recall_memory_tool(host=host).execute(RecallInput(query="zzz-nothing"))
-    assert miss.content == "No relevant memories."
+    miss = await recall_memory_tool(host=host).execute(
+        RecallInput(query="zzz-nothing"), tool_runtime()
+    )
+    assert miss.text_content == "No relevant memories."
 
 
 async def test_disabled_memory_rejects_model_tools() -> None:
@@ -131,17 +140,21 @@ async def test_disabled_memory_rejects_model_tools() -> None:
     )
 
     remembered = await remember_tool(host=host).execute(
-        RememberInput(kind="preference", body="No email.", confidence=0.9)
+        RememberInput(kind="preference", body="No email.", confidence=0.9),
+        tool_runtime(),
     )
-    assert "disabled" in remembered.content
+    assert "disabled" in remembered.text_content
 
     forgotten = await forget_tool(host=host).execute(
-        ForgetInput(memory_id="33333333-3333-3333-3333-333333333333")
+        ForgetInput(memory_id="33333333-3333-3333-3333-333333333333"),
+        tool_runtime(),
     )
-    assert "disabled" in forgotten.content
+    assert "disabled" in forgotten.text_content
 
-    recalled = await recall_memory_tool(host=host).execute(RecallInput(query="anything"))
-    assert "disabled" in recalled.content
+    recalled = await recall_memory_tool(host=host).execute(
+        RecallInput(query="anything"), tool_runtime()
+    )
+    assert "disabled" in recalled.text_content
 
 
 async def test_supersede_rejects_other_owner() -> None:
