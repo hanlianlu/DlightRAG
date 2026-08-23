@@ -297,11 +297,20 @@ mjx-container {
 /* Shared by every confirm dialog so a new one cannot ship without hover. */
 
 .ui-dialog-checkbox {
-    align-items: baseline;
+    align-items: center;
     display: flex;
     font-size: var(--font-size-caption);
     gap: var(--space-tight);
     margin-block: var(--space-component);
+}
+
+.ui-dialog-checkbox input[type='checkbox'] {
+    accent-color: var(--color-accent-action);
+    cursor: pointer;
+    flex: 0 0 auto;
+    height: var(--size-icon-sm);
+    margin: 0;
+    width: var(--size-icon-sm);
 }
 
 .ui-dialog-actions {
