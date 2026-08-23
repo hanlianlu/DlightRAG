@@ -670,6 +670,108 @@ body.conversation-sidebar-open .panel-split {
     padding: var(--space-related) var(--space-section);
 }
 
+/* === Settings Dialog === */
+
+.settings-dialog {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-dialog);
+    box-shadow: var(--shadow-overlay);
+    color: var(--color-text-secondary);
+    max-height: min(640px, calc(100vh - 64px));
+    overflow-y: auto;
+    padding: var(--space-section);
+    width: min(460px, calc(100vw - 32px));
+}
+
+.settings-dialog::backdrop {
+    background: var(--color-scrim-strong);
+}
+
+.settings-dialog h2 {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-subhead);
+    font-weight: 600;
+    margin-bottom: var(--space-section);
+}
+
+.settings-section {
+    border-top: 1px solid var(--color-border-subtle);
+    padding-block: var(--space-section);
+}
+
+.settings-section:first-of-type {
+    border-top: 0;
+    padding-top: 0;
+}
+
+.settings-section h3 {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-body);
+    font-weight: 600;
+    margin-bottom: var(--space-component);
+}
+
+.settings-section p {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
+    line-height: 1.5;
+    margin-block: var(--space-tight);
+}
+
+.settings-theme-row {
+    display: flex;
+    gap: var(--space-tight);
+}
+
+.settings-theme-option {
+    background: transparent;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-control);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    flex: 1;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    padding: var(--space-tight) var(--space-component);
+    transition: background 150ms, border-color 150ms, color 150ms;
+}
+
+.settings-theme-option[aria-pressed='true'] {
+    background: var(--color-accent-surface);
+    border-color: var(--color-accent-border);
+    color: var(--color-text-primary);
+    font-weight: 600;
+}
+
+.settings-row-actions {
+    display: flex;
+    gap: var(--space-tight);
+    margin-top: var(--space-component);
+}
+
+.settings-secondary-danger {
+    background: transparent;
+    border: 1px solid var(--color-danger-bg);
+    border-radius: var(--radius-control);
+    color: var(--color-danger-text);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    padding: var(--space-tight) var(--space-component);
+    transition: background 150ms, color 150ms;
+}
+
+.settings-secondary-danger:hover:not(:disabled) {
+    background: var(--color-danger-bg);
+    color: var(--color-on-danger);
+}
+
+.settings-danger .ui-dialog-actions {
+    margin-top: var(--space-component);
+}
+
 /* === Workspace Dialog === */
 
 .workspace-dialog {

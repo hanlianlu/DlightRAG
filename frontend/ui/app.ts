@@ -117,14 +117,14 @@ export class DlApp extends LightElement {
             </button>
           </div>
           <conversation-list id="conversation-list" role="list" aria-live="polite"></conversation-list>
-          <button id="delete-all-conversations-btn" type="button"
-                  aria-label="Delete all conversations">
-            <span class="conversation-retention-note">Conversation turns stay until run retention (default 365 days) reclaims them.</span>
-            <span class="conversation-delete-all-label" aria-hidden="true">Delete all conversations</span>
-          </button>
-          <button id="memory-settings-btn" type="button"
-                  aria-label="Memory settings" aria-controls="memory-settings-dialog">
-            <span class="sidebar-action-label" aria-hidden="true">Memory settings</span>
+          <button id="settings-btn" type="button"
+                  aria-label="Settings" aria-controls="settings-dialog">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            <span class="sidebar-action-label">Settings</span>
           </button>
         </nav>
         <div id="conversation-sidebar-backdrop" hidden></div>
@@ -340,29 +340,47 @@ export class DlApp extends LightElement {
         <form method="dialog">
           <h2 id="delete-all-conversations-title">Delete all conversations?</h2>
           <p id="delete-all-conversations-draft-warning" hidden>Draft and attachments will also be deleted.</p>
-          <label class="ui-dialog-checkbox">
-            <input type="checkbox" id="delete-all-also-clear-memory" />
-            Also clear Profile memory (remembered preferences and facts)
-          </label>
+          <p class="settings-note">Profile memory is cleared only if you checked that option in Settings.</p>
           <div class="ui-dialog-actions">
             <button type="submit" value="cancel">Cancel</button>
             <button type="submit" value="delete-all" class="ui-dialog-danger">Delete all</button>
           </div>
         </form>
       </dialog>
-      <dialog id="memory-settings-dialog" aria-labelledby="memory-settings-title">
-        <form method="dialog">
-          <h2 id="memory-settings-title">Cross-conversation memory</h2>
-          <label class="ui-dialog-checkbox">
-            <input type="checkbox" id="memory-enabled-toggle" />
-            Use remembered preferences and facts in answers
-          </label>
-          <p id="memory-active-count" aria-live="polite"></p>
-          <div class="ui-dialog-actions">
-            <button type="submit" value="cancel">Cancel</button>
-            <button type="submit" value="clear" class="ui-dialog-danger">Clear memory</button>
-            <button type="submit" value="save">Save</button>
-          </div>
+      <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+        <form id="settings-form" method="dialog">
+          <h2 id="settings-title">Settings</h2>
+          <section class="settings-section">
+            <h3 id="settings-appearance">Appearance</h3>
+            <div id="settings-theme-row" role="group" aria-labelledby="settings-appearance">
+              <button type="button" data-theme-choice="system" class="settings-theme-option">System</button>
+              <button type="button" data-theme-choice="light" class="settings-theme-option">Light</button>
+              <button type="button" data-theme-choice="dark" class="settings-theme-option">Dark</button>
+            </div>
+          </section>
+          <section class="settings-section">
+            <h3 id="settings-memory">Cross-conversation memory</h3>
+            <label class="ui-dialog-checkbox">
+              <input type="checkbox" id="memory-enabled-toggle" />
+              Use remembered preferences and facts in answers
+            </label>
+            <p id="memory-active-count" aria-live="polite"></p>
+            <div class="settings-row-actions">
+              <button type="button" id="memory-clear-btn" class="settings-secondary-danger">Clear memory</button>
+            </div>
+          </section>
+          <section class="settings-section settings-danger">
+            <h3 id="settings-data">Data</h3>
+            <p class="settings-note">Conversation turns stay until run retention (default 365 days) reclaims them.</p>
+            <label class="ui-dialog-checkbox" id="delete-all-memory-row">
+              <input type="checkbox" id="delete-all-also-clear-memory" />
+              Also clear Profile memory (remembered preferences and facts)
+            </label>
+            <div class="ui-dialog-actions">
+              <button type="submit" value="close-settings">Done</button>
+              <button type="submit" value="delete-all" class="ui-dialog-danger">Delete all conversations</button>
+            </div>
+          </section>
         </form>
       </dialog>
       <dialog id="discard-draft-dialog" aria-labelledby="discard-draft-title">

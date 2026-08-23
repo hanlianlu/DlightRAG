@@ -416,9 +416,10 @@ async function requestDelete(conversationId: string): Promise<void> {
     await restoreStableFocus(resolveFinalFocus);
 }
 
-async function requestDeleteAll(): Promise<void> {
+/** Delete every conversation after the shared confirmation (Settings entry point). */
+export async function requestDeleteAll(): Promise<void> {
     if (pendingLifecycleAction || lifecycleBlocked()) return;
-    const trigger = resolveDeleteAllButton;
+    const trigger = resolveSurvivingConversation;
     const discardsDraft = hasUnsavedDraft();
     const dialog = document.getElementById(
         'delete-all-conversations-dialog',
@@ -469,9 +470,6 @@ export function setupConversations(): void {
     document.getElementById('chat-sidebar')?.classList.add(conversationStyles.root);
     document.getElementById('new-conversation-btn')?.addEventListener('click', function() {
         void requestNewConversation();
-    });
-    resolveDeleteAllButton()?.addEventListener('click', function() {
-        void requestDeleteAll();
     });
     document.getElementById('conversation-sidebar-toggle')?.addEventListener('click', toggleSidebar);
     document.getElementById('conversation-sidebar-open')?.addEventListener('click', function(event) {

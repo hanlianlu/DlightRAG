@@ -235,65 +235,34 @@
     height: calc(var(--size-button) + var(--space-tight));
 }
 
-:global(#delete-all-conversations-btn),
-:global(#memory-settings-btn) {
+:global(#settings-btn) {
     align-items: center;
     background: transparent;
     border: 0;
     color: var(--color-text-dim);
     cursor: pointer;
-    display: grid;
+    display: flex;
     flex: 0 0 auto;
     font: inherit;
     font-size: var(--font-size-caption);
+    gap: var(--space-tight);
     line-height: var(--line-height-control);
     padding: var(--space-component) var(--space-related) var(--space-related);
     text-align: left;
+    width: 100%;
 }
 
-:global(#delete-all-conversations-btn > span),
-:global(#memory-settings-btn > span) {
-    grid-area: 1 / 1;
-    transition: color 140ms, opacity 140ms, transform 140ms;
+:global(#settings-btn:hover),
+:global(#settings-btn:focus-visible) {
+    color: var(--color-text);
 }
 
-:global(.conversation-retention-note) {
-    opacity: 1;
-}
-
-:global(.conversation-delete-all-label) {
-    color: var(--color-danger);
-    font-weight: 600;
-    opacity: 0;
-    transform: translateY(var(--space-inline));
-}
-
-:global(.sidebar-action-label) {
+:global(#settings-btn .sidebar-action-label) {
     color: var(--color-text);
     font-weight: 600;
-    opacity: 0;
-    transform: translateY(var(--space-inline));
 }
 
-:global(#memory-settings-btn:hover .sidebar-action-label),
-:global(#memory-settings-btn:focus-visible .sidebar-action-label) {
-    opacity: 1;
-    transform: translateY(0);
-}
-
-:global(#delete-all-conversations-btn:hover .conversation-retention-note),
-:global(#delete-all-conversations-btn:focus-visible .conversation-retention-note) {
-    opacity: 0;
-    transform: translateY(calc(-1 * var(--space-inline)));
-}
-
-:global(#delete-all-conversations-btn:hover .conversation-delete-all-label),
-:global(#delete-all-conversations-btn:focus-visible .conversation-delete-all-label) {
-    opacity: 1;
-    transform: translateY(0);
-}
-
-:global(#delete-all-conversations-btn:disabled) {
+:global(#settings-btn:disabled) {
     cursor: not-allowed;
     opacity: 0.46;
 }
@@ -415,9 +384,5 @@
 
     :global(.conversation-skeleton) {
         animation: none;
-    }
-
-    :global(#delete-all-conversations-btn > span) {
-        transition: none;
     }
 }

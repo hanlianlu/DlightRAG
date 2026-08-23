@@ -3,6 +3,7 @@
 import {
     parseThemePreference,
     resolveColorMode,
+    THEME_CHANGE_EVENT,
     THEME_STORAGE_KEY,
     type ThemePreference,
 } from '../lib/theme.ts';
@@ -219,6 +220,11 @@ export function setupTheme(): void {
         item.addEventListener('click', () => {
             selectTheme(parseThemePreference(item.dataset.themeValue || null));
         });
+    });
+
+    // Settings surfaces apply the same preference; adopt it in this menu too.
+    window.addEventListener(THEME_CHANGE_EVENT, (event: Event) => {
+        applyPreference(parseThemePreference((event as CustomEvent).detail ?? null), false);
     });
 
     menu.addEventListener('keydown', (event) => {
