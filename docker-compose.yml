@@ -2,12 +2,10 @@
 # Credentials come from .env (not tracked in git).
 
 x-common-env: &common-env
-  DLIGHTRAG_STORAGE__POSTGRES__HOST: ${DLIGHTRAG_STORAGE__POSTGRES__HOST:-postgres}
-  DLIGHTRAG_STORAGE__POSTGRES__PORT: "${DLIGHTRAG_STORAGE__POSTGRES__PORT:-5432}"
-  DLIGHTRAG_STORAGE__POSTGRES__DATABASE: ${DLIGHTRAG_STORAGE__POSTGRES__DATABASE:-dlightrag}
-  DLIGHTRAG_STORAGE__POSTGRES__USER: ${DLIGHTRAG_STORAGE__POSTGRES__USER:-dlightrag}
-  DLIGHTRAG_STORAGE__POSTGRES__PASSWORD: ${DLIGHTRAG_STORAGE__POSTGRES__PASSWORD:-dlightrag}
-  DLIGHTRAG_DEPLOYMENT__WORKSPACE: ${DLIGHTRAG_DEPLOYMENT__WORKSPACE:-default}
+  # Container-specific wiring only: the service host differs from local runs,
+  # and the working directories live inside mounted volumes. Everything else
+  # comes from the mounted config.yaml or .env — no duplicated defaults here.
+  DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
   DLIGHTRAG_DEPLOYMENT__WORKING_DIR: /app/dlightrag_storage
   DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT: /app/dlightrag_agent_workspaces
 x-app-image: &app-image dlightrag:local
@@ -23,12 +21,11 @@ services:
       - "127.0.0.1:8100:8100"
     environment:
       <<: *common-env
-      DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
-      DLIGHTRAG_INTERFACES__API__PORT: "8100"
       # The container binds 0.0.0.0, but the port above is published to
       # 127.0.0.1 only, so no-auth is acceptable for local dev. Set
       # DLIGHTRAG_ACCESS__AUTH_MODE=simple + DLIGHTRAG_ACCESS__API_TOKEN (and drop this
       # override) before publishing the port on a non-loopback address.
+      DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
       DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
     env_file: .env
     extra_hosts:
@@ -89,7 +86,6 @@ services:
     environment:
       # PostgreSQL — same instance as DlightRAG (read-only, no conflict)
       POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
       POSTGRES_USER: ${DLIGHTRAG_STORAGE__POSTGRES__USER:-dlightrag}
       POSTGRES_PASSWORD: ${DLIGHTRAG_STORAGE__POSTGRES__PASSWORD:-dlightrag}
       POSTGRES_DATABASE: ${DLIGHTRAG_STORAGE__POSTGRES__DATABASE:-dlightrag}
