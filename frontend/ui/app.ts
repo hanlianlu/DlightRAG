@@ -324,7 +324,7 @@ export class DlApp extends LightElement {
 
   #dialogs(): TemplateResult {
     return html`
-      <dialog id="delete-conversation-dialog" aria-labelledby="delete-conversation-title"
+      <dialog id="delete-conversation-dialog" class="confirm-dialog" aria-labelledby="delete-conversation-title"
               aria-describedby="delete-conversation-message">
         <form method="dialog">
           <h2 id="delete-conversation-title">Delete conversation</h2>
@@ -336,7 +336,7 @@ export class DlApp extends LightElement {
           </div>
         </form>
       </dialog>
-      <dialog id="delete-all-conversations-dialog" aria-labelledby="delete-all-conversations-title">
+      <dialog id="delete-all-conversations-dialog" class="confirm-dialog" aria-labelledby="delete-all-conversations-title">
         <form method="dialog">
           <h2 id="delete-all-conversations-title">Delete all conversations?</h2>
           <p id="delete-all-conversations-draft-warning" hidden>Draft and attachments will also be deleted.</p>
@@ -380,7 +380,7 @@ export class DlApp extends LightElement {
           </div>
         </form>
       </dialog>
-      <dialog id="clear-memory-dialog" aria-labelledby="clear-memory-title">
+      <dialog id="clear-memory-dialog" class="confirm-dialog" aria-labelledby="clear-memory-title">
         <form method="dialog">
           <h2 id="clear-memory-title">Clear Profile memory?</h2>
           <p>Remembered preferences and facts will be forgotten. Conversations are not affected.</p>
