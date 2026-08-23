@@ -303,7 +303,7 @@ function renderCurrentConversationView(): void {
         const lineage = conversationStore.conversations.find(
             (summary) => summary.conversation_id === history.conversation.conversation_id,
         )?.forked_from_title;
-        if (lineage) renderConversationLineage(`Forked from “${lineage}”`);
+        if (lineage) renderConversationLineage(`Forked from ${lineage}`);
         if (pending) {
             void resumePendingTurn(
                 pending.turn,

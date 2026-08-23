@@ -133,7 +133,10 @@
   color: var(--color-text-muted);
   font-size: var(--font-size-caption);
   margin-bottom: var(--space-component);
+  overflow: hidden;
   text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .childAgentChip {
