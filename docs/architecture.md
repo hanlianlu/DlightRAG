@@ -8,33 +8,42 @@ in [domain-language.md](domain-language.md); interface contracts live in
 [retrieval-answer.md](retrieval-answer.md); PostgreSQL deployment details live
 in [postgresql.md](postgresql.md).
 
+## System Context
+
 <p align="center">
-  <img src="architecture.svg" alt="DlightRAG Architecture" width="1080" />
+  <img src="architecture.svg" alt="DlightRAG system context showing callers, the service boundary, external integrations, PostgreSQL, and corpus artifacts" width="1080" />
 </p>
 
-The figure keeps three views separate: compile-time package imports, runtime
-call/provider flow, and persistence adapter wiring. Solid slate lines are
-runtime calls, dashed open lines are dependencies or port implementation,
-dotted magenta lines are AI-provider admission, and `↻` marks the three
-independent concurrency owners.
+This view answers only who uses DlightRAG and which external systems it reaches.
+LightRAG, the Agent loop, and provider adapters are in-process implementation;
+they are deliberately absent here. Optional integrations have dashed borders.
+
+The page uses four independent architectural viewpoints. An arrow keeps exactly
+one meaning inside each figure:
+
+| View | Question | Arrow meaning |
+|---|---|---|
+| System context | Who uses the system and what surrounds it? | System interaction |
+| Runtime ownership | Which in-process module owns each behavior? | Primary runtime invocation |
+| PostgreSQL topology | Where do processes and state live? | Cross-runtime or storage connection |
+| Code layering | Which module may import which? | Allowed import direction |
+
+Fast/Research branching, ingestion, retrieval, and run recovery are dynamic
+flows. They stay in their owning sections rather than being mixed into a static
+architecture overview.
 
 ## Runtime Ownership
 
-```text
-Clients
-  -> REST / Web / MCP / SDK adapters
-  -> Application
-       eager composition and lifecycle
-       -> AnswerService -> dlightrag.runtime RunCoordinator
-            neutral lifecycle records, store port, leases, events, journal
-            -> AnswerExecutor -> PGAnswerRunStore adapter
-       -> RetrievalService -> WorkspacePool -> WorkspaceRag
-       -> CorpusAdmin -> WorkspacePool -> WorkspaceRag
-  -> LightRAG main
-       parser routing, staged ingest, chunks, doc status, KG, vectors
-  -> DlightRAG PostgreSQL stores
-       metadata index, BM25 indexes, workspace/job/Web conversation metadata
-```
+<p align="center">
+  <img src="architecture-runtime.svg" alt="DlightRAG runtime ownership from inbound adapters through application services to Runtime, Answer, RAG, Memory, Agent, and AI modules" width="1180" />
+</p>
+
+`Application` is the eager composition and lifecycle root, not a request stage.
+Inbound adapters call typed application services. Those services invoke the
+small owner interfaces of Runtime, Answer, RAG, and Memory. Agent and RAG both
+use the provider-neutral AI module without depending on each other. Persistence
+is omitted from this view and shown under
+[PostgreSQL Topology](#postgresql-topology).
 
 LightRAG remains the core RAG engine. It owns parser routing, staged ingest,
 document chunks, document status, vector storage, and the knowledge graph.
@@ -291,6 +300,14 @@ filtering, reranking, citation, and multimodal-answer behavior.
 
 ## PostgreSQL Topology
 
+<p align="center">
+  <img src="architecture-deployment.svg" alt="DlightRAG deployment showing writer and reader process roles sharing one PostgreSQL primary and corpus artifact directory" width="1080" />
+</p>
+
+This deployment view shows process and storage connections only. Logical store
+ownership is separated inside PostgreSQL even though the current deployment
+uses one primary endpoint.
+
 DlightRAG uses one PostgreSQL endpoint per service process. A writer process (the
 default) serves REST, Web, MCP, and SDK operations and owns schema migrations.
 A `reader` process is **corpus-read-only, not process-read-only**: it may create
@@ -318,24 +335,17 @@ complete role, migration-order, and shared-artifact contract.
 ## Code Layering
 
 The repository is one UV workspace with two lockstep distributions. The root
-wheel contains three internal deep modules whose import direction remains
-machine-enforced; Memory remains a separate deployment seam:
+wheel contains three internal deep modules plus the storage-neutral durable
+Runtime; their import direction remains machine-enforced. Independently
+installable Memory remains a separate distribution seam:
 
-```text
-dlightrag.ai       immutable settings/fingerprints; fair provider admission;
-     ↑       ↑     chat, tool, embedding, rerank and probe lifecycles
-     │       │
-dlightrag.agent    generic tool contracts and deterministic turn execution
+<p align="center">
+  <img src="architecture-code.svg" alt="DlightRAG compile-time dependency view for root product modules, AI, Agent, RAG, Runtime, Memory, and LightRAG" width="1080" />
+</p>
 
-dlightrag.rag      LightRAG chat/embedding adapters, rerank orchestration,
-                   storage-neutral metadata records and score fusion
-
-dlightrag          product composition, root PostgreSQL adapters,
-                   REST/Web/MCP/SDK
-
-dlightrag-memory   independently installable Owner Profile Memory, stdio MCP,
-                   storage-neutral ports and package-owned PostgreSQL schema
-```
+This is the only figure whose arrows mean compile-time dependency. The arrow
+points from the importing module to the module it may import; it says nothing
+about runtime sequencing or deployment.
 
 Agent and RAG may depend on AI but not on product modules or each other. RAG
 owns its direct LightRAG dependency and never imports concrete PostgreSQL

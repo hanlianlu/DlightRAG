@@ -12,22 +12,14 @@ Status: Python 3.14. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
 ## Architecture At A Glance
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="DlightRAG Architecture" width="1080" />
+  <img src="docs/architecture.svg" alt="DlightRAG system context showing callers, the service boundary, external integrations, PostgreSQL, and corpus artifacts" width="1080" />
 </p>
 
-```text
-Clients
-  -> REST / Web / MCP / SDK adapters
-  -> Application (composition)
-      -> WorkspaceRag -> LightRAG main -> corpus storage
-      -> AnswerService -> RunCoordinator -> Fast invocation or Research AgentLoop
-      -> Agent Session graph + Context Contributions + Evidence + Profile Memory
-      -> dlightrag.rag corpus ports -> root PostgreSQL corpus adapter
-      -> ApplicationHealth -> liveness/readiness projection
-  -> PostgreSQL 18 storage ecosystem
-```
+This is intentionally a system-context view: it shows DlightRAG as one system
+and does not mix internal modules, execution steps, package imports, or database
+entities into the same arrows.
 
-DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. The full runtime and code-layer view is in
+DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. The full runtime, deployment, and code-layer views are in
 [docs/architecture.md](docs/architecture.md).
 
 The repository is one UV workspace with two lockstep distributions. The root
