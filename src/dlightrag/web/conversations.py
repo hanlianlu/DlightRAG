@@ -114,6 +114,7 @@ class WebConversationStore(Protocol):
         title_hint: str | None,
         routing: RoutingAcceptance | None = None,
         create_conversation: bool = False,
+        forked_from_conversation_id: str | None = None,
     ) -> AnswerTurnCreation | None: ...
 
 
@@ -165,6 +166,7 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
     conversation_id: str
     title_hint: str | None
     create_conversation: bool = False
+    forked_from_conversation_id: str | None = None
 
     async def replay_run(
         self,
@@ -206,6 +208,7 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
             title_hint=self.title_hint,
             routing=routing,
             create_conversation=self.create_conversation,
+            forked_from_conversation_id=self.forked_from_conversation_id,
         )
         return None if creation is None else _submission(creation)
 
@@ -460,7 +463,7 @@ class WebConversationService:
             owner_id=principal_id,
             run_id=parent_run_id,
             query=query,
-            include_result=kind == "follow_up",
+            include_answer=kind == "follow_up",
             authorized_workspaces=authorized_workspaces,
         )
         if request is None:
@@ -490,6 +493,7 @@ class WebConversationService:
                 conversation_id=conversation_id,
                 title_hint=_auto_title(query),
                 create_conversation=create_conversation,
+                forked_from_conversation_id=(parent.conversation_id if kind == "fork" else None),
             ),
         )
 
@@ -702,6 +706,12 @@ def _conversation_summary(row: dict[str, Any]) -> ConversationSummary:
         title=row.get("title"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        forked_from_conversation_id=(
+            str(row["forked_from_conversation_id"])
+            if row.get("forked_from_conversation_id") is not None
+            else None
+        ),
+        forked_from_title=row.get("forked_from_title"),
     )
 
 

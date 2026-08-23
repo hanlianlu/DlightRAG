@@ -852,7 +852,7 @@ async def test_continuation_content_limit_is_transport_neutral() -> None:
             owner_id=_OWNER,
             run_id="run-1",
             query="x" * 20_001,
-            include_result=True,
+            include_answer=True,
             authorized_workspaces=("finance",),
         )
 
@@ -925,6 +925,7 @@ async def test_follow_up_and_fork_reenter_one_acceptance_interface() -> None:
     assert fork_request.history == (
         {"role": "user", "content": "ancestor question"},
         {"role": "assistant", "content": "ancestor answer"},
+        {"role": "user", "content": "parent question"},
     )
     assert follow_request.episodic_summary == "Older accepted context."
     assert follow_request.top_k == 7

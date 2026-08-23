@@ -118,6 +118,14 @@ WEB_CONVERSATION_MIGRATIONS = (
             *_CREATE_TURN_INDEXES,
         ),
     ),
+    Migration(
+        "0002_web_conversation_lineage",
+        "Record the conversation a fork branched from",
+        (
+            "ALTER TABLE web_conversations "
+            "ADD COLUMN IF NOT EXISTS forked_from_conversation_id UUID",
+        ),
+    ),
 )
 
 WEB_CONVERSATION_SCHEMA_TABLES = (
@@ -171,7 +179,13 @@ conversation_id::text AS conversation_id,
 title,
 content_revision,
 created_at,
-updated_at
+updated_at,
+forked_from_conversation_id::text AS forked_from_conversation_id,
+(
+    SELECT parent.title FROM web_conversations parent
+    WHERE parent.principal_id = web_conversations.principal_id
+      AND parent.conversation_id = web_conversations.forked_from_conversation_id
+) AS forked_from_title
 """
 
 _CREATE_CONVERSATION = f"""
@@ -181,8 +195,9 @@ RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
 _CREATE_CONVERSATION_IF_MISSING = f"""
-INSERT INTO web_conversations (principal_id, conversation_id)
-VALUES ($1, $2::text::uuid)
+INSERT INTO web_conversations (
+    principal_id, conversation_id, forked_from_conversation_id)
+VALUES ($1, $2::text::uuid, $3::text::uuid)
 ON CONFLICT (principal_id, conversation_id) DO NOTHING
 RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
@@ -646,6 +661,7 @@ class PGWebConversationStore(PostgresOperationRunner):
         title_hint: str | None,
         routing: RoutingAcceptance | None = None,
         create_conversation: bool = False,
+        forked_from_conversation_id: str | None = None,
     ) -> AnswerTurnCreation | None:
         """Accept one submission as a run plus its conversation entry, atomically.
 
@@ -668,6 +684,7 @@ class PGWebConversationStore(PostgresOperationRunner):
                         _CREATE_CONVERSATION_IF_MISSING,
                         principal_id,
                         conversation_id,
+                        forked_from_conversation_id,
                     )
                     if summary_row is None:
                         summary_row = await conn.fetchrow(

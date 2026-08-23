@@ -284,7 +284,7 @@ function renderRunActions(
   const tokenCount = Number(usageDetails?.total_tokens || 0);
   if (state === 'running') {
     turn.actionsDiv.append(
-      runActionButton(turn, 'steer', 'Steer'),
+      runActionButton(turn, 'stop', 'Stop'),
       runActionButton(turn, 'children', 'Child agents'),
     );
     return;
@@ -571,6 +571,19 @@ export function createAnswerRenderer(turn: ChatTurn) {
   function handleToolProgress(eventType: string, data: string): void {
     const info = parseData(data) as ToolProgressPayload;
     if (!info || typeof info.tool_name !== 'string') return;
+    if (info.tool_name === 'spawn_agent' && !turn.contentDiv.querySelector('.child-agent-chip')) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = chatStyles.childAgentChip + ' child-agent-chip';
+      chip.textContent = 'Child agents working…';
+      chip.addEventListener('click', () => {
+        turn.aiDiv.dispatchEvent(new CustomEvent('answer-run-action', {
+          bubbles: true,
+          detail: {action: 'children', runId: turn.aiDiv.dataset.runId || ''},
+        }));
+      });
+      turn.contentDiv.prepend(chip);
+    }
     const elapsed = typeof info.duration_ms === 'number'
       ? info.duration_ms
       : info.elapsed_ms;

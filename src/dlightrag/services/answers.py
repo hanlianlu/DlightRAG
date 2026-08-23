@@ -822,7 +822,7 @@ class AnswerService:
             owner_id=owner_id,
             run_id=run_id,
             query=query,
-            include_result=True,
+            include_answer=True,
             authorized_workspaces=authorized_workspaces,
         )
         if request is None:
@@ -849,7 +849,7 @@ class AnswerService:
             owner_id=owner_id,
             run_id=run_id,
             query=query,
-            include_result=False,
+            include_answer=False,
             authorized_workspaces=authorized_workspaces,
         )
         if request is None:
@@ -867,10 +867,15 @@ class AnswerService:
         owner_id: str,
         run_id: str,
         query: str,
-        include_result: bool,
+        include_answer: bool,
         authorized_workspaces: Sequence[str] | None,
     ) -> AnswerRequest | None:
-        """Build the selected accepted context after transport authorization."""
+        """Build the selected accepted context after transport authorization.
+
+        The parent's question always joins the history; the parent's answer
+        joins only for a follow-up. A fork therefore branches from the same
+        starting point without carrying the answer it is meant to redo.
+        """
         text = query.strip()
         if not text:
             raise ValueError("continuation query cannot be empty")
@@ -887,10 +892,10 @@ class AnswerService:
             for message in accepted.get("history") or ()
             if isinstance(message, Mapping)
         ]
-        if include_result:
-            parent_query = str(accepted.get("query") or "")
-            if parent_query:
-                history.append({"role": "user", "content": parent_query})
+        parent_query = str(accepted.get("query") or "")
+        if parent_query:
+            history.append({"role": "user", "content": parent_query})
+        if include_answer:
             parent_answer = str((record.result or {}).get("answer") or "")
             if parent_answer:
                 history.append({"role": "assistant", "content": parent_answer})
@@ -940,7 +945,7 @@ class AnswerService:
             history_resources=tuple(history_resources),
             mode=str(accepted.get("mode") or "auto"),
             parent_run_id=run_id,
-            continuation_kind="follow_up" if include_result else "fork",
+            continuation_kind="follow_up" if include_answer else "fork",
         )
 
     async def cancel(self, *, owner_id: str, run_id: str) -> CancellationOutcome:

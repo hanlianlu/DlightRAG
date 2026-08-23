@@ -27,6 +27,7 @@ import {
     setAnswerError,
     setAnswerRetryable,
 } from '../lib/chat_renderer.ts';
+import chatStyles from '../styles/chat.module.css';
 import type {ChatTurn} from '../lib/chat_renderer.ts';
 import {answerRunStore, payloadFingerprint} from '../stores/answerRunStore.ts';
 import {chatSessionStore} from '../stores/chatSessionStore.ts';
@@ -83,6 +84,21 @@ function submitComposerForm(form: HTMLFormElement): void {
 
 function isLineBreakInput(e: InputEvent): boolean {
     return e.inputType === 'insertLineBreak';
+}
+
+/** Show a steering instruction as a plain user message in the live thread. */
+function appendUserMessage(text: string): void {
+    const chatMessages = document.getElementById('chat-messages');
+    if (!chatMessages) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = chatStyles.userMessageWrapper;
+    const bubble = document.createElement('div');
+    bubble.className = chatStyles.userMessage;
+    bubble.textContent = text;
+    wrapper.appendChild(bubble);
+    chatMessages.appendChild(wrapper);
+    const chatArea = document.getElementById('chat-area');
+    if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -383,29 +399,15 @@ export async function submitQuery(query: string): Promise<void> {
 async function handleRunAction(action: string, runId: string): Promise<void> {
     if (!runId) return;
     if (action === 'children') {
-        try {
-            const children = await getAnswerRunChildren(runId);
-            const summary = children.length
-                ? children.map((child) => `${child.status}: ${child.objective || child.child_session_id}`).join('\n')
-                : 'No child agents were started.';
-            window.alert(summary);
-        } catch (_) {
-            window.alert('Child agent status is unavailable.');
-        }
+        await showChildrenRoster(runId);
         return;
     }
-    if (action === 'steer') {
-        const instruction = window.prompt('Steering instruction for the active Research run:');
-        if (!instruction?.trim()) return;
-        try {
-            await steerAnswerRun(runId, instruction.trim());
-        } catch (_) {
-            window.alert('This run can no longer be steered.');
-        }
+    if (action === 'stop') {
+        cancelQuery();
         return;
     }
     if (action !== 'follow-up' && action !== 'fork') return;
-    const query = window.prompt(action === 'fork' ? 'Start a branch with:' : 'Follow up with:');
+    const query = await askContinuation(action);
     if (!query?.trim()) return;
     try {
         const descriptor = await continueAnswerRun(
@@ -426,6 +428,59 @@ async function handleRunAction(action: string, runId: string): Promise<void> {
     } catch (_) {
         window.alert('The continuation could not be started.');
     }
+}
+
+function askContinuation(action: string): Promise<string | null> {
+    const dialog = document.getElementById(
+        'run-continuation-dialog',
+    ) as HTMLDialogElement | null;
+    const input = document.getElementById('run-continuation-input') as HTMLTextAreaElement | null;
+    const title = document.getElementById('run-continuation-title');
+    const note = document.getElementById('run-continuation-note');
+    if (!dialog || !input || !title || !note) return Promise.resolve(null);
+    const forking = action === 'fork';
+    title.textContent = forking ? 'Fork this answer' : 'Follow up';
+    note.textContent = forking
+        ? 'Start a new conversation from the same context. The previous answer is not carried over.'
+        : 'Ask a follow-up question; the previous answer is included as context.';
+    input.value = '';
+    dialog.returnValue = '';
+    dialog.showModal();
+    return new Promise(function(resolve) {
+        dialog.addEventListener('close', function() {
+            const value = dialog.returnValue === 'continue' ? input.value : null;
+            resolve(value);
+        }, {once: true});
+        // Focus the textarea once the dialog is visible.
+        window.requestAnimationFrame(() => input.focus());
+    });
+}
+
+async function showChildrenRoster(runId: string): Promise<void> {
+    const dialog = document.getElementById(
+        'children-roster-dialog',
+    ) as HTMLDialogElement | null;
+    const list = document.getElementById('children-roster-list');
+    if (!dialog || !list) return;
+    list.replaceChildren();
+    let children: Array<{status: string; objective?: string; child_session_id?: string}>;
+    try {
+        children = await getAnswerRunChildren(runId);
+    } catch (_) {
+        children = [];
+    }
+    if (children.length === 0) {
+        const empty = document.createElement('li');
+        empty.textContent = 'No child agents were started.';
+        list.appendChild(empty);
+    } else {
+        for (const child of children) {
+            const item = document.createElement('li');
+            item.textContent = `${child.status}: ${child.objective || child.child_session_id || ''}`;
+            list.appendChild(item);
+        }
+    }
+    dialog.showModal();
 }
 
 export function setupQueryForm(): void {
@@ -464,6 +519,22 @@ export function setupQueryForm(): void {
 
     let allowNextLineBreak = false;
 
+    async function submitSteer(): Promise<void> {
+        const text = queryInput.value.trim();
+        const runId = currentRunId;
+        if (!text || !runId) return;
+        try {
+            await steerAnswerRun(runId, text);
+        } catch (_) {
+            window.alert('This run can no longer be steered.');
+            return;
+        }
+        appendUserMessage(text);
+        queryInput.value = '';
+        autoResize();
+        queryInput.focus();
+    }
+
     queryInput.addEventListener('keydown', function(e: KeyboardEvent) {
         if (e.key === 'Escape' && queryInFlight) {
             cancelQuery();
@@ -480,7 +551,12 @@ export function setupQueryForm(): void {
         }
         e.preventDefault();
         allowNextLineBreak = false;
-        if (queryInFlight) return;  // one answer at a time — keep the draft
+        // While the agent is working, a submitted message steers the live run
+        // instead of starting a second answer (Pi-style safe-point injection).
+        if (queryInFlight) {
+            void submitSteer();
+            return;
+        }
         submitComposerForm(queryForm);
     });
     queryInput.addEventListener('keyup', function(e: KeyboardEvent) {
@@ -490,13 +566,12 @@ export function setupQueryForm(): void {
 
     toggleSendButton();
 
-    // Send ⇄ Stop: while an answer streams the button stops it; otherwise it
-    // submits. Enter is gated separately so drafting a follow-up never stops
-    // the current answer by accident.
+    // Send ⇄ Steer: while an answer streams the button steers the live run;
+    // otherwise it submits a new answer. Stop lives in the run actions row.
     sendBtn?.addEventListener('click', function(e) {
         if (!queryInFlight) return;
         e.preventDefault();
-        cancelQuery();
+        void submitSteer();
     });
     chatSessionStore.subscribe(function() {
         if (!sendBtn) return;
@@ -508,7 +583,10 @@ export function setupQueryForm(): void {
 
     queryForm.addEventListener('submit', function(e: SubmitEvent) {
         e.preventDefault();
-        if (queryInFlight) return;  // never clear or submit while an answer streams
+        if (queryInFlight) {
+            void submitSteer();  // Enter during a live run steers it
+            return;
+        }
         const query = queryInput.value.trim();
         if (!query) return;
         queryInput.value = '';

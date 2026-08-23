@@ -390,6 +390,27 @@ export class DlApp extends LightElement {
           </div>
         </form>
       </dialog>
+      <dialog id="run-continuation-dialog" class="confirm-dialog" aria-labelledby="run-continuation-title">
+        <form method="dialog">
+          <h2 id="run-continuation-title">Follow up</h2>
+          <p id="run-continuation-note"></p>
+          <textarea id="run-continuation-input" rows="3"
+                    placeholder="Ask a question…"></textarea>
+          <div class="ui-dialog-actions">
+            <button type="submit" value="cancel">Cancel</button>
+            <button type="submit" value="continue" class="ui-btn">Continue</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="children-roster-dialog" class="confirm-dialog" aria-labelledby="children-roster-title">
+        <form method="dialog">
+          <h2 id="children-roster-title">Child agents</h2>
+          <ul id="children-roster-list"></ul>
+          <div class="ui-dialog-actions">
+            <button type="submit" value="close">Close</button>
+          </div>
+        </form>
+      </dialog>
       <dialog id="discard-draft-dialog" class="confirm-dialog" aria-labelledby="discard-draft-title">
         <form method="dialog">
           <h2 id="discard-draft-title">Discard draft?</h2>

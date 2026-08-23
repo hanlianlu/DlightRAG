@@ -226,11 +226,11 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
 
 
 @pytest.mark.parametrize(
-    ("kind", "same_conversation", "include_result"),
+    ("kind", "same_conversation", "include_answer"),
     [("follow_up", True, True), ("fork", False, False)],
 )
 async def test_service_continuation_uses_shared_answer_contract_and_branch_target(
-    kind: str, same_conversation: bool, include_result: bool
+    kind: str, same_conversation: bool, include_answer: bool
 ) -> None:
     store = AsyncMock()
     store.find_turn_by_run.return_value = linked_turn(
@@ -252,7 +252,7 @@ async def test_service_continuation_uses_shared_answer_contract_and_branch_targe
     )
 
     assert result is marker
-    assert answers.continuation_request.await_args.kwargs["include_result"] is include_result
+    assert answers.continuation_request.await_args.kwargs["include_answer"] is include_answer
     assert answers.continuation_request.await_args.kwargs["authorized_workspaces"] == ("default",)
     acceptor = answers.accept.await_args.kwargs["acceptor"]
     assert (acceptor.conversation_id == _CID) is same_conversation

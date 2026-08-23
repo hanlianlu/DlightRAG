@@ -224,6 +224,12 @@ export class ConversationList extends LightElement {
                         }}
                     >${conversation.title || 'New chat'}</button>
                 `}
+                ${conversation.forked_from_title ? html`
+                    <span class="conversation-lineage"
+                          title="Forked from another conversation">
+                      Forked from “${conversation.forked_from_title}”
+                    </span>
+                ` : nothing}
                 <button
                     type="button"
                     class="conversation-actions-button"

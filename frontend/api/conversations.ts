@@ -7,6 +7,8 @@ export interface ConversationSummary {
   title: string | null;
   created_at: string;
   updated_at: string;
+  forked_from_conversation_id?: string | null;
+  forked_from_title?: string | null;
 }
 
 export interface ConversationAttachmentReference {

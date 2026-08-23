@@ -67,6 +67,8 @@ class ConversationSummary(ClientContractModel):
     title: str | None = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
+    forked_from_conversation_id: str | None = None
+    forked_from_title: str | None = None
 
 
 class ConversationAttachmentReference(ClientContractModel):

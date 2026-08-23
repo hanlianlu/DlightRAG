@@ -207,6 +207,16 @@
     border-color: var(--color-accent-border);
 }
 
+:global(.conversation-lineage) {
+    color: var(--color-text-muted);
+    display: block;
+    font-size: var(--font-size-caption);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 :global(.conversation-list-status) {
     align-items: flex-start;
     color: var(--color-text-subtle);
