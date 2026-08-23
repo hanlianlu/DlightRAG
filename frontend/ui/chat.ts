@@ -92,6 +92,7 @@ function appendUserMessage(text: string): void {
     if (!chatMessages) return;
     const wrapper = document.createElement('div');
     wrapper.className = chatStyles.userMessageWrapper;
+    wrapper.dataset.steer = 'true';
     const bubble = document.createElement('div');
     bubble.className = chatStyles.userMessage;
     bubble.textContent = text;
@@ -399,21 +400,36 @@ export async function submitQuery(query: string): Promise<void> {
 async function handleRunAction(action: string, runId: string): Promise<void> {
     if (!runId) return;
     if (action === 'children') {
-        await showChildrenRoster(runId);
-        return;
-    }
-    if (action === 'stop') {
-        cancelQuery();
+        const roster = document.querySelector('dl-children-roster');
+        roster?.open(async () => {
+            try {
+                return await getAnswerRunChildren(runId);
+            } catch (_) {
+                return [];
+            }
+        });
         return;
     }
     if (action !== 'follow-up' && action !== 'fork') return;
-    const query = await askContinuation(action);
-    if (!query?.trim()) return;
+    const dialog = document.querySelector('dl-continuation-dialog');
+    if (!dialog) return;
+    await new Promise<void>((resolve) => {
+        dialog.addEventListener('dl-continuation-result', function handler(event: Event) {
+            dialog.removeEventListener('dl-continuation-result', handler);
+            const result = (event as CustomEvent).detail;
+            if (result.query) void startContinuation(action, runId, String(result.query));
+            resolve();
+        });
+        dialog.open(action === 'fork' ? 'fork' : 'follow-up');
+    });
+}
+
+async function startContinuation(action: string, runId: string, query: string): Promise<void> {
     try {
         const descriptor = await continueAnswerRun(
             runId,
-            action,
-            query.trim(),
+            action === 'fork' ? 'fork' : 'follow-up',
+            query,
             crypto.randomUUID(),
         );
         conversationStore.upsertSummary(descriptor.conversation);
@@ -428,59 +444,6 @@ async function handleRunAction(action: string, runId: string): Promise<void> {
     } catch (_) {
         window.alert('The continuation could not be started.');
     }
-}
-
-function askContinuation(action: string): Promise<string | null> {
-    const dialog = document.getElementById(
-        'run-continuation-dialog',
-    ) as HTMLDialogElement | null;
-    const input = document.getElementById('run-continuation-input') as HTMLTextAreaElement | null;
-    const title = document.getElementById('run-continuation-title');
-    const note = document.getElementById('run-continuation-note');
-    if (!dialog || !input || !title || !note) return Promise.resolve(null);
-    const forking = action === 'fork';
-    title.textContent = forking ? 'Fork this answer' : 'Follow up';
-    note.textContent = forking
-        ? 'Start a new conversation from the same context. The previous answer is not carried over.'
-        : 'Ask a follow-up question; the previous answer is included as context.';
-    input.value = '';
-    dialog.returnValue = '';
-    dialog.showModal();
-    return new Promise(function(resolve) {
-        dialog.addEventListener('close', function() {
-            const value = dialog.returnValue === 'continue' ? input.value : null;
-            resolve(value);
-        }, {once: true});
-        // Focus the textarea once the dialog is visible.
-        window.requestAnimationFrame(() => input.focus());
-    });
-}
-
-async function showChildrenRoster(runId: string): Promise<void> {
-    const dialog = document.getElementById(
-        'children-roster-dialog',
-    ) as HTMLDialogElement | null;
-    const list = document.getElementById('children-roster-list');
-    if (!dialog || !list) return;
-    list.replaceChildren();
-    let children: Array<{status: string; objective?: string; child_session_id?: string}>;
-    try {
-        children = await getAnswerRunChildren(runId);
-    } catch (_) {
-        children = [];
-    }
-    if (children.length === 0) {
-        const empty = document.createElement('li');
-        empty.textContent = 'No child agents were started.';
-        list.appendChild(empty);
-    } else {
-        for (const child of children) {
-            const item = document.createElement('li');
-            item.textContent = `${child.status}: ${child.objective || child.child_session_id || ''}`;
-            list.appendChild(item);
-        }
-    }
-    dialog.showModal();
 }
 
 export function setupQueryForm(): void {
@@ -499,9 +462,12 @@ export function setupQueryForm(): void {
 
     function toggleSendButton() {
         if (!sendBtn) return;
-        // While an answer streams the button acts as Stop and stays actionable;
-        // otherwise it is Send, enabled only when there is text to send.
-        sendBtn.disabled = queryInFlight ? false : !queryInput.value.trim();
+        // Three states: Send (idle), Steer (running + text), Stop (running + empty).
+        const hasText = Boolean(queryInput.value.trim());
+        sendBtn.disabled = !hasText && !queryInFlight;
+        sendBtn.classList.toggle('is-stop', queryInFlight && !hasText);
+        sendBtn.classList.toggle('is-steer', queryInFlight && hasText);
+        sendBtn.setAttribute('aria-label', queryInFlight ? (hasText ? 'Steer' : 'Stop') : 'Send');
     }
 
     function autoResize() {
@@ -566,18 +532,18 @@ export function setupQueryForm(): void {
 
     toggleSendButton();
 
-    // Send ⇄ Steer: while an answer streams the button steers the live run;
-    // otherwise it submits a new answer. Stop lives in the run actions row.
+    // Send ⇄ Steer ⇄ Stop: with text while running it steers; empty while
+    // running it cancels; otherwise it submits a new answer.
     sendBtn?.addEventListener('click', function(e) {
         if (!queryInFlight) return;
         e.preventDefault();
-        void submitSteer();
+        if (queryInput.value.trim()) {
+            void submitSteer();
+        } else {
+            cancelQuery();
+        }
     });
     chatSessionStore.subscribe(function() {
-        if (!sendBtn) return;
-        const active = chatSessionStore.active;
-        sendBtn.classList.toggle('is-stop', active);
-        sendBtn.setAttribute('aria-label', active ? 'Stop' : 'Send');
         toggleSendButton();
     });
 

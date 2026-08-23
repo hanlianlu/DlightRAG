@@ -5,6 +5,7 @@ import '../tokens/utopia.css';
 import '../styles/global.css';
 import '../styles/primitives.css';
 import '../styles/design_system.css';
+import './run_dialogs.ts';
 
 interface PrimitiveSpec {
   name: string;
@@ -53,6 +54,22 @@ const PRIMITIVES: PrimitiveSpec[] = [
       '</section></div></form></dialog>',
   },
   {
+    name: 'Dialog text input (.ui-dialog-input)',
+    markup: '<textarea class="ui-dialog-input" rows="2" placeholder="Type a workspace name..."></textarea>',
+  },
+  {
+    name: 'Run continuation (dl-continuation-dialog)',
+    markup:
+      '<button class="ui-btn" id="ds-continuation-open" type="button">Open continuation dialog</button>' +
+      '<dl-continuation-dialog></dl-continuation-dialog>',
+  },
+  {
+    name: 'Child roster (dl-children-roster)',
+    markup:
+      '<button class="ui-btn" id="ds-roster-open" type="button">Open child roster</button>' +
+      '<dl-children-roster></dl-children-roster>',
+  },
+  {
     name: 'Panel close (.panel-close)',
     markup: '<button class="panel-close" type="button" aria-label="Close panel">✕</button>',
   },
@@ -85,6 +102,15 @@ function mountPrimitives(): void {
   });
   document.getElementById('ds-settings-open')?.addEventListener('click', () => {
     (document.getElementById('ds-settings') as HTMLDialogElement | null)?.showModal();
+  });
+  document.getElementById('ds-continuation-open')?.addEventListener('click', () => {
+    document.querySelector<HTMLElement & {open(kind: string): void}>('dl-continuation-dialog')
+      ?.open('fork');
+  });
+  document.getElementById('ds-roster-open')?.addEventListener('click', () => {
+    document.querySelector<HTMLElement & {open(fetcher: () => Promise<unknown[]>): void}>(
+      'dl-children-roster',
+    )?.open(async () => [{status: 'succeeded', objective: 'Example child'} as never]);
   });
 }
 

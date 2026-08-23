@@ -90,6 +90,20 @@
 }
 
 
+/* Child-agent roster list inside a confirm dialog. */
+.roster-list {
+    list-style: none;
+    margin: var(--space-component) 0;
+}
+
+.roster-list li {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
+    line-height: 1.5;
+    padding-block: var(--space-inline);
+}
+
 /* === Confirm Dialog === */
 
 /* Shared by every destructive confirmation so none can ship with UA styling. */
@@ -297,6 +311,7 @@
     overflow-wrap: anywhere;
 }
 
+.ui-dialog-input,
 .workspace-dialog-input {
     background: var(--color-bg-subtle);
     border: 1px solid var(--color-border-subtle);
@@ -309,6 +324,7 @@
     width: 100%;
 }
 
+.ui-dialog-input:focus,
 .workspace-dialog-input:focus {
     border-color: var(--color-accent-border);
 }

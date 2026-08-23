@@ -33,6 +33,10 @@
   width: 100%;
 }
 
+.userMessageWrapper[data-steer='true'] .userMessage {
+  border-right: 2px solid var(--color-accent-action);
+}
+
 .aiMessage {
   margin: var(--space-tight) 0 0;
   padding: var(--space-tight) 0 var(--space-message-block);
@@ -125,6 +129,13 @@
   font-size: var(--font-size-caption);
 }
 
+.conversationLineage {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  margin-bottom: var(--space-component);
+  text-align: center;
+}
+
 .childAgentChip {
   background: var(--color-accent-surface);
   border: 1px solid var(--color-accent-border);
@@ -136,44 +147,6 @@
   margin-bottom: var(--space-tight);
   padding: var(--space-inline) var(--space-tight);
 }
-
-.runOverflow {
-  position: relative;
-}
-
-.runOverflowTrigger {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  font-size: var(--font-size-caption);
-  letter-spacing: 0.08em;
-  padding: 0 var(--space-tight);
-}
-
-.runOverflowTrigger:hover {
-  color: var(--color-accent-emphasis);
-}
-
-.runOverflowMenu {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-control);
-  box-shadow: var(--shadow-overlay);
-  display: flex;
-  flex-direction: column;
-  min-width: 10rem;
-  padding: var(--space-tight) 0;
-  position: absolute;
-  right: 0;
-  top: calc(100% + var(--space-tight));
-  z-index: 30;
-}
-
-.runOverflowMenu[hidden] {
-  display: none;
-}
-
 
 /* === Streaming Indicator === */
 

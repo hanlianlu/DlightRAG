@@ -68,10 +68,12 @@ models:
     strategy: voyage_reranker
     model: rerank-2.5-lite
     input_modality: auto
-  max_concurrency: 16
+    max_concurrency: 16
+
 deployment:
   working_dir: ./dlightrag_storage
   workspace: default
+
 corpus:
   extraction:
     language: English
@@ -86,6 +88,7 @@ corpus:
     top_k: 60
     chunk_top_k: 30
     direct_visual_top_k: 20
+
 answer:
   runtime:
     answer_worker_concurrency: 16
@@ -101,5 +104,6 @@ answer:
     workspace_root: null
     # Explicit remote tools only; see docs/configuration.md for endpoint examples.
     outbound_mcp: []
+    
 observability:
   langfuse_host: http://host.docker.internal:3300

@@ -438,7 +438,8 @@ body.files-panel-open #files-btn {
     transform: none;
 }
 
-/* Send ⇄ Stop: swap the paper-plane for a stop square while an answer streams. */
+/* Send ⇄ Steer ⇄ Stop: swap the paper-plane for a stop square while an answer
+   streams with no text; with text the same button steers the live run. */
 .composer-send-icon--stop {
     display: none;
 }
@@ -449,6 +450,10 @@ body.files-panel-open #files-btn {
 
 .composer-send.is-stop .composer-send-icon--stop {
     display: block;
+}
+
+.composer-send.is-steer {
+    background: var(--color-action-bg-hover);
 }
 
 /* === Composer + Button === */

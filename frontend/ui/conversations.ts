@@ -8,6 +8,7 @@ import {
     renderConversationHistory,
     renderConversationHistoryError,
     renderConversationHistoryLoading,
+    renderConversationLineage,
     renderConversationUnavailable,
 } from '../lib/chat_renderer.ts';
 import {conversationRoute, newChatRoute, type WebRoute} from '../lib/router.ts';
@@ -299,6 +300,10 @@ function renderCurrentConversationView(): void {
         const history = conversationStore.history;
         if (!history) return;
         const pending = renderConversationHistory(history);
+        const lineage = conversationStore.conversations.find(
+            (summary) => summary.conversation_id === history.conversation.conversation_id,
+        )?.forked_from_title;
+        if (lineage) renderConversationLineage(`Forked from “${lineage}”`);
         if (pending) {
             void resumePendingTurn(
                 pending.turn,

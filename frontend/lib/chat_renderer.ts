@@ -224,53 +224,6 @@ function runActionButton(turn: ChatTurn, action: string, label: string): HTMLBut
   return button;
 }
 
-function runOverflowMenu(turn: ChatTurn, actions: Array<[string, string]>): HTMLElement {
-  // Low-frequency run operations stay one click away but out of the reading flow.
-  const trigger = document.createElement('button');
-  trigger.type = 'button';
-  trigger.className = chatStyles.runOverflowTrigger;
-  trigger.setAttribute('aria-label', 'More run actions');
-  trigger.setAttribute('aria-haspopup', 'true');
-  trigger.setAttribute('aria-expanded', 'false');
-  trigger.innerHTML = '&#8943;';
-  const menu = document.createElement('div');
-  menu.className = chatStyles.runOverflowMenu;
-  menu.setAttribute('role', 'menu');
-  menu.hidden = true;
-  for (const [action, label] of actions) {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.setAttribute('role', 'menuitem');
-    item.textContent = label;
-    item.addEventListener('click', function() {
-      close();
-      turn.aiDiv.dispatchEvent(new CustomEvent('answer-run-action', {
-        bubbles: true,
-        detail: {action, runId: turn.aiDiv.dataset.runId || ''},
-      }));
-    });
-    menu.appendChild(item);
-  }
-  function close(): void {
-    menu.hidden = true;
-    trigger.setAttribute('aria-expanded', 'false');
-  }
-  trigger.addEventListener('click', function(event) {
-    event.stopPropagation();
-    const open = !menu.hidden;
-    close();
-    if (!open) {
-      menu.hidden = false;
-      trigger.setAttribute('aria-expanded', 'true');
-    }
-  });
-  document.addEventListener('click', close, {once: false});
-  const wrapper = document.createElement('div');
-  wrapper.className = chatStyles.runOverflow;
-  wrapper.append(trigger, menu);
-  return wrapper;
-}
-
 function renderRunActions(
   turn: ChatTurn,
   state: 'running' | 'terminal',
@@ -284,17 +237,14 @@ function renderRunActions(
   const tokenCount = Number(usageDetails?.total_tokens || 0);
   if (state === 'running') {
     turn.actionsDiv.append(
-      runActionButton(turn, 'stop', 'Stop'),
       runActionButton(turn, 'children', 'Child agents'),
     );
     return;
   }
-  turn.actionsDiv.append(runActionButton(turn, 'follow-up', 'Follow up'));
-  const overflow = runOverflowMenu(turn, [
-    ['fork', 'Fork'],
-    ['children', 'Child agents'],
-  ]);
-  turn.actionsDiv.appendChild(overflow);
+  turn.actionsDiv.append(
+    runActionButton(turn, 'follow-up', 'Follow up'),
+    runActionButton(turn, 'fork', 'Fork'),
+  );
   if (evidenceCount || tokenCount) {
     const summary = document.createElement('span');
     summary.className = chatStyles.runSummary;
@@ -341,6 +291,16 @@ export function renderConversationHistory(
     }
   }
   return pending;
+}
+
+/** Show one conversation's fork provenance above its first turn. */
+export function renderConversationLineage(text: string): void {
+  const chatMessages = document.getElementById('chat-messages');
+  if (!chatMessages) return;
+  const banner = document.createElement('div');
+  banner.className = chatStyles.conversationLineage;
+  banner.textContent = text;
+  chatMessages.prepend(banner);
 }
 
 /** Render one stored turn from its run's state: pending, terminal, or answered. */
