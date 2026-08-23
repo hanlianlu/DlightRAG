@@ -340,7 +340,10 @@ export class DlApp extends LightElement {
         <form method="dialog">
           <h2 id="delete-all-conversations-title">Delete all conversations?</h2>
           <p id="delete-all-conversations-draft-warning" hidden>Draft and attachments will also be deleted.</p>
-          <p class="settings-note">Profile memory is cleared only if you checked that option in Settings.</p>
+          <label class="ui-dialog-checkbox">
+            <input type="checkbox" id="delete-all-also-clear-memory" />
+            Also clear Profile memory (remembered preferences and facts)
+          </label>
           <div class="ui-dialog-actions">
             <button type="submit" value="cancel">Cancel</button>
             <button type="submit" value="delete-all" class="ui-dialog-danger">Delete all</button>
@@ -351,15 +354,7 @@ export class DlApp extends LightElement {
         <form id="settings-form" method="dialog">
           <h2 id="settings-title">Settings</h2>
           <section class="settings-section">
-            <h3 id="settings-appearance">Appearance</h3>
-            <div id="settings-theme-row" role="group" aria-labelledby="settings-appearance">
-              <button type="button" data-theme-choice="system" class="settings-theme-option">System</button>
-              <button type="button" data-theme-choice="light" class="settings-theme-option">Light</button>
-              <button type="button" data-theme-choice="dark" class="settings-theme-option">Dark</button>
-            </div>
-          </section>
-          <section class="settings-section">
-            <h3 id="settings-memory">Cross-conversation memory</h3>
+            <h3 id="settings-memory">Profile Memory</h3>
             <label class="ui-dialog-checkbox">
               <input type="checkbox" id="memory-enabled-toggle" />
               Use remembered preferences and facts in answers
@@ -369,13 +364,9 @@ export class DlApp extends LightElement {
               <button type="button" id="memory-clear-btn" class="settings-secondary-danger">Clear memory</button>
             </div>
           </section>
-          <section class="settings-section settings-danger">
-            <h3 id="settings-data">Data</h3>
+          <section class="settings-section">
+            <h3 id="settings-data">Conversation History</h3>
             <p class="settings-note">Conversation turns stay until run retention (default 365 days) reclaims them.</p>
-            <label class="ui-dialog-checkbox" id="delete-all-memory-row">
-              <input type="checkbox" id="delete-all-also-clear-memory" />
-              Also clear Profile memory (remembered preferences and facts)
-            </label>
             <div class="ui-dialog-actions">
               <button type="submit" value="close-settings">Done</button>
               <button type="submit" value="delete-all" class="ui-dialog-danger">Delete all conversations</button>

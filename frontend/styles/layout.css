@@ -720,31 +720,6 @@ body.conversation-sidebar-open .panel-split {
     margin-block: var(--space-tight);
 }
 
-.settings-theme-row {
-    display: flex;
-    gap: var(--space-tight);
-}
-
-.settings-theme-option {
-    background: transparent;
-    border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-control);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    flex: 1;
-    font: inherit;
-    font-size: var(--font-size-detail);
-    padding: var(--space-tight) var(--space-component);
-    transition: background 150ms, border-color 150ms, color 150ms;
-}
-
-.settings-theme-option[aria-pressed='true'] {
-    background: var(--color-accent-surface);
-    border-color: var(--color-accent-border);
-    color: var(--color-text-primary);
-    font-weight: 600;
-}
-
 .settings-row-actions {
     display: flex;
     gap: var(--space-tight);
@@ -766,10 +741,6 @@ body.conversation-sidebar-open .panel-split {
 .settings-secondary-danger:hover:not(:disabled) {
     background: var(--color-danger-bg);
     color: var(--color-on-danger);
-}
-
-.settings-danger .ui-dialog-actions {
-    margin-top: var(--space-component);
 }
 
 /* === Workspace Dialog === */
