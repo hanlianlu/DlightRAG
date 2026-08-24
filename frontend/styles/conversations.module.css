@@ -136,6 +136,12 @@
     white-space: nowrap;
 }
 
+:global(.conversation-row-main) {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
 :global(.conversation-row[aria-current="page"] .conversation-select) {
     color: var(--color-text-primary);
     font-weight: 550;

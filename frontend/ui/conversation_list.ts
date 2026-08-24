@@ -213,23 +213,25 @@ export class ConversationList extends LightElement {
                 data-conversation-id=${conversationId}
                 aria-current=${active ? 'page' : nothing}
             >
-                ${renaming ? this.#renderRenameInput(conversation) : html`
-                    <button
-                        type="button"
-                        class="conversation-select"
-                        ?disabled=${this.busy}
-                        aria-label=${conversation.title ? nothing : 'Open untitled conversation'}
-                        @click=${() => {
-                            this.#emit<ConversationIntentDetail>('conversation-select', {conversationId});
-                        }}
-                    >${conversation.title || 'New chat'}</button>
-                `}
-                ${conversation.forked_from_title ? html`
-                    <span class="conversation-lineage"
-                          title="Forked from another conversation">
-                      Forked from ${conversation.forked_from_title}
-                    </span>
-                ` : nothing}
+                <div class="conversation-row-main">
+                    ${renaming ? this.#renderRenameInput(conversation) : html`
+                        <button
+                            type="button"
+                            class="conversation-select"
+                            ?disabled=${this.busy}
+                            aria-label=${conversation.title ? nothing : 'Open untitled conversation'}
+                            @click=${() => {
+                                this.#emit<ConversationIntentDetail>('conversation-select', {conversationId});
+                            }}
+                        >${conversation.title || 'New chat'}</button>
+                    `}
+                    ${conversation.forked_from_title ? html`
+                        <span class="conversation-lineage"
+                              title="Forked from another conversation">
+                          Forked from ${conversation.forked_from_title}
+                        </span>
+                    ` : nothing}
+                </div>
                 <button
                     type="button"
                     class="conversation-actions-button"
