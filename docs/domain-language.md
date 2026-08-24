@@ -100,13 +100,21 @@ _Avoid_: caller-selected namespace, conversation id, Agent Session
 The structured outcome of one query-aware Memory recall: selected records (exact matches pinned first, then chronological), the raw leg candidates the fusion consumed, degradation flags, and the recalled body character cost (rendering overhead excluded). Never a prompt fragment.
 _Avoid_: prompt text, standing block, packed string
 
-**Memory Write**:
-The only durable create, supersede, or forget of a Memory Record: a named remember or forget channel that passed a closed policy check.
-_Avoid_: Silent promotion, transcript scan, model aside, journal side effect
+**Memory Operation**:
+One host-bound, owner-scoped remember, forget, or undo request carrying a stable idempotency key and trusted provenance. The storage seam validates, settles, and journals it atomically; an Answer Run may impose an atomic mutation limit without changing the package interface.
+_Avoid_: Silent promotion, transcript scan, model aside, adapter-owned mutation
+
+**Memory Operation Receipt**:
+The replay-stable result of one Memory Operation: change identity, action, outcome, affected record identities, safe body, provenance, and supersede/undo links. Answer projects it into a durable product event; Agent Core never interprets it.
+_Avoid_: parsed tool prose, telemetry payload, UI-only notification
+
+**Memory Operation Journal**:
+The package-owned owner-scoped ledger that makes operation replay, changed-input rejection, mutation caps, optimistic conflicts, and compensating Undo one transaction with record transitions.
+_Avoid_: Answer Event Log, Agent Journal, browser cache, out-of-band undo snapshot
 
 **Memory Record Lifecycle**:
-`active → superseded` or `active → forgotten`. Forget is idempotent and leaves a non-recallable tombstone; superseded history follows the shared retention floor. Formation may be proposed without mutation and committed idempotently by proposal id.
-_Avoid_: hard-delete forget, silent transcript promotion, confidence decay
+`active → superseded` or `active → forgotten`. Forget is idempotent and leaves a non-recallable tombstone; Undo is a new compensating operation rather than a reverse state transition. Non-active history follows the shared retention floor. Clear Profile Memory is the explicit exception: it physically removes that owner's package records and operation journal without rewriting Answer or Conversation history.
+_Avoid_: state rollback, silent transcript promotion, confidence score
 
 **Retention Floor**:
 The single deployment clock (`answer.runtime.answer_run_retention_days`, default 365) that bounds how long terminal Answer runs, their event logs, and superseded Memory history stay durable. The sweep is best-effort: it may reclaim later, never earlier.

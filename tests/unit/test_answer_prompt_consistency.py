@@ -26,6 +26,16 @@ def test_research_agent_is_told_the_citation_contract() -> None:
     assert "answer from general knowledge without citations" in normalized
 
 
+def test_profile_memory_guidance_is_product_owned_and_capability_gated() -> None:
+    disabled = agent_control_prompt()
+    enabled = agent_control_prompt(profile_memory_write=True)
+
+    assert "Profile Memory is owner profile state" not in disabled
+    assert "Profile Memory is owner profile state" in enabled
+    assert "The rule that tools add Evidence does not apply" in enabled
+    assert "Never remember task state" in enabled
+
+
 def test_research_agent_keeps_its_own_loop_guidance() -> None:
     prompt = agent_control_prompt()
 

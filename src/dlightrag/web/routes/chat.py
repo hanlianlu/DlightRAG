@@ -366,6 +366,7 @@ async def answer_run_events(
                 browser_frame,
                 downloadable_workspaces=downloadable,
                 visual_workspaces=visual,
+                live_after=turn.run.next_event_sequence - 1,
             ),
         ),
         media_type="text/event-stream",

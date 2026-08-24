@@ -52,6 +52,7 @@ from dlightrag.runtime.progress import (
 from dlightrag.runtime.settlements import (
     CompleteBlobDescriptor,
     EffectHostUpdate,
+    MemoryOperationSettlement,
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
@@ -122,6 +123,23 @@ UPDATE dlightrag_answer_runs
 SET durable_progress_version = durable_progress_version + 1,
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2
+"""
+
+_INSERT_MEMORY_OPERATION_EVENT = """
+WITH bumped AS (
+    UPDATE dlightrag_answer_runs
+    SET next_event_sequence = next_event_sequence + 1,
+        updated_at = NOW()
+    WHERE owner_id = $1 AND run_id = $2
+      AND lease_owner = $3 AND fencing_epoch = $4
+      AND status = 'running' AND lease_expires_at > NOW()
+    RETURNING next_event_sequence - 1 AS event_sequence
+)
+INSERT INTO dlightrag_answer_run_events (
+    owner_id, run_id, event_sequence, event_type, payload
+)
+SELECT $1, $2, event_sequence, 'memory_operation_settled', $5::jsonb
+FROM bumped
 """
 
 _SELECT_SESSION_SNAPSHOT = """
@@ -446,6 +464,22 @@ class PGJournalStore:
         host_update_digest = await self._write_host_update(
             conn, session_id, intent_id, settlement.host_update
         )
+        if settlement.host_update.memory_operation is not None:
+            await conn.execute(
+                _INSERT_MEMORY_OPERATION_EVENT,
+                self._owner_id,
+                self._run_id,
+                self._lease_owner,
+                self._fencing_epoch,
+                json.dumps(
+                    _memory_event_payload(
+                        session_id,
+                        intent_id,
+                        settlement.host_update.memory_operation,
+                    ),
+                    ensure_ascii=False,
+                ),
+            )
         last_sequence = await conn.fetchval(
             "SELECT last_sequence FROM dlightrag_agent_sessions"
             " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
@@ -1014,6 +1048,25 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _memory_event_payload(
+    session_id: SessionId,
+    intent_id: IntentId,
+    operation: MemoryOperationSettlement,
+) -> dict[str, Any]:
+    return {
+        "body": operation.body,
+        "change_id": operation.change_id,
+        "intent_id": intent_id.value,
+        "kind": operation.kind,
+        "memory_ids": list(operation.memory_ids),
+        "operation": operation.operation,
+        "outcome": operation.outcome,
+        "session_id": session_id.value,
+        "supersedes_id": operation.supersedes_id,
+        "target_change_id": operation.target_change_id,
+    }
+
+
 def _host_update_digest(update: EffectHostUpdate) -> str:
     payload = {
         "evidence": [
@@ -1056,6 +1109,20 @@ def _host_update_digest(update: EffectHostUpdate) -> str:
                 "replace_all": update.workspace_inventory.replace_all,
                 "upserts": [record.relative_path for record in update.workspace_inventory.upserts],
                 "deletes": list(update.workspace_inventory.deletes),
+            }
+        ),
+        "memory_operation": (
+            None
+            if update.memory_operation is None
+            else {
+                "operation": update.memory_operation.operation,
+                "outcome": update.memory_operation.outcome,
+                "change_id": update.memory_operation.change_id,
+                "memory_ids": list(update.memory_operation.memory_ids),
+                "kind": update.memory_operation.kind,
+                "body": update.memory_operation.body,
+                "supersedes_id": update.memory_operation.supersedes_id,
+                "target_change_id": update.memory_operation.target_change_id,
             }
         ),
     }

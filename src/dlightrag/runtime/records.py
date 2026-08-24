@@ -24,6 +24,7 @@ type AnswerRunEventType = Literal[
     "tool_start",
     "tool_progress",
     "tool_end",
+    "memory_operation_settled",
     "done",
     "error",
 ]

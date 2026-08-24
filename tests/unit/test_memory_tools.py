@@ -1,14 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""remember / forget / recall_memory composition and forget-miss."""
+"""Parent-only Profile Memory tools and typed operation details."""
 
-from dataclasses import replace
-
-import pytest
-from dlightrag_memory import Memory
-from dlightrag_memory.store import InMemoryMemoryStore, commit_memory_write
+from dlightrag_memory import Memory, MemoryProvenance
+from dlightrag_memory.store import InMemoryMemoryStore
 
 from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.answer.memory import MemoryProvenance, MemoryWrite
 from dlightrag.answer.tools.composition import compose_research_tools
 from dlightrag.answer.tools.memory import (
     ForgetInput,
@@ -26,7 +22,18 @@ async def _retrieve(_query: str) -> object:
     raise RuntimeError("unused")
 
 
-def test_child_inherits_parent_memory_tools() -> None:
+def _host(*, enabled: bool = True) -> MemoryHost:
+    return MemoryHost(
+        owner_id="o",
+        auth_mode="jwt",
+        run_id="11111111-1111-1111-1111-111111111111",
+        session_id="22222222-2222-2222-2222-222222222222",
+        memory=Memory(InMemoryMemoryStore()),
+        enabled=enabled,
+    )
+
+
+def test_child_can_recall_but_cannot_mutate_profile() -> None:
     host = MemoryHost()
     parent = compose_research_tools(
         evidence=EvidenceLedger(),
@@ -48,131 +55,76 @@ def test_child_inherits_parent_memory_tools() -> None:
         child=True,
     )
     assert {"remember", "forget", "recall_memory"} <= {tool.name for tool in parent}
-    assert {"remember", "forget", "recall_memory"} <= {tool.name for tool in child}
+    assert {tool.name for tool in child} & {"remember", "forget"} == set()
+    assert "recall_memory" in {tool.name for tool in child}
 
 
-async def test_forget_miss_is_idempotent() -> None:
-    store = InMemoryMemoryStore()
-    host = MemoryHost(
-        owner_id="o",
-        auth_mode="jwt",
-        run_id="11111111-1111-1111-1111-111111111111",
-        session_id="22222222-2222-2222-2222-222222222222",
-        memory=Memory(store),
+async def test_remember_then_forget_returns_typed_receipts() -> None:
+    host = _host()
+    remembered = await remember_tool(host=host).execute(
+        RememberInput(kind="preference", body="No email."),
+        tool_runtime(call_id="call-1"),
     )
-    tool = forget_tool(host=host)
-    result = await tool.execute(
+    operation = (remembered.details or {})["memory_operation"]
+    assert operation["outcome"] == "changed"
+    memory_id = str(operation["memory_ids"][0])
+
+    forgotten = await forget_tool(host=host).execute(
+        ForgetInput(memory_id=memory_id), tool_runtime(call_id="call-2")
+    )
+    assert (forgotten.details or {})["memory_operation"]["outcome"] == "changed"
+
+
+async def test_forget_miss_is_unchanged() -> None:
+    result = await forget_tool(host=_host()).execute(
         ForgetInput(memory_id="33333333-3333-3333-3333-333333333333"),
         tool_runtime(),
     )
-    assert result.text_content == "Forgotten."
+    assert (result.details or {})["memory_operation"]["outcome"] == "unchanged"
 
 
-async def test_remember_then_forget() -> None:
-    store = InMemoryMemoryStore()
-    host = MemoryHost(
-        owner_id="o",
-        auth_mode="jwt",
-        run_id="11111111-1111-1111-1111-111111111111",
-        session_id="22222222-2222-2222-2222-222222222222",
-        memory=Memory(store),
-    )
-    remembered = await remember_tool(host=host).execute(
-        RememberInput(kind="preference", body="No email.", confidence=0.9),
-        tool_runtime(),
-    )
-    assert remembered.details is not None
-    memory_id = str(remembered.details["memory_id"])
-    forgotten = await forget_tool(host=host).execute(
-        ForgetInput(memory_id=memory_id), tool_runtime()
-    )
-    assert forgotten.text_content == "Forgotten."
-    tombstone = await store.get(owner_id="o", memory_id=memory_id)
-    assert tombstone is not None
-    assert tombstone.status == "forgotten"
-
-
-async def test_recall_tool_returns_relevant_records() -> None:
-    from dlightrag_memory import Memory
-    from dlightrag_memory.store import InMemoryMemoryStore
-
-    store = InMemoryMemoryStore()
-    host = MemoryHost(
-        owner_id="o",
-        auth_mode="jwt",
-        run_id="11111111-1111-1111-1111-111111111111",
-        session_id="22222222-2222-2222-2222-222222222222",
-        memory=Memory(store),
-    )
+async def test_recall_returns_ids_with_relevant_records() -> None:
+    host = _host()
     memory = host.memory
     assert memory is not None
-    await memory.remember(
+    receipt = await memory.remember(
         owner_id="o",
         kind="preference",
         body="No email.",
-        confidence=0.9,
-        provenance=MemoryProvenance(run_id="r", session_id="s"),
+        provenance=MemoryProvenance(origin_kind="answer_run", origin_id="seed"),
+        idempotency_key="seed",
     )
 
     result = await recall_memory_tool(host=host).execute(RecallInput(query="email"), tool_runtime())
 
+    assert receipt.memory_id is not None
+    assert receipt.memory_id in result.text_content
     assert "No email." in result.text_content
-    assert "Relevant memories" in result.text_content
 
-    miss = await recall_memory_tool(host=host).execute(
-        RecallInput(query="zzz-nothing"), tool_runtime()
+
+async def test_disabled_or_stale_capability_rejects_tools() -> None:
+    disabled = _host(enabled=False)
+    result = await remember_tool(host=disabled).execute(
+        RememberInput(kind="preference", body="No email."), tool_runtime()
     )
-    assert miss.text_content == "No relevant memories."
+    assert result.is_error
+    assert (result.details or {})["memory_operation"]["outcome"] == "rejected"
 
+    stale = _host()
 
-async def test_disabled_memory_rejects_model_tools() -> None:
-    """Disabled stops model writes and recall; the rejection is explicit."""
-    from dlightrag_memory import Memory
-    from dlightrag_memory.store import InMemoryMemoryStore
+    async def no_longer_current(**_kwargs) -> bool:
+        return False
 
-    host = MemoryHost(
-        owner_id="o",
-        auth_mode="jwt",
-        run_id="11111111-1111-1111-1111-111111111111",
-        session_id="22222222-2222-2222-2222-222222222222",
-        memory=Memory(InMemoryMemoryStore()),
-        enabled=False,
+    stale.capability_current = no_longer_current
+    forgotten = await forget_tool(host=stale).execute(
+        ForgetInput(memory_id="33333333-3333-3333-3333-333333333333"), tool_runtime()
     )
-
-    remembered = await remember_tool(host=host).execute(
-        RememberInput(kind="preference", body="No email.", confidence=0.9),
-        tool_runtime(),
-    )
-    assert "disabled" in remembered.text_content
-
-    forgotten = await forget_tool(host=host).execute(
-        ForgetInput(memory_id="33333333-3333-3333-3333-333333333333"),
-        tool_runtime(),
-    )
-    assert "disabled" in forgotten.text_content
-
-    recalled = await recall_memory_tool(host=host).execute(
+    assert forgotten.is_error
+    recalled = await recall_memory_tool(host=stale).execute(
         RecallInput(query="anything"), tool_runtime()
     )
-    assert "disabled" in recalled.text_content
+    assert recalled.is_error
 
 
-async def test_supersede_rejects_other_owner() -> None:
-    store = InMemoryMemoryStore()
-    first = await commit_memory_write(
-        store,
-        MemoryWrite(
-            owner_id="alpha",
-            kind="fact",
-            body="Alpha fact.",
-            confidence=1.0,
-            provenance=MemoryProvenance(run_id="r", session_id="s"),
-        ),
-    )
-    assert first is not None
-    with pytest.raises(ValueError, match="cannot change owner"):
-        await store.supersede(
-            owner_id="alpha",
-            old_id=first.memory_id,
-            new=replace(first, owner_id="beta", memory_id="other"),
-        )
+def test_remember_is_safe_to_replay() -> None:
+    assert remember_tool(host=_host()).replay_policy == "safe"

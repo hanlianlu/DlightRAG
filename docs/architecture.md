@@ -376,15 +376,22 @@ never enters the score — exact matches pin first, the rest follow
 chronologically, and no threshold means an empty result is simply not
 injected. Transport is `dlightrag-memory-mcp`, a stdio-only MCP server: the
 subject is bound at launch and never accepted from a tool argument, a
-launched server is authorized for its subject, and exactly three tools exist
-— `memory_recall(query)`, `memory_remember(kind, body, confidence,
-idempotency_key, supersedes_id?)`, and `memory_forget(memory_id | body)` — with no browse, no
-observe, and no HTTP. Callers reuse the required remember idempotency key on
-retry. Remember formation may be proposed then committed
-idempotently; forget writes a tombstone. Eligibility and rendering stay host
+launched server is authorized for its subject, and exactly four tools exist
+— `memory_recall(query)`, `memory_remember(kind, body, idempotency_key,
+supersedes_id?)`, `memory_forget(memory_id | body, idempotency_key)`, and
+`memory_undo(change_id, idempotency_key)` — with no browse, no observe, and no
+HTTP. Every mutation returns a replay-stable operation receipt. The package-owned
+operation journal commits idempotency, mutation limits, record transitions, and
+compensating undo through one atomic storage seam; forget writes a tombstone.
+Eligibility and rendering stay host
 concerns: the package never judges auth mode or renders prompts. DlightRAG binds
 a JWT owner or stable local single-user owner, rejects shared simple-auth
 personalization, and places recalled facts as low-authority non-citable context.
+DlightRAG's owner setting is a hard capability gate: when inactive, acceptance
+reserves no Memory capacity, Answer composes no Memory prompt or tools, and all
+record operations are unavailable except reading or changing the setting. A
+monotonic owner epoch invalidates already-running mutation hosts after deactivate
+or physical Clear.
 
 Inside the root product, modules still sit on a decreasing dependency stack: a
 module at a higher layer may import from lower layers, but lower layers must not

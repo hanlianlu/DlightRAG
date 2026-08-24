@@ -32,7 +32,7 @@ from dlightrag.answer.history import (
     project_history,
 )
 from dlightrag.answer.images import AnswerImagePolicy
-from dlightrag.answer.memory import standing_memory_for_acceptance
+from dlightrag.answer.memory import memory_owner_allowed, standing_memory_for_acceptance
 from dlightrag.answer.mode import (
     ModeCapability,
     ModeResource,
@@ -458,6 +458,7 @@ class AnswerService:
         resources: _AnswerResourcePreparer,
         model_fingerprint_for_role: Callable[[ModelRole], ModelFingerprint],
         research_tool_supplements: Callable[[], Sequence[AgentTool]] | None = None,
+        memory_capability: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
     ) -> None:
         self._store = store
         self._coordinator = coordinator
@@ -468,6 +469,7 @@ class AnswerService:
         self._resources = resources
         self._model_fingerprint_for_role = model_fingerprint_for_role
         self._research_tool_supplements = research_tool_supplements or (lambda: ())
+        self._memory_capability = memory_capability
 
     async def create(
         self,
@@ -556,6 +558,14 @@ class AnswerService:
             self._history_resource_input(owner_id, resource)
             for resource in request.history_resources
         )
+        memory_enabled = (
+            requested_mode != "fast"
+            and "research" in allowed_modes
+            and memory_owner_allowed(auth_mode)
+        )
+        memory_epoch = 0
+        if memory_enabled and self._memory_capability is not None:
+            memory_enabled, memory_epoch = await self._memory_capability(owner_id=owner_id)
         run_input = await self._prepare_input(
             run_request,
             resources=acceptance_resources or None,
@@ -563,10 +573,13 @@ class AnswerService:
             requested_mode=requested_mode,
             allowed_modes=allowed_modes,
             auth_mode=auth_mode,
+            memory_enabled=memory_enabled,
         )
         prepared_input = _prepared_input_payload(
             run_input, requested_mode=requested_mode, auth_mode=auth_mode
         )
+        prepared_input["profile_memory_enabled"] = memory_enabled
+        prepared_input["profile_memory_epoch"] = memory_epoch
         _require_prepared_input_bounds(prepared_input)
         resources_payload = _accepted_resource_payloads(
             run_input, attachment_bytes=attachment_bytes
@@ -1084,6 +1097,7 @@ class AnswerService:
         requested_mode: str,
         allowed_modes: frozenset[str],
         auth_mode: str = "none",
+        memory_enabled: bool = True,
     ) -> AnswerRunInput:
         """Resolve one normalized request into immutable durable run input."""
         projection = await self._project_acceptance(
@@ -1092,6 +1106,7 @@ class AnswerService:
             requested_mode=requested_mode,
             allowed_modes=allowed_modes,
             auth_mode=auth_mode,
+            memory_enabled=memory_enabled,
         )
         return AnswerRunInput(
             query=request.query,
@@ -1122,6 +1137,7 @@ class AnswerService:
         requested_mode: str,
         allowed_modes: frozenset[str],
         auth_mode: str = "none",
+        memory_enabled: bool = True,
     ) -> _AcceptanceProjection:
         """Resolve the exact shared-history envelopes without building the run rig."""
         if resources:
@@ -1153,7 +1169,7 @@ class AnswerService:
                 else ()
             )
             schema = await self._retrieval.schema_for(workspaces)
-            memory_text = standing_memory_for_acceptance(auth_mode)
+            memory_text = standing_memory_for_acceptance(auth_mode) if memory_enabled else ""
             targets = [
                 HistoryProjectionTarget(
                     "planner",
@@ -1186,10 +1202,15 @@ class AnswerService:
                         else None
                     ),
                 )
+                supplements = list(self._research_tool_supplements())
+                if not memory_enabled:
+                    supplements = [
+                        tool
+                        for tool in supplements
+                        if tool.name not in {"remember", "forget", "recall_memory"}
+                    ]
                 try:
-                    tools = list(
-                        ToolRegistry([*tools, *self._research_tool_supplements()]).resolve()
-                    )
+                    tools = list(ToolRegistry([*tools, *supplements]).resolve())
                 except DuplicateToolError as exc:
                     raise InvalidToolConfigurationError(exc.names) from exc
                 measure = research_history_input_measure(

@@ -45,6 +45,13 @@
   gap: var(--space-component);
 }
 
+.ds-toast-demo {
+  inset: auto;
+  opacity: 1;
+  position: static;
+  transform: none;
+}
+
 .ds-token-group {
   margin-bottom: var(--space-component);
 }

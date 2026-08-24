@@ -18,8 +18,8 @@ class MemoryUnavailableError(Exception):
     error_kind = "memory_unavailable"
 
     def __init__(self) -> None:
-        super().__init__("Long-term memory requires a JWT owner.")
-        self.public_message = "Long-term memory requires a JWT owner."
+        super().__init__("Profile Memory is unavailable for this caller.")
+        self.public_message = "Profile Memory is unavailable for this caller."
 
 
 __all__ = ["MemoryUnavailableError", "MemoryWriteRejectedError"]

@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {csrfHeaders} from '../api/csrf';
+import {undoMemoryChange} from '../api/memory.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {clearAttachments, getPendingAttachments} from './attachments.ts';
@@ -33,6 +34,8 @@ import {answerRunStore, payloadFingerprint} from '../stores/answerRunStore.ts';
 import {chatSessionStore} from '../stores/chatSessionStore.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {webRouter} from './router.ts';
+import {refreshMemorySettingsPanel} from './memory.ts';
+import {showActionToast, showToast} from './toast.ts';
 
 // A dropped connection is a transport fault, never a decision about the run, so
 // the browser reattaches from its last durable sequence. The budget bounds
@@ -40,6 +43,58 @@ import {webRouter} from './router.ts';
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 500;
 const NEW_CHAT_RUN_KEY = '__new_chat__';
+const seenMemoryOperations = new Set<string>();
+
+interface MemoryOperationEvent {
+    body?: string;
+    change_id?: string | null;
+    intent_id?: string;
+    kind?: string | null;
+    live?: boolean;
+    operation?: 'remember' | 'forget' | 'undo';
+    outcome?: 'changed' | 'unchanged' | 'rejected' | 'conflict';
+}
+
+function memorySummary(event: MemoryOperationEvent): string {
+    const body = String(event.body || '').replace(/\s+/g, ' ').trim();
+    const concise = body.length > 120 ? body.slice(0, 117) + '…' : body;
+    if (event.outcome === 'unchanged') return 'Already remembered.';
+    if (event.outcome === 'conflict') return 'Profile Memory changed; recall it before retrying.';
+    if (event.outcome === 'rejected') return 'Profile Memory operation was rejected.';
+    if (event.operation === 'forget') return concise ? `Forgot: ${concise}` : 'Profile Memory forgotten.';
+    if (event.operation === 'undo') return concise ? `Restored: ${concise}` : 'Profile Memory restored.';
+    return concise ? `Remembered: ${concise}` : 'Saved to Profile Memory.';
+}
+
+function handleMemoryOperation(data: string): void {
+    let event: MemoryOperationEvent;
+    try {
+        event = JSON.parse(data) as MemoryOperationEvent;
+    } catch {
+        return;
+    }
+    if (!event.live) return;
+    const identity = event.change_id || `${event.intent_id || ''}:${event.operation}:${event.outcome}`;
+    if (!identity || seenMemoryOperations.has(identity)) return;
+    seenMemoryOperations.add(identity);
+    const message = memorySummary(event);
+    if (event.outcome !== 'changed' || !event.change_id) {
+        showToast(message, 5000);
+        return;
+    }
+    const changeId = event.change_id;
+    showActionToast(message, {
+        actionLabel: 'Undo',
+        duration: 12_000,
+        onAction: async () => {
+            const receipt = await undoMemoryChange(changeId);
+            if (receipt.outcome !== 'changed') throw new Error('Memory undo conflicted');
+            void refreshMemorySettingsPanel().catch(() => {});
+            return 'Profile Memory change undone.';
+        },
+    });
+    void refreshMemorySettingsPanel().catch(() => {});
+}
 
 // The POST that turns one submission into a durable run. Only this window may
 // block conversation navigation; following the accepted run never does.
@@ -205,6 +260,7 @@ async function readAnswerEvents(
             answerRunStore.recordSequence(conversationId, runId, sequence);
         }
         if (conversationStore.activeConversationId !== conversationId) return;
+        if (eventType === 'memory_operation_settled') handleMemoryOperation(data);
         renderer.handle(eventType, data);
     });
     const reader = response.body.getReader();

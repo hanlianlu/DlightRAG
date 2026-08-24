@@ -26,6 +26,7 @@ from dlightrag.runtime.settlements import (
     EffectHostUpdate,
     FetchedResourceSettlementUpdate,
     InventoryPathRecord,
+    MemoryOperationSettlement,
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
@@ -148,6 +149,12 @@ def _intent_entry(session_id: SessionId, intent_id: IntentId) -> EffectIntentEnt
 
 
 def _settlement(intent_id: IntentId, update) -> EffectSettlement:
+    if isinstance(update, FetchedResourceSettlementUpdate):
+        update = EffectHostUpdate(fetched=(update,))
+    elif isinstance(update, WorkspaceInventoryUpdate):
+        update = EffectHostUpdate(workspace_inventory=update)
+    elif isinstance(update, CommittedSpillUpdate):
+        update = EffectHostUpdate(committed_outputs=(update,))
     result = ToolResultEntry.text(
         tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", text="found"
     )
@@ -708,6 +715,60 @@ async def test_live_settlement_advances_durable_progress(pool) -> None:
     )
     assert settled.__class__.__name__ == "EffectCommit"
     assert await _progress(pool, claimed.run.run_id) == after_append + 1
+
+
+async def test_memory_operation_event_is_atomic_and_exactly_once(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_store
+    session_id = SessionId.new()
+    intent_id = IntentId.new()
+    await store.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_intent_entry(session_id, intent_id)],
+    )
+    update = EffectHostUpdate(
+        memory_operation=MemoryOperationSettlement(
+            operation="remember",
+            outcome="changed",
+            change_id=str(uuid.uuid7()),
+            memory_ids=(str(uuid.uuid7()),),
+            kind="preference",
+            body="Use Chinese.",
+        )
+    )
+    settled = await store.settle_effect(
+        session_id=session_id,
+        expected_version=1,
+        intent_id=intent_id,
+        settlement=_settlement(intent_id, update),
+        entries=[_result_entry(session_id, intent_id)],
+    )
+    assert settled.__class__.__name__ == "EffectCommit"
+    replay = await store.settle_effect(
+        session_id=session_id,
+        expected_version=2,
+        intent_id=intent_id,
+        settlement=_settlement(intent_id, update),
+        entries=[_result_entry(session_id, intent_id)],
+    )
+    assert replay.__class__.__name__ == "EffectAlreadySettled"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT payload FROM dlightrag_answer_run_events "
+            "WHERE owner_id = $1 AND run_id = $2 "
+            "AND event_type = 'memory_operation_settled'",
+            _OWNER,
+            uuid.UUID(claimed.run.run_id),
+        )
+    assert len(rows) == 1
+    payload = rows[0]["payload"]
+    if isinstance(payload, str):
+        import json
+
+        payload = json.loads(payload)
+    assert payload["intent_id"] == intent_id.value
+    assert payload["body"] == "Use Chinese."
 
 
 async def test_prelude_settlement_does_not_advance_durable_progress(pool) -> None:

@@ -294,6 +294,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         working_dir=config.deployment.working_dir,
         memory_store=memory_store,
         memory_recall_enabled=memory.recall_enabled,
+        memory_capability_current=memory.capability_current,
         external_tools=outbound_tools,
         skills_global_root=Path.home() / ".agents" / "skills",
     )
@@ -323,6 +324,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             model_settings_for_role(config, role)
         ),
         research_tool_supplements=answer_executor.acceptance_research_tools,
+        memory_capability=memory.execution_capability,
     )
     web_store = PGWebConversationStore(run_store=run_store)
     return _ApplicationComponents(

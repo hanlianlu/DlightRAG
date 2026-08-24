@@ -54,6 +54,13 @@ const PRIMITIVES: PrimitiveSpec[] = [
       '</section></div></form></dialog>',
   },
   {
+    name: 'Action toast (.toast + .ui-btn)',
+    markup:
+      '<div class="toast visible ds-toast-demo" role="status">' +
+      '<span class="toast-message">Remembered: Prefers concise answers.</span>' +
+      '<button class="ui-btn toast-action" type="button">Undo</button></div>',
+  },
+  {
     name: 'Dialog text input (.ui-dialog-input)',
     markup: '<textarea class="ui-dialog-input" rows="2" placeholder="Type a workspace name..."></textarea>',
   },

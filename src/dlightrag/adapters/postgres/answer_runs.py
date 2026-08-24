@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_events (
         CHECK (event_type IN (
             'progress', 'token', 'reset',
             'tool_start', 'tool_progress', 'tool_end',
-            'done', 'error'
+            'memory_operation_settled', 'done', 'error'
         )),
     CONSTRAINT dlightrag_answer_run_events_sequence_check
         CHECK (event_sequence >= 1)

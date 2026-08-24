@@ -1,10 +1,14 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Unified settings drawer: Profile Memory and Conversation History. */
 
-import {clearMemory, putMemorySettings} from '../api/memory.ts';
+import {clearMemory} from '../api/memory.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {dialogResult} from './conversations.ts';
-import {refreshMemorySettingsPanel} from './memory.ts';
+import {
+  prepareMemorySettingsPanel,
+  refreshMemorySettingsPanel,
+  setupMemorySettings,
+} from './memory.ts';
 import {showToast} from './toast.ts';
 
 const SETTINGS_BUTTON_ID = 'settings-btn';
@@ -47,22 +51,13 @@ export function setupSettings(onDeleteAll: () => Promise<boolean>): void {
     if (event.target === dialog) dialog.close();
   });
 
+  setupMemorySettings((message) => showToast(message, 5000));
   trigger.addEventListener('click', async () => {
     refreshConversationCount();
-    try {
-      await refreshMemorySettingsPanel();
-    } catch {
+    if (!await prepareMemorySettingsPanel()) {
       showToast('Could not load memory settings.', 5000);
     }
     await openSettings();
-    const toggle = document.getElementById('memory-enabled-toggle') as HTMLInputElement | null;
-    if (toggle) {
-      try {
-        await putMemorySettings(toggle.checked);
-      } catch {
-        showToast('Could not save memory settings.', 5000);
-      }
-    }
   });
 
   // The drawer stays open behind the confirmation, exactly like Clear memory:

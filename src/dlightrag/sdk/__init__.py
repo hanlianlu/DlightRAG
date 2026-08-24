@@ -10,6 +10,8 @@ from dlightrag.sdk.client import (
     AnswerRunClient,
     AnswerRunDescriptor,
     AnswerStreamEvent,
+    ProfileMemoryReceipt,
+    ProfileMemorySettings,
     parse_sse_frames,
 )
 from dlightrag.sdk.http import (
@@ -37,6 +39,8 @@ __all__ = [
     "AnswerRunDescriptor",
     "AnswerStreamEvent",
     "AnswerRunFailedError",
+    "ProfileMemoryReceipt",
+    "ProfileMemorySettings",
     "api_url",
     "auth_headers",
     "auth_token",

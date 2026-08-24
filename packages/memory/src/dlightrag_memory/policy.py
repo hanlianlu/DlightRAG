@@ -1,54 +1,76 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Closed Memory Write checklist and the product's fixed safety bounds.
-
-The 500-character atomic-record bound caps one assertion; recall packing is
-bounded by ``RECALL_TOP_K`` (count) plus ``RECALL_CHAR_BUDGET`` (block size),
-matching the industry shape (MemMachine counts, MemoraX chars). Growth is
-absorbed by supersede folding, explicit forget/clear, natural write rates,
-and cheap storage — no fixed record ceiling, no quota (Pi/Kimi/MemMachine
-bound nothing; see the retention ADR).
-"""
+"""Closed Profile Memory operation checklist and fixed safety bounds."""
 
 from __future__ import annotations
 
 import re
 
 from dlightrag_memory.errors import MemoryWriteRejectedError
-from dlightrag_memory.models import MemoryWrite
+from dlightrag_memory.models import MemoryOperation
 
 MEMORY_BODY_LIMIT = 500
 RECALL_TOP_K = 10
 RECALL_CHAR_BUDGET = 4000
-#: Superseded profile history lives at least this long before purge. The
-#: deployment retention clock (e.g. DlightRAG RuntimeConfig's
-#: answer_run_retention_days) overrides it in composed applications.
 MEMORY_SUPERSEDE_RETENTION_DAYS = 365
 
 _CITATION_MARK = re.compile(r"\[\d+(?:-\d+)?\]")
+_PRIVATE_KEY_MARK = re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----", re.IGNORECASE)
+_TOKEN_MARK = re.compile(
+    r"(?:\bAKIA[0-9A-Z]{16}\b|\bgh[opusr]_[A-Za-z0-9_]{20,}\b|"
+    r"\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bxox[baprs]-[A-Za-z0-9-]{20,}\b|"
+    r"\bsk-[A-Za-z0-9_-]{20,}\b)"
+)
 
 
-def evaluate_memory_write(write: MemoryWrite) -> None:
-    """Accept one Memory Write or raise a public checklist error.
+def evaluate_memory_operation(operation: MemoryOperation) -> None:
+    """Validate one operation before any storage mutation."""
+    if not operation.owner_id.strip():
+        raise MemoryWriteRejectedError("A Memory operation needs an owner.")
+    if not operation.idempotency_key.strip():
+        raise MemoryWriteRejectedError("A Memory operation needs an idempotency key.")
+    if len(operation.idempotency_key) > 255:
+        raise MemoryWriteRejectedError("Memory idempotency keys cannot exceed 255 characters.")
+    if not operation.provenance.origin_id.strip():
+        raise MemoryWriteRejectedError("A Memory operation needs trusted provenance.")
+    if operation.mutation_limit is not None and operation.mutation_limit < 1:
+        raise MemoryWriteRejectedError("A Memory mutation limit must be positive.")
+    if (operation.mutation_scope is None) != (operation.mutation_limit is None):
+        raise MemoryWriteRejectedError("Memory mutation scope and limit must be provided together.")
 
-    Caller eligibility is host policy; the package never judges identity.
-    """
-    body = write.body.strip()
-    if write.action == "forget":
-        if not (write.supersedes_id or "").strip() and not body:
-            raise MemoryWriteRejectedError("A forget must name a memory or quote its body.")
+    body = operation.body.strip()
+    if operation.action == "remember":
+        if operation.kind not in {"preference", "fact"}:
+            raise MemoryWriteRejectedError("Memory kind must be preference or fact.")
+        if not body:
+            raise MemoryWriteRejectedError("Memory body cannot be empty.")
+        if len(body) > MEMORY_BODY_LIMIT:
+            raise MemoryWriteRejectedError(
+                f"Memory body cannot exceed {MEMORY_BODY_LIMIT} characters."
+            )
+        if operation.memory_id is not None or operation.target_change_id is not None:
+            raise MemoryWriteRejectedError("Remember received an incompatible target.")
+        if _CITATION_MARK.search(body):
+            raise MemoryWriteRejectedError("Memory body cannot carry citation markers.")
+        if _PRIVATE_KEY_MARK.search(body) or _TOKEN_MARK.search(body):
+            raise MemoryWriteRejectedError("Credentials and private keys cannot be remembered.")
         return
-    if write.kind not in {"preference", "fact"}:
-        raise MemoryWriteRejectedError("Memory kind must be preference or fact.")
-    if not body:
-        raise MemoryWriteRejectedError("Memory body cannot be empty.")
-    if len(body) > MEMORY_BODY_LIMIT:
-        raise MemoryWriteRejectedError(f"Memory body cannot exceed {MEMORY_BODY_LIMIT} characters.")
-    if not 0 < write.confidence <= 1:
-        raise MemoryWriteRejectedError("Memory confidence must be in (0, 1].")
-    if not write.provenance.run_id.strip() or not write.provenance.session_id.strip():
-        raise MemoryWriteRejectedError("A remember needs run and session provenance.")
-    if _CITATION_MARK.search(body):
-        raise MemoryWriteRejectedError("Memory body cannot carry citation markers.")
+
+    if operation.action == "forget":
+        selectors = sum(bool(value and value.strip()) for value in (operation.memory_id, body))
+        if selectors != 1:
+            raise MemoryWriteRejectedError("Forget needs exactly one memory id or exact body.")
+        if any((operation.kind, operation.supersedes_id, operation.target_change_id)):
+            raise MemoryWriteRejectedError("Forget received an incompatible target.")
+        return
+
+    if operation.action == "undo":
+        if not (operation.target_change_id or "").strip():
+            raise MemoryWriteRejectedError("Undo needs a change id.")
+        if any((operation.kind, body, operation.memory_id, operation.supersedes_id)):
+            raise MemoryWriteRejectedError("Undo received an incompatible target.")
+        return
+
+    raise MemoryWriteRejectedError("Unknown Memory operation.")
 
 
 __all__ = [
@@ -56,5 +78,5 @@ __all__ = [
     "MEMORY_SUPERSEDE_RETENTION_DAYS",
     "RECALL_CHAR_BUDGET",
     "RECALL_TOP_K",
-    "evaluate_memory_write",
+    "evaluate_memory_operation",
 ]

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Owner-scoped Memory Record and Memory Write shapes."""
+"""Owner-scoped Profile Memory records, operations, and receipts."""
 
 from __future__ import annotations
 
@@ -9,14 +9,19 @@ from typing import Literal
 
 MemoryKind = Literal["preference", "fact"]
 MemoryStatus = Literal["active", "superseded", "forgotten"]
+MemoryOriginKind = Literal["answer_run", "management", "mcp", "undo"]
+MemoryOperationAction = Literal["remember", "forget", "undo"]
+MemoryOperationOutcome = Literal["changed", "unchanged", "conflict"]
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryProvenance:
-    """Where a Memory Write learned this body."""
+    """Trusted host-bound source of one Memory operation."""
 
-    run_id: str
-    session_id: str = ""
+    origin_kind: MemoryOriginKind
+    origin_id: str
+    run_id: str | None = None
+    session_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +32,6 @@ class MemoryRecord:
     memory_id: str
     kind: MemoryKind
     body: str
-    confidence: float
     provenance: MemoryProvenance
     status: MemoryStatus = "active"
     supersedes_id: str | None = None
@@ -36,36 +40,56 @@ class MemoryRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class MemoryWrite:
-    """One remember or forget attempt before the store sees it.
-
-    The package never judges caller identity: eligibility is host policy and
-    the host raises its own unavailable error before reaching the façade.
-    """
+class MemoryOperation:
+    """One canonical, idempotent mutation request at the storage seam."""
 
     owner_id: str
-    kind: MemoryKind
-    body: str
-    confidence: float
+    idempotency_key: str
+    action: MemoryOperationAction
     provenance: MemoryProvenance
-    action: Literal["remember", "forget"] = "remember"
+    kind: MemoryKind | None = None
+    body: str = ""
+    memory_id: str | None = None
     supersedes_id: str | None = None
+    target_change_id: str | None = None
+    mutation_scope: str | None = None
+    mutation_limit: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class MemoryProposal:
-    """A validated formation decision before any storage mutation."""
+class MemoryOperationReceipt:
+    """Replay-stable result of one settled Memory operation."""
 
-    proposal_id: str
-    write: MemoryWrite
-    proposed_at: datetime
+    change_id: str
+    action: MemoryOperationAction
+    outcome: MemoryOperationOutcome
+    memory_ids: tuple[str, ...]
+    provenance: MemoryProvenance
+    kind: MemoryKind | None = None
+    body: str = ""
+    supersedes_id: str | None = None
+    target_change_id: str | None = None
+    mutation_scope: str | None = None
+    created_at: datetime | None = None
+
+    @property
+    def memory_id(self) -> str | None:
+        """The primary affected record, when the operation has one."""
+        return self.memory_ids[0] if self.memory_ids else None
+
+    @property
+    def changed(self) -> bool:
+        return self.outcome == "changed"
 
 
 __all__ = [
     "MemoryKind",
-    "MemoryProposal",
+    "MemoryOperation",
+    "MemoryOperationAction",
+    "MemoryOperationOutcome",
+    "MemoryOperationReceipt",
+    "MemoryOriginKind",
     "MemoryProvenance",
     "MemoryRecord",
     "MemoryStatus",
-    "MemoryWrite",
 ]

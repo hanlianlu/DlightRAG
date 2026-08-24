@@ -382,6 +382,7 @@ def _service(
     capabilities: Any = None,
     capability_view: Any = None,
     resources: Any = None,
+    memory_capability: Any = None,
 ) -> AnswerService:
     return AnswerService(
         store=store or _Store(),
@@ -392,6 +393,7 @@ def _service(
         models=MagicMock(query_image_describer=MagicMock(return_value=MagicMock())),
         resources=resources or _Resources(),
         model_fingerprint_for_role=_fingerprint,
+        memory_capability=memory_capability,
     )
 
 
@@ -399,6 +401,42 @@ def _request(**overrides: Any) -> AnswerRequest:
     values: dict[str, Any] = {"query": "why?", "workspaces": ("finance",)}
     values.update(overrides)
     return AnswerRequest(**values)
+
+
+async def test_acceptance_pins_disabled_profile_memory_without_reserving_its_capability() -> None:
+    store = _Store()
+
+    async def disabled(**_kwargs: Any) -> tuple[bool, int]:
+        return False, 7
+
+    service = _service(store=store, memory_capability=disabled)
+    await service.create(
+        request=_request(mode="research"),
+        owner_id=_OWNER,
+        auth_mode="jwt",
+    )
+
+    prepared = store.created[0]["prepared_input"]
+    assert prepared["profile_memory_enabled"] is False
+    assert prepared["profile_memory_epoch"] == 7
+
+
+async def test_fast_acceptance_never_enters_profile_memory_capability() -> None:
+    store = _Store()
+
+    async def unexpected(**_kwargs: Any) -> tuple[bool, int]:
+        raise AssertionError("Fast mode must not read Profile Memory settings")
+
+    service = _service(store=store, memory_capability=unexpected)
+    await service.create(
+        request=_request(mode="fast"),
+        owner_id=_OWNER,
+        auth_mode="jwt",
+    )
+
+    prepared = store.created[0]["prepared_input"]
+    assert prepared["profile_memory_enabled"] is False
+    assert prepared["profile_memory_epoch"] == 0
 
 
 async def test_explicit_fast_with_pdf_creates_no_run() -> None:

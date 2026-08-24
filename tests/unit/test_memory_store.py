@@ -1,18 +1,22 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""In-memory Memory Record store isolation and checklist commit."""
+"""In-memory Profile Memory operation, receipt, and lifecycle semantics."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
-from dlightrag_memory.store import InMemoryMemoryStore, commit_memory_write
+from dlightrag_memory import Memory, MemoryProvenance, MemoryRecord
+from dlightrag_memory.store import InMemoryMemoryStore
 
 from dlightrag.answer.errors import MemoryWriteRejectedError
-from dlightrag.answer.memory import (
-    MEMORY_SUPERSEDE_RETENTION_DAYS,
-    MemoryProvenance,
-    MemoryRecord,
-    MemoryWrite,
-)
+
+
+def _provenance(run_id: str = "run-1") -> MemoryProvenance:
+    return MemoryProvenance(
+        origin_kind="answer_run",
+        origin_id=run_id,
+        run_id=run_id,
+        session_id="session-1",
+    )
 
 
 def _record(
@@ -24,226 +28,197 @@ def _record(
         memory_id=memory_id,
         kind="preference",
         body=body,
-        confidence=0.8,
-        provenance=MemoryProvenance(run_id="run-1", session_id="sess-1"),
+        provenance=_provenance(),
         created_at=now,
         updated_at=now,
     )
 
 
-def _remember(**overrides: object) -> MemoryWrite:
-    payload: dict[str, object] = {
-        "owner_id": "alpha",
-        "kind": "preference",
-        "body": "No email.",
-        "confidence": 0.8,
-        "provenance": MemoryProvenance(run_id="run-1", session_id="sess-1"),
-    }
-    payload.update(overrides)
-    return MemoryWrite(**payload)  # type: ignore[arg-type]
+async def _remember(
+    memory: Memory,
+    *,
+    key: str,
+    body: str = "No email.",
+    kind: str = "preference",
+    supersedes_id: str | None = None,
+    scope: str | None = None,
+    limit: int | None = None,
+):
+    return await memory.remember(
+        owner_id="alpha",
+        kind=kind,  # type: ignore[arg-type]
+        body=body,
+        provenance=_provenance(),
+        idempotency_key=key,
+        supersedes_id=supersedes_id,
+        mutation_scope=scope,
+        mutation_limit=limit,
+    )
 
 
 async def test_owners_cannot_read_each_other() -> None:
     store = InMemoryMemoryStore()
     await store.insert(_record(owner="alpha", memory_id="m1"))
     await store.insert(_record(owner="beta", memory_id="m1", body="Other."))
-    alpha = await store.list_active(owner_id="alpha")
-    beta = await store.list_active(owner_id="beta")
-    assert [row.body for row in alpha] == ["No email."]
-    assert [row.body for row in beta] == ["Other."]
+    assert [row.body for row in await store.list_active(owner_id="alpha")] == ["No email."]
+    assert [row.body for row in await store.list_active(owner_id="beta")] == ["Other."]
 
 
-async def test_supersede_hides_old_and_forget_leaves_tombstone() -> None:
-    store = InMemoryMemoryStore()
-    await store.insert(_record(memory_id="old"))
-    replacement = _record(memory_id="new", body="Use chat only.")
-    await store.supersede(owner_id="alpha", old_id="old", new=replacement)
-    active = await store.list_active(owner_id="alpha")
-    assert [row.memory_id for row in active] == ["new"]
-    superseded = await store.get(owner_id="alpha", memory_id="old")
-    assert superseded is not None
-    assert superseded.status == "superseded"
-    assert await store.forget(owner_id="alpha", memory_id="new") is True
-    forgotten = await store.get(owner_id="alpha", memory_id="new")
-    assert forgotten is not None
-    assert forgotten.status == "forgotten"
-    assert await store.forget(owner_id="alpha", memory_id="new") is False
-
-
-async def test_commit_remember() -> None:
-    store = InMemoryMemoryStore()
-    written = await commit_memory_write(store, _remember())
-    assert written is not None
-    assert written.body == "No email."
-
-
-async def test_proposal_commit_is_replay_idempotent() -> None:
-    from dlightrag_memory import Memory
-
+async def test_operation_replay_returns_the_original_receipt() -> None:
     memory = Memory(InMemoryMemoryStore())
-    proposal = memory.propose_remember(
-        owner_id="alpha",
-        kind="fact",
-        body="Stable.",
-        confidence=1.0,
-        provenance=MemoryProvenance(run_id="r", session_id="s"),
-        proposal_id="turn-1-call-1",
-    )
+    first = await _remember(memory, key="call-1")
+    replay = await _remember(memory, key="call-1")
 
-    first = await memory.commit(proposal)
-    replay = await memory.commit(proposal)
-
-    assert first is not None
+    assert first.outcome == "changed"
     assert replay == first
+    assert len(await memory.list_active(owner_id="alpha")) == 1
 
 
-async def test_supersede_missing_id_is_a_public_reject() -> None:
-    store = InMemoryMemoryStore()
-    with pytest.raises(MemoryWriteRejectedError, match="No matching memory to replace"):
-        await commit_memory_write(
-            store,
-            MemoryWrite(
-                owner_id="alpha",
-                kind="fact",
-                body="Replacement.",
-                confidence=1.0,
-                provenance=MemoryProvenance(run_id="r", session_id="s"),
-                supersedes_id="missing",
-            ),
+async def test_owner_guard_rejects_before_journal_or_record_settlement() -> None:
+    memory = Memory(InMemoryMemoryStore())
+
+    async def reject(_settlement: object | None) -> None:
+        raise MemoryWriteRejectedError("capability changed")
+
+    with pytest.raises(MemoryWriteRejectedError, match="capability changed"):
+        await memory.remember(
+            owner_id="alpha",
+            kind="fact",
+            body="Lives in Gothenburg.",
+            provenance=_provenance(),
+            idempotency_key="call-1",
+            guard=reject,
         )
 
-
-async def test_service_purge_expired_uses_retention_cutoff() -> None:
-    from dlightrag.services.memory import MemoryService
-
-    store = InMemoryMemoryStore()
-    await store.insert(_record(memory_id="old"))
-    await store.supersede(owner_id="alpha", old_id="old", new=_record(memory_id="new"))
-    stale = await store.get(owner_id="alpha", memory_id="old")
-    assert stale is not None
-    store._rows[("alpha", "old")] = MemoryRecord(
-        owner_id=stale.owner_id,
-        memory_id=stale.memory_id,
-        kind=stale.kind,
-        body=stale.body,
-        confidence=stale.confidence,
-        provenance=stale.provenance,
-        status="superseded",
-        created_at=stale.created_at,
-        updated_at=datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS + 10),
-    )
-    removed = await MemoryService(store).purge_expired()
-    assert removed == 1
+    assert await memory.list_active(owner_id="alpha") == ()
+    settled = await _remember(memory, key="call-1", body="Lives in Gothenburg.", kind="fact")
+    assert settled.outcome == "changed"
 
 
-async def test_purge_only_old_superseded_rows() -> None:
-    store = InMemoryMemoryStore()
-    await store.insert(_record(memory_id="old"))
-    await store.supersede(owner_id="alpha", old_id="old", new=_record(memory_id="new"))
-    stale = await store.get(owner_id="alpha", memory_id="old")
-    assert stale is not None
-    store._rows[("alpha", "old")] = MemoryRecord(
-        owner_id=stale.owner_id,
-        memory_id=stale.memory_id,
-        kind=stale.kind,
-        body=stale.body,
-        confidence=stale.confidence,
-        provenance=stale.provenance,
-        status="superseded",
-        created_at=stale.created_at,
-        updated_at=datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS + 10),
-    )
-    assert MEMORY_SUPERSEDE_RETENTION_DAYS == 365
-    removed = await store.purge_superseded(
-        older_than=datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS)
-    )
-    assert removed == 1
-    assert await store.get(owner_id="alpha", memory_id="old") is None
-    assert await store.get(owner_id="alpha", memory_id="new") is not None
+async def test_reusing_an_idempotency_key_with_different_input_rejects() -> None:
+    memory = Memory(InMemoryMemoryStore())
+    await _remember(memory, key="call-1")
+
+    with pytest.raises(MemoryWriteRejectedError, match="different input"):
+        await _remember(memory, key="call-1", body="Use chat.")
 
 
-async def test_forget_all_selectors_are_exclusive_and_complete() -> None:
-    from dlightrag_memory import Memory
+async def test_semantic_duplicate_is_unchanged_without_another_record() -> None:
+    memory = Memory(InMemoryMemoryStore())
+    first = await _remember(memory, key="call-1", body="Use Chinese.")
+    duplicate = await _remember(memory, key="call-2", body="  use chinese.  ")
 
+    assert first.outcome == "changed"
+    assert duplicate.outcome == "unchanged"
+    assert duplicate.memory_id == first.memory_id
+    assert await memory.count_active(owner_id="alpha") == 1
+
+
+async def test_supersede_and_compensating_undo_preserve_history() -> None:
     store = InMemoryMemoryStore()
     memory = Memory(store)
-    await memory.remember(
-        owner_id="alpha",
+    old = await _remember(memory, key="call-1", body="Lives in Beijing.", kind="fact")
+    replacement = await _remember(
+        memory,
+        key="call-2",
+        body="Lives in Gothenburg.",
         kind="fact",
-        body="First.",
-        confidence=1.0,
-        provenance=MemoryProvenance(run_id="r", session_id="s"),
-    )
-    await memory.remember(
-        owner_id="alpha",
-        kind="fact",
-        body="Second.",
-        confidence=1.0,
-        provenance=MemoryProvenance(run_id="r", session_id="s"),
+        supersedes_id=old.memory_id,
     )
 
-    try:
-        await memory.forget(owner_id="alpha")
-    except ValueError as exc:
-        assert "exactly one" in str(exc)
-    else:
-        raise AssertionError("forget without a selector must be rejected")
+    assert replacement.outcome == "changed"
+    assert [row.body for row in await memory.list_active(owner_id="alpha")] == [
+        "Lives in Gothenburg."
+    ]
 
-    await memory.forget(owner_id="alpha", all=True)
+    undone = await memory.undo(
+        owner_id="alpha",
+        change_id=replacement.change_id,
+        provenance=MemoryProvenance(origin_kind="undo", origin_id="undo-1"),
+        idempotency_key="undo-1",
+    )
+
+    assert undone.outcome == "changed"
+    assert [row.body for row in await memory.list_active(owner_id="alpha")] == ["Lives in Beijing."]
+    current = await store.get(owner_id="alpha", memory_id=replacement.memory_id or "")
+    assert current is not None and current.status == "superseded"
+
+
+async def test_forget_and_undo_restore_as_a_new_active_record() -> None:
+    memory = Memory(InMemoryMemoryStore())
+    remembered = await _remember(memory, key="call-1", body="Prefers concise answers.")
+    forgotten = await memory.forget(
+        owner_id="alpha",
+        memory_id=remembered.memory_id,
+        provenance=_provenance(),
+        idempotency_key="forget-1",
+    )
+    assert forgotten.outcome == "changed"
     assert await memory.list_active(owner_id="alpha") == ()
 
-
-async def test_recall_searches_with_query_and_orders_chronologically() -> None:
-    from dlightrag_memory import Memory
-
-    store = InMemoryMemoryStore()
-    memory = Memory(store)
-    await memory.remember(
+    undone = await memory.undo(
         owner_id="alpha",
-        kind="preference",
-        body="No email.",
-        confidence=0.9,
-        provenance=MemoryProvenance(run_id="r", session_id="s"),
+        change_id=forgotten.change_id,
+        provenance=MemoryProvenance(origin_kind="undo", origin_id="undo-1"),
+        idempotency_key="undo-1",
     )
-    await memory.remember(
+    assert undone.outcome == "changed"
+    (restored,) = await memory.list_active(owner_id="alpha")
+    assert restored.body == "Prefers concise answers."
+    assert restored.memory_id != remembered.memory_id
+
+
+async def test_stale_or_repeated_undo_conflicts() -> None:
+    memory = Memory(InMemoryMemoryStore())
+    remembered = await _remember(memory, key="call-1")
+    first = await memory.undo(
         owner_id="alpha",
-        kind="fact",
-        body="Unrelated fact about trains.",
-        confidence=0.9,
-        provenance=MemoryProvenance(run_id="r", session_id="s"),
+        change_id=remembered.change_id,
+        provenance=MemoryProvenance(origin_kind="undo", origin_id="undo-1"),
+        idempotency_key="undo-1",
     )
+    second = await memory.undo(
+        owner_id="alpha",
+        change_id=remembered.change_id,
+        provenance=MemoryProvenance(origin_kind="undo", origin_id="undo-2"),
+        idempotency_key="undo-2",
+    )
+    assert first.outcome == "changed"
+    assert second.outcome == "conflict"
+
+
+async def test_per_run_cap_counts_only_changed_mutations() -> None:
+    memory = Memory(InMemoryMemoryStore())
+    first = await _remember(memory, key="call-1", body="One.", scope="run-1", limit=2)
+    duplicate = await _remember(memory, key="call-2", body="one.", scope="run-1", limit=2)
+    await _remember(memory, key="call-3", body="Two.", scope="run-1", limit=2)
+
+    assert first.changed
+    assert duplicate.outcome == "unchanged"
+    with pytest.raises(MemoryWriteRejectedError, match="mutation limit"):
+        await _remember(memory, key="call-4", body="Three.", scope="run-1", limit=2)
+    assert await memory.count_active(owner_id="alpha") == 2
+
+
+async def test_clear_physically_removes_records_and_operation_replay() -> None:
+    memory = Memory(InMemoryMemoryStore())
+    first = await _remember(memory, key="call-1")
+    assert await memory.clear(owner_id="alpha") == 1
+    assert await memory.list_active(owner_id="alpha") == ()
+
+    replay_after_clear = await _remember(memory, key="call-1")
+    assert replay_after_clear.changed
+    assert replay_after_clear.change_id == first.change_id
+    assert await memory.count_active(owner_id="alpha") == 1
+
+
+async def test_recall_searches_with_query() -> None:
+    memory = Memory(InMemoryMemoryStore())
+    await _remember(memory, key="call-1", body="No email.")
+    await _remember(memory, key="call-2", body="Unrelated fact about trains.", kind="fact")
 
     result = await memory.recall(owner_id="alpha", query="email", top_k=5)
 
     assert result.strategy == "query_search"
     assert [record.body for record in result.records] == ["No email."]
     assert result.content_chars == len("No email.")
-
-    empty = await memory.recall(owner_id="alpha", query="zzz-nothing-matches")
-    assert empty.records == ()
-    assert empty.candidates == ()
-
-
-async def test_memory_service_settings_and_clear() -> None:
-    from dlightrag.services.memory import InMemoryMemorySettingsStore, MemoryService
-
-    service = MemoryService(InMemoryMemoryStore(), settings_store=InMemoryMemorySettingsStore())
-    owner = dict(owner_id="alpha", auth_mode="jwt")
-
-    settings = await service.settings(**owner)
-    assert settings.enabled is True
-    assert settings.active_count == 0
-
-    await service.set_enabled(**owner, enabled=False)
-    assert (await service.settings(**owner)).enabled is False
-    assert await service.recall_enabled(owner_id="alpha") is False
-
-    # Disabled stops injection, not management.
-    await service.set_enabled(**owner, enabled=True)
-    assert await service.recall_enabled(owner_id="alpha") is True
-
-    # Clear is idempotent and leaves enablement untouched.
-    await service.clear(**owner)
-    await service.clear(**owner)
-    assert (await service.settings(**owner)).active_count == 0
-    assert (await service.settings(**owner)).enabled is True

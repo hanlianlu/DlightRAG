@@ -3,7 +3,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +144,20 @@ class CommittedSpillUpdate:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryOperationSettlement:
+    """Owner-safe product receipt projected from one settled Memory tool call."""
+
+    operation: Literal["remember", "forget", "undo"]
+    outcome: Literal["changed", "unchanged", "rejected", "conflict"]
+    change_id: str | None = None
+    memory_ids: Sequence[str] = ()
+    kind: str | None = None
+    body: str = ""
+    supersedes_id: str | None = None
+    target_change_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class EffectHostUpdate:
     """Complete host-side effect batch committed with one model-visible result."""
 
@@ -152,6 +166,7 @@ class EffectHostUpdate:
     fetched: Sequence[FetchedResourceSettlementUpdate] = ()
     committed_outputs: Sequence[CommittedSpillUpdate] = ()
     workspace_inventory: WorkspaceInventoryUpdate | None = None
+    memory_operation: MemoryOperationSettlement | None = None
 
 
 __all__ = [
@@ -160,6 +175,7 @@ __all__ = [
     "EffectHostUpdate",
     "FetchedResourceSettlementUpdate",
     "InventoryPathRecord",
+    "MemoryOperationSettlement",
     "OpaqueEvidenceResourceWrite",
     "OpaqueEvidenceWrite",
     "OpaqueFetchedResourceWrite",

@@ -37,6 +37,7 @@ class ContextAssembler:
         memory_text: str = "",
         contributions: tuple[ContextContribution, ...] = (),
         tool_guidance: tuple[str, ...] = (),
+        profile_memory_write: bool = False,
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
@@ -47,6 +48,7 @@ class ContextAssembler:
         self._memory_text = memory_text
         self._contributions = contributions
         self._tool_guidance = tool_guidance
+        self._profile_memory_write = profile_memory_write
 
     async def control_turn(
         self,
@@ -151,7 +153,10 @@ class ContextAssembler:
         *,
         tool_schema_tokens: int = 0,
     ) -> list[dict[str, Any]]:
-        system = {"role": "system", "content": agent_control_prompt()}
+        system = {
+            "role": "system",
+            "content": agent_control_prompt(profile_memory_write=self._profile_memory_write),
+        }
         head = self._head(system, working.messages())
         tail: list[ContextContribution] = []
         if self._tool_guidance:

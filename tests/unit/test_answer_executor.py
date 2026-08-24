@@ -415,12 +415,14 @@ async def test_research_run_seeds_facts_without_duplicating_pinned_history() -> 
 
     assert result["answer"] == ""
     snapshot = await journal.load(SessionId(request.session_id))
-    assert snapshot.version == 2
+    assert snapshot.version == 1
     kinds = {entry.__class__.__name__ for entry in snapshot.entries}
-    assert "ProfileFactEntry" in kinds
     assert "RunSegmentEntry" in kinds
     assert "UserMessageEntry" not in kinds  # pinned history is a contribution, not journal
-    assert any(getattr(entry, "key", "") == "profile_memory_snapshot" for entry in snapshot.entries)
+    assert not any(
+        str(getattr(entry, "key", "")).startswith("profile_memory_snapshot:")
+        for entry in snapshot.entries
+    )
     orchestrator.answer_stream.assert_awaited_once()
 
 
@@ -632,6 +634,50 @@ def test_fetched_resource_batches_are_atomic_and_session_scoped() -> None:
     assert [item.resource_id for item in buffer.drain(scope=child.value, call_id="call-1")] == [
         "child-a"
     ]
+
+
+def test_memory_operation_details_become_a_typed_product_host_update() -> None:
+    from dlightrag.agent.session.effects import EffectIntent
+    from dlightrag.agent.session.ids import IntentId, SessionId
+    from dlightrag.agent.tools import ToolEffects
+    from dlightrag.answer.executor import FetchedResourceBuffer, JournalRunBoundaries
+
+    intent = EffectIntent(
+        intent_id=IntentId.new(),
+        tool_name="remember",
+        replay_policy="safe",
+        contract_version=1,
+        input_schema_digest="a" * 64,
+        canonical_input="{}",
+        source_call_id="call-1",
+    )
+    boundaries = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=MagicMock(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        tools_by_name={},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+    )
+    update = boundaries._host_update(
+        intent,
+        ToolEffects(),
+        {
+            "memory_operation": {
+                "operation": "remember",
+                "outcome": "changed",
+                "change_id": "change-1",
+                "memory_ids": ["memory-1"],
+                "kind": "preference",
+                "body": "Use Chinese.",
+            }
+        },
+    )
+
+    assert update.memory_operation is not None
+    assert update.memory_operation.change_id == "change-1"
+    assert update.memory_operation.body == "Use Chinese."
 
 
 async def test_non_last_spawn_settlement_carries_adopted_evidence() -> None:
@@ -863,6 +909,7 @@ async def test_profile_memory_recall_snapshot_is_replay_stable() -> None:
         snapshot=snapshot,
         session_id=session_id,
         owner_id="owner",
+        run_id="run-1",
         query="question",
     )
     second = await _resolve_profile_memory_snapshot(
@@ -871,11 +918,23 @@ async def test_profile_memory_recall_snapshot_is_replay_stable() -> None:
         snapshot=first[3],
         session_id=session_id,
         owner_id="owner",
+        run_id="run-1",
         query="different replay query",
     )
 
+    third = await _resolve_profile_memory_snapshot(
+        memory=memory,
+        journal=journal,  # type: ignore[arg-type]
+        snapshot=second[3],
+        session_id=session_id,
+        owner_id="owner",
+        run_id="run-2",
+        query="new run query",
+    )
+
     assert first[:3] == second[:3]
-    memory.recall.assert_awaited_once()
+    assert third[:3] == first[:3]
+    assert memory.recall.await_count == 2
 
 
 async def test_control_replay_deduplicates_after_append_before_ack() -> None:

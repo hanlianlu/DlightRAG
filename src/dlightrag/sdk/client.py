@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
@@ -55,6 +56,45 @@ class AnswerRunDescriptor:
                 str(payload["continuation_kind"]) if payload.get("continuation_kind") else None
             ),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileMemoryReceipt:
+    """One settled direct Profile Memory operation."""
+
+    action: str
+    outcome: str
+    change_id: str
+    memory_ids: tuple[str, ...]
+    kind: str | None = None
+    body: str = ""
+    supersedes_id: str | None = None
+    target_change_id: str | None = None
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> ProfileMemoryReceipt:
+        return cls(
+            action=str(payload["action"]),
+            outcome=str(payload["outcome"]),
+            change_id=str(payload["change_id"]),
+            memory_ids=tuple(str(item) for item in payload.get("memory_ids") or ()),
+            kind=str(payload["kind"]) if payload.get("kind") is not None else None,
+            body=str(payload.get("body") or ""),
+            supersedes_id=(
+                str(payload["supersedes_id"]) if payload.get("supersedes_id") is not None else None
+            ),
+            target_change_id=(
+                str(payload["target_change_id"])
+                if payload.get("target_change_id") is not None
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileMemorySettings:
+    enabled: bool
+    active_count: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,10 +372,71 @@ class AnswerRunClient:
         payload = response.json()
         return list(payload.get("memories") or [])
 
-    async def forget_memory(self, memory_id: str) -> None:
-        response = await self._client.delete(
-            self._url(f"/memory/{memory_id}"), headers=self._headers
+    async def remember_memory(
+        self,
+        *,
+        kind: str,
+        body: str,
+        supersedes_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> ProfileMemoryReceipt:
+        key = idempotency_key or str(uuid4())
+        response = await self._client.post(
+            self._url("/memory"),
+            json={"kind": kind, "body": body, "supersedes_id": supersedes_id},
+            headers={**self._headers, "Idempotency-Key": key},
         )
+        response.raise_for_status()
+        return ProfileMemoryReceipt.from_payload(response.json())
+
+    async def forget_memory(
+        self, memory_id: str, *, idempotency_key: str | None = None
+    ) -> ProfileMemoryReceipt:
+        key = idempotency_key or str(uuid4())
+        response = await self._client.delete(
+            self._url(f"/memory/{memory_id}"),
+            headers={**self._headers, "Idempotency-Key": key},
+        )
+        response.raise_for_status()
+        return ProfileMemoryReceipt.from_payload(response.json())
+
+    async def undo_memory_change(
+        self, change_id: str, *, idempotency_key: str | None = None
+    ) -> ProfileMemoryReceipt:
+        key = idempotency_key or str(uuid4())
+        response = await self._client.post(
+            self._url(f"/memory/changes/{change_id}/undo"),
+            headers={**self._headers, "Idempotency-Key": key},
+        )
+        response.raise_for_status()
+        return ProfileMemoryReceipt.from_payload(response.json())
+
+    async def memory_settings(self) -> ProfileMemorySettings:
+        response = await self._client.get(self._url("/memory/settings"), headers=self._headers)
+        response.raise_for_status()
+        payload = response.json()
+        count = payload.get("active_count")
+        return ProfileMemorySettings(
+            enabled=bool(payload["enabled"]),
+            active_count=int(count) if count is not None else None,
+        )
+
+    async def set_memory_enabled(self, enabled: bool) -> ProfileMemorySettings:
+        response = await self._client.put(
+            self._url("/memory/settings"),
+            json={"enabled": enabled},
+            headers=self._headers,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        count = payload.get("active_count")
+        return ProfileMemorySettings(
+            enabled=bool(payload["enabled"]),
+            active_count=int(count) if count is not None else None,
+        )
+
+    async def clear_memory(self) -> None:
+        response = await self._client.post(self._url("/memory/clear"), headers=self._headers)
         response.raise_for_status()
 
     async def list_artifacts(self, run_id: str) -> list[dict[str, Any]]:
@@ -393,5 +494,7 @@ __all__ = [
     "AnswerRunClient",
     "AnswerRunDescriptor",
     "AnswerStreamEvent",
+    "ProfileMemoryReceipt",
+    "ProfileMemorySettings",
     "parse_sse_frames",
 ]

@@ -127,8 +127,9 @@ def build_bm25_sql(*, index_name: str, limit: int) -> str:
     if limit_value < 1:
         raise ValueError("BM25 limit must be positive")
     return (  # noqa: S608 - interpolates only the validated index name
-        "SELECT owner_id, memory_id, kind, body, normalized_body, confidence, "  # noqa: S608
-        "run_id, session_id, status, supersedes_id, embedding_fingerprint, "
+        "SELECT owner_id, memory_id, kind, body, normalized_body, "  # noqa: S608
+        "origin_kind, origin_id, run_id, session_id, status, supersedes_id, "
+        "embedding_fingerprint, "
         "created_at, updated_at, "
         f"-(body <@> to_bm25query($1, '{safe_index}')) AS score "  # noqa: S608
         "FROM dlightrag_memory_records "

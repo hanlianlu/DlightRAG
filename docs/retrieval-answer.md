@@ -283,14 +283,15 @@ One `AnswerOrchestrator` executes the durable Resolved Mode:
 
 - **Fast Answer** — requested or routed `fast`. Planning, KB retrieval, and one
   lightweight model invocation use shared Context Contribution, Evidence,
-  citation, Profile Memory, model-call, and usage infrastructure. Fast creates
-  no Agent Session, workspace, tools, or publication.
+  citation, model-call, and usage infrastructure. Fast never enters Profile
+  Memory and creates no Agent Session, workspace, tools, or publication.
 - **Research** — requested or routed `research`. The product-neutral AgentLoop
   projects the canonical linear journal as a parent-linked selected-head view and selects from the
   run-local ToolRegistry: KB/resource/Web tools, the seven-tool filesystem set
   (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, in Pi order with
-  metadata-only live tool progress), parent
-  Profile Memory tools, progressive `load_skill`, outbound MCP tools, and
+  metadata-only live tool progress), parent Profile Memory
+  remember/forget/recall tools (children recall only), progressive
+  `load_skill`, outbound MCP tools, and
   `spawn_agent` plus child status/wait/cancel. Foreground children may run in
   parallel with selected context/model/inherited tools; adopted Evidence is
   parent-citable and persists before spawn settlement. A no-tool assistant turn

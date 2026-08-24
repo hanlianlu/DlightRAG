@@ -60,6 +60,7 @@ def _browser_payload(
     *,
     downloadable_workspaces: set[str] | None,
     visual_workspaces: set[str] | None,
+    live_after: int | None,
 ) -> Any:
     payload = dict(event.payload)
     match event.event_type:
@@ -83,6 +84,22 @@ def _browser_payload(
                 "attachment_count",
             }
             return {key: value for key, value in payload.items() if key in allowed}
+        case "memory_operation_settled":
+            allowed = {
+                "body",
+                "change_id",
+                "intent_id",
+                "kind",
+                "memory_ids",
+                "operation",
+                "outcome",
+                "session_id",
+                "supersedes_id",
+                "target_change_id",
+            }
+            safe = {key: value for key, value in payload.items() if key in allowed}
+            safe["live"] = live_after is None or event.sequence > live_after
+            return safe
         case "done":
             return render_done_event(
                 payload,
@@ -101,6 +118,7 @@ def browser_frame(
     *,
     downloadable_workspaces: set[str] | None = None,
     visual_workspaces: set[str] | None = None,
+    live_after: int | None = None,
 ) -> str:
     """Render one durable event as the frame this browser session reads."""
     return sse_frame(
@@ -110,6 +128,7 @@ def browser_frame(
             event,
             downloadable_workspaces=downloadable_workspaces,
             visual_workspaces=visual_workspaces,
+            live_after=live_after,
         ),
     )
 

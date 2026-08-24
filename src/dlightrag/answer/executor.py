@@ -156,6 +156,7 @@ from dlightrag.runtime.settlements import (
     EffectHostUpdate,
     FetchedResourceSettlementUpdate,
     InventoryPathRecord,
+    MemoryOperationSettlement,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
     WorkspaceInventoryUpdate,
@@ -547,11 +548,15 @@ async def _resolve_profile_memory_snapshot(
     snapshot: Any,
     session_id: SessionId,
     owner_id: str,
+    run_id: str,
     query: str,
 ) -> tuple[str, int, int, Any]:
-    """Load or durably pin one replay-stable Profile Memory contribution."""
+    """Load or durably pin one run-scoped Profile Memory contribution."""
+    if memory is None:
+        return "", 0, 0, snapshot
+    snapshot_key = f"profile_memory_snapshot:{run_id}"
     for entry in snapshot.entries:
-        if isinstance(entry, ProfileFactEntry) and entry.key == "profile_memory_snapshot":
+        if isinstance(entry, ProfileFactEntry) and entry.key == snapshot_key:
             value = entry.value if isinstance(entry.value, dict) else {}
             return (
                 str(value.get("text") or ""),
@@ -562,11 +567,10 @@ async def _resolve_profile_memory_snapshot(
     text = ""
     count = 0
     content_chars = 0
-    if memory is not None:
-        recalled = await memory.recall(owner_id=owner_id, query=query)
-        text = render_auto_recall(recalled.records)
-        count = len(recalled.records)
-        content_chars = recalled.content_chars
+    recalled = await memory.recall(owner_id=owner_id, query=query)
+    text = render_auto_recall(recalled.records)
+    count = len(recalled.records)
+    content_chars = recalled.content_chars
     commit = await journal.append(
         session_id=session_id,
         expected_version=snapshot.version,
@@ -575,7 +579,7 @@ async def _resolve_profile_memory_snapshot(
                 entry_id=EntryId.new(),
                 session_id=session_id,
                 timestamp=_entry_timestamp(),
-                key="profile_memory_snapshot",
+                key=snapshot_key,
                 value={
                     "text": text,
                     "record_count": count,
@@ -621,6 +625,7 @@ class AnswerExecutor:
         working_dir: str = "./dlightrag_storage",
         memory_store: MemoryStore | None = None,
         memory_recall_enabled: Callable[..., Awaitable[bool]] | None = None,
+        memory_capability_current: Callable[..., Awaitable[bool]] | None = None,
         external_tools: tuple[AgentTool, ...] = (),
         trusted_extensions: TrustedExtensions | None = None,
         skills_global_root: Path | None = None,
@@ -639,6 +644,7 @@ class AnswerExecutor:
         self._memory_store = memory_store
         self._memory = Memory(memory_store) if memory_store is not None else None
         self._memory_recall_enabled = memory_recall_enabled
+        self._memory_capability_current = memory_capability_current
         self._external_tools = external_tools
         self._trusted_extensions = trusted_extensions or TrustedExtensions()
         self._skills_global_root = skills_global_root
@@ -806,10 +812,20 @@ class AnswerExecutor:
             model_profiles=model_profiles,
         )
         auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
-        recall_allowed = True
+        prepared_input = session.prepared_input or {}
+        recall_allowed = resolved_mode == "research" and bool(
+            prepared_input.get("profile_memory_enabled", True)
+        )
+        memory_epoch = int(prepared_input.get("profile_memory_epoch") or 0)
         memory_recall_record_count = 0
         memory_recall_chars = 0
-        if self._memory is not None and memory_owner_allowed(auth_mode):
+        if self._memory is None or not memory_owner_allowed(auth_mode):
+            recall_allowed = False
+        elif recall_allowed and self._memory_capability_current is not None:
+            recall_allowed = await self._memory_capability_current(
+                owner_id=session.owner_id, epoch=memory_epoch
+            )
+        elif recall_allowed:
             recall_allowed = await _memory_recall_allowed(
                 self._memory_recall_enabled, owner_id=session.owner_id
             )
@@ -857,6 +873,8 @@ class AnswerExecutor:
                     session_id=session_id.value,
                     store=self._memory_store,
                     enabled=recall_allowed,
+                    epoch=memory_epoch,
+                    capability_current=self._memory_capability_current,
                 )
                 run.orchestrator.bind_subagents(
                     parent_session_id=session_id,
@@ -890,6 +908,7 @@ class AnswerExecutor:
                     snapshot=snapshot,
                     session_id=session_id,
                     owner_id=session.owner_id,
+                    run_id=session.run_id,
                     query=request.query,
                 )
                 run.orchestrator.bind_recall(memory_text)
@@ -935,14 +954,6 @@ class AnswerExecutor:
                     },
                 )
                 await fast_boundaries.settle_planner()
-                if self._memory is not None and recall_allowed:
-                    recalled = await self._memory.recall(
-                        owner_id=session.owner_id,
-                        query=request.query,
-                    )
-                    run.orchestrator.bind_recall(render_auto_recall(recalled.records))
-                    memory_recall_record_count = len(recalled.records)
-                    memory_recall_chars = recalled.content_chars
 
             async with self._telemetry.observe(
                 "answer_orchestration",
@@ -1345,6 +1356,38 @@ def _buffered_fetched_bytes_sink(buffer: FetchedResourceBuffer) -> FetchedBytesS
     return persist
 
 
+def _memory_operation_settlement(
+    details: Mapping[str, Any] | None,
+) -> MemoryOperationSettlement | None:
+    """Decode the product-owned Memory receipt envelope; never infer from text."""
+    if not isinstance(details, Mapping):
+        return None
+    raw = details.get("memory_operation")
+    if not isinstance(raw, Mapping):
+        return None
+    operation = str(raw.get("operation") or "")
+    outcome = str(raw.get("outcome") or "")
+    if operation not in {"remember", "forget", "undo"}:
+        return None
+    if outcome not in {"changed", "unchanged", "rejected", "conflict"}:
+        return None
+    memory_ids = raw.get("memory_ids")
+    return MemoryOperationSettlement(
+        operation=operation,  # type: ignore[arg-type]
+        outcome=outcome,  # type: ignore[arg-type]
+        change_id=str(raw["change_id"]) if raw.get("change_id") else None,
+        memory_ids=(
+            tuple(str(memory_id) for memory_id in memory_ids)
+            if isinstance(memory_ids, list | tuple)
+            else ()
+        ),
+        kind=str(raw["kind"]) if raw.get("kind") else None,
+        body=str(raw.get("body") or ""),
+        supersedes_id=str(raw["supersedes_id"]) if raw.get("supersedes_id") else None,
+        target_change_id=(str(raw["target_change_id"]) if raw.get("target_change_id") else None),
+    )
+
+
 class JournalRunBoundaries:
     """Journal each complete turn and settle every intent in source order.
 
@@ -1469,6 +1512,7 @@ class JournalRunBoundaries:
             )
             progress: Literal["live", "prelude"] = "prelude"
             tool_effects = ToolEffects()
+            details: Mapping[str, Any] | None = None
             if intent.replay_policy == "safe" and contract_matches:
                 if tool is None:
                     raise RuntimeError("matched contract lost its tool")
@@ -1494,6 +1538,7 @@ class JournalRunBoundaries:
                     ).parts
                     cached = result.cached
                     tool_effects = result.effects
+                    details = result.details
                 except Exception as exc:
                     # The safe effect ran and settled, but its provider-visible
                     # result remains an error on every replay.
@@ -1523,6 +1568,7 @@ class JournalRunBoundaries:
                 parts=parts,
                 cached=cached,
                 tool_effects=tool_effects,
+                details=details,
                 progress=progress,
             )
 
@@ -1535,6 +1581,7 @@ class JournalRunBoundaries:
         parts: ToolContent,
         cached: bool,
         tool_effects: ToolEffects,
+        details: Mapping[str, Any] | None,
         progress: Literal["live", "prelude"],
     ) -> None:
         result_entry = EffectResultEntry(
@@ -1547,6 +1594,7 @@ class JournalRunBoundaries:
                 call_id=intent.source_call_id or "",
                 outcome=result_outcome,  # type: ignore[arg-type]
                 parts=parts,
+                details=details,
                 cached=cached,
             ),
         )
@@ -1557,7 +1605,7 @@ class JournalRunBoundaries:
             settlement=EffectSettlement(
                 outcome=effect_outcome,  # type: ignore[arg-type]
                 result=result_entry.result,
-                host_update=self._host_update(intent, tool_effects),
+                host_update=self._host_update(intent, tool_effects, details),
             ),
             entries=[result_entry],
             progress=progress,
@@ -1779,6 +1827,7 @@ class JournalRunBoundaries:
             host_update=self._host_update(
                 intent,
                 ToolEffects() if execution is None else execution.result.effects,
+                None if execution is None else execution.result.details,
             ),
         )
         committed = await self._journal.settle_effect(
@@ -1827,6 +1876,7 @@ class JournalRunBoundaries:
         self,
         intent: EffectIntent,
         tool_effects: ToolEffects,
+        details: Mapping[str, Any] | None = None,
     ) -> EffectHostUpdate:
         evidence: tuple[OpaqueEvidenceWrite, ...] = ()
         ledger_state = self._ledger_state()
@@ -1929,6 +1979,7 @@ class JournalRunBoundaries:
                     replace_all=inventory.replace_all,
                 )
             ),
+            memory_operation=_memory_operation_settlement(details),
         )
 
     async def _handle_settlement(

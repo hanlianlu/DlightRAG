@@ -337,7 +337,13 @@ class AnswerOrchestrator:
         session_id: str,
         store: Any,
         enabled: bool = True,
+        epoch: int = 0,
+        capability_current: Any = None,
     ) -> None:
+        if not enabled:
+            self._memory_host = None
+            self._memory_text = ""
+            return
         if self._memory_host is None:
             return
         self._memory_host.owner_id = owner_id
@@ -346,6 +352,8 @@ class AnswerOrchestrator:
         self._memory_host.session_id = session_id
         self._memory_host.memory = Memory(store)
         self._memory_host.enabled = enabled
+        self._memory_host.epoch = epoch
+        self._memory_host.capability_current = capability_current
 
     def bind_recall(self, text: str) -> None:
         """Attach the non-citable auto-recall block for this run."""
@@ -510,6 +518,7 @@ class AnswerOrchestrator:
                 memory_text=self._memory_text,
                 contributions=self._context_contributions(skill_catalog),
                 tool_guidance=_tool_guidance(tools),
+                profile_memory_write=self._memory_host is not None,
             ),
             tools=tools,
             evidence=evidence,
@@ -1098,6 +1107,7 @@ def research_history_input_measure(
             resource_manifest=resource_manifest,
             memory_text=memory_text,
             tool_guidance=_tool_guidance(tools),
+            profile_memory_write=any(tool.name == "remember" for tool in tools),
         )
         return (
             context.measure_control_input(

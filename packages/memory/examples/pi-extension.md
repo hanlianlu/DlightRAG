@@ -12,9 +12,10 @@ the database. This is the reference shape for a Pi extension.
      --dsn postgres://dlightrag:dlightrag@127.0.0.1:5432/dlightrag \
      --subject <pi-user-id>
 
-3. The model gets three tools:
+3. The model gets four tools:
    memory_recall(query)          — low-authority context, never citable
-   memory_remember(kind, body, confidence, idempotency_key, supersedes_id?)
+   memory_remember(kind, body, idempotency_key, supersedes_id?)
+   memory_undo(change_id, idempotency_key)
    memory_forget(memory_id | body)
 ```
 

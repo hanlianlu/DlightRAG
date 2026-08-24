@@ -7,12 +7,15 @@ module re-exports them for Answer callers and keeps the root-owned concerns:
 owner eligibility policy and rendering the non-citable standing block.
 """
 
+from dataclasses import dataclass
+
 from dlightrag_memory import (
     MemoryKind,
+    MemoryOperation,
+    MemoryOperationReceipt,
     MemoryProvenance,
     MemoryRecord,
     MemoryStatus,
-    MemoryWrite,
 )
 from dlightrag_memory.errors import MemoryUnavailableError
 from dlightrag_memory.policy import (
@@ -20,8 +23,16 @@ from dlightrag_memory.policy import (
     MEMORY_SUPERSEDE_RETENTION_DAYS,
     RECALL_CHAR_BUDGET,
     RECALL_TOP_K,
-    evaluate_memory_write,
+    evaluate_memory_operation,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryCapability:
+    """One owner's durable activation state and invalidation epoch."""
+
+    enabled: bool
+    epoch: int
 
 
 def memory_owner_allowed(auth_mode: str) -> bool:
@@ -63,8 +74,12 @@ def reserved_auto_recall_text() -> str:
             memory_id=f"{index:02d}",
             kind="fact" if index % 2 else "preference",
             body=body,
-            confidence=1.0,
-            provenance=MemoryProvenance(run_id="reserve", session_id="reserve"),
+            provenance=MemoryProvenance(
+                origin_kind="answer_run",
+                origin_id="reserve",
+                run_id="reserve",
+                session_id="reserve",
+            ),
         )
         for index in range(min(RECALL_TOP_K, record_capacity))
     )
@@ -94,13 +109,15 @@ __all__ = [
     "MEMORY_BODY_LIMIT",
     "MEMORY_SUPERSEDE_RETENTION_DAYS",
     "RECALL_TOP_K",
+    "MemoryCapability",
     "MemoryKind",
+    "MemoryOperation",
+    "MemoryOperationReceipt",
     "MemoryProvenance",
     "MemoryRecord",
     "MemoryStatus",
     "MemoryUnavailableError",
-    "MemoryWrite",
-    "evaluate_memory_write",
+    "evaluate_memory_operation",
     "memory_owner_allowed",
     "render_auto_recall",
     "reserved_auto_recall_text",

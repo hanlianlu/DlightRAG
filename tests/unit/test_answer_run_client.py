@@ -391,3 +391,45 @@ async def test_agent_control_methods_project_the_shared_rest_contract() -> None:
         ("GET", "/answer/run-1/transcript"),
         ("GET", "/answer/run-1/children"),
     ]
+
+
+async def test_profile_memory_sdk_projects_receipts_settings_and_retry_keys() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/memory/settings":
+            return httpx.Response(200, json={"enabled": True, "active_count": 1})
+        if request.url.path == "/memory/clear":
+            return httpx.Response(204)
+        return httpx.Response(
+            200,
+            json={
+                "action": "undo" if request.url.path.endswith("/undo") else "remember",
+                "outcome": "changed",
+                "change_id": "change-1",
+                "memory_ids": ["memory-1"],
+                "kind": "preference",
+                "body": "Use Chinese.",
+            },
+        )
+
+    http, client = _client(handler)
+    async with http:
+        remembered = await client.remember_memory(
+            kind="preference",
+            body="Use Chinese.",
+            idempotency_key="stable-key",
+        )
+        undone = await client.undo_memory_change(
+            remembered.change_id,
+            idempotency_key="undo-key",
+        )
+        settings = await client.memory_settings()
+        await client.clear_memory()
+
+    assert remembered.memory_ids == ("memory-1",)
+    assert undone.action == "undo"
+    assert settings.active_count == 1
+    assert requests[0].headers["Idempotency-Key"] == "stable-key"
+    assert requests[1].headers["Idempotency-Key"] == "undo-key"

@@ -21,8 +21,12 @@ def _record(
         memory_id=memory_id,
         kind=kind,  # type: ignore[arg-type]
         body=body,
-        confidence=1.0,
-        provenance=MemoryProvenance(run_id="r", session_id="s"),
+        provenance=MemoryProvenance(
+            origin_kind="answer_run",
+            origin_id="r",
+            run_id="r",
+            session_id="s",
+        ),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=updated_minute),
     )
 

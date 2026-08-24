@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
 
+from dlightrag_memory import MemoryOperationReceipt, MemoryProvenance
 from mcp import MCPError
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -46,6 +47,7 @@ from dlightrag.answer.client_contracts import (
 from dlightrag.answer.errors import (
     AnswerInputError,
     InvalidToolConfigurationError,
+    MemoryDisabledError,
     MemoryUnavailableError,
     MemoryWriteRejectedError,
 )
@@ -137,6 +139,19 @@ def _owner_id() -> str:
         user_id=scope.user_id,
         issuer=str(scope.claims.get("iss") or "") or None,
     )
+
+
+def _memory_receipt(receipt: MemoryOperationReceipt) -> dict[str, Any]:
+    return {
+        "action": receipt.action,
+        "body": receipt.body,
+        "change_id": receipt.change_id,
+        "kind": receipt.kind,
+        "memory_ids": list(receipt.memory_ids),
+        "outcome": receipt.outcome,
+        "supersedes_id": receipt.supersedes_id,
+        "target_change_id": receipt.target_change_id,
+    }
 
 
 def _run_descriptor(record: AnswerRunRecord) -> dict[str, Any]:
@@ -762,7 +777,7 @@ async def list_answer_artifacts_tool(
 
 @mcp_app.tool(
     name="list_memories",
-    description="List this caller's stored long-term memories. Not evidence.",
+    description="List this caller's active Profile Memories. Not evidence.",
     annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
 )
 async def list_memories_tool() -> dict[str, Any]:
@@ -771,41 +786,128 @@ async def list_memories_tool() -> dict[str, Any]:
         rows = await application.memory.list_active(
             owner_id=_owner_id(), auth_mode=current_request_scope().auth_mode
         )
-    except MemoryUnavailableError as exc:
+    except (MemoryUnavailableError, MemoryDisabledError) as exc:
         raise ValueError(exc.public_message) from exc
     return {
         "memories": [
-            {
-                "memory_id": row.memory_id,
-                "kind": row.kind,
-                "body": row.body,
-                "confidence": row.confidence,
-            }
-            for row in rows
+            {"memory_id": row.memory_id, "kind": row.kind, "body": row.body} for row in rows
         ]
     }
 
 
 @mcp_app.tool(
+    name="remember_memory",
+    description="Store one durable owner preference or fact. Not evidence.",
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
+)
+async def remember_memory_tool(
+    kind: Annotated[Literal["preference", "fact"], Field(description="Memory kind")],
+    body: Annotated[str, Field(min_length=1, max_length=500, description="Memory body")],
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=255)],
+    supersedes_id: Annotated[str | None, Field(default=None)] = None,
+) -> dict[str, Any]:
+    application = await _ensure_application()
+    try:
+        receipt = await application.memory.remember(
+            owner_id=_owner_id(),
+            auth_mode=current_request_scope().auth_mode,
+            kind=kind,
+            body=body,
+            supersedes_id=supersedes_id,
+            provenance=MemoryProvenance(origin_kind="mcp", origin_id=idempotency_key),
+            idempotency_key=f"mcp:{idempotency_key}",
+        )
+    except (MemoryUnavailableError, MemoryDisabledError, MemoryWriteRejectedError) as exc:
+        raise ValueError(exc.public_message) from exc
+    return _memory_receipt(receipt)
+
+
+@mcp_app.tool(
     name="forget_memory",
-    description="Idempotently forget one stored memory by id.",
+    description="Idempotently forget one active Profile Memory by id.",
     annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
 )
 async def forget_memory_tool(
     memory_id: Annotated[str, Field(description="Memory id")],
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=255)],
 ) -> dict[str, Any]:
     application = await _ensure_application()
     try:
-        await application.memory.forget(
+        receipt = await application.memory.forget(
             owner_id=_owner_id(),
             auth_mode=current_request_scope().auth_mode,
             memory_id=memory_id,
+            provenance=MemoryProvenance(origin_kind="mcp", origin_id=idempotency_key),
+            idempotency_key=f"mcp:{idempotency_key}",
         )
-    except MemoryUnavailableError as exc:
+    except (MemoryUnavailableError, MemoryDisabledError, MemoryWriteRejectedError) as exc:
         raise ValueError(exc.public_message) from exc
-    except MemoryWriteRejectedError as exc:
+    return _memory_receipt(receipt)
+
+
+@mcp_app.tool(
+    name="undo_memory_change",
+    description="Compensate one still-current Profile Memory change.",
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
+)
+async def undo_memory_change_tool(
+    change_id: Annotated[str, Field(description="Change id")],
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=255)],
+) -> dict[str, Any]:
+    application = await _ensure_application()
+    try:
+        receipt = await application.memory.undo(
+            owner_id=_owner_id(),
+            auth_mode=current_request_scope().auth_mode,
+            change_id=change_id,
+            provenance=MemoryProvenance(origin_kind="undo", origin_id=idempotency_key),
+            idempotency_key=f"mcp:{idempotency_key}",
+        )
+    except (MemoryUnavailableError, MemoryDisabledError, MemoryWriteRejectedError) as exc:
         raise ValueError(exc.public_message) from exc
-    return {"forgotten": memory_id}
+    return _memory_receipt(receipt)
+
+
+@mcp_app.tool(
+    name="get_memory_settings",
+    description="Read this caller's Profile Memory activation state.",
+    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+)
+async def get_memory_settings_tool() -> dict[str, Any]:
+    application = await _ensure_application()
+    settings = await application.memory.settings(
+        owner_id=_owner_id(), auth_mode=current_request_scope().auth_mode
+    )
+    return {"enabled": settings.enabled, "active_count": settings.active_count}
+
+
+@mcp_app.tool(
+    name="set_memory_enabled",
+    description="Activate or deactivate this caller's complete Profile Memory capability.",
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
+)
+async def set_memory_enabled_tool(enabled: bool) -> dict[str, Any]:
+    application = await _ensure_application()
+    settings = await application.memory.set_enabled(
+        owner_id=_owner_id(), auth_mode=current_request_scope().auth_mode, enabled=enabled
+    )
+    return {"enabled": settings.enabled, "active_count": settings.active_count}
+
+
+@mcp_app.tool(
+    name="clear_memory",
+    description="Physically clear this caller's active Profile Memory schema state.",
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
+)
+async def clear_memory_tool() -> dict[str, Any]:
+    application = await _ensure_application()
+    try:
+        removed = await application.memory.clear(
+            owner_id=_owner_id(), auth_mode=current_request_scope().auth_mode
+        )
+    except (MemoryUnavailableError, MemoryDisabledError) as exc:
+        raise ValueError(exc.public_message) from exc
+    return {"removed": removed}
 
 
 @mcp_app.tool(

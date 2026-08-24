@@ -870,7 +870,8 @@ remain JSON-RPC errors. The server exposes these tools:
 `steer_answer_run`, `follow_up_answer_run`, `fork_answer_run`,
 `resume_answer_run`, `get_answer_transcript`, `list_answer_children`,
 `list_answer_runs`, artifact operations, ingest/corpus operations,
-`list_memories`, `forget_memory`, and `get_capabilities`.
+`list_memories`, `remember_memory`, `forget_memory`, `undo_memory_change`,
+`get_memory_settings`, `set_memory_enabled`, `clear_memory`, and `get_capabilities`.
 
 MCP `answer` is deliberately descriptor-only: it creates the durable run and
 returns immediately rather than holding one tool call open for a run that may

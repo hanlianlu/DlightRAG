@@ -191,12 +191,16 @@ class TestSchema:
 
         settings = PGMemorySettingsStore(pool=pool)
 
-        assert await settings.enabled(owner_id="alpha") is True
-        await settings.set_enabled(owner_id="alpha", enabled=False)
-        assert await settings.enabled(owner_id="alpha") is False
-        assert await settings.enabled(owner_id="beta") is True
-        await settings.set_enabled(owner_id="alpha", enabled=True)
-        assert await settings.enabled(owner_id="alpha") is True
+        assert (await settings.state(owner_id="alpha")).enabled is True
+        disabled = await settings.set_enabled(owner_id="alpha", enabled=False)
+        assert disabled.enabled is False
+        assert disabled.epoch == 1
+        assert (await settings.state(owner_id="beta")).enabled is True
+        enabled = await settings.set_enabled(owner_id="alpha", enabled=True)
+        assert enabled.enabled is True
+        assert enabled.epoch == 1
+        bumped = await settings.bump_epoch(owner_id="alpha")
+        assert bumped.epoch == 2
 
     async def test_run_columns_match_the_contract(self, store, pool) -> None:
         async with pool.acquire() as conn:

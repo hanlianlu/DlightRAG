@@ -104,31 +104,42 @@ for module in pkgutil.walk_packages(dlightrag_memory.__path__, prefix='dlightrag
 async def main():
     store = InMemoryMemoryStore()
     provenance = MemoryProvenance(
+        origin_kind='answer_run',
+        origin_id='11111111-1111-1111-1111-111111111111',
         run_id='11111111-1111-1111-1111-111111111111',
         session_id='11111111-1111-1111-1111-111111111111',
     )
     memory = Memory(store)
-    proposal = memory.propose_remember(
+    receipt = await memory.remember(
         owner_id='owner-1',
         kind='preference',
         body='Installed memory works.',
-        confidence=1.0,
         provenance=provenance,
-        proposal_id='installed-wheel-proposal',
+        idempotency_key='installed-wheel-proposal',
     )
-    record = await memory.commit(proposal)
-    assert record is not None and record.status == 'active'
-    assert await memory.commit(proposal) == record
+    replay = await memory.remember(
+        owner_id='owner-1',
+        kind='preference',
+        body='Installed memory works.',
+        provenance=provenance,
+        idempotency_key='installed-wheel-proposal',
+    )
+    assert receipt.outcome == 'changed' and replay == receipt
     records = await Memory(store).list_active(owner_id='owner-1')
     assert [item.body for item in records] == ['Installed memory works.']
     recalled = await memory.recall(owner_id='owner-1', query='memory works')
     assert recalled.records
-    await memory.forget(owner_id='owner-1', memory_id=record.memory_id)
-    await memory.forget(owner_id='owner-1', memory_id=record.memory_id)
+    forgotten = await memory.forget(
+        owner_id='owner-1',
+        memory_id=receipt.memory_id,
+        provenance=provenance,
+        idempotency_key='installed-wheel-forget',
+    )
+    assert forgotten.outcome == 'changed'
     assert await memory.list_active(owner_id='owner-1') == ()
     server = dlightrag_memory.mcp_server.build_memory_server(memory, subject='owner-1')
     assert {tool.name for tool in await server.list_tools()} == {
-        'memory_recall', 'memory_remember', 'memory_forget'
+        'memory_recall', 'memory_remember', 'memory_forget', 'memory_undo'
     }
 
 asyncio.run(main())

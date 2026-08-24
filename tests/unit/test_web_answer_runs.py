@@ -667,6 +667,25 @@ async def test_every_frame_carries_its_durable_sequence_as_the_sse_id() -> None:
     ]
 
 
+def test_memory_operation_frame_is_allowlisted_and_marks_only_live_events() -> None:
+    payload = {
+        "operation": "remember",
+        "outcome": "changed",
+        "change_id": "change-1",
+        "memory_ids": ["memory-1"],
+        "body": "Use Chinese.",
+        "owner_id": "must-not-leak",
+    }
+    replay = browser_frame(_event(4, "memory_operation_settled", payload), live_after=4)
+    live = browser_frame(_event(5, "memory_operation_settled", payload), live_after=4)
+
+    replay_payload = json.loads(replay.split("data: ", 1)[1].strip())
+    live_payload = json.loads(live.split("data: ", 1)[1].strip())
+    assert replay_payload["live"] is False
+    assert live_payload["live"] is True
+    assert "owner_id" not in live_payload
+
+
 async def test_tool_progress_frame_projects_metadata_without_raw_output() -> None:
     (frame,) = await _frames(
         [

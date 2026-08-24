@@ -201,19 +201,34 @@ mjx-container {
 /* === Toast === */
 
 .toast {
-    position: fixed;
-    bottom: var(--space-section);
-    left: 50%;
-    transform: translateX(-50%) translateY(8px);
+    align-items: center;
     background: var(--color-bg-elevated);
-    color: var(--color-text-tertiary);
-    padding: var(--space-component) var(--space-section);
     border-radius: var(--radius-popover);
-    font-size: var(--font-size-detail);
-    z-index: 200;
-    opacity: 0;
-    transition: opacity 0.2s ease-out, transform 0.2s ease-out;
+    bottom: var(--space-section);
     box-shadow: var(--shadow-toast);
+    color: var(--color-text-tertiary);
+    display: flex;
+    font-size: var(--font-size-detail);
+    gap: var(--space-component);
+    left: 50%;
+    max-width: min(42rem, calc(100vw - 2 * var(--space-section)));
+    opacity: 0;
+    padding: var(--space-component) var(--space-section);
+    position: fixed;
+    transform: translateX(-50%) translateY(8px);
+    transition: opacity 0.2s ease-out, transform 0.2s ease-out;
+    z-index: 200;
+}
+
+.toast-message {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.toast-action {
+    flex: none;
 }
 
 .toast.visible {

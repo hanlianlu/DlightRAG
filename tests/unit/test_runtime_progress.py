@@ -186,6 +186,7 @@ class TestEffectHostUpdate:
             "fetched",
             "committed_outputs",
             "workspace_inventory",
+            "memory_operation",
         }
 
     def test_fetched_resource_write_validates_digests(self) -> None:

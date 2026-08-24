@@ -364,9 +364,9 @@ export class DlApp extends LightElement {
                 <input type="checkbox" id="memory-enabled-toggle" />
                 Activate profile memories
               </label>
-              <p id="memory-active-count" class="settings-count" aria-live="polite"></p>
+              <p id="memory-active-count" class="settings-count" aria-live="polite" hidden></p>
               <div class="settings-actions">
-                <button type="button" id="memory-clear-btn" class="ui-btn ui-btn-danger-text">Clear memory</button>
+                <button type="button" id="memory-clear-btn" class="ui-btn ui-btn-danger-text" hidden>Clear memory</button>
               </div>
             </section>
             <section class="settings-section">
