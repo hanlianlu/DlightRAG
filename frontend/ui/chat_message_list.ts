@@ -14,6 +14,7 @@ import {LightElement} from '../lib/lit_host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import chatStyles from '../styles/chat.module.css';
 import './answer_presentation.ts';
+import type {ImageOpenDetail} from './image_lightbox.ts';
 
 export type ChatView =
   | {kind: 'new'}
@@ -145,7 +146,7 @@ export class DlChatMessageList extends LightElement {
   protected override render(): TemplateResult {
     const turns = this.turns;
     return html`
-      <main class="chat-area" id="chat-area" aria-label="Chat">
+      <main class="chat-area" id="chat-area" aria-label="Chat" @click=${this.#backgroundClick}>
         <div class="chat-messages" id="chat-messages" role="log" aria-label="Conversation messages">
           ${this.#lineage()}
           ${this.#viewState()}
@@ -342,8 +343,10 @@ export class DlChatMessageList extends LightElement {
       <div class=${chatStyles.historyImageCard}>
         <button type="button" class=${chatStyles.historyImageButton}
                 aria-label=${`Open ${reference.label}`} ?disabled=${failed}
-                data-action=${failed ? nothing : 'open-lightbox'}
-                data-full-src=${failed ? nothing : source}>
+                @click=${(event: Event) => this.#openImage(
+                  reference,
+                  event.currentTarget as HTMLElement,
+                )}>
           <img class=${chatStyles.messageImg} src=${failed ? nothing : thumbnail}
                alt=${reference.label} loading="lazy" decoding="async"
                ?hidden=${failed}
@@ -361,6 +364,20 @@ export class DlChatMessageList extends LightElement {
         </button>
       </div>
     `;
+  }
+
+  #openImage(reference: ConversationAttachmentReference, returnFocus: HTMLElement): void {
+    const source = safeImageSrc(reference.url);
+    if (!source || this.#imageErrors.has(reference.attachment_id)) return;
+    const gallery = this.turns.flatMap((turn) => turn.userAttachments)
+      .filter((attachment) => attachment.kind === 'image')
+      .map((attachment) => safeImageSrc(attachment.url))
+      .filter(Boolean);
+    this.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
+      bubbles: true,
+      composed: true,
+      detail: {src: source, gallery: [...new Set(gallery)], returnFocus},
+    }));
   }
 
   #finishImage(id: string): void {
@@ -392,6 +409,19 @@ export class DlChatMessageList extends LightElement {
     requestAnimationFrame(() => { image.src = thumbnail; });
   }
 
+  #backgroundClick = (event: MouseEvent): void => {
+    if (event.defaultPrevented) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest(
+      'button, a[href], input, textarea, select, summary, [contenteditable="true"], '
+      + '[role="button"], [role="link"], [role="menuitem"], [role="option"]',
+    )) return;
+    this.dispatchEvent(new CustomEvent<void>('dl-chat-background-click', {
+      bubbles: true,
+      composed: true,
+    }));
+  };
+
   #runAction(action: ChatRunActionDetail['action'], runId: string): void {
     this.dispatchEvent(new CustomEvent<ChatRunActionDetail>('dl-chat-run-action', {
       bubbles: true,
@@ -422,6 +452,10 @@ customElements.define('dl-chat-message-list', DlChatMessageList);
 declare global {
   interface HTMLElementTagNameMap {
     'dl-chat-message-list': DlChatMessageList;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-chat-background-click': CustomEvent<void>;
   }
 }
 

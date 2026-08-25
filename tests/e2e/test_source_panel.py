@@ -32,7 +32,7 @@ def _open_ready_page(page) -> None:
     page.wait_for_selector(".composer-input", timeout=10000)
 
 
-def _source_presentation(*, source_url: str | None = None) -> dict:
+def _source_presentation(*, source_url: str | None = None, image_url: str | None = None) -> dict:
     return {
         "answer_text": "DlightRAG cited answer [1-1].",
         "parts": [
@@ -60,8 +60,8 @@ def _source_presentation(*, source_url: str | None = None) -> dict:
                         "chunk_idx": 1,
                         "page_number": 1,
                         "content_html": "<p>Evidence text</p>",
-                        "image_url": None,
-                        "thumbnail_url": None,
+                        "image_url": image_url,
+                        "thumbnail_url": image_url,
                     }
                 ],
             }
@@ -265,27 +265,25 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
 @pytest.mark.e2e
 def test_escape_closes_source_lightbox_only_and_restores_image_focus(page):
     _open_ready_page(page)
-    _inject_answer_with_sources(page)
+    image_url = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+        "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    page.locator(".composer-input").fill("show source image")
+    page.click(".composer-send")
+    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
+    page.locator("dl-answer-presentation").last.evaluate(
+        """(element, presentation) => {
+          element.presentation = presentation;
+          return element.updateComplete;
+        }""",
+        _source_presentation(image_url=image_url),
+    )
     page.locator(".answer-ref-item").press("Enter")
     page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
-    page.evaluate(
-        """
-        () => {
-          const button = document.createElement('button');
-          button.id = 'stacked-source-image';
-          button.type = 'button';
-          button.setAttribute('aria-label', 'Open source image');
-          button.setAttribute('data-action', 'open-lightbox');
-          button.setAttribute(
-            'data-src',
-            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
-          );
-          document.querySelector('#panel-content')?.appendChild(button);
-        }
-        """
-    )
 
-    image = page.get_by_role("button", name="Open source image")
+    image = page.get_by_role("button", name="Open page image")
     image.click()
     page.locator("#image-lightbox[aria-hidden='false']").wait_for()
     page.keyboard.press("Escape")

@@ -51,6 +51,7 @@ function appendMathJaxScript(): void {
     document.head.appendChild(script);
 }
 
+/** Vite-lifetime third-party adapter that schedules the self-hosted MathJax loader. */
 export function setupMathRendering(): void {
     const idle = window.requestIdleCallback ?? ((callback: () => void) => window.setTimeout(callback, 0));
     idle(appendMathJaxScript, {timeout: 2000});

@@ -142,6 +142,28 @@ it('composes stored history through public properties and AnswerPresentation pro
   expect(action).to.deep.equal({action: 'follow-up', runId: 'run-1'});
 });
 
+it('raises background intent without treating interactive message controls as background', async () => {
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.view = {
+    kind: 'ready',
+    conversationId: 'background-intent',
+    history: [storedTurn()],
+    lineage: null,
+  };
+  let backgroundIntents = 0;
+  feature.addEventListener('dl-chat-background-click', () => { backgroundIntents += 1; });
+  document.body.appendChild(feature);
+  await settle(feature);
+
+  feature.querySelector<HTMLElement>('main[aria-label="Chat"]')?.click();
+  expect(backgroundIntents).to.equal(1);
+  const followUp = Array.from(feature.querySelectorAll<HTMLButtonElement>('button')).find(
+    (button) => button.textContent?.trim() === 'Follow up',
+  );
+  followUp?.click();
+  expect(backgroundIntents).to.equal(1);
+});
+
 it('renders cancelled history without a simultaneous stopping phase', async () => {
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {

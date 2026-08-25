@@ -1,80 +1,304 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** Unified settings drawer: Profile Memory and Conversation History. */
+/** Settings Dialog Feature: memory state, conversation commands, and dialog lifecycle. */
 
-import {clearMemory} from '../api/memory.ts';
-import {conversationStore} from '../stores/conversationStore.ts';
-import {modalResult} from './modal.ts';
+import {html, type TemplateResult} from 'lit';
 import {
-  prepareMemorySettingsPanel,
-  refreshMemorySettingsPanel,
-  setupMemorySettings,
-} from './memory.ts';
-import {showToast} from './toast.ts';
+  clearMemory,
+  getMemorySettings,
+  putMemorySettings,
+  undoMemoryChange,
+  type MemorySettings,
+} from '../api/memory.ts';
+import {LightElement, StoreController} from '../lib/lit_host.ts';
+import {conversationStore} from '../stores/conversationStore.ts';
+import type {ChatMemoryOperationDetail} from './chat_feature.ts';
+import {modalResult} from './modal.ts';
+import type {ToastRequestDetail} from './toast.ts';
 
-const SETTINGS_DIALOG_ID = 'settings-dialog';
-const CLEAR_MEMORY_BUTTON_ID = 'memory-clear-btn';
-const CLEAR_MEMORY_DIALOG_ID = 'clear-memory-dialog';
-const CONVERSATION_COUNT_ID = 'conversation-count';
+const MAX_SEEN_MEMORY_OPERATIONS = 500;
+type MemoryReadResult = 'loaded' | 'stale' | 'failed';
 
-function refreshConversationCount(): void {
-  const count = document.getElementById(CONVERSATION_COUNT_ID);
-  if (!count) return;
-  const total = conversationStore.conversations.length;
-  count.textContent = total === 1 ? '1 conversation' : `${total} conversations`;
+function memorySummary(event: ChatMemoryOperationDetail): string {
+  const body = String(event.body || '').replace(/\s+/g, ' ').trim();
+  const concise = body.length > 120 ? body.slice(0, 117) + '…' : body;
+  if (event.outcome === 'unchanged') return 'Already remembered.';
+  if (event.outcome === 'conflict') return 'Profile Memory changed; recall it before retrying.';
+  if (event.outcome === 'rejected') return 'Profile Memory operation was rejected.';
+  if (event.operation === 'forget') return concise ? `Forgot: ${concise}` : 'Profile Memory forgotten.';
+  if (event.operation === 'undo') return concise ? `Restored: ${concise}` : 'Profile Memory restored.';
+  return concise ? `Remembered: ${concise}` : 'Saved to Profile Memory.';
 }
 
-/** Open Settings; resolve with the chosen submit value ('close-settings'|'delete-all'). */
-function openSettings(dialog: HTMLDialogElement): Promise<string> {
-  dialog.returnValue = '';
-  dialog.showModal();
-  document.body.classList.add('settings-open');
-  return new Promise(function(resolve) {
-    dialog.addEventListener('close', function() {
-      document.body.classList.remove('settings-open');
-      resolve(dialog.returnValue);
-    }, {once: true});
-  });
-}
-
-export function setupSettings(onDeleteAll: () => Promise<boolean>): () => Promise<void> {
-  const dialog = document.getElementById(SETTINGS_DIALOG_ID) as HTMLDialogElement | null;
-  if (!dialog) return async () => undefined;
-
-  // Scrim clicks are retargeted to the dialog element itself by the browser;
-  // clicks anywhere inside the drawer body land on inner nodes and never
-  // dismiss, matching the right-panel light-dismiss semantics.
-  dialog.addEventListener('click', function(event) {
-    if (event.target === dialog) dialog.close();
-  });
-
-  setupMemorySettings((message) => showToast(message, 5000));
-
-  // The drawer stays open behind the confirmation, exactly like Clear memory:
-  // it closes only after the deletion was actually carried out.
-  const deleteAllButton = document.getElementById('delete-all-btn');
-  deleteAllButton?.addEventListener('click', async function() {
-    const proceeded = await onDeleteAll();
-    if (proceeded) dialog.close();
-  });
-
-  const clearButton = document.getElementById(CLEAR_MEMORY_BUTTON_ID);
-  clearButton?.addEventListener('click', async function() {
-    const confirm = document.getElementById(CLEAR_MEMORY_DIALOG_ID) as HTMLDialogElement | null;
-    if (confirm && await modalResult(confirm, () => { clearButton?.focus(); }) !== 'clear') return;
-    try {
-      await clearMemory();
-      await refreshMemorySettingsPanel();
-      showToast('Memory cleared.', 3000);
-    } catch {
-      showToast('Could not clear memory.', 5000);
-    }
-  });
-
-  return async () => {
-    refreshConversationCount();
-    if (!await prepareMemorySettingsPanel()) {
-      showToast('Could not load memory settings.', 5000);
-    }
-    await openSettings(dialog);
+/** Owns Settings state, asynchronous mutations, focus, and native Dialog semantics. */
+export class DlSettingsDialog extends LightElement {
+  static properties = {
+    activeHtmlPreviewEnabled: {attribute: false},
+    deleteAllConversations: {attribute: false},
+    memory: {state: true},
+    memoryLoading: {state: true},
+    memoryPending: {state: true},
   };
+
+  declare activeHtmlPreviewEnabled: boolean;
+  declare deleteAllConversations: (returnFocus?: HTMLElement | null) => Promise<boolean>;
+  declare memory: MemorySettings | null;
+  declare memoryLoading: boolean;
+  declare memoryPending: boolean;
+
+  #events: AbortController | null = null;
+  #returnFocus: HTMLElement | null = null;
+  #seenMemoryOperations = new Set<string>();
+  #memoryReadGeneration = 0;
+
+  constructor() {
+    super();
+    this.activeHtmlPreviewEnabled = true;
+    this.deleteAllConversations = async () => false;
+    this.memory = null;
+    this.memoryLoading = false;
+    this.memoryPending = false;
+    new StoreController(this, conversationStore);
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.#events = new AbortController();
+  }
+
+  override disconnectedCallback(): void {
+    this.#events?.abort();
+    this.#events = null;
+    this.#memoryReadGeneration += 1;
+    document.body.classList.remove('settings-open');
+    super.disconnectedCallback();
+  }
+
+  /** Open Settings and refresh its authoritative memory projection. */
+  async open(returnFocus?: HTMLElement | null): Promise<void> {
+    const signal = this.#events?.signal;
+    if (!signal || signal.aborted) return;
+    this.#returnFocus = returnFocus ?? (
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    );
+    if (!this.memoryPending) {
+      this.memoryLoading = true;
+      const read = await this.#readMemory();
+      if (read === 'failed') {
+        this.memory = null;
+        this.#requestToast({message: 'Could not load memory settings.', duration: 5000});
+      }
+      if (!signal.aborted) this.memoryLoading = false;
+    }
+    if (signal.aborted) return;
+    await this.updateComplete;
+    const dialog = this.#dialog();
+    if (!dialog || dialog.open) return;
+    dialog.returnValue = '';
+    dialog.showModal();
+    document.body.classList.add('settings-open');
+  }
+
+  /** Consume one live Profile Memory domain fact from Chat composition. */
+  handleMemoryOperation(event: ChatMemoryOperationDetail): void {
+    if (!event.live) return;
+    const identity = event.change_id || `${event.intent_id || ''}:${event.operation}:${event.outcome}`;
+    if (!identity || this.#seenMemoryOperations.has(identity)) return;
+    if (this.#seenMemoryOperations.size >= MAX_SEEN_MEMORY_OPERATIONS) {
+      const oldest = this.#seenMemoryOperations.values().next().value;
+      if (oldest) this.#seenMemoryOperations.delete(oldest);
+    }
+    this.#seenMemoryOperations.add(identity);
+    const message = memorySummary(event);
+    if (event.outcome !== 'changed' || !event.change_id) {
+      this.#requestToast({message, duration: 5000});
+      return;
+    }
+    const changeId = event.change_id;
+    const signal = this.#events?.signal;
+    this.#requestToast({
+      message,
+      action: {
+        actionLabel: 'Undo',
+        duration: 12_000,
+        onAction: async () => {
+          this.#invalidateMemoryReads();
+          const receipt = await undoMemoryChange(changeId, signal);
+          if (receipt.outcome !== 'changed') throw new Error('Memory undo conflicted');
+          await this.#refreshMemory();
+          return 'Profile Memory change undone.';
+        },
+      },
+    });
+    void this.#refreshMemory();
+  }
+
+  protected override render(): TemplateResult {
+    const total = conversationStore.conversations.length;
+    const active = this.memory?.active_count;
+    return html`
+      <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title"
+              @click=${this.#scrimClick} @close=${this.#closed}>
+        <form method="dialog">
+          <div class="settings-drawer-body">
+            <div class="settings-header">
+              <h2 id="settings-title">Settings</h2>
+              <button class="panel-close settings-close" type="submit" value="close-settings"
+                      aria-label="Close settings">✕</button>
+            </div>
+            <section class="settings-section">
+              <h3 id="settings-memory">Profile Memory</h3>
+              <label class="ui-dialog-checkbox">
+                <input type="checkbox" id="memory-enabled-toggle"
+                       .checked=${this.memory?.enabled ?? false}
+                       ?disabled=${this.memoryLoading || this.memoryPending || !this.memory}
+                       @change=${this.#toggleMemory}>
+                Activate profile memories
+              </label>
+              <p id="memory-active-count" class="settings-count" aria-live="polite"
+                 ?hidden=${active === null || active === undefined}>
+                ${active === 1 ? '1 stored item' : `${active ?? 0} stored items`}
+              </p>
+              <div class="settings-actions">
+                <button type="button" id="memory-clear-btn" class="ui-btn ui-btn-danger-text"
+                        ?hidden=${!this.memory?.enabled} ?disabled=${this.memoryPending}
+                        @click=${this.#clearMemory}>Clear memory</button>
+              </div>
+            </section>
+            <section class="settings-section">
+              <h3>Active HTML Preview</h3>
+              <p class="settings-note">
+                ${this.activeHtmlPreviewEnabled
+                  ? 'Enabled by the operator. Interactive reports require an explicit open action.'
+                  : 'Disabled by the operator. HTML Artifacts are shown with scripts disabled.'}
+              </p>
+            </section>
+            <section class="settings-section">
+              <h3 id="settings-data">Conversation Sessions</h3>
+              <p class="settings-note">Conversations retain 365 days</p>
+              <p id="conversation-count" class="settings-count" aria-live="polite">
+                ${total === 1 ? '1 conversation' : `${total} conversations`}
+              </p>
+              <div class="settings-actions">
+                <button type="button" id="delete-all-btn" class="ui-btn ui-btn-danger-text"
+                        @click=${this.#deleteAll}>Delete all conversations</button>
+              </div>
+            </section>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="clear-memory-dialog" class="confirm-dialog" aria-labelledby="clear-memory-title">
+        <form method="dialog">
+          <h2 id="clear-memory-title">Clear Profile memory?</h2>
+          <p>Remembered preferences and facts will be forgotten. Conversations are not affected.</p>
+          <div class="ui-dialog-actions">
+            <button type="submit" value="cancel">Cancel</button>
+            <button type="submit" value="clear" class="ui-dialog-danger">Clear memory</button>
+          </div>
+        </form>
+      </dialog>
+    `;
+  }
+
+  #dialog(): HTMLDialogElement | null {
+    return this.querySelector<HTMLDialogElement>('#settings-dialog');
+  }
+
+  #scrimClick = (event: MouseEvent): void => {
+    const dialog = this.#dialog();
+    if (dialog && event.target === dialog) dialog.close();
+  };
+
+  #closed = (): void => {
+    document.body.classList.remove('settings-open');
+    const returnFocus = this.#returnFocus;
+    this.#returnFocus = null;
+    if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+  };
+
+  #toggleMemory = async (event: Event): Promise<void> => {
+    const input = event.currentTarget as HTMLInputElement;
+    const requested = input.checked;
+    const signal = this.#events?.signal;
+    if (!signal || signal.aborted || this.memoryPending) return;
+    this.memoryPending = true;
+    this.#invalidateMemoryReads();
+    try {
+      const memory = await putMemorySettings(requested, signal);
+      if (!signal.aborted) this.memory = memory;
+    } catch {
+      if (!signal.aborted) {
+        input.checked = !requested;
+        this.#requestToast({message: 'Could not save memory settings.', duration: 5000});
+      }
+    } finally {
+      if (!signal.aborted) this.memoryPending = false;
+    }
+  };
+
+  #clearMemory = async (event: Event): Promise<void> => {
+    const signal = this.#events?.signal;
+    const button = event.currentTarget as HTMLButtonElement;
+    const confirm = this.querySelector<HTMLDialogElement>('#clear-memory-dialog');
+    if (!signal || signal.aborted || !confirm || this.memoryPending) return;
+    if (await modalResult(confirm, () => button.focus(), signal) !== 'clear') return;
+    this.memoryPending = true;
+    this.#invalidateMemoryReads();
+    try {
+      await clearMemory(signal);
+      if (await this.#readMemory() === 'failed') throw new Error('Memory refresh failed');
+      if (!signal.aborted) this.#requestToast({message: 'Memory cleared.', duration: 3000});
+    } catch {
+      if (!signal.aborted) {
+        this.#requestToast({message: 'Could not clear memory.', duration: 5000});
+      }
+    } finally {
+      if (!signal.aborted) this.memoryPending = false;
+    }
+  };
+
+  #deleteAll = async (event: Event): Promise<void> => {
+    const returnFocus = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    if (await this.deleteAllConversations(returnFocus)) this.#dialog()?.close();
+  };
+
+  #requestToast(detail: ToastRequestDetail): void {
+    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
+      detail,
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  #invalidateMemoryReads(): void {
+    this.#memoryReadGeneration += 1;
+    this.memoryLoading = false;
+  }
+
+  async #readMemory(): Promise<MemoryReadResult> {
+    const signal = this.#events?.signal;
+    if (!signal || signal.aborted) return 'stale';
+    const generation = ++this.#memoryReadGeneration;
+    try {
+      const memory = await getMemorySettings(signal);
+      if (signal.aborted || generation !== this.#memoryReadGeneration) return 'stale';
+      this.memory = memory;
+      return 'loaded';
+    } catch {
+      if (signal.aborted || generation !== this.#memoryReadGeneration) return 'stale';
+      return 'failed';
+    }
+  }
+
+  async #refreshMemory(): Promise<void> {
+    if (this.memoryPending) return;
+    await this.#readMemory();
+  }
+}
+
+customElements.define('dl-settings-dialog', DlSettingsDialog);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'dl-settings-dialog': DlSettingsDialog;
+  }
 }

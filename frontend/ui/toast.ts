@@ -1,8 +1,8 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** One replace-in-place toast surface with optional asynchronous action. */
+/** One replace-in-place toast Feature with optional asynchronous action. */
 
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
-let remainingDuration = 0;
+import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
+import {LightElement} from '../lib/lit_host.ts';
 
 export interface ActionToastOptions {
   actionLabel: string;
@@ -10,74 +10,205 @@ export interface ActionToastOptions {
   duration?: number;
 }
 
-function toastElement(): HTMLElement | null {
-  return document.getElementById('toast');
+export type ToastRequestDetail =
+  | {message: string; duration?: number; action?: never}
+  | {message: string; action: ActionToastOptions; duration?: never};
+
+interface ToastRequest {
+  message: string;
+  duration: number;
+  action: ActionToastOptions | null;
 }
 
-function stopTimer(): void {
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = null;
-}
+/** Accessible toast state, timer lifecycle, and asynchronous action ownership. */
+export class DlToastRegion extends LightElement {
+  static properties = {
+    shellInert: {attribute: false},
+    request: {state: true},
+    visible: {state: true},
+    pending: {state: true},
+  };
 
-function hideToast(): void {
-  stopTimer();
-  toastElement()?.classList.remove('visible');
-}
+  declare shellInert: boolean;
+  declare request: ToastRequest | null;
+  declare visible: boolean;
+  declare pending: boolean;
 
-function scheduleHide(duration: number): void {
-  stopTimer();
-  remainingDuration = duration;
-  toastTimer = setTimeout(hideToast, duration);
-}
+  #timer: ReturnType<typeof setTimeout> | null = null;
+  #remaining = 0;
+  #startedAt = 0;
+  #hovered = false;
+  #focused = false;
 
-function setMessage(el: HTMLElement, message: string): HTMLSpanElement {
-  const text = document.createElement('span');
-  text.className = 'toast-message';
-  text.textContent = message;
-  el.replaceChildren(text);
-  return text;
-}
+  constructor() {
+    super();
+    this.shellInert = false;
+    this.request = null;
+    this.visible = false;
+    this.pending = false;
+  }
 
-export function showToast(message: string, duration = 3000): void {
-  const el = toastElement();
-  if (!el) return;
-  setMessage(el, message);
-  el.classList.add('visible');
-  scheduleHide(duration);
-}
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.addEventListener('mouseenter', this.#pointerEntered);
+    this.addEventListener('mouseleave', this.#pointerLeft);
+    this.addEventListener('focusin', this.#focusEntered);
+    this.addEventListener('focusout', this.#focusLeft);
+  }
 
-export function showActionToast(message: string, options: ActionToastOptions): void {
-  const el = toastElement();
-  if (!el) return;
-  const text = setMessage(el, message);
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'ui-btn toast-action';
-  button.textContent = options.actionLabel;
-  el.appendChild(button);
-  el.classList.add('visible');
+  override disconnectedCallback(): void {
+    this.removeEventListener('mouseenter', this.#pointerEntered);
+    this.removeEventListener('mouseleave', this.#pointerLeft);
+    this.removeEventListener('focusin', this.#focusEntered);
+    this.removeEventListener('focusout', this.#focusLeft);
+    this.#stopTimer();
+    this.request = null;
+    this.visible = false;
+    this.pending = false;
+    this.#hovered = false;
+    this.#focused = false;
+    super.disconnectedCallback();
+  }
 
-  const duration = options.duration ?? 12_000;
-  const pause = (): void => stopTimer();
-  const resume = (): void => scheduleHide(remainingDuration || duration);
-  el.onmouseenter = pause;
-  el.onmouseleave = resume;
-  el.addEventListener('focusin', pause, {once: true});
-  el.addEventListener('focusout', resume, {once: true});
+  /** Replace the current receipt with a plain status message. */
+  show(message: string, duration = 3000): void {
+    this.#show({
+      message,
+      duration,
+      action: null,
+    });
+  }
 
-  button.addEventListener('click', async () => {
-    stopTimer();
-    button.disabled = true;
-    try {
-      const next = await options.onAction();
-      text.textContent = next || 'Profile Memory change undone.';
-      button.remove();
-      scheduleHide(3000);
-    } catch {
-      text.textContent = 'Could not undo the Profile Memory change.';
-      button.remove();
-      scheduleHide(5000);
+  /** Replace the current receipt with one asynchronous action. */
+  showAction(message: string, options: ActionToastOptions): void {
+    this.#show({
+      message,
+      duration: options.duration ?? 12_000,
+      action: options,
+    });
+  }
+
+  protected override updated(changed: PropertyValues<this>): void {
+    this.classList.toggle('visible', this.visible);
+    this.inert = !this.visible || this.shellInert;
+    if (changed.has('shellInert') && this.visible && this.request?.action) {
+      if (this.shellInert) this.#pause();
+      else this.#resume();
     }
-  }, {once: true});
-  scheduleHide(duration);
+  }
+
+  protected override render(): TemplateResult | typeof nothing {
+    const request = this.request;
+    if (!request) return nothing;
+    return html`
+      <span class="toast-message">${request.message}</span>
+      ${request.action ? html`
+        <button class="ui-btn toast-action" type="button" ?disabled=${this.pending}
+                @click=${this.#runAction}>${request.action.actionLabel}</button>
+      ` : nothing}
+    `;
+  }
+
+  #show(request: ToastRequest): void {
+    this.request = request;
+    this.visible = true;
+    this.pending = false;
+    this.#startTimer(request.duration);
+  }
+
+  #hide(): void {
+    this.#stopTimer();
+    this.request = null;
+    this.visible = false;
+    this.pending = false;
+    this.#remaining = 0;
+  }
+
+  #stopTimer(): void {
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = null;
+  }
+
+  #startTimer(duration: number): void {
+    this.#stopTimer();
+    this.#remaining = duration;
+    this.#resume();
+  }
+
+  #hasPauseReason(): boolean {
+    return this.#hovered || this.#focused
+      || Boolean(this.request?.action && this.shellInert);
+  }
+
+  #pause(): void {
+    if (!this.#timer) return;
+    this.#remaining = Math.max(0, this.#remaining - (performance.now() - this.#startedAt));
+    this.#stopTimer();
+  }
+
+  #resume = (): void => {
+    if (!this.visible || this.#timer || this.pending || this.#hasPauseReason()) return;
+    this.#startedAt = performance.now();
+    this.#timer = setTimeout(() => {
+      this.#timer = null;
+      this.#hide();
+    }, this.#remaining);
+  };
+
+  #pointerEntered = (): void => {
+    this.#hovered = true;
+    this.#pause();
+  };
+
+  #pointerLeft = (): void => {
+    this.#hovered = false;
+    this.#resume();
+  };
+
+  #focusEntered = (): void => {
+    this.#focused = true;
+    this.#pause();
+  };
+
+  #focusLeft = (event: FocusEvent): void => {
+    if (event.relatedTarget instanceof Node && this.contains(event.relatedTarget)) return;
+    this.#focused = false;
+    this.#resume();
+  };
+
+  #runAction = async (): Promise<void> => {
+    const request = this.request;
+    if (!request?.action || this.pending) return;
+    this.#stopTimer();
+    this.pending = true;
+    let message: string;
+    let duration: number;
+    try {
+      message = await request.action.onAction() || 'Change undone.';
+      duration = 3000;
+    } catch {
+      message = 'Could not undo the change.';
+      duration = 5000;
+    }
+    if (this.request !== request) return;
+    const settled: ToastRequest = {message, duration, action: null};
+    this.request = settled;
+    this.pending = false;
+    await this.updateComplete;
+    if (this.request !== settled) return;
+    this.#focused = this.contains(document.activeElement);
+    this.#startTimer(duration);
+  };
+}
+
+customElements.define('dl-toast-region', DlToastRegion);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'dl-toast-region': DlToastRegion;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-toast-request': CustomEvent<ToastRequestDetail>;
+  }
 }

@@ -62,8 +62,6 @@ MOCK_WORKSPACES = [
     },
 ]
 
-MOCK_WORKSPACE_LIST = ["default", "research"]
-
 ANSWER_TEXT = "DlightRAG is a multimodal RAG system."
 _ANSWER_TOKENS = ("DlightRAG is a ", "multimodal RAG system.")
 _PNG = base64.b64decode(
@@ -562,8 +560,33 @@ def e2e_base_url(
             )
         ),
     )
-    application_double.corpora.list_workspaces.return_value = MOCK_WORKSPACE_LIST
-    application_double.corpora.alist_workspace_records.return_value = MOCK_WORKSPACES
+    workspace_records = [dict(record) for record in MOCK_WORKSPACES]
+
+    async def _list_workspaces() -> list[str]:
+        return [str(record["workspace"]) for record in workspace_records]
+
+    async def _list_workspace_records() -> list[dict[str, str]]:
+        return [dict(record) for record in workspace_records]
+
+    async def _create_workspace(workspace: str, *, display_name: str) -> None:
+        workspace_records.append(
+            {
+                "workspace": workspace,
+                "display_name": display_name,
+                "embedding_model": "voyage-multimodal-3.5",
+            }
+        )
+
+    async def _reset_workspaces(*, workspace_ids: tuple[str, ...]) -> None:
+        removed = set(workspace_ids)
+        workspace_records[:] = [
+            record for record in workspace_records if record["workspace"] not in removed
+        ]
+
+    application_double.corpora.list_workspaces.side_effect = _list_workspaces
+    application_double.corpora.alist_workspace_records.side_effect = _list_workspace_records
+    application_double.corpora.create_workspace.side_effect = _create_workspace
+    application_double.corpora.reset.side_effect = _reset_workspaces
     application_double.corpora.list_ingested_files.return_value = []
     application_double.corpora.get_pipeline_status.return_value = {
         "busy": False,

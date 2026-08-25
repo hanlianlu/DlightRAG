@@ -21,7 +21,7 @@ import {
 import './conversation_list.ts';
 import {modalResult, type FocusRestorer} from './modal.ts';
 import {webRouter} from './router.ts';
-import {showToast} from './toast.ts';
+import type {ToastRequestDetail} from './toast.ts';
 
 const COLLAPSED_KEY = 'dlightrag.conversation_sidebar_collapsed';
 
@@ -147,13 +147,8 @@ export class DlConversationSidebar extends LightElement {
     this.#drawerReturnFocus = null;
   }
 
-  /** Receives the Shell's modal state without exposing sidebar internals. */
-  setShellInert(inert: boolean): void {
-    this.shellInert = inert;
-  }
-
   /** Settings delegates its destructive command to the navigation owner. */
-  async deleteAll(): Promise<boolean> {
+  async deleteAll(returnFocus?: HTMLElement | null): Promise<boolean> {
     if (this.#busy || this.#lifecycleBlocked()) return false;
     const discardsDraft = this.#hasUnsavedDraft();
     const dialog = this.#dialog('delete-all-conversations-dialog');
@@ -170,7 +165,10 @@ export class DlConversationSidebar extends LightElement {
     }
     if (!dialog || await modalResult(
       dialog,
-      () => this.#focusSurvivingConversation(),
+      () => {
+        if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+        else void this.#focusSurvivingConversation();
+      },
       this.#events?.signal,
     ) !== 'delete-all') {
       return false;
@@ -191,7 +189,7 @@ export class DlConversationSidebar extends LightElement {
       result = await conversationStore.deleteAll(signal);
       if (signal.aborted) return false;
       if (result === 'error') {
-        showToast('Could not delete conversations.', 5000);
+        this.#requestToast({message: 'Could not delete conversations.', duration: 5000});
       } else {
         this.chatFeature?.clearDraft();
         if (alsoClearMemory) {
@@ -199,7 +197,10 @@ export class DlConversationSidebar extends LightElement {
             await clearMemory(signal);
           } catch {
             if (!signal.aborted) {
-              showToast('Conversations deleted; could not clear Profile memory.', 5000);
+              this.#requestToast({
+                message: 'Conversations deleted; could not clear Profile memory.',
+                duration: 5000,
+              });
             }
           }
         }
@@ -301,7 +302,7 @@ export class DlConversationSidebar extends LightElement {
 
   #lifecycleBlocked(): boolean {
     if (!this.chatFeature?.submissionPending) return false;
-    showToast('Wait for the current question to be accepted.', 4000);
+    this.#requestToast({message: 'Wait for the current question to be accepted.', duration: 4000});
     return true;
   }
 
@@ -431,15 +432,15 @@ export class DlConversationSidebar extends LightElement {
     const result = await conversationStore.rename(conversationId, title, signal);
     if (signal.aborted || result === 'ok') return;
     if (result === 'missing') {
-      showToast('Conversation unavailable.', 4000);
+      this.#requestToast({message: 'Conversation unavailable.', duration: 4000});
       return;
     }
-    showToast(
-      title.trim().length > 120
+    this.#requestToast({
+      message: title.trim().length > 120
         ? 'Conversation titles must be 1 to 120 characters.'
         : 'Could not rename the conversation.',
-      5000,
-    );
+      duration: 5000,
+    });
   }
 
   async #requestDelete(conversationId: string): Promise<void> {
@@ -473,7 +474,7 @@ export class DlConversationSidebar extends LightElement {
       result = await conversationStore.delete(conversationId, signal);
       if (signal.aborted) return;
       if (result === 'error') {
-        showToast('Could not delete the conversation.', 5000);
+        this.#requestToast({message: 'Could not delete the conversation.', duration: 5000});
       } else if (wasActive) {
         this.chatFeature?.clearDraft();
         const fallback = conversationStore.fallbackConversationId;
@@ -489,6 +490,14 @@ export class DlConversationSidebar extends LightElement {
     await this.updateComplete;
     if (result === 'error') await this.#focusConversationActions(conversationId);
     else await this.#focusSurvivingConversation();
+  }
+
+  #requestToast(detail: ToastRequestDetail): void {
+    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
+      detail,
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   #toggleSidebar = (): void => {

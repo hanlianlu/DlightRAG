@@ -1,124 +1,149 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+/** Notification Offer Feature and browser Notification lifecycle. */
 
-import type {ChatRunningChangeDetail} from './chat_feature.ts';
+import {html, type PropertyValues, type TemplateResult} from 'lit';
+import {LightElement} from '../lib/lit_host.ts';
 
 const ASKED_STORAGE_KEY = 'dlightrag-notify-asked';
 
-// Set while an answer streams with nobody watching, so the offer only appears
-// to someone who actually missed one.
-let missedAnswer = false;
-let streaming = false;
-
 function away(): boolean {
-    // Switching apps leaves the tab visible, so focus is the other half of this.
-    return document.hidden || !document.hasFocus();
+  // App switching can preserve visibility; focus completes the browser signal.
+  return document.hidden || !document.hasFocus();
 }
 
 function supported(): boolean {
-    // Absent outside a secure context, so a plain-HTTP deployment shows nothing.
-    return typeof window !== 'undefined' && 'Notification' in window;
+  return typeof window !== 'undefined' && 'Notification' in window;
 }
 
 function alreadyAsked(): boolean {
-    try {
-        return window.localStorage.getItem(ASKED_STORAGE_KEY) === '1';
-    } catch (_error) {
-        return false;
-    }
+  try {
+    return window.localStorage.getItem(ASKED_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
 function rememberAsked(): void {
-    try {
-        window.localStorage.setItem(ASKED_STORAGE_KEY, '1');
-    } catch (_error) {
-        // Ignore unavailable or blocked storage.
+  try {
+    window.localStorage.setItem(ASKED_STORAGE_KEY, '1');
+  } catch {
+    // Browser storage is an optional enhancement.
+  }
+}
+
+/** Owns missed-answer state, permission intent, and page-presence listeners. */
+export class DlNotificationOffer extends LightElement {
+  static properties = {
+    running: {attribute: false},
+    visible: {state: true},
+  };
+
+  declare running: boolean;
+  declare visible: boolean;
+
+  #missedAnswer = false;
+  #events: AbortController | null = null;
+
+  constructor() {
+    super();
+    this.running = false;
+    this.visible = false;
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    const events = new AbortController();
+    this.#events = events;
+    window.addEventListener('blur', this.#leftPage, {signal: events.signal});
+    window.addEventListener('focus', this.#cameBack, {signal: events.signal});
+    document.addEventListener('visibilitychange', this.#visibilityChanged, {
+      signal: events.signal,
+    });
+    this.#syncHost();
+  }
+
+  override disconnectedCallback(): void {
+    this.#events?.abort();
+    this.#events = null;
+    super.disconnectedCallback();
+  }
+
+  protected override updated(changed: PropertyValues<this>): void {
+    if (changed.has('running')) {
+      const previous = Boolean(changed.get('running'));
+      if (this.running && !previous) {
+        this.#missedAnswer = away();
+      } else if (!this.running && previous && away()) {
+        this.#missedAnswer = true;
+        if (supported() && Notification.permission === 'granted') this.#notifyAnswerReady();
+      }
     }
-}
+    this.#syncHost();
+  }
 
-function notifyAnswerReady(): void {
+  protected override render(): TemplateResult {
+    return html`
+      <span class="notify-offer-text">Notify you when an answer finishes?</span>
+      <button class="ui-btn" type="button" @click=${this.#accept}>Enable</button>
+      <button class="ui-btn" type="button" @click=${this.#decline}>Not now</button>
+    `;
+  }
+
+  #syncHost(): void {
+    this.hidden = !supported() || !this.visible;
+  }
+
+  #notifyAnswerReady(): void {
     try {
-        // No tag: a shared one silently replaces the parked notification
-        // instead of alerting again, so every answer but the first goes unseen.
-        const notification = new Notification('Answer ready', {
-            body: 'DlightRAG finished generating your answer.',
-        });
-        notification.onclick = function() {
-            window.focus();
-            notification.close();
-        };
-    } catch (_error) {
-        // Some browsers reject construction outside a service worker.
+      const notification = new Notification('Answer ready', {
+        body: 'DlightRAG finished generating your answer.',
+      });
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
+    } catch {
+      // Some browsers reject construction outside a service worker.
     }
-}
+  }
 
-function hideOffer(): void {
-    document.getElementById('notify-offer')?.setAttribute('hidden', '');
-}
+  #leftPage = (): void => {
+    if (this.running) this.#missedAnswer = true;
+  };
 
-function showOffer(): void {
-    const offer = document.getElementById('notify-offer');
-    if (!offer) return;
-    offer.removeAttribute('hidden');
-}
+  #cameBack = (): void => {
+    if (away()) return;
+    if (!this.running && this.#missedAnswer && supported()
+        && Notification.permission === 'default' && !alreadyAsked()) {
+      this.visible = true;
+    }
+    this.#missedAnswer = false;
+  };
 
-async function acceptOffer(): Promise<void> {
-    hideOffer();
+  #visibilityChanged = (): void => {
+    if (document.hidden) this.#leftPage();
+    else this.#cameBack();
+  };
+
+  #accept = async (): Promise<void> => {
+    this.visible = false;
     try {
-        // A dismissed prompt leaves the choice open, so the offer may come back.
-        if (await Notification.requestPermission() !== 'default') rememberAsked();
-    } catch (_error) {
-        rememberAsked();
+      if (await Notification.requestPermission() !== 'default') rememberAsked();
+    } catch {
+      rememberAsked();
     }
-}
+  };
 
-function declineOffer(): void {
+  #decline = (): void => {
     rememberAsked();
-    hideOffer();
+    this.visible = false;
+  };
 }
 
-export function setupNotifications(): void {
-    if (!supported()) return;
+customElements.define('dl-notification-offer', DlNotificationOffer);
 
-    // Milestone 5 moves this Shell control into its final Feature owner.
-    document.querySelector('dl-chat-feature')?.addEventListener(
-        'dl-chat-running-change',
-        function(event: Event) {
-            const active = (event as CustomEvent<ChatRunningChangeDetail>).detail.active;
-            if (active) {
-                streaming = true;
-                missedAnswer = away();
-                return;
-            }
-            if (!streaming) return;
-            streaming = false;
-            if (!away()) return;
-            missedAnswer = true;
-            if (Notification.permission === 'granted') notifyAnswerReady();
-        },
-    );
-
-    function leftPage(): void {
-        if (streaming) missedAnswer = true;
-    }
-
-    function cameBack(): void {
-        // Returning fires visibilitychange before focus, so re-check both.
-        if (away()) return;
-        if (!streaming && missedAnswer && Notification.permission === 'default' && !alreadyAsked()) {
-            showOffer();
-        }
-        missedAnswer = false;
-    }
-
-    window.addEventListener('blur', leftPage);
-    window.addEventListener('focus', cameBack);
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) leftPage();
-        else cameBack();
-    });
-
-    document.getElementById('notify-offer-accept')?.addEventListener('click', function() {
-        void acceptOffer();
-    });
-    document.getElementById('notify-offer-decline')?.addEventListener('click', declineOffer);
+declare global {
+  interface HTMLElementTagNameMap {
+    'dl-notification-offer': DlNotificationOffer;
+  }
 }

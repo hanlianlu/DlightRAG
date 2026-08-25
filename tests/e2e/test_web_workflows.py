@@ -9,7 +9,7 @@ pytestmark = pytest.mark.e2e
 
 def _open_ready_chat(page: Page) -> Locator:
     page.goto("/web/")
-    composer = page.get_by_label("Message")
+    composer = page.get_by_role("textbox", name="Message", exact=True)
     expect(composer).to_be_visible()
     expect(page.locator('[data-conversation-id][aria-current="page"]')).to_have_count(0)
     return composer

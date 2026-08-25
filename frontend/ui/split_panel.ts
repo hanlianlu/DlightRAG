@@ -162,7 +162,10 @@ function createState(
     };
 }
 
-/** Bind Web Awesome's divider to DlightRAG panel state and persisted widths. */
+/**
+ * Bind the app-unique Web Awesome dividers for the Vite document lifetime.
+ * This is the retained third-party integration seam, not a Feature adapter.
+ */
 export function setupPanelSplits(): void {
     states = [
         createState('panel-split', 'inspector', '--panel-width', 'dlightrag-panel-width'),

@@ -19,11 +19,17 @@ export class WorkspaceApiError extends Error {
   }
 }
 
-async function post<T>(path: string, body: Record<string, string>, fallback: string): Promise<T> {
+async function post<T>(
+  path: string,
+  body: Record<string, string>,
+  fallback: string,
+  signal?: AbortSignal,
+): Promise<T> {
   const response = await fetch(path, {
     method: 'POST',
     headers: csrfHeaders('application/x-www-form-urlencoded'),
     body: new URLSearchParams(body).toString(),
+    signal,
   });
   if (!response.ok) {
     // The route answers with {"error": ...}; fall back when it cannot.
@@ -34,18 +40,26 @@ async function post<T>(path: string, body: Record<string, string>, fallback: str
   return await response.json() as T;
 }
 
-export function createWorkspaceRequest(name: string): Promise<CreatedWorkspace> {
+export function createWorkspaceRequest(
+  name: string,
+  signal?: AbortSignal,
+): Promise<CreatedWorkspace> {
   return post<CreatedWorkspace>(
     '/web/api/workspaces/create',
     {workspace_name: name},
     'Failed to create workspace',
+    signal,
   );
 }
 
-export function deleteWorkspaceRequest(name: string): Promise<DeletedWorkspace> {
+export function deleteWorkspaceRequest(
+  name: string,
+  signal?: AbortSignal,
+): Promise<DeletedWorkspace> {
   return post<DeletedWorkspace>(
     '/web/api/workspaces/delete',
     {workspace_name: name, confirm_name: name},
     'Could not delete workspace.',
+    signal,
   );
 }

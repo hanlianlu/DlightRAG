@@ -5,7 +5,8 @@ import type {AnswerPresentation} from '../api/conversations.ts';
 import './answer_presentation.ts';
 import './inspector_sources.ts';
 import type {AnswerPresentationElement} from './answer_presentation.ts';
-import {closeLightbox, openLightbox} from './images.ts';
+import type {DlImageLightbox} from './image_lightbox.ts';
+import './image_lightbox.ts';
 import type {DlInspectorSources} from './inspector_sources.ts';
 
 const presentation: AnswerPresentation = {
@@ -108,8 +109,8 @@ it('renders Artifact intent and semantic Visual Evidence in approved order', asy
   element.addEventListener('artifact-open', (event) => {
     opened = (event as CustomEvent).detail.artifact.resource_id;
   });
-  element.addEventListener('answer-image-open', (event) => {
-    imageSource = (event as CustomEvent).detail.src;
+  element.addEventListener('dl-image-open', (event) => {
+    imageSource = event.detail.src;
   });
   element.querySelector<HTMLButtonElement>('.answer-artifact-card .ui-btn')?.click();
   element.querySelector<HTMLButtonElement>('.answer-image-item')?.click();
@@ -146,13 +147,18 @@ it('includes typed Answer images in previous and next gallery navigation', async
   await element.updateComplete;
   const images = element.querySelectorAll<HTMLElement>('[data-answer-image]');
 
-  openLightbox(images[0].dataset.src);
-  const box = document.getElementById('image-lightbox')!;
-  const next = box.querySelector<HTMLButtonElement>('[aria-label="Next"]')!;
-  expect(next.style.display).to.equal('');
+  const detail = await new Promise<CustomEvent>((resolve) => {
+    element.addEventListener('dl-image-open', (event) => resolve(event), {once: true});
+    images[0].click();
+  });
+  const lightbox = document.createElement('dl-image-lightbox') as DlImageLightbox;
+  document.body.appendChild(lightbox);
+  await lightbox.open(detail.detail.src, detail.detail.returnFocus, detail.detail.gallery);
+  const next = lightbox.querySelector<HTMLButtonElement>('[aria-label="Next"]')!;
+  expect(next.hidden).to.equal(false);
   next.click();
-  expect(box.getAttribute('data-current-src')).to.equal(images[1].dataset.src);
-  closeLightbox();
+  expect(lightbox.current).to.equal(images[1].dataset.src);
+  lightbox.close();
 });
 
 it('renders sanitized source chunks and rejects cross-origin download links', async () => {

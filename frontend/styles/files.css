@@ -29,6 +29,7 @@
     color: var(--color-accent-action);
     cursor: pointer;
     display: flex;
+    font: inherit;
     font-size: var(--font-size-detail);
     font-weight: 500;
     gap: var(--space-inline);
@@ -41,6 +42,13 @@
 .ingest-target-pill:hover {
     background: var(--color-accent-hover-strong);
     border-color: var(--color-accent-border-soft);
+}
+
+.ui-popover--ingest .ui-popover-item {
+    background: transparent;
+    border: 0;
+    text-align: left;
+    width: 100%;
 }
 
 .ingest-target-dot {

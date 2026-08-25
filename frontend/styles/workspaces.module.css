@@ -4,11 +4,25 @@
  */
 
 .workspacePopoverAll {
+  background: transparent;
+  border: 0;
   color: var(--color-accent-action);
+  text-align: left;
+  width: 100%;
 }
 
 .workspacePopoverItem {
+  align-items: center;
+  display: flex;
   min-width: 0;
+}
+
+.workspacePopoverOption {
+  background: transparent;
+  border: 0;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
 }
 
 .workspacePopoverCheck {
@@ -58,6 +72,7 @@
   cursor: pointer;
   display: flex;
   flex-shrink: 0;
+  font: inherit;
   font-size: var(--font-size-caption);
   height: var(--size-icon-md);
   justify-content: center;
@@ -71,7 +86,8 @@
     opacity: 0;
   }
 
-  .workspacePopoverItem:hover .workspacePopoverDelete {
+  .workspacePopoverItem:hover .workspacePopoverDelete,
+  .workspacePopoverItem:focus-within .workspacePopoverDelete {
     opacity: 1;
   }
 }

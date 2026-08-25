@@ -4,7 +4,9 @@
 import '../tokens/utopia.css';
 import '../styles/global.css';
 import '../styles/primitives.css';
+import '../styles/layout.css';
 import '../styles/panels.css';
+import '../styles/files.css';
 import '../styles/sources.css';
 import '../styles/artifacts.css';
 import '../styles/design_system.css';
@@ -12,6 +14,13 @@ import './active_artifact_frame.ts';
 import './artifact_canvas.ts';
 import './answer_presentation.ts';
 import './run_dialogs.ts';
+import type {DlImageLightbox} from './image_lightbox.ts';
+import './image_lightbox.ts';
+import type {DlNotificationOffer} from './notifications.ts';
+import './notifications.ts';
+import './theme.ts';
+import type {DlToastRegion} from './toast.ts';
+import './toast.ts';
 
 interface PrimitiveSpec {
   name: string;
@@ -60,11 +69,43 @@ const PRIMITIVES: PrimitiveSpec[] = [
       '</section></div></form></dialog>',
   },
   {
-    name: 'Action toast (.toast + .ui-btn)',
+    name: 'Action toast (dl-toast-region + .ui-btn)',
     markup:
-      '<div class="toast visible ds-toast-demo" role="status">' +
-      '<span class="toast-message">Remembered: Prefers concise answers.</span>' +
-      '<button class="ui-btn toast-action" type="button">Undo</button></div>',
+      '<dl-toast-region class="toast ds-toast-demo" role="status"></dl-toast-region>',
+  },
+  {
+    name: 'Theme Control (dl-theme-control)',
+    markup: '<dl-theme-control id="ds-theme-feature"></dl-theme-control>',
+  },
+  {
+    name: 'Answer notification offer (dl-notification-offer)',
+    markup:
+      '<dl-notification-offer class="notify-offer ds-notify-demo" role="group" ' +
+      'aria-label="Answer notifications"></dl-notification-offer>',
+  },
+  {
+    name: 'Answer Mode menu',
+    markup:
+      '<div class="composer-mode"><button class="composer-mode-trigger" type="button" ' +
+      'aria-haspopup="menu" aria-expanded="true">Research</button>' +
+      '<div class="composer-mode-menu ds-mode-demo" role="menu" aria-label="Answer mode">' +
+      '<button role="menuitemradio" aria-checked="true">Research</button>' +
+      '<button role="menuitemradio" aria-checked="false">Quick</button></div></div>',
+  },
+  {
+    name: 'Image Lightbox (dl-image-lightbox)',
+    markup:
+      '<button class="ui-btn" id="ds-lightbox-open" type="button">Open image viewer</button>' +
+      '<dl-image-lightbox id="ds-image-lightbox"></dl-image-lightbox>',
+  },
+  {
+    name: 'Workspace controls',
+    markup:
+      '<div class="ui-popover" role="dialog" aria-label="Workspaces">' +
+      '<button class="ui-popover-item" type="button" aria-pressed="true">All workspaces</button>' +
+      '<div class="ui-popover-create"><input class="ui-popover-input" aria-label="New workspace name" ' +
+      'placeholder="New workspace..."><button class="ui-popover-create-btn" aria-label="Create workspace">+</button>' +
+      '</div></div>',
   },
   {
     name: 'Dialog text input (.ui-dialog-input)',
@@ -123,6 +164,16 @@ function mountPrimitives(): void {
     card.append(title, stage);
     section.appendChild(card);
   }
+  document.querySelector<DlToastRegion>('.ds-toast-demo')?.showAction(
+    'Remembered: Prefers concise answers.',
+    {
+      actionLabel: 'Undo',
+      onAction: async () => 'Profile Memory change undone.',
+      duration: 3_600_000,
+    },
+  );
+  const notificationOffer = document.querySelector<DlNotificationOffer>('.ds-notify-demo');
+  if (notificationOffer) notificationOffer.visible = true;
   document.getElementById('ds-confirm-open')?.addEventListener('click', () => {
     (document.getElementById('ds-confirm') as HTMLDialogElement | null)?.showModal();
   });
@@ -137,6 +188,12 @@ function mountPrimitives(): void {
     document.querySelector<HTMLElement & {open(fetcher: () => Promise<unknown[]>): void}>(
       'dl-children-roster',
     )?.open(async () => [{status: 'succeeded', objective: 'Example child'} as never]);
+  });
+  document.getElementById('ds-lightbox-open')?.addEventListener('click', (event) => {
+    void document.querySelector<DlImageLightbox>('#ds-image-lightbox')?.open(
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+      event.currentTarget as HTMLElement,
+    );
   });
   const frame = document.querySelector<HTMLElement & {source: string; active: boolean}>(
     '#ds-artifact-frame',

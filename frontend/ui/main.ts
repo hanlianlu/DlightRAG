@@ -11,27 +11,16 @@ import '../styles/sources.css';
 
 import type {DlApp} from './app.ts';
 import './app.ts';
-import {setupImageLightbox} from './images.ts';
 import {setupMathRendering} from './mathjax.ts';
-import {setupChatMemoryOperationAdapter} from './memory.ts';
-import {setupNotifications} from './notifications.ts';
 import {setupPanelSplits} from './split_panel.ts';
-import {setupTheme} from './theme.ts';
-import {initWorkspaces} from './workspaces.ts';
 
-// Every module below is needed on first paint, so splitting them into dynamic
-// imports only added round-trips and blocked cross-module tree-shaking.
-document.addEventListener('DOMContentLoaded', function() {
-    const app = document.querySelector<DlApp>('dl-app');
-    if (!app) return;
-    void app.ready.then(function() {
-        setupTheme();
-        initWorkspaces();
-        setupPanelSplits();
-        app.setupSettingsAdapter();
-        setupChatMemoryOperationAdapter();
-        setupImageLightbox();
-        setupMathRendering();
-        setupNotifications();
-    });
+// Vite's one-shot entry is the approved seam for the two browser/third-party
+// adapters: MathJax loading/scheduling and Web Awesome split-panel binding.
+document.addEventListener('DOMContentLoaded', () => {
+  const app = document.querySelector<DlApp>('dl-app');
+  if (!app) return;
+  void app.ready.then(() => {
+    setupPanelSplits();
+    setupMathRendering();
+  });
 });

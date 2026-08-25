@@ -205,8 +205,11 @@ command overrides its Docker host alias with the native loopback endpoint.
 ### Web
 
 The Web UI is served by the REST API at `/web/`. Vite owns its static document
-and hashed assets, while light-DOM Lit components own browser presentation and
-route-driven state. It supports workspace selection, file/folder upload,
+and hashed assets, while light-DOM Lit Features own browser presentation,
+route-driven state, async work, focus, and accessibility. `dl-app` is only the
+composition root: all DlightRAG custom elements use `dl-`, sibling intent crosses
+typed events and small commands, and no migration adapters or fixed-ID
+cross-Feature mutations remain. It supports workspace selection, file/folder upload,
 durable principal-scoped conversations and answer attachments, citations,
 Sources, semantic highlights, and typed Answer Artifacts. Presentable files open
 in Artifact Canvas with side, wide, and fullscreen layouts; a Primary Report is

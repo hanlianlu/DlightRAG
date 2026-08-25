@@ -12,6 +12,7 @@ import {LightElement} from '../lib/lit_host.ts';
 import {setSanitizedLlmHtml} from '../lib/safe_html.ts';
 import {renderMath} from '../lib/math.ts';
 import {safeImageSrc} from '../lib/urls.ts';
+import type {ImageOpenDetail} from './image_lightbox.ts';
 import {renderDiagrams} from './mermaid.ts';
 
 export interface ArtifactOpenDetail {
@@ -23,11 +24,6 @@ export interface AnswerSourceOpenDetail {
   presentation: AnswerPresentation;
   referenceId: string;
   chunkId?: string;
-  returnFocus: HTMLElement;
-}
-
-export interface AnswerImageOpenDetail {
-  src: string;
   returnFocus: HTMLElement;
 }
 
@@ -153,7 +149,7 @@ export class AnswerPresentationElement extends LightElement {
           <strong>${artifact.label}</strong>
           <span>${artifact.filename}</span>
         </div>
-        <button class="ui-btn" type="button" data-action="open-artifact" @click=${(event: Event) => {
+        <button class="ui-btn" type="button" @click=${(event: Event) => {
           this.#openArtifact(artifact, event.currentTarget as HTMLElement);
         }}>${primary ? 'View report' : 'Open Artifact'}</button>
       </article>
@@ -207,12 +203,34 @@ export class AnswerPresentationElement extends LightElement {
     if (!image || !this.contains(image)) return;
     event.preventDefault();
     event.stopPropagation();
-    this.dispatchEvent(new CustomEvent<AnswerImageOpenDetail>('answer-image-open', {
+    this.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
       bubbles: true,
       composed: true,
-      detail: {src: image.dataset.src || '', returnFocus: image},
+      detail: {
+        src: image.dataset.src || '',
+        gallery: this.#galleryImages(),
+        returnFocus: image,
+      },
     }));
   };
+
+  #galleryImages(): string[] {
+    const presentation = this.presentation;
+    if (!presentation) return [];
+    const candidates = [
+      ...presentation.parts.flatMap((part) => {
+        if (part.type === 'evidence_image' && part.evidence_image) {
+          return [part.evidence_image.url];
+        }
+        if (part.type === 'artifact' && part.artifact?.presentation === 'image') {
+          return [part.artifact.data_url || ''];
+        }
+        return [];
+      }),
+      ...presentation.evidence_images.map((image) => image.url),
+    ];
+    return [...new Set(candidates.map(safeImageSrc).filter(Boolean))];
+  }
 
   #handleKeyIntent = (event: KeyboardEvent): void => {
     if (event.key !== 'Enter' && event.key !== ' ') return;

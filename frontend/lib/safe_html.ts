@@ -2,15 +2,12 @@
 
 import DOMPurify, {type Config} from 'dompurify';
 
-// Attributes shared by both profiles. data-action / data-* are kept because
-// citation and image intents rely on them, and their handlers re-validate input.
+// Attributes shared by both profiles. Only citation identities cross from
+// sanitized answer HTML; image and Artifact intent is rendered by Lit.
 const BASE_ADD_ATTR = [
   'aria-label',
-  'data-action',
   'data-chunk',
-  'data-full-src',
   'data-ref',
-  'data-src',
   'download',
   'hidden',
   'role',
@@ -29,7 +26,7 @@ const BASE_ADD_ATTR = [
 // Strict profile — untrusted LLM answer/preview/highlight content.
 const LLM_SANITIZE_CONFIG: Config = {
   USE_PROFILES: {html: true, svg: true},
-  ALLOW_DATA_ATTR: true,
+  ALLOW_DATA_ATTR: false,
   ADD_TAGS: ['line', 'polyline'],
   ADD_ATTR: [...BASE_ADD_ATTR],
 };

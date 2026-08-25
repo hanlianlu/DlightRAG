@@ -8,11 +8,12 @@ import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
+import './workspace_create.ts';
 
 const CARET = svg`<path d="M2.5 4 L5 6.5 L7.5 4"/>`;
 
 /** Picks which workspace an upload lands in; shown only while Files is open. */
-export class IngestTarget extends LightElement {
+export class DlIngestTarget extends LightElement {
     static properties = {
         active: {attribute: false},
         open: {state: true},
@@ -24,7 +25,7 @@ export class IngestTarget extends LightElement {
     readonly #dismiss = createAutoDismiss({
         getAnchor: () => this,
         isOpen: () => this.open,
-        onDismiss: () => { this.open = false; },
+        onDismiss: (reason) => { this.#dismissPopover(reason === 'escape'); },
     });
 
     constructor() {
@@ -58,27 +59,22 @@ export class IngestTarget extends LightElement {
 
     #renderOption(record: WorkspaceRecord) {
         const selected = record.workspace === ingestStore.workspace;
-        const select = (event: Event): void => {
-            event.stopPropagation();
-            this.open = false;
-            ingestStore.set(record.workspace);
-        };
         return html`
-            <div
+            <button
                 class="ui-popover-item"
-                role="option"
-                tabindex="0"
-                aria-selected=${selected ? 'true' : 'false'}
-                @click=${select}
-                @keydown=${(event: KeyboardEvent) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
-                    event.preventDefault();
-                    select(event);
+                type="button"
+                data-ingest-workspace-choice
+                aria-pressed=${selected ? 'true' : 'false'}
+                @click=${(event: Event) => {
+                    event.stopPropagation();
+                    this.open = false;
+                    ingestStore.set(record.workspace);
+                    void this.updateComplete.then(() => { this.#trigger()?.focus(); });
                 }}
             >
-                <div class="ingest-target-popover-radio${selected ? ' on' : ''}"></div>
+                <span class="ingest-target-popover-radio${selected ? ' on' : ''}"></span>
                 <span>${record.displayName}</span>
-            </div>
+            </button>
         `;
     }
 
@@ -88,54 +84,89 @@ export class IngestTarget extends LightElement {
         return html`
             <div
                 class="ui-popover ui-popover--ingest"
-                role="listbox"
+                id="ingest-target-popover"
+                role="dialog"
                 aria-label="Select ingest workspace"
-                @keydown=${(event: KeyboardEvent) => { rovingArrowKeydown(event, '[role="option"]'); }}
+                ?hidden=${!this.active || !this.open}
+                @keydown=${(event: KeyboardEvent) => {
+                    rovingArrowKeydown(event, '[data-ingest-workspace-choice]');
+                }}
             >
                 ${repeat(sorted, (record) => record.workspace, (record) => this.#renderOption(record))}
-                <workspace-create></workspace-create>
+                <dl-workspace-create @dl-workspace-created=${this.#workspaceCreated}></dl-workspace-create>
             </div>
         `;
     }
 
     protected override render(): TemplateResult | typeof nothing {
-        if (!this.active) return nothing;
         const displayName = this.#displayName;
-        const toggle = (event: Event): void => {
-            event.stopPropagation();
-            this.open = !this.open;
-        };
         return html`
-            <span class="ingest-target-label">Files in:</span>
-            <span
-                class="ingest-target-pill"
-                role="button"
-                tabindex="0"
-                aria-label="Files in ${displayName}; choose file workspace"
-                aria-expanded=${this.open ? 'true' : 'false'}
-                @click=${toggle}
-                @keydown=${(event: KeyboardEvent) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
-                    event.preventDefault();
-                    toggle(event);
-                }}
-            >
-                <span class="ingest-target-dot"></span>
-                <span class="ingest-target-name">${displayName}</span>
-                <span class="ingest-target-caret">
-                    <svg width="8" height="8" viewBox="0 0 10 10" fill="none"
-                         stroke="currentColor" stroke-width="1.5">${CARET}</svg>
-                </span>
-            </span>
-            ${this.open ? this.#renderPopover() : nothing}
+            ${this.active ? html`
+                <span class="ingest-target-label">Files in:</span>
+                <button
+                    class="ingest-target-pill"
+                    id="ingest-target-trigger"
+                    type="button"
+                    aria-label="Files in ${displayName}; choose file workspace"
+                    aria-haspopup="dialog"
+                    aria-expanded=${this.open ? 'true' : 'false'}
+                    aria-controls="ingest-target-popover"
+                    @click=${this.#togglePopover}
+                >
+                    <span class="ingest-target-dot"></span>
+                    <span class="ingest-target-name">${displayName}</span>
+                    <span class="ingest-target-caret">
+                        <svg width="8" height="8" viewBox="0 0 10 10" fill="none"
+                             stroke="currentColor" stroke-width="1.5">${CARET}</svg>
+                    </span>
+                </button>
+            ` : nothing}
+            ${this.#renderPopover()}
         `;
     }
+
+    #trigger(): HTMLButtonElement | null {
+        return this.querySelector<HTMLButtonElement>('#ingest-target-trigger');
+    }
+
+    #togglePopover = (event: Event): void => {
+        event.stopPropagation();
+        if (this.open) {
+            this.open = false;
+            return;
+        }
+        this.open = true;
+        void this.updateComplete.then(() => {
+            const selected = this.querySelector<HTMLButtonElement>(
+                '[data-ingest-workspace-choice][aria-pressed="true"]',
+            );
+            (selected ?? this.querySelector<HTMLButtonElement>(
+                '[data-ingest-workspace-choice]',
+            ))?.focus();
+        });
+    };
+
+    #dismissPopover(restoreFocus: boolean): void {
+        this.open = false;
+        if (restoreFocus) {
+            void this.updateComplete.then(() => { this.#trigger()?.focus(); });
+        }
+    }
+
+    #workspaceCreated = (): void => {
+        const active = document.activeElement;
+        const restoreFocus = active === document.body || this.contains(active);
+        this.open = false;
+        if (restoreFocus) {
+            void this.updateComplete.then(() => { this.#trigger()?.focus(); });
+        }
+    };
 }
 
-customElements.define('ingest-target', IngestTarget);
+customElements.define('dl-ingest-target', DlIngestTarget);
 
 declare global {
     interface HTMLElementTagNameMap {
-        'ingest-target': IngestTarget;
+        'dl-ingest-target': DlIngestTarget;
     }
 }

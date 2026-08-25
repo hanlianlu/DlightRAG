@@ -76,6 +76,7 @@ it('requires explicit user intent before creating the active iframe', async () =
 
   frame?.dispatchEvent(new CustomEvent('artifact-frame-escape', {bubbles: true, composed: true}));
   await canvas.updateComplete;
+  await new Promise((resolve) => requestAnimationFrame(resolve));
   expect(canvas.classList.contains('open')).to.equal(false);
   expect(canvas.inert).to.equal(true);
   expect(canvas.getAttribute('aria-hidden')).to.equal('true');
@@ -88,44 +89,26 @@ it('requires explicit user intent before creating the active iframe', async () =
   expect(canvas.hasAttribute('aria-modal')).to.equal(false);
   canvas.close();
   await canvas.updateComplete;
+  await new Promise((resolve) => requestAnimationFrame(resolve));
   expect(canvas.querySelector('dl-active-artifact-frame')).to.equal(null);
   expect(document.activeElement).to.equal(returnFocus);
 });
 
-it('uses one modal predicate for ARIA, focus trapping, and outside inertness', async () => {
+it('publishes the one modal predicate for Shell composition and focus trapping', async () => {
   window.matchMedia = desktopMedia;
   window.fetch = async () => new Response('<!doctype html><html><body>Report</body></html>');
-  document.body.classList.add('conversation-sidebar-open');
-  const sidebar = document.createElement('nav');
-  const sidebarFeature = document.createElement('dl-conversation-sidebar') as HTMLElement & {
-    setShellInert(inert: boolean): void;
-  };
-  sidebarFeature.setShellInert = (inert) => { sidebar.inert = inert; };
-  sidebarFeature.appendChild(sidebar);
-  const topbar = document.createElement('header');
-  topbar.className = 'topbar';
-  topbar.appendChild(sidebarFeature);
-  const chat = document.createElement('dl-chat-feature');
-  const panel = document.createElement('aside');
-  panel.id = 'panel';
-  panel.className = 'open';
-  const inspector = document.createElement('dl-inspector') as HTMLElement & {
-    setShellInert(inert: boolean): void;
-  };
-  inspector.setShellInert = (inert) => { panel.inert = inert; };
-  inspector.appendChild(panel);
   const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
-  document.body.append(topbar, chat, inspector, canvas);
+  const states: Array<{open: boolean; modal: boolean; overlay: boolean}> = [];
+  canvas.addEventListener('dl-artifact-canvas-state-change', (event) => {
+    states.push(event.detail);
+  });
+  document.body.append(canvas);
 
   await canvas.open(htmlArtifact());
   await canvas.updateComplete;
 
   expect(canvas.getAttribute('aria-modal')).to.equal('true');
-  expect(document.body.classList.contains('artifact-canvas-modal')).to.equal(true);
-  expect(sidebar.inert).to.equal(true);
-  expect(topbar.inert).to.equal(true);
-  expect(chat.inert).to.equal(true);
-  expect(panel.inert).to.equal(true);
+  expect(states.at(-1)).to.deep.equal({open: true, modal: true, overlay: true});
 
   const focusable = Array.from(canvas.querySelectorAll<HTMLButtonElement>('button'));
   focusable.at(-1)?.focus();
@@ -138,11 +121,32 @@ it('uses one modal predicate for ARIA, focus trapping, and outside inertness', a
   await canvas.updateComplete;
   expect(canvas.layout).to.equal('side');
   expect(canvas.hasAttribute('aria-modal')).to.equal(false);
-  expect(document.body.classList.contains('artifact-canvas-modal')).to.equal(false);
-  expect(sidebar.inert).to.equal(false);
-  expect(topbar.inert).to.equal(false);
-  expect(chat.inert).to.equal(false);
-  expect(panel.inert).to.equal(false);
+  expect(states.at(-1)).to.deep.equal({open: true, modal: false, overlay: false});
+});
+
+it('does not restore stale focus when close is immediately followed by reopen', async () => {
+  window.matchMedia = desktopMedia;
+  const artifact = htmlArtifact();
+  artifact.status = 'unavailable';
+  artifact.issue = {
+    kind: 'missing_file',
+    description: 'Referenced Artifact is missing.',
+    resource_id: artifact.resource_id,
+  };
+  const firstTrigger = document.createElement('button');
+  const secondTrigger = document.createElement('button');
+  const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
+  document.body.append(firstTrigger, secondTrigger, canvas);
+
+  await canvas.open(artifact, firstTrigger);
+  canvas.close();
+  const reopened = canvas.open(artifact, secondTrigger);
+  await reopened;
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+
+  expect(canvas.classList.contains('open')).to.equal(true);
+  expect(document.activeElement).not.to.equal(firstTrigger);
+  expect(canvas.contains(document.activeElement)).to.equal(true);
 });
 
 it('operator-disabled HTML uses only the script-disabled static frame', async () => {

@@ -119,12 +119,17 @@ body.conversation-drawer-open {
     width: clamp(200px, 20vw, 260px);
 }
 
+.ui-popover[hidden] {
+    display: none;
+}
+
 .ui-popover-item {
     align-items: center;
     border-radius: var(--radius-control);
     color: var(--color-text-secondary);
     cursor: pointer;
     display: flex;
+    font: inherit;
     font-size: var(--font-size-detail);
     gap: var(--space-component);
     padding: var(--space-tight) var(--space-component);
@@ -175,6 +180,7 @@ body.conversation-drawer-open {
     cursor: pointer;
     display: flex;
     flex-shrink: 0;
+    font: inherit;
     font-size: var(--font-size-body);
     height: var(--size-button);
     justify-content: center;

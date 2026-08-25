@@ -7,6 +7,7 @@ import {LightElement} from '../lib/lit_host.ts';
 import {setSanitizedLlmHtml} from '../lib/safe_html.ts';
 import {safeExternalHttpHref, safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import {renderMath} from '../lib/math.ts';
+import type {ImageOpenDetail} from './image_lightbox.ts';
 
 export interface InspectorSourcesStateDetail {
   hasSources: boolean;
@@ -158,10 +159,17 @@ export class DlInspectorSources extends LightElement {
                   </div>
                   ${image && thumbnail ? html`
                     <div class="source-chunk-image">
-                      <img src=${thumbnail} data-full-src=${image}
-                           alt=${`Page ${chunk.page_number ?? ''}`} loading="lazy"
-                           data-action="open-lightbox" role="button" tabindex="0"
-                           aria-label="Open page image">
+                      <img src=${thumbnail} alt=${`Page ${chunk.page_number ?? ''}`} loading="lazy"
+                           role="button" tabindex="0" aria-label="Open page image"
+                           @click=${(event: Event) => this.#openImage(
+                             image,
+                             event.currentTarget as HTMLElement,
+                           )}
+                           @keydown=${(event: KeyboardEvent) => {
+                             if (event.key !== 'Enter' && event.key !== ' ') return;
+                             event.preventDefault();
+                             this.#openImage(image, event.currentTarget as HTMLElement);
+                           }}>
                     </div>
                   ` : nothing}
                   ${chunk.content_html ? html`
@@ -179,6 +187,17 @@ export class DlInspectorSources extends LightElement {
 
   protected override render(): TemplateResult {
     return html`${repeat(this.sources, (source) => source.id, (source) => this.#source(source))}`;
+  }
+
+  #openImage(src: string, returnFocus: HTMLElement): void {
+    const gallery = this.sources.flatMap((source) => source.chunks)
+      .map((chunk) => safeImageSrc(chunk.image_url || chunk.thumbnail_url))
+      .filter(Boolean);
+    this.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
+      bubbles: true,
+      composed: true,
+      detail: {src, gallery: [...new Set(gallery)], returnFocus},
+    }));
   }
 
   #downloadIcon(): TemplateResult {

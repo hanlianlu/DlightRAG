@@ -246,9 +246,16 @@ commands, and composes a Conversation List that emits typed item intent. Inspect
 separately owns its Sources/Files pane state, responsive accessibility, focus, and
 commands; its Sources and Files content modules own list intent and async file work.
 Citation intent reaches Inspector through a typed AnswerPresentation event composed
-by the Shell. The Shell consumes typed state events to coordinate layout and
-inertness through public Feature hosts. Internal adapters retain DOMPurify, MathJax,
-Mermaid, object URLs, and split integration.
+by the Shell. The Message List classifies conversation-background clicks and raises
+a typed intent, so the Shell never inspects Chat DOM. The Shell consumes typed state
+events to coordinate layout and inertness through public Feature properties; it
+contains no migration adapters or fixed-ID cross-Feature mutations. Settings Dialog, Toast Region, Image Lightbox,
+Notification Offer, Theme Control, and workspace controls own their state, async
+work, accessibility, and browser lifecycle behind `dl-` interfaces. Answer Mode
+remains private to the Composer that owns its request state. Vite startup retains
+only the approved MathJax loader/scheduler and Web Awesome split integration;
+internal adapters retain DOMPurify, Mermaid, object URLs, and those two browser/
+third-party integrations.
 Server-sanitized semantic answer/source HTML is the only deliberate same-DOM HTML
 sink. Artifact Canvas remains separate and owns typed Artifact renderer selection and focus; active
 HTML is fetched as authenticated inert bytes and placed in `srcdoc` only after

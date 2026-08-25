@@ -434,6 +434,15 @@ the primary Files target, answer-attachment limits, and the current image-input
 capability; it never contains bearer credentials or edge identity tokens. A
 Vite-owned static document renders `<dl-app>` immediately; the Lit root stays
 inert until this snapshot succeeds and exposes an explicit retry on failure.
+`dl-app` then composes the `dl-`-prefixed Chat, Conversation Sidebar, Inspector,
+Artifact Canvas, Settings, Toast, Image Lightbox, Notification Offer, Theme, and
+workspace Features. Properties flow down, typed intent/state events flow up, and
+small commands cross sibling seams only through Shell composition. In particular,
+Features raise typed toast intents and the Shell invokes the Toast Region's public
+commands; no module-global notification channel exists. There are no
+legacy custom-element aliases, fixed-ID cross-Feature mutations, or UI
+choreography events on the domain bus. The only one-shot setup functions are the
+MathJax browser observer and Web Awesome split-panel integration.
 
 Browser navigation has two explicit page routes: `/web/` is an unpersisted New
 Chat, while `/web/conversations/{conversation_id}` identifies one durable

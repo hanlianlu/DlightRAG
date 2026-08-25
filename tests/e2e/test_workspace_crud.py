@@ -2,6 +2,7 @@
 """E2E tests for workspace CRUD: create, open, delete workspaces."""
 
 import pytest
+from playwright.sync_api import expect
 
 
 @pytest.mark.e2e
@@ -35,8 +36,7 @@ def test_workspace_popover_closes(page):
 
     # Click outside — the popover should go away
     page.locator(".app").click(position={"x": 10, "y": 10})
-    page.wait_for_timeout(300)
-    assert page.locator(".ui-popover--workspace").count() == 0
+    expect(page.locator(".ui-popover--workspace")).to_be_hidden()
 
 
 @pytest.mark.e2e
@@ -46,13 +46,15 @@ def test_scope_toggle_keeps_a_half_typed_workspace_name(page):
     page.wait_for_selector("#workspace-selector", timeout=10000)
 
     page.locator("#workspace-selector").click()
-    page.wait_for_selector(".ui-popover--workspace", timeout=5000)
-    page.locator(".ui-popover-input").fill("half typed name")
+    popover = page.get_by_role("dialog", name="Workspaces")
+    popover.wait_for()
+    create_input = popover.get_by_label("New workspace name")
+    create_input.fill("half typed name")
 
     page.locator('[data-workspace-all="true"]').click()
     page.wait_for_timeout(300)
 
-    assert page.locator(".ui-popover-input").input_value() == "half typed name"
+    assert create_input.input_value() == "half typed name"
 
 
 @pytest.mark.e2e
@@ -65,11 +67,12 @@ def test_workspace_popover_is_arrow_navigable(page):
     page.wait_for_selector(".ui-popover--workspace", timeout=5000)
 
     focused_index = """() => {
-        const options = [...document.querySelectorAll('.ui-popover--workspace [role=option]')];
-        return options.indexOf(document.activeElement?.closest('[role=option]'));
+        const choices = [...document.querySelectorAll('[data-workspace-choice]')];
+        return choices.indexOf(document.activeElement);
     }"""
-    last = page.locator(".ui-popover--workspace [role=option]").count() - 1
-    page.locator(".ui-popover--workspace [role=option]").first.focus()
+    choices = page.locator("[data-workspace-choice]")
+    last = choices.count() - 1
+    choices.first.focus()
 
     page.keyboard.press("ArrowDown")
     assert page.evaluate(focused_index) == 1
@@ -82,6 +85,33 @@ def test_workspace_popover_is_arrow_navigable(page):
 
 
 @pytest.mark.e2e
+def test_workspace_controls_inherit_application_typography(page):
+    """Native workspace triggers and choices inherit the application font."""
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+    app_font = page.locator("body").evaluate("element => getComputedStyle(element).fontFamily")
+
+    scope_trigger = page.get_by_role("button", name="Choose search workspaces")
+    assert scope_trigger.evaluate("element => getComputedStyle(element).fontFamily") == app_font
+    scope_trigger.click()
+    workspace_dialog = page.get_by_role("dialog", name="Workspaces")
+    workspace_choice = workspace_dialog.get_by_role("button", name="All workspaces")
+    assert workspace_choice.evaluate("element => getComputedStyle(element).fontFamily") == app_font
+    page.keyboard.press("Escape")
+    expect(workspace_dialog).to_be_hidden()
+
+    page.get_by_role("button", name="Files", exact=True).click()
+    page.wait_for_selector("#upload-zone", timeout=10000)
+    ingest_trigger = page.get_by_role("button", name="Files in Default; choose file workspace")
+    assert ingest_trigger.evaluate("element => getComputedStyle(element).fontFamily") == app_font
+    ingest_trigger.click()
+    ingest_choice = page.get_by_role("dialog", name="Select ingest workspace").get_by_role(
+        "button", name="Default", exact=True
+    )
+    assert ingest_choice.evaluate("element => getComputedStyle(element).fontFamily") == app_font
+
+
+@pytest.mark.e2e
 def test_workspace_create_input_visible(page):
     """Verify the new-workspace input row exists inside the popover."""
     page.goto("/web/")
@@ -91,10 +121,11 @@ def test_workspace_create_input_visible(page):
     page.wait_for_selector(".ui-popover--workspace", timeout=5000)
 
     # The create-row with input and button should be present
-    create_row = page.locator(".ui-popover-create")
+    popover = page.get_by_role("dialog", name="Workspaces")
+    create_row = popover.locator("dl-workspace-create")
     assert create_row.is_visible()
-    assert create_row.locator(".ui-popover-input").is_visible()
-    assert create_row.locator(".ui-popover-create-btn").is_visible()
+    assert create_row.get_by_label("New workspace name").is_visible()
+    assert create_row.get_by_label("Create workspace").is_visible()
 
 
 @pytest.mark.e2e
@@ -111,7 +142,7 @@ def test_workspace_selector_labels_all_when_scope_covers_every_workspace(page):
     assert (
         page.locator(
             ".ui-popover--workspace .ui-popover-item", has_text="All workspaces"
-        ).get_attribute("aria-selected")
+        ).get_attribute("aria-pressed")
         == "true"
     )
 
@@ -147,3 +178,43 @@ def test_workspace_selector_auto_all_keeps_last_explicit_primary(page):
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
     assert page.locator("#workspace-label").text_content() == "All workspaces (2)"
     assert page.locator(".ingest-target-name").text_content() == "Research"
+
+
+@pytest.mark.e2e
+def test_workspace_create_delete_server_round_trip(page):
+    """Create and delete through the real Web routes, with deterministic cleanup."""
+    name = "E2E Round Trip"
+    created = False
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+
+    try:
+        page.locator("#workspace-selector").click()
+        workspace_popover = page.get_by_role("dialog", name="Workspaces")
+        workspace_popover.get_by_label("New workspace name").fill(name)
+        with page.expect_response("**/web/api/workspaces/create") as create_response:
+            workspace_popover.get_by_label("Create workspace").click()
+        assert create_response.value.ok
+        created = True
+        expect(page.locator("#workspace-label")).to_have_text(name)
+
+        page.locator("#workspace-selector").click()
+        page.get_by_label(f"Delete workspace {name}").click()
+        dialog = page.get_by_role("dialog", name="Delete workspace")
+        dialog.get_by_label(f"Type {name} to confirm").fill(name)
+        with page.expect_response("**/web/api/workspaces/delete") as delete_response:
+            dialog.get_by_role("button", name="Delete", exact=True).click()
+        assert delete_response.value.ok
+        created = False
+
+        expect(dialog).to_be_hidden()
+        expect(page.locator("#workspace-label")).to_have_text("Default")
+        page.locator("#workspace-selector").click()
+        expect(page.get_by_label(f"Delete workspace {name}")).to_have_count(0)
+    finally:
+        if created:
+            cleanup = page.request.post(
+                "/web/api/workspaces/delete",
+                form={"workspace_name": name, "confirm_name": name},
+            )
+            assert cleanup.ok

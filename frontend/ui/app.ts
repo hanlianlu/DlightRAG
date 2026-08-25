@@ -1,46 +1,52 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {html, type TemplateResult} from 'lit';
-import {
-  getWebBootstrap,
-  type WebBootstrap,
-} from '../api/bootstrap.ts';
+import {getWebBootstrap, type WebBootstrap} from '../api/bootstrap.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
-import {closestElement, syncShellInert} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit_host.ts';
+import {workspaceStore} from '../stores/workspaceStore.ts';
 import type {AttachmentPolicy} from './attachment_policy.ts';
-import type {DlArtifactCanvas} from './artifact_canvas.ts';
+import type {
+  ArtifactCanvasStateDetail,
+  DlArtifactCanvas,
+} from './artifact_canvas.ts';
 import './artifact_canvas.ts';
 import type {
   ConversationSidebarStateDetail,
   DlConversationSidebar,
 } from './conversation_sidebar.ts';
 import './conversation_sidebar.ts';
-import type {
-  AnswerImageOpenDetail,
-  AnswerSourceOpenDetail,
-} from './answer_presentation.ts';
+import type {AnswerSourceOpenDetail} from './answer_presentation.ts';
 import type {ComposerWorkspaceDropDetail} from './chat_composer.ts';
-import {openLightbox} from './images.ts';
-import type {DlInspector, InspectorStateDetail} from './inspector.ts';
-import './inspector.ts';
 import type {
   ChatContentChangeDetail,
+  ChatMemoryOperationDetail,
   ChatRunActionDetail,
+  ChatRunningChangeDetail,
   ChatViewActionDetail,
   DlChatFeature,
 } from './chat_feature.ts';
 import './chat_feature.ts';
-import {setupSettings} from './settings.ts';
+import type {ImageOpenDetail} from './image_lightbox.ts';
+import type {DlImageLightbox} from './image_lightbox.ts';
+import './image_lightbox.ts';
+import type {DlInspector, InspectorStateDetail} from './inspector.ts';
+import './inspector.ts';
+import type {DlSettingsDialog} from './settings.ts';
+import './settings.ts';
 import {syncPanelSplitState} from './split_panel.ts';
-import {showToast} from './toast.ts';
 import type {
   ContinuationResult,
   DlChildrenRoster,
   DlContinuationDialog,
 } from './run_dialogs.ts';
 import './run_dialogs.ts';
+import './notifications.ts';
+import './theme.ts';
+import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
+import './toast.ts';
+import './workspace_scope.ts';
 
 const EMPTY_BOOTSTRAP: WebBootstrap = {
   contract_version: 1,
@@ -59,16 +65,38 @@ const EMPTY_BOOTSTRAP: WebBootstrap = {
   active_html_preview_enabled: true,
 };
 
-/** Vite-owned application document body and authenticated bootstrap lifecycle. */
+/** Authenticated bootstrap, top-level capabilities, and Feature composition only. */
 export class DlApp extends LightElement {
   static properties = {
     bootState: {state: true},
+    hasMessages: {state: true},
+    conversationExpanded: {state: true},
+    conversationCompact: {state: true},
+    inspectorOpen: {state: true},
+    inspectorKind: {state: true},
+    inspectorCompact: {state: true},
+    canvasOpen: {state: true},
+    canvasModal: {state: true},
+    canvasOverlay: {state: true},
+    chatRunning: {state: true},
+    lightboxOpen: {state: true},
   };
 
   declare bootState: 'loading' | 'ready' | 'error';
+  declare hasMessages: boolean;
+  declare conversationExpanded: boolean;
+  declare conversationCompact: boolean;
+  declare inspectorOpen: boolean;
+  declare inspectorKind: 'files' | 'sources' | null;
+  declare inspectorCompact: boolean;
+  declare canvasOpen: boolean;
+  declare canvasModal: boolean;
+  declare canvasOverlay: boolean;
+  declare chatRunning: boolean;
+  declare lightboxOpen: boolean;
+
   #bootstrap: WebBootstrap = EMPTY_BOOTSTRAP;
   #controller: AbortController | null = null;
-  #openSettings: (() => Promise<void>) | null = null;
   #pendingContinuation: {kind: 'follow-up' | 'fork'; runId: string} | null = null;
   readonly #ready: Promise<WebBootstrap>;
   #resolveReady!: (bootstrap: WebBootstrap) => void;
@@ -77,6 +105,17 @@ export class DlApp extends LightElement {
   constructor() {
     super();
     this.bootState = 'loading';
+    this.hasMessages = false;
+    this.conversationExpanded = false;
+    this.conversationCompact = false;
+    this.inspectorOpen = false;
+    this.inspectorKind = null;
+    this.inspectorCompact = false;
+    this.canvasOpen = false;
+    this.canvasModal = false;
+    this.canvasOverlay = false;
+    this.chatRunning = false;
+    this.lightboxOpen = false;
     this.#ready = new Promise((resolve) => { this.#resolveReady = resolve; });
   }
 
@@ -100,16 +139,11 @@ export class DlApp extends LightElement {
       'files-panel-open',
       'sources-panel-open',
       'panel-drawer-open',
+      'artifact-canvas-open',
+      'artifact-canvas-overlay',
+      'artifact-canvas-modal',
+      'settings-open',
     );
-  }
-
-  /** Milestone 5 deletes this adapter with the imperative Settings setup. */
-  setupSettingsAdapter(): void {
-    this.#openSettings = setupSettings(() => this.#requestDeleteAllConversations());
-  }
-
-  async #requestDeleteAllConversations(): Promise<boolean> {
-    return await this.#conversationSidebar()?.deleteAll() ?? false;
   }
 
   async #load(): Promise<void> {
@@ -118,15 +152,25 @@ export class DlApp extends LightElement {
     this.#controller = controller;
     this.bootState = 'loading';
     try {
-      this.#bootstrap = await getWebBootstrap(controller.signal);
+      const bootstrap = await getWebBootstrap(controller.signal);
       if (this.#controller !== controller) return;
+      this.#bootstrap = bootstrap;
+      workspaceStore.init(
+        bootstrap.workspaces.map((workspace) => ({
+          workspace: workspace.workspace,
+          displayName: workspace.display_name,
+          embeddingModel: workspace.embedding_model,
+        })),
+        bootstrap.active_workspaces,
+        bootstrap.primary_workspace,
+      );
       this.bootState = 'ready';
       await this.updateComplete;
       if (!this.#readyResolved) {
         this.#readyResolved = true;
-        this.#resolveReady(this.#bootstrap);
+        this.#resolveReady(bootstrap);
       }
-    } catch (error) {
+    } catch {
       if (controller.signal.aborted || this.#controller !== controller) return;
       this.bootState = 'error';
     } finally {
@@ -139,25 +183,28 @@ export class DlApp extends LightElement {
     const attachments = bootstrap.answer_attachments;
     const ready = this.bootState === 'ready';
     const chatFeature = this.querySelector<DlChatFeature>('dl-chat-feature');
+    const conversationModal = this.conversationExpanded && this.conversationCompact;
+    const inspectorModal = this.inspectorOpen && this.inspectorCompact;
+    const shellModal = conversationModal || inspectorModal || this.canvasModal;
     return html`
-      <div
-        class="app"
-        id="app"
+      <div class="app${this.hasMessages ? ' has-messages' : ''}" id="app"
         @artifact-open=${this.#openArtifact}
         @answer-source-open=${this.#openAnswerSource}
-        @answer-image-open=${this.#openAnswerImage}
+        @dl-image-open=${this.#openImage}
         @dl-chat-view-action=${this.#chatViewAction}
+        @dl-chat-memory-operation=${this.#memoryOperation}
+        @dl-chat-running-change=${this.#runningChanged}
         @dl-settings-request=${this.#settingsRequested}
+        @dl-toast-request=${this.#toastRequested}
         @dl-conversation-sidebar-opening=${this.#conversationSidebarOpening}
         @dl-conversation-sidebar-state-change=${this.#conversationSidebarStateChanged}
         @dl-conversation-route-change=${this.#conversationRouteChanged}
-        @click=${this.#conversationAreaClick}
         @dl-inspector-opening=${this.#inspectorOpening}
         @dl-inspector-state-change=${this.#inspectorStateChanged}
-        @artifact-canvas-state-changed=${this.#paneStateChanged}
+        @dl-artifact-canvas-state-change=${this.#canvasStateChanged}
         @dl-composer-workspace-drop=${this.#workspaceDrop}
         aria-busy=${ready ? 'false' : 'true'}
-        ?inert=${!ready}
+        ?inert=${!ready || this.lightboxOpen}
       >
         <wa-split-panel class="panel-split" id="panel-split" primary="end"
                         position-in-pixels="0">
@@ -165,58 +212,23 @@ export class DlApp extends LightElement {
                           primary="end" position-in-pixels="0">
             <div class="primary-shell" slot="start">
               <div class="app-shell">
-                <header class="topbar">
-                  <dl-conversation-sidebar
-                    .enabled=${ready}
-                    .chatFeature=${chatFeature}
-                  ></dl-conversation-sidebar>
-                  <span class="topbar-scope-label">Search in:</span>
-                  <workspace-scope
-                    class="workspace-selector"
-                    id="workspace-selector"
-                    role="button"
-                    tabindex="0"
-                    aria-label="Choose search workspaces"
-                    data-all=${JSON.stringify(bootstrap.workspaces)}
-                    data-primary=${bootstrap.primary_workspace}
-                    data-active=${JSON.stringify(bootstrap.active_workspaces)}
-                  ></workspace-scope>
-                  <div class="topbar-spacer"></div>
+                <header class="topbar" ?inert=${inspectorModal || this.canvasModal}>
+                  <dl-conversation-sidebar .enabled=${ready} .chatFeature=${chatFeature}
+                    .shellInert=${this.canvasModal}></dl-conversation-sidebar>
+                  <span class="topbar-scope-label" ?inert=${shellModal}>Search in:</span>
+                  <dl-workspace-scope class="workspace-selector" id="workspace-selector"
+                    ?inert=${shellModal}></dl-workspace-scope>
+                  <div class="topbar-spacer" ?inert=${shellModal}></div>
                   <button class="topbar-btn" id="files-btn" type="button"
-                          @click=${this.#openFiles}>Files</button>
-                  <div id="theme-control">
-                    <button id="theme-trigger" type="button" aria-label="Appearance" title="Appearance"
-                            aria-haspopup="menu" aria-controls="theme-menu" aria-expanded="false">
-                      <svg class="theme-icon theme-icon-moon" width="17" height="17" viewBox="0 0 24 24"
-                           fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
-                           stroke-linejoin="round" aria-hidden="true">
-                        <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"></path>
-                      </svg>
-                      <svg class="theme-icon theme-icon-sun" width="17" height="17" viewBox="0 0 24 24"
-                           fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
-                           stroke-linejoin="round" aria-hidden="true">
-                        <circle cx="12" cy="12" r="4"></circle>
-                        <path d="M12 2v2"></path><path d="M12 20v2"></path>
-                        <path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path>
-                        <path d="M2 12h2"></path><path d="M20 12h2"></path>
-                        <path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path>
-                      </svg>
-                    </button>
-                    <div id="theme-menu" role="menu" aria-label="Appearance" hidden>
-                      ${this.#themeOption('system', 'System', this.#systemIcon())}
-                      ${this.#themeOption('light', 'Light', this.#sunIcon())}
-                      ${this.#themeOption('dark', 'Dark', this.#moonIcon())}
-                    </div>
-                  </div>
+                          ?inert=${shellModal} @click=${this.#openFiles}>Files</button>
+                  <dl-theme-control id="theme-control" ?inert=${shellModal}></dl-theme-control>
                 </header>
 
-                <dl-chat-feature
-                  .attachmentPolicy=${this.#attachmentPolicy()}
-                  .attachmentAccept=${attachments.accept}
+                <dl-chat-feature .attachmentPolicy=${this.#attachmentPolicy()}
+                  .attachmentAccept=${attachments.accept} ?inert=${shellModal}
                   @dl-chat-content-change=${this.#chatContentChanged}
-                  @dl-chat-run-action=${this.#chatRunAction}
-                ></dl-chat-feature>
-
+                  @dl-chat-background-click=${this.#chatBackgroundClick}
+                  @dl-chat-run-action=${this.#chatRunAction}></dl-chat-feature>
               </div>
             </div>
             <dl-artifact-canvas id="artifact-canvas" class="panel" slot="end"
@@ -224,19 +236,24 @@ export class DlApp extends LightElement {
               .activePreviewEnabled=${bootstrap.active_html_preview_enabled}
             ></dl-artifact-canvas>
           </wa-split-panel>
-          <dl-inspector id="inspector" slot="end"></dl-inspector>
+          <dl-inspector id="inspector" slot="end"
+            .shellInert=${this.canvasModal}></dl-inspector>
         </wa-split-panel>
 
-        <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
-        <div class="notify-offer" id="notify-offer" role="group"
-             aria-label="Answer notifications" hidden>
-          <span class="notify-offer-text">Notify you when an answer finishes?</span>
-          <button class="ui-btn" id="notify-offer-accept" type="button">Enable</button>
-          <button class="ui-btn" id="notify-offer-decline" type="button">Not now</button>
-        </div>
-
+        <dl-toast-region class="toast" id="toast" role="status" aria-live="polite"
+          aria-atomic="true"
+          .shellInert=${shellModal || this.lightboxOpen}></dl-toast-region>
+        <dl-notification-offer class="notify-offer" id="notify-offer" role="group"
+          aria-label="Answer notifications" .running=${this.chatRunning}
+          ?inert=${shellModal}></dl-notification-offer>
+        <dl-settings-dialog
+          .activeHtmlPreviewEnabled=${bootstrap.active_html_preview_enabled}
+          .deleteAllConversations=${this.#requestDeleteAllConversations}
+        ></dl-settings-dialog>
         ${this.#dialogs()}
       </div>
+      <dl-image-lightbox id="image-lightbox"
+        @dl-image-lightbox-state-change=${this.#lightboxStateChanged}></dl-image-lightbox>
       ${this.#bootstrapStatus()}
     `;
   }
@@ -250,7 +267,34 @@ export class DlApp extends LightElement {
   }
 
   #settingsRequested(): void {
-    if (this.#openSettings) void this.#openSettings();
+    const settings = this.querySelector<DlSettingsDialog>('dl-settings-dialog');
+    void settings?.open(document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  }
+
+  #requestDeleteAllConversations = async (
+    returnFocus?: HTMLElement | null,
+  ): Promise<boolean> => {
+    return await this.#conversationSidebar()?.deleteAll(returnFocus) ?? false;
+  };
+
+  #memoryOperation(event: CustomEvent<ChatMemoryOperationDetail>): void {
+    this.querySelector<DlSettingsDialog>('dl-settings-dialog')
+      ?.handleMemoryOperation(event.detail);
+  }
+
+  #toast(): DlToastRegion | null {
+    return this.querySelector<DlToastRegion>('dl-toast-region');
+  }
+
+  #toastRequested(event: CustomEvent<ToastRequestDetail>): void {
+    const toast = this.#toast();
+    if (!toast) return;
+    if (event.detail.action) toast.showAction(event.detail.message, event.detail.action);
+    else toast.show(event.detail.message, event.detail.duration);
+  }
+
+  #runningChanged(event: CustomEvent<ChatRunningChangeDetail>): void {
+    this.chatRunning = event.detail.active;
   }
 
   #inspector(): DlInspector | null {
@@ -266,7 +310,7 @@ export class DlApp extends LightElement {
     if (!inspector?.open) return;
     if (inspector.hasActiveFileMutation) {
       event.preventDefault();
-      showToast('Wait for the file change to finish before opening conversations.', 5000);
+      this.#toast()?.show('Wait for the file change to finish before opening conversations.', 5000);
       return;
     }
     inspector.close();
@@ -280,13 +324,9 @@ export class DlApp extends LightElement {
   #conversationSidebarStateChanged(
     event: CustomEvent<ConversationSidebarStateDetail>,
   ): void {
-    document.body.classList.toggle('conversation-sidebar-open', event.detail.expanded);
-    document.body.classList.toggle(
-      'conversation-drawer-open',
-      event.detail.expanded && event.detail.compact,
-    );
-    syncPanelSplitState();
-    syncShellInert();
+    this.conversationExpanded = event.detail.expanded;
+    this.conversationCompact = event.detail.compact;
+    this.#syncShellState();
   }
 
   #conversationRouteChanged(): void {
@@ -295,38 +335,49 @@ export class DlApp extends LightElement {
   }
 
   #inspectorStateChanged(event: CustomEvent<InspectorStateDetail>): void {
-    this.#syncPaneState(event.detail);
+    this.inspectorOpen = event.detail.open;
+    this.inspectorKind = event.detail.kind;
+    this.inspectorCompact = event.detail.compact;
+    this.#syncShellState();
   }
 
-  #conversationAreaClick = (event: MouseEvent): void => {
+  #canvasStateChanged(event: CustomEvent<ArtifactCanvasStateDetail>): void {
+    this.canvasOpen = event.detail.open;
+    this.canvasModal = event.detail.modal;
+    this.canvasOverlay = event.detail.overlay;
+    this.#syncShellState();
+  }
+
+  #lightboxStateChanged(event: CustomEvent<{open: boolean}>): void {
+    this.lightboxOpen = event.detail.open;
+  }
+
+  #syncShellState(): void {
+    document.body.classList.toggle('conversation-sidebar-open', this.conversationExpanded);
+    document.body.classList.toggle(
+      'conversation-drawer-open',
+      this.conversationExpanded && this.conversationCompact,
+    );
+    document.body.classList.toggle('panel-open', this.inspectorOpen || this.canvasOpen);
+    document.body.classList.toggle('files-panel-open', this.inspectorKind === 'files');
+    document.body.classList.toggle('sources-panel-open', this.inspectorKind === 'sources');
+    document.body.classList.toggle(
+      'panel-drawer-open',
+      this.inspectorOpen && this.inspectorCompact,
+    );
+    document.body.classList.toggle('artifact-canvas-open', this.canvasOpen);
+    document.body.classList.toggle('artifact-canvas-overlay', this.canvasOverlay);
+    document.body.classList.toggle('artifact-canvas-modal', this.canvasModal);
+    syncPanelSplitState();
+  }
+
+  #chatBackgroundClick = (): void => {
     if (window.matchMedia(COMPACT_SHELL_MEDIA).matches) return;
     if (document.body.hasAttribute('data-resizing')) return;
-    if (!closestElement(event.target, '#chat-area')) return;
-    if (closestElement(event.target, '[data-action="open-artifact"]')) return;
-    const inspector = this.#inspector();
-    const canvas = this.#canvas();
-    if (!inspector?.open && !canvas?.classList.contains('open')) return;
-    inspector?.close();
-    canvas?.close(false);
+    if (!this.inspectorOpen && !this.canvasOpen) return;
+    this.#inspector()?.close();
+    this.#canvas()?.close(false);
   };
-
-  #paneStateChanged(): void {
-    this.#syncPaneState();
-  }
-
-  #syncPaneState(inspectorState?: InspectorStateDetail): void {
-    const inspector = this.#inspector();
-    const inspectorOpen = inspectorState?.open ?? Boolean(inspector?.open);
-    const inspectorKind = inspectorState?.kind ?? inspector?.kind ?? null;
-    const compact = inspectorState?.compact ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches;
-    const canvasOpen = Boolean(this.#canvas()?.classList.contains('open'));
-    document.body.classList.toggle('panel-open', inspectorOpen || canvasOpen);
-    document.body.classList.toggle('files-panel-open', inspectorKind === 'files');
-    document.body.classList.toggle('sources-panel-open', inspectorKind === 'sources');
-    document.body.classList.toggle('panel-drawer-open', inspectorOpen && compact);
-    syncPanelSplitState();
-    syncShellInert();
-  }
 
   #openFiles = (event: Event): void => {
     event.preventDefault();
@@ -339,41 +390,33 @@ export class DlApp extends LightElement {
     const returnFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    void this.#inspector()?.uploadFiles(
-      event.detail.files,
-      event.detail.folderName,
-      returnFocus,
-    );
+    void this.#inspector()?.uploadFiles(event.detail.files, event.detail.folderName, returnFocus);
   }
 
   #openArtifact(event: CustomEvent<{artifact: AnswerArtifact; returnFocus: HTMLElement}>): void {
     const canvas = this.#canvas();
-    if (!canvas) return;
-    void canvas.open(event.detail.artifact, event.detail.returnFocus);
+    if (canvas) void canvas.open(event.detail.artifact, event.detail.returnFocus);
   }
 
   #openAnswerSource(event: CustomEvent<AnswerSourceOpenDetail>): void {
     const canvas = this.#canvas();
     const sourceWasInCanvas = Boolean(canvas?.contains(event.detail.returnFocus));
-    canvas?.prepareForInspector();
-    const returnFocus = sourceWasInCanvas && !canvas?.classList.contains('open')
-      ? document.activeElement instanceof HTMLElement ? document.activeElement : null
-      : event.detail.returnFocus;
+    const canvasReturnFocus = canvas?.prepareForInspector() ?? null;
     void this.#inspector()?.openSources(
       event.detail.presentation,
       event.detail.referenceId,
       event.detail.chunkId,
-      returnFocus,
+      sourceWasInCanvas ? canvasReturnFocus : event.detail.returnFocus,
     );
   }
 
-  #openAnswerImage(event: CustomEvent<AnswerImageOpenDetail>): void {
-    event.detail.returnFocus.focus();
-    openLightbox(event.detail.src);
+  #openImage(event: CustomEvent<ImageOpenDetail>): void {
+    const lightbox = this.querySelector<DlImageLightbox>('dl-image-lightbox');
+    void lightbox?.open(event.detail.src, event.detail.returnFocus, event.detail.gallery);
   }
 
   #chatContentChanged(event: CustomEvent<ChatContentChangeDetail>): void {
-    this.querySelector('.app')?.classList.toggle('has-messages', event.detail.hasMessages);
+    this.hasMessages = event.detail.hasMessages;
   }
 
   #attachmentPolicy(): AttachmentPolicy {
@@ -397,11 +440,9 @@ export class DlApp extends LightElement {
       );
       return;
     }
-    this.#pendingContinuation = {
-      kind: event.detail.action,
-      runId: event.detail.runId,
-    };
-    this.querySelector<DlContinuationDialog>('dl-continuation-dialog')?.open(event.detail.action);
+    this.#pendingContinuation = {kind: event.detail.action, runId: event.detail.runId};
+    this.querySelector<DlContinuationDialog>('dl-continuation-dialog')
+      ?.open(event.detail.action);
   }
 
   #continuationResult(event: CustomEvent<ContinuationResult>): void {
@@ -410,42 +451,6 @@ export class DlApp extends LightElement {
     if (!pending || !event.detail.query || event.detail.kind !== pending.kind) return;
     const chat = this.querySelector<DlChatFeature>('dl-chat-feature');
     if (chat) void chat.continueRun(pending.kind, pending.runId, event.detail.query);
-  }
-
-  #themeOption(value: string, label: string, icon: TemplateResult): TemplateResult {
-    return html`
-      <button type="button" role="menuitemradio" data-theme-value=${value}
-              aria-checked=${value === 'system' ? 'true' : 'false'} tabindex="-1">
-        <span class="theme-menu-icon" aria-hidden="true">${icon}</span>
-        <span class="theme-menu-label">${label}</span>
-        <span class="theme-menu-check" aria-hidden="true">✓</span>
-      </button>
-    `;
-  }
-
-  #systemIcon(): TemplateResult {
-    return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-      <rect width="20" height="14" x="2" y="3" rx="2"></rect>
-      <line x1="8" x2="16" y1="21" y2="21"></line><line x1="12" x2="12" y1="17" y2="21"></line>
-    </svg>`;
-  }
-
-  #sunIcon(): TemplateResult {
-    return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path>
-      <path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path>
-      <path d="M2 12h2"></path><path d="M20 12h2"></path>
-      <path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path>
-    </svg>`;
-  }
-
-  #moonIcon(): TemplateResult {
-    return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"></path>
-    </svg>`;
   }
 
   #bootstrapStatus(): TemplateResult {
@@ -461,74 +466,9 @@ export class DlApp extends LightElement {
 
   #dialogs(): TemplateResult {
     return html`
-      <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
-        <form id="settings-form" method="dialog">
-          <div class="settings-drawer-body">
-            <div class="settings-header">
-              <h2 id="settings-title">Settings</h2>
-              <button class="panel-close settings-close" type="submit" value="close-settings"
-                      aria-label="Close settings">✕</button>
-            </div>
-            <section class="settings-section">
-              <h3 id="settings-memory">Profile Memory</h3>
-              <label class="ui-dialog-checkbox">
-                <input type="checkbox" id="memory-enabled-toggle" />
-                Activate profile memories
-              </label>
-              <p id="memory-active-count" class="settings-count" aria-live="polite" hidden></p>
-              <div class="settings-actions">
-                <button type="button" id="memory-clear-btn" class="ui-btn ui-btn-danger-text" hidden>Clear memory</button>
-              </div>
-            </section>
-            <section class="settings-section">
-              <h3>Active HTML Preview</h3>
-              <p class="settings-note">
-                ${this.#bootstrap.active_html_preview_enabled
-                  ? 'Enabled by the operator. Interactive reports require an explicit open action.'
-                  : 'Disabled by the operator. HTML Artifacts are shown with scripts disabled.'}
-              </p>
-            </section>
-            <section class="settings-section">
-              <h3 id="settings-data">Conversation Sessions</h3>
-              <p class="settings-note">Conversations retain 365 days</p>
-              <p id="conversation-count" class="settings-count" aria-live="polite"></p>
-              <div class="settings-actions">
-                <button type="button" id="delete-all-btn" class="ui-btn ui-btn-danger-text">Delete all conversations</button>
-              </div>
-            </section>
-          </div>
-        </form>
-      </dialog>
-      <dialog id="clear-memory-dialog" class="confirm-dialog" aria-labelledby="clear-memory-title">
-        <form method="dialog">
-          <h2 id="clear-memory-title">Clear Profile memory?</h2>
-          <p>Remembered preferences and facts will be forgotten. Conversations are not affected.</p>
-          <div class="ui-dialog-actions">
-            <button type="submit" value="cancel">Cancel</button>
-            <button type="submit" value="clear" class="ui-dialog-danger">Clear memory</button>
-          </div>
-        </form>
-      </dialog>
       <dl-continuation-dialog
-        @dl-continuation-result=${this.#continuationResult}
-      ></dl-continuation-dialog>
+        @dl-continuation-result=${this.#continuationResult}></dl-continuation-dialog>
       <dl-children-roster></dl-children-roster>
-      <dialog id="delete-workspace-dialog" class="workspace-dialog">
-        <form id="delete-workspace-form">
-          <h3 class="workspace-dialog-title">Delete workspace</h3>
-          <p class="workspace-dialog-text">This will permanently delete all data for</p>
-          <p class="workspace-dialog-name" id="delete-workspace-name"></p>
-          <p class="workspace-dialog-text">Type the workspace name to confirm</p>
-          <input type="hidden" name="workspace_name" id="delete-workspace-id">
-          <input type="text" name="confirm_name" id="delete-workspace-confirm-input"
-                 class="workspace-dialog-input" autocomplete="off" placeholder="Type workspace name...">
-          <div class="ui-dialog-actions">
-            <button type="button" data-action="close-delete-workspace-dialog">Cancel</button>
-            <button type="submit" id="delete-workspace-confirm-btn"
-                    class="ui-dialog-danger" disabled>Delete</button>
-          </div>
-        </form>
-      </dialog>
     `;
   }
 }

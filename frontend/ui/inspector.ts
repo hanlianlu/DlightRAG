@@ -47,6 +47,7 @@ export class DlInspector extends LightElement {
   #events: AbortController | null = null;
   #compactMedia: MediaQueryList | null = null;
   #stateSignature = '';
+  #focusGeneration = 0;
 
   constructor() {
     super();
@@ -71,6 +72,7 @@ export class DlInspector extends LightElement {
     this.#events?.abort();
     this.#events = null;
     this.#compactMedia = null;
+    this.#focusGeneration += 1;
     this.#files()?.pause();
     this.#stateSignature = '';
     super.disconnectedCallback();
@@ -134,6 +136,7 @@ export class DlInspector extends LightElement {
   /** Close the Inspector and optionally restore the element that opened it. */
   close(restoreFocus = true): void {
     if (!this.open) return;
+    const focusGeneration = ++this.#focusGeneration;
     this.#files()?.pause();
     this.kind = null;
     this.presentation = null;
@@ -150,7 +153,12 @@ export class DlInspector extends LightElement {
     }
     const returnFocus = this.#returnFocus;
     this.#returnFocus = null;
-    if (restoreFocus && returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => {
+        if (focusGeneration !== this.#focusGeneration || this.open) return;
+        if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+      });
+    }
   }
 
   /** Close conversation-scoped Sources while preserving workspace Files. */
@@ -158,12 +166,6 @@ export class DlInspector extends LightElement {
     if (this.kind !== 'sources') return;
     this.close(false);
     this.#returnFocus = null;
-  }
-
-  /** Receive Artifact Canvas modality from Shell composition. */
-  setShellInert(inert: boolean): void {
-    this.shellInert = inert;
-    this.#syncHostState();
   }
 
   protected override render(): TemplateResult {
@@ -193,11 +195,11 @@ export class DlInspector extends LightElement {
             ?hidden=${!sources || !this.sourceHasItems}
             @click=${this.#toggleAllSources}
           >${this.sourcesExpanded ? 'Collapse all' : 'Show all'}</button>
-          <ingest-target
+          <dl-ingest-target
             class="ingest-target"
             id="ingest-target"
             .active=${files}
-          ></ingest-target>
+          ></dl-ingest-target>
           <button class="panel-close" id="panel-close-btn" type="button"
                   aria-label="Close panel" @click=${() => this.close()}>✕</button>
         </div>
@@ -228,6 +230,7 @@ export class DlInspector extends LightElement {
       detail: {kind},
     });
     if (!this.dispatchEvent(event)) return false;
+    this.#focusGeneration += 1;
     if (returnFocus) this.#returnFocus = returnFocus;
     else if (!this.open && document.activeElement instanceof HTMLElement) {
       this.#returnFocus = document.activeElement;

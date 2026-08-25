@@ -97,9 +97,28 @@ it('owns Sources state, selection, commands, and focus restoration through its p
   expect(inspector.sourcesExpanded).to.equal(true);
 
   buttonNamed(inspector, 'Close panel')?.click();
+  await new Promise((resolve) => requestAnimationFrame(resolve));
   expect(inspector.open).to.equal(false);
   expect(document.activeElement).to.equal(returnFocus);
   expect(customElements.get('source-panel-view')).to.equal(undefined);
+});
+
+it('does not restore stale focus when close is immediately followed by reopen', async () => {
+  window.matchMedia = media(true);
+  const firstTrigger = document.createElement('button');
+  const secondTrigger = document.createElement('button');
+  const inspector = document.createElement('dl-inspector') as DlInspector;
+  document.body.append(firstTrigger, secondTrigger, inspector);
+
+  await inspector.openSources(presentation, undefined, undefined, firstTrigger);
+  inspector.close();
+  const reopened = inspector.openSources(presentation, undefined, undefined, secondTrigger);
+  await reopened;
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+
+  expect(inspector.open).to.equal(true);
+  expect(document.activeElement).not.to.equal(firstTrigger);
+  expect(document.activeElement).to.equal(buttonNamed(inspector, 'Close panel'));
 });
 
 it('owns compact dialog semantics, entry focus, Escape, and typed state', async () => {

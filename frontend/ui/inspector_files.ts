@@ -17,7 +17,7 @@ import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {bus} from '../events/bus.ts';
 import {withRelativePath} from './folder-upload.ts';
-import {showToast} from './toast.ts';
+import type {ToastRequestDetail} from './toast.ts';
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -136,7 +136,7 @@ export class DlInspectorFiles extends LightElement {
     this.uploading = true;
     this.error = null;
     const name = uploadLabel(files, label);
-    showToast(`Uploading ${name}...`);
+    this.#requestToast({message: `Uploading ${name}...`});
     try {
       const receipt = await uploadFileBatch(workspace, files, controller.signal);
       if (!this.#isCurrent(controller, workspace)) return;
@@ -146,13 +146,13 @@ export class DlInspectorFiles extends LightElement {
         ingest: receipt.ingest,
       };
       this.acceptedFiles = receipt.file_count;
-      showToast('Files received — processing in background', 3000);
+      this.#requestToast({message: 'Files received — processing in background', duration: 3000});
       this.#schedulePoll(workspace);
     } catch (error) {
       if (isAbortError(error) || !this.#isCurrent(controller, workspace)) return;
       const message = error instanceof FilesApiError ? error.message : 'Upload failed.';
       this.error = message;
-      showToast(message, 5000);
+      this.#requestToast({message, duration: 5000});
     } finally {
       this.#finishMutation();
       if (this.#request === controller) {
@@ -182,13 +182,13 @@ export class DlInspectorFiles extends LightElement {
       const snapshot = await deleteFileRequest(workspace, filePath, controller.signal);
       if (!this.#isCurrent(controller, workspace)) return;
       this.snapshot = snapshot;
-      showToast('File deleted.', 3000);
+      this.#requestToast({message: 'File deleted.', duration: 3000});
       if (snapshot.ingest.busy) this.#schedulePoll(workspace);
     } catch (error) {
       if (isAbortError(error) || !this.#isCurrent(controller, workspace)) return;
       const message = error instanceof FilesApiError ? error.message : 'Deletion failed.';
       this.error = message;
-      showToast(message, 5000);
+      this.#requestToast({message, duration: 5000});
     } finally {
       this.#finishMutation();
       if (this.#request === controller) this.#request = null;
@@ -286,6 +286,14 @@ export class DlInspectorFiles extends LightElement {
       return withRelativePath(file, path);
     });
     void this.upload(files, folderName);
+  }
+
+  #requestToast(detail: ToastRequestDetail): void {
+    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
+      detail,
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   #progress(status: WebIngestStatus): TemplateResult | typeof nothing {

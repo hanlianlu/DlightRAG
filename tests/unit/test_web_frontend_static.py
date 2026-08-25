@@ -353,3 +353,66 @@ def test_button_hover_rules_change_something() -> None:
                 continue
             changed = any(base[root].get(prop) != value for prop, value in hover.items())
             assert changed, f"{part.strip()} restates {root} and renders no feedback"
+
+
+def test_lit_shell_completion_has_one_owner_and_no_compatibility_layer() -> None:
+    app = (FRONTEND_UI / "app.ts").read_text(encoding="utf-8")
+    main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+    bus = (FRONTEND / "events" / "bus.ts").read_text(encoding="utf-8")
+    production = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in FRONTEND_UI.glob("*.ts")
+        if not path.name.endswith((".test.ts", ".browser.test.ts"))
+    )
+
+    for replaced in (
+        "images.ts",
+        "memory.ts",
+        "workspaces.ts",
+        "workspace_events.ts",
+    ):
+        assert not (FRONTEND_UI / replaced).exists()
+        assert not (FRONTEND / "events" / replaced).exists()
+    for adapter in (
+        "setupSettingsAdapter",
+        "setupChatMemoryOperationAdapter",
+        "setupImageLightbox",
+        "setupNotifications",
+        "setupTheme",
+        "initWorkspaces",
+        "syncShellInert",
+    ):
+        assert adapter not in app + main + production
+
+    definitions = re.findall(r"customElements\.define\(['\"]([^'\"]+)", production)
+    assert definitions
+    assert all(name.startswith("dl-") for name in definitions)
+    assert "customElements.define('workspace-scope'" not in production
+    assert "customElements.define('workspace-create'" not in production
+    assert "customElements.define('ingest-target'" not in production
+
+    assert "@dl-chat-memory-operation" in app
+    assert "@dl-chat-background-click" in app
+    assert "#chat-area" not in app and "open-artifact" not in app
+    assert "@dl-image-open" in app
+    assert "@dl-toast-request" in app
+    assert ".shellInert=${shellModal || this.lightboxOpen}" in app
+    assert "@dl-artifact-canvas-state-change" in app
+    assert "document.getElementById" not in app
+    assert "document.querySelector" not in app
+    assert "setupPanelSplits();" in main
+    assert "setupMathRendering();" in main
+    assert "workspaceCreated" in bus and "workspaceDeleted" in bus
+    assert "panelOpening" not in bus and "settings" not in bus.lower()
+
+    toast = (FRONTEND_UI / "toast.ts").read_text(encoding="utf-8")
+    assert "toastListeners" not in toast and "pendingToast" not in toast
+    assert "export function showToast" not in toast
+    assert "export function showActionToast" not in toast
+    assert "nextRequestId" not in toast and "id: request.id" not in toast
+
+    design_system = (FRONTEND_UI / "design_system.ts").read_text(encoding="utf-8")
+    assert "import './notifications.ts'" in design_system
+    assert "<dl-notification-offer" in design_system
+    assert "data:image/png;base64," in design_system
+    assert "data:image/svg+xml" not in design_system

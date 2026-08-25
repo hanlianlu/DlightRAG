@@ -61,7 +61,7 @@ it('assigns geometry by surface role rather than component size', () => {
   const app = element('app');
   expect(getComputedStyle(app).borderRadius).to.equal('0px');
   expect(getComputedStyle(app).clipPath).to.equal('none');
-  expect(radius('workspace-selector')).to.equal('999px');
+  expect(radius('workspace-selector-trigger')).to.equal('999px');
   expect(radius('imageLightboxPrev')).to.equal('0px 10px 10px 0px');
 });
 

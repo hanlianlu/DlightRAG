@@ -5,10 +5,12 @@ import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
 import './app.ts';
 import type {DlApp} from './app.ts';
 import type {DlChatFeature} from './chat_feature.ts';
+import type {ImageOpenDetail} from './image_lightbox.ts';
 import type {
   AnswerPresentationElement,
   AnswerSourceOpenDetail,
 } from './answer_presentation.ts';
+import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
 
 const bootstrap = {
   contract_version: 1,
@@ -28,6 +30,9 @@ const bootstrap = {
   },
   active_html_preview_enabled: true,
 } as const;
+
+const SAFE_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
 const originalFetch = window.fetch;
 const originalMatchMedia = window.matchMedia;
@@ -106,7 +111,7 @@ it('renders the application shell from the typed bootstrap before resolving read
   expect(loaded).to.deep.equal(bootstrap);
   const shell = app.querySelector<HTMLElement>('#app');
   expect(shell?.inert).to.equal(false);
-  expect(app.querySelector('workspace-scope')?.getAttribute('data-primary')).to.equal('default');
+  expect(app.querySelector('dl-workspace-scope')?.textContent).to.contain('All workspaces (1)');
   const chat = app.querySelector<DlChatFeature>('dl-chat-feature');
   expect(chat?.attachmentPolicy?.countLimit).to.equal(6);
   expect(chat?.attachmentPolicy?.documentMaxBytes).to.equal(2048);
@@ -124,9 +129,11 @@ it('keeps the composed compact conversation modal interactive and inerts sibling
 
   const offer = app.querySelector<HTMLElement>('#notify-offer')!;
   offer.hidden = false;
+  const toast = app.querySelector<DlToastRegion>('dl-toast-region')!;
   const open = app.querySelector<HTMLButtonElement>('[aria-label="Open conversations"]')!;
   open.click();
   await waitFor(() => document.body.classList.contains('conversation-drawer-open'));
+  await app.updateComplete;
 
   const navigation = app.querySelector<HTMLElement>('nav[aria-label="Conversations"]')!;
   const chat = app.querySelector<DlChatFeature>('dl-chat-feature')!;
@@ -136,17 +143,95 @@ it('keeps the composed compact conversation modal interactive and inerts sibling
   expect(topbar.inert).to.equal(false);
   expect(chat.inert).to.equal(true);
   expect(offer.inert).to.equal(true);
-  expect(app.querySelector<HTMLElement>('workspace-scope')?.inert).to.equal(true);
+  toast.showAction('Composed receipt', {actionLabel: 'Undo', onAction: async () => {}});
+  await toast.updateComplete;
+  expect(toast.textContent).to.contain('Composed receipt');
+  expect(toast.inert).to.equal(true);
+  expect(app.querySelector<HTMLElement>('dl-workspace-scope')?.inert).to.equal(true);
   expect(app.querySelector<HTMLElement>('#files-btn')?.inert).to.equal(true);
 
   document.dispatchEvent(new KeyboardEvent('keydown', {
     key: 'Escape', bubbles: true, cancelable: true,
   }));
   await waitFor(() => !document.body.classList.contains('conversation-drawer-open'));
+  await app.updateComplete;
+  await toast.updateComplete;
   expect(chat.inert).to.equal(false);
   expect(offer.inert).to.equal(false);
-  expect(app.querySelector<HTMLElement>('workspace-scope')?.inert).to.equal(false);
+  expect(toast.inert).to.equal(false);
+  expect(app.querySelector<HTMLElement>('dl-workspace-scope')?.inert).to.equal(false);
   expect(document.activeElement).to.equal(open);
+});
+
+it('pauses an actionable receipt while the Image Lightbox makes the app inert', async () => {
+  window.fetch = async (input) => bootstrapResponse(input);
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+
+  const toast = app.querySelector<DlToastRegion>('dl-toast-region')!;
+  toast.showAction('Undo available', {
+    actionLabel: 'Undo',
+    onAction: async () => {},
+    duration: 40,
+  });
+  const returnFocus = Array.from(app.querySelectorAll<HTMLButtonElement>('button'))
+    .find((button) => button.textContent?.trim() === 'Files')!;
+  returnFocus.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
+    detail: {src: SAFE_PNG, gallery: [SAFE_PNG], returnFocus},
+    bubbles: true,
+    composed: true,
+  }));
+  await waitFor(() => app.lightboxOpen);
+  await app.updateComplete;
+  await toast.updateComplete;
+
+  expect(toast.shellInert).to.equal(true);
+  expect(toast.inert).to.equal(true);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  await toast.updateComplete;
+  expect(toast.textContent).to.contain('Undo available');
+  expect(toast.querySelector('button')?.textContent).to.equal('Undo');
+
+  document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape', bubbles: true, cancelable: true,
+  }));
+  await waitFor(() => !app.lightboxOpen);
+  await app.updateComplete;
+  await toast.updateComplete;
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  expect(toast.shellInert).to.equal(false);
+  expect(toast.inert).to.equal(false);
+  expect(document.activeElement).to.equal(returnFocus);
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  await toast.updateComplete;
+  expect(toast.textContent?.trim()).to.equal('');
+  expect(toast.querySelector('button')).to.equal(null);
+});
+
+it('routes typed toast intent through Shell composition to the public Toast command', async () => {
+  window.fetch = async (input) => bootstrapResponse(input);
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+
+  const toast = app.querySelector<DlToastRegion>('dl-toast-region')!;
+  app.querySelector('dl-settings-dialog')?.dispatchEvent(
+    new CustomEvent<ToastRequestDetail>('dl-toast-request', {
+      detail: {
+        message: 'Composed receipt',
+        action: {actionLabel: 'Undo', onAction: async () => {}},
+      },
+      bubbles: true,
+      composed: true,
+    }),
+  );
+  await toast.updateComplete;
+
+  expect(toast.textContent).to.contain('Composed receipt');
+  expect(toast.inert).to.equal(false);
+  expect(toast.querySelector('button')?.textContent).to.equal('Undo');
 });
 
 it('closes conversation-scoped Inspector content on a typed route reset', async () => {
@@ -268,6 +353,10 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
   expect(document.body.classList.contains('panel-drawer-open')).to.equal(true);
   expect(document.body.classList.contains('artifact-canvas-modal')).to.equal(false);
   expect(document.activeElement).to.equal(app.querySelector('#panel-close-btn'));
+
+  app.querySelector<HTMLButtonElement>('#panel-close-btn')?.click();
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  expect(document.activeElement).to.equal(returnFocus);
 });
 
 it('restores a desktop Canvas citation when Sources closes alongside it', async () => {
@@ -318,6 +407,7 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
   expect(canvas.layout).to.equal('side');
 
   app.querySelector<HTMLButtonElement>('#panel-close-btn')?.click();
+  await new Promise((resolve) => requestAnimationFrame(resolve));
 
   expect(app.querySelector('#panel')?.classList.contains('open')).to.equal(false);
   expect(canvas.classList.contains('open')).to.equal(true);
@@ -345,7 +435,7 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
   expect(canvas.classList.contains('open')).to.equal(true);
   expect(app.querySelector('dl-inspector')?.open).to.equal(false);
 
-  app.querySelector('#chat-area')?.dispatchEvent(new MouseEvent('click', {
+  app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {
     bubbles: true,
     composed: true,
   }));
@@ -361,10 +451,11 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
     answer_text: '', parts: [], sources: [], evidence_images: [], artifacts: [],
     artifact_outcome: {status: 'complete', issues: []},
   }, undefined, undefined, inspectorReturn);
-  app.querySelector('#chat-area')?.dispatchEvent(new MouseEvent('click', {
+  app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {
     bubbles: true,
     composed: true,
   }));
+  await new Promise((resolve) => requestAnimationFrame(resolve));
 
   expect(inspector.open).to.equal(false);
   expect(canvas.classList.contains('open')).to.equal(false);

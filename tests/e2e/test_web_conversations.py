@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
-from playwright.sync_api import Locator, Page, Route
+from playwright.sync_api import Locator, Page, Route, expect
 
 
 @dataclass
@@ -615,7 +615,7 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
     assert closed_panel.evaluate("element => element.inert") is True
     assert page.get_by_text("Search in:", exact=True).is_visible()
     assert "All workspaces (2)" in search_scope.inner_text()
-    active_scope = search_scope.get_attribute("data-active")
+    active_scope = search_scope.inner_text()
 
     files_trigger = page.get_by_role("button", name="Files", exact=True)
     files_trigger.click()
@@ -669,10 +669,8 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
     )
 
     page.get_by_role("button", name="New chat").click()
-    page.wait_for_function(
-        "active => document.querySelector('#workspace-selector')?.getAttribute('data-active') === active",
-        arg=active_scope,
-    )
+    page.wait_for_url("**/web/")
+    assert search_scope.inner_text() == active_scope
 
 
 @pytest.mark.e2e
@@ -684,12 +682,13 @@ def test_escape_closes_files_workspace_popover_without_closing_panel(page: Page)
     page.get_by_role("button", name="Files", exact=True).click()
     page.locator("#upload-zone").wait_for()
 
-    ingest_target = page.locator("#ingest-target [role='button']")
+    ingest_target = page.get_by_role("button", name="Files in Default; choose file workspace")
     ingest_target.click()
-    page.get_by_role("listbox", name="Select ingest workspace").wait_for()
+    page.get_by_role("dialog", name="Select ingest workspace").wait_for()
     page.keyboard.press("Escape")
 
-    assert page.get_by_role("listbox", name="Select ingest workspace").count() == 0
+    assert page.get_by_role("dialog", name="Select ingest workspace").count() == 0
+    expect(ingest_target).to_be_focused()
     assert page.locator("#panel").evaluate("element => element.classList.contains('open')") is True
 
 
@@ -725,7 +724,7 @@ def test_only_the_conversation_area_dismisses_an_open_panel(page: Page) -> None:
     is_open = "element => element.classList.contains('open')"
 
     page.locator("#workspace-selector").click()
-    page.get_by_role("listbox", name="Workspaces").wait_for()
+    page.get_by_role("dialog", name="Workspaces").wait_for()
     assert panel.evaluate(is_open) is True
     page.keyboard.press("Escape")
 
@@ -1010,9 +1009,14 @@ def test_offscreen_history_loads_lazy_thumbnails_and_original_only_on_lightbox(
     page.on("request", record_image_request)
     page.set_viewport_size({"width": 1440, "height": 720})
     page.goto(f"/web/conversations/{conversation_id}")
-    history_images = page.locator("#chat-messages button[data-full-src] img")
+    history_buttons = page.locator(
+        "#chat-messages button[aria-label^='Open Turn '][aria-label$=', attachment 1']"
+    )
+    history_images = history_buttons.locator("img")
     page.wait_for_function(
-        "count => document.querySelectorAll('#chat-messages button[data-full-src] img').length === count",
+        "count => Array.from(document.querySelectorAll('#chat-messages button'))"
+        ".filter(button => button.getAttribute('aria-label')?.startsWith('Open Turn '))"
+        ".filter(button => button.getAttribute('aria-label')?.endsWith(', attachment 1')).length === count",
         arg=turn_count,
     )
     page.wait_for_timeout(500)
@@ -1025,8 +1029,7 @@ def test_offscreen_history_loads_lazy_thumbnails_and_original_only_on_lightbox(
         )
         > 0
     )
-    last_image_button = page.locator("#chat-messages button[data-full-src]").last
-    last_image_button.click()
+    history_buttons.last.click()
     page.locator("#image-lightbox[aria-hidden='false']").wait_for()
     page.wait_for_function("document.querySelector('#image-lightbox img')?.naturalWidth > 0")
 

@@ -177,6 +177,14 @@ body.files-panel-open #files-btn {
 }
 
 .workspace-selector {
+    display: inline-flex;
+    flex: 0 1 auto;
+    max-width: min(320px, 58vw);
+    min-width: 0;
+    position: relative;
+}
+
+.workspace-selector-trigger {
     align-items: center;
     background: var(--color-control-surface);
     border: 1px solid var(--color-border-subtle);
@@ -184,22 +192,21 @@ body.files-panel-open #files-btn {
     color: var(--color-text-muted);
     cursor: pointer;
     display: inline-flex;
-    flex: 0 1 auto;
+    font: inherit;
     font-size: var(--font-size-detail);
     font-weight: 500;
     gap: var(--space-tight);
     height: var(--size-button);
-    max-width: min(320px, 58vw);
+    max-width: 100%;
     min-width: 0;
     padding: 0 var(--space-related);
-    position: relative;
     transition: background 0.15s, border-color 0.15s;
     user-select: none;
     white-space: nowrap;
 }
 
-.workspace-selector:hover,
-.workspace-selector.open {
+.workspace-selector-trigger:hover,
+.workspace-selector.open .workspace-selector-trigger {
     background: var(--color-bg-hover);
     border-color: var(--color-control-border-hover);
 }

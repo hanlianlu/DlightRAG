@@ -186,7 +186,7 @@ it('owns desktop collapse state, focus, and typed Shell state', async () => {
   expect(navigation.inert).to.equal(false);
   expect(state).to.deep.equal({expanded: true, compact: false});
   expect(document.activeElement).to.equal(button(sidebar, 'New chat'));
-  sidebar.setShellInert(true);
+  sidebar.shellInert = true;
   await sidebar.updateComplete;
   expect(navigation.inert).to.equal(true);
 });
