@@ -3,10 +3,10 @@
 import {expect} from '@esm-bundle/chai';
 import type {AnswerPresentation} from '../api/conversations.ts';
 import './answer_presentation.ts';
-import './source_panel_view.ts';
+import './inspector_sources.ts';
 import type {AnswerPresentationElement} from './answer_presentation.ts';
 import {closeLightbox, openLightbox} from './images.ts';
-import type {SourcePanelView} from './source_panel_view.ts';
+import type {DlInspectorSources} from './inspector_sources.ts';
 
 const presentation: AnswerPresentation = {
   answer_text: 'Safe [1].',
@@ -54,11 +54,15 @@ it('sanitizes rich answer HTML while Lit escapes structured references', async (
   expect(element.querySelector('.answer-ref-title img')).to.equal(null);
 
   let referenceId = '';
+  let eventPresentation: AnswerPresentation | null = null;
   element.addEventListener('answer-source-open', (event) => {
-    referenceId = (event as CustomEvent).detail.referenceId;
+    const detail = (event as CustomEvent).detail;
+    referenceId = detail.referenceId;
+    eventPresentation = detail.presentation;
   });
   element.querySelector<HTMLElement>('.citation-badge')?.click();
   expect(referenceId).to.equal('1');
+  expect(eventPresentation).to.equal(element.presentation);
 });
 
 it('renders Artifact intent and semantic Visual Evidence in approved order', async () => {
@@ -152,7 +156,7 @@ it('includes typed Answer images in previous and next gallery navigation', async
 });
 
 it('renders sanitized source chunks and rejects cross-origin download links', async () => {
-  const view = document.createElement('source-panel-view') as SourcePanelView;
+  const view = document.createElement('dl-inspector-sources') as DlInspectorSources;
   view.sources = presentation.sources;
   view.setSelection('1', '2');
   document.body.appendChild(view);

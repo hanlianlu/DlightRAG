@@ -161,7 +161,7 @@ def test_presentation_preserves_authorized_download_without_nesting_markup() -> 
         source_uri="local://default/notes.md",
         download_url="/web/api/files/raw/doc-notes?workspace=default",
     )
-    source_view = (FRONTEND_UI / "source_panel_view.ts").read_text(encoding="utf-8")
+    source_view = (FRONTEND_UI / "inspector_sources.ts").read_text(encoding="utf-8")
 
     assert source.download_url == "/web/api/files/raw/doc-notes?workspace=default"
     assert source.title == "Source"
@@ -206,7 +206,7 @@ def test_answer_presentation_uses_semantic_citations_and_no_legacy_paths() -> No
         sources=[],
         evidence_images=[],
     )
-    source_view = (FRONTEND_UI / "source_panel_view.ts").read_text(encoding="utf-8")
+    source_view = (FRONTEND_UI / "inspector_sources.ts").read_text(encoding="utf-8")
     answer_view = (FRONTEND_UI / "answer_presentation.ts").read_text(encoding="utf-8")
 
     assert '<cite class="citation-badge"' in presentation.parts[0].html
@@ -231,9 +231,24 @@ def test_source_anchor_allowlist_rejects_unsafe_attributes_and_targets() -> None
     assert "target=" not in html
 
 
+def test_inspector_cutover_removes_legacy_setup_and_universal_panel_surface() -> None:
+    app = (FRONTEND_UI / "app.ts").read_text(encoding="utf-8")
+    inspector = (FRONTEND_UI / "inspector.ts").read_text(encoding="utf-8")
+
+    for replaced in ("panel.ts", "source-panel.ts", "source_panel_view.ts", "files-panel.ts"):
+        assert not (FRONTEND_UI / replaced).exists()
+    for legacy in ("setupPanel", "setupSourcePanel", "setupFilesPanel", "panelOpening"):
+        assert legacy not in app + inspector
+    assert "PanelController" not in "".join(
+        path.read_text(encoding="utf-8") for path in FRONTEND_UI.glob("*.ts")
+    )
+    assert "<dl-inspector" in app
+    assert "customElements.define('dl-inspector'" in inspector
+
+
 def test_panel_action_icons_are_accessible_svg_buttons() -> None:
-    file_panel = (FRONTEND_UI / "files-panel.ts").read_text(encoding="utf-8")
-    source_panel = (FRONTEND_UI / "source_panel_view.ts").read_text(encoding="utf-8")
+    file_panel = (FRONTEND_UI / "inspector_files.ts").read_text(encoding="utf-8")
+    source_panel = (FRONTEND_UI / "inspector_sources.ts").read_text(encoding="utf-8")
 
     assert "&#10005;" not in file_panel
     assert "&#x2B07;" not in source_panel

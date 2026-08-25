@@ -20,6 +20,7 @@ export interface ArtifactOpenDetail {
 }
 
 export interface AnswerSourceOpenDetail {
+  presentation: AnswerPresentation;
   referenceId: string;
   chunkId?: string;
   returnFocus: HTMLElement;
@@ -186,13 +187,15 @@ export class AnswerPresentationElement extends LightElement {
     const source = target.closest<HTMLElement>(
       '.citation-badge[data-ref], .answer-ref-item[data-ref], .answer-image-source[data-ref]',
     );
-    if (source && this.contains(source)) {
+    const presentation = this.presentation;
+    if (source && this.contains(source) && presentation) {
       event.preventDefault();
       event.stopPropagation();
       this.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('answer-source-open', {
         bubbles: true,
         composed: true,
         detail: {
+          presentation,
           referenceId: source.dataset.ref || '',
           ...(source.dataset.chunk ? {chunkId: source.dataset.chunk} : {}),
           returnFocus: source,

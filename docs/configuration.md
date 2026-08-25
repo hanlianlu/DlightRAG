@@ -1028,7 +1028,7 @@ separately with a stable proposal id.
 
 ## Citations
 
-Citation validation is always part of answer finalization. Web source-panel
+Citation validation is always part of answer finalization. Web Inspector Sources
 semantic highlights are enabled by default and use the keyword LLM role after
 the answer has already been streamed/finalized. SDK, REST, and MCP answer calls
 default to no semantic highlights; pass `semantic_highlights=True` in Python or

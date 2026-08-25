@@ -165,7 +165,7 @@ function createState(
 /** Bind Web Awesome's divider to DlightRAG panel state and persisted widths. */
 export function setupPanelSplits(): void {
     states = [
-        createState('panel-split', 'panel', '--panel-width', 'dlightrag-panel-width'),
+        createState('panel-split', 'inspector', '--panel-width', 'dlightrag-panel-width'),
         createState(
             'artifact-canvas-split',
             'artifact-canvas',

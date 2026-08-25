@@ -61,11 +61,13 @@ export function syncShellInert(): void {
         }
     }
 
-    // Milestone 5 deletes this Shell lookup when modal state flows through composition.
+    // Milestone 5 deletes these Shell lookups when modal state flows through composition.
     const sidebar = document.querySelector<HTMLElement & {
         setShellInert(inert: boolean): void;
     }>('dl-conversation-sidebar');
     sidebar?.setShellInert(artifactModal);
-    const panel = document.getElementById('panel');
-    if (panel) panel.inert = artifactModal || !panel.classList.contains('open');
+    const inspector = document.querySelector<HTMLElement & {
+        setShellInert(inert: boolean): void;
+    }>('dl-inspector');
+    inspector?.setShellInert(artifactModal);
 }

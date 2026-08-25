@@ -103,7 +103,7 @@ export class DlArtifactCanvas extends LightElement {
     await this.#load(artifact);
   }
 
-  /** Make the legacy Inspector reachable without leaving two modal panes active. */
+  /** Make the Inspector reachable without leaving two modal panes active. */
   prepareForInspector(): void {
     if (!this.classList.contains('open')) return;
     if (this.#compactMedia?.matches ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches) {

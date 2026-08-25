@@ -1,6 +1,23 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* Right-edge slide-out panels (sources, report, files) and their scrim. */
+/* Right-edge Inspector shell and its Sources/Files content. */
+
+dl-inspector {
+    display: block;
+    height: 100%;
+    min-width: 0;
+    position: relative;
+    width: 100%;
+}
+
+dl-inspector[aria-hidden='true'] {
+    pointer-events: none;
+}
+
+.inspector-surface {
+    inset: 0;
+    position: absolute;
+}
 
 .panel {
     background: var(--color-bg-surface);
@@ -67,11 +84,18 @@
     display: none;
 }
 
-#panel-backdrop {
+.inspector-backdrop {
     background: var(--color-scrim);
+    border: 0;
+    cursor: default;
     inset: 0;
+    padding: 0;
     position: fixed;
     z-index: 90;
+}
+
+.inspector-backdrop[hidden] {
+    display: none;
 }
 
 .panel-close:hover {
@@ -83,5 +107,15 @@
     flex: 1;
     overflow-y: auto;
     padding: var(--space-related) var(--space-section);
+}
+
+dl-inspector-sources,
+dl-inspector-files {
+    display: block;
+}
+
+dl-inspector-sources[hidden],
+dl-inspector-files[hidden] {
+    display: none;
 }
 

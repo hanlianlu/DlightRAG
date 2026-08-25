@@ -109,8 +109,13 @@ it('uses one modal predicate for ARIA, focus trapping, and outside inertness', a
   const panel = document.createElement('aside');
   panel.id = 'panel';
   panel.className = 'open';
+  const inspector = document.createElement('dl-inspector') as HTMLElement & {
+    setShellInert(inert: boolean): void;
+  };
+  inspector.setShellInert = (inert) => { panel.inert = inert; };
+  inspector.appendChild(panel);
   const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
-  document.body.append(topbar, chat, panel, canvas);
+  document.body.append(topbar, chat, inspector, canvas);
 
   await canvas.open(htmlArtifact());
   await canvas.updateComplete;

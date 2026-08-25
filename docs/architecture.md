@@ -242,12 +242,15 @@ conversation, workspace, attachment, ingest, and Answer-run state. The Lit-nativ
 Chat Feature composes its Message List and Composer while one RunController owns
 SSE replay/resume, reconnect timers, cancellation, and reader aborts. The
 Conversation Sidebar owns route lifecycle, drawer accessibility, and conversation
-commands, and composes a Conversation List that emits typed item intent. The Shell
-consumes its typed state event to coordinate layout and inertness through public
-Feature hosts. Internal adapters retain DOMPurify, MathJax, Mermaid, object URLs,
-and split integration.
+commands, and composes a Conversation List that emits typed item intent. Inspector
+separately owns its Sources/Files pane state, responsive accessibility, focus, and
+commands; its Sources and Files content modules own list intent and async file work.
+Citation intent reaches Inspector through a typed AnswerPresentation event composed
+by the Shell. The Shell consumes typed state events to coordinate layout and
+inertness through public Feature hosts. Internal adapters retain DOMPurify, MathJax,
+Mermaid, object URLs, and split integration.
 Server-sanitized semantic answer/source HTML is the only deliberate same-DOM HTML
-sink. Artifact Canvas owns typed Artifact renderer selection and focus; active
+sink. Artifact Canvas remains separate and owns typed Artifact renderer selection and focus; active
 HTML is fetched as authenticated inert bytes and placed in `srcdoc` only after
 explicit consent, inside an opaque-origin iframe that is destroyed on close or
 switch. Filenames, controls, links, galleries, panels, and system states remain
@@ -257,8 +260,8 @@ DlightRAG's Utopia/Mineral tokens remain the visual authority. The production
 uses only Web Awesome's Split Panel component, imported directly without its
 default theme and wrapped by DlightRAG persistence, clamping, accessibility,
 and compact-layout behavior. Nested split panels preserve simultaneous Artifact
-Canvas and Sources on wide layouts. Below 1200px the primary app remains a full-width
-fixed layer under the native backdrop while the active panel retains modal
+Canvas and Inspector Sources on wide layouts. Below 1200px the primary app remains a
+full-width fixed layer under the native backdrop while the active pane retains modal
 focus/inert semantics. Drawer and Dialog components were deliberately rejected;
 the existing native overlays use the same semantic geometry tokens.
 

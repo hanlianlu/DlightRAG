@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {html, nothing, type TemplateResult} from 'lit';
+import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
   FilesApiError,
@@ -16,39 +16,20 @@ import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {bus} from '../events/bus.ts';
-import {openPanel} from './panel.ts';
 import {withRelativePath} from './folder-upload.ts';
 import {showToast} from './toast.ts';
-import type {ComposerWorkspaceDropDetail} from './chat_composer.ts';
-import './ingest_target.ts';
 
 const POLL_INTERVAL_MS = 2000;
-let activeFileMutations = 0;
-
-export function hasActiveFileMutation(): boolean {
-  return activeFileMutations > 0;
-}
-
-function beginFileMutation(): void {
-  activeFileMutations += 1;
-}
-
-function finishFileMutation(): void {
-  activeFileMutations = Math.max(0, activeFileMutations - 1);
-}
-
-function isFilesPanelActive(): boolean {
-  const panel = document.getElementById('panel');
-  return Boolean(panel?.classList.contains('open') && panel.dataset.panelKind === 'files');
-}
 
 function uploadLabel(files: readonly File[], label?: string | null): string {
   if (label) return label;
   return files.length === 1 ? files[0].name : `${files.length} files`;
 }
 
-export class FilePanel extends LightElement {
+/** File-management content, async work, and upload intent owned by the Inspector. */
+export class DlInspectorFiles extends LightElement {
   static properties = {
+    active: {attribute: false},
     snapshot: {state: true},
     loading: {state: true},
     error: {state: true},
@@ -56,6 +37,7 @@ export class FilePanel extends LightElement {
     acceptedFiles: {state: true},
   };
 
+  declare active: boolean;
   declare snapshot: WebFilePanelSnapshot | null;
   declare loading: boolean;
   declare error: string | null;
@@ -66,9 +48,12 @@ export class FilePanel extends LightElement {
   #request: AbortController | null = null;
   #pollController: AbortController | null = null;
   #pollTimer: number | null = null;
+  #activeMutations = 0;
+  #releaseWorkspaceEvents: (() => void)[] = [];
 
   constructor() {
     super();
+    this.active = false;
     this.snapshot = null;
     this.loading = true;
     this.error = null;
@@ -80,17 +65,29 @@ export class FilePanel extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    queueMicrotask(() => { void this.reload(); });
+    this.#releaseWorkspaceEvents = [
+      bus.on('workspaceCreated', ({workspace}) => { ingestStore.set(workspace); }),
+      bus.on('workspaceDeleted', ({nextWorkspace}) => {
+        ingestStore.set(nextWorkspace || workspaceStore.primary);
+      }),
+    ];
+    if (this.active) queueMicrotask(() => { void this.reload(); });
   }
 
   override disconnectedCallback(): void {
     this.pause();
+    for (const release of this.#releaseWorkspaceEvents) release();
+    this.#releaseWorkspaceEvents = [];
     super.disconnectedCallback();
   }
 
-  protected override updated(): void {
+  protected override updated(changed: PropertyValues<this>): void {
+    if (changed.has('active')) {
+      if (this.active) void this.reload();
+      else this.pause();
+    }
     const workspace = ingestStore.workspace;
-    if (workspace !== this.#workspace && this.isConnected) {
+    if (this.active && workspace !== this.#workspace && this.isConnected) {
       this.#workspace = workspace;
       void this.reload();
     }
@@ -98,6 +95,10 @@ export class FilePanel extends LightElement {
       const value = Number(fill.dataset.pct);
       fill.style.width = `${Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0))}%`;
     });
+  }
+
+  get hasActiveMutation(): boolean {
+    return this.#activeMutations > 0;
   }
 
   async reload(showLoading = true): Promise<void> {
@@ -131,7 +132,7 @@ export class FilePanel extends LightElement {
     this.#workspace = workspace;
     const controller = this.#startRequest();
     this.#stopPolling();
-    beginFileMutation();
+    this.#beginMutation();
     this.uploading = true;
     this.error = null;
     const name = uploadLabel(files, label);
@@ -153,7 +154,7 @@ export class FilePanel extends LightElement {
       this.error = message;
       showToast(message, 5000);
     } finally {
-      finishFileMutation();
+      this.#finishMutation();
       if (this.#request === controller) {
         this.#request = null;
         this.uploading = false;
@@ -175,7 +176,7 @@ export class FilePanel extends LightElement {
     const workspace = ingestStore.workspace;
     this.#stopPolling();
     const controller = this.#startRequest();
-    beginFileMutation();
+    this.#beginMutation();
     this.error = null;
     try {
       const snapshot = await deleteFileRequest(workspace, filePath, controller.signal);
@@ -189,7 +190,7 @@ export class FilePanel extends LightElement {
       this.error = message;
       showToast(message, 5000);
     } finally {
-      finishFileMutation();
+      this.#finishMutation();
       if (this.#request === controller) this.#request = null;
     }
   }
@@ -199,7 +200,7 @@ export class FilePanel extends LightElement {
     this.#pollController = controller;
     try {
       const status = await getIngestStatus(workspace, controller.signal);
-      if (workspace !== ingestStore.workspace || !isFilesPanelActive()) return;
+      if (workspace !== ingestStore.workspace || !this.active || !this.isConnected) return;
       if (!status.busy) {
         await this.reload(false);
         return;
@@ -208,7 +209,7 @@ export class FilePanel extends LightElement {
       this.#schedulePoll(workspace);
     } catch (error) {
       if (isAbortError(error)) return;
-      if (workspace === ingestStore.workspace && isFilesPanelActive()) {
+      if (workspace === ingestStore.workspace && this.active && this.isConnected) {
         this.#schedulePoll(workspace);
       }
     } finally {
@@ -250,8 +251,20 @@ export class FilePanel extends LightElement {
     return this.#request === controller && ingestStore.workspace === workspace;
   }
 
+  #beginMutation(): void {
+    this.#activeMutations += 1;
+  }
+
+  #finishMutation(): void {
+    this.#activeMutations = Math.max(0, this.#activeMutations - 1);
+  }
+
   #chooseFiles(): void {
     this.querySelector<HTMLInputElement>('#file-input')?.click();
+  }
+
+  #chooseFolder(): void {
+    this.querySelector<HTMLInputElement>('#folder-input')?.click();
   }
 
   #fileInputChanged(event: Event): void {
@@ -259,6 +272,20 @@ export class FilePanel extends LightElement {
     const files = Array.from(input.files ?? []);
     input.value = '';
     if (files.length > 0) void this.upload(files);
+  }
+
+  #folderInputChanged(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    const rawFiles = Array.from(input.files ?? []);
+    input.value = '';
+    if (rawFiles.length === 0) return;
+    let folderName: string | null = null;
+    const files = rawFiles.map((file) => {
+      const path = file.webkitRelativePath || file.name;
+      if (!folderName && file.webkitRelativePath) folderName = path.split('/')[0];
+      return withRelativePath(file, path);
+    });
+    void this.upload(files, folderName);
   }
 
   #progress(status: WebIngestStatus): TemplateResult | typeof nothing {
@@ -300,11 +327,11 @@ export class FilePanel extends LightElement {
           <span class="upload-text">Drop files or folders, or click to choose files</span>
         </button>
         <button type="button" class="upload-folder-action"
-                @click=${() => {
-                  this.dispatchEvent(new CustomEvent('files-folder-request', {bubbles: true}));
-                }}>Choose folder</button>
+                @click=${() => { this.#chooseFolder(); }}>Choose folder</button>
         <input class="hidden" type="file" id="file-input" name="files" multiple
                @change=${(event: Event) => { this.#fileInputChanged(event); }}>
+        <input class="hidden" type="file" id="folder-input" webkitdirectory directory multiple
+               @change=${(event: Event) => { this.#folderInputChanged(event); }}>
         <div id="upload-spinner" class="file-status">Uploading...</div>
       </div>
       ${this.loading ? html`
@@ -339,91 +366,10 @@ export class FilePanel extends LightElement {
   }
 }
 
-customElements.define('file-panel', FilePanel);
+customElements.define('dl-inspector-files', DlInspectorFiles);
 
 declare global {
   interface HTMLElementTagNameMap {
-    'file-panel': FilePanel;
+    'dl-inspector-files': DlInspectorFiles;
   }
-}
-
-function filePanel(): FilePanel | null {
-  return document.querySelector('file-panel');
-}
-
-function ensureFilePanel(): FilePanel | null {
-  const content = document.getElementById('panel-content');
-  if (!content) return null;
-  const existing = content.querySelector('file-panel');
-  if (existing) return existing;
-  const panel = document.createElement('file-panel');
-  content.replaceChildren(panel);
-  return panel;
-}
-
-export async function refreshFilePanel(): Promise<void> {
-  await ensureFilePanel()?.reload();
-}
-
-export async function uploadFilesToWorkspace(
-  files: readonly File[],
-  label?: string | null,
-): Promise<void> {
-  if (!isFilesPanelActive()) openFilesPanel();
-  const panel = ensureFilePanel();
-  if (!panel) return;
-  await panel.updateComplete;
-  await panel.upload(files, label);
-}
-
-function handleFolderInputChange(input: HTMLInputElement): void {
-  const fileList = input.files;
-  if (!fileList || fileList.length === 0) return;
-  const rawFiles = Array.from(fileList);
-  let folderName: string | null = null;
-  const files = rawFiles.map(function(file) {
-    const path = file.webkitRelativePath || file.name;
-    const relativeFile = withRelativePath(file, path);
-    if (!folderName && file.webkitRelativePath) folderName = file.webkitRelativePath.split('/')[0];
-    return relativeFile;
-  });
-  void uploadFilesToWorkspace(files, folderName);
-  input.value = '';
-}
-
-export function openFilesPanel(): void {
-  ingestStore.resetToPrimary();
-  openPanel('FILES');
-  const panel = ensureFilePanel();
-  // A newly connected element owns its first load; a reused one refreshes.
-  if (panel?.snapshot || panel?.error) void panel.reload();
-}
-
-export function setupFilesPanel(): void {
-  document.getElementById('files-btn')?.addEventListener('click', function(event) {
-    event.preventDefault();
-    openFilesPanel();
-  });
-
-  const folderInput = document.getElementById('folder-input') as HTMLInputElement | null;
-  folderInput?.addEventListener('change', function() { handleFolderInputChange(folderInput); });
-  document.addEventListener('files-folder-request', function() { folderInput?.click(); });
-  // Milestone 4 deletes this adapter when Files becomes Inspector-owned content.
-  document.addEventListener('dl-composer-workspace-drop', function(event: Event) {
-    const {files, folderName} = (event as CustomEvent<ComposerWorkspaceDropDetail>).detail;
-    void uploadFilesToWorkspace(files, folderName);
-  });
-
-  bus.on('workspaceCreated', ({workspace}) => {
-    ingestStore.set(workspace);
-  });
-  bus.on('workspaceDeleted', ({nextWorkspace}) => {
-    ingestStore.set(nextWorkspace || workspaceStore.primary);
-  });
-
-  document.body.addEventListener('panelOpening', function(event) {
-    const title = (event as CustomEvent<{title?: string}>).detail?.title;
-    if (title && title !== 'FILES') filePanel()?.pause();
-  });
-  document.body.addEventListener('panelClosed', function() { filePanel()?.pause(); });
 }

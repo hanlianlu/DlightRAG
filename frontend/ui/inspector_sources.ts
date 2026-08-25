@@ -8,7 +8,13 @@ import {setSanitizedLlmHtml} from '../lib/safe_html.ts';
 import {safeExternalHttpHref, safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import {renderMath} from '../lib/math.ts';
 
-export class SourcePanelView extends LightElement {
+export interface InspectorSourcesStateDetail {
+  hasSources: boolean;
+  fullyExpanded: boolean;
+}
+
+/** Source list content owned by the Inspector. */
+export class DlInspectorSources extends LightElement {
   static properties = {
     sources: {attribute: false},
     expandedRef: {state: true},
@@ -76,7 +82,17 @@ export class SourcePanelView extends LightElement {
         renderMath(element);
       });
     }
-    this.dispatchEvent(new CustomEvent('source-panel-change', {bubbles: true}));
+    this.dispatchEvent(new CustomEvent<InspectorSourcesStateDetail>(
+      'dl-inspector-sources-state-change',
+      {
+        bubbles: true,
+        composed: true,
+        detail: {
+          hasSources: this.sources.length > 0,
+          fullyExpanded: this.fullyExpanded,
+        },
+      },
+    ));
   }
 
   #chunkKey(chunkIndex: number | null, fallback: number): string {
@@ -182,10 +198,14 @@ export class SourcePanelView extends LightElement {
   }
 }
 
-customElements.define('source-panel-view', SourcePanelView);
+customElements.define('dl-inspector-sources', DlInspectorSources);
 
 declare global {
   interface HTMLElementTagNameMap {
-    'source-panel-view': SourcePanelView;
+    'dl-inspector-sources': DlInspectorSources;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-inspector-sources-state-change': CustomEvent<InspectorSourcesStateDetail>;
   }
 }

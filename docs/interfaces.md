@@ -538,8 +538,8 @@ The REST API uses resource-oriented verbs (for example `POST /workspaces`,
 the browser (for example `POST /web/api/workspaces/create`,
 `POST /web/api/workspaces/delete`) and returns typed JSON for browser-owned
 state. The Files snapshot, upload, delete, and two-second ingest poll are JSON
-contracts rendered by the Lit `<file-panel>`; answer, source, and report
-surfaces use the shared `AnswerPresentation` contract. Sanitized rich-content
+contracts rendered by the Lit Inspector Files content module; answer, source, and
+Artifact presentation surfaces use the shared `AnswerPresentation` contract. Sanitized rich-content
 strings are the only deliberate browser HTML sinks. These browser routes have
 no compatibility aliases at their old
 `/web/*` paths. Prefer REST or the SDK for programmatic access.
@@ -962,7 +962,7 @@ from dlightrag.rag.retrieval import ContextRow, RetrievalContexts
 | `content` | string | yes | Chunk text content |
 | `page_number` | int \| null | no | Optional **1-based** display page number |
 | `image_url` | string \| null | no | Full image route for visual chunks in public REST/Web responses |
-| `thumbnail_url` | string \| null | no | Thumbnail route for source-panel rendering |
+| `thumbnail_url` | string \| null | no | Thumbnail route for Inspector Sources rendering |
 | `image_mime_type` | string \| null | no | MIME type for the visual asset |
 | `relevance_score` | float \| null | no | 0–1 relevance score (when reranking is enabled) |
 | `metadata` | object | no | Extra metadata (`file_name`, `file_type`, etc.) |

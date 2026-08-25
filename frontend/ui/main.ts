@@ -11,14 +11,11 @@ import '../styles/sources.css';
 
 import type {DlApp} from './app.ts';
 import './app.ts';
-import {setupFilesPanel} from './files-panel.ts';
 import {setupImageLightbox} from './images.ts';
 import {setupMathRendering} from './mathjax.ts';
 import {setupChatMemoryOperationAdapter} from './memory.ts';
 import {setupNotifications} from './notifications.ts';
-import {setupPanel} from './panel.ts';
 import {setupPanelSplits} from './split_panel.ts';
-import {setupSourcePanel} from './source-panel.ts';
 import {setupTheme} from './theme.ts';
 import {initWorkspaces} from './workspaces.ts';
 
@@ -31,9 +28,6 @@ document.addEventListener('DOMContentLoaded', function() {
         setupTheme();
         initWorkspaces();
         setupPanelSplits();
-        setupPanel();
-        setupSourcePanel();
-        setupFilesPanel();
         app.setupSettingsAdapter();
         setupChatMemoryOperationAdapter();
         setupImageLightbox();

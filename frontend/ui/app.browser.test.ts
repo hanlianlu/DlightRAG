@@ -9,7 +9,6 @@ import type {
   AnswerPresentationElement,
   AnswerSourceOpenDetail,
 } from './answer_presentation.ts';
-import {setupPanel} from './panel.ts';
 
 const bootstrap = {
   contract_version: 1,
@@ -157,10 +156,11 @@ it('closes conversation-scoped Inspector content on a typed route reset', async 
   document.body.appendChild(app);
   await app.ready;
 
-  const panel = app.querySelector<HTMLElement>('#panel')!;
-  panel.classList.add('open');
-  panel.dataset.panelKind = 'sources';
-  panel.inert = false;
+  const inspector = app.querySelector('dl-inspector')!;
+  await inspector.openSources({
+    answer_text: '', parts: [], sources: [], evidence_images: [], artifacts: [],
+    artifact_outcome: {status: 'complete', issues: []},
+  });
   app.querySelector('dl-conversation-sidebar')?.dispatchEvent(new CustomEvent(
     'dl-conversation-route-change',
     {
@@ -169,9 +169,10 @@ it('closes conversation-scoped Inspector content on a typed route reset', async 
       detail: {previousConversationId: null, nextConversationId: null},
     },
   ));
+  await inspector.updateComplete;
 
-  expect(panel.classList.contains('open')).to.equal(false);
-  expect(panel.inert).to.equal(true);
+  expect(inspector.open).to.equal(false);
+  expect(inspector.inert).to.equal(true);
 });
 
 it('owns Shell message layout while preserving the welcome for an empty conversation', async () => {
@@ -256,7 +257,7 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
   canvasPresentation.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('answer-source-open', {
     bubbles: true,
     composed: true,
-    detail: {referenceId: '1', returnFocus: canvasPresentation},
+    detail: {presentation, referenceId: '1', returnFocus: canvasPresentation},
   }));
   await waitFor(() => app.querySelector('#panel')?.classList.contains('open') === true);
   await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -289,7 +290,6 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
   const app = document.createElement('dl-app') as DlApp;
   document.body.appendChild(app);
   await app.ready;
-  setupPanel();
   const artifact: AnswerArtifact = {
     resource_id: 'report-desktop', role: 'primary_report', media_type: 'text/markdown',
     label: 'Report', filename: 'report.md', byte_size: 20, digest: 'b'.repeat(64),
@@ -311,7 +311,7 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
   canvasPresentation.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('answer-source-open', {
     bubbles: true,
     composed: true,
-    detail: {referenceId: '1', returnFocus: canvasPresentation},
+    detail: {presentation, referenceId: '1', returnFocus: canvasPresentation},
   }));
   await waitFor(() => app.querySelector('#panel')?.classList.contains('open') === true);
   expect(canvas.classList.contains('open')).to.equal(true);
@@ -322,6 +322,53 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
   expect(app.querySelector('#panel')?.classList.contains('open')).to.equal(false);
   expect(canvas.classList.contains('open')).to.equal(true);
   expect(document.activeElement).to.equal(canvasPresentation);
+});
+
+it('dismisses a lone desktop Artifact Canvas from the conversation area', async () => {
+  window.matchMedia = desktopMedia;
+  window.fetch = async (input) => bootstrapResponse(input);
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+  const canvas = app.querySelector('dl-artifact-canvas')!;
+  const artifact: AnswerArtifact = {
+    resource_id: 'chart-1', role: 'attachment', media_type: 'image/png',
+    label: 'Chart', filename: 'chart.png', byte_size: 20, digest: 'c'.repeat(64),
+    presentation: 'image', status: 'available',
+    uri: 'dlightrag://answer/run-1/artifacts/chart-1', width: 100, height: 100,
+    data_url: '/web/api/answer/run-1/artifacts/chart-1',
+    download_url: '/web/api/answer/run-1/artifacts/chart-1?download=1',
+    presentation_url: null, issue: null,
+  };
+  await canvas.open(artifact, app.querySelector('#files-btn'));
+  await canvas.updateComplete;
+  expect(canvas.classList.contains('open')).to.equal(true);
+  expect(app.querySelector('dl-inspector')?.open).to.equal(false);
+
+  app.querySelector('#chat-area')?.dispatchEvent(new MouseEvent('click', {
+    bubbles: true,
+    composed: true,
+  }));
+
+  expect(canvas.classList.contains('open')).to.equal(false);
+  expect(document.body.classList.contains('artifact-canvas-open')).to.equal(false);
+
+  await canvas.open(artifact, app.querySelector('#files-btn'));
+  canvas.prepareForInspector();
+  const inspectorReturn = app.querySelector<HTMLButtonElement>('#theme-trigger')!;
+  const inspector = app.querySelector('dl-inspector')!;
+  await inspector.openSources({
+    answer_text: '', parts: [], sources: [], evidence_images: [], artifacts: [],
+    artifact_outcome: {status: 'complete', issues: []},
+  }, undefined, undefined, inspectorReturn);
+  app.querySelector('#chat-area')?.dispatchEvent(new MouseEvent('click', {
+    bubbles: true,
+    composed: true,
+  }));
+
+  expect(inspector.open).to.equal(false);
+  expect(canvas.classList.contains('open')).to.equal(false);
+  expect(document.activeElement).to.equal(inspectorReturn);
 });
 
 it('fails closed and resolves the same ready promise after an explicit retry', async () => {

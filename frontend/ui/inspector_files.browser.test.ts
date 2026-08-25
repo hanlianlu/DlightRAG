@@ -3,8 +3,8 @@
 import {expect} from '@esm-bundle/chai';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
-import './files-panel.ts';
-import type {FilePanel} from './files-panel.ts';
+import './inspector_files.ts';
+import type {DlInspectorFiles} from './inspector_files.ts';
 
 const originalFetch = window.fetch;
 
@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 it('clears upload chrome when the panel is paused for close or workspace change', () => {
-  const panel = document.createElement('file-panel') as FilePanel;
+  const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
   panel.uploading = true;
 
   panel.pause();
@@ -53,7 +53,8 @@ it('renders typed file data as escaped Lit text without an HTML fragment sink', 
       pending_enqueues: 0,
     },
   }), {status: 200, headers: {'Content-Type': 'application/json'}});
-  const panel = document.createElement('file-panel') as FilePanel;
+  const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
+  panel.active = true;
   document.body.appendChild(panel);
   await waitFor(() => panel.loading === false);
 

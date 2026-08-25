@@ -159,6 +159,45 @@ def test_markdown_primary_report_uses_the_general_artifact_canvas(page: Page) ->
     assert page.locator("#report-panel").count() == 0
 
 
+def test_desktop_conversation_area_dismisses_a_lone_artifact_canvas(page: Page) -> None:
+    page.set_viewport_size({"width": 1440, "height": 900})
+    artifact = _artifact(presentation="markdown", media_type="text/markdown", filename="report.md")
+    _install_history(page, _presentation(artifact))
+    page.route(
+        f"**/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}/presentation",
+        lambda route: route.fulfill(
+            json={
+                "answer_text": "Report body.",
+                "parts": [
+                    {
+                        "type": "markdown",
+                        "text": "Report body.",
+                        "html": "<p>Report body.</p>",
+                        "artifact": None,
+                        "evidence_image": None,
+                        "inline": False,
+                    }
+                ],
+                "sources": [],
+                "evidence_images": [],
+                "artifacts": [artifact],
+                "artifact_outcome": {"status": "complete", "issues": []},
+            }
+        ),
+    )
+    _open_ready_page(page)
+    page.get_by_role("button", name="View report").click()
+    page.get_by_text("Report body.").wait_for(timeout=10000)
+    assert page.locator("#panel").get_attribute("data-panel-kind") is None
+
+    page.locator("#chat-area").click(position={"x": 8, "y": 8})
+
+    page.wait_for_function(
+        "!document.getElementById('artifact-canvas')?.classList.contains('open')",
+        timeout=10000,
+    )
+
+
 _MALICIOUS_HTML = """<!doctype html><html><body>
 <div id="results"></div>
 <script>

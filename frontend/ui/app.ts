@@ -6,7 +6,8 @@ import {
   type WebBootstrap,
 } from '../api/bootstrap.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
-import {syncShellInert} from '../lib/dom.ts';
+import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
+import {closestElement, syncShellInert} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import type {AttachmentPolicy} from './attachment_policy.ts';
 import type {DlArtifactCanvas} from './artifact_canvas.ts';
@@ -18,13 +19,12 @@ import type {
 import './conversation_sidebar.ts';
 import type {
   AnswerImageOpenDetail,
-  AnswerPresentationElement,
   AnswerSourceOpenDetail,
 } from './answer_presentation.ts';
-import {hasActiveFileMutation} from './files-panel.ts';
+import type {ComposerWorkspaceDropDetail} from './chat_composer.ts';
 import {openLightbox} from './images.ts';
-import {closeConversationPanels, closePanel} from './panel.ts';
-import {openAnswerSources} from './source-panel.ts';
+import type {DlInspector, InspectorStateDetail} from './inspector.ts';
+import './inspector.ts';
 import type {
   ChatContentChangeDetail,
   ChatRunActionDetail,
@@ -68,7 +68,6 @@ export class DlApp extends LightElement {
   declare bootState: 'loading' | 'ready' | 'error';
   #bootstrap: WebBootstrap = EMPTY_BOOTSTRAP;
   #controller: AbortController | null = null;
-  #shellEvents: AbortController | null = null;
   #openSettings: (() => Promise<void>) | null = null;
   #pendingContinuation: {kind: 'follow-up' | 'fork'; runId: string} | null = null;
   readonly #ready: Promise<WebBootstrap>;
@@ -87,14 +86,6 @@ export class DlApp extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    if (!this.#shellEvents) {
-      const events = new AbortController();
-      this.#shellEvents = events;
-      // Milestone 4 deletes this adapter with the legacy Inspector opening event.
-      document.body.addEventListener('panelOpening', () => {
-        void this.#conversationSidebar()?.close(false);
-      }, {signal: events.signal});
-    }
     if (!this.#controller && this.bootState !== 'ready') void this.#load();
   }
 
@@ -102,9 +93,14 @@ export class DlApp extends LightElement {
     super.disconnectedCallback();
     this.#controller?.abort();
     this.#controller = null;
-    this.#shellEvents?.abort();
-    this.#shellEvents = null;
-    document.body.classList.remove('conversation-sidebar-open', 'conversation-drawer-open');
+    document.body.classList.remove(
+      'conversation-sidebar-open',
+      'conversation-drawer-open',
+      'panel-open',
+      'files-panel-open',
+      'sources-panel-open',
+      'panel-drawer-open',
+    );
   }
 
   /** Milestone 5 deletes this adapter with the imperative Settings setup. */
@@ -155,6 +151,11 @@ export class DlApp extends LightElement {
         @dl-conversation-sidebar-opening=${this.#conversationSidebarOpening}
         @dl-conversation-sidebar-state-change=${this.#conversationSidebarStateChanged}
         @dl-conversation-route-change=${this.#conversationRouteChanged}
+        @click=${this.#conversationAreaClick}
+        @dl-inspector-opening=${this.#inspectorOpening}
+        @dl-inspector-state-change=${this.#inspectorStateChanged}
+        @artifact-canvas-state-changed=${this.#paneStateChanged}
+        @dl-composer-workspace-drop=${this.#workspaceDrop}
         aria-busy=${ready ? 'false' : 'true'}
         ?inert=${!ready}
       >
@@ -181,7 +182,8 @@ export class DlApp extends LightElement {
                     data-active=${JSON.stringify(bootstrap.active_workspaces)}
                   ></workspace-scope>
                   <div class="topbar-spacer"></div>
-                  <button class="topbar-btn" id="files-btn" type="button">Files</button>
+                  <button class="topbar-btn" id="files-btn" type="button"
+                          @click=${this.#openFiles}>Files</button>
                   <div id="theme-control">
                     <button id="theme-trigger" type="button" aria-label="Appearance" title="Appearance"
                             aria-haspopup="menu" aria-controls="theme-menu" aria-expanded="false">
@@ -215,7 +217,6 @@ export class DlApp extends LightElement {
                   @dl-chat-run-action=${this.#chatRunAction}
                 ></dl-chat-feature>
 
-                <input class="hidden" type="file" id="folder-input" webkitdirectory directory multiple>
               </div>
             </div>
             <dl-artifact-canvas id="artifact-canvas" class="panel" slot="end"
@@ -223,18 +224,8 @@ export class DlApp extends LightElement {
               .activePreviewEnabled=${bootstrap.active_html_preview_enabled}
             ></dl-artifact-canvas>
           </wa-split-panel>
-          <aside class="panel" id="panel" slot="end">
-            <div class="panel-header">
-              <span id="panel-title"></span>
-              <button class="source-toggle-all" id="source-toggle-all-btn" type="button"
-                      aria-pressed="false" hidden>Show all</button>
-              <ingest-target class="ingest-target" id="ingest-target"></ingest-target>
-              <button class="panel-close" id="panel-close-btn" type="button" aria-label="Close panel">✕</button>
-            </div>
-            <div id="panel-content" class="panel-content"></div>
-          </aside>
+          <dl-inspector id="inspector" slot="end"></dl-inspector>
         </wa-split-panel>
-        <div id="panel-backdrop" hidden></div>
 
         <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
         <div class="notify-offer" id="notify-offer" role="group"
@@ -262,16 +253,28 @@ export class DlApp extends LightElement {
     if (this.#openSettings) void this.#openSettings();
   }
 
-  // Milestone 4 deletes these adapters when Inspector exposes typed commands.
+  #inspector(): DlInspector | null {
+    return this.querySelector<DlInspector>('dl-inspector');
+  }
+
+  #canvas(): DlArtifactCanvas | null {
+    return this.querySelector<DlArtifactCanvas>('dl-artifact-canvas');
+  }
+
   #conversationSidebarOpening(event: Event): void {
-    const panel = this.querySelector<HTMLElement>('#panel');
-    if (!panel?.classList.contains('open')) return;
-    if (hasActiveFileMutation()) {
+    const inspector = this.#inspector();
+    if (!inspector?.open) return;
+    if (inspector.hasActiveFileMutation) {
       event.preventDefault();
       showToast('Wait for the file change to finish before opening conversations.', 5000);
       return;
     }
-    closePanel();
+    inspector.close();
+    this.#canvas()?.close(false);
+  }
+
+  #inspectorOpening(): void {
+    void this.#conversationSidebar()?.close(false);
   }
 
   #conversationSidebarStateChanged(
@@ -287,26 +290,77 @@ export class DlApp extends LightElement {
   }
 
   #conversationRouteChanged(): void {
-    closeConversationPanels();
+    this.#inspector()?.closeConversationContent();
+    this.#canvas()?.close(false);
+  }
+
+  #inspectorStateChanged(event: CustomEvent<InspectorStateDetail>): void {
+    this.#syncPaneState(event.detail);
+  }
+
+  #conversationAreaClick = (event: MouseEvent): void => {
+    if (window.matchMedia(COMPACT_SHELL_MEDIA).matches) return;
+    if (document.body.hasAttribute('data-resizing')) return;
+    if (!closestElement(event.target, '#chat-area')) return;
+    if (closestElement(event.target, '[data-action="open-artifact"]')) return;
+    const inspector = this.#inspector();
+    const canvas = this.#canvas();
+    if (!inspector?.open && !canvas?.classList.contains('open')) return;
+    inspector?.close();
+    canvas?.close(false);
+  };
+
+  #paneStateChanged(): void {
+    this.#syncPaneState();
+  }
+
+  #syncPaneState(inspectorState?: InspectorStateDetail): void {
+    const inspector = this.#inspector();
+    const inspectorOpen = inspectorState?.open ?? Boolean(inspector?.open);
+    const inspectorKind = inspectorState?.kind ?? inspector?.kind ?? null;
+    const compact = inspectorState?.compact ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches;
+    const canvasOpen = Boolean(this.#canvas()?.classList.contains('open'));
+    document.body.classList.toggle('panel-open', inspectorOpen || canvasOpen);
+    document.body.classList.toggle('files-panel-open', inspectorKind === 'files');
+    document.body.classList.toggle('sources-panel-open', inspectorKind === 'sources');
+    document.body.classList.toggle('panel-drawer-open', inspectorOpen && compact);
+    syncPanelSplitState();
+    syncShellInert();
+  }
+
+  #openFiles = (event: Event): void => {
+    event.preventDefault();
+    this.#canvas()?.close(false);
+    const trigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    void this.#inspector()?.openFiles(trigger);
+  };
+
+  #workspaceDrop(event: CustomEvent<ComposerWorkspaceDropDetail>): void {
+    const returnFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    void this.#inspector()?.uploadFiles(
+      event.detail.files,
+      event.detail.folderName,
+      returnFocus,
+    );
   }
 
   #openArtifact(event: CustomEvent<{artifact: AnswerArtifact; returnFocus: HTMLElement}>): void {
-    const canvas = this.querySelector<DlArtifactCanvas>('#artifact-canvas');
+    const canvas = this.#canvas();
     if (!canvas) return;
     void canvas.open(event.detail.artifact, event.detail.returnFocus);
   }
 
   #openAnswerSource(event: CustomEvent<AnswerSourceOpenDetail>): void {
-    const presentation = (event.target as AnswerPresentationElement | null)?.presentation;
-    if (!presentation) return;
-    const canvas = this.querySelector<DlArtifactCanvas>('#artifact-canvas');
+    const canvas = this.#canvas();
     const sourceWasInCanvas = Boolean(canvas?.contains(event.detail.returnFocus));
     canvas?.prepareForInspector();
     const returnFocus = sourceWasInCanvas && !canvas?.classList.contains('open')
       ? document.activeElement instanceof HTMLElement ? document.activeElement : null
       : event.detail.returnFocus;
-    openAnswerSources(
-      presentation,
+    void this.#inspector()?.openSources(
+      event.detail.presentation,
       event.detail.referenceId,
       event.detail.chunkId,
       returnFocus,
