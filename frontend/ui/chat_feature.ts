@@ -39,6 +39,8 @@ import {
 import './chat_message_list.ts';
 import {webRouter} from './router.ts';
 
+export type {ChatRunActionDetail, ChatView, ChatViewActionDetail} from './chat_message_list.ts';
+
 const NEW_CHAT_RUN_KEY = '__new_chat__';
 type AnswerPhase = 'routing' | 'planning' | 'searching' | 'researching' | 'generating';
 const PHASE_LABELS: Record<AnswerPhase, string> = {

@@ -97,18 +97,20 @@ it('uses one modal predicate for ARIA, focus trapping, and outside inertness', a
   window.fetch = async () => new Response('<!doctype html><html><body>Report</body></html>');
   document.body.classList.add('conversation-sidebar-open');
   const sidebar = document.createElement('nav');
-  sidebar.id = 'chat-sidebar';
+  const sidebarFeature = document.createElement('dl-conversation-sidebar') as HTMLElement & {
+    setShellInert(inert: boolean): void;
+  };
+  sidebarFeature.setShellInert = (inert) => { sidebar.inert = inert; };
+  sidebarFeature.appendChild(sidebar);
   const topbar = document.createElement('header');
   topbar.className = 'topbar';
-  const chat = document.createElement('main');
-  chat.className = 'chat-area';
-  const composer = document.createElement('div');
-  composer.className = 'composer';
+  topbar.appendChild(sidebarFeature);
+  const chat = document.createElement('dl-chat-feature');
   const panel = document.createElement('aside');
   panel.id = 'panel';
   panel.className = 'open';
   const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
-  document.body.append(sidebar, topbar, chat, composer, panel, canvas);
+  document.body.append(topbar, chat, panel, canvas);
 
   await canvas.open(htmlArtifact());
   await canvas.updateComplete;
@@ -118,7 +120,6 @@ it('uses one modal predicate for ARIA, focus trapping, and outside inertness', a
   expect(sidebar.inert).to.equal(true);
   expect(topbar.inert).to.equal(true);
   expect(chat.inert).to.equal(true);
-  expect(composer.inert).to.equal(true);
   expect(panel.inert).to.equal(true);
 
   const focusable = Array.from(canvas.querySelectorAll<HTMLButtonElement>('button'));
@@ -136,7 +137,6 @@ it('uses one modal predicate for ARIA, focus trapping, and outside inertness', a
   expect(sidebar.inert).to.equal(false);
   expect(topbar.inert).to.equal(false);
   expect(chat.inert).to.equal(false);
-  expect(composer.inert).to.equal(false);
   expect(panel.inert).to.equal(false);
 });
 

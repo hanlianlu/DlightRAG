@@ -259,6 +259,10 @@ mjx-container {
     display: none;
 }
 
+.notify-offer[inert] {
+    visibility: hidden;
+}
+
 /* === Drop Overlay === */
 
 .drop-overlay {

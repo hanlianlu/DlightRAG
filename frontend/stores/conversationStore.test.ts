@@ -134,6 +134,32 @@ test('rename validation errors do not masquerade as missing conversations', asyn
   assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['one']);
 });
 
+test('an aborted mutation settles pending state without applying local changes', async () => {
+  let receivedSignal: AbortSignal | undefined;
+  const store = new ConversationStore(api({
+    list: async () => [summary('one')],
+    deleteAll: async (signal) => {
+      receivedSignal = signal;
+      await new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'));
+        }, {once: true});
+      });
+    },
+  }));
+  await store.loadList();
+  const controller = new AbortController();
+
+  const deletion = store.deleteAll(controller.signal);
+  assert.equal(store.mutationPending, true);
+  controller.abort();
+
+  assert.equal(await deletion, 'error');
+  assert.equal(receivedSignal, controller.signal);
+  assert.equal(store.mutationPending, false);
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['one']);
+});
+
 test('delete mutates the server before removing the local summary', async () => {
   const calls: string[] = [];
   const store = new ConversationStore(api({

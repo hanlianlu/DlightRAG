@@ -196,10 +196,14 @@ export class ConversationStore extends Store {
     this.changed();
   }
 
-  async rename(conversationId: string, title: string): Promise<ConversationMutationResult> {
+  async rename(
+    conversationId: string,
+    title: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationMutationResult> {
     return this.#mutate(async () => {
       try {
-        this.#upsert(await this.#api.rename(conversationId, title));
+        this.#upsert(await this.#api.rename(conversationId, title, signal));
         return 'ok';
       } catch (error) {
         if (!this.#isMissing(error)) return 'error';
@@ -214,11 +218,14 @@ export class ConversationStore extends Store {
     });
   }
 
-  async delete(conversationId: string): Promise<ConversationMutationResult> {
+  async delete(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationMutationResult> {
     return this.#mutate(async () => {
       let result: ConversationMutationResult = 'ok';
       try {
-        await this.#api.delete(conversationId);
+        await this.#api.delete(conversationId, signal);
       } catch (error) {
         if (!this.#isMissing(error)) return 'error';
         result = 'missing';
@@ -228,10 +235,10 @@ export class ConversationStore extends Store {
     });
   }
 
-  async deleteAll(): Promise<ConversationMutationResult> {
+  async deleteAll(signal?: AbortSignal): Promise<ConversationMutationResult> {
     return this.#mutate(async () => {
       try {
-        await this.#api.deleteAll();
+        await this.#api.deleteAll(signal);
       } catch {
         return 'error';
       }

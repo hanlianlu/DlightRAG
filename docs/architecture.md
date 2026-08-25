@@ -240,8 +240,12 @@ Browser state is split by lifetime rather than collected in one store. The
 History API route is the active-conversation authority; focused stores own
 conversation, workspace, attachment, ingest, and Answer-run state. The Lit-native
 Chat Feature composes its Message List and Composer while one RunController owns
-SSE replay/resume, reconnect timers, cancellation, and reader aborts. Internal
-adapters retain DOMPurify, MathJax, Mermaid, object URLs, and split integration.
+SSE replay/resume, reconnect timers, cancellation, and reader aborts. The
+Conversation Sidebar owns route lifecycle, drawer accessibility, and conversation
+commands, and composes a Conversation List that emits typed item intent. The Shell
+consumes its typed state event to coordinate layout and inertness through public
+Feature hosts. Internal adapters retain DOMPurify, MathJax, Mermaid, object URLs,
+and split integration.
 Server-sanitized semantic answer/source HTML is the only deliberate same-DOM HTML
 sink. Artifact Canvas owns typed Artifact renderer selection and focus; active
 HTML is fetched as authenticated inert bytes and placed in `srcdoc` only after

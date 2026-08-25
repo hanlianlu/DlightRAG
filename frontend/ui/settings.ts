@@ -3,7 +3,7 @@
 
 import {clearMemory} from '../api/memory.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
-import {dialogResult} from './conversations.ts';
+import {modalResult} from './modal.ts';
 import {
   prepareMemorySettingsPanel,
   refreshMemorySettingsPanel,
@@ -11,7 +11,6 @@ import {
 } from './memory.ts';
 import {showToast} from './toast.ts';
 
-const SETTINGS_BUTTON_ID = 'settings-btn';
 const SETTINGS_DIALOG_ID = 'settings-dialog';
 const CLEAR_MEMORY_BUTTON_ID = 'memory-clear-btn';
 const CLEAR_MEMORY_DIALOG_ID = 'clear-memory-dialog';
@@ -25,9 +24,7 @@ function refreshConversationCount(): void {
 }
 
 /** Open Settings; resolve with the chosen submit value ('close-settings'|'delete-all'). */
-function openSettings(): Promise<string> {
-  const dialog = document.getElementById(SETTINGS_DIALOG_ID) as HTMLDialogElement | null;
-  if (!dialog) return Promise.resolve('');
+function openSettings(dialog: HTMLDialogElement): Promise<string> {
   dialog.returnValue = '';
   dialog.showModal();
   document.body.classList.add('settings-open');
@@ -39,10 +36,9 @@ function openSettings(): Promise<string> {
   });
 }
 
-export function setupSettings(onDeleteAll: () => Promise<boolean>): void {
-  const trigger = document.getElementById(SETTINGS_BUTTON_ID);
+export function setupSettings(onDeleteAll: () => Promise<boolean>): () => Promise<void> {
   const dialog = document.getElementById(SETTINGS_DIALOG_ID) as HTMLDialogElement | null;
-  if (!trigger || !(trigger instanceof HTMLButtonElement) || !dialog) return;
+  if (!dialog) return async () => undefined;
 
   // Scrim clicks are retargeted to the dialog element itself by the browser;
   // clicks anywhere inside the drawer body land on inner nodes and never
@@ -52,13 +48,6 @@ export function setupSettings(onDeleteAll: () => Promise<boolean>): void {
   });
 
   setupMemorySettings((message) => showToast(message, 5000));
-  trigger.addEventListener('click', async () => {
-    refreshConversationCount();
-    if (!await prepareMemorySettingsPanel()) {
-      showToast('Could not load memory settings.', 5000);
-    }
-    await openSettings();
-  });
 
   // The drawer stays open behind the confirmation, exactly like Clear memory:
   // it closes only after the deletion was actually carried out.
@@ -71,7 +60,7 @@ export function setupSettings(onDeleteAll: () => Promise<boolean>): void {
   const clearButton = document.getElementById(CLEAR_MEMORY_BUTTON_ID);
   clearButton?.addEventListener('click', async function() {
     const confirm = document.getElementById(CLEAR_MEMORY_DIALOG_ID) as HTMLDialogElement | null;
-    if (confirm && await dialogResult(confirm, () => clearButton) !== 'clear') return;
+    if (confirm && await modalResult(confirm, () => { clearButton?.focus(); }) !== 'clear') return;
     try {
       await clearMemory();
       await refreshMemorySettingsPanel();
@@ -80,4 +69,12 @@ export function setupSettings(onDeleteAll: () => Promise<boolean>): void {
       showToast('Could not clear memory.', 5000);
     }
   });
+
+  return async () => {
+    refreshConversationCount();
+    if (!await prepareMemorySettingsPanel()) {
+      showToast('Could not load memory settings.', 5000);
+    }
+    await openSettings(dialog);
+  };
 }

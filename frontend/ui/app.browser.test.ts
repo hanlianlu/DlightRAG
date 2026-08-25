@@ -67,6 +67,10 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
+function bootstrapResponse(input: RequestInfo | URL): Response {
+  return String(input) === '/web/api/conversations' ? response([]) : response(bootstrap);
+}
+
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (predicate()) return;
@@ -94,7 +98,7 @@ afterEach(() => {
 });
 
 it('renders the application shell from the typed bootstrap before resolving ready', async () => {
-  window.fetch = async () => response(bootstrap);
+  window.fetch = async (input) => bootstrapResponse(input);
   const app = document.createElement('dl-app') as DlApp;
   document.body.appendChild(app);
 
@@ -112,8 +116,66 @@ it('renders the application shell from the typed bootstrap before resolving read
   expect(chat?.querySelector('dl-chat-composer')).not.to.equal(null);
 });
 
+it('keeps the composed compact conversation modal interactive and inerts sibling Shell UI', async () => {
+  window.matchMedia = compactMedia;
+  window.fetch = async (input) => bootstrapResponse(input);
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+
+  const offer = app.querySelector<HTMLElement>('#notify-offer')!;
+  offer.hidden = false;
+  const open = app.querySelector<HTMLButtonElement>('[aria-label="Open conversations"]')!;
+  open.click();
+  await waitFor(() => document.body.classList.contains('conversation-drawer-open'));
+
+  const navigation = app.querySelector<HTMLElement>('nav[aria-label="Conversations"]')!;
+  const chat = app.querySelector<DlChatFeature>('dl-chat-feature')!;
+  const topbar = app.querySelector<HTMLElement>('.topbar')!;
+  expect(navigation.inert).to.equal(false);
+  expect(document.activeElement).to.equal(app.querySelector('#new-conversation-btn'));
+  expect(topbar.inert).to.equal(false);
+  expect(chat.inert).to.equal(true);
+  expect(offer.inert).to.equal(true);
+  expect(app.querySelector<HTMLElement>('workspace-scope')?.inert).to.equal(true);
+  expect(app.querySelector<HTMLElement>('#files-btn')?.inert).to.equal(true);
+
+  document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape', bubbles: true, cancelable: true,
+  }));
+  await waitFor(() => !document.body.classList.contains('conversation-drawer-open'));
+  expect(chat.inert).to.equal(false);
+  expect(offer.inert).to.equal(false);
+  expect(app.querySelector<HTMLElement>('workspace-scope')?.inert).to.equal(false);
+  expect(document.activeElement).to.equal(open);
+});
+
+it('closes conversation-scoped Inspector content on a typed route reset', async () => {
+  window.matchMedia = desktopMedia;
+  window.fetch = async (input) => bootstrapResponse(input);
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+
+  const panel = app.querySelector<HTMLElement>('#panel')!;
+  panel.classList.add('open');
+  panel.dataset.panelKind = 'sources';
+  panel.inert = false;
+  app.querySelector('dl-conversation-sidebar')?.dispatchEvent(new CustomEvent(
+    'dl-conversation-route-change',
+    {
+      bubbles: true,
+      composed: true,
+      detail: {previousConversationId: null, nextConversationId: null},
+    },
+  ));
+
+  expect(panel.classList.contains('open')).to.equal(false);
+  expect(panel.inert).to.equal(true);
+});
+
 it('owns Shell message layout while preserving the welcome for an empty conversation', async () => {
-  window.fetch = async () => response(bootstrap);
+  window.fetch = async (input) => bootstrapResponse(input);
   const app = document.createElement('dl-app') as DlApp;
   document.body.appendChild(app);
   await app.ready;
@@ -169,7 +231,7 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
   };
   window.fetch = async (input) => String(input).includes('/presentation')
     ? response(presentation)
-    : response(bootstrap);
+    : bootstrapResponse(input);
   const app = document.createElement('dl-app') as DlApp;
   document.body.appendChild(app);
   await app.ready;
@@ -223,7 +285,7 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
   };
   window.fetch = async (input) => String(input).includes('/presentation')
     ? response(presentation)
-    : response(bootstrap);
+    : bootstrapResponse(input);
   const app = document.createElement('dl-app') as DlApp;
   document.body.appendChild(app);
   await app.ready;
@@ -264,7 +326,8 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
 
 it('fails closed and resolves the same ready promise after an explicit retry', async () => {
   let attempts = 0;
-  window.fetch = async () => {
+  window.fetch = async (input) => {
+    if (String(input) === '/web/api/conversations') return response([]);
     attempts += 1;
     return attempts === 1 ? response({detail: 'down'}, 503) : response(bootstrap);
   };

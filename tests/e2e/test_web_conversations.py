@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
-from playwright.sync_api import Page, Route
+from playwright.sync_api import Locator, Page, Route
 
 
 @dataclass
@@ -124,6 +124,18 @@ def _new_conversation(page: Page) -> tuple[str, str]:
     )
     page.locator("#new-conversation-btn:not([disabled])").wait_for()
     return previous_id, conversation_id
+
+
+def _open_settings(page: Page) -> Locator:
+    trigger = page.get_by_role("button", name="Settings", exact=True)
+    if not trigger.is_visible():
+        page.get_by_role("button", name="Open conversations").click()
+        page.locator("#chat-sidebar").wait_for(state="visible")
+    trigger.focus()
+    page.keyboard.press("Enter")
+    dialog = page.get_by_role("dialog", name="Settings")
+    dialog.wait_for()
+    return dialog
 
 
 def _add_draft_with_image(page: Page, text: str) -> None:
@@ -473,21 +485,10 @@ def test_delete_all_conversations_is_quiet_accessible_and_returns_to_new_chat(
     _new_conversation(page)
     assert len(state.conversations) == 3
 
-    trigger = page.get_by_role("button", name="Delete all conversations")
-    retention = trigger.get_by_text(
-        "Conversation turns stay until run retention (default 365 days) reclaims them."
-    )
-    danger_label = trigger.get_by_text("Delete all conversations", exact=True)
-    assert retention.is_visible()
-    assert float(danger_label.evaluate("element => getComputedStyle(element).opacity")) == 0
-    assert trigger.evaluate("element => getComputedStyle(element).borderTopStyle") == "none"
-
-    trigger.hover()
-    page.wait_for_function(
-        "() => getComputedStyle(document.querySelector('.conversation-retention-note')).opacity === '0'"
-    )
-    assert float(retention.evaluate("element => getComputedStyle(element).opacity")) == 0
-    assert float(danger_label.evaluate("element => getComputedStyle(element).opacity")) == 1
+    settings = _open_settings(page)
+    trigger = settings.get_by_role("button", name="Delete all conversations")
+    assert settings.get_by_text("Conversations retain 365 days", exact=True).is_visible()
+    assert settings.get_by_text("3 conversations", exact=True).is_visible()
     trigger.click()
 
     dialog = page.get_by_role("dialog", name="Delete all conversations?")
@@ -504,10 +505,13 @@ def test_delete_all_conversations_is_quiet_accessible_and_returns_to_new_chat(
     assert actions.evaluate("element => getComputedStyle(element).justifyContent") == "center"
     assert dialog.locator("p:visible").count() == 0
     dialog.get_by_role("button", name="Cancel").click()
+    assert settings.is_visible()
     assert len(state.conversations) == 3
+    settings.get_by_role("button", name="Close settings").click()
 
     _add_draft_with_image(page, "discard this draft")
-    trigger.click()
+    settings = _open_settings(page)
+    settings.get_by_role("button", name="Delete all conversations").click()
     dialog.get_by_text("Draft and attachments will also be deleted.").wait_for()
     dialog.get_by_role("button", name="Delete all").click()
 
@@ -527,8 +531,8 @@ def test_delete_all_failure_preserves_conversations_draft_and_theme_tokens(page:
     _new_conversation(page)
     _add_draft_with_image(page, "keep this draft")
 
-    trigger = page.get_by_role("button", name="Delete all conversations")
-    trigger.click()
+    settings = _open_settings(page)
+    settings.get_by_role("button", name="Delete all conversations").click()
     dialog = page.get_by_role("dialog", name="Delete all conversations?")
     danger = dialog.get_by_role("button", name="Delete all")
     page.add_style_tag(content=".ui-dialog-actions button { transition: none !important; }")
@@ -560,6 +564,7 @@ def test_delete_all_failure_preserves_conversations_draft_and_theme_tokens(page:
 
     danger.click()
     page.get_by_text("Could not delete conversations.").wait_for()
+    assert settings.is_visible()
     assert len(state.conversations) == 2
     assert page.locator("[data-conversation-id]").count() == 2
     assert page.get_by_role("textbox", name="Message").input_value() == "keep this draft"
@@ -571,9 +576,9 @@ def test_delete_all_is_keyboard_accessible_and_centered_on_mobile(page: Page) ->
     _install_conversation_routes(page)
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto("/web/")
-    page.get_by_role("button", name="Open conversations").click()
+    settings = _open_settings(page)
 
-    trigger = page.get_by_role("button", name="Delete all conversations")
+    trigger = settings.get_by_role("button", name="Delete all conversations")
     trigger.focus()
     page.keyboard.press("Enter")
     dialog = page.get_by_role("dialog", name="Delete all conversations?")
@@ -593,7 +598,8 @@ def test_delete_all_is_keyboard_accessible_and_centered_on_mobile(page: Page) ->
 
     page.keyboard.press("Escape")
     dialog.wait_for(state="hidden")
-    page.wait_for_function("document.activeElement?.id === 'delete-all-conversations-btn'")
+    page.wait_for_function("document.activeElement?.id === 'delete-all-btn'")
+    assert settings.is_visible()
 
 
 @pytest.mark.e2e
@@ -737,21 +743,34 @@ def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     page.goto("/web/")
     page.locator("[aria-current='page']").wait_for()
 
+    notification_offer = page.locator("#notify-offer")
+    notification_offer.evaluate("element => { element.hidden = false; }")
+    assert notification_offer.is_visible()
     open_conversations = page.get_by_role("button", name="Open conversations")
     open_conversations.click()
     sidebar = page.locator("#chat-sidebar")
     assert sidebar.get_attribute("role") == "dialog"
     assert sidebar.get_attribute("aria-modal") == "true"
-    assert page.locator("#composer").evaluate("element => element.inert") is True
+    assert page.locator("dl-chat-feature").evaluate("element => element.inert") is True
+    assert notification_offer.evaluate("element => element.inert") is True
+    assert (
+        notification_offer.evaluate("element => getComputedStyle(element).visibility") == "hidden"
+    )
     page.keyboard.press("Escape")
     page.wait_for_function("document.activeElement?.id === 'conversation-sidebar-open'")
+    assert notification_offer.evaluate("element => element.inert") is False
+    assert notification_offer.is_visible()
 
     files = page.get_by_role("button", name="Files", exact=True)
     files.click()
     panel = page.locator("#panel")
     assert panel.get_attribute("role") == "dialog"
     assert panel.get_attribute("aria-modal") == "true"
-    assert page.locator("#composer").evaluate("element => element.inert") is True
+    assert page.locator("dl-chat-feature").evaluate("element => element.inert") is True
+    assert notification_offer.evaluate("element => element.inert") is True
+    assert (
+        notification_offer.evaluate("element => getComputedStyle(element).visibility") == "hidden"
+    )
     new_bottom = _text_bottom(page, "#new-conversation-btn")
     search_bottom = _text_bottom(page, ".topbar-scope-label")
     files_bottom = _text_bottom(page, ".ingest-target-label")
@@ -777,7 +796,7 @@ def test_resizing_open_files_panel_to_compact_keeps_background_inert(page: Page)
     )
 
     assert page.locator("#panel").get_attribute("aria-modal") == "true"
-    assert page.locator("#composer").evaluate("element => element.inert") is True
+    assert page.locator("dl-chat-feature").evaluate("element => element.inert") is True
     outer_split = page.locator("#panel-split").bounding_box()
     primary_app = page.locator(".app-shell").bounding_box()
     panel = page.locator("#panel").bounding_box()

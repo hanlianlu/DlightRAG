@@ -9,9 +9,8 @@ import '../styles/artifacts.css';
 import '../styles/files.css';
 import '../styles/sources.css';
 
+import type {DlApp} from './app.ts';
 import './app.ts';
-import {requestDeleteAll, setupConversations} from './conversations.ts';
-import {setupSettings} from './settings.ts';
 import {setupFilesPanel} from './files-panel.ts';
 import {setupImageLightbox} from './images.ts';
 import {setupMathRendering} from './mathjax.ts';
@@ -26,7 +25,7 @@ import {initWorkspaces} from './workspaces.ts';
 // Every module below is needed on first paint, so splitting them into dynamic
 // imports only added round-trips and blocked cross-module tree-shaking.
 document.addEventListener('DOMContentLoaded', function() {
-    const app = document.querySelector('dl-app');
+    const app = document.querySelector<DlApp>('dl-app');
     if (!app) return;
     void app.ready.then(function() {
         setupTheme();
@@ -35,11 +34,10 @@ document.addEventListener('DOMContentLoaded', function() {
         setupPanel();
         setupSourcePanel();
         setupFilesPanel();
-        setupSettings(requestDeleteAll);
+        app.setupSettingsAdapter();
         setupChatMemoryOperationAdapter();
         setupImageLightbox();
         setupMathRendering();
-        setupConversations();
         setupNotifications();
     });
 });

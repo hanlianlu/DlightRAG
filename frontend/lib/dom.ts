@@ -34,7 +34,7 @@ export function wrapTabFocus(focusable: readonly HTMLElement[], event: KeyboardE
     return false;
 }
 
-const SHELL_SELECTORS = ['.topbar', '.chat-area', '.composer'];
+const TOPBAR_SIDEBAR = 'dl-conversation-sidebar';
 
 /**
  * Mark every surface outside a modal Shell pane inert.
@@ -44,20 +44,28 @@ const SHELL_SELECTORS = ['.topbar', '.chat-area', '.composer'];
  */
 export function syncShellInert(): void {
     const artifactModal = document.body.classList.contains('artifact-canvas-modal');
-    const shellInert =
-        artifactModal ||
-        document.body.classList.contains('panel-drawer-open') ||
-        document.body.classList.contains('conversation-drawer-open');
-    for (const selector of SHELL_SELECTORS) {
-        const element = document.querySelector<HTMLElement>(selector);
-        if (element) element.inert = shellInert;
+    const panelDrawer = document.body.classList.contains('panel-drawer-open');
+    const conversationDrawer = document.body.classList.contains('conversation-drawer-open');
+    const shellInert = artifactModal || panelDrawer || conversationDrawer;
+    const chat = document.querySelector<HTMLElement>('dl-chat-feature');
+    if (chat) chat.inert = shellInert;
+    const notificationOffer = document.getElementById('notify-offer');
+    if (notificationOffer) notificationOffer.inert = shellInert;
+
+    const topbar = document.querySelector<HTMLElement>('.topbar');
+    if (topbar) {
+        topbar.inert = artifactModal || panelDrawer;
+        for (const child of topbar.children) {
+            if (!(child instanceof HTMLElement) || child.matches(TOPBAR_SIDEBAR)) continue;
+            child.inert = shellInert;
+        }
     }
 
-    const sidebar = document.getElementById('chat-sidebar');
-    if (sidebar) {
-        const expanded = document.body.classList.contains('conversation-sidebar-open');
-        sidebar.inert = artifactModal || !expanded;
-    }
+    // Milestone 5 deletes this Shell lookup when modal state flows through composition.
+    const sidebar = document.querySelector<HTMLElement & {
+        setShellInert(inert: boolean): void;
+    }>('dl-conversation-sidebar');
+    sidebar?.setShellInert(artifactModal);
     const panel = document.getElementById('panel');
     if (panel) panel.inert = artifactModal || !panel.classList.contains('open');
 }

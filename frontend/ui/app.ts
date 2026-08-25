@@ -6,20 +6,35 @@ import {
   type WebBootstrap,
 } from '../api/bootstrap.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
+import {syncShellInert} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import type {AttachmentPolicy} from './attachment_policy.ts';
 import type {DlArtifactCanvas} from './artifact_canvas.ts';
 import './artifact_canvas.ts';
 import type {
+  ConversationSidebarStateDetail,
+  DlConversationSidebar,
+} from './conversation_sidebar.ts';
+import './conversation_sidebar.ts';
+import type {
   AnswerImageOpenDetail,
   AnswerPresentationElement,
   AnswerSourceOpenDetail,
 } from './answer_presentation.ts';
+import {hasActiveFileMutation} from './files-panel.ts';
 import {openLightbox} from './images.ts';
+import {closeConversationPanels, closePanel} from './panel.ts';
 import {openAnswerSources} from './source-panel.ts';
-import type {ChatContentChangeDetail, DlChatFeature} from './chat_feature.ts';
-import type {ChatRunActionDetail} from './chat_message_list.ts';
+import type {
+  ChatContentChangeDetail,
+  ChatRunActionDetail,
+  ChatViewActionDetail,
+  DlChatFeature,
+} from './chat_feature.ts';
 import './chat_feature.ts';
+import {setupSettings} from './settings.ts';
+import {syncPanelSplitState} from './split_panel.ts';
+import {showToast} from './toast.ts';
 import type {
   ContinuationResult,
   DlChildrenRoster,
@@ -53,6 +68,8 @@ export class DlApp extends LightElement {
   declare bootState: 'loading' | 'ready' | 'error';
   #bootstrap: WebBootstrap = EMPTY_BOOTSTRAP;
   #controller: AbortController | null = null;
+  #shellEvents: AbortController | null = null;
+  #openSettings: (() => Promise<void>) | null = null;
   #pendingContinuation: {kind: 'follow-up' | 'fork'; runId: string} | null = null;
   readonly #ready: Promise<WebBootstrap>;
   #resolveReady!: (bootstrap: WebBootstrap) => void;
@@ -70,6 +87,14 @@ export class DlApp extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    if (!this.#shellEvents) {
+      const events = new AbortController();
+      this.#shellEvents = events;
+      // Milestone 4 deletes this adapter with the legacy Inspector opening event.
+      document.body.addEventListener('panelOpening', () => {
+        void this.#conversationSidebar()?.close(false);
+      }, {signal: events.signal});
+    }
     if (!this.#controller && this.bootState !== 'ready') void this.#load();
   }
 
@@ -77,6 +102,18 @@ export class DlApp extends LightElement {
     super.disconnectedCallback();
     this.#controller?.abort();
     this.#controller = null;
+    this.#shellEvents?.abort();
+    this.#shellEvents = null;
+    document.body.classList.remove('conversation-sidebar-open', 'conversation-drawer-open');
+  }
+
+  /** Milestone 5 deletes this adapter with the imperative Settings setup. */
+  setupSettingsAdapter(): void {
+    this.#openSettings = setupSettings(() => this.#requestDeleteAllConversations());
+  }
+
+  async #requestDeleteAllConversations(): Promise<boolean> {
+    return await this.#conversationSidebar()?.deleteAll() ?? false;
   }
 
   async #load(): Promise<void> {
@@ -105,6 +142,7 @@ export class DlApp extends LightElement {
     const bootstrap = this.#bootstrap;
     const attachments = bootstrap.answer_attachments;
     const ready = this.bootState === 'ready';
+    const chatFeature = this.querySelector<DlChatFeature>('dl-chat-feature');
     return html`
       <div
         class="app"
@@ -112,42 +150,14 @@ export class DlApp extends LightElement {
         @artifact-open=${this.#openArtifact}
         @answer-source-open=${this.#openAnswerSource}
         @answer-image-open=${this.#openAnswerImage}
+        @dl-chat-view-action=${this.#chatViewAction}
+        @dl-settings-request=${this.#settingsRequested}
+        @dl-conversation-sidebar-opening=${this.#conversationSidebarOpening}
+        @dl-conversation-sidebar-state-change=${this.#conversationSidebarStateChanged}
+        @dl-conversation-route-change=${this.#conversationRouteChanged}
         aria-busy=${ready ? 'false' : 'true'}
         ?inert=${!ready}
       >
-        <nav id="chat-sidebar" aria-label="Conversations">
-          <div class="conversation-top-row">
-            <button id="new-conversation-btn" type="button">
-              <svg class="new-chat-icon" width="14" height="14" viewBox="0 0 24 24"
-                   fill="none" stroke="currentColor" stroke-width="1.8"
-                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-              </svg>
-              New chat
-            </button>
-            <button id="conversation-sidebar-toggle" type="button"
-                    aria-label="Collapse conversations" aria-controls="chat-sidebar">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
-                   stroke-linejoin="round" aria-hidden="true">
-                <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-                <path d="M9 3v18"></path><path d="M14 10l-2 2 2 2"></path>
-              </svg>
-            </button>
-          </div>
-          <conversation-list id="conversation-list" role="list" aria-live="polite"></conversation-list>
-          <button id="settings-btn" type="button"
-                  aria-label="Settings" aria-controls="settings-dialog">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-            </svg>
-            <span class="sidebar-action-label">Settings</span>
-          </button>
-        </nav>
-        <div id="conversation-sidebar-backdrop" hidden></div>
-
         <wa-split-panel class="panel-split" id="panel-split" primary="end"
                         position-in-pixels="0">
           <wa-split-panel class="panel-split" id="artifact-canvas-split" slot="start"
@@ -155,15 +165,10 @@ export class DlApp extends LightElement {
             <div class="primary-shell" slot="start">
               <div class="app-shell">
                 <header class="topbar">
-                  <button id="conversation-sidebar-open" type="button" aria-label="Open conversations"
-                          aria-controls="chat-sidebar">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
-                         stroke-linejoin="round" aria-hidden="true">
-                      <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-                      <path d="M9 3v18"></path><path d="M10 10l2 2-2 2"></path>
-                    </svg>
-                  </button>
+                  <dl-conversation-sidebar
+                    .enabled=${ready}
+                    .chatFeature=${chatFeature}
+                  ></dl-conversation-sidebar>
                   <span class="topbar-scope-label">Search in:</span>
                   <workspace-scope
                     class="workspace-selector"
@@ -243,6 +248,46 @@ export class DlApp extends LightElement {
       </div>
       ${this.#bootstrapStatus()}
     `;
+  }
+
+  #conversationSidebar(): DlConversationSidebar | null {
+    return this.querySelector<DlConversationSidebar>('dl-conversation-sidebar');
+  }
+
+  #chatViewAction(event: CustomEvent<ChatViewActionDetail>): void {
+    this.#conversationSidebar()?.handleChatViewAction(event.detail.action);
+  }
+
+  #settingsRequested(): void {
+    if (this.#openSettings) void this.#openSettings();
+  }
+
+  // Milestone 4 deletes these adapters when Inspector exposes typed commands.
+  #conversationSidebarOpening(event: Event): void {
+    const panel = this.querySelector<HTMLElement>('#panel');
+    if (!panel?.classList.contains('open')) return;
+    if (hasActiveFileMutation()) {
+      event.preventDefault();
+      showToast('Wait for the file change to finish before opening conversations.', 5000);
+      return;
+    }
+    closePanel();
+  }
+
+  #conversationSidebarStateChanged(
+    event: CustomEvent<ConversationSidebarStateDetail>,
+  ): void {
+    document.body.classList.toggle('conversation-sidebar-open', event.detail.expanded);
+    document.body.classList.toggle(
+      'conversation-drawer-open',
+      event.detail.expanded && event.detail.compact,
+    );
+    syncPanelSplitState();
+    syncShellInert();
+  }
+
+  #conversationRouteChanged(): void {
+    closeConversationPanels();
   }
 
   #openArtifact(event: CustomEvent<{artifact: AnswerArtifact; returnFocus: HTMLElement}>): void {
@@ -362,32 +407,6 @@ export class DlApp extends LightElement {
 
   #dialogs(): TemplateResult {
     return html`
-      <dialog id="delete-conversation-dialog" class="confirm-dialog" aria-labelledby="delete-conversation-title"
-              aria-describedby="delete-conversation-message">
-        <form method="dialog">
-          <h2 id="delete-conversation-title">Delete conversation</h2>
-          <p id="delete-conversation-message">This conversation and its history will be permanently deleted.</p>
-          <p id="delete-conversation-draft-warning" hidden>Your unsent draft and attachments will also be discarded.</p>
-          <div class="ui-dialog-actions">
-            <button type="submit" value="cancel">Cancel</button>
-            <button type="submit" value="delete" class="ui-dialog-danger">Delete</button>
-          </div>
-        </form>
-      </dialog>
-      <dialog id="delete-all-conversations-dialog" class="confirm-dialog" aria-labelledby="delete-all-conversations-title">
-        <form method="dialog">
-          <h2 id="delete-all-conversations-title">Delete all conversations?</h2>
-          <p id="delete-all-conversations-draft-warning" hidden>Draft and attachments will also be deleted.</p>
-          <label class="ui-dialog-checkbox">
-            <input type="checkbox" id="delete-all-also-clear-memory" />
-            Also clear profile memories
-          </label>
-          <div class="ui-dialog-actions">
-            <button type="submit" value="cancel">Cancel</button>
-            <button type="submit" value="delete-all" class="ui-dialog-danger">Delete all</button>
-          </div>
-        </form>
-      </dialog>
       <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
         <form id="settings-form" method="dialog">
           <div class="settings-drawer-body">
@@ -440,16 +459,6 @@ export class DlApp extends LightElement {
         @dl-continuation-result=${this.#continuationResult}
       ></dl-continuation-dialog>
       <dl-children-roster></dl-children-roster>
-      <dialog id="discard-draft-dialog" class="confirm-dialog" aria-labelledby="discard-draft-title">
-        <form method="dialog">
-          <h2 id="discard-draft-title">Discard draft?</h2>
-          <p>Your unsent message and attachments will not move to another conversation.</p>
-          <div class="ui-dialog-actions">
-            <button type="submit" value="cancel">Keep editing</button>
-            <button type="submit" value="discard">Discard and continue</button>
-          </div>
-        </form>
-      </dialog>
       <dialog id="delete-workspace-dialog" class="workspace-dialog">
         <form id="delete-workspace-form">
           <h3 class="workspace-dialog-title">Delete workspace</h3>

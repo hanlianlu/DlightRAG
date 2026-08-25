@@ -572,6 +572,21 @@ body.conversation-sidebar-open .panel-split {
     --split-chat-reserve: calc(var(--layout-chat-sidebar-width) + var(--layout-chat-min-width));
 }
 
+@media (width >= 1200px) {
+    body.conversation-sidebar-open .topbar,
+    body.conversation-sidebar-open dl-chat-feature {
+        margin-left: var(--layout-chat-sidebar-width);
+        transition: margin-left var(--layout-shell-duration) var(--layout-shell-easing);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.conversation-sidebar-open .topbar,
+    body.conversation-sidebar-open dl-chat-feature {
+        transition: none;
+    }
+}
+
 .panel-split::part(divider) {
     background: var(--color-border-subtle);
     opacity: 0;

@@ -24,27 +24,6 @@ def _css_rule(path: Path, selector: str) -> str:
     return match.group("body")
 
 
-def test_lit_app_owns_the_final_conversation_shell() -> None:
-    app = (FRONTEND_UI / "app.ts").read_text(encoding="utf-8")
-
-    for selector in (
-        'id="chat-sidebar"',
-        'id="new-conversation-btn"',
-        'id="conversation-list"',
-        'id="conversation-sidebar-toggle"',
-        'id="conversation-sidebar-open"',
-        'id="delete-conversation-dialog"',
-        'id="settings-btn"',
-        'id="delete-all-btn"',
-        'id="delete-all-conversations-dialog"',
-        'id="discard-draft-dialog"',
-    ):
-        assert selector in app
-    assert 'aria-label="Conversations"' in app
-    assert not (ROOT / "src/dlightrag/web/templates/index.html").exists()
-    assert not (ROOT / "src/dlightrag/web/templates/base.html").exists()
-
-
 def test_bootstrap_advertises_exact_backend_attachment_limits() -> None:
     bootstrap_source = (ROOT / "src/dlightrag/web/routes/bootstrap.py").read_text(encoding="utf-8")
 
