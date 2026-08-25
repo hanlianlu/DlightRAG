@@ -13,10 +13,12 @@ import dlightrag.sdk.client as client_module
 from dlightrag.sdk import (
     EVENT_READ_IDLE_SECONDS,
     MAX_RECONNECT_ATTEMPTS,
+    AnswerArtifact,
     AnswerAttachmentUpload,
     AnswerRunCancelledError,
     AnswerRunClient,
     AnswerRunFailedError,
+    SyncAnswerRunClient,
     parse_sse_frames,
 )
 
@@ -104,7 +106,7 @@ async def test_answer_creates_then_follows_events_to_the_result() -> None:
     async with http:
         result = await runs.answer({"query": "q"}, on_token=tokens.append)
 
-    assert result == _RESULT
+    assert result.answer == _RESULT["answer"]
     assert tokens == ["grou"]
     assert seen == ["/answer", "/answer/run-1/events"]
 
@@ -154,7 +156,7 @@ async def test_reconnect_resumes_after_the_last_sequence_without_gaps() -> None:
     async with http:
         result = await runs.answer({"query": "q"}, on_token=tokens.append)
 
-    assert result == _RESULT
+    assert result.answer == _RESULT["answer"]
     assert tokens == ["a", "b"]
     assert cursors == [None, "1"]
 
@@ -185,7 +187,7 @@ async def test_a_dropped_stream_resumes_after_the_last_sequence(
     async with http:
         result = await runs.answer({"query": "q"}, on_token=tokens.append)
 
-    assert result == _RESULT
+    assert result.answer == _RESULT["answer"]
     assert tokens == ["a", "b"]
     assert cursors == [None, "1"]
     assert creates == 1
@@ -225,7 +227,7 @@ async def test_the_event_stream_reads_with_a_bounded_idle_timeout() -> None:
 
     http, runs = _client(handler)
     async with http:
-        assert await runs.answer({"query": "q"}) == _RESULT
+        assert (await runs.answer({"query": "q"})).answer == _RESULT["answer"]
 
     assert captured["timeout"]["read"] == EVENT_READ_IDLE_SECONDS
     assert all(value is not None for value in captured["timeout"].values())
@@ -245,7 +247,7 @@ async def test_expired_event_log_falls_back_to_the_status_result() -> None:
 
     http, runs = _client(handler)
     async with http:
-        assert await runs.answer({"query": "q"}) == _RESULT
+        assert (await runs.answer({"query": "q"})).answer == _RESULT["answer"]
 
     assert attempts == 1
 
@@ -340,7 +342,7 @@ async def test_a_stream_that_closes_early_polls_the_run_row() -> None:
 
     http, runs = _client(handler)
     async with http:
-        assert await runs.answer({"query": "q"}) == _RESULT
+        assert (await runs.answer({"query": "q"})).answer == _RESULT["answer"]
 
 
 async def test_cancel_is_a_plain_delete() -> None:
@@ -433,3 +435,56 @@ async def test_profile_memory_sdk_projects_receipts_settings_and_retry_keys() ->
     assert settings.active_count == 1
     assert requests[0].headers["Idempotency-Key"] == "stable-key"
     assert requests[1].headers["Idempotency-Key"] == "undo-key"
+
+
+_ARTIFACT_PAYLOAD = {
+    "resource_id": "artifact-1",
+    "role": "attachment",
+    "media_type": "text/plain",
+    "label": "Notes",
+    "filename": "notes.txt",
+    "byte_size": 5,
+    "digest": "a" * 64,
+    "presentation": "text",
+    "status": "available",
+    "uri": "dlightrag://answer/run-1/artifacts/artifact-1",
+    "data_url": "/answer/run-1/artifacts/artifact-1",
+    "download_url": "/answer/run-1/artifacts/artifact-1?download=1",
+    "presentation_url": "/answer/run-1/artifacts/artifact-1/presentation",
+}
+
+
+async def test_async_sdk_lists_typed_artifacts_and_reads_bounded_bytes() -> None:
+    seen_range = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_range
+        if request.url.path.endswith("/artifacts"):
+            return httpx.Response(200, json={"artifacts": [_ARTIFACT_PAYLOAD]})
+        seen_range = request.headers.get("Range", "")
+        return httpx.Response(206, content=b"notes")
+
+    http, runs = _client(handler)
+    async with http:
+        (artifact,) = await runs.list_artifacts("run-1")
+        data = await runs.read_artifact("run-1", artifact.resource_id, offset=2, length=5)
+
+    assert isinstance(artifact, AnswerArtifact)
+    assert artifact.uri.startswith("dlightrag://answer/")
+    assert data == b"notes"
+    assert seen_range == "bytes=2-6"
+
+
+def test_sync_sdk_has_symmetric_artifact_helpers() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/artifacts"):
+            return httpx.Response(200, json={"artifacts": [_ARTIFACT_PAYLOAD]})
+        return httpx.Response(206, content=b"notes")
+
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://rag.test") as http:
+        runs = SyncAnswerRunClient(http)
+        (artifact,) = runs.list_artifacts("run-1")
+        data = runs.read_artifact("run-1", artifact.resource_id, length=5)
+
+    assert isinstance(artifact, AnswerArtifact)
+    assert data == b"notes"

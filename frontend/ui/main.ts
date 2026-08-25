@@ -5,6 +5,7 @@ import '../styles/global.css';
 import '../styles/primitives.css';
 import '../styles/layout.css';
 import '../styles/panels.css';
+import '../styles/artifacts.css';
 import '../styles/files.css';
 import '../styles/sources.css';
 
@@ -21,7 +22,6 @@ import {setupMathRendering} from './mathjax.ts';
 import {setupNotifications} from './notifications.ts';
 import {setupPanel} from './panel.ts';
 import {setupPanelSplits} from './split_panel.ts';
-import {setupReportPanel} from './report-panel.ts';
 import {setupSourcePanel} from './source-panel.ts';
 import {setupTheme} from './theme.ts';
 import {initWorkspaces} from './workspaces.ts';
@@ -37,7 +37,6 @@ document.addEventListener('DOMContentLoaded', function() {
         setupPanelSplits();
         setupPanel();
         setupSourcePanel();
-        setupReportPanel();
         setupFilesPanel();
         setupSettings(requestDeleteAll);
         setupImageLightbox();

@@ -17,7 +17,7 @@ def test_usage_and_evidence_round_trip_on_every_projection() -> None:
             "relationships": [],
         },
         sources=[],
-        answer_images=[],
+        evidence_images=[],
         trace={"usage": {"usage_details": {"total_tokens": 12}}},
         image_descriptions=[],
     )
@@ -35,3 +35,56 @@ def test_usage_and_evidence_round_trip_on_every_projection() -> None:
     assert restored.evidence == stored["evidence"]
     assert projected["usage"] == stored["usage"]
     assert projected["evidence"] == stored["evidence"]
+    assert restored.artifact_outcome.status == "complete"
+    assert projected["parts"] == [{"type": "markdown", "text": "Grounded answer."}]
+
+
+def test_parts_derive_artifact_and_inline_evidence_placements() -> None:
+    artifact = {
+        "resource_id": "artifact-report",
+        "role": "primary_report",
+        "media_type": "text/markdown",
+        "label": "Report",
+        "filename": "report.md",
+        "byte_size": 10,
+        "digest": "a" * 64,
+        "presentation": "markdown",
+        "status": "available",
+    }
+    stored = {
+        "answer": (
+            "Intro. [View report](artifact:artifact-report) ![Inline chart](evidence:chart-1) End."
+        ),
+        "sources": [],
+        "contexts": {},
+        "evidence_images": [
+            {
+                "id": "chart-1",
+                "chunk_id": "chunk-1",
+                "workspace": "default",
+                "source_ref": "1",
+                "label": "Chart",
+            }
+        ],
+        "artifacts": [artifact],
+        "artifact_outcome": {"status": "complete", "issues": []},
+    }
+
+    projected = project_answer_result(
+        stored,
+        run_id="run-1",
+        artifact_url_prefix="/answer",
+    )
+
+    assert [part["type"] for part in projected["parts"]] == [
+        "markdown",
+        "artifact",
+        "markdown",
+        "evidence_image",
+        "markdown",
+    ]
+    assert projected["parts"][1]["artifact"]["role"] == "primary_report"
+    assert projected["parts"][1]["artifact"]["data_url"].endswith(
+        "/run-1/artifacts/artifact-report"
+    )
+    assert projected["parts"][3]["evidence_image"]["source_ref"] == "1"

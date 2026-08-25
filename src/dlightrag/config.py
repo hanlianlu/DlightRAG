@@ -260,6 +260,26 @@ class OutboundMcpServerConfig(BaseModel):
         return self
 
 
+class ArtifactPublicationConfig(BaseModel):
+    """Independent Agent workspace, publication, and browser-preview budgets."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    max_artifacts: int = Field(default=20, ge=1)
+    max_file_bytes: int = Field(default=30 * 1024 * 1024, ge=1)
+    max_total_bytes: int = Field(default=100 * 1024 * 1024, ge=1)
+    workspace_max_bytes: int = Field(
+        default=1024 * 1024 * 1024,
+        ge=1,
+        le=5 * 1024 * 1024 * 1024,
+    )
+    preview_image_max_pixels: int = Field(default=16_000_000, ge=1)
+    preview_image_max_edge: int = Field(default=4096, ge=1)
+    original_image_max_pixels: int = Field(default=64_000_000, ge=1)
+    original_image_max_edge: int = Field(default=8000, ge=1)
+    active_html_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1)
+
+
 class AgentExecutionConfig(BaseModel):
     """Optional Agent execution; sandbox requires a trusted adapter extension."""
 
@@ -274,6 +294,7 @@ class AgentExecutionConfig(BaseModel):
             "must set the same absolute path on every worker."
         ),
     )
+    publication: ArtifactPublicationConfig = Field(default_factory=ArtifactPublicationConfig)
     outbound_mcp: tuple[OutboundMcpServerConfig, ...] = ()
 
 
@@ -281,6 +302,11 @@ class WebConversationsConfig(BaseModel):
     """Browser conversation surface; retention follows RuntimeConfig."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    active_html_preview_enabled: bool = Field(
+        default=True,
+        description="Allow explicit opaque-origin execution of self-contained HTML Artifacts.",
+    )
 
 
 class WebSearchConfig(BaseModel):

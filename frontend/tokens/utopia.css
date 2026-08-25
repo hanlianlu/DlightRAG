@@ -187,7 +187,7 @@
 
     /* ── Layout ── */
     --panel-width: 420px;  /* files/sources default; Split Panel overrides at runtime */
-    --report-panel-width: 420px;
+    --artifact-canvas-width: 420px;
     --layout-content-width: clamp(340px, 55vw, 880px);
     --layout-panel-min: 320px;
     /* ── Radius semantics: B — Soft ── */

@@ -1,0 +1,204 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* Answer Artifact placements */
+.answer-parts {
+    display: flow-root;
+}
+
+.answer-artifact-card,
+.artifact-active-consent,
+.artifact-download-only,
+.artifact-unavailable,
+.artifact-error {
+    align-items: center;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-card);
+    display: flex;
+    gap: var(--space-component);
+    justify-content: space-between;
+    margin: var(--space-component) 0;
+    padding: var(--space-component);
+}
+
+.answer-artifact-card > div {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.answer-artifact-card span,
+.artifact-canvas-filename {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.answer-artifact-unavailable,
+.artifact-unavailable,
+.artifact-error {
+    align-items: flex-start;
+    border-color: var(--color-danger);
+    flex-direction: column;
+}
+
+.artifact-publication-warning {
+    background: var(--color-danger-surface);
+    border: 1px solid var(--color-danger);
+    border-radius: var(--radius-content);
+    color: var(--color-text-primary);
+    margin-bottom: var(--space-component);
+    padding: var(--space-component);
+}
+
+.answer-artifact-image {
+    margin: var(--space-component) 0;
+}
+
+.answer-artifact-image button,
+.artifact-image {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    display: block;
+    padding: 0;
+}
+
+.answer-artifact-image img,
+.artifact-image img {
+    border-radius: var(--radius-content);
+    display: block;
+    height: auto;
+    max-height: 70vh;
+    max-width: 100%;
+}
+
+.answer-evidence h3 {
+    color: var(--color-text-subtle);
+    font-size: var(--font-size-caption);
+    margin: var(--space-related) 0 0;
+    text-transform: uppercase;
+}
+
+.answer-evidence-image {
+    align-items: flex-start;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.answer-image-source {
+    background: transparent;
+    border: 0;
+    color: var(--color-accent-action);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-caption);
+    padding: var(--space-inline) 0;
+}
+
+/* Artifact Canvas */
+dl-artifact-canvas {
+    background: var(--color-bg-surface);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: 0;
+    overflow: hidden;
+    width: 100%;
+}
+
+dl-artifact-canvas:not(.open) {
+    pointer-events: none;
+}
+
+.artifact-canvas-header {
+    align-items: center;
+    display: flex;
+    flex: 0 0 var(--conversation-top-row-height);
+    gap: var(--space-component);
+    justify-content: space-between;
+    padding: 0 var(--space-component);
+}
+
+.artifact-canvas-heading {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.artifact-canvas-title {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+}
+
+.artifact-canvas-actions {
+    align-items: center;
+    display: flex;
+    gap: var(--space-tight);
+}
+
+.artifact-canvas-actions .ui-btn[aria-pressed='true'] {
+    background: var(--color-accent-surface);
+    border-color: var(--color-accent-border);
+}
+
+.artifact-canvas-content {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: var(--space-related) var(--space-section);
+}
+
+.artifact-source {
+    max-height: 70vh;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.artifact-pdf {
+    border: 0;
+    height: 100%;
+    min-height: 70vh;
+    width: 100%;
+}
+
+dl-artifact-canvas.layout-wide {
+    position: fixed;
+    inset: var(--space-layout);
+    width: auto;
+    height: auto;
+    z-index: 105;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-dialog);
+    box-shadow: var(--shadow-overlay);
+}
+
+dl-artifact-canvas.layout-fullscreen {
+    inset: 0;
+    position: fixed;
+    z-index: 120;
+}
+
+@media (width < 1200px) {
+    dl-artifact-canvas.open {
+        inset: 0;
+        position: fixed;
+        z-index: 110;
+    }
+}
+
+@media (width <= 640px) {
+    .artifact-canvas-actions .ui-btn:not([aria-pressed='true']),
+    .artifact-canvas-filename {
+        display: none;
+    }
+
+    .artifact-canvas-content {
+        padding: var(--space-component);
+    }
+}

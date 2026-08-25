@@ -4,7 +4,6 @@ import {
   releaseMessageAttachmentObjectUrls,
   renderMessageAttachmentImages,
 } from '../ui/images.ts';
-import {bindPrimaryReportControl} from '../ui/report-panel.ts';
 import type {AnswerPresentationElement} from '../ui/answer_presentation.ts';
 import '../ui/answer_presentation.ts';
 import {createDocumentChip} from './document_chip.ts';
@@ -199,14 +198,9 @@ function applyFinalAnswer(
   usage: Record<string, unknown> = {},
   evidence: Record<string, number> = {},
 ): void {
-  const element = document.createElement('answer-presentation') as AnswerPresentationElement;
+  const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
   element.presentation = presentation;
   turn.contentDiv.replaceChildren(element);
-  bindPrimaryReportControl(
-    turn.aiDiv,
-    turn.aiDiv.dataset.runId || '',
-    presentation.primary_report,
-  );
   renderRunActions(turn, 'terminal', usage, evidence);
 }
 

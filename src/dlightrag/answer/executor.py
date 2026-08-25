@@ -90,11 +90,16 @@ from dlightrag.answer.errors import (
 )
 from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.answer.images import AnswerImageBudget
-from dlightrag.answer.media import answer_images_from_sources
+from dlightrag.answer.media import evidence_images_from_sources
 from dlightrag.answer.memory import memory_owner_allowed, render_auto_recall
 from dlightrag.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.answer.model_runtime import AnswerModelRuntime
-from dlightrag.answer.publication import is_empty_answer
+from dlightrag.answer.publication import (
+    PublicationLimits,
+    PublicationPlan,
+    is_empty_answer,
+    validate_publication,
+)
 from dlightrag.answer.resources import ResourceInput, ResourceRegistry
 from dlightrag.answer.resources.models import (
     ResourceManifestEntry,
@@ -215,6 +220,7 @@ class AnswerExecutorSettings:
     default_top_k: int
     default_chunk_top_k: int
     semantic_highlights: SemanticHighlightSettings
+    publication: PublicationLimits = PublicationLimits()
 
 
 @dataclass(frozen=True)
@@ -984,6 +990,25 @@ class AnswerExecutor:
                 await session.flush_tokens()
                 answer_text = getattr(stream, "answer", "") or "".join(answer_parts)
                 finalized = finalize_answer(answer_text, contexts)
+                publication = _publication_plan(
+                    run.orchestrator.artifact_root(),
+                    answer=finalized.answer,
+                    limits=self._settings.publication,
+                )
+                if publication.repairable and boundaries is not None and prepared is not None:
+                    corrected = await run.orchestrator.correct_publication(
+                        prepared,
+                        boundaries=boundaries,
+                        feedback=publication.correction_feedback(),
+                    )
+                    if corrected is not None:
+                        finalized = finalize_answer(corrected, contexts)
+                        publication = _publication_plan(
+                            run.orchestrator.artifact_root(),
+                            answer=finalized.answer,
+                            limits=self._settings.publication,
+                        )
+                finalized.answer = publication.answer
                 if request.semantic_highlights:
                     finalized.sources = await enrich_semantic_highlights(
                         finalized.sources,
@@ -1016,7 +1041,7 @@ class AnswerExecutor:
                 trace["query_image_description_count"] = len(run.image_descriptions)
                 trace["memory_recall_record_count"] = memory_recall_record_count
                 trace["memory_recall_chars"] = memory_recall_chars
-                images = answer_images_from_sources(finalized.sources, contexts=contexts)
+                images = evidence_images_from_sources(finalized.sources, contexts=contexts)
                 pipeline_trace.update(
                     output=answer_trace_output(
                         finalized.answer,
@@ -1025,24 +1050,22 @@ class AnswerExecutor:
                         capture_sensitive_data=self._telemetry.capture_sensitive_data,
                     )
                 )
-                publications, primary_handle, artifact_descriptors, report_sources = (
-                    _stage_publications(
-                        staged=run.orchestrator.staged_artifacts(),
-                        answer=finalized.answer,
-                        contexts=contexts,
-                        require_answer=getattr(prepared_early, "stop_reason", None) == "model_stop",
-                    )
+                publications, artifact_descriptors, report_sources = _stage_publications(
+                    plan=publication,
+                    answer=finalized.answer,
+                    contexts=contexts,
+                    require_answer=getattr(prepared_early, "stop_reason", None) == "model_stop",
                 )
                 session.pending_publications = publications
                 stored = store_answer_result(
                     answer=finalized.answer,
                     contexts=project_contexts_for_client(contexts),
                     sources=finalized.sources,
-                    answer_images=images,
+                    evidence_images=images,
                     trace=trace,
                     image_descriptions=run.image_descriptions,
-                    primary_report=primary_handle,
                     artifacts=artifact_descriptors,
+                    artifact_outcome=publication.outcome,
                     report_sources=report_sources,
                 )
                 if fast_boundaries is not None:
@@ -2583,49 +2606,51 @@ def _context_count(contexts: RetrievalContexts, key: str) -> int:
     return len(items) if isinstance(items, list) else 0
 
 
+def _publication_plan(
+    root: Path | None,
+    *,
+    answer: str,
+    limits: PublicationLimits,
+) -> PublicationPlan:
+    if not isinstance(root, Path):
+        return PublicationPlan(answer=answer)
+    return validate_publication(root, answer=answer, limits=limits)
+
+
 def _stage_publications(
     *,
-    staged: Sequence[Any],
+    plan: PublicationPlan,
     answer: str,
     contexts: RetrievalContexts,
     require_answer: bool = False,
-) -> tuple[list[PendingPublication], str | None, list[dict[str, Any]], list[Any]]:
-    has_report = any(item.kind == "primary_report" for item in staged)
+) -> tuple[list[PendingPublication], list[dict[str, Any]], list[Any]]:
+    has_report = any(item.role == "primary_report" for item in plan.artifacts)
     if require_answer and is_empty_answer(answer=answer, has_primary_report=has_report):
         raise RunExecutionError("empty_answer", "The run produced no answer.")
     publications: list[PendingPublication] = []
-    descriptors: list[dict[str, Any]] = []
-    primary_handle: str | None = None
     report_sources: list[Any] = []
-    for item in staged:
-        payload = item.path.read_bytes()
-        if item.kind == "primary_report":
+    descriptors = [dict(item) for item in plan.descriptors]
+    for item in plan.artifacts:
+        payload = item.content
+        if item.role == "primary_report" and item.media_type == "text/markdown":
             cleaned = finalize_answer(payload.decode("utf-8"), contexts)
             payload = cleaned.answer.encode("utf-8")
             report_sources = list(cleaned.sources)
-            primary_handle = "primary_report"
-            resource_id = "primary_report"
-        else:
-            resource_id = f"artifact-{item.relative_path.replace('/', '-')}"
+            for descriptor in descriptors:
+                if descriptor.get("resource_id") == item.resource_id:
+                    descriptor["byte_size"] = len(payload)
+                    descriptor["digest"] = artifact_digest(payload)
+                    break
         publications.append(
             PendingPublication(
-                resource_id=resource_id,
+                resource_id=item.resource_id,
                 reference_kind=item.kind,
-                filename=item.relative_path,
+                filename=item.filename,
                 mime_type=item.media_type,
                 content=payload,
             )
         )
-        descriptors.append(
-            {
-                "resource_id": resource_id,
-                "kind": item.kind,
-                "filename": item.relative_path,
-                "media_type": item.media_type,
-                "size_bytes": len(payload),
-            }
-        )
-    return publications, primary_handle, descriptors, report_sources
+    return publications, descriptors, report_sources
 
 
 def answer_trace_output(

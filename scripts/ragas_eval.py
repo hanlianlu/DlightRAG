@@ -259,8 +259,8 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
         except httpx.HTTPError as exc:
             raise EvalError(f"DlightRAG API request failed: {type(exc).__name__}: {exc}") from exc
 
-        answer = result.get("answer", "No response generated")
-        chunks = result.get("contexts", {}).get("chunks", [])
+        answer = result.answer or "No response generated"
+        chunks = result.contexts.get("chunks", [])
 
         # RAGAS scores textual grounding; display-only media blocks stay out.
         contexts: list[str] = []

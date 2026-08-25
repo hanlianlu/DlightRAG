@@ -471,7 +471,7 @@ def _stored_result() -> dict[str, Any]:
                 ],
             }
         ],
-        "answer_images": [
+        "evidence_images": [
             {
                 "id": "c1",
                 "chunk_id": "c1",
@@ -481,24 +481,28 @@ def _stored_result() -> dict[str, Any]:
                 "answer_image_sent": False,
             }
         ],
+        "artifacts": [],
+        "artifact_outcome": {"status": "complete", "issues": []},
         "trace": {"agent_turns": 1},
         "image_descriptions": [],
     }
 
 
 class TestResultProjection:
-    async def test_answer_images_keep_stored_transport_state(
+    async def test_evidence_images_keep_stored_transport_state(
         self, client: AsyncClient, run_application: _RunApplication
     ) -> None:
         run_application.record = _record(status="succeeded", result=_stored_result())
 
         result = (await client.get(f"/answer/{_RUN_ID}")).json()["result"]
 
-        image = result["answer_images"][0]
+        image = result["evidence_images"][0]
         assert image["answer_image_sent"] is False
         assert image["url"] == "/images/default/c1?size=full"
         assert "workspace" not in image
-        assert result["answer_blocks"][-1]["type"] == "image_ref"
+        assert result["parts"][0]["type"] == "markdown"
+        assert result["parts"][0]["text"] == "Answer [1-1]."
+        assert "answer_images" not in result
 
     async def test_unauthorized_visual_workspace_drops_images(
         self, client: AsyncClient, run_application: _RunApplication, _app: FastAPI
@@ -508,7 +512,7 @@ class TestResultProjection:
 
         result = (await client.get(f"/answer/{_RUN_ID}")).json()["result"]
 
-        assert result["answer_images"] == []
+        assert result["evidence_images"] == []
         assert result["sources"][0]["chunks"][0]["image_url"] is None
         assert result["sources"][0]["download_url"] is None
 
@@ -761,28 +765,68 @@ async def test_schema_validation_error_is_a_safe_503(
 # Artifact reads
 # ---------------------------------------------------------------------------
 
+_ARTIFACT_ID = "artifact-report"
+
+
+def _publish_test_artifact(application: _RunApplication) -> None:
+    result = _stored_result()
+    result["artifacts"] = [
+        {
+            "resource_id": _ARTIFACT_ID,
+            "role": "primary_report",
+            "media_type": "text/markdown",
+            "label": "Report",
+            "filename": "report.md",
+            "byte_size": 10,
+            "digest": "a" * 64,
+            "presentation": "markdown",
+            "status": "available",
+        }
+    ]
+    application.record = _record(status="succeeded", result=result)
+    application.artifact_bytes = b"0123456789"
+
+
+async def test_artifact_list_returns_typed_owner_links_without_bytes(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    _publish_test_artifact(run_application)
+
+    response = await client.get(f"/answer/{_RUN_ID}/artifacts")
+
+    assert response.status_code == 200
+    artifact = response.json()["artifacts"][0]
+    assert artifact["role"] == "primary_report"
+    assert artifact["uri"].startswith("dlightrag://answer/")
+    assert artifact["data_url"].endswith(f"/{_RUN_ID}/artifacts/{_ARTIFACT_ID}")
+    assert "content" not in artifact
+    assert response.json()["artifact_outcome"]["status"] == "complete"
+
 
 async def test_full_artifact_read_streams_without_a_range(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:
-    run_application.artifact_bytes = b"0123456789"
+    _publish_test_artifact(run_application)
 
-    response = await client.get(f"/answer/{_RUN_ID}/artifacts/primary_report")
+    response = await client.get(f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}")
 
     assert response.status_code == 200
     assert response.content == b"0123456789"
     assert response.headers["content-type"].startswith("application/octet-stream")
     assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-disposition"].startswith("attachment")
     assert "content-range" not in response.headers
 
 
 async def test_open_ended_range_returns_206_with_a_content_range(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:
-    run_application.artifact_bytes = b"0123456789"
+    _publish_test_artifact(run_application)
 
     response = await client.get(
-        f"/answer/{_RUN_ID}/artifacts/primary_report", headers={"Range": "bytes=5-"}
+        f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}", headers={"Range": "bytes=5-"}
     )
 
     assert response.status_code == 206
@@ -793,10 +837,10 @@ async def test_open_ended_range_returns_206_with_a_content_range(
 async def test_suffix_range_returns_the_last_bytes(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:
-    run_application.artifact_bytes = b"0123456789"
+    _publish_test_artifact(run_application)
 
     response = await client.get(
-        f"/answer/{_RUN_ID}/artifacts/primary_report", headers={"Range": "bytes=-4"}
+        f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}", headers={"Range": "bytes=-4"}
     )
 
     assert response.status_code == 206
@@ -807,10 +851,10 @@ async def test_suffix_range_returns_the_last_bytes(
 async def test_closed_range_returns_exactly_the_window(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:
-    run_application.artifact_bytes = b"0123456789"
+    _publish_test_artifact(run_application)
 
     response = await client.get(
-        f"/answer/{_RUN_ID}/artifacts/primary_report", headers={"Range": "bytes=2-5"}
+        f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}", headers={"Range": "bytes=2-5"}
     )
 
     assert response.status_code == 206
@@ -821,10 +865,10 @@ async def test_closed_range_returns_exactly_the_window(
 async def test_unsatisfiable_range_is_416_with_the_total(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:
-    run_application.artifact_bytes = b"0123456789"
+    _publish_test_artifact(run_application)
 
     response = await client.get(
-        f"/answer/{_RUN_ID}/artifacts/primary_report", headers={"Range": "bytes=20-"}
+        f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}", headers={"Range": "bytes=20-"}
     )
 
     assert response.status_code == 416

@@ -366,9 +366,38 @@ class AnswerOrchestrator:
 
     def staged_artifacts(self) -> tuple[StagedArtifact, ...]:
         """Regular files under artifacts/, or empty when no workspace is bound."""
-        if self._workspace is None:
-            return ()
-        return scan_artifact_directory(self._workspace.workspace / "artifacts")
+        root = self.artifact_root()
+        return scan_artifact_directory(root) if root is not None else ()
+
+    def artifact_root(self) -> Path | None:
+        """Return this run's request-local Artifact root, when execution owns one."""
+        return None if self._workspace is None else self._workspace.workspace / "artifacts"
+
+    async def correct_publication(
+        self,
+        run: PreparedRun,
+        *,
+        boundaries: RunBoundaries,
+        feedback: str,
+    ) -> str | None:
+        """Allow one bounded correction pass using the existing Agent and tools.
+
+        One tool turn plus one terminal turn is the maximum needed by the Agent
+        protocol, where a provider response cannot both call a tool and settle
+        visible text. A second tool batch ends the pass without widening it.
+        """
+        run.context.set_publication_feedback(feedback)
+        driver = _ResearchLoopDriver(self, run, boundaries, on_event=_discard_agent_event)
+        try:
+            for _ in range(2):
+                executed = await driver.run_turn(run.agent_turn_count + 1)
+                if not executed.assistant.tool_calls:
+                    run.last_turn = executed
+                    run.stop_reason = "model_stop"
+                    return executed.assistant.text
+            return None
+        finally:
+            run.context.set_publication_feedback("")
 
     @property
     def resolved_mode(self) -> ResolvedMode:
@@ -1118,6 +1147,10 @@ def research_history_input_measure(
         )
 
     return measure
+
+
+async def _discard_agent_event(_event: AgentEvent) -> None:
+    return None
 
 
 async def _single_chunk(text: str) -> AsyncIterator[str]:

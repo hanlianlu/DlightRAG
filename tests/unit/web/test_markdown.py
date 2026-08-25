@@ -79,9 +79,13 @@ def test_mermaid_marker_survives_nh3():
     """The mermaid marker must survive server-side nh3 sanitization."""
     from dlightrag.web.presentation import build_answer_presentation
 
-    result = build_answer_presentation(
-        answer="```mermaid\ngraph TD\n  A-->B\n```", sources=[], answer_images=[]
-    ).answer_html
+    result = (
+        build_answer_presentation(
+            answer="```mermaid\ngraph TD\n  A-->B\n```", sources=[], evidence_images=[]
+        )
+        .parts[0]
+        .html
+    )
     assert 'class="mermaid-source"' in result
     assert 'data-lang="mermaid"' in result
     assert "graph TD" in result

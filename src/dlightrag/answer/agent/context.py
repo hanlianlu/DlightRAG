@@ -49,6 +49,11 @@ class ContextAssembler:
         self._contributions = contributions
         self._tool_guidance = tool_guidance
         self._profile_memory_write = profile_memory_write
+        self._publication_feedback = ""
+
+    def set_publication_feedback(self, feedback: str) -> None:
+        """Set the transient, bounded publication-correction instruction."""
+        self._publication_feedback = feedback.strip()
 
     async def control_turn(
         self,
@@ -202,6 +207,15 @@ class ContextAssembler:
                 )
             )
         tail.extend(self._contributions)
+        if self._publication_feedback:
+            tail.append(
+                ContextContribution(
+                    source="answer.artifact_correction",
+                    authority="user",
+                    messages=({"role": "user", "content": self._publication_feedback},),
+                    compressible=False,
+                )
+            )
         return [*head, *ContextProjector().project(tail).messages]
 
     def _head(

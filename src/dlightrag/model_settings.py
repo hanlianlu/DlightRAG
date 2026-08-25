@@ -129,11 +129,15 @@ def answer_resource_settings(config: DlightragConfig) -> AnswerResourceSettings:
 
 
 def answer_executor_settings(config: DlightragConfig) -> AnswerExecutorSettings:
-    """Snapshot durable Answer execution policy."""
+    """Snapshot durable Answer execution and Artifact publication policy."""
+    from dlightrag.answer.publication import PublicationLimits
+
+    publication = config.answer.agent.publication
     return AnswerExecutorSettings(
         default_top_k=config.corpus.retrieval.top_k,
         default_chunk_top_k=config.corpus.retrieval.chunk_top_k,
         semantic_highlights=semantic_highlight_settings(config),
+        publication=PublicationLimits(**publication.model_dump()),
     )
 
 

@@ -522,7 +522,7 @@ body.files-panel-open #files-btn {
     flex: 1;
 }
 
-#report-panel-split,
+#artifact-canvas-split,
 .primary-shell,
 .app-shell {
     height: 100%;
@@ -547,8 +547,12 @@ body.files-panel-open #files-btn {
     --min: var(--layout-panel-min);
 }
 
-body.report-panel-open #panel-split {
-    --split-other-width: var(--report-panel-width);
+body.artifact-canvas-open #panel-split {
+    --split-other-width: var(--artifact-canvas-width);
+}
+
+body.artifact-canvas-overlay #panel-split {
+    --split-other-width: 0px;
 }
 
 body.conversation-sidebar-open .panel-split {

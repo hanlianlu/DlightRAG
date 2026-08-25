@@ -669,14 +669,16 @@ def project_conversation_turn(
             downloadable_workspaces=downloadable_workspaces,
             visual_workspaces=visual_workspaces,
             image_url_prefix=WEB_IMAGE_URL_BASE,
+            run_id=run.run_id,
+            artifact_url_prefix="/web/api/answer",
         )
         answer = str(projected["answer"])
-        handle = projected.get("primary_report")
         presentation = build_answer_presentation(
             answer=answer,
             sources=projected["sources"],
-            answer_images=projected["answer_images"],
-            primary_report=handle if isinstance(handle, str) and handle else None,
+            evidence_images=projected["evidence_images"],
+            artifacts=projected["artifacts"],
+            artifact_outcome=projected["artifact_outcome"],
         )
     return ConversationTurn(
         turn_id=turn.turn_id,

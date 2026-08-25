@@ -29,6 +29,7 @@ def render_done_event(
     *,
     downloadable_workspaces: set[str] | None,
     visual_workspaces: set[str] | None,
+    run_id: str | None = None,
 ) -> AnswerDoneEvent:
     """Derive the finished presentation from the run's canonical result."""
     if str(payload.get("status")) == "cancelled":
@@ -39,9 +40,10 @@ def render_done_event(
         downloadable_workspaces=downloadable_workspaces,
         visual_workspaces=visual_workspaces,
         image_url_prefix=WEB_IMAGE_URL_BASE,
+        run_id=run_id,
+        artifact_url_prefix="/web/api/answer",
     )
     answer = str(projected["answer"])
-    handle = projected.get("primary_report")
     return AnswerDoneEvent(
         status="succeeded",
         usage=dict(projected.get("usage") or {}),
@@ -49,8 +51,9 @@ def render_done_event(
         presentation=build_answer_presentation(
             answer=answer,
             sources=projected["sources"],
-            answer_images=projected["answer_images"],
-            primary_report=handle if isinstance(handle, str) and handle else None,
+            evidence_images=projected["evidence_images"],
+            artifacts=projected["artifacts"],
+            artifact_outcome=projected["artifact_outcome"],
         ),
     )
 
@@ -61,6 +64,7 @@ def _browser_payload(
     downloadable_workspaces: set[str] | None,
     visual_workspaces: set[str] | None,
     live_after: int | None,
+    run_id: str | None,
 ) -> Any:
     payload = dict(event.payload)
     match event.event_type:
@@ -105,6 +109,7 @@ def _browser_payload(
                 payload,
                 downloadable_workspaces=downloadable_workspaces,
                 visual_workspaces=visual_workspaces,
+                run_id=run_id,
             )
         case _:
             return AnswerErrorEvent(
@@ -119,6 +124,7 @@ def browser_frame(
     downloadable_workspaces: set[str] | None = None,
     visual_workspaces: set[str] | None = None,
     live_after: int | None = None,
+    run_id: str | None = None,
 ) -> str:
     """Render one durable event as the frame this browser session reads."""
     return sse_frame(
@@ -129,6 +135,7 @@ def browser_frame(
             downloadable_workspaces=downloadable_workspaces,
             visual_workspaces=visual_workspaces,
             live_after=live_after,
+            run_id=run_id,
         ),
     )
 

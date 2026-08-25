@@ -236,7 +236,9 @@ def stored_result(answer: str = "Revenue increased [1].") -> dict[str, Any]:
                 "chunks": [],
             }
         ],
-        "answer_images": [],
+        "evidence_images": [],
+        "artifacts": [],
+        "artifact_outcome": {"status": "complete", "issues": []},
         "trace": {},
         "usage": {"usage_details": {"total_tokens": 42}},
         "evidence": {"chunks": 1, "entities": 0, "relationships": 0, "sources": 1},

@@ -66,20 +66,6 @@
   overflow-x: auto;
 }
 
-.reportControl {
-  display: inline-flex;
-  margin-top: var(--space-tight);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--color-accent-action);
-  font: inherit;
-  font-size: var(--font-size-caption);
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 0.15em;
-}
-
 .runActions {
   align-items: center;
   display: flex;

@@ -6,10 +6,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+import time
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 from uuid import uuid4
 
 import httpx
@@ -104,6 +106,180 @@ class AnswerStreamEvent:
     sequence: int
     event_type: str
     payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerArtifactIssue:
+    kind: str
+    description: str
+    resource_id: str | None = None
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> AnswerArtifactIssue:
+        return cls(
+            kind=str(payload.get("kind") or "publication_failed"),
+            description=str(payload.get("description") or "Artifact is unavailable."),
+            resource_id=str(payload["resource_id"]) if payload.get("resource_id") else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactOutcome:
+    status: Literal["complete", "partial", "failed"]
+    issues: tuple[AnswerArtifactIssue, ...]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any] | None) -> ArtifactOutcome:
+        value = payload or {}
+        status = value.get("status")
+        return cls(
+            status=status if status in {"complete", "partial", "failed"} else "complete",
+            issues=tuple(
+                AnswerArtifactIssue.from_payload(issue)
+                for issue in value.get("issues") or ()
+                if isinstance(issue, Mapping)
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerArtifact:
+    resource_id: str
+    role: Literal["primary_report", "attachment"]
+    media_type: str
+    label: str
+    filename: str
+    byte_size: int
+    digest: str
+    presentation: str
+    status: Literal["available", "unavailable"]
+    uri: str
+    width: int | None = None
+    height: int | None = None
+    data_url: str | None = None
+    download_url: str | None = None
+    presentation_url: str | None = None
+    issue: AnswerArtifactIssue | None = None
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> AnswerArtifact:
+        issue = payload.get("issue")
+        role = payload.get("role")
+        status = payload.get("status")
+        return cls(
+            resource_id=str(payload["resource_id"]),
+            role=role if role in {"primary_report", "attachment"} else "attachment",
+            media_type=str(payload.get("media_type") or "application/octet-stream"),
+            label=str(payload.get("label") or payload.get("filename") or "Artifact"),
+            filename=str(payload.get("filename") or "artifact"),
+            byte_size=int(payload.get("byte_size") or 0),
+            digest=str(payload.get("digest") or ""),
+            presentation=str(payload.get("presentation") or "download"),
+            status=status if status in {"available", "unavailable"} else "unavailable",
+            uri=str(payload.get("uri") or ""),
+            width=int(payload["width"]) if payload.get("width") is not None else None,
+            height=int(payload["height"]) if payload.get("height") is not None else None,
+            data_url=str(payload["data_url"]) if payload.get("data_url") else None,
+            download_url=str(payload["download_url"]) if payload.get("download_url") else None,
+            presentation_url=(
+                str(payload["presentation_url"]) if payload.get("presentation_url") else None
+            ),
+            issue=AnswerArtifactIssue.from_payload(issue) if isinstance(issue, Mapping) else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceImage:
+    id: str
+    chunk_id: str
+    source_ref: str
+    url: str
+    thumbnail_url: str
+    label: str
+    answer_image_sent: bool
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> EvidenceImage:
+        return cls(
+            id=str(payload.get("id") or ""),
+            chunk_id=str(payload.get("chunk_id") or ""),
+            source_ref=str(payload.get("source_ref") or ""),
+            url=str(payload.get("url") or ""),
+            thumbnail_url=str(payload.get("thumbnail_url") or ""),
+            label=str(payload.get("label") or ""),
+            answer_image_sent=payload.get("answer_image_sent") is not False,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerPart:
+    type: Literal["markdown", "artifact", "evidence_image"]
+    text: str = ""
+    artifact: AnswerArtifact | None = None
+    evidence_image: EvidenceImage | None = None
+    inline: bool = False
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> AnswerPart:
+        kind = payload.get("type")
+        artifact = payload.get("artifact")
+        image = payload.get("evidence_image")
+        return cls(
+            type=kind if kind in {"markdown", "artifact", "evidence_image"} else "markdown",
+            text=str(payload.get("text") or ""),
+            artifact=AnswerArtifact.from_payload(artifact)
+            if isinstance(artifact, Mapping)
+            else None,
+            evidence_image=EvidenceImage.from_payload(image)
+            if isinstance(image, Mapping)
+            else None,
+            inline=bool(payload.get("inline")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerResult:
+    answer: str
+    parts: tuple[AnswerPart, ...]
+    sources: tuple[Mapping[str, Any], ...]
+    evidence_images: tuple[EvidenceImage, ...]
+    artifacts: tuple[AnswerArtifact, ...]
+    artifact_outcome: ArtifactOutcome
+    contexts: Mapping[str, Any]
+    references: tuple[Mapping[str, Any], ...]
+    usage: Mapping[str, Any]
+    evidence: Mapping[str, Any]
+    trace: Mapping[str, Any]
+    image_descriptions: tuple[str, ...]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> AnswerResult:
+        return cls(
+            answer=str(payload.get("answer") or ""),
+            parts=tuple(
+                AnswerPart.from_payload(part)
+                for part in payload.get("parts") or ()
+                if isinstance(part, Mapping)
+            ),
+            sources=tuple(dict(item) for item in payload.get("sources") or ()),
+            evidence_images=tuple(
+                EvidenceImage.from_payload(item)
+                for item in payload.get("evidence_images") or ()
+                if isinstance(item, Mapping)
+            ),
+            artifacts=tuple(
+                AnswerArtifact.from_payload(item)
+                for item in payload.get("artifacts") or ()
+                if isinstance(item, Mapping)
+            ),
+            artifact_outcome=ArtifactOutcome.from_payload(payload.get("artifact_outcome")),
+            contexts=dict(payload.get("contexts") or {}),
+            references=tuple(dict(item) for item in payload.get("references") or ()),
+            usage=dict(payload.get("usage") or {}),
+            evidence=dict(payload.get("evidence") or {}),
+            trace=dict(payload.get("trace") or {}),
+            image_descriptions=tuple(str(item) for item in payload.get("image_descriptions") or ()),
+        )
 
 
 def parse_sse_frames(chunk: str, *, buffer: str = "") -> tuple[list[AnswerStreamEvent], str]:
@@ -299,8 +475,8 @@ class AnswerRunClient:
         attachments: Sequence[AnswerAttachmentUpload] = (),
         idempotency_key: str | None = None,
         on_token: Callable[[str], None] | None = None,
-    ) -> dict[str, Any]:
-        """Create one run and wait for its canonical result."""
+    ) -> AnswerResult:
+        """Create one run and wait for its typed canonical result."""
         descriptor = await self.create(
             payload, attachments=attachments, idempotency_key=idempotency_key
         )
@@ -343,7 +519,7 @@ class AnswerRunClient:
                 for event in events:
                     yield event
 
-    async def _await_terminal_status(self, run_id: str) -> dict[str, Any]:
+    async def _await_terminal_status(self, run_id: str) -> AnswerResult:
         while True:
             status = await self.status(run_id)
             if status["status"] in _TERMINAL_STATUSES:
@@ -439,13 +615,47 @@ class AnswerRunClient:
         response = await self._client.post(self._url("/memory/clear"), headers=self._headers)
         response.raise_for_status()
 
-    async def list_artifacts(self, run_id: str) -> list[dict[str, Any]]:
+    async def list_artifacts(self, run_id: str) -> tuple[AnswerArtifact, ...]:
         response = await self._client.get(
             self._url(f"/answer/{run_id}/artifacts"), headers=self._headers
         )
         response.raise_for_status()
         payload = response.json()
-        return list(payload.get("artifacts") or [])
+        return tuple(
+            AnswerArtifact.from_payload(item)
+            for item in payload.get("artifacts") or ()
+            if isinstance(item, Mapping)
+        )
+
+    async def read_artifact(
+        self,
+        run_id: str,
+        resource_id: str,
+        *,
+        offset: int = 0,
+        length: int = 1_048_576,
+    ) -> bytes | None:
+        """Read one bounded Artifact byte window without downloading the collection."""
+        start = max(0, offset)
+        end = start + max(1, length) - 1
+        response = await self._client.get(
+            self._url(f"/answer/{run_id}/artifacts/{resource_id}"),
+            headers={**self._headers, "Range": f"bytes={start}-{end}"},
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.content
+
+    async def download_artifact(
+        self, run_id: str, artifact: AnswerArtifact, destination: str | Path
+    ) -> Path:
+        """Stream one explicitly selected Artifact to ``destination``."""
+        target = Path(destination)
+        with target.open("wb") as output:
+            async for chunk in self.iter_artifact(run_id, artifact.resource_id):
+                output.write(chunk)
+        return target
 
     async def iter_artifact(
         self, run_id: str, resource_id: str, *, chunk_size: int = 1_048_576
@@ -457,7 +667,7 @@ class AnswerRunClient:
                 self._url(f"/answer/{run_id}/artifacts/{resource_id}"),
                 headers={**self._headers, "Range": f"bytes={offset}-{end}"},
             )
-            if response.status_code == 404:
+            if response.status_code in {404, 416}:
                 return
             response.raise_for_status()
             chunk = response.content
@@ -476,9 +686,9 @@ class AnswerRunClient:
         result: Any,
         error_kind: Any = None,
         error_message: Any = None,
-    ) -> dict[str, Any]:
+    ) -> AnswerResult:
         if status == "succeeded" and isinstance(result, dict):
-            return dict(result)
+            return AnswerResult.from_payload(result)
         if status == "cancelled":
             raise AnswerRunCancelledError(run_id)
         raise AnswerRunFailedError(
@@ -487,14 +697,156 @@ class AnswerRunClient:
         )
 
 
+class SyncAnswerRunClient:
+    """Synchronous counterpart to :class:`AnswerRunClient` for REST workflows."""
+
+    def __init__(
+        self,
+        client: httpx.Client,
+        *,
+        base_url: str = "",
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
+        self._client = client
+        self._base_url = base_url.rstrip("/")
+        self._headers = dict(headers or {})
+
+    def _url(self, path: str) -> str:
+        return f"{self._base_url}{path}"
+
+    def create(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        attachments: Sequence[AnswerAttachmentUpload] = (),
+        idempotency_key: str | None = None,
+    ) -> AnswerRunDescriptor:
+        headers = dict(self._headers)
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        if attachments:
+            headers.pop("Content-Type", None)
+            response = self._client.post(
+                self._url("/answer"),
+                data={"request": json.dumps(payload)},
+                files=[
+                    ("attachments", (item.filename, item.content, item.content_type))
+                    for item in attachments
+                ],
+                headers=headers,
+            )
+        else:
+            response = self._client.post(self._url("/answer"), json=dict(payload), headers=headers)
+        response.raise_for_status()
+        return AnswerRunDescriptor.from_payload(response.json())
+
+    def status(self, run_id: str) -> dict[str, Any]:
+        response = self._client.get(self._url(f"/answer/{run_id}"), headers=self._headers)
+        response.raise_for_status()
+        return dict(response.json())
+
+    def answer(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        attachments: Sequence[AnswerAttachmentUpload] = (),
+        idempotency_key: str | None = None,
+    ) -> AnswerResult:
+        descriptor = self.create(payload, attachments=attachments, idempotency_key=idempotency_key)
+        while True:
+            status = self.status(descriptor.run_id)
+            if status["status"] in _TERMINAL_STATUSES:
+                return AnswerRunClient._terminal_result(
+                    descriptor.run_id,
+                    status=str(status["status"]),
+                    result=status.get("result"),
+                    error_kind=status.get("error_kind"),
+                    error_message=status.get("error_message"),
+                )
+            time.sleep(STATUS_POLL_SECONDS)
+
+    def cancel(self, run_id: str) -> dict[str, Any]:
+        response = self._client.request(
+            "DELETE", self._url(f"/answer/{run_id}"), headers=self._headers
+        )
+        response.raise_for_status()
+        return dict(response.json())
+
+    def list_artifacts(self, run_id: str) -> tuple[AnswerArtifact, ...]:
+        response = self._client.get(self._url(f"/answer/{run_id}/artifacts"), headers=self._headers)
+        response.raise_for_status()
+        return tuple(
+            AnswerArtifact.from_payload(item)
+            for item in response.json().get("artifacts") or ()
+            if isinstance(item, Mapping)
+        )
+
+    def read_artifact(
+        self,
+        run_id: str,
+        resource_id: str,
+        *,
+        offset: int = 0,
+        length: int = 1_048_576,
+    ) -> bytes | None:
+        start = max(0, offset)
+        response = self._client.get(
+            self._url(f"/answer/{run_id}/artifacts/{resource_id}"),
+            headers={
+                **self._headers,
+                "Range": f"bytes={start}-{start + max(1, length) - 1}",
+            },
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.content
+
+    def iter_artifact(
+        self, run_id: str, resource_id: str, *, chunk_size: int = 1_048_576
+    ) -> Iterator[bytes]:
+        offset = 0
+        while True:
+            try:
+                chunk = self.read_artifact(
+                    run_id, resource_id, offset=offset, length=max(1, chunk_size)
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 416:
+                    return
+                raise
+            if not chunk:
+                return
+            yield chunk
+            if len(chunk) < chunk_size:
+                return
+            offset += len(chunk)
+
+    def download_artifact(
+        self, run_id: str, artifact: AnswerArtifact, destination: str | Path
+    ) -> Path:
+        target = Path(destination)
+        with target.open("wb") as output:
+            for chunk in self.iter_artifact(run_id, artifact.resource_id):
+                output.write(chunk)
+        return target
+
+
 __all__ = [
     "EVENT_READ_IDLE_SECONDS",
     "MAX_RECONNECT_ATTEMPTS",
     "STATUS_POLL_SECONDS",
+    "AnswerArtifact",
+    "AnswerArtifactIssue",
+    "AnswerPart",
+    "AnswerResult",
     "AnswerRunClient",
     "AnswerRunDescriptor",
     "AnswerStreamEvent",
+    "ArtifactOutcome",
+    "EvidenceImage",
     "ProfileMemoryReceipt",
     "ProfileMemorySettings",
+    "SyncAnswerRunClient",
     "parse_sse_frames",
 ]

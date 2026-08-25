@@ -1,20 +1,15 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 import {closestElement, syncShellInert, wrapTabFocus} from '../lib/dom.ts';
+import type {DlArtifactCanvas} from './artifact_canvas.ts';
 import {syncPanelSplitState} from './split_panel.ts';
 
-// Source links and the report control open panel content, so they must not
-// dismiss the stack first.
 const PANEL_KEEP_OPEN_SELECTOR = [
     '[data-action="filter-source"]',
     '[data-action="open-ref-source"]',
-    '[data-action="open-primary-report"]',
+    '[data-action="open-artifact"]',
 ].join(', ');
 const DRAWER_MEDIA = '(max-width: 1199px)';
-const LABELS: Record<string, string> = {
-    FILES: 'Files',
-    SOURCES: 'Sources',
-    REPORT: 'Report',
-};
+const LABELS: Record<string, string> = {FILES: 'Files', SOURCES: 'Sources'};
 
 let panelReturnFocus: HTMLElement | null = null;
 
@@ -26,8 +21,8 @@ function mainPanel(): HTMLElement | null {
     return document.getElementById('panel');
 }
 
-function reportPanel(): HTMLElement | null {
-    return document.getElementById('report-panel');
+function artifactCanvas(): DlArtifactCanvas | null {
+    return document.querySelector<DlArtifactCanvas>('#artifact-canvas');
 }
 
 function isOpen(el: HTMLElement | null): boolean {
@@ -38,39 +33,28 @@ export function isSourcesOpen(): boolean {
     return mainPanel()?.dataset.panelKind === 'sources' && isOpen(mainPanel());
 }
 
-export function isReportOpen(): boolean {
-    return isOpen(reportPanel());
-}
-
 function anyPaneOpen(): boolean {
-    return isOpen(mainPanel()) || isOpen(reportPanel());
+    return isOpen(mainPanel()) || isOpen(artifactCanvas());
 }
 
 function applyPanelModality(): void {
     const main = mainPanel();
-    const report = reportPanel();
     const backdrop = document.getElementById('panel-backdrop');
-    const drawer = isDrawer();
-    const top = isOpen(main) ? main : isOpen(report) ? report : null;
-    const modal = drawer && top !== null;
+    const modal = isDrawer() && isOpen(main);
     document.body.classList.toggle('panel-drawer-open', modal);
     if (backdrop) backdrop.hidden = !modal;
     syncShellInert();
-    for (const pane of [main, report]) {
-        if (!pane) continue;
-        const open = isOpen(pane);
-        pane.inert = !open || (drawer && top !== null && pane !== top);
-        if (open) pane.removeAttribute('aria-hidden');
-        else pane.setAttribute('aria-hidden', 'true');
-    }
-    if (top && modal) {
-        top.setAttribute('role', 'dialog');
-        top.setAttribute('aria-modal', 'true');
-    } else {
-        main?.removeAttribute('role');
-        main?.removeAttribute('aria-modal');
-        report?.removeAttribute('role');
-        report?.removeAttribute('aria-modal');
+    if (main) {
+        main.inert = !isOpen(main);
+        if (isOpen(main)) main.removeAttribute('aria-hidden');
+        else main.setAttribute('aria-hidden', 'true');
+        if (modal) {
+            main.setAttribute('role', 'dialog');
+            main.setAttribute('aria-modal', 'true');
+        } else {
+            main.removeAttribute('role');
+            main.removeAttribute('aria-modal');
+        }
     }
 }
 
@@ -83,15 +67,12 @@ function focusablePanelElements(panel: HTMLElement): HTMLElement[] {
 function trapPanelFocus(event: KeyboardEvent): void {
     if (event.key !== 'Tab' || !isDrawer()) return;
     const main = mainPanel();
-    const report = reportPanel();
-    const top = isOpen(main) ? main : isOpen(report) ? report : null;
-    if (!top) return;
-    wrapTabFocus(focusablePanelElements(top), event);
+    if (!isOpen(main) || !main) return;
+    wrapTabFocus(focusablePanelElements(main), event);
 }
 
 function shouldDismissPanelOnOutsideClick(target: EventTarget | null): boolean {
-    if (!anyPaneOpen()) return false;
-    if (document.body.hasAttribute('data-resizing')) return false;
+    if (!anyPaneOpen() || document.body.hasAttribute('data-resizing')) return false;
     return Boolean(closestElement(target, '#chat-area'))
         && !closestElement(target, PANEL_KEEP_OPEN_SELECTOR);
 }
@@ -108,7 +89,6 @@ function syncBodyFlags(): void {
     document.body.classList.toggle('panel-open', anyPaneOpen());
     document.body.classList.toggle('files-panel-open', Boolean(files));
     document.body.classList.toggle('sources-panel-open', isSourcesOpen());
-    document.body.classList.toggle('report-panel-open', isReportOpen());
     const ingest = document.querySelector('ingest-target');
     if (ingest) ingest.active = Boolean(files);
     syncPanelSplitState();
@@ -126,38 +106,15 @@ function openMainPane(title: 'FILES' | 'SOURCES'): void {
     if (titleEl) titleEl.textContent = title === 'FILES' ? '' : LABELS[title];
     syncBodyFlags();
     applyPanelModality();
-    if (isDrawer()) window.requestAnimationFrame(function() {
+    if (isDrawer()) window.requestAnimationFrame(() => {
         document.getElementById('panel-close-btn')?.focus();
     });
 }
 
-function openReportPane(): void {
-    const panel = reportPanel();
-    if (!panel) return;
-    rememberFocus();
-    document.body.dispatchEvent(new CustomEvent('panelOpening', {detail: {title: 'REPORT'}}));
-    panel.classList.add('open');
-    panel.dataset.panelKind = 'report';
-    syncBodyFlags();
-    applyPanelModality();
-    if (isDrawer() && !isOpen(mainPanel())) window.requestAnimationFrame(function() {
-        document.getElementById('report-panel-close-btn')?.focus();
-    });
-}
-
 export function openPanel(title?: string): void {
-    if (title === 'REPORT') {
-        if (mainPanel()?.dataset.panelKind === 'files') closeMainPane(false);
-        openReportPane();
-        return;
-    }
     if (title === 'FILES') {
-        closeReportPane(false);
+        artifactCanvas()?.close(false);
         openMainPane('FILES');
-        return;
-    }
-    if (title === 'SOURCES') {
-        openMainPane('SOURCES');
         return;
     }
     if (title) openMainPane(title === 'FILES' ? 'FILES' : 'SOURCES');
@@ -177,22 +134,9 @@ function closeMainPane(restoreFocus: boolean): void {
     }
 }
 
-function closeReportPane(restoreFocus: boolean): void {
-    const panel = reportPanel();
-    if (!isOpen(panel)) return;
-    panel?.classList.remove('open');
-    syncBodyFlags();
-    applyPanelModality();
-    document.body.dispatchEvent(new CustomEvent('reportPanelClosed'));
-    if (restoreFocus && !anyPaneOpen()) {
-        panelReturnFocus?.focus();
-        panelReturnFocus = null;
-    }
-}
-
 export function closePanel(restoreFocus = true): void {
     closeMainPane(false);
-    closeReportPane(false);
+    artifactCanvas()?.close(false);
     syncBodyFlags();
     applyPanelModality();
     if (restoreFocus) {
@@ -201,41 +145,30 @@ export function closePanel(restoreFocus = true): void {
     }
 }
 
-/** Close conversation-scoped Sources/Report while preserving workspace Files. */
+/** Close conversation-scoped Sources and Artifact Canvas while preserving Files. */
 export function closeConversationPanels(): void {
     if (isSourcesOpen()) closeMainPane(false);
-    closeReportPane(false);
+    artifactCanvas()?.close(false);
     syncBodyFlags();
     applyPanelModality();
 }
 
 export function setupPanel(): void {
-    document.getElementById('panel-close-btn')?.addEventListener('click', function() {
+    document.getElementById('panel-close-btn')?.addEventListener('click', () => {
         closeMainPane(true);
     });
-    document.getElementById('report-panel-close-btn')?.addEventListener('click', function() {
-        closeReportPane(true);
-    });
-    document.getElementById('panel-backdrop')?.addEventListener('click', function() {
-        if (isOpen(mainPanel())) closeMainPane(true);
-        else closeReportPane(true);
+    document.getElementById('panel-backdrop')?.addEventListener('click', () => {
+        closeMainPane(true);
     });
     mainPanel()?.addEventListener('keydown', trapPanelFocus);
-    reportPanel()?.addEventListener('keydown', trapPanelFocus);
-
-    document.addEventListener('click', function(e) {
-        if (!isDrawer() && shouldDismissPanelOnOutsideClick(e.target)) closePanel();
+    document.addEventListener('click', (event) => {
+        if (!isDrawer() && shouldDismissPanelOnOutsideClick(event.target)) closePanel();
     });
-
-    document.addEventListener('keydown', function(e) {
-        if (e.key !== 'Escape') return;
-        if (document.querySelector('dialog[open]')) return;
-        if (isOpen(mainPanel())) {
-            closeMainPane(true);
-            return;
-        }
-        if (isOpen(reportPanel())) closeReportPane(true);
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+        if (isOpen(mainPanel())) closeMainPane(true);
     });
     window.addEventListener('resize', applyPanelModality);
+    document.body.addEventListener('artifact-canvas-state-changed', syncBodyFlags);
     applyPanelModality();
 }

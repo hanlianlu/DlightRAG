@@ -112,15 +112,63 @@ class RetrievalResponse(ClientContractModel):
     image_descriptions: list[str] = Field(default_factory=list)
 
 
+class ArtifactIssueResponse(ClientContractModel):
+    kind: str
+    description: str
+    resource_id: str | None = None
+
+
+class ArtifactOutcomeResponse(ClientContractModel):
+    status: Literal["complete", "partial", "failed"] = "complete"
+    issues: list[ArtifactIssueResponse] = Field(default_factory=list)
+
+
+class AnswerArtifactResponse(ClientContractModel):
+    resource_id: str
+    role: Literal["primary_report", "attachment"]
+    media_type: str
+    label: str
+    filename: str
+    byte_size: int
+    digest: str
+    presentation: Literal["image", "markdown", "html", "pdf", "text", "download"]
+    status: Literal["available", "unavailable"]
+    uri: str
+    width: int | None = None
+    height: int | None = None
+    data_url: str | None = None
+    download_url: str | None = None
+    presentation_url: str | None = None
+    issue: ArtifactIssueResponse | None = None
+
+
+class EvidenceImageResponse(ClientContractModel):
+    id: str
+    chunk_id: str
+    source_ref: str
+    url: str
+    thumbnail_url: str
+    label: str
+    answer_image_sent: bool = True
+
+
+class AnswerPartResponse(ClientContractModel):
+    type: Literal["markdown", "artifact", "evidence_image"]
+    text: str = ""
+    artifact: AnswerArtifactResponse | None = None
+    evidence_image: EvidenceImageResponse | None = None
+    inline: bool = False
+
+
 class AnswerResponse(RetrievalResponse):
     answer: str | None = None
+    parts: list[AnswerPartResponse] = Field(default_factory=list)
     references: list[ReferenceSummary] = Field(default_factory=list)
-    answer_images: list[dict[str, Any]] = Field(default_factory=list)
-    answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_images: list[EvidenceImageResponse] = Field(default_factory=list)
+    artifacts: list[AnswerArtifactResponse] = Field(default_factory=list)
+    artifact_outcome: ArtifactOutcomeResponse = Field(default_factory=ArtifactOutcomeResponse)
     usage: dict[str, Any] = Field(default_factory=dict)
     evidence: dict[str, Any] = Field(default_factory=dict)
-    primary_report: str | None = None
-    artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AnswerRunDescriptor(ClientContractModel):

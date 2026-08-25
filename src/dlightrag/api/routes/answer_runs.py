@@ -8,7 +8,7 @@ identities only, and each authenticated read projects fresh URLs from them.
 """
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -244,6 +244,24 @@ def _descriptor(record: AnswerRunRecord) -> dict[str, Any]:
     }
 
 
+def _published_artifact(
+    result: Mapping[str, Any] | None, resource_id: str
+) -> Mapping[str, Any] | None:
+    for item in (result or {}).get("artifacts") or ():
+        if isinstance(item, Mapping) and item.get("resource_id") == resource_id:
+            return item
+    return None
+
+
+def _artifact_response_headers(descriptor: Mapping[str, Any], *, download: bool) -> tuple[str, str]:
+    media_type = str(descriptor.get("media_type") or "application/octet-stream")
+    safe_inline = media_type.startswith("image/") or media_type == "application/pdf"
+    effective_type = media_type if safe_inline and not download else "application/octet-stream"
+    filename = str(descriptor.get("filename") or "artifact").replace('"', "_")
+    disposition = "attachment" if download or not safe_inline else "inline"
+    return effective_type, f'{disposition}; filename="{filename}"'
+
+
 async def _status_payload(
     request: Request, user: UserContext, record: AnswerRunRecord
 ) -> dict[str, Any]:
@@ -260,6 +278,8 @@ async def _status_payload(
             visual_workspaces=await authorized_workspaces(
                 request, user, workspaces, AccessAction.WORKSPACE_READ_VISUAL_ASSET
             ),
+            run_id=record.run_id,
+            artifact_url_prefix="/answer",
         )
     return {
         **_descriptor(record),
@@ -302,21 +322,15 @@ async def list_answer_artifacts(
     run_id: str, request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:
     application = get_application(request)
-    items = await application.answers.list_artifacts(
-        owner_id=owner_id_from_user(user), run_id=run_id
+    record = await application.answers.get(owner_id=owner_id_from_user(user), run_id=run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    projected = project_answer_result(
+        record.result or {},
+        run_id=run_id,
+        artifact_url_prefix="/answer",
     )
-    return {
-        "artifacts": [
-            {
-                "resource_id": item.resource_id,
-                "kind": item.reference_kind,
-                "filename": item.filename,
-                "media_type": item.mime_type,
-                "digest": item.digest,
-            }
-            for item in items
-        ]
-    }
+    return {"artifacts": projected["artifacts"], "artifact_outcome": projected["artifact_outcome"]}
 
 
 @router.get("/answer/{run_id}/artifacts/{resource_id}")
@@ -324,12 +338,18 @@ async def read_answer_artifact(
     run_id: str,
     resource_id: str,
     request: Request,
+    download: bool = False,
     user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse:
     application = get_application(request)
+    owner_id = owner_id_from_user(user)
+    record = await application.answers.get(owner_id=owner_id, run_id=run_id)
+    descriptor = _published_artifact(record.result if record else None, resource_id)
+    if descriptor is None or descriptor.get("status") != "available":
+        raise HTTPException(status_code=404, detail="artifact not found")
     header = request.headers.get("range", "").strip()
     total = await application.answers.artifact_size(
-        owner_id=owner_id_from_user(user),
+        owner_id=owner_id,
         run_id=run_id,
         resource_id=resource_id,
     )
@@ -372,7 +392,7 @@ async def read_answer_artifact(
         status_code = 206
         content_range = f"bytes {offset}-{offset + length - 1}/{total}"
     stream = await application.answers.open_artifact(
-        owner_id=owner_id_from_user(user),
+        owner_id=owner_id,
         run_id=run_id,
         resource_id=resource_id,
         offset=offset,
@@ -380,13 +400,15 @@ async def read_answer_artifact(
     )
     if stream is None:
         raise HTTPException(status_code=404, detail="artifact not found")
+    media_type, disposition = _artifact_response_headers(descriptor, download=download)
     return StreamingResponse(
         stream,
-        media_type="application/octet-stream",
+        media_type=media_type,
         headers={
             "Accept-Ranges": "bytes",
+            "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
-            "Content-Disposition": 'attachment; filename="download"',
+            "Content-Disposition": disposition,
             **({"Content-Range": content_range} if content_range else {}),
         },
         status_code=status_code,
@@ -626,6 +648,7 @@ async def stream_answer_run_events(
                 answer_run_frame,
                 downloadable_workspaces=downloadable,
                 visual_workspaces=visual,
+                run_id=run_id,
             ),
         ),
         media_type="text/event-stream",
@@ -638,6 +661,7 @@ def answer_run_frame(
     *,
     downloadable_workspaces: set[str] | None,
     visual_workspaces: set[str] | None,
+    run_id: str | None = None,
 ) -> str:
     """Render one durable event for REST: stored identities, freshly projected URLs."""
     payload = dict(event.payload)
@@ -648,6 +672,8 @@ def answer_run_frame(
             source_link_builder=SourceDownloadLinkBuilder(),
             downloadable_workspaces=downloadable_workspaces,
             visual_workspaces=visual_workspaces,
+            run_id=run_id,
+            artifact_url_prefix="/answer",
         )
     return sse_frame(sequence=event.sequence, event_type=event.event_type, payload=payload)
 

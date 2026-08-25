@@ -111,13 +111,13 @@ def test_soft_shell_keeps_all_structural_chrome_square_on_desktop(page: Page) ->
             const style = selector => getComputedStyle(document.querySelector(selector));
             const radius = selector => style(selector).borderRadius;
             document.body.classList.add('sources-panel-open');
-            document.querySelector('#report-panel').classList.add('open');
+            document.querySelector('#artifact-canvas').classList.add('open');
             return {
                 app: radius('.app'),
                 appClip: style('.app').clipPath,
                 conversations: radius('#chat-sidebar'),
                 outerPanel: radius('#panel'),
-                internalReport: radius('#report-panel'),
+                internalArtifact: radius('#artifact-canvas'),
             };
         }"""
     )
@@ -126,7 +126,7 @@ def test_soft_shell_keeps_all_structural_chrome_square_on_desktop(page: Page) ->
         "appClip": "none",
         "conversations": "0px",
         "outerPanel": "0px",
-        "internalReport": "0px",
+        "internalArtifact": "0px",
     }
 
 

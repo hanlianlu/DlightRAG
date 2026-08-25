@@ -44,18 +44,19 @@ async def test_generate_rag_response_translates_answer_contract(monkeypatch: pyt
                 {"content": "second chunk"},
             ]
         },
-        "answer_images": [
+        "parts": [{"type": "markdown", "text": "grounded answer [1-1]."}],
+        "evidence_images": [
             {
                 "id": "fig-1",
+                "chunk_id": "chunk-1",
                 "source_ref": "1-1",
                 "url": "https://example.test/full.png",
                 "thumbnail_url": "https://example.test/thumb.png",
+                "label": "Figure",
             }
         ],
-        "answer_blocks": [
-            {"type": "markdown", "text": "grounded answer [1-1]."},
-            {"type": "image_ref", "image_id": "fig-1"},
-        ],
+        "artifacts": [],
+        "artifact_outcome": {"status": "complete", "issues": []},
     }
 
     async def handler(request: httpx.Request) -> httpx.Response:

@@ -5,7 +5,10 @@ import {
   getWebBootstrap,
   type WebBootstrap,
 } from '../api/bootstrap.ts';
+import type {AnswerArtifact} from '../api/conversations.ts';
 import {LightElement} from '../lib/lit_host.ts';
+import type {DlArtifactCanvas} from './artifact_canvas.ts';
+import './artifact_canvas.ts';
 
 const EMPTY_BOOTSTRAP: WebBootstrap = {
   contract_version: 1,
@@ -21,6 +24,7 @@ const EMPTY_BOOTSTRAP: WebBootstrap = {
     image_limit: 0,
     accept: '',
   },
+  active_html_preview_enabled: true,
 };
 
 /** Vite-owned application document body and authenticated bootstrap lifecycle. */
@@ -87,6 +91,7 @@ export class DlApp extends LightElement {
       <div
         class="app"
         id="app"
+        @artifact-open=${this.#openArtifact}
         data-attachment-count-limit=${String(attachments.count_limit)}
         data-attachment-image-max-bytes=${String(attachments.image_max_bytes)}
         data-attachment-document-max-bytes=${String(attachments.document_max_bytes)}
@@ -131,7 +136,7 @@ export class DlApp extends LightElement {
 
         <wa-split-panel class="panel-split" id="panel-split" primary="end"
                         position-in-pixels="0">
-          <wa-split-panel class="panel-split" id="report-panel-split" slot="start"
+          <wa-split-panel class="panel-split" id="artifact-canvas-split" slot="start"
                           primary="end" position-in-pixels="0">
             <div class="primary-shell" slot="start">
               <div class="app-shell">
@@ -239,14 +244,10 @@ export class DlApp extends LightElement {
                 <input class="hidden" type="file" id="folder-input" webkitdirectory directory multiple>
               </div>
             </div>
-            <aside class="panel" id="report-panel" slot="end" aria-label="Report" aria-hidden="true">
-              <div class="panel-header">
-                <span id="report-panel-title">Report</span>
-                <button class="panel-close" id="report-panel-close-btn" type="button"
-                        aria-label="Close report">✕</button>
-              </div>
-              <div id="report-panel-content" class="panel-content"></div>
-            </aside>
+            <dl-artifact-canvas id="artifact-canvas" class="panel" slot="end"
+              aria-label="Artifact Canvas" aria-hidden="true"
+              .activePreviewEnabled=${bootstrap.active_html_preview_enabled}
+            ></dl-artifact-canvas>
           </wa-split-panel>
           <aside class="panel" id="panel" slot="end">
             <div class="panel-header">
@@ -273,6 +274,12 @@ export class DlApp extends LightElement {
       </div>
       ${this.#bootstrapStatus()}
     `;
+  }
+
+  #openArtifact(event: CustomEvent<{artifact: AnswerArtifact; returnFocus: HTMLElement}>): void {
+    const canvas = this.querySelector<DlArtifactCanvas>('#artifact-canvas');
+    if (!canvas) return;
+    void canvas.open(event.detail.artifact, event.detail.returnFocus);
   }
 
   #themeOption(value: string, label: string, icon: TemplateResult): TemplateResult {
@@ -368,6 +375,14 @@ export class DlApp extends LightElement {
               <div class="settings-actions">
                 <button type="button" id="memory-clear-btn" class="ui-btn ui-btn-danger-text" hidden>Clear memory</button>
               </div>
+            </section>
+            <section class="settings-section">
+              <h3>Active HTML Preview</h3>
+              <p class="settings-note">
+                ${this.#bootstrap.active_html_preview_enabled
+                  ? 'Enabled by the operator. Interactive reports require an explicit open action.'
+                  : 'Disabled by the operator. HTML Artifacts are shown with scripts disabled.'}
+              </p>
             </section>
             <section class="settings-section">
               <h3 id="settings-data">Conversation Sessions</h3>

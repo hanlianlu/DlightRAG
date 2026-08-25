@@ -20,6 +20,7 @@ const bootstrap = {
     image_limit: 3,
     accept: 'image/*,.md,.pdf',
   },
+  active_html_preview_enabled: true,
 } as const;
 
 const originalFetch = window.fetch;

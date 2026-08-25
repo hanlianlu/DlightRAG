@@ -35,6 +35,45 @@ export interface PresentationImage {
   answer_image_sent: boolean;
 }
 
+export interface ArtifactIssue {
+  kind: string;
+  description: string;
+  resource_id: string | null;
+}
+
+export interface ArtifactOutcome {
+  status: 'complete' | 'partial' | 'failed';
+  issues: ArtifactIssue[];
+}
+
+export interface AnswerArtifact {
+  resource_id: string;
+  role: 'primary_report' | 'attachment';
+  media_type: string;
+  label: string;
+  filename: string;
+  byte_size: number;
+  digest: string;
+  presentation: 'image' | 'markdown' | 'html' | 'pdf' | 'text' | 'download';
+  status: 'available' | 'unavailable';
+  uri: string;
+  width: number | null;
+  height: number | null;
+  data_url: string | null;
+  download_url: string | null;
+  presentation_url: string | null;
+  issue: ArtifactIssue | null;
+}
+
+export interface PresentationPart {
+  type: 'markdown' | 'artifact' | 'evidence_image';
+  text: string;
+  html: string;
+  artifact: AnswerArtifact | null;
+  evidence_image: PresentationImage | null;
+  inline: boolean;
+}
+
 export interface PresentationSourceChunk {
   chunk_idx: number | null;
   page_number: number | null;
@@ -53,10 +92,11 @@ export interface PresentationSource {
 
 export interface AnswerPresentation {
   answer_text: string;
-  answer_html: string;
+  parts: PresentationPart[];
   sources: PresentationSource[];
-  answer_images: PresentationImage[];
-  primary_report?: string | null;
+  evidence_images: PresentationImage[];
+  artifacts: AnswerArtifact[];
+  artifact_outcome: ArtifactOutcome;
 }
 
 export interface AgentChildStatus {
@@ -184,13 +224,18 @@ export async function deleteAllConversations(signal?: AbortSignal): Promise<void
   }
 }
 
-export async function getAnswerReport(
+export async function getArtifactPresentation(
   runId: string,
+  resourceId: string,
   signal?: AbortSignal,
 ): Promise<AnswerPresentation> {
-  const id = encodeURIComponent(runId);
-  const response = await fetch(`/web/api/answer/${id}/report`, {signal});
-  return responseJson<AnswerPresentation>(response, 'Failed to load the report');
+  const run = encodeURIComponent(runId);
+  const resource = encodeURIComponent(resourceId);
+  const response = await fetch(
+    `/web/api/answer/${run}/artifacts/${resource}/presentation`,
+    {signal},
+  );
+  return responseJson<AnswerPresentation>(response, 'Failed to load the Artifact');
 }
 
 export async function getAnswerRun(

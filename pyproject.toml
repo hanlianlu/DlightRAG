@@ -73,6 +73,7 @@ eval = [
     "lightrag-hku[evaluation]>=1.5.6",
 ]
 dev = [
+    "bandit>=1.9.4",
     "import-linter>=2.11",
     "pre-commit>=4.6.0",
     "pyright>=1.1.408",

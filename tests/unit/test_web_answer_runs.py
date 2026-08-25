@@ -51,6 +51,29 @@ _BODY = {
     "conversation_id": _CID,
     "submission_id": SUBMISSION_ID,
 }
+_REPORT_RESOURCE = "artifact-report"
+
+
+def _with_primary_report(result: dict[str, Any], *, answer: str | None = None) -> dict[str, Any]:
+    result["answer"] = (
+        answer
+        if answer is not None
+        else (f"Revenue increased [1]. [View report](artifact:{_REPORT_RESOURCE})")
+    )
+    result["artifacts"] = [
+        {
+            "resource_id": _REPORT_RESOURCE,
+            "role": "primary_report",
+            "media_type": "text/markdown",
+            "label": "View report",
+            "filename": "report.md",
+            "byte_size": 13,
+            "digest": "a" * 64,
+            "presentation": "markdown",
+            "status": "available",
+        }
+    ]
+    return result
 
 
 @pytest.fixture
@@ -423,7 +446,7 @@ async def test_status_projects_the_linked_turn(client: AsyncClient) -> None:
     assert body["user_text"] == "What changed?"
 
 
-@pytest.mark.parametrize("path", ["", "/events", "/report"])
+@pytest.mark.parametrize("path", ["", "/events", "/artifacts/missing/presentation"])
 async def test_a_run_this_principal_does_not_own_is_404(
     client: AsyncClient, service: AsyncMock, path: str
 ) -> None:
@@ -434,32 +457,60 @@ async def test_a_run_this_principal_does_not_own_is_404(
     assert response.status_code == 404
 
 
-async def test_the_report_route_returns_structured_safe_presentation(
+async def test_general_artifact_route_returns_markdown_presentation(
     client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:
-    result = stored_result(answer="")
-    result["primary_report"] = "primary_report"
+    result = _with_primary_report(
+        stored_result(answer=""), answer=f"[View report](artifact:{_REPORT_RESOURCE})"
+    )
     service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
     application_double.answers.read_artifact = AsyncMock(return_value=b"# Title\n\nBody")
 
-    response = await client.get(f"/web/api/answer/{RUN_ID}/report")
+    response = await client.get(
+        f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}/presentation"
+    )
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/json")
-    assert response.json()["answer_text"] == "# Title\n\nBody"
-    assert "<h1>Title</h1>" in response.json()["answer_html"]
-    assert "<p>Body</p>" in response.json()["answer_html"]
+    body = response.json()
+    assert body["answer_text"] == "# Title\n\nBody"
+    assert "<h1>Title</h1>" in body["parts"][0]["html"]
+    assert "<p>Body</p>" in body["parts"][0]["html"]
+    assert body["artifacts"][0]["role"] == "primary_report"
     application_double.answers.read_artifact.assert_awaited_once()
 
 
-async def test_the_report_route_is_404_without_a_handle(
+async def test_browser_artifact_data_is_attachment_nosniff_and_no_store(
+    client: AsyncClient, service: AsyncMock, application_double: AsyncMock
+) -> None:
+    result = _with_primary_report(stored_result())
+    result["artifacts"][0]["media_type"] = "text/html"
+    result["artifacts"][0]["presentation"] = "html"
+    result["artifacts"][0]["filename"] = "report.html"
+    service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
+    application_double.answers.artifact_size = AsyncMock(return_value=13)
+
+    async def stream():
+        yield b"<h1>HTML</h1>"
+
+    application_double.answers.open_artifact = AsyncMock(return_value=stream())
+
+    response = await client.get(f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/octet-stream")
+    assert response.headers["content-disposition"].startswith("attachment")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["cache-control"] == "private, no-store"
+
+
+async def test_general_artifact_presentation_is_404_without_a_descriptor(
     client: AsyncClient, service: AsyncMock
 ) -> None:
     service.turn_for_run.return_value = linked_turn(
         answer_run(status="succeeded", result=stored_result())
     )
 
-    response = await client.get(f"/web/api/answer/{RUN_ID}/report")
+    response = await client.get(f"/web/api/answer/{RUN_ID}/artifacts/missing/presentation")
 
     assert response.status_code == 404
 
@@ -756,7 +807,7 @@ async def test_a_failed_run_becomes_a_public_browser_error() -> None:
 
 def test_the_done_event_is_derived_from_the_canonical_result() -> None:
     result = stored_result()
-    result["answer_images"] = [
+    result["evidence_images"] = [
         {
             "id": "chart",
             "chunk_id": "chunk-1",
@@ -775,12 +826,12 @@ def test_the_done_event_is_derived_from_the_canonical_result() -> None:
     assert done.status == "succeeded"
     assert done.presentation is not None
     assert done.presentation.answer_text == "Revenue increased [1]."
-    assert done.presentation.primary_report is None
+    assert done.presentation.artifacts == []
     assert done.presentation.sources[0].download_url == (
         "/web/api/files/raw/report?workspace=default"
     )
-    assert "citation-badge" in done.presentation.answer_html
-    assert done.presentation.answer_images[0].url.startswith("/web/api/images/default/chunk-1")
+    assert "citation-badge" in done.presentation.parts[0].html
+    assert done.presentation.evidence_images[0].url.startswith("/web/api/images/default/chunk-1")
 
 
 def test_a_cancelled_run_carries_no_answer() -> None:
@@ -845,7 +896,7 @@ def test_a_succeeded_turn_renders_from_the_run_result() -> None:
 
     assert turn.assistant_text == "Revenue increased [1]."
     assert turn.presentation is not None
-    assert turn.presentation.primary_report is None
+    assert turn.presentation.artifacts == []
     assert turn.presentation.sources[0].download_url == (
         "/web/api/files/raw/report?workspace=default"
     )
@@ -854,30 +905,33 @@ def test_a_succeeded_turn_renders_from_the_run_result() -> None:
     assert "principal_id" not in turn.model_dump_json()
 
 
-def test_a_succeeded_turn_exposes_the_primary_report_handle() -> None:
-    result = stored_result()
-    result["primary_report"] = "primary_report"
+def test_a_succeeded_turn_exposes_primary_report_as_an_artifact_part() -> None:
+    result = _with_primary_report(stored_result())
     turn = project_conversation_turn(
         linked_turn(answer_run(status="succeeded", result=result)),
     )
 
     assert turn.presentation is not None
-    assert turn.presentation.primary_report == "primary_report"
-    assert turn.assistant_text == "Revenue increased [1]."
+    assert turn.presentation.artifacts[0].role == "primary_report"
+    assert turn.presentation.parts[-1].artifact is not None
+    assert turn.presentation.parts[-1].artifact.resource_id == _REPORT_RESOURCE
+    assert turn.assistant_text == result["answer"]
 
 
-def test_the_done_event_carries_the_primary_report_handle() -> None:
-    result = stored_result()
-    result["primary_report"] = "primary_report"
+def test_the_done_event_carries_primary_report_only_as_an_artifact() -> None:
+    result = _with_primary_report(stored_result())
     done = render_done_event(
         {"status": "succeeded", "result": result},
         downloadable_workspaces=None,
         visual_workspaces=None,
+        run_id=RUN_ID,
     )
 
     assert done.presentation is not None
-    assert done.presentation.primary_report == "primary_report"
-    assert "primary_report" not in done.presentation.answer_html
+    assert done.presentation.artifacts[0].role == "primary_report"
+    assert done.presentation.artifacts[0].data_url is not None
+    assert done.presentation.artifacts[0].data_url.startswith("/web/api/answer/")
+    assert "primary_report" not in done.presentation.model_dump()
 
 
 async def test_terminal_attachment_is_read_through_the_answer_service() -> None:

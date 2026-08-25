@@ -202,8 +202,10 @@ _DONE = _frame(
     "done",
     '{"status":"succeeded","presentation":{'
     '"answer_text":"DlightRAG is a multimodal RAG system.",'
-    '"answer_html":"<p>DlightRAG is a multimodal RAG system.</p>",'
-    '"sources":[],"answer_images":[],"primary_report":null}}',
+    '"parts":[{"type":"markdown","text":"DlightRAG is a multimodal RAG system.",'
+    '"html":"<p>DlightRAG is a multimodal RAG system.</p>","artifact":null,'
+    '"evidence_image":null,"inline":false}],"sources":[],"evidence_images":[],'
+    '"artifacts":[],"artifact_outcome":{"status":"complete","issues":[]}}}',
 )
 _DONE_RENDERED = _DONE
 

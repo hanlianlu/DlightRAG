@@ -35,11 +35,20 @@ def _open_ready_page(page) -> None:
 def _source_presentation(*, source_url: str | None = None) -> dict:
     return {
         "answer_text": "DlightRAG cited answer [1-1].",
-        "answer_html": (
-            "<p>DlightRAG cited answer "
-            '<cite class="citation-badge" data-ref="1" data-chunk="1" '
-            'role="button" tabindex="0" aria-label="Source 1, chunk 1">1-1</cite>.</p>'
-        ),
+        "parts": [
+            {
+                "type": "markdown",
+                "text": "DlightRAG cited answer [1-1].",
+                "html": (
+                    "<p>DlightRAG cited answer "
+                    '<cite class="citation-badge" data-ref="1" data-chunk="1" '
+                    'role="button" tabindex="0" aria-label="Source 1, chunk 1">1-1</cite>.</p>'
+                ),
+                "artifact": None,
+                "evidence_image": None,
+                "inline": False,
+            }
+        ],
         "sources": [
             {
                 "id": "1",
@@ -57,8 +66,9 @@ def _source_presentation(*, source_url: str | None = None) -> dict:
                 ],
             }
         ],
-        "answer_images": [],
-        "primary_report": None,
+        "evidence_images": [],
+        "artifacts": [],
+        "artifact_outcome": {"status": "complete", "issues": []},
     }
 
 
@@ -67,7 +77,7 @@ def _inject_answer_with_sources(page) -> None:
     page.locator(".composer-input").fill("show cited source")
     page.click(".composer-send")
     page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
-    page.locator("answer-presentation").last.evaluate(
+    page.locator("dl-answer-presentation").last.evaluate(
         """(element, presentation) => {
           element.presentation = presentation;
           return element.updateComplete;
@@ -93,7 +103,7 @@ def _inject_static_source_answer(page) -> None:
           answer.className = aiMessageClass;
           const content = document.createElement('div');
           content.className = contentClass;
-          const element = document.createElement('answer-presentation');
+          const element = document.createElement('dl-answer-presentation');
           element.presentation = presentation;
           content.appendChild(element);
           answer.appendChild(content);

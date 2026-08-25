@@ -148,7 +148,9 @@ def _stored_result() -> dict[str, Any]:
                 "chunks": [],
             }
         ],
-        "answer_images": [],
+        "evidence_images": [],
+        "artifacts": [],
+        "artifact_outcome": {"status": "complete", "issues": []},
         "trace": {},
         "image_descriptions": [],
     }
@@ -794,12 +796,12 @@ async def test_mcp_status_returns_the_canonical_result_and_sanitizes_contexts(
     assert mock_mcp_application.answers.get.await_args.kwargs["owner_id"] == _EXPECTED_OWNER
 
 
-async def test_mcp_status_keeps_the_recorded_answer_image_transport_state(
+async def test_mcp_status_keeps_the_recorded_evidence_image_transport_state(
     mock_mcp_application: AsyncMock,
 ) -> None:
     """An image the answer model never received must not read as if it had."""
     stored = _stored_result()
-    stored["answer_images"] = [
+    stored["evidence_images"] = [
         {
             "id": "c1",
             "chunk_id": "c1",
@@ -813,7 +815,38 @@ async def test_mcp_status_keeps_the_recorded_answer_image_transport_state(
 
     body = _tool_json(await mcp_server.mcp_app.call_tool("get_answer_run", {"run_id": _RUN_ID}))
 
-    assert body["result"]["answer_images"][0]["answer_image_sent"] is False
+    assert body["result"]["evidence_images"][0]["answer_image_sent"] is False
+    assert "answer_images" not in body["result"]
+
+
+async def test_mcp_artifacts_use_stable_uris_without_browser_cookie_urls(
+    mock_mcp_application: AsyncMock,
+) -> None:
+    stored = _stored_result()
+    stored["answer"] = "[Notes](artifact:artifact-1)"
+    stored["artifacts"] = [
+        {
+            "resource_id": "artifact-1",
+            "role": "attachment",
+            "media_type": "text/plain",
+            "label": "Notes",
+            "filename": "notes.txt",
+            "byte_size": 5,
+            "digest": "a" * 64,
+            "presentation": "text",
+            "status": "available",
+        }
+    ]
+    stored["artifact_outcome"] = {"status": "complete", "issues": []}
+    mock_mcp_application.answers.get.return_value = _run_record(status="succeeded", result=stored)
+
+    body = _tool_json(await mcp_server.mcp_app.call_tool("get_answer_run", {"run_id": _RUN_ID}))
+
+    artifact = body["result"]["artifacts"][0]
+    assert artifact["uri"].startswith("dlightrag://answer/")
+    assert artifact["data_url"] is None
+    assert artifact["download_url"] is None
+    assert body["result"]["parts"][0]["artifact"]["resource_id"] == "artifact-1"
 
 
 async def test_mcp_status_reports_a_failed_run_with_its_public_error(

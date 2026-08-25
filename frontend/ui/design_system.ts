@@ -4,7 +4,13 @@
 import '../tokens/utopia.css';
 import '../styles/global.css';
 import '../styles/primitives.css';
+import '../styles/panels.css';
+import '../styles/sources.css';
+import '../styles/artifacts.css';
 import '../styles/design_system.css';
+import './active_artifact_frame.ts';
+import './artifact_canvas.ts';
+import './answer_presentation.ts';
 import './run_dialogs.ts';
 
 interface PrimitiveSpec {
@@ -80,6 +86,19 @@ const PRIMITIVES: PrimitiveSpec[] = [
     name: 'Panel close (.panel-close)',
     markup: '<button class="panel-close" type="button" aria-label="Close panel">✕</button>',
   },
+  {
+    name: 'Artifact card and Canvas controls',
+    markup:
+      '<article class="answer-artifact-card"><div><strong>Quarterly report</strong>' +
+      '<span>report.html</span></div><button class="ui-btn" type="button">View report</button></article>' +
+      '<div class="artifact-canvas-actions"><button class="ui-btn" aria-pressed="true">Side</button>' +
+      '<button class="ui-btn" aria-pressed="false">Wide</button>' +
+      '<button class="ui-btn" aria-pressed="false">Fullscreen</button></div>',
+  },
+  {
+    name: 'Opaque Artifact frame (dl-active-artifact-frame)',
+    markup: '<dl-active-artifact-frame id="ds-artifact-frame"></dl-active-artifact-frame>',
+  },
 ];
 
 const TOKEN_GROUPS: Array<[string, string[]]> = [
@@ -119,6 +138,13 @@ function mountPrimitives(): void {
       'dl-children-roster',
     )?.open(async () => [{status: 'succeeded', objective: 'Example child'} as never]);
   });
+  const frame = document.querySelector<HTMLElement & {source: string; active: boolean}>(
+    '#ds-artifact-frame',
+  );
+  if (frame) {
+    frame.source = '<main><h1>Static Artifact example</h1><p>Scripts are disabled here.</p></main>';
+    frame.active = false;
+  }
 }
 
 function mountTokens(): void {

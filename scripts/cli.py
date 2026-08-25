@@ -46,6 +46,7 @@ from pydantic import ValidationError
 
 from dlightrag.sdk import (
     AnswerAttachmentUpload,
+    AnswerResult,
     AnswerRunCancelledError,
     AnswerRunClient,
     AnswerRunFailedError,
@@ -141,53 +142,46 @@ def _build_answer_payload(
     return payload
 
 
-def _answer_images_by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    images = data.get("answer_images") or []
-    if not isinstance(images, list):
-        return {}
-    return {
-        str(image["id"]): image for image in images if isinstance(image, dict) and image.get("id")
-    }
-
-
-def _format_answer_image_ref(image: dict[str, Any] | None, image_id: str) -> str:
-    if image is None:
-        return f"[image {image_id or '?'}]"
-
-    source_ref = str(image.get("source_ref") or image.get("id") or image_id or "?")
-    text = f"[image {source_ref}]"
-    label = str(image.get("label") or "").strip()
+def _format_evidence_image(source_ref: str, label: str, url: str) -> str:
+    text = f"[evidence image {source_ref or '?'}]"
     if label:
         text = f"{text} {label}"
-    url = str(image.get("thumbnail_url") or image.get("url") or "").strip()
-    if url:
-        text = f"{text} {url}"
-    return text
+    return f"{text} {url}" if url else text
 
 
-def _render_answer_for_terminal(data: dict[str, Any]) -> str:
-    """Render structured answer blocks in a terminal-friendly text form."""
-    fallback = str(data.get("answer") or "(no answer)")
-    blocks = data.get("answer_blocks") or []
-    if not isinstance(blocks, list) or not blocks:
-        images = _answer_images_by_id(data).values()
-        image_refs = [
-            _format_answer_image_ref(image, str(image.get("id") or "")) for image in images
-        ]
-        return "\n".join([fallback, *image_refs]) if image_refs else fallback
-
-    images_by_id = _answer_images_by_id(data)
+def _render_answer_for_terminal(data: AnswerResult) -> str:
+    """Render typed Answer parts and the default Evidence Image region."""
     rendered: list[str] = []
-    for block in blocks:
-        if not isinstance(block, dict):
-            continue
-        if block.get("type") == "markdown":
-            rendered.append(str(block.get("text") or ""))
-        elif block.get("type") == "image_ref":
-            image_id = str(block.get("image_id") or "")
-            rendered.append(f"\n{_format_answer_image_ref(images_by_id.get(image_id), image_id)}\n")
-
-    return "".join(rendered).strip() or fallback
+    for part in data.parts:
+        if part.type == "markdown":
+            rendered.append(part.text)
+        elif part.type == "artifact" and part.artifact is not None:
+            artifact = part.artifact
+            suffix = artifact.uri if artifact.status == "available" else "unavailable"
+            rendered.append(f"\n[Artifact: {artifact.label}] {suffix}\n")
+        elif part.type == "evidence_image" and part.evidence_image is not None:
+            image = part.evidence_image
+            rendered.append(
+                "\n"
+                + _format_evidence_image(
+                    image.source_ref, image.label, image.thumbnail_url or image.url
+                )
+                + "\n"
+            )
+    inline_images = {
+        part.evidence_image.id
+        for part in data.parts
+        if part.type == "evidence_image" and part.evidence_image is not None
+    }
+    for image in data.evidence_images:
+        if image.id not in inline_images:
+            rendered.append(
+                "\n"
+                + _format_evidence_image(
+                    image.source_ref, image.label, image.thumbnail_url or image.url
+                )
+            )
+    return "".join(rendered).strip() or data.answer or "(no answer)"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -293,7 +287,7 @@ async def _answer_client() -> AsyncIterator[AnswerRunClient]:
         )
 
 
-async def _run_answer(args: argparse.Namespace) -> dict[str, Any]:
+async def _run_answer(args: argparse.Namespace) -> AnswerResult:
     async with _answer_client() as client:
         return await client.answer(
             _build_answer_payload(args, query=args.query),
@@ -323,10 +317,9 @@ def cmd_answer(args: argparse.Namespace) -> None:
     answer = _render_answer_for_terminal(data)
     print(f"Answer:\n{answer}\n")
 
-    references = data.get("references") or []
-    if references:
-        print(f"References ({len(references)}):")
-        for ref in references:
+    if data.references:
+        print(f"References ({len(data.references)}):")
+        for ref in data.references:
             print(f"  [{ref.get('id', '?')}] {ref.get('title', '')}")
 
 
@@ -366,9 +359,8 @@ async def _run_chat(args: argparse.Namespace) -> None:
 
             print(f"\nAssistant: {_render_answer_for_terminal(data)}")
 
-            sources = data.get("sources") or []
-            if sources:
-                titles = {s.get("title") for s in sources if s.get("title")}
+            if data.sources:
+                titles = {str(s["title"]) for s in data.sources if s.get("title")}
                 if titles:
                     print(f"  Sources: {', '.join(sorted(titles))}")
             print()

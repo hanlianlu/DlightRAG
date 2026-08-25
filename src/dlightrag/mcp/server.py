@@ -548,8 +548,9 @@ async def answer_tool(
     description=(
         "Return the current state of an answer run started by the answer tool. status is "
         "queued, running, succeeded, failed, or cancelled; cancel_requested reports whether "
-        "cancellation was asked for. A succeeded run carries result with answer, sources, "
-        "contexts, references, answer_images, and image_descriptions. A failed run carries "
+        "cancellation was asked for. A succeeded run carries result with answer, typed parts, "
+        "sources, evidence_images, Artifacts, artifact_outcome, contexts, and image_descriptions. "
+        "A failed run carries "
         "error_kind and error_message. An unknown run id, or one owned by another caller, "
         "is reported as not found."
     ),
@@ -572,6 +573,8 @@ async def get_answer_run_tool(
                 [str(value) for value in record.request_input().get("workspaces") or ()],
                 application=application,
             ),
+            run_id=record.run_id,
+            artifact_url_prefix=None,
         )
     return {
         **_run_descriptor(record),
@@ -924,19 +927,20 @@ async def read_answer_artifact_tool(
     import base64
 
     application = await _ensure_application()
+    start = max(0, offset)
     chunk = await application.answers.read_artifact(
         owner_id=_owner_id(),
         run_id=run_id,
         resource_id=resource_id,
-        offset=max(0, offset),
+        offset=start,
         length=min(max(0, length), 1_048_576),
     )
     if chunk is None:
         raise ValueError("artifact not found")
     return {
         "data": base64.b64encode(chunk).decode("ascii"),
-        "offset": offset,
-        "next_offset": offset + len(chunk),
+        "offset": start,
+        "next_offset": start + len(chunk),
         "bytes": len(chunk),
     }
 

@@ -480,7 +480,8 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert "data:image" not in serialized
     assert "/srv/private/book.pdf" not in serialized
     assert result["sources"][0]["source_uri"] == "corpus://book.pdf"
-    assert result["answer_images"][0]["chunk_id"] == "c1"
+    assert result["evidence_images"][0]["chunk_id"] == "c1"
+    assert "answer_images" not in result
     assert result["trace"]["retrieval"] == "ok"
 
 

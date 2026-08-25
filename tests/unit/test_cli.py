@@ -118,7 +118,9 @@ def test_answer_cli_local_attachment_uses_multipart(
     async def fake_answer(self, payload, *, attachments=(), idempotency_key=None, on_token=None):
         captured["payload"] = payload
         captured["attachments"] = list(attachments)
-        return {"answer": "done", "references": []}
+        return _cli.AnswerResult.from_payload(
+            {"answer": "done", "parts": [{"type": "markdown", "text": "done"}]}
+        )
 
     monkeypatch.setattr(_cli.AnswerRunClient, "answer", fake_answer)
     monkeypatch.setattr(_cli.sdk_http, "api_url", lambda: "https://rag.example")
@@ -156,30 +158,30 @@ def test_chat_payload_is_stateless_and_preserves_current_answer_options() -> Non
     }
 
 
-def test_answer_cli_renders_structured_image_blocks(
+def test_answer_cli_renders_typed_evidence_images(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     captured: dict[str, Any] = {}
 
     async def fake_answer(self, payload, *, attachments=(), idempotency_key=None, on_token=None):
         captured["payload"] = payload
-        return {
-            "answer": "The figure shows the flow [1-1].",
-            "references": [{"id": "1", "title": "paper.pdf"}],
-            "answer_images": [
-                {
-                    "id": "fig-1",
-                    "source_ref": "1-1",
-                    "label": "paper.pdf",
-                    "url": "https://example.test/full.png",
-                    "thumbnail_url": "https://example.test/thumb.png",
-                }
-            ],
-            "answer_blocks": [
-                {"type": "markdown", "text": "The figure shows the flow [1-1]."},
-                {"type": "image_ref", "image_id": "fig-1"},
-            ],
-        }
+        return _cli.AnswerResult.from_payload(
+            {
+                "answer": "The figure shows the flow [1-1].",
+                "parts": [{"type": "markdown", "text": "The figure shows the flow [1-1]."}],
+                "references": [{"id": "1", "title": "paper.pdf"}],
+                "evidence_images": [
+                    {
+                        "id": "fig-1",
+                        "chunk_id": "chunk-1",
+                        "source_ref": "1-1",
+                        "label": "paper.pdf",
+                        "url": "https://example.test/full.png",
+                        "thumbnail_url": "https://example.test/thumb.png",
+                    }
+                ],
+            }
+        )
 
     monkeypatch.setattr(_cli.AnswerRunClient, "answer", fake_answer)
     monkeypatch.setattr(_cli.sdk_http, "api_url", lambda: "https://rag.example")
@@ -192,7 +194,7 @@ def test_answer_cli_renders_structured_image_blocks(
     output = capsys.readouterr().out
     assert captured["payload"]["query"] == "describe diagram"
     assert "The figure shows the flow [1-1]." in output
-    assert "[image 1-1] paper.pdf https://example.test/thumb.png" in output
+    assert "[evidence image 1-1] paper.pdf https://example.test/thumb.png" in output
     assert "References (1):" in output
 
 

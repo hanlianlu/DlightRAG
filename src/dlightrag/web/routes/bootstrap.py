@@ -45,6 +45,7 @@ class WebBootstrap(ClientContractModel):
     primary_workspace: str
     active_workspaces: list[str]
     answer_attachments: WebAttachmentBootstrap
+    active_html_preview_enabled: bool
 
 
 def _workspace_contract(record: WorkspaceRecord) -> WebBootstrapWorkspace:
@@ -109,6 +110,9 @@ async def build_web_bootstrap(
             image_capability=capability_status,
             image_limit=effective_current_upload_limit,
             accept=",".join(["image/*", *(f".{extension}" for extension in extensions)]),
+        ),
+        active_html_preview_enabled=(
+            application.config.answer.conversations.active_html_preview_enabled
         ),
     )
 

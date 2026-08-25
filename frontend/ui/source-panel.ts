@@ -30,7 +30,7 @@ function hideToggleAllButton(): void {
 }
 
 function presentationHost(origin: Element): AnswerPresentationElement | null {
-  return origin.closest('answer-presentation');
+  return origin.closest('dl-answer-presentation');
 }
 
 function openSources(origin: HTMLElement, ref?: string, chunk?: string): void {

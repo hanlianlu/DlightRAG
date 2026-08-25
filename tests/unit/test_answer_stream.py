@@ -203,12 +203,14 @@ def test_rest_serves_the_canonical_result_and_the_browser_serves_presentation() 
     assert set(browser) == {"status", "presentation", "usage", "evidence"}
     assert browser["usage"] == canonical["result"].get("usage", {})
     assert browser["evidence"] == canonical["result"].get("evidence", {})
-    assert "<" in presentation["answer_html"]
+    assert "<" in presentation["parts"][0]["html"]
     assert set(presentation) == {
         "answer_text",
-        "answer_html",
+        "parts",
         "sources",
-        "answer_images",
+        "evidence_images",
+        "artifacts",
+        "artifact_outcome",
     }
-    assert presentation.get("primary_report") is None
+    assert presentation["artifacts"] == []
     assert "result" not in browser

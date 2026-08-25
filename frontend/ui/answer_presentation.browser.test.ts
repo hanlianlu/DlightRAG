@@ -9,7 +9,14 @@ import type {SourcePanelView} from './source_panel_view.ts';
 
 const presentation: AnswerPresentation = {
   answer_text: 'Safe [1].',
-  answer_html: '<p>Safe <cite class="citation-badge" data-ref="1">1</cite></p><script>x()</script>',
+  parts: [{
+    type: 'markdown',
+    text: 'Safe [1].',
+    html: '<p>Safe <cite class="citation-badge" data-ref="1">1</cite></p><script>x()</script>',
+    artifact: null,
+    evidence_image: null,
+    inline: false,
+  }],
   sources: [
     {
       id: '1',
@@ -27,14 +34,15 @@ const presentation: AnswerPresentation = {
       ],
     },
   ],
-  answer_images: [],
-  primary_report: null,
+  evidence_images: [],
+  artifacts: [],
+  artifact_outcome: {status: 'complete', issues: []},
 };
 
 afterEach(() => { document.body.replaceChildren(); });
 
 it('sanitizes rich answer HTML while Lit escapes structured references', async () => {
-  const element = document.createElement('answer-presentation') as AnswerPresentationElement;
+  const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
   element.presentation = presentation;
   document.body.appendChild(element);
   await element.updateComplete;
@@ -43,6 +51,58 @@ it('sanitizes rich answer HTML while Lit escapes structured references', async (
   expect(element.querySelector('script')).to.equal(null);
   expect(element.querySelector('.answer-ref-title')?.textContent).to.equal('<img src=x>');
   expect(element.querySelector('.answer-ref-title img')).to.equal(null);
+});
+
+it('renders Artifact intent and semantic Visual Evidence in approved order', async () => {
+  const artifact = {
+    resource_id: 'artifact-report',
+    role: 'primary_report' as const,
+    media_type: 'text/markdown',
+    label: 'Quarterly report',
+    filename: 'report.md',
+    byte_size: 20,
+    digest: 'a'.repeat(64),
+    presentation: 'markdown' as const,
+    status: 'available' as const,
+    uri: 'dlightrag://answer/run-1/artifacts/artifact-report',
+    width: null,
+    height: null,
+    data_url: '/web/api/answer/run-1/artifacts/artifact-report',
+    download_url: '/web/api/answer/run-1/artifacts/artifact-report?download=1',
+    presentation_url: '/web/api/answer/run-1/artifacts/artifact-report/presentation',
+    issue: null,
+  };
+  const value: AnswerPresentation = {
+    ...presentation,
+    parts: [
+      presentation.parts[0],
+      {type: 'artifact', text: '', html: '', artifact, evidence_image: null, inline: false},
+    ],
+    artifacts: [artifact],
+    evidence_images: [{
+      id: 'image-1', chunk_id: 'chunk-1', source_ref: '1',
+      url: '/web/api/images/default/chunk-1?size=full',
+      thumbnail_url: '/web/api/images/default/chunk-1?size=thumb',
+      label: 'Chart', answer_image_sent: true,
+    }],
+  };
+  const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
+  element.presentation = value;
+  document.body.appendChild(element);
+  await element.updateComplete;
+
+  let opened = '';
+  element.addEventListener('artifact-open', (event) => {
+    opened = (event as CustomEvent).detail.artifact.resource_id;
+  });
+  element.querySelector<HTMLButtonElement>('.answer-artifact-card .ui-btn')?.click();
+
+  expect(opened).to.equal('artifact-report');
+  expect(element.querySelector('.answer-evidence h3')?.textContent).to.equal('Visual Evidence');
+  expect(element.querySelector('.answer-image-source')?.getAttribute('data-ref')).to.equal('1');
+  const evidence = element.querySelector('.answer-evidence');
+  const references = element.querySelector('.answer-references');
+  expect(Boolean(evidence && references && (evidence.compareDocumentPosition(references) & Node.DOCUMENT_POSITION_FOLLOWING))).to.equal(true);
 });
 
 it('renders sanitized source chunks and rejects cross-origin download links', async () => {

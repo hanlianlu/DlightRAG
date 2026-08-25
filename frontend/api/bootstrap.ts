@@ -24,6 +24,7 @@ export interface WebBootstrap {
   primary_workspace: string;
   active_workspaces: string[];
   answer_attachments: AnswerAttachmentBootstrap;
+  active_html_preview_enabled: boolean;
 }
 
 export class BootstrapApiError extends Error {

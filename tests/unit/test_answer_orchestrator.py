@@ -19,7 +19,7 @@ from dlightrag.agent.tools import (
 from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.ai.messages import AssistantTurn, ToolCall
 from dlightrag.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
+from dlightrag.answer.agent.orchestrator import AnswerOrchestrator, _NoBoundaries
 from dlightrag.answer.citations import finalize_answer
 from dlightrag.answer.errors import (
     INVALID_TOOL_CONFIGURATION,
@@ -1598,3 +1598,23 @@ def test_bound_workspace_exposes_staged_artifacts(tmp_path: Any) -> None:
         "report.md": "primary_report",
         "table.csv": "published_artifact",
     }
+
+
+async def test_publication_correction_is_one_bounded_terminal_pass() -> None:
+    agent = ScriptedAgent(
+        _answer("corrected"),
+        final_text="Corrected [Notes](artifact:notes.txt)",
+    )
+    orchestrator = _research(agent, lambda _query: _corpus_result(), None)
+    prepared = orchestrator.prepare_run("Question")
+
+    corrected = await orchestrator.correct_publication(
+        prepared,
+        boundaries=_NoBoundaries(),
+        feedback="missing_file: notes.txt is missing; repair it once.",
+    )
+
+    assert corrected == "Corrected [Notes](artifact:notes.txt)"
+    assert len(agent.turn_calls) == 1
+    messages = agent.turn_calls[0]["messages"]
+    assert any("missing_file" in str(message.get("content")) for message in messages)

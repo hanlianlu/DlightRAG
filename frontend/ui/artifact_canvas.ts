@@ -1,0 +1,297 @@
+// Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+
+import {html, nothing, type TemplateResult} from 'lit';
+import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
+import {wrapTabFocus} from '../lib/dom.ts';
+import {LightElement} from '../lib/lit_host.ts';
+import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
+import type {DlActiveArtifactFrame} from './active_artifact_frame.ts';
+import './active_artifact_frame.ts';
+import type {AnswerPresentationElement} from './answer_presentation.ts';
+import './answer_presentation.ts';
+
+type CanvasLayout = 'side' | 'wide' | 'fullscreen';
+type CanvasState = 'idle' | 'loading' | 'ready' | 'error';
+
+const TEXT_PREVIEW_BYTES = 1024 * 1024;
+
+/** General presentation surface for every Answer Artifact, including Primary Reports. */
+export class DlArtifactCanvas extends LightElement {
+  static properties = {
+    activePreviewEnabled: {type: Boolean, attribute: 'active-preview-enabled'},
+    canvasState: {state: true},
+    layout: {state: true},
+    artifact: {state: true},
+    textPreview: {state: true},
+    presentation: {state: true},
+    interactive: {state: true},
+  };
+
+  declare activePreviewEnabled: boolean;
+  declare canvasState: CanvasState;
+  declare layout: CanvasLayout;
+  declare artifact: AnswerArtifact | null;
+  declare textPreview: string;
+  declare presentation: AnswerPresentation | null;
+  declare interactive: boolean;
+
+  #controller: AbortController | null = null;
+  #returnFocus: HTMLElement | null = null;
+
+  constructor() {
+    super();
+    this.activePreviewEnabled = true;
+    this.canvasState = 'idle';
+    this.layout = 'side';
+    this.artifact = null;
+    this.textPreview = '';
+    this.presentation = null;
+    this.interactive = false;
+    this.addEventListener('keydown', (event) => this.#onKeyDown(event));
+  }
+
+  override disconnectedCallback(): void {
+    this.#destroyPreview();
+    this.#controller?.abort();
+    super.disconnectedCallback();
+  }
+
+  async open(artifact: AnswerArtifact, returnFocus?: HTMLElement | null): Promise<void> {
+    const entering = !this.classList.contains('open');
+    this.#controller?.abort();
+    this.#destroyPreview();
+    if (entering) {
+      this.#returnFocus = returnFocus ?? (
+        document.activeElement instanceof HTMLElement ? document.activeElement : null
+      );
+    }
+    this.artifact = artifact;
+    this.canvasState = 'loading';
+    this.#setLayout(this.#suggestedLayout(artifact));
+    this.textPreview = '';
+    this.presentation = null;
+    this.interactive = false;
+    this.classList.add('open');
+    this.removeAttribute('aria-hidden');
+    this.setAttribute('role', 'dialog');
+    this.setAttribute('aria-modal', window.matchMedia('(max-width: 1199px)').matches ? 'true' : 'false');
+    document.body.classList.add('artifact-canvas-open');
+    this.#stateChanged();
+    await this.updateComplete;
+    this.querySelector<HTMLButtonElement>('[data-action="close"]')?.focus();
+    await this.#load(artifact);
+  }
+
+  close(restoreFocus = true): void {
+    if (!this.classList.contains('open')) return;
+    this.#controller?.abort();
+    this.#controller = null;
+    this.#destroyPreview();
+    this.classList.remove('open', 'layout-wide', 'layout-fullscreen');
+    this.setAttribute('aria-hidden', 'true');
+    this.removeAttribute('role');
+    this.removeAttribute('aria-modal');
+    document.body.classList.remove('artifact-canvas-open', 'artifact-canvas-overlay');
+    this.artifact = null;
+    this.canvasState = 'idle';
+    this.presentation = null;
+    this.textPreview = '';
+    this.#stateChanged();
+    if (restoreFocus) this.#returnFocus?.focus();
+    this.#returnFocus = null;
+    this.dispatchEvent(new CustomEvent('artifact-canvas-closed', {bubbles: true}));
+  }
+
+  reload(): void {
+    if (this.artifact) void this.#load(this.artifact);
+  }
+
+  protected override render(): TemplateResult {
+    const artifact = this.artifact;
+    return html`
+      <div class="artifact-canvas-header">
+        <div class="artifact-canvas-heading">
+          <span class="artifact-canvas-title">${artifact?.label || 'Artifact'}</span>
+          ${artifact ? html`<span class="artifact-canvas-filename">${artifact.filename}</span>` : nothing}
+        </div>
+        <div class="artifact-canvas-actions">
+          <button class="ui-btn" type="button" @click=${() => this.#setLayout('side')}
+                  aria-pressed=${this.layout === 'side'}>Side</button>
+          <button class="ui-btn" type="button" @click=${() => this.#setLayout('wide')}
+                  aria-pressed=${this.layout === 'wide'}>Wide</button>
+          <button class="ui-btn" type="button" @click=${() => this.#setLayout('fullscreen')}
+                  aria-pressed=${this.layout === 'fullscreen'}>Fullscreen</button>
+          ${artifact?.download_url ? html`
+            <a class="ui-btn" href=${safeSameOriginHref(artifact.download_url) || '#'} download>
+              Download
+            </a>` : nothing}
+          <button class="panel-close" data-action="close" type="button"
+                  aria-label="Close Artifact" @click=${() => this.close()}>✕</button>
+        </div>
+      </div>
+      <div class="artifact-canvas-content">
+        ${this.#content()}
+      </div>
+    `;
+  }
+
+  #content(): TemplateResult {
+    const artifact = this.artifact;
+    if (!artifact) return html``;
+    if (artifact.status === 'unavailable') {
+      return html`<div class="artifact-unavailable" role="alert">
+        <strong>Artifact unavailable</strong>
+        <p>${artifact.issue?.description || 'This Artifact could not be published.'}</p>
+      </div>`;
+    }
+    if (this.canvasState === 'loading') {
+      return html`<div class="artifact-loading" role="status">Loading Artifact…</div>`;
+    }
+    if (this.canvasState === 'error') {
+      return html`<div class="artifact-error" role="alert">
+        <p>Could not load this Artifact safely.</p>
+        <button class="ui-btn" type="button" @click=${() => this.reload()}>Retry</button>
+        ${this.textPreview ? html`<pre>${this.textPreview}</pre>` : nothing}
+      </div>`;
+    }
+    switch (artifact.presentation) {
+      case 'markdown':
+        return this.presentation
+          ? html`<dl-answer-presentation .presentation=${this.presentation}></dl-answer-presentation>`
+          : html``;
+      case 'image': {
+        const source = safeImageSrc(artifact.data_url || '');
+        return source
+          ? html`<button class="artifact-image" type="button" data-action="open-lightbox"
+                  data-src=${source} aria-label=${`Open image: ${artifact.label}`}>
+              <img src=${source} alt=${artifact.label}>
+            </button>`
+          : this.#downloadOnly();
+      }
+      case 'html':
+        return this.#htmlPreview();
+      case 'pdf': {
+        const source = safeSameOriginHref(artifact.data_url || '');
+        return source
+          ? html`<iframe class="artifact-pdf" title=${artifact.label} src=${source}></iframe>`
+          : this.#downloadOnly();
+      }
+      case 'text':
+        return html`<pre class="artifact-source">${this.textPreview}</pre>`;
+      default:
+        return this.#downloadOnly();
+    }
+  }
+
+  #htmlPreview(): TemplateResult {
+    if (!this.activePreviewEnabled) {
+      return html`<dl-active-artifact-frame
+        .source=${this.textPreview}
+        .active=${false}
+        .label=${this.artifact?.label || 'HTML Artifact'}
+      ></dl-active-artifact-frame>`;
+    }
+    if (!this.interactive) {
+      return html`
+        <div class="artifact-active-consent">
+          <strong>Untrusted interactive report</strong>
+          <p>Active code is isolated from DlightRAG. Normal external loads are blocked by browser policy.</p>
+          <button class="ui-btn" type="button" @click=${() => { this.interactive = true; }}>
+            Open interactive report
+          </button>
+        </div>
+        <details><summary>Static source</summary><pre class="artifact-source">${this.textPreview}</pre></details>
+      `;
+    }
+    return html`
+      <dl-active-artifact-frame
+        .source=${this.textPreview}
+        .active=${true}
+        .label=${this.artifact?.label || 'HTML Artifact'}
+      ></dl-active-artifact-frame>
+      <details><summary>Source</summary><pre class="artifact-source">${this.textPreview}</pre></details>
+    `;
+  }
+
+  #downloadOnly(): TemplateResult {
+    return html`<div class="artifact-download-only">
+      <p>No browser-safe inline preview is available for this file.</p>
+      ${this.artifact?.download_url ? html`
+        <a class="ui-btn" href=${safeSameOriginHref(this.artifact.download_url) || '#'} download>
+          Download ${this.artifact.filename}
+        </a>` : nothing}
+    </div>`;
+  }
+
+  async #load(artifact: AnswerArtifact): Promise<void> {
+    const controller = new AbortController();
+    this.#controller = controller;
+    try {
+      if (artifact.status === 'unavailable') {
+        this.canvasState = 'ready';
+        return;
+      }
+      if (artifact.presentation === 'markdown') {
+        if (!artifact.presentation_url) throw new Error('missing presentation URL');
+        const response = await fetch(artifact.presentation_url, {signal: controller.signal});
+        if (!response.ok) throw new Error('presentation failed');
+        this.presentation = await response.json() as AnswerPresentation;
+      } else if (artifact.presentation === 'html' || artifact.presentation === 'text') {
+        if (!artifact.data_url) throw new Error('missing Artifact URL');
+        const response = await fetch(artifact.data_url, {
+          headers: artifact.presentation === 'text'
+            ? {Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}`}
+            : undefined,
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('Artifact data failed');
+        this.textPreview = await response.text();
+      }
+      if (this.#controller === controller) this.canvasState = 'ready';
+    } catch {
+      if (!controller.signal.aborted && this.#controller === controller) this.canvasState = 'error';
+    }
+  }
+
+  #destroyPreview(): void {
+    this.querySelector<DlActiveArtifactFrame>('dl-active-artifact-frame')?.destroy();
+  }
+
+  #stateChanged(): void {
+    this.dispatchEvent(new CustomEvent('artifact-canvas-state-changed', {bubbles: true}));
+  }
+
+  #setLayout(layout: CanvasLayout): void {
+    this.layout = layout;
+    this.classList.toggle('layout-wide', layout === 'wide');
+    this.classList.toggle('layout-fullscreen', layout === 'fullscreen');
+    document.body.classList.toggle('artifact-canvas-overlay', layout !== 'side');
+  }
+
+  #suggestedLayout(artifact: AnswerArtifact): CanvasLayout {
+    if (window.matchMedia('(max-width: 640px)').matches) return 'fullscreen';
+    return artifact.presentation === 'markdown' ? 'side' : 'wide';
+  }
+
+  #onKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.close();
+      return;
+    }
+    if (event.key === 'Tab' && window.matchMedia('(max-width: 1199px)').matches) {
+      const focusable = Array.from(this.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => element.getClientRects().length > 0);
+      wrapTabFocus(focusable, event);
+    }
+  }
+}
+
+customElements.define('dl-artifact-canvas', DlArtifactCanvas);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'dl-artifact-canvas': DlArtifactCanvas;
+  }
+}

@@ -6,7 +6,7 @@ const DRAWER_MEDIA = '(max-width: 1199px)';
 const MIN_WIDTH = 320;
 const RESIZE_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'Home', 'End']);
 
-type WidthVar = '--panel-width' | '--report-panel-width';
+type WidthVar = '--panel-width' | '--artifact-canvas-width';
 
 interface SplitState {
     split: WaSplitPanel;
@@ -114,7 +114,7 @@ function finishDrags(): void {
 function bindDivider(state: SplitState): void {
     state.split.divider.setAttribute(
         'aria-label',
-        state.widthVar === '--panel-width' ? 'Resize Files or Sources' : 'Resize Report',
+        state.widthVar === '--panel-width' ? 'Resize Files or Sources' : 'Resize Artifact Canvas',
     );
     const begin = (): void => {
         if (state.split.disabled) return;
@@ -167,10 +167,10 @@ export function setupPanelSplits(): void {
     states = [
         createState('panel-split', 'panel', '--panel-width', 'dlightrag-panel-width'),
         createState(
-            'report-panel-split',
-            'report-panel',
-            '--report-panel-width',
-            'dlightrag-report-panel-width',
+            'artifact-canvas-split',
+            'artifact-canvas',
+            '--artifact-canvas-width',
+            'dlightrag-artifact-canvas-width',
         ),
     ].filter((state): state is SplitState => state !== null);
 

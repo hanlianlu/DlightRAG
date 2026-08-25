@@ -197,7 +197,7 @@ def _presentation_source(*, source_uri: str, download_url: str | None = None):
     return build_answer_presentation(
         answer="Cited [1].",
         sources=[source],
-        answer_images=[],
+        evidence_images=[],
     ).sources[0]
 
 
@@ -249,12 +249,13 @@ def test_answer_presentation_uses_semantic_citations_and_no_legacy_paths() -> No
     presentation = build_answer_presentation(
         answer="Answer [1].",
         sources=[],
-        answer_images=[],
+        evidence_images=[],
     )
     source_view = (FRONTEND_UI / "source_panel_view.ts").read_text(encoding="utf-8")
     answer_view = (FRONTEND_UI / "answer_presentation.ts").read_text(encoding="utf-8")
 
-    assert '<cite class="citation-badge"' in presentation.answer_html
+    assert '<cite class="citation-badge"' in presentation.parts[0].html
+    assert "answer_images" not in presentation.model_dump()
     assert "src.path" not in source_view
     assert "answer-ref-item" in answer_view
     assert "source-doc-badge" in source_view

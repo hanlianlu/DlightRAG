@@ -291,17 +291,124 @@ async def cancel_answer_run(
     )
 
 
-@router.get("/answer/{run_id}/report", response_model=AnswerPresentation)
-async def answer_run_report(
+def _artifact_descriptor(result: Mapping[str, Any], resource_id: str) -> Mapping[str, Any] | None:
+    for item in result.get("artifacts") or ():
+        if isinstance(item, Mapping) and item.get("resource_id") == resource_id:
+            return item
+    return None
+
+
+def _artifact_range(header: str, total: int) -> tuple[int, int | None, int, str | None]:
+    if not header:
+        return 0, None, 200, None
+    if not header.lower().startswith("bytes=") or "," in header:
+        raise HTTPException(
+            status_code=416,
+            detail="range not satisfiable",
+            headers={"Content-Range": f"bytes */{total}"},
+        )
+    start_s, _, end_s = header.split("=", 1)[1].partition("-")
+    try:
+        if start_s == "":
+            suffix = int(end_s)
+            if suffix <= 0 or total == 0:
+                raise ValueError
+            length = min(suffix, total)
+            offset = total - length
+        else:
+            offset = int(start_s)
+            end = int(end_s) if end_s else total - 1
+            if offset >= total or end < offset:
+                raise ValueError
+            length = min(end, total - 1) - offset + 1
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=416,
+            detail="range not satisfiable",
+            headers={"Content-Range": f"bytes */{total}"},
+        ) from exc
+    return offset, length, 206, f"bytes {offset}-{offset + length - 1}/{total}"
+
+
+@router.get("/answer/{run_id}/artifacts/{resource_id}")
+async def answer_artifact_data(
     run_id: str,
+    resource_id: str,
+    request: Request,
+    download: bool = False,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> StreamingResponse:
+    """Stream one owned Artifact as inert data with Range support."""
+    user = getattr(request.state, "user_context", None)
+    turn = await conversation_service.turn_for_run(user, run_id)
+    result = turn.run.result if turn is not None else None
+    descriptor = _artifact_descriptor(result or {}, resource_id)
+    if descriptor is None or descriptor.get("status") != "available":
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    owner = owner_id_from_user(user)
+    application = get_application(request)
+    total = await application.answers.artifact_size(
+        owner_id=owner, run_id=run_id, resource_id=resource_id
+    )
+    if total is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    offset, length, status_code, content_range = _artifact_range(
+        request.headers.get("range", "").strip(), total
+    )
+    stream = await application.answers.open_artifact(
+        owner_id=owner,
+        run_id=run_id,
+        resource_id=resource_id,
+        offset=offset,
+        length=length,
+    )
+    if stream is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    media_type = str(descriptor.get("media_type") or "application/octet-stream")
+    safe_inline = media_type.startswith("image/") or media_type == "application/pdf"
+    filename = str(descriptor.get("filename") or "artifact").replace('"', "_")
+    disposition = "attachment" if download or not safe_inline else "inline"
+    return StreamingResponse(
+        stream,
+        media_type=media_type if safe_inline and not download else "application/octet-stream",
+        status_code=status_code,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+            **({"Content-Range": content_range} if content_range else {}),
+        },
+    )
+
+
+@router.get(
+    "/answer/{run_id}/artifacts/{resource_id}/presentation",
+    response_model=AnswerPresentation,
+)
+async def answer_artifact_presentation(
+    run_id: str,
+    resource_id: str,
     request: Request,
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
 ) -> AnswerPresentation:
-    """Return the safe structured Primary Report presentation."""
+    """Return a safe AnswerPresentation for any Markdown Artifact."""
     user = getattr(request.state, "user_context", None)
     turn = await conversation_service.turn_for_run(user, run_id)
     if turn is None or turn.run.status != "succeeded" or turn.run.result is None:
-        raise HTTPException(status_code=404, detail="Primary report not found")
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    descriptor = _artifact_descriptor(turn.run.result, resource_id)
+    if descriptor is None or descriptor.get("media_type") != "text/markdown":
+        raise HTTPException(status_code=404, detail="Artifact presentation not found")
+    blob = await get_application(request).answers.read_artifact(
+        owner_id=owner_id_from_user(user), run_id=run_id, resource_id=resource_id
+    )
+    if blob is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    try:
+        markdown = blob.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail="Artifact is not UTF-8") from exc
     downloadable, visual = await _projection_workspaces(request, turn.run.request_input())
     projected = project_answer_result(
         turn.run.result,
@@ -309,31 +416,26 @@ async def answer_run_report(
         downloadable_workspaces=downloadable,
         visual_workspaces=visual,
         image_url_prefix=WEB_IMAGE_URL_BASE,
-    )
-    handle = projected.get("primary_report")
-    if not isinstance(handle, str) or not handle:
-        raise HTTPException(status_code=404, detail="Primary report not found")
-    blob = await get_application(request).answers.read_artifact(
-        owner_id=owner_id_from_user(user),
         run_id=run_id,
-        resource_id=handle,
+        artifact_url_prefix="/web/api/answer",
     )
-    if blob is None:
-        raise HTTPException(status_code=404, detail="Primary report not found")
-    try:
-        markdown = blob.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=422, detail="Primary report is not UTF-8") from exc
-    return build_answer_presentation(
-        answer=markdown,
-        sources=project_report_sources(
+    sources = (
+        project_report_sources(
             turn.run.result,
             source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
             downloadable_workspaces=downloadable,
             visual_workspaces=visual,
             image_url_prefix=WEB_IMAGE_URL_BASE,
-        ),
-        answer_images=[],
+        )
+        if descriptor.get("role") == "primary_report"
+        else []
+    )
+    return build_answer_presentation(
+        answer=markdown,
+        sources=sources,
+        evidence_images=[],
+        artifacts=projected["artifacts"],
+        artifact_outcome=projected["artifact_outcome"],
     )
 
 
@@ -367,6 +469,7 @@ async def answer_run_events(
                 downloadable_workspaces=downloadable,
                 visual_workspaces=visual,
                 live_after=turn.run.next_event_sequence - 1,
+                run_id=run_id,
             ),
         ),
         media_type="text/event-stream",

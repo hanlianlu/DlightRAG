@@ -329,11 +329,8 @@ def test_project_contexts_for_client_skips_chunks_without_public_id() -> None:
     assert public["chunks"] == []
 
 
-def test_answer_helpers_derive_visual_images_and_blocks() -> None:
-    from dlightrag.answer.media import (
-        answer_blocks_from_markdown,
-        answer_images_from_sources,
-    )
+def test_evidence_image_helper_derives_cited_visuals() -> None:
+    from dlightrag.answer.media import evidence_images_from_sources
 
     sources = [
         _internal_source(
@@ -349,7 +346,7 @@ def test_answer_helpers_derive_visual_images_and_blocks() -> None:
         )
     ]
 
-    images = answer_images_from_sources(sources)
+    images = evidence_images_from_sources(sources)
 
     assert images == [
         {
@@ -361,9 +358,4 @@ def test_answer_helpers_derive_visual_images_and_blocks() -> None:
             "label": "report.pdf",
             "answer_image_sent": True,
         }
-    ]
-    assert answer_blocks_from_markdown("Diagram below [1-1]. Details after.", images) == [
-        {"type": "markdown", "text": "Diagram below [1-1]."},
-        {"type": "image_ref", "image_id": "fig-1"},
-        {"type": "markdown", "text": " Details after."},
     ]

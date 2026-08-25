@@ -507,6 +507,7 @@ class TestWebBootstrap:
                     ]
                 ),
             },
+            "active_html_preview_enabled": True,
         }
 
     async def test_filters_saved_scope_and_primary_through_authorized_workspaces(
@@ -1003,7 +1004,7 @@ class TestSourcePresentation:
                     ],
                 )
             ],
-            answer_images=[],
+            evidence_images=[],
         )
 
         source = presentation.sources[0]
