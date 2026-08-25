@@ -2,9 +2,8 @@
 
 // Single source of truth for the composer's ordered pending attachments (images
 // and documents in one collection). Each item keeps a stable id and a preview
-// object URL; the browser half (ui/attachments.ts) renders and the submission
-// path (ui/chat.ts) posts the files in this order. URL/id factories are injected
-// so the ordering and lifecycle can be unit-tested in Node.
+// object URL; dl-chat-composer renders and submits the files in this order.
+// URL/id factories are injected so ordering and lifecycle can be unit-tested.
 
 import type {AttachmentKind} from '../ui/attachment_policy.ts';
 

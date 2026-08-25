@@ -2,9 +2,8 @@
 
 import DOMPurify, {type Config} from 'dompurify';
 
-// Attributes shared by both profiles. data-action / data-* are kept for LLM
-// content because answer image strips and reference lists rely on them
-// (open-lightbox / open-ref-source), and their click handlers re-validate input.
+// Attributes shared by both profiles. data-action / data-* are kept because
+// citation and image intents rely on them, and their handlers re-validate input.
 const BASE_ADD_ATTR = [
   'aria-label',
   'data-action',

@@ -2,7 +2,8 @@
 
 import {html, nothing, type TemplateResult} from 'lit';
 import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
-import {wrapTabFocus} from '../lib/dom.ts';
+import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
+import {syncShellInert, wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import type {DlActiveArtifactFrame} from './active_artifact_frame.ts';
@@ -37,6 +38,7 @@ export class DlArtifactCanvas extends LightElement {
 
   #controller: AbortController | null = null;
   #returnFocus: HTMLElement | null = null;
+  #compactMedia: MediaQueryList | null = null;
 
   constructor() {
     super();
@@ -50,9 +52,27 @@ export class DlArtifactCanvas extends LightElement {
     this.addEventListener('keydown', (event) => this.#onKeyDown(event));
   }
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (!this.classList.contains('open')) {
+      this.inert = true;
+      this.setAttribute('aria-hidden', 'true');
+    }
+    this.#compactMedia = window.matchMedia(COMPACT_SHELL_MEDIA);
+    this.#compactMedia.addEventListener('change', this.#compactLayoutChanged);
+  }
+
   override disconnectedCallback(): void {
+    this.#compactMedia?.removeEventListener('change', this.#compactLayoutChanged);
+    this.#compactMedia = null;
     this.#destroyPreview();
     this.#controller?.abort();
+    document.body.classList.remove(
+      'artifact-canvas-open',
+      'artifact-canvas-overlay',
+      'artifact-canvas-modal',
+    );
+    syncShellInert();
     super.disconnectedCallback();
   }
 
@@ -72,9 +92,10 @@ export class DlArtifactCanvas extends LightElement {
     this.presentation = null;
     this.interactive = false;
     this.classList.add('open');
+    this.inert = false;
     this.removeAttribute('aria-hidden');
     this.setAttribute('role', 'dialog');
-    this.setAttribute('aria-modal', window.matchMedia('(max-width: 1199px)').matches ? 'true' : 'false');
+    this.#syncModalState();
     document.body.classList.add('artifact-canvas-open');
     this.#stateChanged();
     await this.updateComplete;
@@ -82,23 +103,44 @@ export class DlArtifactCanvas extends LightElement {
     await this.#load(artifact);
   }
 
+  /** Make the legacy Inspector reachable without leaving two modal panes active. */
+  prepareForInspector(): void {
+    if (!this.classList.contains('open')) return;
+    if (this.#compactMedia?.matches ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches) {
+      this.close();
+      return;
+    }
+    this.#setLayout('side');
+  }
+
   close(restoreFocus = true): void {
     if (!this.classList.contains('open')) return;
     this.#controller?.abort();
     this.#controller = null;
     this.#destroyPreview();
+    const focusedInside = this.contains(document.activeElement);
     this.classList.remove('open', 'layout-wide', 'layout-fullscreen');
+    this.inert = true;
     this.setAttribute('aria-hidden', 'true');
     this.removeAttribute('role');
     this.removeAttribute('aria-modal');
-    document.body.classList.remove('artifact-canvas-open', 'artifact-canvas-overlay');
+    document.body.classList.remove(
+      'artifact-canvas-open',
+      'artifact-canvas-overlay',
+      'artifact-canvas-modal',
+    );
+    syncShellInert();
     this.artifact = null;
     this.canvasState = 'idle';
     this.presentation = null;
     this.textPreview = '';
     this.#stateChanged();
-    if (restoreFocus) this.#returnFocus?.focus();
+    const returnFocus = this.#returnFocus;
     this.#returnFocus = null;
+    if (restoreFocus && returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
+    else if (focusedInside && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     this.dispatchEvent(new CustomEvent('artifact-canvas-closed', {bubbles: true}));
   }
 
@@ -173,7 +215,8 @@ export class DlArtifactCanvas extends LightElement {
       case 'pdf': {
         const source = safeSameOriginHref(artifact.data_url || '');
         return source
-          ? html`<iframe class="artifact-pdf" title=${artifact.label} src=${source}></iframe>`
+          ? html`<iframe class="artifact-pdf" title=${artifact.label} src=${source}
+                  sandbox="" referrerpolicy="no-referrer"></iframe>`
           : this.#downloadOnly();
       }
       case 'text':
@@ -208,6 +251,7 @@ export class DlArtifactCanvas extends LightElement {
         .source=${this.textPreview}
         .active=${true}
         .label=${this.artifact?.label || 'HTML Artifact'}
+        @artifact-frame-escape=${() => this.close()}
       ></dl-active-artifact-frame>
       <details><summary>Source</summary><pre class="artifact-source">${this.textPreview}</pre></details>
     `;
@@ -266,10 +310,32 @@ export class DlArtifactCanvas extends LightElement {
     this.classList.toggle('layout-wide', layout === 'wide');
     this.classList.toggle('layout-fullscreen', layout === 'fullscreen');
     document.body.classList.toggle('artifact-canvas-overlay', layout !== 'side');
+    this.#syncModalState();
+  }
+
+  #compactLayoutChanged = (): void => {
+    this.#syncModalState();
+    if (this.#isModal() && !this.contains(document.activeElement)) {
+      this.querySelector<HTMLButtonElement>('[data-action="close"]')?.focus();
+    }
+  };
+
+  #isModal(): boolean {
+    const compact = this.#compactMedia?.matches
+      ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches;
+    return this.classList.contains('open') && (this.layout !== 'side' || compact);
+  }
+
+  #syncModalState(): void {
+    const modal = this.#isModal();
+    if (modal) this.setAttribute('aria-modal', 'true');
+    else this.removeAttribute('aria-modal');
+    document.body.classList.toggle('artifact-canvas-modal', modal);
+    syncShellInert();
   }
 
   #suggestedLayout(artifact: AnswerArtifact): CanvasLayout {
-    if (window.matchMedia('(max-width: 640px)').matches) return 'fullscreen';
+    if (window.matchMedia(MOBILE_MEDIA).matches) return 'fullscreen';
     return artifact.presentation === 'markdown' ? 'side' : 'wide';
   }
 
@@ -279,7 +345,7 @@ export class DlArtifactCanvas extends LightElement {
       this.close();
       return;
     }
-    if (event.key === 'Tab' && window.matchMedia('(max-width: 1199px)').matches) {
+    if (event.key === 'Tab' && this.#isModal()) {
       const focusable = Array.from(this.querySelectorAll<HTMLElement>(
         'button:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"])',
       )).filter((element) => element.getClientRects().length > 0);

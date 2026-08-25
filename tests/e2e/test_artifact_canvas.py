@@ -289,5 +289,13 @@ def test_active_html_is_opt_in_opaque_and_destroyed_on_close(page: Page) -> None
     assert downloads == []
     assert network_hits == ["https://network.invalid/download"]
 
-    canvas.get_by_role("button", name="Close Artifact").click()
+    child.locator("body").click()
+    page.keyboard.press("Escape")
+    page.wait_for_function(
+        "!document.getElementById('artifact-canvas')?.classList.contains('open')",
+        timeout=10000,
+    )
     assert page.locator("dl-active-artifact-frame iframe").count() == 0
+    assert page.get_by_role("button", name="View report").evaluate(
+        "element => document.activeElement === element"
+    )

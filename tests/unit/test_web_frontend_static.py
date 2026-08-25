@@ -45,28 +45,6 @@ def test_lit_app_owns_the_final_conversation_shell() -> None:
     assert not (ROOT / "src/dlightrag/web/templates/base.html").exists()
 
 
-def test_lit_app_projects_one_unified_attachment_policy() -> None:
-    app = (FRONTEND_UI / "app.ts").read_text(encoding="utf-8")
-
-    for field in (
-        "data-attachment-count-limit",
-        "data-attachment-image-max-bytes",
-        "data-attachment-document-max-bytes",
-        "data-attachment-extensions",
-        "data-attachment-image-capability",
-        "data-attachment-image-limit",
-        "attachments.accept",
-    ):
-        assert field in app
-    for stale in (
-        "data-effective-current-upload-limit",
-        "data-document-current-upload-limit",
-        "data-max-upload-bytes",
-        "data-answer-image-capability",
-    ):
-        assert stale not in app
-
-
 def test_bootstrap_advertises_exact_backend_attachment_limits() -> None:
     bootstrap_source = (ROOT / "src/dlightrag/web/routes/bootstrap.py").read_text(encoding="utf-8")
 
@@ -83,10 +61,8 @@ def test_frontend_submits_only_the_unified_attachments_part() -> None:
     request_builder = (FRONTEND / "lib" / "answer_request.ts").read_text(encoding="utf-8")
 
     assert "form.append('attachments', file, file.name)" in request_builder
-    for source in ("lib/answer_request.ts", "ui/chat.ts"):
-        text = (FRONTEND / source).read_text(encoding="utf-8")
-        assert "append('images'" not in text
-        assert "append('documents'" not in text
+    assert "append('images'" not in request_builder
+    assert "append('documents'" not in request_builder
 
 
 def test_vite_html_has_no_external_script_or_unresolved_theme_placeholder() -> None:
@@ -286,15 +262,6 @@ def test_panel_action_icons_are_accessible_svg_buttons() -> None:
     assert 'class="file-delete-icon"' in file_panel
     assert 'class="source-action-icon-svg"' in source_panel
     assert 'stroke="currentColor"' in source_panel
-
-
-def test_history_images_are_lazy_async_thumbnails_with_on_demand_originals() -> None:
-    images_source = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
-
-    assert "imgEl.loading = 'lazy'" in images_source
-    assert "imgEl.decoding = 'async'" in images_source
-    assert "imgEl.src = thumbnailSrc" in images_source
-    assert "imageButton.setAttribute('data-full-src', fullSrc)" in images_source
 
 
 def test_split_panel_adapter_preserves_cancel_and_compact_guards() -> None:

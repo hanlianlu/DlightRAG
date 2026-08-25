@@ -5,6 +5,7 @@ import type {AnswerPresentation} from '../api/conversations.ts';
 import './answer_presentation.ts';
 import './source_panel_view.ts';
 import type {AnswerPresentationElement} from './answer_presentation.ts';
+import {closeLightbox, openLightbox} from './images.ts';
 import type {SourcePanelView} from './source_panel_view.ts';
 
 const presentation: AnswerPresentation = {
@@ -51,6 +52,13 @@ it('sanitizes rich answer HTML while Lit escapes structured references', async (
   expect(element.querySelector('script')).to.equal(null);
   expect(element.querySelector('.answer-ref-title')?.textContent).to.equal('<img src=x>');
   expect(element.querySelector('.answer-ref-title img')).to.equal(null);
+
+  let referenceId = '';
+  element.addEventListener('answer-source-open', (event) => {
+    referenceId = (event as CustomEvent).detail.referenceId;
+  });
+  element.querySelector<HTMLElement>('.citation-badge')?.click();
+  expect(referenceId).to.equal('1');
 });
 
 it('renders Artifact intent and semantic Visual Evidence in approved order', async () => {
@@ -92,17 +100,55 @@ it('renders Artifact intent and semantic Visual Evidence in approved order', asy
   await element.updateComplete;
 
   let opened = '';
+  let imageSource = '';
   element.addEventListener('artifact-open', (event) => {
     opened = (event as CustomEvent).detail.artifact.resource_id;
   });
+  element.addEventListener('answer-image-open', (event) => {
+    imageSource = (event as CustomEvent).detail.src;
+  });
   element.querySelector<HTMLButtonElement>('.answer-artifact-card .ui-btn')?.click();
+  element.querySelector<HTMLButtonElement>('.answer-image-item')?.click();
 
   expect(opened).to.equal('artifact-report');
+  expect(imageSource).to.equal(
+    new URL('/web/api/images/default/chunk-1?size=full', window.location.origin).href,
+  );
   expect(element.querySelector('.answer-evidence h3')?.textContent).to.equal('Visual Evidence');
   expect(element.querySelector('.answer-image-source')?.getAttribute('data-ref')).to.equal('1');
   const evidence = element.querySelector('.answer-evidence');
   const references = element.querySelector('.answer-references');
   expect(Boolean(evidence && references && (evidence.compareDocumentPosition(references) & Node.DOCUMENT_POSITION_FOLLOWING))).to.equal(true);
+});
+
+it('includes typed Answer images in previous and next gallery navigation', async () => {
+  const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
+  element.presentation = {
+    ...presentation,
+    evidence_images: [
+      {
+        id: 'image-1', chunk_id: 'chunk-1', source_ref: '1',
+        url: '/web/api/images/default/chunk-1?size=full', thumbnail_url: '',
+        label: 'First', answer_image_sent: true,
+      },
+      {
+        id: 'image-2', chunk_id: 'chunk-2', source_ref: '1',
+        url: '/web/api/images/default/chunk-2?size=full', thumbnail_url: '',
+        label: 'Second', answer_image_sent: true,
+      },
+    ],
+  };
+  document.body.appendChild(element);
+  await element.updateComplete;
+  const images = element.querySelectorAll<HTMLElement>('[data-answer-image]');
+
+  openLightbox(images[0].dataset.src);
+  const box = document.getElementById('image-lightbox')!;
+  const next = box.querySelector<HTMLButtonElement>('[aria-label="Next"]')!;
+  expect(next.style.display).to.equal('');
+  next.click();
+  expect(box.getAttribute('data-current-src')).to.equal(images[1].dataset.src);
+  closeLightbox();
 });
 
 it('renders sanitized source chunks and rejects cross-origin download links', async () => {

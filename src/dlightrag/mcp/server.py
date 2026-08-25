@@ -764,17 +764,19 @@ async def list_answer_artifacts_tool(
     run_id: Annotated[str, Field(description="Run id")],
 ) -> dict[str, Any]:
     application = await _ensure_application()
-    items = await application.answers.list_artifacts(owner_id=_owner_id(), run_id=run_id)
+    record = await application.answers.get(owner_id=_owner_id(), run_id=run_id)
+    if record is None:
+        raise ValueError(f"Answer run not found: {run_id}")
+    if record.result is None:
+        raise ValueError("Answer artifacts are not available until the run has a stored result")
+    projected = project_answer_result(
+        record.result,
+        run_id=run_id,
+        artifact_url_prefix=None,
+    )
     return {
-        "artifacts": [
-            {
-                "resource_id": item.resource_id,
-                "kind": item.reference_kind,
-                "filename": item.filename,
-                "media_type": item.mime_type,
-            }
-            for item in items
-        ]
+        "artifacts": projected["artifacts"],
+        "artifact_outcome": projected["artifact_outcome"],
     }
 
 

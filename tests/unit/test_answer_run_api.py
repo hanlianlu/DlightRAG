@@ -95,6 +95,10 @@ class _RunApplication:
         del owner_id, run_id, resource_id
         return None if self.artifact_bytes is None else len(self.artifact_bytes)
 
+    async def read_artifact(self, *, owner_id: str, run_id: str, resource_id: str) -> bytes | None:
+        del owner_id, run_id, resource_id
+        return self.artifact_bytes
+
     async def open_artifact(
         self,
         *,
@@ -787,6 +791,19 @@ def _publish_test_artifact(application: _RunApplication) -> None:
     application.artifact_bytes = b"0123456789"
 
 
+async def test_artifact_list_does_not_invent_an_in_flight_outcome(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    assert run_application.record is not None
+    assert run_application.record.result is None
+    response = await client.get(f"/answer/{_RUN_ID}/artifacts")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Answer artifacts are not available until the run has a stored result"
+    )
+
+
 async def test_artifact_list_returns_typed_owner_links_without_bytes(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:
@@ -801,6 +818,23 @@ async def test_artifact_list_returns_typed_owner_links_without_bytes(
     assert artifact["data_url"].endswith(f"/{_RUN_ID}/artifacts/{_ARTIFACT_ID}")
     assert "content" not in artifact
     assert response.json()["artifact_outcome"]["status"] == "complete"
+
+
+async def test_markdown_artifact_presentation_route_matches_its_advertised_url(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    _publish_test_artifact(run_application)
+    run_application.artifact_bytes = b"# Report\n\nBody"
+
+    listed = await client.get(f"/answer/{_RUN_ID}/artifacts")
+    presentation_url = listed.json()["artifacts"][0]["presentation_url"]
+    response = await client.get(presentation_url)
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.json()["answer"] == "# Report\n\nBody"
+    assert response.json()["parts"][0]["text"] == "# Report\n\nBody"
+    assert response.json()["artifacts"][0]["uri"].startswith("dlightrag://answer/")
 
 
 async def test_full_artifact_read_streams_without_a_range(

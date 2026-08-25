@@ -2,8 +2,8 @@
 
 // One unified attachment admission policy for the composer: images and
 // documents share a single ordered collection, one count limit, and per-item
-// byte limits. DOM- and CSS-free so it can be unit-tested in Node; the browser
-// half (ui/attachments.ts) renders and wires these decisions.
+// byte limits. DOM- and CSS-free so it can be unit-tested in Node;
+// dl-chat-composer renders and wires these decisions.
 
 export type CapabilityStatus = 'supported' | 'unsupported' | 'unknown';
 export type AttachmentKind = 'image' | 'document' | 'unsupported';
@@ -22,34 +22,6 @@ export interface AttachmentCounts {
     images: number;
 }
 
-function parseInteger(value: string | undefined, minimum: number): number | null {
-    if (!value || !/^\d+$/.test(value)) return null;
-    const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed < minimum) return null;
-    return parsed;
-}
-
-function parseCapabilityStatus(value: string | undefined): CapabilityStatus | null {
-    if (value === 'supported' || value === 'unsupported' || value === 'unknown') return value;
-    return null;
-}
-
-function parseExtensions(value: string | undefined): ReadonlySet<string> | null {
-    if (!value) return null;
-    try {
-        const parsed: unknown = JSON.parse(value);
-        if (!Array.isArray(parsed) || parsed.length === 0) return null;
-        const extensions = new Set<string>();
-        for (const extension of parsed) {
-            if (typeof extension !== 'string' || !/^[a-z0-9]+$/.test(extension)) return null;
-            extensions.add(extension);
-        }
-        return extensions;
-    } catch {
-        return null;
-    }
-}
-
 export function classifyAttachmentFile(
     file: {name: string; type: string},
     extensions: ReadonlySet<string>,
@@ -57,29 +29,6 @@ export function classifyAttachmentFile(
     if (file.type.startsWith('image/')) return 'image';
     const extension = file.name.split('.').pop()?.toLowerCase() || '';
     return extensions.has(extension) ? 'document' : 'unsupported';
-}
-
-export function getAttachmentPolicy(
-    root: Pick<HTMLElement, 'dataset'> | null = document.getElementById('app'),
-): AttachmentPolicy | null {
-    if (!root) return null;
-    const countLimit = parseInteger(root.dataset.attachmentCountLimit, 1);
-    const imageMaxBytes = parseInteger(root.dataset.attachmentImageMaxBytes, 1);
-    const documentMaxBytes = parseInteger(root.dataset.attachmentDocumentMaxBytes, 1);
-    const extensions = parseExtensions(root.dataset.attachmentExtensions);
-    const imageCapability = parseCapabilityStatus(root.dataset.attachmentImageCapability);
-    const imageLimit = parseInteger(root.dataset.attachmentImageLimit, 0);
-    if (
-        countLimit === null ||
-        imageMaxBytes === null ||
-        documentMaxBytes === null ||
-        extensions === null ||
-        imageCapability === null ||
-        imageLimit === null
-    ) {
-        return null;
-    }
-    return {countLimit, imageMaxBytes, documentMaxBytes, extensions, imageCapability, imageLimit};
 }
 
 export function acceptsAttachmentUpload(

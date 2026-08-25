@@ -10,15 +10,12 @@ import '../styles/files.css';
 import '../styles/sources.css';
 
 import './app.ts';
-import './run_dialogs.ts';
-import {setupAttachmentInputs} from './attachments.ts';
-import {setupAnswerModeMenu} from './answer_mode.ts';
-import {setupQueryForm} from './chat.ts';
 import {requestDeleteAll, setupConversations} from './conversations.ts';
 import {setupSettings} from './settings.ts';
 import {setupFilesPanel} from './files-panel.ts';
 import {setupImageLightbox} from './images.ts';
 import {setupMathRendering} from './mathjax.ts';
+import {setupChatMemoryOperationAdapter} from './memory.ts';
 import {setupNotifications} from './notifications.ts';
 import {setupPanel} from './panel.ts';
 import {setupPanelSplits} from './split_panel.ts';
@@ -39,10 +36,8 @@ document.addEventListener('DOMContentLoaded', function() {
         setupSourcePanel();
         setupFilesPanel();
         setupSettings(requestDeleteAll);
+        setupChatMemoryOperationAdapter();
         setupImageLightbox();
-        setupAttachmentInputs();
-        setupAnswerModeMenu();
-        setupQueryForm();
         setupMathRendering();
         setupConversations();
         setupNotifications();

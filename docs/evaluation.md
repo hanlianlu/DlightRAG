@@ -95,10 +95,11 @@ DlightRAG /answer response              →  LightRAG RAGEvaluator format
 }
 ```
 
-Display-only answer fields such as `answer_images`, `answer_blocks`,
-`references`, `sources`, and `trace` remain part of the DlightRAG `/answer`
-contract, but the adapter deliberately ignores them. RAGAS evaluates the final
-answer text against textual chunk contexts, not frontend rendering metadata.
+Presentation and provenance fields such as ordered `parts`, `evidence_images`,
+`references`, `sources`, typed `artifacts`, `artifact_outcome`, and `trace`
+remain part of the DlightRAG `/answer` contract, but the adapter deliberately
+ignores them. RAGAS evaluates the final answer text against textual chunk
+contexts, not presentation metadata.
 
 Everything else — the RAGAS `evaluate()` call, the two-stage concurrency
 pipeline (RAG semaphore → RAGAS semaphore), tqdm progress bars, CSV/JSON

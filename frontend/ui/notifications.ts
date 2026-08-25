@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {chatSessionStore} from '../stores/chatSessionStore.ts';
+import type {ChatRunningChangeDetail} from './chat_feature.ts';
 
 const ASKED_STORAGE_KEY = 'dlightrag-notify-asked';
 
@@ -79,19 +79,23 @@ function declineOffer(): void {
 export function setupNotifications(): void {
     if (!supported()) return;
 
-    chatSessionStore.subscribe(function() {
-        const active = chatSessionStore.active;
-        if (active) {
-            streaming = true;
-            missedAnswer = away();
-            return;
-        }
-        if (!streaming) return;
-        streaming = false;
-        if (!away()) return;
-        missedAnswer = true;
-        if (Notification.permission === 'granted') notifyAnswerReady();
-    });
+    // Milestone 5 moves this Shell control into its final Feature owner.
+    document.querySelector('dl-chat-feature')?.addEventListener(
+        'dl-chat-running-change',
+        function(event: Event) {
+            const active = (event as CustomEvent<ChatRunningChangeDetail>).detail.active;
+            if (active) {
+                streaming = true;
+                missedAnswer = away();
+                return;
+            }
+            if (!streaming) return;
+            streaming = false;
+            if (!away()) return;
+            missedAnswer = true;
+            if (Notification.permission === 'granted') notifyAnswerReady();
+        },
+    );
 
     function leftPage(): void {
         if (streaming) missedAnswer = true;

@@ -6,10 +6,19 @@ import type {DlActiveArtifactFrame} from './active_artifact_frame.ts';
 
 afterEach(() => { document.body.replaceChildren(); });
 
-it('creates exactly one opaque-origin active iframe after source is provided', async () => {
+it('executes scripts inside one opaque-origin active iframe without reaching the parent DOM', async () => {
   const frame = document.createElement('dl-active-artifact-frame') as DlActiveArtifactFrame;
   frame.active = true;
-  frame.source = '<script>parent.document.body.dataset.compromised="yes"</script>';
+  const scriptRan = new Promise<void>((resolve) => {
+    const receive = (event: MessageEvent): void => {
+      if (event.data !== 'dl-test-script-ran') return;
+      window.removeEventListener('message', receive);
+      resolve();
+    };
+    window.addEventListener('message', receive);
+  });
+  frame.source = '<script>try{parent.document.body.dataset.compromised="yes"}catch(_){};' +
+    'parent.postMessage("dl-test-script-ran","*")</script>';
   document.body.appendChild(frame);
   await frame.updateComplete;
 
@@ -24,7 +33,46 @@ it('creates exactly one opaque-origin active iframe after source is provided', a
   expect(source).to.contain("connect-src 'none'");
   expect(source).to.contain("worker-src 'none'");
   expect(source).to.contain("frame-src 'none'");
+  await scriptRan;
   expect(document.body.dataset.compromised).to.equal(undefined);
+});
+
+it('captures its private Escape signal before hostile Artifact listeners', async () => {
+  const frame = document.createElement('dl-active-artifact-frame') as DlActiveArtifactFrame;
+  frame.active = true;
+  const scriptReady = new Promise<void>((resolve) => {
+    const receive = (event: MessageEvent): void => {
+      if (event.data !== 'dl-test-escape-ready') return;
+      window.removeEventListener('message', receive);
+      resolve();
+    };
+    window.addEventListener('message', receive);
+  });
+  frame.source = '<script>document.addEventListener("keydown",event=>' +
+    'event.stopImmediatePropagation(),true);addEventListener("message",event=>{' +
+    'if(event.data==="dl-test-trigger-escape")document.body.dispatchEvent(' +
+    'new KeyboardEvent("keydown",{key:"Escape",bubbles:true,composed:true}))});' +
+    'parent.postMessage("dl-test-escape-ready","*")</script>';
+  let escapes = 0;
+  const escaped = new Promise<void>((resolve) => {
+    frame.addEventListener('artifact-frame-escape', () => {
+      escapes += 1;
+      resolve();
+    });
+  });
+  document.body.appendChild(frame);
+  await frame.updateComplete;
+  const iframe = frame.shadowRoot?.querySelector('iframe');
+  await scriptReady;
+
+  window.dispatchEvent(new MessageEvent('message', {
+    source: iframe?.contentWindow,
+    data: {type: 'dl-artifact-frame-escape', token: 'forged'},
+  }));
+  expect(escapes).to.equal(0);
+  iframe?.contentWindow?.postMessage('dl-test-trigger-escape', '*');
+  await escaped;
+  expect(escapes).to.equal(1);
 });
 
 it('uses an opaque script-disabled iframe for the operator-disabled fallback', async () => {

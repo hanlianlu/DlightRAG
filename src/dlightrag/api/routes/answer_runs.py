@@ -23,13 +23,18 @@ from dlightrag.access import AccessAction, UserContext, owner_id_from_user
 from dlightrag.answer.client_contracts import conversation_history_as_dicts
 from dlightrag.answer.resources.links import answer_link_resources
 from dlightrag.answer.resources.models import ResourceInput
-from dlightrag.answer.runs.results import project_answer_result
+from dlightrag.answer.runs.results import (
+    answer_parts_from_markdown,
+    project_answer_result,
+    project_report_sources,
+)
 from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor, sse_frame
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     ANSWER_REQUEST_PART_MAX_BYTES,
     AnswerRequest,
+    AnswerResponse,
     AnswerRunDescriptor,
     AnswerRunStatusResponse,
 )
@@ -325,12 +330,94 @@ async def list_answer_artifacts(
     record = await application.answers.get(owner_id=owner_id_from_user(user), run_id=run_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
+    if record.result is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Answer artifacts are not available until the run has a stored result",
+        )
     projected = project_answer_result(
-        record.result or {},
+        record.result,
         run_id=run_id,
         artifact_url_prefix="/answer",
     )
     return {"artifacts": projected["artifacts"], "artifact_outcome": projected["artifact_outcome"]}
+
+
+@router.get(
+    "/answer/{run_id}/artifacts/{resource_id}/presentation",
+    response_model=AnswerResponse,
+)
+async def read_answer_artifact_presentation(
+    run_id: str,
+    resource_id: str,
+    request: Request,
+    response: Response,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return one authenticated Markdown Artifact as a typed Answer presentation."""
+    application = get_application(request)
+    owner_id = owner_id_from_user(user)
+    record = await application.answers.get(owner_id=owner_id, run_id=run_id)
+    descriptor = _published_artifact(record.result if record else None, resource_id)
+    if (
+        record is None
+        or record.status != "succeeded"
+        or descriptor is None
+        or descriptor.get("status") != "available"
+        or descriptor.get("media_type") != "text/markdown"
+    ):
+        raise HTTPException(status_code=404, detail="artifact presentation not found")
+    blob = await application.answers.read_artifact(
+        owner_id=owner_id, run_id=run_id, resource_id=resource_id
+    )
+    if blob is None:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    try:
+        markdown = blob.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail="artifact is not UTF-8") from exc
+
+    workspaces = [str(value) for value in record.request_input().get("workspaces") or ()]
+    downloadable = await authorized_workspaces(
+        request, user, workspaces, AccessAction.WORKSPACE_DOWNLOAD_SOURCE
+    )
+    visual = await authorized_workspaces(
+        request, user, workspaces, AccessAction.WORKSPACE_READ_VISUAL_ASSET
+    )
+    projected = project_answer_result(
+        record.result or {},
+        source_link_builder=SourceDownloadLinkBuilder(),
+        downloadable_workspaces=downloadable,
+        visual_workspaces=visual,
+        run_id=run_id,
+        artifact_url_prefix="/answer",
+    )
+    report_sources = (
+        project_report_sources(
+            record.result or {},
+            source_link_builder=SourceDownloadLinkBuilder(),
+            downloadable_workspaces=downloadable,
+            visual_workspaces=visual,
+        )
+        if descriptor.get("role") == "primary_report"
+        else []
+    )
+    projected.update(
+        answer=markdown,
+        parts=answer_parts_from_markdown(
+            markdown,
+            artifacts=projected["artifacts"],
+            evidence_images=[],
+        ),
+        contexts={},
+        references=[
+            {"id": source.id, "title": source.title or "Source"} for source in report_sources
+        ],
+        sources=[source.model_dump() for source in report_sources],
+        evidence_images=[],
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return projected
 
 
 @router.get("/answer/{run_id}/artifacts/{resource_id}")

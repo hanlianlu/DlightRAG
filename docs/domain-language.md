@@ -181,12 +181,20 @@ Private full tool output retained for the life of an active Answer Run and addre
 _Avoid_: Artifact, report, Journal Entry, Blob when referring to the handle
 
 **Published Artifact**:
-An owner-visible output reference created by fenced publication of staged Agent Workspace bytes.
-_Avoid_: Spill, Blob when referring to the reference rather than the bytes
+An owner-visible, run-scoped output descriptor created by fenced publication of explicitly referenced Agent Workspace bytes. It carries stable resource identity, validated media type, presentation capability, publication status, and an owner-scoped data plane without exposing a Workspace path.
+_Avoid_: Spill, Blob when referring to the reference rather than the bytes, unreferenced workspace file
 
 **Primary Report**:
-The optional published Markdown document taken from `artifacts/report.md` after citation finalization; its bytes live in the Blob store and the result names it by Resource Handle. On Web Conversation it is read in the document panel, not as a second chat body.
-_Avoid_: answer body, chat column, Spill, Compaction Summary, required report
+The optional single Published Artifact occupying `artifacts/report.md`, `artifacts/report.html`, or `artifacts/report.pdf`. It must be non-blank, media-valid, and explicitly referenced by the Main Answer. It opens in Artifact Canvas rather than becoming a second chat body.
+_Avoid_: answer body, chat column, Spill, Compaction Summary, required report, parallel result pointer
+
+**Artifact Canvas**:
+The Web Feature that opens any presentable Artifact and owns loading, safe renderer selection, side/wide/fullscreen layout, focus restoration, and preview teardown. Primary Report is a role inside this surface, not a separate panel.
+_Avoid_: Report Pane, universal Panel abstraction, same-DOM active HTML
+
+**Active HTML Preview**:
+An explicit opt-in rendering mode for a self-contained HTML Artifact inside an opaque-origin, script-enabled sandboxed iframe. It is isolated from DlightRAG credentials and DOM; its CSP blocks normal external loads, but it is not a server execution sandbox or an absolute network-egress guarantee.
+_Avoid_: trusted report, same-origin iframe, Sandbox service, zero-egress claim
 
 **Publication**:
 The fenced terminal transaction that makes staged Agent Workspace files owner-visible as Published Artifacts.

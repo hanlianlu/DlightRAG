@@ -1,16 +1,8 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import conversationStyles from '../styles/conversations.module.css';
-import {detachAnswerRun, isSubmissionPending, resumePendingTurn} from './chat.ts';
 import {clearMemory} from '../api/memory.ts';
-import {
-    clearChatViewport,
-    renderConversationHistory,
-    renderConversationHistoryError,
-    renderConversationHistoryLoading,
-    renderConversationLineage,
-    renderConversationUnavailable,
-} from '../lib/chat_renderer.ts';
+import {DESKTOP_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {conversationRoute, newChatRoute, type WebRoute} from '../lib/router.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import './conversation_list.ts';
@@ -20,7 +12,8 @@ import type {
     ConversationRetryDetail,
 } from './conversation_list.ts';
 import {hasActiveFileMutation} from './files-panel.ts';
-import {clearAttachments, getPendingAttachments} from './attachments.ts';
+import type {DlChatFeature} from './chat_feature.ts';
+import type {ChatViewActionDetail} from './chat_message_list.ts';
 import {closeConversationPanels, closePanel} from './panel.ts';
 import {syncPanelSplitState} from './split_panel.ts';
 import {showToast} from './toast.ts';
@@ -28,7 +21,6 @@ import {syncShellInert, wrapTabFocus} from '../lib/dom.ts';
 import {webRouter} from './router.ts';
 
 const COLLAPSED_KEY = 'dlightrag.conversation_sidebar_collapsed';
-const DESKTOP_MEDIA = '(min-width: 1200px)';
 
 type FocusResolver = () => HTMLElement | null;
 
@@ -53,31 +45,24 @@ function setCollapsedPreference(value: boolean): void {
 }
 
 function isDesktop(): boolean {
-    return window.matchMedia(DESKTOP_MEDIA).matches;
+    return window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
 }
 
-function composerInput(): HTMLTextAreaElement | null {
-    return document.querySelector<HTMLTextAreaElement>('#query-form .composer-input');
+// Milestone 3 deletes this adjacent-Feature adapter when navigation becomes Lit-owned.
+function chatFeature(): DlChatFeature | null {
+    return document.querySelector<DlChatFeature>('dl-chat-feature');
 }
 
 function focusComposer(): void {
-    window.requestAnimationFrame(function() { composerInput()?.focus(); });
+    window.requestAnimationFrame(function() { chatFeature()?.focusComposer(); });
 }
 
 function hasUnsavedDraft(): boolean {
-    return (
-        Boolean(composerInput()?.value)
-        || getPendingAttachments().length > 0
-    );
+    return chatFeature()?.hasDraft ?? false;
 }
 
 function clearDraft(): void {
-    const input = composerInput();
-    if (input) {
-        input.value = '';
-        input.dispatchEvent(new Event('input', {bubbles: true}));
-    }
-    clearAttachments();
+    chatFeature()?.clearDraft();
 }
 
 function resolveConversationActions(conversationId: string): HTMLButtonElement | null {
@@ -149,7 +134,7 @@ async function confirmDiscardDraft(resolveReturnTarget: FocusResolver): Promise<
  * run keeps producing and the turn is waiting in history on the way back.
  */
 function lifecycleBlocked(): boolean {
-    if (!isSubmissionPending()) return false;
+    if (!chatFeature()?.submissionPending) return false;
     showToast('Wait for the current question to be accepted.', 4000);
     return true;
 }
@@ -288,53 +273,45 @@ function renderCurrentConversationView(): void {
     if (renderedViewRevision === conversationStore.viewRevision) return;
     renderedViewRevision = conversationStore.viewRevision;
 
+    const chat = chatFeature();
+    if (!chat) return;
     if (conversationStore.viewState === 'new') {
-        clearChatViewport();
+        chat.view = {kind: 'new'};
         return;
     }
     if (conversationStore.viewState === 'loading') {
-        renderConversationHistoryLoading();
+        chat.view = {kind: 'loading'};
         return;
     }
     if (conversationStore.viewState === 'ready') {
         const history = conversationStore.history;
         if (!history) return;
-        const pending = renderConversationHistory(history);
         const lineage = conversationStore.conversations.find(
             (summary) => summary.conversation_id === history.conversation.conversation_id,
-        )?.forked_from_title;
-        if (lineage) renderConversationLineage(`Forked from ${lineage}`);
-        if (pending) {
-            void resumePendingTurn(
-                pending.turn,
-                history.conversation.conversation_id,
-                pending.stored,
-            );
-        }
+        )?.forked_from_title ?? null;
+        chat.view = {
+            kind: 'ready',
+            conversationId: history.conversation.conversation_id,
+            history: history.turns,
+            lineage,
+        };
         return;
     }
     if (conversationStore.viewState === 'unavailable') {
-        const fallback = conversationStore.fallbackConversationId;
-        renderConversationUnavailable(
-            function() { void webRouter.navigate(newChatRoute()); },
-            fallback
-                ? function() { void webRouter.navigate(conversationRoute(fallback)); }
-                : null,
-        );
+        chat.view = {
+            kind: 'unavailable',
+            hasRecent: Boolean(conversationStore.fallbackConversationId),
+        };
         return;
     }
-    const conversationId = conversationStore.activeConversationId;
-    renderConversationHistoryError(function() {
-        if (conversationId) void conversationStore.open(conversationId);
-        else void conversationStore.loadList();
-    });
+    chat.view = {kind: 'error'};
 }
 
 async function applyRoute(route: WebRoute): Promise<void> {
     const previous = conversationStore.activeConversationId;
     const next = route.kind === 'conversation' ? route.conversationId : null;
     if (previous !== next) {
-        detachAnswerRun();
+        chatFeature()?.detachRun();
         closeConversationPanels();
     }
 
@@ -344,10 +321,8 @@ async function applyRoute(route: WebRoute): Promise<void> {
         conversationStore.openNew();
     } else {
         conversationStore.openNew();
-        renderConversationUnavailable(
-            function() { void webRouter.navigate(newChatRoute(), {replace: true}); },
-            null,
-        );
+        const chat = chatFeature();
+        if (chat) chat.view = {kind: 'unavailable', hasRecent: false};
     }
     closeCompactDrawer(false);
 }
@@ -398,7 +373,7 @@ async function requestDelete(conversationId: string): Promise<void> {
     if (lifecycleBlocked()) return;
 
     setLifecyclePending(true);
-    if (wasActive) detachAnswerRun();
+    if (wasActive) chatFeature()?.detachRun();
     let resolveFinalFocus: FocusResolver = function() {
         return resolveConversationActions(conversationId) || resolveSurvivingConversation();
     };
@@ -447,7 +422,7 @@ export async function requestDeleteAll(): Promise<boolean> {
     )?.checked;
 
     setLifecyclePending(true);
-    detachAnswerRun();
+    chatFeature()?.detachRun();
     const result = await conversationStore.deleteAll();
     if (result === 'error') {
         showToast('Could not delete conversations.', 5000);
@@ -499,6 +474,21 @@ export function setupConversations(): void {
     });
     list?.addEventListener('conversation-retry', function({detail}) {
         void (detail.kind === 'reload' ? initializeConversations() : requestNewConversation());
+    });
+    chatFeature()?.addEventListener('dl-chat-view-action', function(event: Event) {
+        const {action} = (event as CustomEvent<ChatViewActionDetail>).detail;
+        if (action === 'new') {
+            void webRouter.navigate(newChatRoute());
+            return;
+        }
+        if (action === 'recent') {
+            const fallback = conversationStore.fallbackConversationId;
+            if (fallback) void webRouter.navigate(conversationRoute(fallback));
+            return;
+        }
+        const conversationId = conversationStore.activeConversationId;
+        if (conversationId) void conversationStore.open(conversationId);
+        else void conversationStore.loadList();
     });
 
     document.addEventListener('keydown', function(event) {

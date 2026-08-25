@@ -9,6 +9,7 @@ with a stable resource id and exposes only sanitized filenames and safe issues.
 from __future__ import annotations
 
 import hashlib
+import html as html_lib
 import json
 import re
 import stat
@@ -16,12 +17,14 @@ import xml.etree.ElementTree as ET
 import zipfile
 from collections import deque
 from collections.abc import Mapping, Sequence
+from contextlib import closing
 from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Literal
 from urllib.parse import unquote
 
+import pypdfium2 as pdfium
 from defusedxml import ElementTree as DefusedElementTree
 from PIL import Image
 
@@ -43,7 +46,6 @@ ArtifactIssueKind = Literal[
 ]
 
 PRIMARY_REPORT_NAMES = frozenset({"report.md", "report.html", "report.pdf"})
-PRIMARY_REPORT_NAME = "report.md"
 _ARTIFACT_TARGET = re.compile(
     r"(?P<prefix>!?(?:\[[^\]]*\])\(\s*<?artifact:)(?P<path>[^\s)>]+)(?P<suffix>>?(?:\s+[^)]*)?\))",
     re.IGNORECASE,
@@ -62,6 +64,18 @@ _HTML_STYLESHEET = re.compile(
 )
 _CSS_EXTERNAL_URL = re.compile(r"url\(\s*[\"']?(?!data:|blob:)[^)]+\)", re.IGNORECASE)
 _CSS_EXTERNAL_IMPORT = re.compile(r"@import\s+(?!url\(\s*[\"']?data:)", re.IGNORECASE)
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_HTML_SUBSTANTIVE_ELEMENT = re.compile(
+    r"<(?:audio|embed|iframe|img|object|source|video)\b[^>]*(?:src|data)\s*="
+    r"|<(?:input|button)\b"
+    r"|<(?:circle|ellipse|line|path|polygon|polyline|rect|text)\b"
+    r"|<(?:link|script)\b[^>]*(?:href|src)\s*=",
+    re.IGNORECASE,
+)
+_HTML_STYLE_BLOCK = re.compile(r"<style\b[^>]*>.*?</style\s*>", re.DOTALL | re.IGNORECASE)
+_HTML_TAG = re.compile(r"<[^>]*>")
+_PDF_REPORT_SCAN_PAGES = 256
+_PDF_REPORT_TEXT_CHARS_PER_PAGE = 4096
 
 _MEDIA_BY_EXTENSION: dict[str, tuple[str, PresentationCapability]] = {
     ".md": ("text/markdown", "markdown"),
@@ -219,7 +233,7 @@ def scan_artifact_directory(
     files = _inventory(artifacts_root, limits=limits)
     staged: list[StagedArtifact] = []
     for relative, path in files.items():
-        if relative == PRIMARY_REPORT_NAME and not _report_has_body(path):
+        if relative in PRIMARY_REPORT_NAMES and not _report_has_body(path, limits=limits):
             continue
         staged.append(_validate_file(relative, path, limits=limits))
     return tuple(staged)
@@ -245,6 +259,11 @@ def validate_publication(
         return PublicationPlan(answer=settled, descriptors=descriptor, issues=(issue,))
 
     report_names = sorted(name for name in files if name in PRIMARY_REPORT_NAMES)
+    files = {
+        relative: path
+        for relative, path in files.items()
+        if relative not in PRIMARY_REPORT_NAMES or _report_has_body(path, limits=limits)
+    }
     global_issues: list[ArtifactIssue] = []
     if len(report_names) > 1:
         global_issues.append(
@@ -450,7 +469,10 @@ def _inventory(root: Path, *, limits: PublicationLimits) -> dict[str, Path]:
 
 
 def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> StagedArtifact:
-    size = path.stat().st_size
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise _FileValidationError("unsafe_file", "An Artifact could not be read safely.") from exc
     if size > limits.max_file_bytes:
         raise _FileValidationError(
             "file_too_large",
@@ -493,8 +515,11 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
         elif media_type == "image/svg+xml":
             content = _sanitize_svg(content)
         elif media_type == "application/pdf":
-            if not content.startswith(b"%PDF-") or b"%%EOF" not in content[-4096:]:
-                raise ValueError("not PDF")
+            with pdfium.PdfDocument(content) as document:
+                if len(document) == 0:
+                    raise ValueError("PDF has no pages")
+            if relative in PRIMARY_REPORT_NAMES and not _pdf_has_body(content):
+                raise ValueError("PDF report is blank")
         elif media_type.startswith("application/vnd.openxmlformats-officedocument"):
             expected_root = {
                 ".docx": "word/",
@@ -546,11 +571,13 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
         raise
     except (
         OSError,
+        RuntimeError,
         UnicodeDecodeError,
         ValueError,
         ET.ParseError,
         Image.DecompressionBombError,
         json.JSONDecodeError,
+        pdfium.PdfiumError,
     ) as exc:
         raise _FileValidationError(
             "media_mismatch", f"Artifact {Path(relative).name} does not match its file extension."
@@ -728,11 +755,56 @@ def _dedupe_issues(issues: Sequence[ArtifactIssue]) -> list[ArtifactIssue]:
     return result
 
 
-def _report_has_body(path: Path) -> bool:
+def _pdf_has_body(content: bytes) -> bool:
+    visual_types = [
+        pdfium.raw.FPDF_PAGEOBJ_IMAGE,
+        pdfium.raw.FPDF_PAGEOBJ_PATH,
+        pdfium.raw.FPDF_PAGEOBJ_SHADING,
+    ]
+    with pdfium.PdfDocument(content) as document:
+        page_count = min(len(document), _PDF_REPORT_SCAN_PAGES)
+        for page_index in range(page_count):
+            page = document[page_index]
+            try:
+                text_page = page.get_textpage()
+                try:
+                    count = min(
+                        text_page.count_chars(),
+                        _PDF_REPORT_TEXT_CHARS_PER_PAGE,
+                    )
+                    text = text_page.get_text_range(count=count) if count > 0 else ""
+                finally:
+                    text_page.close()
+                if is_substantive_text(text):
+                    return True
+                with closing(page.get_objects(filter=visual_types, max_depth=8)) as objects:
+                    for page_object in objects:
+                        page_object.close()
+                        return True
+            finally:
+                page.close()
+    return False
+
+
+def _report_has_body(path: Path, *, limits: PublicationLimits) -> bool:
     try:
-        return is_substantive_text(path.read_text(encoding="utf-8"))
+        if path.stat().st_size > limits.max_file_bytes:
+            return True  # Let _validate_file report the stable size issue without reading it.
+        if path.suffix.lower() == ".pdf":
+            content = path.read_bytes()
+            try:
+                return _pdf_has_body(content)
+            except pdfium.PdfiumError, RuntimeError, ValueError:
+                return True  # Let _validate_file report malformed PDF media.
+        text = path.read_text(encoding="utf-8")
     except OSError, UnicodeDecodeError:
-        return False
+        return True  # Let _validate_file report unreadable or malformed text media.
+    if path.suffix.lower() in {".html", ".htm"}:
+        text = _HTML_COMMENT.sub(" ", text)
+        if _HTML_SUBSTANTIVE_ELEMENT.search(text):
+            return True
+        text = html_lib.unescape(_HTML_TAG.sub(" ", _HTML_STYLE_BLOCK.sub(" ", text)))
+    return is_substantive_text(text)
 
 
 def _reject_special(path: Path) -> None:
@@ -747,7 +819,6 @@ def _reject_special(path: Path) -> None:
 
 
 __all__ = [
-    "PRIMARY_REPORT_NAME",
     "PRIMARY_REPORT_NAMES",
     "ArtifactIssue",
     "ArtifactIssueKind",

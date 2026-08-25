@@ -1,8 +1,8 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import WaSplitPanel from '@awesome.me/webawesome/dist/components/split-panel/split-panel.js';
+import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
 
-const DRAWER_MEDIA = '(max-width: 1199px)';
 const MIN_WIDTH = 320;
 const RESIZE_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'Home', 'End']);
 
@@ -64,7 +64,7 @@ function scheduleRenderedWidthSync(): void {
 }
 
 export function syncPanelSplitState(): void {
-    const drawer = window.matchMedia(DRAWER_MEDIA).matches;
+    const drawer = window.matchMedia(COMPACT_SHELL_MEDIA).matches;
     for (const state of states) {
         const open = state.panel.classList.contains('open');
         state.split.disabled = drawer || !open;

@@ -11,6 +11,8 @@ const PERMISSIONS = [
   'serial', 'speaker-selection', 'usb', 'web-share', 'xr-spatial-tracking',
 ].map((name) => `${name} 'none'`).join('; ');
 
+const ESCAPE_MESSAGE = 'dl-artifact-frame-escape';
+
 const BASE_CSP = [
   "default-src 'none'",
   "style-src 'unsafe-inline'",
@@ -27,14 +29,20 @@ const BASE_CSP = [
   "manifest-src 'none'",
 ];
 
-function wrapperDocument(source: string, active: boolean): string {
+function wrapperDocument(source: string, active: boolean, escapeToken: string): string {
   const script = active ? "script-src 'unsafe-inline'" : "script-src 'none'";
   const policy = [BASE_CSP[0], script, ...BASE_CSP.slice(1)].join('; ');
+  const escapeBridge = active
+    ? `<script>(()=>{const token=${JSON.stringify(escapeToken)};` +
+      'document.currentScript.remove();window.addEventListener("keydown",event=>{' +
+      `if(event.key==="Escape")parent.postMessage({type:"${ESCAPE_MESSAGE}",token},"*");` +
+      '},true);})();</script>'
+    : '';
   return '<!doctype html><html><head><meta charset="utf-8">' +
     `<meta http-equiv="Content-Security-Policy" content="${policy}">` +
     '<meta name="referrer" content="no-referrer">' +
     '<meta name="color-scheme" content="light dark"></head><body>' +
-    source + '</body></html>';
+    escapeBridge + source + '</body></html>';
 }
 
 /** The sole execution boundary for untrusted Artifact HTML. */
@@ -69,11 +77,23 @@ export class DlActiveArtifactFrame extends LitElement {
   declare active: boolean;
   declare label: string;
 
+  readonly #escapeToken = crypto.randomUUID();
+
   constructor() {
     super();
     this.source = null;
     this.active = false;
     this.label = 'Artifact HTML preview';
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener('message', this.#receiveMessage);
+  }
+
+  override disconnectedCallback(): void {
+    window.removeEventListener('message', this.#receiveMessage);
+    super.disconnectedCallback();
   }
 
   destroy(): void {
@@ -92,11 +112,24 @@ export class DlActiveArtifactFrame extends LitElement {
           sandbox=${this.active ? 'allow-scripts' : ''}
           referrerpolicy="no-referrer"
           allow=${PERMISSIONS}
-          .srcdoc=${wrapperDocument(this.source, this.active)}
+          .srcdoc=${wrapperDocument(this.source, this.active, this.#escapeToken)}
         ></iframe>
       </div>
     `;
   }
+
+  #receiveMessage = (event: MessageEvent): void => {
+    const iframe = this.renderRoot.querySelector('iframe');
+    const payload = event.data as {type?: unknown; token?: unknown} | null;
+    if (
+      !iframe || event.source !== iframe.contentWindow || !payload
+      || payload.type !== ESCAPE_MESSAGE || payload.token !== this.#escapeToken
+    ) return;
+    this.dispatchEvent(new CustomEvent('artifact-frame-escape', {
+      bubbles: true,
+      composed: true,
+    }));
+  };
 }
 
 customElements.define('dl-active-artifact-frame', DlActiveArtifactFrame);

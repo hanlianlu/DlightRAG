@@ -1,8 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import chatStyles from '../styles/chat.module.css';
 import lightboxStyles from '../styles/lightbox.module.css';
-import type {ConversationAttachmentReference} from '../api/conversations.ts';
 import {closestElement, wrapTabFocus} from '../lib/dom.ts';
 import {safeImageSrc} from '../lib/urls.ts';
 
@@ -12,109 +10,21 @@ type LightboxElement = HTMLDivElement & {
     __lightboxImg?: HTMLImageElement;
 };
 
-// Render image attachments (composer previews and stored history alike) as lazy
-// async thumbnails that open their full-resolution original in the lightbox on
-// demand. `thumbnail_url` falls back to `url` when a derived thumbnail is absent
-// (e.g. live blob previews that carry a single object URL).
-export function renderMessageAttachmentImages(
-    container: Element,
-    images: readonly ConversationAttachmentReference[],
-): void {
-    if (images.length === 0) return;
-    const msgImages = document.createElement('div');
-    msgImages.className = chatStyles.messageImages;
-    images.forEach(function(reference) {
-        const card = document.createElement('div');
-        card.className = chatStyles.historyImageCard;
-
-        const imageButton = document.createElement('button');
-        imageButton.type = 'button';
-        imageButton.className = chatStyles.historyImageButton;
-        imageButton.setAttribute('aria-label', `Open ${reference.label}`);
-
-        const status = document.createElement('span');
-        status.className = chatStyles.historyImageStatus;
-        status.setAttribute('role', 'status');
-        status.textContent = `Loading ${reference.label}`;
-
-        const retry = document.createElement('button');
-        retry.type = 'button';
-        retry.className = chatStyles.historyImageRetry;
-        retry.textContent = 'Retry image';
-        retry.setAttribute('aria-label', `Retry image: ${reference.label}`);
-        retry.hidden = true;
-
-        const imgEl = document.createElement('img');
-        imgEl.className = chatStyles.messageImg;
-        imgEl.alt = reference.label;
-        imgEl.loading = 'lazy';
-        imgEl.decoding = 'async';
-        const thumbnailSrc = safeImageSrc(reference.thumbnail_url || reference.url);
-        const fullSrc = safeImageSrc(reference.url);
-
-        const showError = (): void => {
-            imgEl.hidden = true;
-            imageButton.disabled = true;
-            imageButton.removeAttribute('data-action');
-            status.textContent = `History image failed to load: ${reference.label}`;
-            retry.hidden = false;
-        };
-        imgEl.addEventListener('load', function() {
-            status.hidden = true;
-            retry.hidden = true;
-        });
-        imgEl.addEventListener('error', showError);
-        retry.addEventListener('click', function() {
-            if (!thumbnailSrc || !fullSrc) return;
-            retry.hidden = true;
-            status.hidden = false;
-            status.textContent = `Loading ${reference.label}`;
-            imageButton.disabled = false;
-            imageButton.setAttribute('data-action', 'open-lightbox');
-            imgEl.hidden = false;
-            imgEl.removeAttribute('src');
-            window.requestAnimationFrame(function() { imgEl.src = thumbnailSrc; });
-        });
-
-        if (thumbnailSrc && fullSrc) {
-            imageButton.setAttribute('data-action', 'open-lightbox');
-            imageButton.setAttribute('data-full-src', fullSrc);
-            if (fullSrc.startsWith('blob:')) imageButton.dataset.liveObjectUrl = fullSrc;
-            imgEl.src = thumbnailSrc;
-        } else {
-            showError();
-        }
-
-        imageButton.append(imgEl, status);
-        card.append(imageButton, retry);
-        msgImages.appendChild(card);
-    });
-    container.appendChild(msgImages);
-}
-
-export function releaseMessageAttachmentObjectUrls(root: ParentNode): void {
-    const urls = new Set<string>();
-    root.querySelectorAll<HTMLElement>('[data-live-object-url]').forEach((element) => {
-        const url = element.dataset.liveObjectUrl;
-        if (url) urls.add(url);
-        delete element.dataset.liveObjectUrl;
-    });
-    for (const url of urls) URL.revokeObjectURL(url);
-}
-
 function _getLightboxImageSrc(el: Element): string {
     const s = el.getAttribute('data-full-src') || el.getAttribute('data-src') || '';
     return safeImageSrc(s);
 }
 
 function _collectGalleryImages(): string[] {
-    const items = document.querySelectorAll('[data-action="open-lightbox"]');
-    const srcs: string[] = [];
+    const items = document.querySelectorAll(
+        '[data-action="open-lightbox"], [data-answer-image]',
+    );
+    const srcs = new Set<string>();
     items.forEach(function(el) {
-        const s = _getLightboxImageSrc(el);
-        if (s) srcs.push(s);
+        const source = _getLightboxImageSrc(el);
+        if (source) srcs.add(source);
     });
-    return srcs;
+    return [...srcs];
 }
 
 function _updateNavButtons(box: LightboxElement): void {

@@ -345,7 +345,9 @@ def _public_artifact(
         value.update(
             data_url=base,
             download_url=f"{base}?download=1",
-            presentation_url=f"{base}/presentation",
+            presentation_url=(
+                f"{base}/presentation" if value["presentation"] == "markdown" else None
+            ),
         )
     else:
         value.update(data_url=None, download_url=None, presentation_url=None)

@@ -14,6 +14,22 @@ import {renderMath} from '../lib/math.ts';
 import {safeImageSrc} from '../lib/urls.ts';
 import {renderDiagrams} from './mermaid.ts';
 
+export interface ArtifactOpenDetail {
+  artifact: AnswerArtifact;
+  returnFocus: HTMLElement;
+}
+
+export interface AnswerSourceOpenDetail {
+  referenceId: string;
+  chunkId?: string;
+  returnFocus: HTMLElement;
+}
+
+export interface AnswerImageOpenDetail {
+  src: string;
+  returnFocus: HTMLElement;
+}
+
 function secureExternalLinks(container: ParentNode): void {
   container.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((link) => {
     if (link.hasAttribute('download')) return;
@@ -58,11 +74,12 @@ export class AnswerPresentationElement extends LightElement {
           Some requested Artifacts could not be published.
         </div>
       `}
-      <div class="answer-parts">
+      <div class="answer-parts" @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
         ${presentation.parts.map((part, index) => this.#part(part, index))}
       </div>
       ${presentation.evidence_images.length > 0 ? html`
-        <section class="answer-evidence" aria-label="Visual Evidence">
+        <section class="answer-evidence" aria-label="Visual Evidence"
+                 @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
           <h3>Visual Evidence</h3>
           <div class="answer-image-strip">
             ${repeat(
@@ -74,7 +91,8 @@ export class AnswerPresentationElement extends LightElement {
         </section>
       ` : nothing}
       ${presentation.sources.length > 0 ? html`
-        <section class="answer-references" aria-label="References">
+        <section class="answer-references" aria-label="References"
+                 @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
           <h3 class="answer-references-title">References</h3>
           ${repeat(
             presentation.sources,
@@ -118,7 +136,7 @@ export class AnswerPresentationElement extends LightElement {
       if (source) {
         return html`
           <figure class="answer-artifact-image">
-            <button type="button" data-action="open-lightbox" data-src=${source}
+            <button type="button" data-answer-image data-src=${source}
                     aria-label=${`Open image: ${artifact.label}`}>
               <img src=${source} alt=${artifact.label} loading="lazy">
             </button>
@@ -147,7 +165,7 @@ export class AnswerPresentationElement extends LightElement {
     if (!source || !thumbnail) return nothing;
     return html`
       <div class="answer-evidence-image">
-        <button class="answer-image-item" type="button" data-action="open-lightbox"
+        <button class="answer-image-item" type="button" data-answer-image
                 data-src=${source} aria-label=${`Open image: ${image.label}`}>
           <img src=${thumbnail} alt=${image.label} loading="lazy">
           <span class="answer-image-label">${image.label}</span>
@@ -162,8 +180,46 @@ export class AnswerPresentationElement extends LightElement {
     `;
   }
 
+  #handleIntent = (event: Event): void => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    const source = target.closest<HTMLElement>(
+      '.citation-badge[data-ref], .answer-ref-item[data-ref], .answer-image-source[data-ref]',
+    );
+    if (source && this.contains(source)) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('answer-source-open', {
+        bubbles: true,
+        composed: true,
+        detail: {
+          referenceId: source.dataset.ref || '',
+          ...(source.dataset.chunk ? {chunkId: source.dataset.chunk} : {}),
+          returnFocus: source,
+        },
+      }));
+      return;
+    }
+    const image = target.closest<HTMLElement>('[data-answer-image][data-src]');
+    if (!image || !this.contains(image)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.dispatchEvent(new CustomEvent<AnswerImageOpenDetail>('answer-image-open', {
+      bubbles: true,
+      composed: true,
+      detail: {src: image.dataset.src || '', returnFocus: image},
+    }));
+  };
+
+  #handleKeyIntent = (event: KeyboardEvent): void => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target || target instanceof HTMLButtonElement) return;
+    this.#handleIntent(event);
+  };
+
   #openArtifact(artifact: AnswerArtifact, returnFocus: HTMLElement): void {
-    this.dispatchEvent(new CustomEvent('artifact-open', {
+    this.dispatchEvent(new CustomEvent<ArtifactOpenDetail>('artifact-open', {
       bubbles: true,
       composed: true,
       detail: {artifact, returnFocus},

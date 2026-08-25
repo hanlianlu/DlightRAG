@@ -296,10 +296,13 @@ One `AnswerOrchestrator` executes the durable Resolved Mode:
   parallel with selected context/model/inherited tools; adopted Evidence is
   parent-citable and persists before spawn settlement. A no-tool assistant turn
   ends Research and its text is the answer. There is no hidden finalizer model
-  call. Optional `artifacts/report.md` publishes as a handle-only report.
+  call. One explicitly referenced, non-blank `artifacts/report.md`,
+  `artifacts/report.html`, or `artifacts/report.pdf` may publish as the typed
+  Primary Report Artifact.
 
 Both paths use deterministic citation/source finalization and expose the same
-result shape, including `sources`, `answer_images`, `usage`, and Evidence counts.
+result shape, including ordered `parts`, `sources`, `evidence_images`, typed
+`artifacts` with `artifact_outcome`, `usage`, and Evidence counts.
 Resource reads are deterministic first: `read` decodes UTF-8/CSV
 directly and converts HTML/PDF/DOCX/PPTX/XLSX through selected MarkItDown
 converters (plugins disabled, no network, OOXML zip-bomb preflight).
@@ -432,10 +435,11 @@ Markdown headings degrades to its document marker `[n]`: that excerpt states no
 fact, so the claim is credited to the document rather than to a passage the
 model only guessed at. Returned `sources` contain only
 cited documents and chunks.
-Answer generation also derives `answer_images` and `answer_blocks` from those
-validated cited sources before transport projection, so SDK, REST, MCP, and Web
-expose the same image registry and insertion hints without trusting
-model-generated Markdown image URLs.
+Answer finalization also derives the `evidence_images` registry and ordered
+`parts` from validated cited sources and explicit Artifact references before
+transport projection. SDK, REST, MCP, and Web therefore expose the same typed
+image and Artifact presentation data, including `artifacts` and
+`artifact_outcome`, without trusting model-generated Markdown image URLs.
 Streaming callers receive tokens immediately and a final normalized answer plus
 cited sources after validation.
 

@@ -106,8 +106,8 @@ def test_run_status_and_phase_literals_have_one_runtime_owner() -> None:
 
 
 def test_frontend_phase_union_matches_runtime() -> None:
-    text = (_ROOT / "frontend/lib/chat_renderer.ts").read_text(encoding="utf-8")
-    match = re.search(r"type PhaseLabel = ([^;]+);", text)
+    text = (_ROOT / "frontend/ui/chat_feature.ts").read_text(encoding="utf-8")
+    match = re.search(r"type AnswerPhase = ([^;]+);", text)
     assert match is not None
     values = tuple(part.strip().strip("'\"") for part in match.group(1).split("|"))
     assert values == _PHASE_VALUES

@@ -1,7 +1,11 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
-import {prepareMemorySettingsPanel, setupMemorySettings} from './memory.ts';
+import {
+  prepareMemorySettingsPanel,
+  setupChatMemoryOperationAdapter,
+  setupMemorySettings,
+} from './memory.ts';
 
 const originalFetch = window.fetch;
 
@@ -23,6 +27,54 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 afterEach(() => {
   window.fetch = originalFetch;
   document.body.replaceChildren();
+});
+
+it('adapts typed Chat memory facts into Toast and authoritative Settings refresh', async () => {
+  const methods: string[] = [];
+  window.fetch = async (_input, init) => {
+    const method = init?.method || 'GET';
+    methods.push(method);
+    const payload = method === 'POST'
+      ? {
+          action: 'undo', outcome: 'changed', change_id: 'undo-1', memory_ids: [], body: '',
+        }
+      : {enabled: true, active_count: methods.filter((item) => item === 'POST').length ? 0 : 1};
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: {'Content-Type': 'application/json'},
+    });
+  };
+  mountMemorySettings();
+  const chat = document.createElement('dl-chat-feature');
+  const toast = document.createElement('div');
+  toast.id = 'toast';
+  document.body.append(chat, toast);
+  setupChatMemoryOperationAdapter();
+
+  chat.dispatchEvent(new CustomEvent('dl-chat-memory-operation', {
+    detail: {
+      live: true,
+      intent_id: 'intent-adapter-test',
+      operation: 'remember',
+      outcome: 'changed',
+      change_id: 'change-adapter-test',
+      body: 'Use concise answers',
+    },
+  }));
+  await waitFor(() => document.getElementById('memory-active-count')?.textContent === '1 stored item');
+
+  expect(methods).to.deep.equal(['GET']);
+  expect(toast.textContent).to.contain('Remembered: Use concise answers');
+  expect(toast.querySelector('button')?.textContent).to.equal('Undo');
+  expect(document.getElementById('memory-active-count')?.textContent).to.equal('1 stored item');
+
+  toast.querySelector<HTMLButtonElement>('button')?.click();
+  await waitFor(() =>
+    methods.length === 3
+    && toast.textContent === 'Profile Memory change undone.'
+    && document.getElementById('memory-active-count')?.textContent === '0 stored items',
+  );
+  expect(methods).to.deep.equal(['GET', 'POST', 'GET']);
 });
 
 it('never enables mutation controls after a failed authoritative read', async () => {

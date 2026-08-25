@@ -37,18 +37,27 @@ export function wrapTabFocus(focusable: readonly HTMLElement[], event: KeyboardE
 const SHELL_SELECTORS = ['.topbar', '.chat-area', '.composer'];
 
 /**
- * Mark the app shell inert while any drawer-style surface is modal.
+ * Mark every surface outside a modal Shell pane inert.
  *
- * Derived from the body flags rather than from a single caller, so the panel and
- * the conversation sidebar cannot clear each other's inert state.
+ * Derived from body flags so the Inspector, conversation drawer, and Artifact
+ * Canvas cannot clear each other's accessibility state.
  */
-export function syncShellInert(extraModal = false): void {
-    const inert =
-        extraModal ||
+export function syncShellInert(): void {
+    const artifactModal = document.body.classList.contains('artifact-canvas-modal');
+    const shellInert =
+        artifactModal ||
         document.body.classList.contains('panel-drawer-open') ||
         document.body.classList.contains('conversation-drawer-open');
     for (const selector of SHELL_SELECTORS) {
         const element = document.querySelector<HTMLElement>(selector);
-        if (element) element.inert = inert;
+        if (element) element.inert = shellInert;
     }
+
+    const sidebar = document.getElementById('chat-sidebar');
+    if (sidebar) {
+        const expanded = document.body.classList.contains('conversation-sidebar-open');
+        sidebar.inert = artifactModal || !expanded;
+    }
+    const panel = document.getElementById('panel');
+    if (panel) panel.inert = artifactModal || !panel.classList.contains('open');
 }

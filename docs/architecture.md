@@ -104,7 +104,8 @@ answer request (query + optional attachments + mode auto|fast|research)
        run-local ToolRegistry exposes every configured tool
        foreground spawn_agent children inherit tools except spawn, run in
        parallel under the parent lease, and adopt citable Evidence atomically
-       optional artifacts/report.md publishes as a Primary Report handle
+       explicitly referenced outputs publish as typed Artifacts; one non-blank
+       report.md, report.html, or report.pdf may hold the Primary Report role
 ```
 
 The execution setting is exactly `disabled | trust | sandbox`. Trust binds a
@@ -237,17 +238,22 @@ or HTMX composition path and no backend-generated ordinary UI fragment.
 
 Browser state is split by lifetime rather than collected in one store. The
 History API route is the active-conversation authority; focused stores own
-conversation, workspace, attachment, ingest, and Answer-run state; internal
-adapters own SSE, DOMPurify, MathJax, Mermaid, object URLs, focus, and panel
-resize integration. Server-sanitized semantic answer/source HTML is the only
-deliberate HTML sink. Filenames, controls, links, galleries, panels, and system
-states remain typed values rendered by Lit.
+conversation, workspace, attachment, ingest, and Answer-run state. The Lit-native
+Chat Feature composes its Message List and Composer while one RunController owns
+SSE replay/resume, reconnect timers, cancellation, and reader aborts. Internal
+adapters retain DOMPurify, MathJax, Mermaid, object URLs, and split integration.
+Server-sanitized semantic answer/source HTML is the only deliberate same-DOM HTML
+sink. Artifact Canvas owns typed Artifact renderer selection and focus; active
+HTML is fetched as authenticated inert bytes and placed in `srcdoc` only after
+explicit consent, inside an opaque-origin iframe that is destroyed on close or
+switch. Filenames, controls, links, galleries, panels, and system states remain
+typed values rendered by Lit.
 
 DlightRAG's Utopia/Mineral tokens remain the visual authority. The production
 uses only Web Awesome's Split Panel component, imported directly without its
 default theme and wrapped by DlightRAG persistence, clamping, accessibility,
-and compact-layout behavior. Nested split panels preserve simultaneous Report
-and Sources on wide layouts. Below 1200px the primary app remains a full-width
+and compact-layout behavior. Nested split panels preserve simultaneous Artifact
+Canvas and Sources on wide layouts. Below 1200px the primary app remains a full-width
 fixed layer under the native backdrop while the active panel retains modal
 focus/inert semantics. Drawer and Dialog components were deliberately rejected;
 the existing native overlays use the same semantic geometry tokens.

@@ -19,6 +19,7 @@ import {bus} from '../events/bus.ts';
 import {openPanel} from './panel.ts';
 import {withRelativePath} from './folder-upload.ts';
 import {showToast} from './toast.ts';
+import type {ComposerWorkspaceDropDetail} from './chat_composer.ts';
 import './ingest_target.ts';
 
 const POLL_INTERVAL_MS = 2000;
@@ -407,6 +408,11 @@ export function setupFilesPanel(): void {
   const folderInput = document.getElementById('folder-input') as HTMLInputElement | null;
   folderInput?.addEventListener('change', function() { handleFolderInputChange(folderInput); });
   document.addEventListener('files-folder-request', function() { folderInput?.click(); });
+  // Milestone 4 deletes this adapter when Files becomes Inspector-owned content.
+  document.addEventListener('dl-composer-workspace-drop', function(event: Event) {
+    const {files, folderName} = (event as CustomEvent<ComposerWorkspaceDropDetail>).detail;
+    void uploadFilesToWorkspace(files, folderName);
+  });
 
   bus.on('workspaceCreated', ({workspace}) => {
     ingestStore.set(workspace);

@@ -68,7 +68,7 @@ def test_terminal_answer_exposes_minimal_agent_branch_controls(page):
     actions = page.locator('[class*="runActions"]').last
     assert actions.get_by_role("button", name="Follow up").is_visible()
     assert actions.get_by_role("button", name="Fork").is_visible()
-    assert actions.get_by_role("button", name="Child agents").is_visible()
+    assert actions.get_by_role("button", name="Child agents").count() == 0
 
 
 @pytest.mark.e2e
@@ -288,6 +288,29 @@ def test_navigating_away_from_a_pending_run_detaches_instead_of_blocking(page: P
         conversation_id,
     )
     assert status in ("queued", "running")
+
+
+@pytest.mark.e2e
+def test_steering_clears_only_text_and_keeps_pending_attachments(page: Page) -> None:
+    page.goto("/web/")
+    page.wait_for_selector(".composer-input", timeout=10000)
+    _install_event_transport(
+        page,
+        [[_frame(index + 1, "progress", '{"phase":"planning"}')] for index in range(200)],
+    )
+    page.route("**/web/api/answer/*/steer", lambda route: route.fulfill(status=202, json={}))
+
+    _submit(page, "Start research")
+    page.wait_for_selector(".composer-send.is-stop", timeout=10000)
+    page.locator("#attachment-input").set_input_files(
+        {"name": "notes.md", "mimeType": "text/markdown", "buffer": b"notes"}
+    )
+    page.get_by_role("textbox", name="Message").fill("Use these notes")
+    page.get_by_role("button", name="Steer").click()
+
+    page.wait_for_function("document.querySelector('.composer-input').value === ''")
+    assert page.locator("#thumbnail-strip").get_by_text("notes.md").is_visible()
+    assert page.get_by_text("Use these notes", exact=True).is_visible()
 
 
 @pytest.mark.e2e

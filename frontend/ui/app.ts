@@ -7,8 +7,25 @@ import {
 } from '../api/bootstrap.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
 import {LightElement} from '../lib/lit_host.ts';
+import type {AttachmentPolicy} from './attachment_policy.ts';
 import type {DlArtifactCanvas} from './artifact_canvas.ts';
 import './artifact_canvas.ts';
+import type {
+  AnswerImageOpenDetail,
+  AnswerPresentationElement,
+  AnswerSourceOpenDetail,
+} from './answer_presentation.ts';
+import {openLightbox} from './images.ts';
+import {openAnswerSources} from './source-panel.ts';
+import type {ChatContentChangeDetail, DlChatFeature} from './chat_feature.ts';
+import type {ChatRunActionDetail} from './chat_message_list.ts';
+import './chat_feature.ts';
+import type {
+  ContinuationResult,
+  DlChildrenRoster,
+  DlContinuationDialog,
+} from './run_dialogs.ts';
+import './run_dialogs.ts';
 
 const EMPTY_BOOTSTRAP: WebBootstrap = {
   contract_version: 1,
@@ -36,6 +53,7 @@ export class DlApp extends LightElement {
   declare bootState: 'loading' | 'ready' | 'error';
   #bootstrap: WebBootstrap = EMPTY_BOOTSTRAP;
   #controller: AbortController | null = null;
+  #pendingContinuation: {kind: 'follow-up' | 'fork'; runId: string} | null = null;
   readonly #ready: Promise<WebBootstrap>;
   #resolveReady!: (bootstrap: WebBootstrap) => void;
   #readyResolved = false;
@@ -92,12 +110,8 @@ export class DlApp extends LightElement {
         class="app"
         id="app"
         @artifact-open=${this.#openArtifact}
-        data-attachment-count-limit=${String(attachments.count_limit)}
-        data-attachment-image-max-bytes=${String(attachments.image_max_bytes)}
-        data-attachment-document-max-bytes=${String(attachments.document_max_bytes)}
-        data-attachment-extensions=${JSON.stringify(attachments.extensions)}
-        data-attachment-image-capability=${attachments.image_capability}
-        data-attachment-image-limit=${String(attachments.image_limit)}
+        @answer-source-open=${this.#openAnswerSource}
+        @answer-image-open=${this.#openAnswerImage}
         aria-busy=${ready ? 'false' : 'true'}
         ?inert=${!ready}
       >
@@ -189,57 +203,12 @@ export class DlApp extends LightElement {
                   </div>
                 </header>
 
-                <main class="chat-area" id="chat-area">
-                  <div id="chat-messages" class="chat-messages">
-                    <div class="welcome" id="welcome">
-                      <div class="welcome-brand">DlightRAG</div>
-                      <div class="welcome-sub">Ask anything about your documents</div>
-                    </div>
-                  </div>
-                </main>
-
-                <div class="drop-overlay" id="drop-overlay">
-                  <div class="drop-overlay-content">Drop files or folders here</div>
-                </div>
-
-                <div class="composer" id="composer">
-                  <div class="composer-inner">
-                    <div class="thumbnail-strip" id="thumbnail-strip"></div>
-                    <form id="query-form" class="composer-form">
-                      <button type="button" class="composer-plus" id="composer-plus" aria-label="Attach files">
-                        <svg class="composer-plus-icon" width="24" height="24" viewBox="0 0 24 24"
-                             fill="none" stroke="currentColor" stroke-linecap="round"
-                             stroke-linejoin="round" aria-hidden="true" focusable="false">
-                          <path d="M12 5v14"></path><path d="M5 12h14"></path>
-                        </svg>
-                      </button>
-                      <textarea name="query" aria-label="Message" placeholder="Ask anything"
-                                class="composer-input" rows="1" autocomplete="off"></textarea>
-                      <div class="composer-mode">
-                        <button type="button" class="composer-mode-trigger" id="composer-mode"
-                                aria-haspopup="menu" aria-expanded="false" aria-label="Answer mode: Auto">Auto</button>
-                        <div class="composer-mode-menu" id="composer-mode-menu" role="menu" hidden>
-                          <button type="button" role="menuitemradio" data-mode="auto" aria-checked="true">Auto</button>
-                          <button type="button" role="menuitemradio" data-mode="fast" aria-checked="false">Fast</button>
-                          <button type="button" role="menuitemradio" data-mode="research" aria-checked="false">Research</button>
-                        </div>
-                      </div>
-                      <button type="submit" class="composer-send" aria-label="Send">
-                        <svg class="composer-send-icon composer-send-icon--send" width="18" height="18"
-                             viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                          <line x1="22" y1="2" x2="11" y2="13"></line>
-                          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                        </svg>
-                        <svg class="composer-send-icon composer-send-icon--stop" width="16" height="16"
-                             viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
-                          <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-                        </svg>
-                      </button>
-                    </form>
-                  </div>
-                  <input class="hidden" type="file" id="attachment-input" accept=${attachments.accept} multiple>
-                </div>
+                <dl-chat-feature
+                  .attachmentPolicy=${this.#attachmentPolicy()}
+                  .attachmentAccept=${attachments.accept}
+                  @dl-chat-content-change=${this.#chatContentChanged}
+                  @dl-chat-run-action=${this.#chatRunAction}
+                ></dl-chat-feature>
 
                 <input class="hidden" type="file" id="folder-input" webkitdirectory directory multiple>
               </div>
@@ -280,6 +249,68 @@ export class DlApp extends LightElement {
     const canvas = this.querySelector<DlArtifactCanvas>('#artifact-canvas');
     if (!canvas) return;
     void canvas.open(event.detail.artifact, event.detail.returnFocus);
+  }
+
+  #openAnswerSource(event: CustomEvent<AnswerSourceOpenDetail>): void {
+    const presentation = (event.target as AnswerPresentationElement | null)?.presentation;
+    if (!presentation) return;
+    const canvas = this.querySelector<DlArtifactCanvas>('#artifact-canvas');
+    const sourceWasInCanvas = Boolean(canvas?.contains(event.detail.returnFocus));
+    canvas?.prepareForInspector();
+    const returnFocus = sourceWasInCanvas && !canvas?.classList.contains('open')
+      ? document.activeElement instanceof HTMLElement ? document.activeElement : null
+      : event.detail.returnFocus;
+    openAnswerSources(
+      presentation,
+      event.detail.referenceId,
+      event.detail.chunkId,
+      returnFocus,
+    );
+  }
+
+  #openAnswerImage(event: CustomEvent<AnswerImageOpenDetail>): void {
+    event.detail.returnFocus.focus();
+    openLightbox(event.detail.src);
+  }
+
+  #chatContentChanged(event: CustomEvent<ChatContentChangeDetail>): void {
+    this.querySelector('.app')?.classList.toggle('has-messages', event.detail.hasMessages);
+  }
+
+  #attachmentPolicy(): AttachmentPolicy {
+    const attachments = this.#bootstrap.answer_attachments;
+    return {
+      countLimit: attachments.count_limit,
+      imageMaxBytes: attachments.image_max_bytes,
+      documentMaxBytes: attachments.document_max_bytes,
+      extensions: new Set(attachments.extensions),
+      imageCapability: attachments.image_capability,
+      imageLimit: attachments.image_limit,
+    };
+  }
+
+  #chatRunAction(event: CustomEvent<ChatRunActionDetail>): void {
+    const chat = this.querySelector<DlChatFeature>('dl-chat-feature');
+    if (!chat) return;
+    if (event.detail.action === 'children') {
+      this.querySelector<DlChildrenRoster>('dl-children-roster')?.open(
+        () => chat.loadRunChildren(event.detail.runId),
+      );
+      return;
+    }
+    this.#pendingContinuation = {
+      kind: event.detail.action,
+      runId: event.detail.runId,
+    };
+    this.querySelector<DlContinuationDialog>('dl-continuation-dialog')?.open(event.detail.action);
+  }
+
+  #continuationResult(event: CustomEvent<ContinuationResult>): void {
+    const pending = this.#pendingContinuation;
+    this.#pendingContinuation = null;
+    if (!pending || !event.detail.query || event.detail.kind !== pending.kind) return;
+    const chat = this.querySelector<DlChatFeature>('dl-chat-feature');
+    if (chat) void chat.continueRun(pending.kind, pending.runId, event.detail.query);
   }
 
   #themeOption(value: string, label: string, icon: TemplateResult): TemplateResult {
@@ -405,7 +436,9 @@ export class DlApp extends LightElement {
           </div>
         </form>
       </dialog>
-      <dl-continuation-dialog></dl-continuation-dialog>
+      <dl-continuation-dialog
+        @dl-continuation-result=${this.#continuationResult}
+      ></dl-continuation-dialog>
       <dl-children-roster></dl-children-roster>
       <dialog id="discard-draft-dialog" class="confirm-dialog" aria-labelledby="discard-draft-title">
         <form method="dialog">

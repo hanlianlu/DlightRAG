@@ -390,6 +390,7 @@ async def answer_artifact_presentation(
     run_id: str,
     resource_id: str,
     request: Request,
+    response: Response,
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
 ) -> AnswerPresentation:
     """Return a safe AnswerPresentation for any Markdown Artifact."""
@@ -430,6 +431,7 @@ async def answer_artifact_presentation(
         if descriptor.get("role") == "primary_report"
         else []
     )
+    response.headers["Cache-Control"] = "private, no-store"
     return build_answer_presentation(
         answer=markdown,
         sources=sources,

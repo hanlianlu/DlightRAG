@@ -471,6 +471,7 @@ async def test_general_artifact_route_returns_markdown_presentation(
     )
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
     body = response.json()
     assert body["answer_text"] == "# Title\n\nBody"
     assert "<h1>Title</h1>" in body["parts"][0]["html"]

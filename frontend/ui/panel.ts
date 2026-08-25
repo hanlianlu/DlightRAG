@@ -1,20 +1,16 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {closestElement, syncShellInert, wrapTabFocus} from '../lib/dom.ts';
 import type {DlArtifactCanvas} from './artifact_canvas.ts';
 import {syncPanelSplitState} from './split_panel.ts';
 
-const PANEL_KEEP_OPEN_SELECTOR = [
-    '[data-action="filter-source"]',
-    '[data-action="open-ref-source"]',
-    '[data-action="open-artifact"]',
-].join(', ');
-const DRAWER_MEDIA = '(max-width: 1199px)';
+const PANEL_KEEP_OPEN_SELECTOR = '[data-action="open-artifact"]';
 const LABELS: Record<string, string> = {FILES: 'Files', SOURCES: 'Sources'};
 
 let panelReturnFocus: HTMLElement | null = null;
 
 function isDrawer(): boolean {
-    return window.matchMedia(DRAWER_MEDIA).matches;
+    return window.matchMedia(COMPACT_SHELL_MEDIA).matches;
 }
 
 function mainPanel(): HTMLElement | null {
@@ -43,7 +39,6 @@ function applyPanelModality(): void {
     const modal = isDrawer() && isOpen(main);
     document.body.classList.toggle('panel-drawer-open', modal);
     if (backdrop) backdrop.hidden = !modal;
-    syncShellInert();
     if (main) {
         main.inert = !isOpen(main);
         if (isOpen(main)) main.removeAttribute('aria-hidden');
@@ -56,6 +51,7 @@ function applyPanelModality(): void {
             main.removeAttribute('aria-modal');
         }
     }
+    syncShellInert();
 }
 
 function focusablePanelElements(panel: HTMLElement): HTMLElement[] {
@@ -77,10 +73,20 @@ function shouldDismissPanelOnOutsideClick(target: EventTarget | null): boolean {
         && !closestElement(target, PANEL_KEEP_OPEN_SELECTOR);
 }
 
-function rememberFocus(): void {
-    if (!anyPaneOpen() && document.activeElement instanceof HTMLElement) {
+function rememberFocus(returnFocus?: HTMLElement | null): void {
+    if (returnFocus) {
+        panelReturnFocus = returnFocus;
+        return;
+    }
+    if (!isOpen(mainPanel()) && document.activeElement instanceof HTMLElement) {
         panelReturnFocus = document.activeElement;
     }
+}
+
+function restorePanelFocus(): void {
+    const returnFocus = panelReturnFocus;
+    panelReturnFocus = null;
+    if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
 }
 
 function syncBodyFlags(): void {
@@ -94,10 +100,13 @@ function syncBodyFlags(): void {
     syncPanelSplitState();
 }
 
-function openMainPane(title: 'FILES' | 'SOURCES'): void {
+function openMainPane(
+    title: 'FILES' | 'SOURCES',
+    returnFocus?: HTMLElement | null,
+): void {
     const panel = mainPanel();
     if (!panel) return;
-    rememberFocus();
+    rememberFocus(returnFocus);
     document.body.dispatchEvent(new CustomEvent('panelOpening', {detail: {title}}));
     panel.classList.add('open');
     panel.dataset.panelKind = title.toLowerCase();
@@ -111,13 +120,13 @@ function openMainPane(title: 'FILES' | 'SOURCES'): void {
     });
 }
 
-export function openPanel(title?: string): void {
+export function openPanel(title?: string, returnFocus?: HTMLElement | null): void {
     if (title === 'FILES') {
         artifactCanvas()?.close(false);
-        openMainPane('FILES');
+        openMainPane('FILES', returnFocus);
         return;
     }
-    if (title) openMainPane(title === 'FILES' ? 'FILES' : 'SOURCES');
+    if (title) openMainPane(title === 'FILES' ? 'FILES' : 'SOURCES', returnFocus);
 }
 
 function closeMainPane(restoreFocus: boolean): void {
@@ -128,10 +137,7 @@ function closeMainPane(restoreFocus: boolean): void {
     syncBodyFlags();
     applyPanelModality();
     document.body.dispatchEvent(new CustomEvent('panelClosed'));
-    if (restoreFocus && !anyPaneOpen()) {
-        panelReturnFocus?.focus();
-        panelReturnFocus = null;
-    }
+    if (restoreFocus) restorePanelFocus();
 }
 
 export function closePanel(restoreFocus = true): void {
@@ -139,16 +145,14 @@ export function closePanel(restoreFocus = true): void {
     artifactCanvas()?.close(false);
     syncBodyFlags();
     applyPanelModality();
-    if (restoreFocus) {
-        panelReturnFocus?.focus();
-        panelReturnFocus = null;
-    }
+    if (restoreFocus) restorePanelFocus();
 }
 
 /** Close conversation-scoped Sources and Artifact Canvas while preserving Files. */
 export function closeConversationPanels(): void {
     if (isSourcesOpen()) closeMainPane(false);
     artifactCanvas()?.close(false);
+    panelReturnFocus = null;
     syncBodyFlags();
     applyPanelModality();
 }

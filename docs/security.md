@@ -492,6 +492,30 @@ Follow-up and fork are new ordinary runs, not mutations of that accepted run, so
 every REST, MCP, SDK, and Web continuation rechecks current `workspace.query`
 authorization before its own acceptance transaction.
 
+### Answer Artifact browser boundary
+
+Artifact descriptors expose validated media and owner-scoped URLs, never Blob
+bytes or Agent Workspace paths. Authenticated Artifact data and Markdown
+presentation responses use `Cache-Control: private, no-store`; active and unknown
+formats are attachments with `nosniff`. PDF preview is sandboxed and carries no
+same-origin capability.
+
+HTML Artifact bytes are never served as executable same-origin documents. The
+browser fetches them through the authenticated inert data route and, only after
+explicit user consent, creates one `srcdoc` iframe with `sandbox="allow-scripts"`
+but no `allow-same-origin`, forms, popups, downloads, frames, workers, storage,
+device permissions, or application bridge. A CSP inserted before Artifact bytes
+blocks normal fetches and subresources. The only parent signal is a private,
+one-way Escape close token installed by the wrapper and removed before Artifact
+code runs; malformed messages and all Tool/MCP-shaped messages are ignored.
+Closing or switching Artifact Canvas aborts loading and destroys the iframe.
+
+This boundary isolates DlightRAG's authenticated DOM, cookies, and storage. It
+does not provide CPU or memory quotas, execute server code, or justify a claim of
+absolute browser network denial: browser engines do not expose a complete
+all-egress primitive for arbitrary JavaScript. Chromium is the security-
+regression baseline for active preview.
+
 ## Deployment Posture
 
 | Deployment | Recommended posture |

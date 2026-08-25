@@ -541,6 +541,19 @@ body.files-panel-open #files-btn {
     overflow: hidden;
 }
 
+dl-chat-feature {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+}
+
+dl-chat-message-list,
+dl-chat-composer {
+    display: contents;
+}
+
 .panel-split[data-open] {
     --divider-width: 1px;
     --max: calc(100% - var(--split-chat-reserve) - var(--split-other-width));

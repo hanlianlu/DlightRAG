@@ -352,7 +352,7 @@ LightRAG's document status and DlightRAG's content-hash guard.
 | REST API | JSON object | HTTP 202 run descriptor | reconnectable SSE at `/answer/{run_id}/events` |
 | MCP Server | JSON text | descriptor-only, returns immediately | status, steer, follow-up, cancel, resume, fork, transcript, and child-roster tools |
 | Web UI | — | HTTP 202 run descriptor | rendered events plus applicable run/control/branch routes under `/web/api/answer/{run_id}` |
-| CLI (`scripts/cli.py`) | JSON object printed to stdout | Terminal text; `answer_blocks` image refs render as image URL lines | follows the run, then falls back to status |
+| CLI (`scripts/cli.py`) | JSON object printed to stdout | Typed `parts` plus default `evidence_images` render as terminal text and image URL lines | follows the run, then falls back to status |
 
 ### Contract Terms
 
@@ -361,8 +361,8 @@ LightRAG's document status and DlightRAG's content-hash guard.
 | `contexts` | Evidence package. `/retrieve` returns the broader retrieved set; `/answer` returns the packed evidence that the answer model actually saw. |
 | `sources` | Document-level source objects with chunks, pages, optional visual routes, and optional highlights. `/retrieve` returns all retrieved sources; `/answer` returns only cited sources. |
 | `references` | Compact document-level citation summary for answers, derived from validated inline citations. |
-| `answer_images` | Registry of cited visual assets available for rendering. Entries reference image routes, not inline document image bytes. |
-| `answer_blocks` | Display plan for answers: markdown text blocks plus `image_ref` blocks that point into `answer_images`. |
+| `evidence_images` | Registry of cited visual evidence available for rendering. Entries reference image routes, not inline document image bytes. |
+| `parts` | Derived display order for Markdown, Artifact references, and explicitly inline Evidence Images. |
 | `usage` | Provider-reported root usage plus child and inclusive usage when Research spawned children. |
 | `evidence` | Transport-neutral counts for admitted chunks, entities, relationships, and cited sources. |
 | `parent_run_id`, `continuation_kind` | Durable lineage for follow-up and fork runs. |
@@ -441,7 +441,7 @@ conversation. The URL, not local storage, is the active-conversation authority;
 direct reload and browser Back/Forward therefore reopen the same owner-scoped
 history. A missing, malformed, or foreign id stays on its URL and renders the
 same unavailable state. Navigation detaches any local SSE reader without
-cancelling its run, closes conversation-scoped Sources/Report panels, and keeps
+cancelling its run, closes conversation-scoped Sources/Artifact Canvas, and keeps
 the workspace-scoped Files panel. An unsent draft guards click, programmatic,
 and browser-history navigation through the same confirmation.
 
@@ -465,11 +465,12 @@ owner-scoped `GET /web/api/answer/{run_id}/events`. That
 stream follows the same durable event log as the REST stream, with the same
 sequence, `Last-Event-ID` resume, 410-on-trim, and detach semantics, and differs
 only in projection: a browser `done` frame embeds one typed
-`AnswerPresentation` (`answer_text`, sanitized semantic `answer_html`, structured
-`sources`, `answer_images`, and optional `primary_report` handle), not the
-canonical result payload REST serves. Conversation history embeds that same
-presentation shape, and the Primary Report endpoint returns it too, so live,
-reload, and report paths share one Lit renderer. Source chunks carry separately
+`AnswerPresentation` (`answer_text`, ordered typed `parts`, `sources`, separate
+`evidence_images`, `artifacts`, and `artifact_outcome`), not the canonical result
+payload REST serves. Conversation history embeds that same presentation shape.
+A Markdown Primary Report uses the general authenticated Artifact presentation
+route and the same private presentation builder; there is no dedicated Report
+endpoint or parallel `primary_report` pointer. Source chunks carry separately
 sanitized `content_html`; filenames, links, source controls, galleries, and
 panel structure remain ordinary typed fields rendered by Lit. The run and its
 conversation turn are inserted in one transaction before
@@ -510,8 +511,10 @@ The 100-turn read window never trims storage.
 `research` (omitted means `auto`). Capability resolves a Valid Mode Set; routing
 writes a durable Resolved Mode. Fast plans, retrieves, and synthesizes with no
 Agent Session. Research runs the Agent Loop until the model emits no tool call; the
-last silent turn is the answer. Optional `artifacts/report.md` publishes as a
-Primary Report handle.
+last silent turn is the answer. One explicitly referenced, non-blank
+`artifacts/report.md`, `artifacts/report.html`, or `artifacts/report.pdf` may
+publish as the Primary Report Artifact. Other referenced files use the same
+descriptor and byte data plane; unreferenced Workspace files remain private.
 Evidence-producing Exa result URLs are registered as opaque request-local
 resources, so the same `read` tool can deepen a search result without
 accepting an arbitrary model-supplied URL. Reading performs no login, cookie
@@ -632,8 +635,8 @@ result = await application.answers.answer(
 result.answer  # "The key findings are... [1-1] [2-3]"
 result.contexts  # same structure as retrieve, packed to what the answer model saw
 result.references  # validated cited documents, derived from inline citations
-result.answer_images  # cited visual assets available for rendering
-result.answer_blocks  # markdown/image_ref blocks for structured display
+result.evidence_images  # cited visual evidence available for rendering
+result.parts  # derived markdown/artifact/evidence_image display order
 
 # Answer with attachments: files or HTTPS references become request-local
 # resources read on demand. The SDK builds ResourceInput objects from the
@@ -783,7 +786,7 @@ response, and the payload embedded in its terminal `done` event):
   "contexts": { "chunks": [...], "entities": [...], "relationships": [...] },
   "references": [{"id": "1", "title": "report.pdf"}, {"id": "2", "title": "spec.pdf"}],
   "sources": [...],
-  "answer_images": [
+  "evidence_images": [
     {
       "id": "fig-1",
       "chunk_id": "fig-1",
@@ -793,9 +796,9 @@ response, and the payload embedded in its terminal `done` event):
       "label": "report.pdf"
     }
   ],
-  "answer_blocks": [
+  "parts": [
     {"type": "markdown", "text": "The diagram shows... [1-1]."},
-    {"type": "image_ref", "image_id": "fig-1"}
+    {"type": "evidence_image", "evidence_image": {"id": "fig-1", "url": "/images/default/fig-1?size=full"}, "inline": true}
   ],
   "trace": {...},
   "image_descriptions": ["Image 1: a line chart about revenue"]
@@ -885,8 +888,8 @@ Answer payloads keep `sources` at top level:
   "contexts": { "chunks": [...], "entities": [...], "relationships": [...] },
   "references": [{"id": "1", "title": "report.pdf"}],
   "sources": [...],
-  "answer_images": [...],
-  "answer_blocks": [...],
+  "evidence_images": [...],
+  "parts": [...],
   "usage": {"usage_details": {...}},
   "evidence": {"chunks": 8, "sources": 3}
 }
@@ -921,10 +924,10 @@ Retrieved document images are exposed as route references, not embedded bytes:
 
 | Interface | Image reference shape | Byte access |
 |---|---|---|
-| REST | `/images/{workspace}/{chunk_id}?size=thumb\|full` in `image_url`, `thumbnail_url`, and `answer_images` | Authenticated REST image route |
+| REST | `/images/{workspace}/{chunk_id}?size=thumb\|full` in `image_url`, `thumbnail_url`, and `evidence_images` | Authenticated REST image route |
 | Web | `/web/api/images/{workspace}/{chunk_id}?size=thumb\|full` in rendered HTML/SSE payloads | Same-origin Web image route |
 | MCP | Same JSON `image_url`/`thumbnail_url` references as REST when a REST image route is reachable | No separate MCP binary stream today |
-| SDK | `answer_images` render references; internal `contexts` may still include `image_data` | In-process caller can inspect internals, but renderers should prefer `answer_images` |
+| SDK | `evidence_images` render references; internal `contexts` may still include `image_data` | In-process caller can inspect internals, but renderers should prefer `evidence_images` |
 
 User-supplied `/retrieve` `query_images` are different: they can arrive as data
 URIs and are bounded before model use. Answer attachments are also different:

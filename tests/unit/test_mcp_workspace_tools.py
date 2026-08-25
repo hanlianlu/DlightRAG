@@ -182,6 +182,66 @@ async def test_get_capabilities_reports_answer_image_capability(
     assert cap["model"] == "test-model"
 
 
+async def test_list_answer_artifacts_uses_canonical_semantic_descriptors(
+    mock_mcp_application: AsyncMock,
+) -> None:
+    stored = _stored_result()
+    stored["artifacts"] = [
+        {
+            "resource_id": "artifact-report",
+            "role": "primary_report",
+            "media_type": "text/markdown",
+            "label": "Quarterly report",
+            "filename": "report.md",
+            "byte_size": 42,
+            "digest": "a" * 64,
+            "presentation": "markdown",
+            "status": "available",
+        }
+    ]
+    stored["artifact_outcome"] = {"status": "partial", "issues": []}
+    mock_mcp_application.answers.get.return_value = _run_record(status="succeeded", result=stored)
+
+    result = await mcp_server.mcp_app.call_tool("list_answer_artifacts", {"run_id": _RUN_ID})
+
+    payload = _tool_json(result)
+    descriptor = payload["artifacts"][0]
+    assert descriptor == {
+        "resource_id": "artifact-report",
+        "role": "primary_report",
+        "media_type": "text/markdown",
+        "label": "Quarterly report",
+        "filename": "report.md",
+        "byte_size": 42,
+        "digest": "a" * 64,
+        "presentation": "markdown",
+        "status": "available",
+        "uri": f"dlightrag://answer/{_RUN_ID}/artifacts/artifact-report",
+        "width": None,
+        "height": None,
+        "issue": None,
+        "data_url": None,
+        "download_url": None,
+        "presentation_url": None,
+    }
+    assert payload["artifact_outcome"] == {"status": "partial", "issues": []}
+    assert "kind" not in descriptor
+
+
+async def test_list_answer_artifacts_does_not_invent_an_in_flight_outcome(
+    mock_mcp_application: AsyncMock,
+) -> None:
+    mock_mcp_application.answers.get.return_value = _run_record(status="running", result=None)
+
+    result = await mcp_server.mcp_app.call_tool("list_answer_artifacts", {"run_id": _RUN_ID})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == (
+        "Error: Answer artifacts are not available until the run has a stored result"
+    )
+
+
 async def test_mcp_v2_client_lists_and_calls_tools(mock_mcp_application: AsyncMock) -> None:
     mock_mcp_application.corpora.get_ingest_job = AsyncMock(
         return_value={"job_id": "job-1", "status": "running"}

@@ -7,7 +7,6 @@ import {
   acceptsAttachmentUpload,
   attachmentsEnabled,
   classifyAttachmentFile,
-  getAttachmentPolicy,
 } from '../ui/attachment_policy.ts';
 
 function file(name: string, type: string, size: number): File {
@@ -101,75 +100,14 @@ test('attachmentsEnabled reflects whether any attachment can be added', () => {
   );
 });
 
-test('policy reads the unified server-projected data attributes', () => {
-  const root = {
-    dataset: {
-      attachmentCountLimit: '6',
-      attachmentImageMaxBytes: '15728640',
-      attachmentDocumentMaxBytes: '104857600',
-      attachmentExtensions: '["md","pdf"]',
-      attachmentImageCapability: 'supported',
-      attachmentImageLimit: '3',
-    },
-  } as unknown as HTMLElement;
-
-  const parsed = getAttachmentPolicy(root);
-
-  assert.equal(parsed?.countLimit, 6);
-  assert.equal(parsed?.imageMaxBytes, 15728640);
-  assert.equal(parsed?.documentMaxBytes, 104857600);
-  assert.deepEqual(parsed?.extensions, new Set(['md', 'pdf']));
-  assert.equal(parsed?.imageCapability, 'supported');
-  assert.equal(parsed?.imageLimit, 3);
-});
-
-test('policy fails closed for missing, malformed, or unsafe attributes', () => {
-  assert.equal(getAttachmentPolicy(null), null);
-
-  const base = {
-    attachmentCountLimit: '6',
-    attachmentImageMaxBytes: '100',
-    attachmentDocumentMaxBytes: '100',
-    attachmentExtensions: '["pdf"]',
-    attachmentImageCapability: 'supported',
-    attachmentImageLimit: '3',
-  };
-  const root = (overrides: Record<string, string | undefined>): HTMLElement =>
-    ({dataset: {...base, ...overrides}}) as unknown as HTMLElement;
-
-  assert.equal(getAttachmentPolicy(root({attachmentCountLimit: undefined})), null);
-  assert.equal(getAttachmentPolicy(root({attachmentCountLimit: 'six'})), null);
-  assert.equal(getAttachmentPolicy(root({attachmentCountLimit: '0'})), null);
-  assert.equal(getAttachmentPolicy(root({attachmentImageMaxBytes: '0'})), null);
-  assert.equal(getAttachmentPolicy(root({attachmentDocumentMaxBytes: '0'})), null);
-  assert.equal(getAttachmentPolicy(root({attachmentExtensions: '[]'})), null);
-  assert.equal(getAttachmentPolicy(root({attachmentExtensions: '["pdf",42]'})), null);
-  assert.equal(getAttachmentPolicy(root({attachmentImageCapability: 'bogus'})), null);
-  assert.equal(getAttachmentPolicy(root({attachmentImageLimit: '-1'})), null);
-  assert.equal(getAttachmentPolicy(root({attachmentImageMaxBytes: '9007199254740992'})), null);
-});
-
-test('zero image limit stays valid but admits no images', () => {
-  const zeroImages = getAttachmentPolicy(
-    {
-      dataset: {
-        attachmentCountLimit: '6',
-        attachmentImageMaxBytes: '100',
-        attachmentDocumentMaxBytes: '100',
-        attachmentExtensions: '["pdf"]',
-        attachmentImageCapability: 'supported',
-        attachmentImageLimit: '0',
-      },
-    } as unknown as HTMLElement,
-  );
-
-  assert.equal(zeroImages?.imageLimit, 0);
+test('zero image limit admits documents but no images', () => {
+  const zeroImages = {...policy, imageLimit: 0};
   assert.equal(
-    acceptsAttachmentUpload(file('a.png', 'image/png', 1), {total: 0, images: 0}, zeroImages!),
+    acceptsAttachmentUpload(file('a.png', 'image/png', 1), {total: 0, images: 0}, zeroImages),
     false,
   );
   assert.equal(
-    acceptsAttachmentUpload(file('report.pdf', 'application/pdf', 1), {total: 0, images: 0}, zeroImages!),
+    acceptsAttachmentUpload(file('report.pdf', 'application/pdf', 1), {total: 0, images: 0}, zeroImages),
     true,
   );
 });

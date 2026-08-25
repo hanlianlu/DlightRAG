@@ -208,9 +208,15 @@ The Web UI is served by the REST API at `/web/`. Vite owns its static document
 and hashed assets, while light-DOM Lit components own browser presentation and
 route-driven state. It supports workspace selection, file/folder upload,
 durable principal-scoped conversations and answer attachments, citations,
-source/report panels, and semantic highlights. Desktop panel resizing uses the
-Web Awesome Split Panel component behind DlightRAG tokens and persisted-width
-state; compact layouts retain the native modal overlay behavior. The Web-only
+Sources, semantic highlights, and typed Answer Artifacts. Presentable files open
+in Artifact Canvas with side, wide, and fullscreen layouts; a Primary Report is
+one Artifact role rather than a second answer pane. Active HTML requires an
+explicit click and runs only in an opaque-origin sandboxed iframe with restrictive
+CSP; closing or switching the Canvas destroys it. This protects DlightRAG's DOM,
+storage, and credentials but is not a server-code sandbox or an absolute network-
+egress guarantee. Desktop panel resizing uses the Web Awesome Split Panel
+component behind DlightRAG tokens and persisted-width state; compact layouts
+retain the native modal overlay behavior. The Web-only
 conversation lifecycle provides New chat, select, rename, delete, reload,
 durable resume/cancel, Research steering and child status, and minimal
 follow-up/fork controls. Its recent-turn read window is not retention: linked
