@@ -267,7 +267,7 @@ def read_tool(
         description="Read a workspace path or a durable resource id.",
         input_model=ReadArgs,
         execute=execute,
-        replay_policy="safe",
+        replay_policy="replayable",
         guidance=(
             "read: one of path or resource_id; text pages default to 2000 lines and "
             "carry an offset continuation; follow the printed continuation instead of "
@@ -488,7 +488,7 @@ def grep_tool(
         description="Search workspace files with ripgrep.",
         input_model=GrepArgs,
         execute=execute,
-        replay_policy="safe",
+        replay_policy="replayable",
         guidance=(
             "grep: regex by default (literal=true for plain text); limit caps matching "
             "lines, not context lines; hidden files are searched while ignore rules apply."
@@ -691,7 +691,7 @@ def find_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> 
         description="Find workspace paths recursively by glob without following symlinks.",
         input_model=FindArgs,
         execute=execute,
-        replay_policy="safe",
+        replay_policy="replayable",
         contract_version=1,
         guidance=(
             "find: glob matched against basenames (or full relative paths when the "
@@ -727,7 +727,7 @@ def ls_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> Ag
         description="List one workspace directory without following symlinks.",
         input_model=LsArgs,
         execute=execute,
-        replay_policy="safe",
+        replay_policy="replayable",
         contract_version=1,
         guidance="ls: one directory level, kind/size/name per entry; symlinks listed, never followed.",
     )

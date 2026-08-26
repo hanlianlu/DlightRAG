@@ -75,6 +75,7 @@ from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.tools.subagents import ChildRequest, SubagentHost
 from dlightrag.answer.workspace import RunWorkspace
 from dlightrag.rag.retrieval import RetrievalContexts
+from dlightrag.runtime import AnswerRunCancelledError, RunCancelledError
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +96,9 @@ class RunBoundaries(PhaseBoundaries, Protocol):
 
     ``commit_intents`` durably appends the complete assistant response and
     its ordered intents before any tool executes (Blocker 2);
-    ``settle_intent`` settles one persisted intent in source order after the
-    model-visible observation batch has been fitted.
+    ``settle_intent`` appends every fitted source-position result in order;
+    executable calls settle a persisted intent while deterministic validation
+    results carry no intent.
     """
 
     @property
@@ -106,7 +108,7 @@ class RunBoundaries(PhaseBoundaries, Protocol):
 
     async def settle_intent(
         self,
-        intent: EffectIntent,
+        intent: EffectIntent | None,
         execution: ToolExecution | None,
         *,
         turn_number: int,
@@ -143,7 +145,7 @@ class _NoBoundaries:
 
     async def settle_intent(
         self,
-        intent: EffectIntent,
+        intent: EffectIntent | None,
         execution: ToolExecution | None,
         *,
         turn_number: int,
@@ -214,12 +216,7 @@ class _ResearchLoopDriver:
     async def check_cancelled(self) -> None:
         try:
             await self.boundaries.check_cancelled()
-        except Exception as exc:
-            if exc.__class__.__name__ not in {
-                "RunCancelledError",
-                "AnswerRunCancelledError",
-            }:
-                raise
+        except (RunCancelledError, AnswerRunCancelledError) as exc:
             raise AgentLoopCancelled from exc
 
     async def run_turn(self, turn_number: int) -> ExecutedTurn:
@@ -317,6 +314,7 @@ class AnswerOrchestrator:
         load_child: Any = None,
         finish_child: Any = None,
         run_child: Any = None,
+        check_cancelled: Any = None,
     ) -> None:
         if self._subagent_host is None:
             return
@@ -327,6 +325,7 @@ class AnswerOrchestrator:
         self._subagent_host.load_child = load_child
         self._subagent_host.finish_child = finish_child
         self._subagent_host.run_child = run_child
+        self._subagent_host.check_cancelled = check_cancelled
 
     def bind_memory(
         self,
@@ -390,6 +389,7 @@ class AnswerOrchestrator:
         driver = _ResearchLoopDriver(self, run, boundaries, on_event=_discard_agent_event)
         try:
             for _ in range(2):
+                await boundaries.check_cancelled()
                 executed = await driver.run_turn(run.agent_turn_count + 1)
                 if not executed.assistant.tool_calls:
                     run.last_turn = executed
@@ -672,7 +672,7 @@ class AnswerOrchestrator:
         trace: dict[str, Any],
         *,
         child: bool,
-        skill_catalog: SkillCatalog,
+        skill_catalog: SkillCatalog | None,
         tool_names: tuple[str, ...] | None = None,
         child_session_id: str = "",
     ) -> list[AgentTool]:
@@ -750,17 +750,19 @@ class AnswerOrchestrator:
 
         return read
 
-    def _skill_catalog(self) -> SkillCatalog:
+    def _skill_catalog(self) -> SkillCatalog | None:
         workspace_root = self._environment.root if self._environment is not None else None
+        if workspace_root is None and self._skills_global_root is None:
+            return None
         return SkillCatalog.discover(
             workspace_root=workspace_root,
             global_root=self._skills_global_root,
         )
 
     def _context_contributions(
-        self, skill_catalog: SkillCatalog
+        self, skill_catalog: SkillCatalog | None
     ) -> tuple[ContextContribution, ...]:
-        skill = skill_catalog.contribution()
+        skill = None if skill_catalog is None else skill_catalog.contribution()
         return (
             *self._trusted_extensions.context_contributions(),
             *((skill,) if skill is not None else ()),

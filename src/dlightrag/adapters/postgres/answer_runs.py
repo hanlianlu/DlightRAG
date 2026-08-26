@@ -253,7 +253,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_effects (
     FOREIGN KEY (owner_id, run_id, session_id)
         REFERENCES dlightrag_agent_sessions (owner_id, run_id, session_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_agent_effects_policy_check
-        CHECK (replay_policy IN ('safe', 'never')),
+        CHECK (replay_policy IN ('replayable', 'never')),
     CONSTRAINT dlightrag_agent_effects_contract_check
         CHECK (contract_version >= 1),
     CONSTRAINT dlightrag_agent_effects_digest_check
@@ -263,7 +263,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_effects (
                AND (settled_at IS NULL) = (result_digest IS NULL)),
     CONSTRAINT dlightrag_agent_effects_outcome_check
         CHECK (outcome IS NULL OR outcome IN
-               ('succeeded', 'interrupted', 'tool_contract_changed'))
+               ('succeeded', 'interrupted', 'outcome_unknown', 'tool_contract_changed'))
 )
 """
 

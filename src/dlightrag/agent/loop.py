@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Small event-driven Agent loop independent of products and storage."""
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -9,6 +10,8 @@ from dlightrag.agent.events import AgentEvent
 from dlightrag.agent.tools.contracts import ExecutedTurn
 
 type EventSink = Callable[[AgentEvent], Awaitable[None]]
+
+logger = logging.getLogger(__name__)
 
 
 class AgentLoopCancelled(Exception):
@@ -21,6 +24,8 @@ class AgentTurnDriver(Protocol):
     async def check_cancelled(self) -> None: ...
 
     async def run_turn(self, turn_number: int) -> ExecutedTurn: ...
+
+    async def continue_after_stop(self) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,10 +81,8 @@ class AgentLoop:
                         },
                     )
                 )
-                if not last_turn.assistant.tool_calls:
-                    continue_after_stop = getattr(driver, "continue_after_stop", None)
-                    if continue_after_stop is None or not await continue_after_stop():
-                        break
+                if not last_turn.assistant.tool_calls and not await driver.continue_after_stop():
+                    break
         except BaseException:
             stop_reason = "error"
             raise
@@ -98,8 +101,12 @@ class AgentLoop:
         )
 
     async def _emit(self, event: AgentEvent) -> None:
-        if self._on_event is not None:
+        if self._on_event is None:
+            return
+        try:
             await self._on_event(event)
+        except Exception:
+            logger.warning("Agent event sink failed", exc_info=True)
 
 
 __all__ = [

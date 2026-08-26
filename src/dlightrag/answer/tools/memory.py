@@ -110,7 +110,7 @@ def remember_tool(*, host: MemoryHost) -> AgentTool:
         ),
         RememberInput,
         execute,
-        replay_policy="safe",
+        replay_policy="replayable",
     )
 
 
@@ -141,7 +141,7 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
         "Forget one active Profile Memory by id or exact body. Recall first when the id is unknown.",
         ForgetInput,
         execute,
-        replay_policy="safe",
+        replay_policy="replayable",
     )
 
 
@@ -170,7 +170,7 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
         ),
         RecallInput,
         execute,
-        replay_policy="safe",
+        replay_policy="replayable",
     )
 
 

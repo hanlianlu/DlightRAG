@@ -159,21 +159,24 @@ class AgentTool:
     """Executable tool with a Pydantic argument contract.
 
     ``replay_policy``, ``contract_version``, and ``input_schema_digest`` are the
-    intent facts safe replay must match exactly (M3-D13, M3-D18). The digest is
-    the SHA-256 of the canonicalized input schema, so presentation fields and
-    declaration order never change it.
+    intent facts replay must match exactly (M3-D13, M3-D18). Replay is fail-closed:
+    tools opt in only when identical persisted arguments are safe to execute again.
+    The digest is the SHA-256 of the canonicalized input schema, so presentation
+    fields and declaration order never change it.
     """
 
     name: str
     description: str
     input_model: type[BaseModel]
     execute: ToolExecute
-    replay_policy: ReplayPolicy = "safe"
+    replay_policy: ReplayPolicy = "never"
     contract_version: int = 2
     input_schema_digest: str = ""
     guidance: str = ""
 
     def __post_init__(self) -> None:
+        if self.replay_policy not in {"replayable", "never"}:
+            raise ValueError("AgentTool replay policy must be replayable or never")
         if self.contract_version < 1:
             raise ValueError("AgentTool contract_version must be positive")
         object.__setattr__(

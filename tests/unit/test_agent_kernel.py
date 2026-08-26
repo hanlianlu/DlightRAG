@@ -146,6 +146,9 @@ class _Driver:
             messages=[],
         )
 
+    async def continue_after_stop(self) -> bool:
+        return False
+
 
 async def test_agent_loop_emits_ordered_events_until_model_silence() -> None:
     events = []
@@ -203,3 +206,18 @@ async def test_agent_loop_returns_cancelled_without_a_turn() -> None:
     assert result.turn_count == 0
     assert result.stop_reason == "cancelled"
     assert result.last_turn is None
+
+
+async def test_agent_loop_event_sink_failure_is_observe_only() -> None:
+    calls = 0
+
+    async def broken_sink(_event: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("telemetry unavailable")
+
+    result = await AgentLoop(on_event=broken_sink).run(_Driver())
+
+    assert result.turn_count == 2
+    assert result.stop_reason == "model_stop"
+    assert calls > 0

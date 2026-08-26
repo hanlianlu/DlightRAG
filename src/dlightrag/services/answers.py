@@ -6,6 +6,7 @@ from contextlib import AbstractAsyncContextManager, aclosing
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+from dlightrag.agent.session.plan import AgentRunPlan
 from dlightrag.agent.tools import AgentTool
 from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.ai.capacity import (
@@ -303,6 +304,7 @@ class _AcceptanceProjection:
     episodic_summary: str
     image_descriptions: tuple[str, ...]
     pinned_models: tuple[PinnedModelProfile, ...]
+    agent_run_plan: AgentRunPlan | None
 
 
 def _attachment_bytes(resources: Sequence[ResourceInput]) -> list[bytes]:
@@ -1124,6 +1126,7 @@ class AnswerService:
             context_policy_revision=CONTEXT_POLICY_REVISION,
             model_catalog_revision=MODEL_CATALOG_REVISION,
             idempotency_fingerprint=idempotency_fingerprint,
+            agent_run_plan=projection.agent_run_plan,
             image_descriptions=projection.image_descriptions,
             parent_run_id=request.parent_run_id,
             continuation_kind=request.continuation_kind,
@@ -1153,6 +1156,7 @@ class AnswerService:
             confirm_image_context=self._capabilities.confirmed_live_answer_context,
             resolved_mode=("research" if "research" in allowed_modes else "fast"),
         )
+        agent_run_plan: AgentRunPlan | None = None
         try:
             workspaces = list(request.workspaces)
             self._retrieval.warm(workspaces)
@@ -1213,6 +1217,11 @@ class AnswerService:
                     tools = list(ToolRegistry([*tools, *supplements]).resolve())
                 except DuplicateToolError as exc:
                     raise InvalidToolConfigurationError(exc.names) from exc
+                agent_run_plan = AgentRunPlan.from_tools(
+                    tools,
+                    model_role="query",
+                    context_policy_revision=CONTEXT_POLICY_REVISION,
+                )
                 measure = research_history_input_measure(
                     model_profile=models.query,
                     context_policy=CONTEXT_POLICY,
@@ -1294,6 +1303,7 @@ class AnswerService:
                 episodic_summary="\n\n".join(dict.fromkeys(episodic_parts)),
                 image_descriptions=image_descriptions,
                 pinned_models=self._pin_model_profiles(model_profiles),
+                agent_run_plan=agent_run_plan,
             )
         finally:
             if resolved.registry is not None:

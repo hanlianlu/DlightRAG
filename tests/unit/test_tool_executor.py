@@ -625,6 +625,17 @@ async def _search_tool(_args: BaseModel, _runtime: object) -> ToolResult:
     return ToolResult.text("found")
 
 
+def test_agent_tool_rejects_legacy_or_unknown_replay_policy() -> None:
+    with pytest.raises(ValueError, match="replay policy"):
+        AgentTool(
+            "search",
+            "Search.",
+            SearchArgs,
+            _search_tool,
+            replay_policy="safe",  # type: ignore[arg-type]
+        )
+
+
 async def test_preflight_creates_ordered_intents_for_valid_calls() -> None:
     from dlightrag.agent.tools import preflight_tool_calls
 
@@ -644,7 +655,7 @@ async def test_preflight_creates_ordered_intents_for_valid_calls() -> None:
 
     assert [intent.source_call_id for intent in preflight.intents] == ["1", "2"]
     assert [intent.tool_name for intent in preflight.intents] == ["search", "search"]
-    assert all(intent.replay_policy == "safe" for intent in preflight.intents)
+    assert all(intent.replay_policy == "never" for intent in preflight.intents)
     assert all(len(intent.input_schema_digest) == 64 for intent in preflight.intents)
     assert all(intent.contract_version == 2 for intent in preflight.intents)
     assert preflight.validation_results == ()
@@ -675,7 +686,7 @@ async def test_preflight_orders_invalid_calls_as_validation_results() -> None:
     assert "not available" in validation.text_content
 
 
-async def test_preflight_is_never_policy_for_web_and_contracts_are_pinned() -> None:
+async def test_preflight_pins_explicit_replay_policy_and_contract() -> None:
     from dlightrag.agent.tools import preflight_tool_calls
 
     web_tool = AgentTool(
@@ -683,14 +694,14 @@ async def test_preflight_is_never_policy_for_web_and_contracts_are_pinned() -> N
         description="web search",
         input_model=SearchArgs,
         execute=_search_tool,
-        replay_policy="never",
+        replay_policy="replayable",
         contract_version=7,
     )
     turn = _turn(ToolCall(id="1", name="search_web", arguments={"query": "q"}))
     preflight = preflight_tool_calls(turn, [web_tool])
 
     (intent,) = preflight.intents
-    assert intent.replay_policy == "never"
+    assert intent.replay_policy == "replayable"
     assert intent.contract_version == 7
 
 

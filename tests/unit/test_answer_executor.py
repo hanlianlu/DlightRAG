@@ -5,6 +5,7 @@ import asyncio
 import io
 import uuid
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -111,6 +112,87 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         "load_skill",
         "remote_lookup",
     } <= names
+
+
+def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> None:
+    from dlightrag.agent.environment.local import LocalExecutionEnvironment
+    from dlightrag.agent.session.plan import AgentRunPlan
+    from dlightrag.agent.skills import SkillCatalog
+    from dlightrag.answer.evidence import EvidenceLedger
+    from dlightrag.answer.tools.composition import compose_research_tools
+    from dlightrag.answer.tools.subagents import SubagentHost
+
+    executor = AnswerExecutor(
+        store=MagicMock(),
+        pool=MagicMock(),
+        retrieve=AsyncMock(),
+        models=MagicMock(),
+        capabilities=MagicMock(),
+        resources=MagicMock(),
+        settings=_executor()._settings,
+        telemetry=NOOP_TELEMETRY,
+        execution_environment="trust",
+    )
+    accepted = executor.acceptance_research_tools()
+
+    async def retrieve(_query: str) -> Any:
+        raise RuntimeError("tool definitions are never executed")
+
+    runtime_tools = compose_research_tools(
+        evidence=EvidenceLedger(),
+        trace={},
+        retrieve_knowledge_base=retrieve,  # type: ignore[arg-type]
+        search_web=None,
+        resource_tools=[],
+        register_web_source=None,
+        environment=LocalExecutionEnvironment(tmp_path),
+        subagent_host=SubagentHost(),
+        skill_catalog=SkillCatalog(()),
+    )
+    runtime_by_name = {tool.name: tool for tool in runtime_tools}
+    runtime_surface = tuple(runtime_by_name[tool.name] for tool in accepted)
+
+    accepted_plan = AgentRunPlan.from_tools(
+        accepted,
+        model_role="query",
+        context_policy_revision="policy-1",
+    )
+    runtime_plan = AgentRunPlan.from_tools(
+        runtime_surface,
+        model_role="query",
+        context_policy_revision="policy-1",
+    )
+
+    assert runtime_plan.digest == accepted_plan.digest
+
+
+def test_execution_rejects_tools_that_differ_from_the_accepted_agent_plan() -> None:
+    from pydantic import BaseModel
+
+    from dlightrag.agent.session.plan import AgentRunPlan
+    from dlightrag.agent.tools import AgentTool, ToolResult
+    from dlightrag.answer.executor import IncompatibleActiveRunError
+
+    class Args(BaseModel):
+        value: str
+
+    async def execute(_args: BaseModel, _runtime: object) -> ToolResult:
+        return ToolResult.text("unused")
+
+    accepted_tool = AgentTool("lookup", "Accepted description.", Args, execute)
+    plan = AgentRunPlan.from_tools(
+        (accepted_tool,),
+        model_role="query",
+        context_policy_revision="policy-1",
+    )
+    request = MagicMock(agent_run_plan=plan, context_policy_revision="policy-1")
+
+    AnswerExecutor.validate_pinned_agent_run_plan(request, (accepted_tool,))
+    with pytest.raises(IncompatibleActiveRunError, match="differs"):
+        AnswerExecutor.validate_pinned_agent_run_plan(
+            request,
+            (AgentTool("lookup", "Changed description.", Args, execute),),
+        )
 
 
 def _resource_resolver() -> AnswerResourceResolver:
@@ -607,7 +689,7 @@ def test_fetched_resource_batches_are_atomic_and_session_scoped() -> None:
     intent = EffectIntent(
         intent_id=IntentId.new(),
         tool_name="read",
-        replay_policy="safe",
+        replay_policy="replayable",
         contract_version=1,
         input_schema_digest="a" * 64,
         canonical_input="{}",
@@ -645,7 +727,7 @@ def test_memory_operation_details_become_a_typed_product_host_update() -> None:
     intent = EffectIntent(
         intent_id=IntentId.new(),
         tool_name="remember",
-        replay_policy="safe",
+        replay_policy="replayable",
         contract_version=1,
         input_schema_digest="a" * 64,
         canonical_input="{}",
@@ -693,7 +775,7 @@ async def test_non_last_spawn_settlement_carries_adopted_evidence() -> None:
     intent = EffectIntent(
         intent_id=IntentId.new(),
         tool_name="spawn_agent",
-        replay_policy="safe",
+        replay_policy="replayable",
         contract_version=1,
         input_schema_digest="a" * 64,
         canonical_input="{}",
@@ -737,6 +819,132 @@ async def test_non_last_spawn_settlement_carries_adopted_evidence() -> None:
     assert b"child-1" in settlement.host_update.evidence[0].content
 
 
+async def test_mixed_valid_invalid_tool_results_fold_in_source_order_live() -> None:
+    from pydantic import BaseModel, ConfigDict
+
+    from dlightrag.agent.session.fold import fold_entries
+    from dlightrag.agent.session.ids import SessionId
+    from dlightrag.agent.tools import AgentTool, ToolResult, ToolTurnExecutor
+    from dlightrag.ai.messages import AssistantTurn, ToolCall
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
+
+    class SearchArgs(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        query: str
+
+    async def model(**_kwargs: object) -> AssistantTurn:
+        return AssistantTurn(
+            text="",
+            tool_calls=(
+                ToolCall(id="valid", name="search", arguments={"query": "q"}),
+                ToolCall(id="invalid", name="missing", arguments={}),
+            ),
+            stop_reason="tool_use",
+        )
+
+    async def execute(_args: BaseModel, _runtime: object) -> ToolResult:
+        return ToolResult.text("found")
+
+    journal = InMemoryAgentSessionStore()
+    session_id = SessionId.new()
+    tool = AgentTool("search", "Search.", SearchArgs, execute, replay_policy="replayable")
+    boundaries = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={tool.name: tool},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+    )
+    executor = ToolTurnExecutor(model)
+    prepared = await executor.prepare_turn([{"role": "user", "content": "q"}], [tool])
+    await boundaries.commit_intents(prepared)
+    await executor.execute_prepared(
+        prepared,
+        [tool],
+        on_result=lambda intent, execution, is_last: boundaries.settle_intent(
+            intent,
+            execution,
+            turn_number=1,
+            is_last=is_last,
+        ),
+    )
+
+    messages = fold_entries((await journal.load(session_id)).entries)
+    assert [message["tool_call_id"] for message in messages if message["role"] == "tool"] == [
+        "valid",
+        "invalid",
+    ]
+
+
+async def test_mixed_valid_invalid_tool_results_fold_in_source_order_after_recovery() -> None:
+    from pydantic import BaseModel, ConfigDict
+
+    from dlightrag.agent.session.fold import fold_entries
+    from dlightrag.agent.session.ids import SessionId
+    from dlightrag.agent.tools import AgentTool, ToolResult, ToolTurnExecutor
+    from dlightrag.ai.messages import AssistantTurn, ToolCall
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
+
+    class SearchArgs(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        query: str
+
+    async def model(**_kwargs: object) -> AssistantTurn:
+        return AssistantTurn(
+            text="",
+            tool_calls=(
+                ToolCall(id="valid", name="search", arguments={"query": "q"}),
+                ToolCall(id="invalid", name="missing", arguments={}),
+            ),
+            stop_reason="tool_use",
+        )
+
+    async def execute(_args: BaseModel, _runtime: object) -> ToolResult:
+        return ToolResult.text("found")
+
+    journal = InMemoryAgentSessionStore()
+    session_id = SessionId.new()
+    tool = AgentTool("search", "Search.", SearchArgs, execute, replay_policy="replayable")
+    initial = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={tool.name: tool},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+    )
+    prepared = await ToolTurnExecutor(model).prepare_turn(
+        [{"role": "user", "content": "q"}], [tool]
+    )
+    await initial.commit_intents(prepared)
+    snapshot = await journal.load(session_id)
+    recovered = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={tool.name: tool},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+        initial_version=snapshot.version,
+        last_sequence=snapshot.entries[-1].sequence,
+        entries=snapshot.entries,
+    )
+
+    await recovered.recover_pending_intents(snapshot)
+
+    messages = fold_entries((await journal.load(session_id)).entries)
+    assert [message["tool_call_id"] for message in messages if message["role"] == "tool"] == [
+        "valid",
+        "invalid",
+    ]
+
+
 async def test_durable_tool_error_folds_as_error_after_settlement() -> None:
     from dlightrag.agent.session.effects import EffectIntent
     from dlightrag.agent.session.fold import fold_entries
@@ -757,7 +965,7 @@ async def test_durable_tool_error_folds_as_error_after_settlement() -> None:
     intent = EffectIntent(
         intent_id=IntentId.new(),
         tool_name="broken",
-        replay_policy="safe",
+        replay_policy="replayable",
         contract_version=1,
         input_schema_digest="a" * 64,
         canonical_input="{}",
@@ -799,7 +1007,75 @@ async def test_durable_tool_error_folds_as_error_after_settlement() -> None:
     assert messages[-1]["is_error"] is True
 
 
-async def test_safe_effect_recovery_fits_oversized_observation() -> None:
+async def test_never_effect_recovery_reports_unknown_without_reexecution() -> None:
+    from pydantic import BaseModel
+
+    from dlightrag.agent.session.entries import EffectResultEntry
+    from dlightrag.agent.session.ids import SessionId
+    from dlightrag.agent.tools import AgentTool, ToolResult, ToolTurnExecutor
+    from dlightrag.ai.messages import AssistantTurn, ToolCall
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
+
+    class EmptyArgs(BaseModel):
+        pass
+
+    calls = 0
+
+    async def model(**_kwargs: object) -> AssistantTurn:
+        return AssistantTurn(
+            text="",
+            tool_calls=(ToolCall(id="call-never", name="mutate", arguments={}),),
+            stop_reason="tool_use",
+        )
+
+    async def execute(_args: BaseModel, _runtime: object) -> ToolResult:
+        nonlocal calls
+        calls += 1
+        return ToolResult.text("changed")
+
+    tool = AgentTool("mutate", "Mutate.", EmptyArgs, execute)
+    journal = InMemoryAgentSessionStore()
+    session_id = SessionId.new()
+    initial = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={tool.name: tool},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+    )
+    prepared = await ToolTurnExecutor(model).prepare_turn(
+        [{"role": "user", "content": "q"}], [tool]
+    )
+    await initial.commit_intents(prepared)
+    snapshot = await journal.load(session_id)
+    recovered = JournalRunBoundaries(
+        session=MagicMock(),
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={tool.name: tool},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+        initial_version=snapshot.version,
+        last_sequence=snapshot.entries[-1].sequence,
+        entries=snapshot.entries,
+    )
+
+    await recovered.recover_pending_intents(snapshot)
+
+    result = next(
+        entry
+        for entry in (await journal.load(session_id)).entries
+        if isinstance(entry, EffectResultEntry)
+    )
+    assert calls == 0
+    assert result.result.outcome == "outcome_unknown"
+    assert "may have happened" in result.result.text_content
+
+
+async def test_replayable_effect_recovery_fits_oversized_observation() -> None:
     from pydantic import BaseModel
 
     from dlightrag.agent.session.effects import EffectIntent
@@ -819,7 +1095,13 @@ async def test_safe_effect_recovery_fits_oversized_observation() -> None:
     async def execute(_args: BaseModel, _runtime: object) -> ToolResult:
         return ToolResult.text(payload)
 
-    tool = AgentTool("large", "Large safe result.", EmptyArgs, execute)
+    tool = AgentTool(
+        "large",
+        "Large replayable result.",
+        EmptyArgs,
+        execute,
+        replay_policy="replayable",
+    )
     journal = InMemoryAgentSessionStore()
     session_id = SessionId.new()
     call = ToolCall(id="call-large", name=tool.name, arguments={})

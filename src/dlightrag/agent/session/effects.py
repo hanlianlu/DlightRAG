@@ -3,9 +3,9 @@
 
 An effect is one validated model-visible tool call. Intents persist before
 execution in assistant source order; settlements commit results one at a time
-in the same source order (M3-D12). Safe replay requires the tool name, replay
-policy, contract version, and canonical input-schema digest to match exactly
-(M3-D13, M3-D18).
+in the same source order (M3-D12). Replayable effects require the tool name,
+replay policy, contract version, and canonical input-schema digest to match
+exactly (M3-D13, M3-D18).
 """
 
 from collections.abc import Mapping
@@ -16,20 +16,23 @@ from typing import Any, Literal, TypeVar
 from dlightrag.agent.session.ids import IntentId
 from dlightrag.agent.tool_content import ToolContent, tool_content_text
 
-type ReplayPolicy = Literal["safe", "never"]
+type ReplayPolicy = Literal["replayable", "never"]
 type EffectOutcome = Literal[
     "succeeded",
     "interrupted",
+    "outcome_unknown",
     "tool_contract_changed",
 ]
 type ToolResultOutcome = Literal[
     "succeeded",
     "interrupted",
+    "outcome_unknown",
     "tool_contract_changed",
     "failed",
     "validation_failed",
     "unknown_tool",
     "invalid_arguments",
+    "truncated_arguments",
 ]
 type JsonValue = Any
 
@@ -99,6 +102,8 @@ class EffectIntent:
     def __post_init__(self) -> None:
         if not self.tool_name.strip():
             raise ValueError("effect intent tool name cannot be empty")
+        if self.replay_policy not in {"replayable", "never"}:
+            raise ValueError("effect intent replay policy must be replayable or never")
         if self.contract_version < 1:
             raise ValueError("effect intent contract version must be positive")
         if len(self.input_schema_digest) != 64:

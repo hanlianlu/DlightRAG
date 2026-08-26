@@ -139,7 +139,7 @@ def _intent_entry(session_id: SessionId, intent_id: IntentId) -> EffectIntentEnt
         intent=EffectIntent(
             intent_id=intent_id,
             tool_name="search_knowledge_base",
-            replay_policy="safe",
+            replay_policy="replayable",
             contract_version=1,
             input_schema_digest="a" * 64,
             canonical_input='{"q":"x"}',

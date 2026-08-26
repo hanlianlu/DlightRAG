@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from dlightrag.agent.session.effects import EffectIntent
 from dlightrag.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.agent.session.ids import IntentId, SessionId
@@ -112,21 +114,49 @@ async def test_spawn_many_runs_in_parallel_and_aggregates_usage() -> None:
     assert not host.tasks
 
 
-async def test_default_depth_one_rejects_recursive_spawn() -> None:
+async def test_spawn_checks_parent_cancellation_before_starting_children() -> None:
+    cancelled = AsyncMock(side_effect=RunCancelledError)
     runner = AsyncMock()
     host = SubagentHost(
         parent_session_id=SessionId.new(),
         run_id=SessionId.new().value,
-        depth=1,
+        check_cancelled=cancelled,
         run_child=runner,
     )
 
-    result = await subagent_tools(host=host)[0].execute(
-        _spawn_input("too deep"), tool_runtime(tool_name="spawn_agent")
+    with pytest.raises(asyncio.CancelledError):
+        await subagent_tools(host=host)[0].execute(
+            _spawn_input("must not start"), tool_runtime(tool_name="spawn_agent")
+        )
+
+    cancelled.assert_awaited()
+    runner.assert_not_awaited()
+
+
+async def test_spawn_propagates_parent_cancel_and_finishes_persisted_child() -> None:
+    finish = AsyncMock()
+
+    async def run_child(
+        _child_id: SessionId, _request: ChildRequest, _call_id: str
+    ) -> ChildOutcome:
+        raise RunCancelledError
+
+    host = SubagentHost(
+        parent_session_id=SessionId.new(),
+        run_id=SessionId.new().value,
+        persist=AsyncMock(),
+        finish_child=finish,
+        run_child=run_child,
     )
 
-    assert "depth limit" in result.text_content
-    runner.assert_not_awaited()
+    with pytest.raises(asyncio.CancelledError):
+        await subagent_tools(host=host)[0].execute(
+            _spawn_input("cancel in flight"), tool_runtime(tool_name="spawn_agent")
+        )
+
+    assert finish.await_args is not None
+    assert finish.await_args.kwargs["status"] == "cancelled"
+    assert not host.tasks
 
 
 async def test_cancel_tool_joins_a_known_foreground_child() -> None:
@@ -308,7 +338,12 @@ class _FakeSession:
         return None
 
 
-def _child_orchestrator(model_func: Any, *, environment: Any = None) -> AnswerOrchestrator:
+def _child_orchestrator(
+    model_func: Any,
+    *,
+    environment: Any = None,
+    retrieve_func: Any = None,
+) -> AnswerOrchestrator:
     profile = answer_model_profile()
 
     async def retrieve(_query: str) -> Any:
@@ -319,7 +354,7 @@ def _child_orchestrator(model_func: Any, *, environment: Any = None) -> AnswerOr
             image_policy=answer_image_policy(),
             model_profile=profile,
         ),
-        retrieve_knowledge_base=retrieve,
+        retrieve_knowledge_base=retrieve_func or retrieve,
         search_web=None,
         model_func=model_func,
         telemetry=NOOP_TELEMETRY,
@@ -332,6 +367,8 @@ def _child_orchestrator(model_func: Any, *, environment: Any = None) -> AnswerOr
 
 
 async def test_child_session_journals_and_replays_without_rerun() -> None:
+    from dlightrag.agent.session.entries import ProfileFactEntry
+
     calls = {"n": 0}
 
     async def model(**_kwargs: object) -> AssistantTurn:
@@ -365,6 +402,15 @@ async def test_child_session_journals_and_replays_without_rerun() -> None:
     assert calls["n"] == 1
     snapshot = await journal.load(child_id)
     assert snapshot.version >= 2
+    lineage = next(
+        entry.value
+        for entry in snapshot.entries
+        if isinstance(entry, ProfileFactEntry) and entry.key == "parent"
+    )
+    assert lineage == {
+        "session_id": parent_id.value,
+        "call_id": "call-1",
+    }
     assert any(entry.entry_type == "session_terminal" for entry in snapshot.entries)
 
     second = await run_child_session(
@@ -431,6 +477,48 @@ def test_child_inherits_parent_path_tools_except_spawn() -> None:
     names = {tool.name for tool in child}
     assert names >= {"search_knowledge_base", "read", "write", "edit", "grep", "bash"}
     assert "spawn_agent" not in names
+
+
+async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
+    from dlightrag.agent.session.entries import EffectResultEntry
+    from dlightrag.ai.messages import ToolCall
+
+    async def model(**_kwargs: object) -> AssistantTurn:
+        return AssistantTurn(
+            text="",
+            tool_calls=(
+                ToolCall(
+                    id="search-cancelled",
+                    name="search_knowledge_base",
+                    arguments={"query": "cancel me"},
+                ),
+            ),
+            stop_reason="tool_use",
+        )
+
+    async def cancel_during_search(_query: str) -> Any:
+        raise asyncio.CancelledError
+
+    parent_id = SessionId.new()
+    child_id = SessionId.deterministic(run_id=str(parent_id.value), name="pending-cancel")
+    journal = InMemoryAgentSessionStore()
+    with pytest.raises(asyncio.CancelledError):
+        await run_child_session(
+            orchestrator=_child_orchestrator(model, retrieve_func=cancel_during_search),
+            journal=journal,  # type: ignore[arg-type]
+            session=_FakeSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
+            fetched_buffer=FetchedResourceBuffer(),
+            child_id=child_id,
+            request=ChildRequest(objective="cancel while searching"),
+            parent_call_id="call-pending",
+            parent_session_id=parent_id,
+        )
+
+    snapshot = await journal.load(child_id)
+    result = next(entry for entry in snapshot.entries if isinstance(entry, EffectResultEntry))
+    assert result.result.call_id == "search-cancelled"
+    assert result.result.outcome == "outcome_unknown"
+    assert snapshot.entries[-1].entry_type == "session_terminal"
 
 
 async def test_parent_cancel_marks_the_child_cancelled() -> None:
@@ -510,7 +598,7 @@ async def test_recovery_backfills_child_effect_intent_before_spawn_replay() -> N
         "Replay spawn.",
         SpawnAgentInput,
         execute,
-        replay_policy="safe",
+        replay_policy="replayable",
     )
     call = ToolCall(
         id="call-recovery",
@@ -585,7 +673,7 @@ async def test_parent_turn_binds_child_effect_intent() -> None:
     intent = EffectIntent(
         intent_id=IntentId.new(),
         tool_name="spawn_agent",
-        replay_policy="safe",
+        replay_policy="replayable",
         contract_version=1,
         input_schema_digest="a" * 64,
         canonical_input=_spawn_input("research").model_dump_json(),

@@ -121,6 +121,7 @@ class AssistantMessageEntry(SessionEntry):
     stop_reason: Literal["stop", "length", "tool_use"]
     reasoning: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
+    preflight_results: tuple[ToolResultEntry, ...] = ()
     usage: JsonValue | None = None
     cost: JsonValue | None = None
     provider_state: JsonValue | None = None
@@ -148,6 +149,18 @@ class AssistantMessageEntry(SessionEntry):
                 for call in self.tool_calls
             ],
         }
+        if self.preflight_results:
+            payload["preflight_results"] = [
+                {
+                    "tool_name": result.tool_name,
+                    "call_id": result.call_id,
+                    "outcome": result.outcome,
+                    "content": encode_tool_content(result.parts),
+                    "details": result.details,
+                    "cached": result.cached,
+                }
+                for result in self.preflight_results
+            ]
         if self.usage is not None:
             payload["usage"] = self.usage
         if self.cost is not None:
@@ -380,12 +393,24 @@ def decode_entry_payload(
             )
             for call in payload.get("tool_calls") or ()
         )
+        preflight_results = tuple(
+            ToolResultEntry(
+                tool_name=str(result["tool_name"]),
+                call_id=str(result["call_id"]),
+                outcome=result["outcome"],
+                parts=decode_tool_content(result["content"]),
+                details=result.get("details"),
+                cached=bool(result.get("cached") or False),
+            )
+            for result in payload.get("preflight_results") or ()
+        )
         return AssistantMessageEntry(
             **common,
             content=str(payload["content"]),
             stop_reason=payload["stop_reason"],
             reasoning=str(payload.get("reasoning") or ""),
             tool_calls=calls,
+            preflight_results=preflight_results,
             usage=payload.get("usage"),
             cost=payload.get("cost"),
             provider_state=payload.get("provider_state"),

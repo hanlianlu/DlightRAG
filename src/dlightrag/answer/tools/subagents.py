@@ -19,10 +19,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from dlightrag.agent.session.ids import SessionId
 from dlightrag.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.answer.evidence import EvidenceDelta
+from dlightrag.runtime import AnswerRunCancelledError, RunCancelledError
 
 type ChildStatus = Literal["running", "succeeded", "failed", "cancelled"]
 type ChildContextMode = Literal["isolated", "parent"]
 type ChildModelRole = Literal["query", "extract"]
+
+
+class _ParentRunCancelled(asyncio.CancelledError):
+    """A cooperative parent cancellation crossing the Tool execution seam."""
 
 
 class ChildRequest(BaseModel):
@@ -86,9 +91,8 @@ class SubagentHost:
     parent_session_id: SessionId | None = None
     run_id: str = ""
     owner_id: str = ""
-    depth: int = 0
-    max_depth: int = 1
     max_concurrency: int = 4
+    check_cancelled: Callable[[], Awaitable[None]] | None = None
     persist: Callable[..., Awaitable[Any]] | None = None
     load_child: Callable[..., Awaitable[Any]] | None = None
     finish_child: Callable[..., Awaitable[Any]] | None = None
@@ -108,11 +112,13 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
 
     async def status(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
+        await _check_cancelled(host)
         outcome = await _status(host, args.child_session_id)
         return _single_result(outcome)
 
     async def wait(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
+        await _check_cancelled(host)
         task = host.tasks.get(args.child_session_id)
         if task is not None:
             outcome = await asyncio.shield(task)
@@ -122,6 +128,7 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
 
     async def cancel(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
+        await _check_cancelled(host)
         task = host.tasks.get(args.child_session_id)
         if task is not None and not task.done():
             task.cancel()
@@ -142,28 +149,28 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             "Run one or many foreground child Agent Sessions and wait for all results.",
             SpawnAgentInput,
             spawn,
-            replay_policy="safe",
+            replay_policy="replayable",
         ),
         AgentTool(
             "subagent_status",
             "Read one foreground or completed child session status.",
             ChildControlInput,
             status,
-            replay_policy="safe",
+            replay_policy="replayable",
         ),
         AgentTool(
             "wait_subagent",
             "Wait for one known foreground child session.",
             ChildControlInput,
             wait,
-            replay_policy="safe",
+            replay_policy="replayable",
         ),
         AgentTool(
             "cancel_subagent",
             "Cancel one known foreground child session.",
             ChildControlInput,
             cancel,
-            replay_policy="safe",
+            replay_policy="replayable",
         ),
     )
 
@@ -177,8 +184,7 @@ async def _spawn(
         raise RuntimeError("spawn_agent is not bound to a parent session")
     if host.run_child is None:
         raise RuntimeError("spawn_agent has no child runner")
-    if host.depth >= host.max_depth:
-        return ToolResult.text(f"Child depth limit reached ({host.max_depth}).")
+    await _check_cancelled(host)
     parent_session_id = host.parent_session_id
     run_child = host.run_child
     call_id = runtime.call_id
@@ -194,6 +200,7 @@ async def _spawn(
     ]
 
     async def run_one(child_id: SessionId, request: ChildRequest) -> ChildOutcome:
+        await _check_cancelled(host)
         if host.persist is not None:
             await host.persist(
                 owner_id=host.owner_id,
@@ -208,24 +215,16 @@ async def _spawn(
             )
         try:
             async with semaphore:
+                await _check_cancelled(host)
                 outcome = await run_child(child_id, request, call_id)
+        except (RunCancelledError, AnswerRunCancelledError) as exc:
+            await _finish_cancelled_child(host, child_id.value)
+            raise _ParentRunCancelled from exc
+        except _ParentRunCancelled:
+            await _finish_cancelled_child(host, child_id.value)
+            raise
         except asyncio.CancelledError:
-            cancelled = ChildOutcome(
-                status="cancelled",
-                summary="Child session cancelled.",
-                child_session_id=child_id.value,
-            )
-            host.outcomes[child_id.value] = cancelled
-            if host.finish_child is not None:
-                await host.finish_child(
-                    owner_id=host.owner_id,
-                    run_id=host.run_id,
-                    child_session_id=child_id.value,
-                    status="cancelled",
-                    summary=cancelled.summary,
-                    usage=None,
-                )
-            return cancelled
+            return await _finish_cancelled_child(host, child_id.value)
         if outcome.evidence_state is not None and host.adopt_evidence is not None:
             outcome = replace(
                 outcome,
@@ -264,6 +263,34 @@ async def _spawn(
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
     return _many_result(tuple(outcomes))
+
+
+async def _check_cancelled(host: SubagentHost) -> None:
+    if host.check_cancelled is None:
+        return
+    try:
+        await host.check_cancelled()
+    except (RunCancelledError, AnswerRunCancelledError) as exc:
+        raise _ParentRunCancelled from exc
+
+
+async def _finish_cancelled_child(host: SubagentHost, child_id: str) -> ChildOutcome:
+    cancelled = ChildOutcome(
+        status="cancelled",
+        summary="Child session cancelled.",
+        child_session_id=child_id,
+    )
+    host.outcomes[child_id] = cancelled
+    if host.finish_child is not None:
+        await host.finish_child(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            child_session_id=child_id,
+            status="cancelled",
+            summary=cancelled.summary,
+            usage=None,
+        )
+    return cancelled
 
 
 async def _status(host: SubagentHost, child_id: str) -> ChildOutcome:

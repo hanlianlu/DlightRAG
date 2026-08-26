@@ -242,7 +242,7 @@ class ToolTurnExecutor:
         observation_budget: Callable[[list[dict[str, Any]]], int] | None = None,
         execution_scope: str = "",
         on_result: (
-            Callable[[EffectIntent, ToolExecution | None, bool], Awaitable[None]] | None
+            Callable[[EffectIntent | None, ToolExecution, bool], Awaitable[None]] | None
         ) = None,
     ) -> ExecutedTurn:
         """Execute one prepared turn's tool batch and settle in source order.
@@ -250,8 +250,9 @@ class ToolTurnExecutor:
         Tools run in parallel. Their complete batch is fitted to the shared
         observation residual before ``on_result`` receives the model-visible
         results, so durable replay stores exactly the same bounded content as
-        the live next turn. Validation failures and length-stop fabrications
-        never reach ``on_result`` because they carry no intent.
+        the live next turn. ``on_result`` receives every source position; calls
+        rejected by validation or truncation carry no intent and are durably
+        appended only when their source position is reached.
         """
         assistant = prepared.assistant
         transcript = prepared.transcript
@@ -285,12 +286,20 @@ class ToolTurnExecutor:
                 )
                 for call in assistant.tool_calls
             )
+            fitted = (
+                _fit_results(results, max_tokens=max_observation_tokens)
+                if max_observation_tokens is not None
+                else results
+            )
+            if on_result is not None:
+                for position, execution in enumerate(fitted):
+                    await on_result(None, execution, position == len(fitted) - 1)
             return _assemble_turn(
                 assistant,
                 transcript,
-                results,
+                fitted,
                 prepared.preflight,
-                max_observation_tokens,
+                None,
             )
 
         intents_by_call = {
@@ -312,22 +321,28 @@ class ToolTurnExecutor:
         }
         completed = False
         try:
-            ordered = tuple(
-                await asyncio.gather(*(tasks[call.id] for call in assistant.tool_calls))
-            )
-            fitted = (
-                _fit_results(ordered, max_tokens=max_observation_tokens)
-                if max_observation_tokens is not None
-                else ordered
-            )
-            by_call_id = {execution.call.id: execution for execution in fitted}
-            if on_result is not None:
-                for position, intent in enumerate(intents):
-                    await on_result(
-                        intent,
-                        by_call_id.get(intent.source_call_id or ""),
-                        position == len(intents) - 1,
+            fitted_items: list[ToolExecution] = []
+            remaining_tokens = max_observation_tokens
+            for position, call in enumerate(assistant.tool_calls):
+                execution = await tasks[call.id]
+                if remaining_tokens is not None:
+                    result_count = len(assistant.tool_calls) - position
+                    execution = _fit_execution(
+                        execution,
+                        max_tokens=remaining_tokens // result_count,
                     )
+                    remaining_tokens = max(
+                        0,
+                        remaining_tokens - estimate_tokens(execution.result.text_content),
+                    )
+                fitted_items.append(execution)
+                if on_result is not None:
+                    await on_result(
+                        intents_by_call.get(execution.call.id),
+                        execution,
+                        position == len(assistant.tool_calls) - 1,
+                    )
+            fitted = tuple(fitted_items)
             completed = True
         finally:
             if not completed:
@@ -380,23 +395,24 @@ def _fit_results(
     fitted: list[ToolExecution] = []
     for index, execution in enumerate(results):
         result_count = len(results) - index
-        allowance = remaining // result_count
-        result = fit_tool_result(execution.result, max_tokens=allowance)
-        remaining = max(0, remaining - estimate_tokens(result.text_content))
-        if result == execution.result:
-            fitted.append(execution)
-            continue
-        fitted.append(
-            replace(
-                execution,
-                result=result,
-                observation=replace(
-                    execution.observation,
-                    content_chars=len(result.text_content),
-                ),
-            )
-        )
+        execution = _fit_execution(execution, max_tokens=remaining // result_count)
+        remaining = max(0, remaining - estimate_tokens(execution.result.text_content))
+        fitted.append(execution)
     return tuple(fitted)
+
+
+def _fit_execution(execution: ToolExecution, *, max_tokens: int) -> ToolExecution:
+    result = fit_tool_result(execution.result, max_tokens=max_tokens)
+    if result == execution.result:
+        return execution
+    return replace(
+        execution,
+        result=result,
+        observation=replace(
+            execution.observation,
+            content_chars=len(result.text_content),
+        ),
+    )
 
 
 def fit_tool_result(result: ToolResult, *, max_tokens: int) -> ToolResult:

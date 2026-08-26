@@ -398,7 +398,7 @@ async def test_provider_overflow_compacts_then_retries_the_same_turn_once() -> N
             intent=EffectIntent(
                 intent_id=IntentId.new(),
                 tool_name="search_knowledge_base",
-                replay_policy="safe",
+                replay_policy="replayable",
                 contract_version=1,
                 input_schema_digest="a" * 64,
                 canonical_input='{"query":"q"}',
@@ -1598,6 +1598,48 @@ def test_bound_workspace_exposes_staged_artifacts(tmp_path: Any) -> None:
         "report.md": "primary_report",
         "table.csv": "published_artifact",
     }
+
+
+async def test_same_named_non_cancellation_error_is_not_reclassified() -> None:
+    class RunCancelledError(Exception):
+        pass
+
+    agent = ScriptedAgent(_answer("must not run"), final_text="unreachable")
+    orchestrator = _research(agent, lambda _query: _corpus_result(), None)
+    prepared = orchestrator.prepare_run("Question")
+
+    class BrokenBoundaries(_NoBoundaries):
+        async def check_cancelled(self) -> None:
+            raise RunCancelledError("not the runtime cancellation type")
+
+    with pytest.raises(RunCancelledError, match="not the runtime"):
+        await orchestrator.research_until_stopped(
+            prepared,
+            boundaries=BrokenBoundaries(),
+        )
+
+    assert agent.turn_calls == []
+
+
+async def test_publication_correction_checks_cancellation_before_model_call() -> None:
+    from dlightrag.runtime import RunCancelledError
+
+    agent = ScriptedAgent(_answer("must not run"), final_text="unreachable")
+    orchestrator = _research(agent, lambda _query: _corpus_result(), None)
+    prepared = orchestrator.prepare_run("Question")
+
+    class CancelledBoundaries(_NoBoundaries):
+        async def check_cancelled(self) -> None:
+            raise RunCancelledError
+
+    with pytest.raises(RunCancelledError):
+        await orchestrator.correct_publication(
+            prepared,
+            boundaries=CancelledBoundaries(),
+            feedback="correct it",
+        )
+
+    assert agent.turn_calls == []
 
 
 async def test_publication_correction_is_one_bounded_terminal_pass() -> None:

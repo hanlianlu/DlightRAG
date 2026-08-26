@@ -38,6 +38,7 @@ from dlightrag.agent.session.entries import (
 )
 from dlightrag.agent.session.fold import PriorTurns, fold_entries
 from dlightrag.agent.session.ids import EntryId, ProjectionId, SessionId, StageIntentId
+from dlightrag.agent.session.plan import AgentRunPlan
 from dlightrag.agent.session.projection import (
     ContextProjection,
     TokenAnchor,
@@ -704,6 +705,8 @@ class AnswerExecutor:
                 root=Path.cwd(),
                 source="global",
             )
+            # Membership follows configured roots, not discovered contents, so
+            # workspace changes cannot alter an accepted Plan.
             tools.append(load_skill_tool(SkillCatalog((placeholder,))))
         registry = ToolRegistry(tools)
         self._trusted_extensions.register_tools(registry)
@@ -896,6 +899,7 @@ class AnswerExecutor:
                         fetched_buffer=fetched_buffer,
                         parent_session_id=session_id,
                     ),
+                    check_cancelled=session.check_cancelled,
                 )
                 snapshot = await journal.load(session_id)
                 is_new_session = snapshot.version == 0
@@ -924,6 +928,7 @@ class AnswerExecutor:
                     query_images=run.query_images,
                     registry=run.registry,
                 )
+                self.validate_pinned_agent_run_plan(request, prepared_early.tools)
                 if not is_new_session:
                     await run.orchestrator.recover_from_fold(prepared_early, snapshot)
                     await _adopt_durable_evidence(prepared_early, journal, session_id)
@@ -1329,6 +1334,25 @@ class AnswerExecutor:
         return base64.b64encode(content).decode("ascii") if content else None
 
     @staticmethod
+    def validate_pinned_agent_run_plan(
+        request: AnswerRunInput,
+        tools: Sequence[AgentTool],
+    ) -> None:
+        """Reject execution when runtime tools differ from acceptance."""
+        pinned = request.agent_run_plan
+        if pinned is None:
+            return
+        actual = AgentRunPlan.from_tools(
+            tools,
+            model_role="query",
+            context_policy_revision=request.context_policy_revision,
+        )
+        if actual.digest != pinned.digest:
+            raise IncompatibleActiveRunError(
+                "answer run Agent Plan differs from its accepted tool contracts"
+            )
+
+    @staticmethod
     def validate_pinned_model_profiles(
         request: AnswerRunInput,
     ) -> dict[ModelRole, ModelProfile]:
@@ -1412,12 +1436,12 @@ def _memory_operation_settlement(
 
 
 class JournalRunBoundaries:
-    """Journal each complete turn and settle every intent in source order.
+    """Journal each complete turn and append every result in source order.
 
-    One append transaction commits the assistant entry, all valid intents, and
-    deterministic validation-result entries (M3-D26); each effect then settles
-    one at a time in assistant source order (M3-D12), with the turn's durable
-    evidence/fetched-resource host updates attached to the final settlement.
+    One append commits the assistant entry, pinned deterministic preflight
+    results, and all valid intents before effects execute. Source-position
+    callbacks then settle executable effects or append validation results in the
+    exact order the provider emitted them (M3-D12, M3-D26).
     """
 
     def __init__(
@@ -1502,98 +1526,164 @@ class JournalRunBoundaries:
         return commit
 
     async def recover_pending_intents(self, snapshot: Any) -> None:
-        """Settle intents a crash left unsettled, per their pinned policy.
+        """Complete unsettled tool batches in their assistant source order."""
+        for intent, result in self._pending_tool_positions(snapshot):
+            if intent is not None:
+                await self._recover_intent(intent)
+            elif result is not None:
+                await self._append_preflight_result(result)
 
-        Committed effects fold and never execute again; unsettled ``safe``
-        effects replay only when tool name, replay policy, contract version,
-        and schema digest all match, unsettled ``never`` effects settle
-        interrupted, and a changed contract settles ``tool_contract_changed``
-        (M3-D13, 3C recovery).
+    async def close_pending_intents(self, snapshot: Any) -> None:
+        """Close every unsettled source position without executing another effect.
+
+        Cancellation cannot prove whether a concurrently dispatched effect ran.
+        Every durable intent therefore closes as outcome-unknown, including an
+        otherwise replayable tool. Deterministic preflight failures are appended
+        normally so the terminal child transcript keeps every call paired.
         """
-        import json as _json
-
-        settled_ids = {
-            entry.intent_id
-            for entry in snapshot.entries
-            if isinstance(entry, EffectResultEntry) and entry.intent_id is not None
-        }
-        for entry in snapshot.entries:
-            if not isinstance(entry, EffectIntentEntry):
+        for intent, result in self._pending_tool_positions(snapshot):
+            if intent is None:
+                if result is not None:
+                    await self._append_preflight_result(result)
                 continue
-            intent = entry.intent
-            if intent.intent_id in settled_ids:
-                continue
-            # A crash may land the journal append before roster precreation.
-            # Rebind deterministic child rows before replaying the spawn effect.
-            await self._bind_subagents_parent_intents((intent,))
-            tool = self._tools_by_name.get(intent.tool_name)
-            contract_matches = (
-                tool is not None
-                and tool.replay_policy == intent.replay_policy
-                and tool.contract_version == intent.contract_version
-                and tool.input_schema_digest == intent.input_schema_digest
-            )
-            progress: Literal["live", "prelude"] = "prelude"
-            tool_effects = ToolEffects()
-            details: Mapping[str, Any] | None = None
-            if intent.replay_policy == "safe" and contract_matches:
-                if tool is None:
-                    raise RuntimeError("matched contract lost its tool")
-                try:
-                    arguments = tool.input_model.model_validate(_json.loads(intent.canonical_input))
-
-                    async def ignore_update(_result: ToolResult) -> None:
-                        return None
-
-                    runtime = ToolRuntime(
-                        call_id=intent.source_call_id or intent.intent_id.value,
-                        tool_name=intent.tool_name,
-                        intent_id=intent.intent_id,
-                        execution_scope=self.tool_execution_scope,
-                        _update_sink=ignore_update,
-                    )
-                    result = await tool.execute(arguments, runtime)
-                    effect_outcome = "succeeded"
-                    result_outcome = "failed" if result.is_error else "succeeded"
-                    parts = fit_tool_result(
-                        result,
-                        max_tokens=CONTEXT_POLICY.observation_reserve_tokens,
-                    ).parts
-                    cached = result.cached
-                    tool_effects = result.effects
-                    details = result.details
-                except Exception as exc:
-                    # The safe effect ran and settled, but its provider-visible
-                    # result remains an error on every replay.
-                    effect_outcome = "succeeded"
-                    result_outcome = "failed"
-                    parts = (ToolTextPart(f'Tool "{intent.tool_name}" failed: {exc}'),)
-                    cached = False
-                progress = "live"
-            elif intent.replay_policy == "safe":
-                effect_outcome = "tool_contract_changed"
-                result_outcome = "tool_contract_changed"
-                parts = (
-                    ToolTextPart(f'Tool "{intent.tool_name}" contract changed; result discarded.'),
-                )
-                cached = False
-            else:
-                effect_outcome = "interrupted"
-                result_outcome = "interrupted"
-                parts = (
-                    ToolTextPart(f'Tool "{intent.tool_name}" was interrupted before it settled.'),
-                )
-                cached = False
             await self._settle_intent_recovery(
                 intent,
-                effect_outcome=effect_outcome,
-                result_outcome=result_outcome,
-                parts=parts,
-                cached=cached,
-                tool_effects=tool_effects,
-                details=details,
-                progress=progress,
+                effect_outcome="outcome_unknown",
+                result_outcome="outcome_unknown",
+                parts=(
+                    ToolTextPart(
+                        f'Tool "{intent.tool_name}" did not settle before cancellation; '
+                        "its prior effect may have happened and its outcome is unknown."
+                    ),
+                ),
+                cached=False,
+                tool_effects=ToolEffects(),
+                details=None,
+                progress="prelude",
             )
+
+    @staticmethod
+    def _pending_tool_positions(
+        snapshot: Any,
+    ) -> tuple[tuple[EffectIntent | None, ToolResultEntry | None], ...]:
+        """Return unsettled calls in their assistant-declared source order."""
+        intents_by_call = {
+            entry.intent.source_call_id: entry.intent
+            for entry in snapshot.entries
+            if isinstance(entry, EffectIntentEntry) and entry.intent.source_call_id is not None
+        }
+        settled_calls = {
+            entry.result.call_id
+            for entry in snapshot.entries
+            if isinstance(entry, EffectResultEntry)
+        }
+        pending: list[tuple[EffectIntent | None, ToolResultEntry | None]] = []
+        for entry in snapshot.entries:
+            if not isinstance(entry, AssistantMessageEntry) or not entry.tool_calls:
+                continue
+            validation_by_call = {result.call_id: result for result in entry.preflight_results}
+            for call in entry.tool_calls:
+                if call.id in settled_calls:
+                    continue
+                intent = intents_by_call.get(call.id)
+                result = None if intent is not None else validation_by_call.get(call.id)
+                if result is None and intent is None and entry.stop_reason == "length":
+                    result = ToolResultEntry.text(
+                        tool_name=call.name,
+                        call_id=call.id,
+                        outcome="truncated_arguments",
+                        text=(
+                            f'Tool "{call.name}" was not executed because the model hit '
+                            "its output token limit and the arguments may be truncated."
+                        ),
+                    )
+                if intent is None and result is None:
+                    raise RunExecutionError(
+                        "run_execution_failed",
+                        "Durable tool preflight lost one source-position result.",
+                    )
+                pending.append((intent, result))
+                settled_calls.add(call.id)
+        return tuple(pending)
+
+    async def _recover_intent(self, intent: EffectIntent) -> None:
+        """Settle one source-position intent according to its pinned replay policy."""
+        import json as _json
+
+        # A crash may land the journal append before roster precreation.
+        # Rebind deterministic child rows before replaying the spawn effect.
+        await self._bind_subagents_parent_intents((intent,))
+        tool = self._tools_by_name.get(intent.tool_name)
+        contract_matches = (
+            tool is not None
+            and tool.replay_policy == intent.replay_policy
+            and tool.contract_version == intent.contract_version
+            and tool.input_schema_digest == intent.input_schema_digest
+        )
+        progress: Literal["live", "prelude"] = "prelude"
+        tool_effects = ToolEffects()
+        details: Mapping[str, Any] | None = None
+        if intent.replay_policy == "replayable" and contract_matches:
+            if tool is None:
+                raise RuntimeError("matched contract lost its tool")
+            try:
+                arguments = tool.input_model.model_validate(_json.loads(intent.canonical_input))
+
+                async def ignore_update(_result: ToolResult) -> None:
+                    return None
+
+                runtime = ToolRuntime(
+                    call_id=intent.source_call_id or intent.intent_id.value,
+                    tool_name=intent.tool_name,
+                    intent_id=intent.intent_id,
+                    execution_scope=self.tool_execution_scope,
+                    _update_sink=ignore_update,
+                )
+                result = await tool.execute(arguments, runtime)
+                effect_outcome = "succeeded"
+                result_outcome = "failed" if result.is_error else "succeeded"
+                parts = fit_tool_result(
+                    result,
+                    max_tokens=CONTEXT_POLICY.observation_reserve_tokens,
+                ).parts
+                cached = result.cached
+                tool_effects = result.effects
+                details = result.details
+            except Exception as exc:
+                # The replayable effect ran and settled, but its provider-visible
+                # result remains an error on every replay.
+                effect_outcome = "succeeded"
+                result_outcome = "failed"
+                parts = (ToolTextPart(f'Tool "{intent.tool_name}" failed: {exc}'),)
+                cached = False
+            progress = "live"
+        elif intent.replay_policy == "replayable":
+            effect_outcome = "tool_contract_changed"
+            result_outcome = "tool_contract_changed"
+            parts = (
+                ToolTextPart(f'Tool "{intent.tool_name}" contract changed; result discarded.'),
+            )
+            cached = False
+        else:
+            effect_outcome = "outcome_unknown"
+            result_outcome = "outcome_unknown"
+            parts = (
+                ToolTextPart(
+                    f'Tool "{intent.tool_name}" was not replayed because its prior '
+                    "effect may have happened before recovery. Its outcome is unknown."
+                ),
+            )
+            cached = False
+        await self._settle_intent_recovery(
+            intent,
+            effect_outcome=effect_outcome,
+            result_outcome=result_outcome,
+            parts=parts,
+            cached=cached,
+            tool_effects=tool_effects,
+            details=details,
+            progress=progress,
+        )
 
     async def _settle_intent_recovery(
         self,
@@ -1757,13 +1847,17 @@ class JournalRunBoundaries:
         return bool(entries)
 
     async def commit_intents(self, prepared: PreparedToolTurn) -> None:
-        """Durably append one prepared turn's assistant entry and its intents.
+        """Durably append one assistant, its preflight plan, and valid intents.
 
-        This is the persist step that must land before any tool executes:
-        after this commit, a crash leaves recoverable unsettled intents instead
-        of effects with no durable trace (Blocker 2).
+        This persist step lands before any tool executes. Invalid-call results
+        remain pinned on the assistant but are not model-visible until every
+        earlier source position has settled.
         """
-        assistant = _assistant_entry(prepared.assistant, self._session_id)
+        assistant = _assistant_entry(
+            prepared.assistant,
+            self._session_id,
+            preflight_results=prepared.preflight.validation_results,
+        )
         intents = tuple(
             EffectIntentEntry(
                 entry_id=EntryId.new(),
@@ -1772,15 +1866,6 @@ class JournalRunBoundaries:
                 intent=intent,
             )
             for intent in prepared.preflight.intents
-        )
-        validation = tuple(
-            EffectResultEntry(
-                entry_id=EntryId.new(),
-                session_id=self._session_id,
-                timestamp=_entry_timestamp(),
-                result=result,
-            )
-            for result in prepared.preflight.validation_results
         )
         next_projection = None
         if self._active_projection is not None:
@@ -1795,7 +1880,7 @@ class JournalRunBoundaries:
         commit = await self._journal.append(
             session_id=self._session_id,
             expected_version=self._version,
-            entries=(assistant, *intents, *validation),
+            entries=(assistant, *intents),
             projection=next_projection,
         )
         if isinstance(commit, (VersionConflict, LeaseLost)):
@@ -1804,22 +1889,28 @@ class JournalRunBoundaries:
         self._last_sequence = commit.appended_sequences[-1]
         if next_projection is not None:
             self._active_projection = next_projection
-            tail_messages = fold_entries((assistant, *intents, *validation))
+            tail_messages = fold_entries((assistant, *intents))
             self._tail_tokens = estimate_messages_tokens(tail_messages) if tail_messages else 0
         else:
-            batch_messages = fold_entries((assistant, *intents, *validation))
+            batch_messages = fold_entries((assistant, *intents))
             self._tail_tokens += estimate_messages_tokens(batch_messages) if batch_messages else 0
         await self._bind_subagents_parent_intents(prepared.preflight.intents)
 
     async def settle_intent(
         self,
-        intent: EffectIntent,
+        intent: EffectIntent | None,
         execution: ToolExecution | None,
         *,
         turn_number: int,
         is_last: bool,
     ) -> None:
-        """Settle one already-persisted intent with its execution, or as interrupted."""
+        """Append one fitted source-position result, settling an intent when present."""
+        del turn_number, is_last
+        if intent is None:
+            if execution is None:
+                raise RuntimeError("validation result lost its tool execution")
+            await self._append_validation_result(execution)
+            return
         if execution is None:
             effect_outcome: str = "interrupted"
             result_outcome: str = "interrupted"
@@ -1866,6 +1957,40 @@ class JournalRunBoundaries:
             appended_tokens=estimate_messages_tokens(fold_entries([result_entry])),
         )
 
+    async def _append_validation_result(self, execution: ToolExecution) -> None:
+        """Append a deterministic no-effect result at its assistant source position."""
+        outcome = execution.observation.outcome
+        if outcome not in {"unknown_tool", "invalid_arguments", "truncated_arguments"}:
+            raise RuntimeError(f"tool result without intent has invalid outcome: {outcome}")
+        await self._append_preflight_result(
+            ToolResultEntry(
+                tool_name=execution.call.name,
+                call_id=execution.call.id,
+                outcome=outcome,  # type: ignore[arg-type]
+                parts=execution.result.parts,
+                details=execution.result.details,
+                cached=execution.result.cached,
+            )
+        )
+
+    async def _append_preflight_result(self, result: ToolResultEntry) -> None:
+        entry = EffectResultEntry(
+            entry_id=EntryId.new(),
+            session_id=self._session_id,
+            timestamp=_entry_timestamp(),
+            result=result,
+        )
+        committed = await self._journal.append(
+            session_id=self._session_id,
+            expected_version=self._version,
+            entries=[entry],
+        )
+        if not isinstance(committed, SessionCommit):
+            raise LeaseLostError
+        self._version = committed.version
+        self._last_sequence = committed.appended_sequences[-1]
+        self._tail_tokens += estimate_messages_tokens(fold_entries([entry]))
+
     async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None:
         """Append and settle one already-executed turn in one step.
 
@@ -1882,17 +2007,17 @@ class JournalRunBoundaries:
             transcript=executed.messages,
         )
         await self.commit_intents(prepared)
-        intents = executed.intents
-        for position, intent in enumerate(intents):
-            execution = next(
-                (result for result in executed.results if result.call.id == intent.source_call_id),
-                None,
-            )
+        intents_by_call = {
+            intent.source_call_id: intent
+            for intent in executed.intents
+            if intent.source_call_id is not None
+        }
+        for position, execution in enumerate(executed.results):
             await self.settle_intent(
-                intent,
+                intents_by_call.get(execution.call.id),
                 execution,
                 turn_number=turn_number,
-                is_last=position == len(intents) - 1,
+                is_last=position == len(executed.results) - 1,
             )
 
     def _host_update(
@@ -2163,6 +2288,7 @@ async def run_child_session(
         status, journal_reason = _child_status(prepared.stop_reason)
         summary = _child_summary(prepared, status)
     except asyncio.CancelledError:
+        await boundaries.close_pending_intents(await journal.load(child_id))
         await _append_child_terminal(
             journal,
             child_id,
@@ -2452,7 +2578,12 @@ def _initial_tail_tokens(
     return estimate_messages_tokens(folded) if folded else 0
 
 
-def _assistant_entry(assistant: AssistantTurn, session_id: SessionId) -> AssistantMessageEntry:
+def _assistant_entry(
+    assistant: AssistantTurn,
+    session_id: SessionId,
+    *,
+    preflight_results: tuple[ToolResultEntry, ...] = (),
+) -> AssistantMessageEntry:
     return AssistantMessageEntry(
         entry_id=EntryId.new(),
         session_id=session_id,
@@ -2461,6 +2592,7 @@ def _assistant_entry(assistant: AssistantTurn, session_id: SessionId) -> Assista
         stop_reason=assistant.stop_reason,
         reasoning=assistant.reasoning,
         tool_calls=assistant.tool_calls,
+        preflight_results=preflight_results,
         usage=assistant.usage_details,
         cost=assistant.cost_details,
         provider_state=assistant.provider_state,

@@ -85,7 +85,7 @@ def _intent(session_id: SessionId, canonical_input: str) -> EffectIntentEntry:
         intent=EffectIntent(
             intent_id=IntentId.new(),
             tool_name="read_file",
-            replay_policy="safe",
+            replay_policy="replayable",
             contract_version=1,
             input_schema_digest="a" * 64,
             canonical_input=canonical_input,

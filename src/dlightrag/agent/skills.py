@@ -117,7 +117,7 @@ def load_skill_tool(catalog: SkillCatalog) -> AgentTool:
         description="Load one discovered Agent Skill document on demand. Never executes Skill code.",
         input_model=LoadSkillInput,
         execute=execute,
-        replay_policy="safe",
+        replay_policy="replayable",
     )
 
 

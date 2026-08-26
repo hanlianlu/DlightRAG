@@ -110,18 +110,27 @@ class TestEntryUnion:
             content="searching",
             stop_reason="tool_use",
             tool_calls=(ToolCall(id="c1", name="search_knowledge_base", arguments={"q": "x"}),),
+            preflight_results=(
+                ToolResultEntry.text(
+                    tool_name="missing",
+                    call_id="c2",
+                    outcome="unknown_tool",
+                    text="not available",
+                ),
+            ),
             usage={"input_tokens": 10, "output_tokens": 4},
         )
         payload = entry.canonical_payload()
         assert payload["stop_reason"] == "tool_use"
         assert payload["tool_calls"][0]["name"] == "search_knowledge_base"
+        assert payload["preflight_results"][0]["call_id"] == "c2"
         assert payload["usage"] == {"input_tokens": 10, "output_tokens": 4}
 
     def test_effect_intent_entry_carries_all_replay_facts(self) -> None:
         intent = EffectIntent(
             intent_id=IntentId.new(),
             tool_name="search_knowledge_base",
-            replay_policy="safe",
+            replay_policy="replayable",
             contract_version=3,
             input_schema_digest="a" * 64,
             canonical_input='{"q":"x"}',
@@ -130,7 +139,7 @@ class TestEntryUnion:
         entry = EffectIntentEntry(**_entry(), intent=intent)
         payload = entry.canonical_payload()
         assert payload["tool_name"] == "search_knowledge_base"
-        assert payload["replay_policy"] == "safe"
+        assert payload["replay_policy"] == "replayable"
         assert payload["contract_version"] == 3
         assert payload["input_schema_digest"] == "a" * 64
 

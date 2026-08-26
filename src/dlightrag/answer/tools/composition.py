@@ -98,7 +98,10 @@ def compose_research_tools(
                 recall_memory_tool(host=memory_host),
             )
         )
-    if skill_catalog is not None and skill_catalog.metadata:
+    if skill_catalog is not None:
+        # Tool membership is pinned before a run workspace exists. Keep the
+        # contract stable even when this particular catalog is empty; execution
+        # then returns an ordinary not-found result rather than changing the Plan.
         tools.append(load_skill_tool(skill_catalog))
     try:
         registry = ToolRegistry(tools)
@@ -128,6 +131,7 @@ def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger) -> AgentTool:
         execute,
         replay_policy=tool.replay_policy,
         contract_version=tool.contract_version,
+        guidance=tool.guidance,
     )
 
 

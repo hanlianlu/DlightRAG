@@ -198,7 +198,7 @@ def test_accounting_entries_produce_no_model_messages() -> None:
         intent=EffectIntent(
             intent_id=IntentId.new(),
             tool_name="search_knowledge_base",
-            replay_policy="safe",
+            replay_policy="replayable",
             contract_version=1,
             input_schema_digest="a" * 64,
             canonical_input='{"q":"x"}',

@@ -24,7 +24,7 @@ MATRIX: dict[str, tuple[tuple[str, ...], dict[str, object], str, int]] = {
             "focus": None,
             "cursor": None,
         },
-        "safe",
+        "replayable",
         2,
     ),
     "bash": (("command",), {"timeout_seconds": None}, "never", 2),
@@ -45,11 +45,11 @@ MATRIX: dict[str, tuple[tuple[str, ...], dict[str, object], str, int]] = {
             "context": None,
             "limit": 100,
         },
-        "safe",
+        "replayable",
         2,
     ),
-    "find": (("pattern",), {"path": ".", "limit": 1000}, "safe", 1),
-    "ls": ((), {"path": ".", "limit": 500}, "safe", 1),
+    "find": (("pattern",), {"path": ".", "limit": 1000}, "replayable", 1),
+    "ls": ((), {"path": ".", "limit": 500}, "replayable", 1),
 }
 
 

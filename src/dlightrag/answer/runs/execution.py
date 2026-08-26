@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from dlightrag.agent.session.plan import AgentRunPlan
 from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.answer.mode import canonical_answer_mode
@@ -241,6 +242,7 @@ class AnswerRunInput:
     context_policy_revision: str
     model_catalog_revision: str
     idempotency_fingerprint: str
+    agent_run_plan: AgentRunPlan | None = None
     workspaces: tuple[str, ...] = ()
     history: tuple[Mapping[str, Any], ...] = ()
     episodic_summary: str = ""
@@ -278,6 +280,9 @@ class AnswerRunInput:
             "context_policy_revision": self.context_policy_revision,
             "model_catalog_revision": self.model_catalog_revision,
             "idempotency_fingerprint": self.idempotency_fingerprint,
+            "agent_run_plan": (
+                self.agent_run_plan.canonical_payload() if self.agent_run_plan is not None else None
+            ),
             "image_descriptions": list(self.image_descriptions),
             "session_id": self.session_id,
             "resource_manifest": [dict(item) for item in self.resource_manifest],
@@ -297,6 +302,12 @@ class AnswerRunInput:
         context_policy_revision = str(request.get("context_policy_revision") or "")
         model_catalog_revision = str(request.get("model_catalog_revision") or "")
         idempotency_fingerprint = str(request.get("idempotency_fingerprint") or "")
+        raw_agent_run_plan = request.get("agent_run_plan")
+        agent_run_plan = (
+            AgentRunPlan.from_payload(raw_agent_run_plan)
+            if isinstance(raw_agent_run_plan, Mapping)
+            else None
+        )
         if (
             not pinned_models
             or not context_policy_revision
@@ -310,6 +321,7 @@ class AnswerRunInput:
             context_policy_revision=context_policy_revision,
             model_catalog_revision=model_catalog_revision,
             idempotency_fingerprint=idempotency_fingerprint,
+            agent_run_plan=agent_run_plan,
             workspaces=tuple(str(value) for value in request.get("workspaces") or ()),
             history=tuple(dict(message) for message in request.get("history") or ()),
             episodic_summary=str(request.get("episodic_summary") or ""),

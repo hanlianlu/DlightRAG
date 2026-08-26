@@ -569,6 +569,9 @@ async def test_carried_history_resource_loads_from_the_run_that_accepted_it() ->
     assert run_input.context_policy_revision == CONTEXT_POLICY_REVISION
     assert run_input.model_catalog_revision == MODEL_CATALOG_REVISION
     assert {pinned.role for pinned in run_input.pinned_models} == set(MODEL_ROLE_NAMES)
+    assert run_input.agent_run_plan is not None
+    assert run_input.agent_run_plan.context_policy_revision == CONTEXT_POLICY_REVISION
+    assert run_input.agent_run_plan.digest
 
 
 async def test_preparation_runs_after_link_materialization() -> None:

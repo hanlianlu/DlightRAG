@@ -127,4 +127,4 @@ async def test_disabled_or_stale_capability_rejects_tools() -> None:
 
 
 def test_remember_is_safe_to_replay() -> None:
-    assert remember_tool(host=_host()).replay_policy == "safe"
+    assert remember_tool(host=_host()).replay_policy == "replayable"
