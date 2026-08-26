@@ -42,8 +42,6 @@ class TestMigrationDeclaration:
             "dlightrag_agent_sessions",
             "dlightrag_agent_session_entries",
             "dlightrag_agent_session_registers",
-            "dlightrag_agent_context_projections",
-            "dlightrag_agent_effects",
             "dlightrag_answer_run_stages",
             "dlightrag_answer_evidence",
             "dlightrag_answer_resources",

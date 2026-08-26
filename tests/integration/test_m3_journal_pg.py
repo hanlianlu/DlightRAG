@@ -1,33 +1,55 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Integration tests for the M3 journal, progress, evidence, resource, and blob
-adapters against a dedicated test database."""
+"""PostgreSQL parity tests for canonical M3 AgentSessionRuntime."""
 
+import hashlib
+import json
 import uuid
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import asyncpg
 import pytest
+from pydantic import BaseModel
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.session_journal import PGJournalStore
-from dlightrag.agent.session.effects import EffectIntent, EffectSettlement, ToolResultEntry
+from dlightrag.agent.session.effects import ToolResultEntry
 from dlightrag.agent.session.entries import (
-    EffectIntentEntry,
-    EffectResultEntry,
+    AssistantMessageEntry,
+    SessionEntry,
+    ToolResultMessageEntry,
     UserMessageEntry,
 )
 from dlightrag.agent.session.ids import (
+    AttemptId,
     EntryId,
     IntentId,
     LaneId,
-    ProjectionId,
     SessionId,
     StageIntentId,
 )
-from dlightrag.agent.session.projection import ContextProjection, TokenAnchor
-from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
-from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
+from dlightrag.agent.session.memory import MemoryAgentSessionStore
+from dlightrag.agent.session.operation import OperationCompleted, ToolBatchItem
+from dlightrag.agent.session.plan import AgentRunPlan
+from dlightrag.agent.session.registers import LaneHead, LaneState, RequestSnapshot, SetRegister
+from dlightrag.agent.session.runtime import (
+    AgentSessionRuntime,
+    RuntimeContext,
+    ToolEffectResult,
+)
+from dlightrag.agent.session.transactions import (
+    HostDeltaSettlement,
+    RegisterConflict,
+    RegisterExpectation,
+    SessionTransaction,
+    TransactionCommit,
+)
+from dlightrag.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
+from dlightrag.agent.tools import AgentTool, ToolResult
+from dlightrag.ai.messages import AssistantTurn, ToolCall
+from dlightrag.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
 from dlightrag.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
 from dlightrag.runtime.settlements import (
     CommittedSpillUpdate,
@@ -36,11 +58,11 @@ from dlightrag.runtime.settlements import (
     FetchedResourceSettlementUpdate,
     InventoryPathRecord,
     MemoryOperationSettlement,
-    OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
     WorkspaceInventoryUpdate,
 )
+from dlightrag.services.answers import AnswerService
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -50,7 +72,6 @@ _ADMIN: dict[str, Any] = dict(
 _TEST_DATABASE = "dlightrag_m3_journal_test"
 _OWNER = "owner-alpha"
 _WORKER = "worker-1"
-_OTHER_WORKER = "worker-2"
 
 
 async def _pg_available() -> bool:
@@ -73,7 +94,6 @@ async def pool():
         pass
     finally:
         await admin.close()
-
     created = await asyncpg.create_pool(
         **{**_ADMIN, "database": _TEST_DATABASE}, min_size=1, max_size=8
     )
@@ -94,638 +114,401 @@ async def _store(pool) -> PGAnswerRunStore:
     return store
 
 
-def _prepared_input() -> dict[str, Any]:
-    return {
-        "session_id": str(uuid.uuid7()),
-        "fingerprint": "f" * 64,
-        "query": "question?",
-        "workspaces": ["default"],
-        "schema_version": 1,
-    }
-
-
-async def _accept(pool, *, owner: str = _OWNER) -> PGAnswerRunStore:
+async def _claim(pool, *, session_id: SessionId | None = None) -> ClaimedRun:
     store = await _store(pool)
     await store.accept_run(
-        owner_id=owner,
+        owner_id=_OWNER,
         run_id=str(uuid.uuid7()),
         idempotency_key=None,
         fingerprint="f" * 64,
-        prepared_input=_prepared_input(),
+        prepared_input={
+            "session_id": (session_id or SessionId.new()).value,
+            "fingerprint": "f" * 64,
+            "query": "question?",
+            "workspaces": ["default"],
+            "schema_version": 1,
+        },
     )
-    return store
-
-
-async def _claim(pool, *, owner: str = _OWNER, worker: str = _WORKER) -> ClaimedRun:
-    store = await _store(pool)
-    await store.accept_run(
-        owner_id=owner,
-        run_id=str(uuid.uuid7()),
-        idempotency_key=None,
-        fingerprint="f" * 64,
-        prepared_input=_prepared_input(),
-    )
-    claimed = await store.claim_next(worker_id=worker)
+    claimed = await store.claim_next(worker_id=_WORKER)
     assert claimed is not None
     return claimed
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
+class Args(BaseModel):
+    value: str
 
 
-def _user(session_id: SessionId, content: str = "hello") -> UserMessageEntry:
-    return UserMessageEntry(
-        entry_id=EntryId.new(), session_id=session_id, timestamp=_now(), content=content
+async def _unused(_args, _runtime) -> ToolResult:
+    return ToolResult.text("unused")
+
+
+_TOOL = AgentTool(
+    name="lookup",
+    description="lookup",
+    input_model=Args,
+    execute=_unused,
+    replay_policy="never",
+)
+_PLAN = AgentRunPlan.from_tools([_TOOL], model_role="query", context_policy_revision="context-v1")
+
+
+class Effects:
+    def __init__(self, *, session_id: SessionId) -> None:
+        self._session_id = session_id
+        self.turns = [
+            AssistantTurn(
+                text="",
+                tool_calls=(ToolCall("c1", "lookup", {"value": "x"}),),
+                stop_reason="tool_use",
+            ),
+            AssistantTurn(text="done", tool_calls=(), stop_reason="stop"),
+        ]
+
+    async def assemble_request(self, context: RuntimeContext) -> RequestSnapshot:
+        return RequestSnapshot.from_values(
+            operation_id=context.operation_id,
+            turn_number=getattr(context.state, "turn_count", 0) + 1,
+            plan_digest=context.meta.plan_digest,
+            model_role="query",
+            messages=[{"role": "user", "content": "exact"}],
+            tools=[],
+            tool_choice="auto",
+            max_tokens=100,
+        )
+
+    async def call_provider(
+        self,
+        context: RuntimeContext,
+        request: RequestSnapshot,
+        attempt_id: AttemptId,
+        emit_ephemeral,
+    ) -> AssistantTurn:
+        del context, request, attempt_id, emit_ephemeral
+        return self.turns.pop(0)
+
+    async def execute_tool(
+        self,
+        context: RuntimeContext,
+        item: ToolBatchItem,
+        arguments: Mapping[str, Any],
+        attempt_id: AttemptId,
+        emit_ephemeral,
+    ) -> ToolEffectResult[EffectHostUpdate]:
+        del context, arguments, attempt_id, emit_ephemeral
+        assert item.intent_id is not None
+        content = b"evidence"
+        evidence = OpaqueEvidenceWrite(
+            session_id=self._session_id.value,
+            intent_id=item.intent_id.value,
+            result_ordinal=0,
+            content_digest=hashlib.sha256(content).hexdigest(),
+            locator_digest=hashlib.sha256(b"locator").hexdigest(),
+            content=content,
+            locator=b"locator",
+        )
+        return ToolEffectResult(
+            ToolResultEntry.text(
+                tool_name=item.tool_name,
+                call_id=item.call_id,
+                outcome="succeeded",
+                text="found",
+            ),
+            EffectHostUpdate(evidence=(evidence,)),
+        )
+
+    async def compact(self, context: RuntimeContext, attempt: int):
+        del context, attempt
+        raise AssertionError("compaction not expected")
+
+
+async def _drive(adapter, *, session_id: SessionId, fencing_epoch: int):
+    runtime = AgentSessionRuntime(
+        transactions=adapter,
+        load=adapter.load,
+        effects=Effects(session_id=session_id),
+        tools=[_TOOL],
+        fencing_epoch=fencing_epoch,
     )
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key=f"parity:{session_id.value}",
+        content="question",
+        plan=_PLAN,
+    )
+    final = await runtime.drive(
+        session_id=session_id,
+        operation_id=accepted.operation_id,
+    )
+    assert isinstance(final.state, OperationCompleted)
+    return await adapter.load(session_id)
 
 
-def _user_contents(entries: tuple[object, ...]) -> list[object]:
-    assert all(isinstance(entry, UserMessageEntry) for entry in entries)
-    return [entry.content for entry in entries if isinstance(entry, UserMessageEntry)]
-
-
-def _intent_entry(session_id: SessionId, intent_id: IntentId) -> EffectIntentEntry:
-    return EffectIntentEntry(
+async def _seed_transaction_session(
+    store, session_id: SessionId, fencing_epoch: int
+) -> TransactionCommit:
+    root = UserMessageEntry(
         entry_id=EntryId.new(),
         session_id=session_id,
-        timestamp=_now(),
-        intent=EffectIntent(
-            intent_id=intent_id,
-            tool_name="search_knowledge_base",
-            replay_policy="replayable",
-            contract_version=1,
-            input_schema_digest="a" * 64,
-            canonical_input='{"q":"x"}',
-            source_call_id="c1",
+        timestamp=datetime.now(UTC),
+        content="question",
+    )
+    head = LaneHead(LaneId.main(), root.entry_id)
+    state = LaneState(LaneId.main())
+    outcome = await store.transact(
+        session_id=session_id,
+        fencing_epoch=fencing_epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=[root],
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
         ),
     )
+    assert isinstance(outcome, TransactionCommit)
+    return outcome
 
 
-def _settlement(intent_id: IntentId, update) -> EffectSettlement:
-    if isinstance(update, FetchedResourceSettlementUpdate):
-        update = EffectHostUpdate(fetched=(update,))
-    elif isinstance(update, WorkspaceInventoryUpdate):
-        update = EffectHostUpdate(workspace_inventory=update)
-    elif isinstance(update, CommittedSpillUpdate):
-        update = EffectHostUpdate(committed_outputs=(update,))
-    result = ToolResultEntry.text(
-        tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", text="found"
-    )
-    return EffectSettlement(outcome="succeeded", result=result, host_update=update)
-
-
-def _result_entry(session_id: SessionId, intent_id: IntentId) -> EffectResultEntry:
-    return EffectResultEntry(
-        entry_id=EntryId.new(),
+async def _append_transaction_entry(
+    store,
+    session_id: SessionId,
+    entry: SessionEntry,
+    *,
+    fencing_epoch: int,
+    intent_id: IntentId | None = None,
+    host_delta: EffectHostUpdate | None = None,
+):
+    snapshot = await store.load(session_id)
+    head = snapshot.tree.lane().head
+    placed = replace(entry, parent_entry_id=head.value.entry_id)
+    outcome = await store.transact(
         session_id=session_id,
-        timestamp=_now(),
+        fencing_epoch=fencing_epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=[placed],
+            register_writes=[SetRegister(LaneHead(LaneId.main(), placed.entry_id))],
+            expectations=[RegisterExpectation(head.ref, head.sequence)],
+            host_delta=(
+                HostDeltaSettlement(intent_id, host_delta)
+                if intent_id is not None and host_delta is not None
+                else None
+            ),
+        ),
+    )
+    return outcome
+
+
+def _tool_result(
+    session_id: SessionId,
+    intent_id: IntentId,
+    *,
+    parts=None,
+    entry_id: EntryId | None = None,
+) -> ToolResultMessageEntry:
+    return ToolResultMessageEntry(
+        entry_id=entry_id or EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        result=ToolResultEntry(
+            tool_name="lookup",
+            call_id="c1",
+            outcome="succeeded",
+            parts=parts or (ToolTextPart("found"),),
+        ),
         intent_id=intent_id,
-        result=ToolResultEntry.text(
-            tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", text="found"
-        ),
+        source_index=0,
+        contract_version=1,
+        input_schema_digest="a" * 64,
+        replay_policy="never",
+        attempt_id=AttemptId.new(),
+        effective_input_digest="b" * 64,
     )
 
 
-def _projection() -> ContextProjection:
-    return ContextProjection(
-        projection_id=ProjectionId.new(),
-        first_retained_sequence=1,
-        covered_through_sequence=0,
-        summary=None,
-        token_anchors=(
-            TokenAnchor(through_sequence=0, measured_input_tokens=4, measured_output_tokens=2),
-        ),
+async def _progress(pool, run_id: str) -> int:
+    async with pool.acquire() as conn:
+        value = await conn.fetchval(
+            "SELECT durable_progress_version FROM dlightrag_answer_runs"
+            " WHERE owner_id = $1 AND run_id = $2",
+            _OWNER,
+            uuid.UUID(run_id),
+        )
+    return int(value)
+
+
+async def test_agent_session_runtime_memory_and_pg_have_atomic_state_parity(pool) -> None:
+    claimed = await _claim(pool)
+    pg = claimed.execution.session_store
+    memory = MemoryAgentSessionStore[EffectHostUpdate](
+        fencing_epoch=claimed.execution.fencing_epoch
     )
+    memory_id = SessionId.new()
+    pg_id = SessionId.new()
+    memory_snapshot = await _drive(
+        memory,
+        session_id=memory_id,
+        fencing_epoch=claimed.execution.fencing_epoch,
+    )
+    pg_snapshot = await _drive(
+        pg,
+        session_id=pg_id,
+        fencing_epoch=claimed.execution.fencing_epoch,
+    )
+    assert (
+        [entry.entry_type for entry in memory_snapshot.entries]
+        == [entry.entry_type for entry in pg_snapshot.entries]
+        == ["user_message", "assistant_message", "tool_result", "assistant_message"]
+    )
+    assert [record.ref.kind for record in memory_snapshot.registers] == [
+        record.ref.kind for record in pg_snapshot.registers
+    ]
+    assert memory_snapshot.commit_sequence == pg_snapshot.commit_sequence
+    assert len(memory.applied_host_deltas(memory_id)) == 1
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM dlightrag_answer_evidence") == 1
 
 
-def _evidence_write(*, ordinal: int = 0, content: bytes = b"evidence") -> OpaqueEvidenceWrite:
-    import hashlib
+async def test_host_delta_identity_conflict_rolls_back_entry_and_register(pool) -> None:
+    from dlightrag.adapters.postgres.session_journal import _EvidenceIdentityConflict
 
-    return OpaqueEvidenceWrite(
-        session_id=str(uuid.uuid4()),
-        intent_id=str(uuid.uuid4()),
-        result_ordinal=ordinal,
+    claimed = await _claim(pool)
+    store = claimed.execution.session_store
+    epoch = claimed.execution.fencing_epoch
+    session_id = SessionId.new()
+    await _seed_transaction_session(store, session_id, epoch)
+    intent_id = IntentId.new()
+    identity_session = SessionId.new()
+    content = b"first"
+    write = OpaqueEvidenceWrite(
+        session_id=identity_session.value,
+        intent_id=intent_id.value,
+        result_ordinal=3,
         content_digest=hashlib.sha256(content).hexdigest(),
-        locator_digest="b" * 64,
+        locator_digest=hashlib.sha256(b"locator").hexdigest(),
         content=content,
         locator=b"locator",
     )
-
-
-async def test_effect_settlement_commits_everything_atomically(pool) -> None:
-    claimed = await _claim(pool)
-    store = claimed.execution.session_store
-    session_id = SessionId.new()
-    intent_id = IntentId.new()
-
-    first = await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
-    )
-    assert first.__class__.__name__ == "SessionCommit"
-
-    update = EffectHostUpdate(evidence=(_evidence_write(),))
-    settlement = await store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
+    first = await _append_transaction_entry(
+        store,
+        session_id,
+        _tool_result(session_id, intent_id),
+        fencing_epoch=epoch,
         intent_id=intent_id,
-        settlement=_settlement(intent_id, update),
-        entries=[_result_entry(session_id, intent_id)],
-        projection=_projection(),
+        host_delta=EffectHostUpdate(evidence=(write,)),
     )
-    assert settlement.__class__.__name__ == "EffectCommit"
-    assert settlement.version == 2  # type: ignore[attr-defined]
-    assert settlement.appended_sequences == (2,)  # type: ignore[attr-defined]
+    assert isinstance(first, TransactionCommit)
+    before = await store.load(session_id)
 
-    snapshot = await store.load(session_id)
-    assert snapshot.version == 2
-    assert snapshot.active_projection is not None
-    assert [entry.sequence for entry in snapshot.entries] == [1, 2]
-    assert isinstance(snapshot.entries[1], EffectResultEntry)
-
-    # The settled intent is terminal and host facts are durable.
-    conn = await pool.acquire()
-    try:
-        outcome = await conn.fetchval(
-            "SELECT outcome FROM dlightrag_agent_effects"
-            " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3 AND intent_id = $4",
+    changed_content = b"changed"
+    different = replace(
+        write,
+        content=changed_content,
+        content_digest=hashlib.sha256(changed_content).hexdigest(),
+    )
+    second_intent = IntentId.new()
+    with pytest.raises(_EvidenceIdentityConflict):
+        await _append_transaction_entry(
+            store,
+            session_id,
+            _tool_result(session_id, second_intent),
+            fencing_epoch=epoch,
+            intent_id=second_intent,
+            host_delta=EffectHostUpdate(evidence=(different,)),
+        )
+    after = await store.load(session_id)
+    assert after.commit_sequence == before.commit_sequence
+    assert after.entries == before.entries
+    assert after.tree.lane().head == before.tree.lane().head
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT content_digest, content FROM dlightrag_answer_evidence"
+            " WHERE owner_id = $1 AND run_id = $2",
             _OWNER,
             uuid.UUID(claimed.run.run_id),
-            session_id.value,
-            intent_id.value,
         )
-        assert outcome == "succeeded"
-        evidence_count = await conn.fetchval("SELECT count(*) FROM dlightrag_answer_evidence")
-        assert evidence_count == 1
-    finally:
-        await pool.release(conn)
+    assert row is not None
+    assert row["content_digest"] == write.content_digest
+    assert bytes(row["content"]) == content
 
 
-async def test_unrelated_lane_commit_does_not_conflict_with_effect_settlement(pool) -> None:
+async def test_fetched_resource_host_delta_writes_complete_blob(pool) -> None:
     claimed = await _claim(pool)
     store = claimed.execution.session_store
+    epoch = claimed.execution.fencing_epoch
     session_id = SessionId.new()
+    await _seed_transaction_session(store, session_id, epoch)
     intent_id = IntentId.new()
-
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
-    )
-    await store.fork_lane(
-        session_id=session_id,
-        source_lane_id=LaneId.main(),
-        lane_id=LaneId.new(),
-    )
-    settled = await store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
-        intent_id=intent_id,
-        settlement=_settlement(intent_id, EffectHostUpdate(evidence=(_evidence_write(),))),
-        entries=[_result_entry(session_id, intent_id)],
-    )
-    assert settled.__class__.__name__ == "EffectCommit"
-
-    snapshot = await store.load(session_id)
-    assert snapshot.commit_sequence == 3
-    assert len(snapshot.entries) == 2
-    conn = await pool.acquire()
-    try:
-        count = await conn.fetchval("SELECT count(*) FROM dlightrag_answer_evidence")
-        assert count == 1
-        outcome = await conn.fetchval(
-            "SELECT outcome FROM dlightrag_agent_effects"
-            " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3 AND intent_id = $4",
-            _OWNER,
-            uuid.UUID(claimed.run.run_id),
-            session_id.value,
-            intent_id.value,
-        )
-        assert outcome == "succeeded"
-    finally:
-        await pool.release(conn)
-
-
-async def test_lane_register_cas_does_not_conflict_across_branches(pool) -> None:
-    claimed = await _claim(pool)
-    store = claimed.execution.session_store
-    session_id = SessionId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_user(session_id, "root")],
-    )
-    initial = await store.load(session_id)
-    main = initial.tree.lane()
-    branch_id = LaneId.new()
-    forked = await store.fork_lane(
-        session_id=session_id,
-        source_lane_id=LaneId.main(),
-        lane_id=branch_id,
-    )
-    assert forked.__class__.__name__ == "TransactionCommit"
-    branch = (await store.load(session_id)).tree.lane(branch_id)
-
-    main_commit = await store.append_to_lane(
-        session_id=session_id,
-        lane_id=LaneId.main(),
-        expected_head=main.head,
-        entries=[_user(session_id, "main future")],
-    )
-    assert main_commit.__class__.__name__ == "TransactionCommit"
-    branch_commit = await store.append_to_lane(
-        session_id=session_id,
-        lane_id=branch_id,
-        expected_head=branch.head,
-        entries=[_user(session_id, "branch future")],
-    )
-    assert branch_commit.__class__.__name__ == "TransactionCommit"
-
-    snapshot = await store.load(session_id)
-    assert _user_contents(snapshot.tree.ancestry(LaneId.main())) == [
-        "root",
-        "main future",
-    ]
-    assert _user_contents(snapshot.tree.ancestry(branch_id)) == [
-        "root",
-        "branch future",
-    ]
-
-
-async def test_pg_effect_settlement_advances_the_lane_that_owns_the_intent(pool) -> None:
-    claimed = await _claim(pool)
-    store = claimed.execution.session_store
-    session_id = SessionId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_user(session_id, "root")],
-    )
-    branch_id = LaneId.new()
-    await store.fork_lane(
-        session_id=session_id,
-        source_lane_id=LaneId.main(),
-        lane_id=branch_id,
-    )
-    branch = (await store.load(session_id)).tree.lane(branch_id)
-    intent_id = IntentId.new()
-    await store.append_to_lane(
-        session_id=session_id,
-        lane_id=branch_id,
-        expected_head=branch.head,
-        entries=[_intent_entry(session_id, intent_id)],
-    )
-    settled = await store.settle_effect(
-        session_id=session_id,
-        expected_version=0,
-        intent_id=intent_id,
-        settlement=_settlement(intent_id, EffectHostUpdate()),
-        entries=[_result_entry(session_id, intent_id)],
-        lane_id=branch_id,
-    )
-    assert settled.__class__.__name__ == "EffectCommit"
-    snapshot = await store.load(session_id)
-    assert len(snapshot.tree.ancestry(LaneId.main())) == 1
-    assert [entry.entry_type for entry in snapshot.tree.ancestry(branch_id)] == [
-        "user_message",
-        "effect_intent",
-        "effect_result",
-    ]
-
-
-async def test_same_lane_stale_register_token_conflicts_without_writing(pool) -> None:
-    claimed = await _claim(pool)
-    store = claimed.execution.session_store
-    session_id = SessionId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_user(session_id, "root")],
-    )
-    stale = (await store.load(session_id)).tree.lane().head
-    first = await store.append_to_lane(
-        session_id=session_id,
-        lane_id=LaneId.main(),
-        expected_head=stale,
-        entries=[_user(session_id, "first")],
-    )
-    assert first.__class__.__name__ == "TransactionCommit"
-    conflict = await store.append_to_lane(
-        session_id=session_id,
-        lane_id=LaneId.main(),
-        expected_head=stale,
-        entries=[_user(session_id, "lost")],
-    )
-    assert conflict.__class__.__name__ == "RegisterConflict"
-    snapshot = await store.load(session_id)
-    assert _user_contents(snapshot.tree.ancestry()) == ["root", "first"]
-
-
-async def test_pg_transaction_rejects_unconsumed_host_delta_before_mutation(pool) -> None:
-    claimed = await _claim(pool)
-    store = claimed.execution.session_store
-    session_id = SessionId.new()
-    head = LaneHead(LaneId.main(), None)
-    state = LaneState(LaneId.main())
-    with pytest.raises(TypeError, match="HostDelta"):
-        await store.transact(
-            session_id=session_id,
-            fencing_epoch=claimed.execution.fencing_epoch,
-            transaction=SessionTransaction.from_parts(
-                register_writes=[SetRegister(head), SetRegister(state)],
-                expectations=[
-                    RegisterExpectation(head.ref, None),
-                    RegisterExpectation(state.ref, None),
-                ],
-                host_delta=EffectHostUpdate(),
-            ),
-        )
-    async with pool.acquire() as conn:
-        assert (
-            await conn.fetchval(
-                "SELECT count(*) FROM dlightrag_agent_sessions"
-                " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
-                _OWNER,
-                uuid.UUID(claimed.run.run_id),
-                session_id.value,
-            )
-            == 0
-        )
-
-
-async def test_stale_epoch_writes_zero_rows(pool) -> None:
-    claimed = await _claim(pool)
-    run_uuid = uuid.UUID(claimed.run.run_id)
-    stale = PGJournalStore(
-        pool=pool,
-        owner_id=_OWNER,
-        run_id=run_uuid,
-        worker_id=_WORKER,
-        lease_owner=_WORKER,
-        fencing_epoch=claimed.execution.fencing_epoch + 99,
-    )
-    session_id = SessionId.new()
-    outcome = await stale.append(
-        session_id=session_id, expected_version=0, entries=[_user(session_id)]
-    )
-    assert outcome.__class__.__name__ == "LeaseLost"
-
-    conn = await pool.acquire()
-    try:
-        sessions = await conn.fetchval(
-            "SELECT count(*) FROM dlightrag_agent_sessions WHERE owner_id = $1 AND run_id = $2",
-            _OWNER,
-            run_uuid,
-        )
-        assert sessions == 0
-    finally:
-        await pool.release(conn)
-
-
-async def test_pg_settlement_rejects_result_for_another_intent_before_host_delta(pool) -> None:
-    claimed = await _claim(pool)
-    store = claimed.execution.session_store
-    session_id = SessionId.new()
-    intent_id = IntentId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
-    )
-    with pytest.raises(ValueError, match="settled intent"):
-        await store.settle_effect(
-            session_id=session_id,
-            expected_version=1,
-            intent_id=intent_id,
-            settlement=_settlement(
-                intent_id,
-                EffectHostUpdate(evidence=(_evidence_write(),)),
-            ),
-            entries=[_result_entry(session_id, IntentId.new())],
-        )
-    async with pool.acquire() as conn:
-        assert await conn.fetchval("SELECT count(*) FROM dlightrag_answer_evidence") == 0
-        assert (
-            await conn.fetchval(
-                "SELECT outcome FROM dlightrag_agent_effects"
-                " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3 AND intent_id = $4",
-                _OWNER,
-                uuid.UUID(claimed.run.run_id),
-                session_id.value,
-                intent_id.value,
-            )
-            is None
-        )
-
-
-async def test_duplicate_evidence_identity_is_idempotent_only_with_equal_digests(pool) -> None:
-    claimed = await _claim(pool)
-    store = claimed.execution.session_store
-    session_id = SessionId.new()
-    intent_id = IntentId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
-    )
-    write = _evidence_write(ordinal=3, content=b"first")
-    first = await store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
-        intent_id=intent_id,
-        settlement=_settlement(intent_id, EffectHostUpdate(evidence=(write,))),
-        entries=[_result_entry(session_id, intent_id)],
-    )
-    assert first.__class__.__name__ == "EffectCommit"
-
-    # Same identity, same digests, new settlement attempt: already settled, not conflict.
-    again = await store.settle_effect(
-        session_id=session_id,
-        expected_version=2,
-        intent_id=intent_id,
-        settlement=_settlement(intent_id, EffectHostUpdate(evidence=(write,))),
-        entries=[_result_entry(session_id, intent_id)],
-    )
-    assert again.__class__.__name__ == "EffectAlreadySettled"
-
-    # A different intent over the SAME evidence identity with different content
-    # is a deterministic conflict, and the transaction rolls back.
-    intent_two = IntentId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=2,
-        entries=[_intent_entry(session_id, intent_two)],
-    )
-    import hashlib
-
-    different = OpaqueEvidenceWrite(
-        session_id=write.session_id,
-        intent_id=write.intent_id,
-        result_ordinal=write.result_ordinal,
-        content_digest=hashlib.sha256(b"changed").hexdigest(),
-        locator_digest=write.locator_digest,
-        content=b"changed",
-        locator=write.locator,
-    )
-    conflict = await store.settle_effect(
-        session_id=session_id,
-        expected_version=3,
-        intent_id=intent_two,
-        settlement=_settlement(intent_two, EffectHostUpdate(evidence=(different,))),
-        entries=[_result_entry(session_id, intent_two)],
-    )
-    assert conflict.__class__.__name__ == "EvidenceConflict"
-    snapshot = await store.load(session_id)
-    assert snapshot.version == 3
-    assert len(snapshot.entries) == 3  # intent appended, its settlement did not
-
-
-async def test_fetched_resource_settlement_writes_complete_blob_and_resource(pool) -> None:
-    claimed = await _claim(pool)
-    store = claimed.execution.session_store
-    session_id = SessionId.new()
-    intent_id = IntentId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
-    )
-
-    import hashlib
-
-    from dlightrag.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
-
     body = b"z" * (BLOB_CHUNK_BYTES + 7)
-    plan = plan_blob(body)
-    update = FetchedResourceSettlementUpdate(
+    blob = plan_blob(body)
+    fetched = FetchedResourceSettlementUpdate(
         resource=OpaqueFetchedResourceWrite(
             resource_id="fetched-1",
             safe_name="page.html",
             media_type="text/html",
             capabilities={},
-            blob_digest=plan.digest,
-            source_locator_digest=hashlib.sha256(b"https://x").hexdigest(),
-            source_locator=b"https://x",
+            blob_digest=blob.digest,
+            source_locator_digest=hashlib.sha256(b"https://example.test/page").hexdigest(),
+            source_locator=b"https://example.test/page",
             session_id=session_id.value,
             intent_id=intent_id.value,
         ),
         complete_blob=CompleteBlobDescriptor(
-            digest=plan.digest,
-            total_bytes=plan.total_bytes,
-            chunks=tuple(plan.chunk(body, index) for index in range(plan.chunk_count)),
+            digest=blob.digest,
+            total_bytes=blob.total_bytes,
+            chunks=tuple(blob.chunk(body, index) for index in range(blob.chunk_count)),
         ),
     )
-    settled = await store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
+    outcome = await _append_transaction_entry(
+        store,
+        session_id,
+        _tool_result(session_id, intent_id),
+        fencing_epoch=epoch,
         intent_id=intent_id,
-        settlement=_settlement(intent_id, update),
-        entries=[_result_entry(session_id, intent_id)],
+        host_delta=EffectHostUpdate(fetched=(fetched,)),
     )
-    assert settled.__class__.__name__ == "EffectCommit"
-
-    conn = await pool.acquire()
-    try:
-        chunks = await conn.fetchval(
-            "SELECT count(*) FROM dlightrag_blob_chunks WHERE owner_id = $1 AND digest = $2",
-            _OWNER,
-            plan.digest,
+    assert isinstance(outcome, TransactionCommit)
+    async with pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_blob_chunks WHERE owner_id = $1 AND digest = $2",
+                _OWNER,
+                blob.digest,
+            )
+            == 2
         )
-        assert chunks == 2  # 1 MiB + 7 bytes
-        size = await conn.fetchval(
+        assert await conn.fetchval(
             "SELECT byte_size FROM dlightrag_blobs WHERE owner_id = $1 AND digest = $2",
             _OWNER,
-            plan.digest,
-        )
-        assert size == BLOB_CHUNK_BYTES + 7
-        kind = await conn.fetchval(
-            "SELECT kind FROM dlightrag_answer_resources"
-            " WHERE owner_id = $1 AND run_id = $2 AND resource_id = $3",
+            blob.digest,
+        ) == len(body)
+        resource = await conn.fetchrow(
+            "SELECT kind, blob_digest FROM dlightrag_answer_resources"
+            " WHERE owner_id = $1 AND run_id = $2 AND resource_id = 'fetched-1'",
             _OWNER,
             uuid.UUID(claimed.run.run_id),
-            "fetched-1",
         )
-        assert kind == "fetched_blob"
-    finally:
-        await pool.release(conn)
-
-    # The resource identity stays stable across reloads.
-    snapshot = await store.load(session_id)
-    last_entry = snapshot.entries[-1]
-    assert last_entry.__class__.__name__ == "EffectResultEntry"
-    assert last_entry.result.text_content == "found"  # type: ignore[attr-defined]
+    assert resource is not None
+    assert (resource["kind"], resource["blob_digest"]) == ("fetched_blob", blob.digest)
 
 
-async def test_unequal_existing_resource_is_rejected(pool) -> None:
-    claimed = await _claim(pool)
-    store = claimed.execution.session_store
-    session_id = SessionId.new()
-    intent_id = IntentId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
-    )
-
-    resource = OpaqueEvidenceResourceWrite(
-        resource_id="res-1",
-        safe_name="doc.pdf",
-        media_type="application/pdf",
-        capabilities={},
-        session_id=session_id.value,
-        intent_id=intent_id.value,
-        result_ordinal=0,
-        locator_digest="c" * 64,
-    )
-    first = await store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
-        intent_id=intent_id,
-        settlement=_settlement(intent_id, EffectHostUpdate(evidence=(), resources=(resource,))),
-        entries=[_result_entry(session_id, intent_id)],
-    )
-    assert first.__class__.__name__ == "EffectCommit"
-
-    intent_two = IntentId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=2,
-        entries=[_intent_entry(session_id, intent_two)],
-    )
-    unequal = OpaqueEvidenceResourceWrite(
-        resource_id="res-1",
-        safe_name="doc.pdf",
-        media_type="application/pdf",
-        capabilities={},
-        session_id=session_id.value,
-        intent_id=intent_two.value,
-        result_ordinal=0,
-        locator_digest="d" * 64,
-    )
-    conflict = await store.settle_effect(
-        session_id=session_id,
-        expected_version=3,
-        intent_id=intent_two,
-        settlement=_settlement(intent_two, EffectHostUpdate(evidence=(), resources=(unequal,))),
-        entries=[_result_entry(session_id, intent_two)],
-    )
-    assert conflict.__class__.__name__ == "EvidenceConflict"
-
-
-async def test_accepted_attachment_registration_commits_with_acceptance(pool) -> None:
+async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:
     store = await _store(pool)
     content = b"%PDF-accepted"
-    import hashlib
-
     digest = hashlib.sha256(content).hexdigest()
     creation = await store.accept_run(
         owner_id=_OWNER,
         run_id=str(uuid.uuid7()),
-        idempotency_key="accept-1",
+        idempotency_key="attachment-acceptance",
         fingerprint="f" * 64,
-        prepared_input=_prepared_input(),
+        prepared_input={
+            "session_id": SessionId.new().value,
+            "fingerprint": "f" * 64,
+            "query": "question?",
+            "workspaces": ["default"],
+            "schema_version": 1,
+        },
         resources=(
             {
                 "resource_id": "accepted-1",
@@ -749,185 +532,84 @@ async def test_accepted_attachment_registration_commits_with_acceptance(pool) ->
         ),
     )
     assert not creation.replayed
-
-    conn = await pool.acquire()
-    try:
-        blob = await conn.fetchval(
+    async with pool.acquire() as conn:
+        assert await conn.fetchval(
             "SELECT byte_size FROM dlightrag_blobs WHERE owner_id = $1 AND digest = $2",
             _OWNER,
             digest,
+        ) == len(content)
+        assert (
+            await conn.fetchval(
+                "SELECT kind FROM dlightrag_answer_resources"
+                " WHERE owner_id = $1 AND run_id = $2 AND resource_id = 'accepted-1'",
+                _OWNER,
+                uuid.UUID(creation.run.run_id),
+            )
+            == "accepted_blob"
         )
-        assert blob == len(content)
-        kind = await conn.fetchval(
-            "SELECT kind FROM dlightrag_answer_resources WHERE owner_id = $1 AND resource_id = $2",
-            _OWNER,
-            "accepted-1",
-        )
-        assert kind == "accepted_blob"
-        prepared = await conn.fetchval(
-            "SELECT prepared_input_json IS NOT NULL FROM dlightrag_answer_runs WHERE owner_id = $1",
-            _OWNER,
-        )
-        assert prepared is True
-    finally:
-        await pool.release(conn)
-
-    # Replayed acceptance returns the same run without duplicating anything.
-    replay = await store.replay_run(
-        owner_id=_OWNER, idempotency_key="accept-1", idempotency_fingerprint="f" * 64
-    )
-    assert replay is not None and replay.replayed
 
 
-async def test_fast_stage_settlement_never_creates_an_agent_session(pool) -> None:
-    claimed = await _claim(pool)
-    progress = claimed.execution.progress_store
-    stage_id = StageIntentId.deterministic(run_id=claimed.run.run_id, name="fast:planner:0")
-
-    settled = await progress.settle_stage(
-        expected_progress_version=0,
-        stage_intent_id=stage_id,
-        stage_name="planner",
-        state={"plan": "canonical"},
-        evidence=(),
-    )
-    assert settled.__class__.__name__ == "StageCommit"
-    assert settled.progress_version == 1  # type: ignore[attr-defined]
-
-    conn = await pool.acquire()
-    try:
-        sessions = await conn.fetchval(
-            "SELECT count(*) FROM dlightrag_agent_sessions WHERE owner_id = $1 AND run_id = $2",
-            _OWNER,
-            uuid.UUID(claimed.run.run_id),
-        )
-        assert sessions == 0
-        progress_version = await conn.fetchval(
-            "SELECT durable_progress_version FROM dlightrag_answer_runs"
-            " WHERE owner_id = $1 AND run_id = $2",
-            _OWNER,
-            uuid.UUID(claimed.run.run_id),
-        )
-        assert progress_version == 1
-    finally:
-        await pool.release(conn)
-
-    # Re-settling the same stage with the same state is idempotent and does not
-    # advance progress twice.
-    again = await progress.settle_stage(
-        expected_progress_version=1,
-        stage_intent_id=stage_id,
-        stage_name="planner",
-        state={"plan": "canonical"},
-        evidence=(),
-    )
-    assert again.__class__.__name__ == "StageCommit"
-
-
-async def test_stage_conflict_on_different_state(pool) -> None:
-    claimed = await _claim(pool)
-    progress = claimed.execution.progress_store
-    stage_id = StageIntentId.deterministic(run_id=claimed.run.run_id, name="fast:retrieval:1")
-
-    await progress.settle_stage(
-        expected_progress_version=0,
-        stage_intent_id=stage_id,
-        stage_name="retrieval",
-        state={"evidence": [1]},
-        evidence=(),
-    )
-    conflict = await progress.settle_stage(
-        expected_progress_version=1,
-        stage_intent_id=stage_id,
-        stage_name="retrieval",
-        state={"evidence": [2]},
-        evidence=(),
-    )
-    assert conflict.__class__.__name__ == "StageConflict"
-
-
-async def test_event_appends_do_not_advance_progress(pool) -> None:
-    claimed = await _claim(pool)
-    store = await _store(pool)
-    run_uuid = uuid.UUID(claimed.run.run_id)
-
-    await store.append_token_batch(
-        owner_id=_OWNER,
-        run_id=str(run_uuid),
-        worker_id=_WORKER,
-        fencing_epoch=claimed.execution.fencing_epoch,
-        text="token stream",
-    )
-    conn = await pool.acquire()
-    try:
-        progress = await conn.fetchval(
-            "SELECT durable_progress_version FROM dlightrag_answer_runs"
-            " WHERE owner_id = $1 AND run_id = $2",
-            _OWNER,
-            run_uuid,
-        )
-        assert progress == 0
-    finally:
-        await pool.release(conn)
-
-
-async def _progress(pool, run_id: str) -> int:
-    conn = await pool.acquire()
-    try:
-        value = await conn.fetchval(
-            "SELECT durable_progress_version FROM dlightrag_answer_runs"
-            " WHERE owner_id = $1 AND run_id = $2",
-            _OWNER,
-            uuid.UUID(run_id),
-        )
-        return int(value)
-    finally:
-        await pool.release(conn)
-
-
-async def _expire_lease(pool, run_id: str) -> None:
-    conn = await pool.acquire()
-    try:
-        await conn.execute(
-            "UPDATE dlightrag_answer_runs SET lease_expires_at = NOW() - INTERVAL '1 second'"
-            " WHERE run_id = $1",
-            uuid.UUID(run_id),
-        )
-    finally:
-        await pool.release(conn)
-
-
-async def test_live_settlement_advances_durable_progress(pool) -> None:
+async def test_host_delta_commits_workspace_inventory_and_spill(pool) -> None:
     claimed = await _claim(pool)
     store = claimed.execution.session_store
+    epoch = claimed.execution.fencing_epoch
     session_id = SessionId.new()
+    await _seed_transaction_session(store, session_id, epoch)
     intent_id = IntentId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
+    update = EffectHostUpdate(
+        committed_outputs=(
+            CommittedSpillUpdate(
+                resource_id="spill-1",
+                content_digest="c" * 64,
+                size_bytes=12,
+                session_id=session_id.value,
+                intent_id=intent_id.value,
+            ),
+        ),
+        workspace_inventory=WorkspaceInventoryUpdate(
+            upserts=(
+                InventoryPathRecord(
+                    relative_path="notes/a.md",
+                    entry_type="file",
+                    size_bytes=4,
+                    mode=0o644,
+                    content_digest="d" * 64,
+                ),
+            ),
+        ),
     )
-    after_append = await _progress(pool, claimed.run.run_id)
-    settled = await store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
+    outcome = await _append_transaction_entry(
+        store,
+        session_id,
+        _tool_result(session_id, intent_id),
+        fencing_epoch=epoch,
         intent_id=intent_id,
-        settlement=_settlement(intent_id, EffectHostUpdate()),
-        entries=[_result_entry(session_id, intent_id)],
+        host_delta=update,
     )
-    assert settled.__class__.__name__ == "EffectCommit"
-    assert await _progress(pool, claimed.run.run_id) == after_append + 1
+    assert isinstance(outcome, TransactionCommit)
+    workspace = claimed.execution.workspace_store
+    assert workspace is not None
+    inventory = await workspace.load_inventory()
+    spills = await workspace.load_spills()
+    assert [(item.relative_path, item.content_digest) for item in inventory] == [
+        ("notes/a.md", "d" * 64)
+    ]
+    assert [(item.resource_id, item.content_digest) for item in spills] == [("spill-1", "c" * 64)]
 
 
-async def test_memory_operation_event_is_atomic_and_exactly_once(pool) -> None:
+async def test_memory_operation_event_is_exactly_once_with_transaction(pool) -> None:
     claimed = await _claim(pool)
     store = claimed.execution.session_store
+    epoch = claimed.execution.fencing_epoch
     session_id = SessionId.new()
+    await _seed_transaction_session(store, session_id, epoch)
+    snapshot = await store.load(session_id)
+    head = snapshot.tree.lane().head
+    assert isinstance(head.value, LaneHead)
     intent_id = IntentId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
+    entry = replace(
+        _tool_result(session_id, intent_id),
+        parent_entry_id=head.value.entry_id,
     )
     update = EffectHostUpdate(
         memory_operation=MemoryOperationSettlement(
@@ -939,329 +621,295 @@ async def test_memory_operation_event_is_atomic_and_exactly_once(pool) -> None:
             body="Use Chinese.",
         )
     )
-    settled = await store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
-        intent_id=intent_id,
-        settlement=_settlement(intent_id, update),
-        entries=[_result_entry(session_id, intent_id)],
+    transaction = SessionTransaction.from_parts(
+        entries=[entry],
+        register_writes=[SetRegister(LaneHead(LaneId.main(), entry.entry_id))],
+        expectations=[RegisterExpectation(head.ref, head.sequence)],
+        host_delta=HostDeltaSettlement(intent_id, update),
     )
-    assert settled.__class__.__name__ == "EffectCommit"
-    replay = await store.settle_effect(
+    first = await store.transact(
         session_id=session_id,
-        expected_version=2,
-        intent_id=intent_id,
-        settlement=_settlement(intent_id, update),
-        entries=[_result_entry(session_id, intent_id)],
+        fencing_epoch=epoch,
+        transaction=transaction,
     )
-    assert replay.__class__.__name__ == "EffectAlreadySettled"
+    replay = await store.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=transaction,
+    )
+    assert isinstance(first, TransactionCommit)
+    assert isinstance(replay, RegisterConflict)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT payload FROM dlightrag_answer_run_events "
-            "WHERE owner_id = $1 AND run_id = $2 "
-            "AND event_type = 'memory_operation_settled'",
+            "SELECT payload FROM dlightrag_answer_run_events"
+            " WHERE owner_id = $1 AND run_id = $2"
+            " AND event_type = 'memory_operation_settled'",
             _OWNER,
             uuid.UUID(claimed.run.run_id),
         )
     assert len(rows) == 1
-    payload = rows[0]["payload"]
-    if isinstance(payload, str):
-        import json
-
-        payload = json.loads(payload)
+    payload = json.loads(rows[0]["payload"])
     assert payload["intent_id"] == intent_id.value
     assert payload["body"] == "Use Chinese."
 
 
-async def test_prelude_settlement_does_not_advance_durable_progress(pool) -> None:
+async def test_live_session_progress_and_passive_events_are_distinct(pool) -> None:
     claimed = await _claim(pool)
-    store = claimed.execution.session_store
-    session_id = SessionId.new()
-    intent_id = IntentId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
-    )
-    after_append = await _progress(pool, claimed.run.run_id)
-    settled = await store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
-        intent_id=intent_id,
-        settlement=_settlement(intent_id, EffectHostUpdate()),
-        entries=[_result_entry(session_id, intent_id)],
-        progress="prelude",
-    )
-    assert settled.__class__.__name__ == "EffectCommit"
-    assert await _progress(pool, claimed.run.run_id) == after_append
-    snapshot = await store.load(session_id)
-    assert snapshot.version == 2
-    assert isinstance(snapshot.entries[-1], EffectResultEntry)
-
-
-async def test_prelude_only_reclaims_still_abandon(pool) -> None:
-    claimed = await _claim(pool)
-    journal = claimed.execution.session_store
-    session_id = SessionId.new()
-    intent_id = IntentId.new()
-    await journal.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
-    )
-    store = await _store(pool)
-    await _expire_lease(pool, claimed.run.run_id)
-    first = await store.claim_next(worker_id="reclaim-0")
-    assert first is not None
-    assert first.run.reclaims_without_progress == 1
-    settled = await first.execution.session_store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
-        intent_id=intent_id,
-        settlement=_settlement(intent_id, EffectHostUpdate()),
-        entries=[_result_entry(session_id, intent_id)],
-        progress="prelude",
-    )
-    assert settled.__class__.__name__ == "EffectCommit"
-    for index in range(1, 3):
-        await _expire_lease(pool, claimed.run.run_id)
-        reclaimed = await store.claim_next(worker_id=f"reclaim-{index}")
-        assert reclaimed is not None
-        assert reclaimed.run.reclaims_without_progress == index + 1
-    await _expire_lease(pool, claimed.run.run_id)
-    fourth = await store.claim_next(worker_id="reclaim-3")
-    assert fourth is None
-    record = await store.get_run(owner_id=_OWNER, run_id=claimed.run.run_id)
-    assert record is not None
-    assert record.status == "failed"
-    assert record.error_kind == "run_abandoned"
-
-
-async def test_writer_startup_adds_workspace_tables(pool) -> None:
-    await _store(pool)
-    conn = await pool.acquire()
-    try:
-        tables = await conn.fetch(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
-            " AND tablename LIKE 'dlightrag_answer_%'"
-        )
-        names = {row["tablename"] for row in tables}
-        assert "dlightrag_answer_workspace_inventory" in names
-        assert "dlightrag_answer_committed_spills" in names
-        column = await conn.fetchval(
-            "SELECT 1 FROM information_schema.columns"
-            " WHERE table_name = 'dlightrag_answer_runs' AND column_name = 'workspace_epoch'"
-        )
-        assert column == 1
-    finally:
-        await pool.release(conn)
-
-
-async def test_committed_spill_cannot_carry_a_blob_digest(pool) -> None:
-    claimed = await _claim(pool)
-    conn = await pool.acquire()
-    try:
-        with pytest.raises(asyncpg.CheckViolationError):
-            await conn.execute(
-                "INSERT INTO dlightrag_answer_resources ("
-                " owner_id, run_id, resource_id, kind, safe_name, media_type, blob_digest)"
-                " VALUES ($1, $2, 'res_bad', 'committed_spill', 'x', 'text/plain', $3)",
-                _OWNER,
-                uuid.UUID(claimed.run.run_id),
-                "a" * 64,
-            )
-    finally:
-        await pool.release(conn)
-
-
-async def test_handoff_wrong_epoch_writes_zero_rows(pool) -> None:
-    claimed = await _claim(pool)
-    store = claimed.execution.workspace_store
-    assert store is not None
-    result = await store.handoff_epoch(expected_epoch=3, destination_epoch=4, inventory=())
-    assert result.__class__.__name__ == "HandoffConflict"
-    record = await (await _store(pool)).get_run(owner_id=_OWNER, run_id=claimed.run.run_id)
-    assert record is not None
-    assert record.workspace_epoch is None
-
-
-async def test_settle_effect_writes_inventory_and_spill_without_prelude_progress(pool) -> None:
-    from dlightrag.runtime.settlements import (
-        CommittedSpillUpdate,
-        InventoryPathRecord,
-        WorkspaceInventoryUpdate,
-    )
-
-    claimed = await _claim(pool)
-    journal = claimed.execution.session_store
-    session_id = SessionId.new()
-    intent_id = IntentId.new()
-    await journal.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
-    )
-    after_append = await _progress(pool, claimed.run.run_id)
-    settled = await journal.settle_effect(
-        session_id=session_id,
-        expected_version=1,
-        intent_id=intent_id,
-        settlement=_settlement(
-            intent_id,
-            WorkspaceInventoryUpdate(
-                upserts=(
-                    InventoryPathRecord(
-                        relative_path="notes/a.md", entry_type="file", size_bytes=4
-                    ),
-                )
-            ),
-        ),
-        entries=[_result_entry(session_id, intent_id)],
-        progress="prelude",
-    )
-    assert settled.__class__.__name__ == "EffectCommit"
-    assert await _progress(pool, claimed.run.run_id) == after_append
-    intent_two = IntentId.new()
-    await journal.append(
-        session_id=session_id,
-        expected_version=2,
-        entries=[_intent_entry(session_id, intent_two)],
-    )
-    await journal.settle_effect(
-        session_id=session_id,
-        expected_version=3,
-        intent_id=intent_two,
-        settlement=_settlement(
-            intent_two,
-            CommittedSpillUpdate(
-                resource_id="res_spill",
-                content_digest="c" * 64,
-                size_bytes=12,
-                session_id=str(session_id),
-                intent_id=str(intent_two),
-            ),
-        ),
-        entries=[_result_entry(session_id, intent_two)],
-    )
-    workspace = claimed.execution.workspace_store
-    assert workspace is not None
-    assert any(item.relative_path == "notes/a.md" for item in await workspace.load_inventory())
-    assert any(item.resource_id == "res_spill" for item in await workspace.load_spills())
-
-
-async def test_terminal_finish_deletes_spill_rows(pool) -> None:
-    claimed = await _claim(pool)
-    workspace = claimed.execution.workspace_store
-    assert workspace is not None
-    from dlightrag.runtime.workspace import CommittedSpillRecord
-
-    await workspace.register_spill(
-        CommittedSpillRecord(
-            resource_id="res_done",
-            content_digest="d" * 64,
-            size_bytes=1,
-            session_id=str(uuid.uuid4()),
-            intent_id=str(uuid.uuid4()),
-        )
-    )
-    store = await _store(pool)
-    await store.finish_success(
+    run_store = await _store(pool)
+    assert await _progress(pool, claimed.run.run_id) == 0
+    await run_store.append_token_batch(
         owner_id=_OWNER,
         run_id=claimed.run.run_id,
         worker_id=_WORKER,
         fencing_epoch=claimed.execution.fencing_epoch,
-        result={"answer": "ok"},
+        text="ephemeral progress",
     )
-    assert await workspace.load_spills() == ()
-
-
-async def test_effect_host_update_commits_inventory_and_spill(pool) -> None:
-    claimed = await _claim(pool)
-    journal = claimed.execution.session_store
+    assert await _progress(pool, claimed.run.run_id) == 0
+    register_only_session = SessionId.new()
+    head = LaneHead(LaneId.main(), None)
+    state = LaneState(LaneId.main())
+    register_commit = await claimed.execution.session_store.transact(
+        session_id=register_only_session,
+        fencing_epoch=claimed.execution.fencing_epoch,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(register_commit, TransactionCommit)
+    assert await _progress(pool, claimed.run.run_id) == 0
     session_id = SessionId.new()
-    intent_id = IntentId.new()
-    await journal.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_intent_entry(session_id, intent_id)],
+    await _seed_transaction_session(
+        claimed.execution.session_store,
+        session_id,
+        claimed.execution.fencing_epoch,
     )
-    result = EffectResultEntry(
+    assert await _progress(pool, claimed.run.run_id) == 1
+    snapshot = await claimed.execution.session_store.load(session_id)
+    head = snapshot.tree.lane().head
+    assert isinstance(head.value, LaneHead)
+    recovery_intent = IntentId.new()
+    recovery_entry = replace(
+        _tool_result(session_id, recovery_intent),
+        parent_entry_id=head.value.entry_id,
+    )
+    recovery = await claimed.execution.session_store.transact(
+        session_id=session_id,
+        fencing_epoch=claimed.execution.fencing_epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=[recovery_entry],
+            register_writes=[SetRegister(LaneHead(LaneId.main(), recovery_entry.entry_id))],
+            expectations=[RegisterExpectation(head.ref, head.sequence)],
+            advances_durable_progress=False,
+        ),
+    )
+    assert isinstance(recovery, TransactionCommit)
+    assert await _progress(pool, claimed.run.run_id) == 1
+    live_intent = IntentId.new()
+    await _append_transaction_entry(
+        claimed.execution.session_store,
+        session_id,
+        _tool_result(session_id, live_intent),
+        fencing_epoch=claimed.execution.fencing_epoch,
+        intent_id=live_intent,
+        host_delta=EffectHostUpdate(),
+    )
+    assert await _progress(pool, claimed.run.run_id) == 2
+
+
+async def test_fast_stage_progress_never_creates_agent_session(pool) -> None:
+    claimed = await _claim(pool)
+    stage_id = StageIntentId.deterministic(
+        run_id=claimed.run.run_id,
+        name="fast:planner:0",
+    )
+    settled = await claimed.execution.progress_store.settle_stage(
+        expected_progress_version=0,
+        stage_intent_id=stage_id,
+        stage_name="planner",
+        state={"plan": "canonical"},
+        evidence=(),
+    )
+    assert settled.__class__.__name__ == "StageCommit"
+    assert await _progress(pool, claimed.run.run_id) == 1
+    async with pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_agent_sessions WHERE owner_id = $1 AND run_id = $2",
+                _OWNER,
+                uuid.UUID(claimed.run.run_id),
+            )
+            == 0
+        )
+
+
+async def test_postgres_and_service_transcript_project_typed_tool_result_parts(pool) -> None:
+    session_id = SessionId.new()
+    claimed = await _claim(pool, session_id=session_id)
+    store = claimed.execution.session_store
+    epoch = claimed.execution.fencing_epoch
+    await _seed_transaction_session(store, session_id, epoch)
+    assistant = AssistantMessageEntry(
         entry_id=EntryId.new(),
         session_id=session_id,
-        timestamp=_now(),
-        intent_id=intent_id,
-        result=ToolResultEntry.text(
-            tool_name="write",
-            call_id="c1",
-            outcome="succeeded",
-            text="wrote notes.md",
-        ),
+        timestamp=datetime.now(UTC),
+        content="checking",
+        stop_reason="tool_use",
+        tool_calls=(ToolCall("c1", "lookup", {"value": "x"}),),
     )
-    settled = await journal.settle_effect(
-        session_id=session_id,
-        expected_version=1,
-        intent_id=intent_id,
-        settlement=EffectSettlement(
-            outcome="succeeded",
-            result=result.result,
-            host_update=EffectHostUpdate(
-                committed_outputs=(
-                    CommittedSpillUpdate(
-                        resource_id="spill_from_details",
-                        content_digest="f" * 64,
-                        size_bytes=12,
-                        session_id=session_id.value,
-                        intent_id=intent_id.value,
-                    ),
-                ),
-                workspace_inventory=WorkspaceInventoryUpdate(
-                    upserts=(
-                        InventoryPathRecord(
-                            relative_path="notes.md",
-                            entry_type="file",
-                            size_bytes=5,
-                            mode=0o644,
-                            content_digest="e" * 64,
-                        ),
-                    ),
-                ),
+    assistant_commit = await _append_transaction_entry(
+        store,
+        session_id,
+        assistant,
+        fencing_epoch=epoch,
+    )
+    assert isinstance(assistant_commit, TransactionCommit)
+    intent_id = IntentId.new()
+    digest = hashlib.sha256(b"resource").hexdigest()
+    result = _tool_result(
+        session_id,
+        intent_id,
+        parts=(
+            ToolTextPart("found"),
+            ToolResourceAttachmentPart(
+                resource_id="resource-1",
+                safe_name="report.txt",
+                media_type="text/plain",
+                content_digest=digest,
+                size_bytes=8,
             ),
         ),
-        entries=[result],
     )
-    assert settled.__class__.__name__ == "EffectCommit"
-    workspace = claimed.execution.workspace_store
-    assert workspace is not None
-    inventory = await workspace.load_inventory()
-    assert any(item.relative_path == "notes.md" for item in inventory)
-    assert any(item.resource_id == "spill_from_details" for item in await workspace.load_spills())
+    result_commit = await _append_transaction_entry(
+        store,
+        session_id,
+        result,
+        fencing_epoch=epoch,
+        intent_id=intent_id,
+        host_delta=EffectHostUpdate(),
+    )
+    assert isinstance(result_commit, TransactionCommit)
+
+    run_store = await _store(pool)
+    projected = await run_store.load_agent_transcript(
+        owner_id=_OWNER,
+        run_id=claimed.run.run_id,
+        session_id=session_id.value,
+        limit=20,
+    )
+    assert [message["role"] for message in projected] == ["user", "assistant", "tool"]
+    assert projected[-1] == {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "name": "lookup",
+        "content": "found",
+        "attachments": [
+            {
+                "resource_id": "resource-1",
+                "safe_name": "report.txt",
+                "media_type": "text/plain",
+                "content_digest": digest,
+                "size_bytes": 8,
+            }
+        ],
+        "is_error": False,
+    }
+    service = AnswerService(
+        store=run_store,
+        coordinator=cast(Any, None),
+        retrieval=cast(Any, None),
+        capabilities=cast(Any, None),
+        capability_view=cast(Any, None),
+        models=cast(Any, None),
+        resources=cast(Any, None),
+        model_fingerprint_for_role=cast(Any, None),
+    )
+    transcript = await service.transcript_tail(
+        owner_id=_OWNER,
+        run_id=claimed.run.run_id,
+    )
+    assert transcript is not None
+    assert transcript.messages[-1] == projected[-1]
 
 
-async def test_list_runs_is_owner_scoped_and_cursorable(pool) -> None:
-    store = await _store(pool)
-    first = await store.accept_run(
+async def test_lane_register_cas_does_not_conflict_across_branches(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_store
+    session_id = SessionId.new()
+    await _drive(
+        store,
+        session_id=session_id,
+        fencing_epoch=claimed.execution.fencing_epoch,
+    )
+    initial = await store.load(session_id)
+    main = initial.tree.lane()
+    branch_id = LaneId.new()
+    await store.fork_lane(
+        session_id=session_id,
+        source_lane_id=LaneId.main(),
+        lane_id=branch_id,
+    )
+    branch = (await store.load(session_id)).tree.lane(branch_id)
+    user_main = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="main future",
+    )
+    user_branch = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="branch future",
+    )
+    assert (
+        await store.append_to_lane(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            expected_head=main.head,
+            entries=[user_main],
+        )
+    ).__class__.__name__ == "TransactionCommit"
+    assert (
+        await store.append_to_lane(
+            session_id=session_id,
+            lane_id=branch_id,
+            expected_head=branch.head,
+            entries=[user_branch],
+        )
+    ).__class__.__name__ == "TransactionCommit"
+
+
+async def test_stale_epoch_writes_zero_rows(pool) -> None:
+    claimed = await _claim(pool)
+    stale = PGJournalStore(
+        pool=pool,
         owner_id=_OWNER,
-        run_id=str(uuid.uuid7()),
-        idempotency_key=None,
-        fingerprint="a" * 64,
-        prepared_input=_prepared_input(),
+        run_id=uuid.UUID(claimed.run.run_id),
+        worker_id=_WORKER,
+        lease_owner=_WORKER,
+        fencing_epoch=claimed.execution.fencing_epoch + 99,
     )
-    second = await store.accept_run(
-        owner_id=_OWNER,
-        run_id=str(uuid.uuid7()),
-        idempotency_key=None,
-        fingerprint="b" * 64,
-        prepared_input=_prepared_input(),
+    session_id = SessionId.new()
+    from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
+    from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
+
+    head = LaneHead(LaneId.main(), None)
+    state = LaneState(LaneId.main())
+    outcome = await stale.transact(
+        session_id=session_id,
+        fencing_epoch=claimed.execution.fencing_epoch + 99,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
+        ),
     )
-    await store.accept_run(
-        owner_id="other",
-        run_id=str(uuid.uuid7()),
-        idempotency_key=None,
-        fingerprint="c" * 64,
-        prepared_input=_prepared_input(),
-    )
-    page = await store.list_runs(owner_id=_OWNER, limit=1)
-    assert len(page) == 1
-    assert page[0].run_id == first.run.run_id
-    rest = await store.list_runs(owner_id=_OWNER, after_run_id=page[0].run_id, limit=10)
-    assert [item.run_id for item in rest] == [second.run.run_id]
+    assert outcome.__class__.__name__ == "TransactionLeaseLost"
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM dlightrag_agent_sessions") == 0

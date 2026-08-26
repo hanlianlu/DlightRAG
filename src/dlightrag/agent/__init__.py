@@ -9,15 +9,13 @@ from dlightrag.agent.extensions import (
     ToolExtension,
     TrustedExtensions,
 )
-from dlightrag.agent.loop import AgentLoop, AgentLoopCancelled, AgentLoopResult
+from dlightrag.agent.session.runtime import AgentSessionRuntime
 from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
 
 __all__ = [
     "AgentEvent",
     "AgentEventKind",
-    "AgentLoop",
-    "AgentLoopCancelled",
-    "AgentLoopResult",
+    "AgentSessionRuntime",
     "ContextContribution",
     "ContextExtension",
     "ContextProjector",

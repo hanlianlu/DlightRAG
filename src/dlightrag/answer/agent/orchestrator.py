@@ -7,11 +7,11 @@ Research mode enters the agent loop: the model selects from the available peer
 tools and writes the answer when it stops calling tools.
 """
 
-import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
@@ -24,30 +24,35 @@ from dlightrag.agent.environment.errors import TOOL_RESULT_MAX_BYTES, TOOL_RESUL
 from dlightrag.agent.environment.execution import ExecutionEnvironment
 from dlightrag.agent.events import AgentEvent
 from dlightrag.agent.extensions import TrustedExtensions
-from dlightrag.agent.loop import AgentLoop, AgentLoopCancelled, EventSink
-from dlightrag.agent.session.effects import EffectIntent
+from dlightrag.agent.session.entries import AssistantMessageEntry, CompactionEntry
 from dlightrag.agent.session.fold import (
     PriorTurns,
     WorkingContextProjection,
     project_session_messages,
 )
-from dlightrag.agent.session.ids import SessionId
+from dlightrag.agent.session.ids import EntryId, ProjectionId, SessionId
 from dlightrag.agent.session.projection import (
     AgentInputOverflowError,
     ContextProjection,
     require_compactable,
     should_compact,
 )
+from dlightrag.agent.session.registers import (
+    ContextProjectionRegister,
+    RegisterRecord,
+    RequestSnapshot,
+)
+from dlightrag.agent.session.runtime import (
+    CompactionRequired,
+    CompactionResult,
+    RuntimeContext,
+)
 from dlightrag.agent.skills import SkillCatalog
 from dlightrag.agent.tools import (
     AgentTool,
     ExecutedTurn,
-    PreparedToolTurn,
-    ToolExecution,
     ToolResult,
-    ToolResultCapacityError,
     ToolRuntime,
-    ToolTurnExecutor,
 )
 from dlightrag.agent.tools.contracts import ToolModelFunc
 from dlightrag.agent.tools.files import ResourceReader
@@ -57,7 +62,7 @@ from dlightrag.ai.capacity import (
     ContextPolicy,
     ModelProfile,
 )
-from dlightrag.ai.providers.base import is_provider_context_overflow
+from dlightrag.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.ai.telemetry import Telemetry
 from dlightrag.ai.tokens import estimate_tokens
 from dlightrag.answer.agent.compaction import CompactionCoordinator
@@ -76,12 +81,12 @@ from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.tools.subagents import ChildRequest, SubagentHost
 from dlightrag.answer.workspace import RunWorkspace
 from dlightrag.rag.retrieval import RetrievalContexts
-from dlightrag.runtime import AnswerRunCancelledError, RunCancelledError
 
 logger = logging.getLogger(__name__)
 
 ToolModel = ToolModelFunc
 StreamModel = Callable[..., AsyncIterator[str]]
+EventSink = Callable[[AgentEvent], Awaitable[None]]
 
 
 class PhaseBoundaries(Protocol):
@@ -92,100 +97,12 @@ class PhaseBoundaries(Protocol):
     async def check_cancelled(self) -> None: ...
 
 
-class RunBoundaries(PhaseBoundaries, Protocol):
-    """Durable boundaries Research may observe between Agent steps.
-
-    ``commit_intents`` durably appends the complete assistant response and
-    its ordered intents before any tool executes (Blocker 2);
-    ``settle_intent`` appends every fitted source-position result in order;
-    executable calls settle a persisted intent while deterministic validation
-    results carry no intent.
-    """
-
-    @property
-    def tool_execution_scope(self) -> str: ...
-
-    async def commit_intents(self, prepared: PreparedToolTurn) -> None: ...
-
-    async def settle_intent(
-        self,
-        intent: EffectIntent | None,
-        execution: ToolExecution | None,
-        *,
-        turn_number: int,
-        is_last: bool,
-    ) -> None: ...
-
-    async def apply_controls(self) -> bool: ...
-
-    async def close_committed_turn(self) -> None: ...
-
-    async def publish_agent_event(self, event: AgentEvent) -> None: ...
-
-    def accounted_input(self, estimated_input_tokens: int) -> int: ...
-
-    async def load_snapshot(self) -> Any: ...
-
-    async def commit_compaction(
-        self,
-        *,
-        projection: ContextProjection,
-    ) -> Any: ...
-
-
-class _NoBoundaries:
-    """An in-process answer observes no durable boundary."""
-
-    @property
-    def tool_execution_scope(self) -> str:
-        return ""
-
+class _NoPhaseBoundaries:
     async def enter_phase(self, phase: str) -> None:
-        return None
-
-    async def commit_intents(self, prepared: PreparedToolTurn) -> None:
-        return None
-
-    async def settle_intent(
-        self,
-        intent: EffectIntent | None,
-        execution: ToolExecution | None,
-        *,
-        turn_number: int,
-        is_last: bool,
-    ) -> None:
-        return None
+        del phase
 
     async def check_cancelled(self) -> None:
         return None
-
-    async def close_committed_turn(self) -> None:
-        return None
-
-    async def publish_agent_event(self, event: AgentEvent) -> None:
-        del event
-
-    async def apply_controls(self) -> bool:
-        return False
-
-    def accounted_input(self, estimated_input_tokens: int) -> int:
-        return estimated_input_tokens
-
-    async def load_snapshot(self) -> Any:
-        raise AssertionError("no journal behind in-process boundaries")
-
-    async def commit_compaction(self, *, projection: Any) -> Any:
-        raise AssertionError("no journal behind in-process boundaries")
-
-
-@dataclass(frozen=True, slots=True)
-class _PreparedControlTurn:
-    """One preflighted model turn plus the executor context to run it."""
-
-    prepared: PreparedToolTurn
-    executor: ToolTurnExecutor
-    call_messages_len: int
-    observation_budget: Callable[[list[dict[str, Any]]], int]
 
 
 @dataclass(slots=True)
@@ -210,47 +127,6 @@ class PreparedRun:
     stop_reason: str = "model_stop"
     last_turn: ExecutedTurn | None = None
     compaction_overflow_retried: bool = False
-
-
-@dataclass(slots=True)
-class _ResearchLoopDriver:
-    orchestrator: AnswerOrchestrator
-    run: PreparedRun
-    boundaries: RunBoundaries
-    on_event: EventSink
-
-    async def check_cancelled(self) -> None:
-        try:
-            await self.boundaries.check_cancelled()
-        except (RunCancelledError, AnswerRunCancelledError) as exc:
-            raise AgentLoopCancelled from exc
-
-    async def run_turn(self, turn_number: int) -> ExecutedTurn:
-        await self.boundaries.apply_controls()
-        await self.boundaries.enter_phase("researching")
-        try:
-            executed = await self.orchestrator._durable_control_turn(
-                self.run,
-                self.boundaries,
-                turn_number=turn_number,
-                on_event=self.on_event,
-            )
-        except Exception as exc:
-            executed = await self.orchestrator._handle_overflow_retry(
-                exc,
-                self.run,
-                self.boundaries,
-                turn_number=turn_number,
-                on_event=self.on_event,
-            )
-        self.run.agent_turn_count = turn_number
-        self.run.trace["agent_turns"] = turn_number
-        self.run.last_turn = executed
-        return executed
-
-    async def continue_after_stop(self) -> bool:
-        """Admit controls that arrived during the terminal-looking model call."""
-        return await self.boundaries.apply_controls()
 
 
 class AnswerOrchestrator:
@@ -378,33 +254,6 @@ class AnswerOrchestrator:
         """Return this run's request-local Artifact root, when execution owns one."""
         return None if self._workspace is None else self._workspace.workspace / "artifacts"
 
-    async def correct_publication(
-        self,
-        run: PreparedRun,
-        *,
-        boundaries: RunBoundaries,
-        feedback: str,
-    ) -> str | None:
-        """Allow one bounded correction pass using the existing Agent and tools.
-
-        One tool turn plus one terminal turn is the maximum needed by the Agent
-        protocol, where a provider response cannot both call a tool and settle
-        visible text. A second tool batch ends the pass without widening it.
-        """
-        run.context.set_publication_feedback(feedback)
-        driver = _ResearchLoopDriver(self, run, boundaries, on_event=_discard_agent_event)
-        try:
-            for _ in range(2):
-                await boundaries.check_cancelled()
-                executed = await driver.run_turn(run.agent_turn_count + 1)
-                if not executed.assistant.tool_calls:
-                    run.last_turn = executed
-                    run.stop_reason = "model_stop"
-                    return executed.assistant.text
-            return None
-        finally:
-            run.context.set_publication_feedback("")
-
     @property
     def resolved_mode(self) -> ResolvedMode:
         """The durable Fast or Research path this orchestrator was built for."""
@@ -423,23 +272,16 @@ class AnswerOrchestrator:
         run: PreparedRun | None = None,
         boundaries: PhaseBoundaries | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        limits = boundaries or _NoBoundaries()
-        if self._resolved_mode == "fast":
-            if query_images:
-                raise RuntimeError("Current images require request resources")
-            return await self._fast_answer_stream(
-                query,
-                conversation_history=conversation_history,
-                boundaries=limits,
-            )
-        return await self._run_research_stream(
-            run
-            or self.prepare_run(
-                query,
-                conversation_history=conversation_history,
-                query_images=query_images,
-            ),
-            boundaries=cast(RunBoundaries, limits),
+        del run
+        if self._resolved_mode != "fast":
+            raise RuntimeError("Research must be driven by AgentSessionRuntime")
+        limits = boundaries or _NoPhaseBoundaries()
+        if query_images:
+            raise RuntimeError("Current images require request resources")
+        return await self._fast_answer_stream(
+            query,
+            conversation_history=conversation_history,
+            boundaries=limits,
         )
 
     # ------------------------------------------------------------------
@@ -475,16 +317,10 @@ class AnswerOrchestrator:
     # Research path
     # ------------------------------------------------------------------
 
-    async def _run_research_stream(
-        self,
-        run: PreparedRun,
-        *,
-        boundaries: RunBoundaries,
+    def runtime_answer_stream(
+        self, run: PreparedRun
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        if self._model_func is None:
-            raise RuntimeError("Research answer requires a tool-capable model")
-        await self.research_until_stopped(run, boundaries=boundaries)
-        await boundaries.enter_phase("generating")
+        """Present a Research result already completed by AgentSessionRuntime."""
         run.trace["agent_stop_reason"] = run.stop_reason
         text = run.last_turn.assistant.text if run.last_turn is not None else ""
         indexer = run.evidence.render_blocks()[1]
@@ -492,27 +328,140 @@ class AnswerOrchestrator:
         stream.trace = run.trace  # type: ignore[attr-defined]
         return run.evidence.contexts, stream
 
-    async def research_until_stopped(self, run: PreparedRun, *, boundaries: RunBoundaries) -> None:
-        """Run the product-neutral Agent loop through durable Answer boundaries."""
-
-        async def record_event(event: AgentEvent) -> None:
-            run.trace.setdefault("agent_events", []).append(
-                {
-                    "kind": event.kind,
-                    "turn_number": event.turn_number,
-                    **{key: value for key, value in event.data.items() if key != "snapshot"},
-                }
-            )
-            await boundaries.publish_agent_event(event)
-
-        result = await AgentLoop(on_event=record_event).run(
-            _ResearchLoopDriver(self, run, boundaries, on_event=record_event),
-            starting_turn=run.agent_turn_count,
+    async def assemble_runtime_request(
+        self,
+        run: PreparedRun,
+        runtime_context: RuntimeContext,
+    ) -> RequestSnapshot | CompactionRequired:
+        """Build one exact provider request without executing an external effect."""
+        self._record_working_fold(run, runtime_context.snapshot)
+        tool_schema_tokens = _tool_schema_tokens(run.tools)
+        estimated = (
+            run.context.measure_control_input(evidence=run.evidence, working=run.working)
+            + tool_schema_tokens
         )
-        run.agent_turn_count = result.turn_count
-        run.trace["agent_turns"] = result.turn_count
-        run.last_turn = result.last_turn
-        run.stop_reason = result.stop_reason
+        if should_compact(
+            run.model_profile,
+            input_tokens=estimated,
+            context_policy=self._context_policy,
+        ):
+            self._require_compactable_floor(run, tool_schema_tokens)
+            return CompactionRequired()
+        messages = await run.context.control_turn(
+            evidence=run.evidence,
+            working=run.working,
+            tool_schema_tokens=tool_schema_tokens,
+        )
+        max_tokens = run.context.control_output_allowance(
+            messages,
+            tool_schema_tokens=tool_schema_tokens,
+        )
+        return RequestSnapshot.from_values(
+            operation_id=runtime_context.operation_id,
+            turn_number=getattr(runtime_context.state, "turn_count", 0) + 1,
+            plan_digest=runtime_context.meta.plan_digest,
+            model_role=run.model_role,
+            messages=messages,
+            tools=[asdict(tool.definition) for tool in run.tools],
+            tool_choice="auto",
+            max_tokens=max_tokens,
+        )
+
+    async def call_runtime_provider(self, request: RequestSnapshot) -> AssistantTurn:
+        """Execute one already-persisted exact provider Request Snapshot."""
+        definitions = [ToolDefinition(**definition) for definition in request.tools]
+        kwargs: dict[str, Any] = {
+            "messages": request.messages,
+            "tools": definitions,
+            "tool_choice": request.tool_choice,
+        }
+        if request.max_tokens is not None:
+            kwargs["max_tokens"] = request.max_tokens
+        return await cast(ToolModelFunc, self._model_func)(**kwargs)
+
+    async def compact_runtime_context(
+        self,
+        run: PreparedRun,
+        runtime_context: RuntimeContext,
+        attempt: int,
+    ) -> CompactionResult:
+        """Prepare one automatic checkpoint compaction for Runtime settlement."""
+        snapshot = runtime_context.snapshot
+        if snapshot.active_projection is None:
+            baseline = ContextProjection(
+                projection_id=ProjectionId.new(),
+                first_retained_sequence=1,
+                covered_through_sequence=0,
+                summary=None,
+            )
+            snapshot = replace(
+                snapshot,
+                registers=(
+                    *snapshot.registers,
+                    RegisterRecord(
+                        ContextProjectionRegister(runtime_context.lane_id, baseline),
+                        max(1, snapshot.commit_sequence),
+                    ),
+                ),
+            )
+
+        coordinator = self._compaction_coordinator(run)
+        tail = self._context_policy.retained_tail_target(run.model_profile) // (
+            2 ** max(0, attempt - 1)
+        )
+        projection, _outcome = await coordinator.prepare(
+            snapshot,
+            tail_target_tokens=tail,
+            accounted_before=(
+                run.context.measure_control_input(evidence=run.evidence, working=run.working)
+                + _tool_schema_tokens(run.tools)
+            ),
+            trace=run.trace,
+        )
+        return CompactionResult(
+            entry=CompactionEntry(
+                entry_id=EntryId.new(),
+                session_id=runtime_context.session_id,
+                timestamp=datetime.now(UTC),
+                projection_id=projection.projection_id,
+                summary=projection.summary,
+                covered_through_sequence=projection.covered_through_sequence,
+                first_retained_sequence=projection.first_retained_sequence,
+                covered_through_entry_id=projection.covered_through_entry_id,
+                first_retained_entry_id=projection.first_retained_entry_id,
+                source_digest=projection.source_digest,
+            ),
+            projection=projection,
+        )
+
+    def adopt_runtime_snapshot(self, run: PreparedRun, snapshot: Any) -> None:
+        """Project a terminal Runtime snapshot into the product's live result cache."""
+        self._record_working_fold(run, snapshot)
+        assistants = [
+            entry for entry in snapshot.graph.ancestry() if isinstance(entry, AssistantMessageEntry)
+        ]
+        run.agent_turn_count = len(assistants)
+        run.trace["agent_turns"] = run.agent_turn_count
+        if assistants:
+            entry = assistants[-1]
+            run.last_turn = ExecutedTurn(
+                assistant=AssistantTurn(
+                    text=entry.content,
+                    tool_calls=entry.tool_calls,
+                    stop_reason=entry.stop_reason,
+                    reasoning=entry.reasoning,
+                    usage_details=(dict(entry.usage) if isinstance(entry.usage, Mapping) else None),
+                    cost_details=(dict(entry.cost) if isinstance(entry.cost, Mapping) else None),
+                    provider_state=(
+                        dict(entry.provider_state)
+                        if isinstance(entry.provider_state, Mapping)
+                        else None
+                    ),
+                ),
+                results=(),
+                messages=[],
+            )
+        run.stop_reason = "model_stop"
 
     # ------------------------------------------------------------------
     # Research helpers
@@ -624,23 +573,6 @@ class AnswerOrchestrator:
             stream_model_func=child_stream,
             model_profile=child_profile,
             model_role=request.model_role,
-        )
-
-    def adopt_agent_turn_count(self, run: PreparedRun, turns: int) -> None:
-        """Continue a resumed run's recorded turn count from the journal."""
-        run.agent_turn_count = int(turns)
-        run.trace["agent_turns"] = run.agent_turn_count
-
-    async def recover_from_fold(self, run: PreparedRun, snapshot: Any) -> None:
-        """Rebuild the live working from the folded journal suffix."""
-        self._record_working_fold(run, snapshot)
-        self.adopt_agent_turn_count(
-            run,
-            sum(
-                1
-                for entry in snapshot.entries
-                if entry.__class__.__name__ == "AssistantMessageEntry"
-            ),
         )
 
     def _record_working_fold(self, run: PreparedRun, snapshot: Any) -> None:
@@ -810,140 +742,6 @@ class AnswerOrchestrator:
 
         return write
 
-    async def _prepare_control_turn(
-        self,
-        run: PreparedRun,
-        boundaries: RunBoundaries,
-        *,
-        on_event: EventSink | None = None,
-    ) -> _PreparedControlTurn:
-        """Model call plus preflight; no tool has executed yet."""
-        if not isinstance(boundaries, _NoBoundaries):
-            # The durable journal is the only working-context authority. The
-            # working is a request-local projection cache rebuilt before every
-            # provider call.
-            await self._rebuild_working(run, boundaries)
-        executor = ToolTurnExecutor(
-            run.model_func,
-            telemetry=self._telemetry,
-            on_event=on_event,
-        )
-        tool_schema_tokens = _tool_schema_tokens(run.tools)
-        estimated = (
-            run.context.measure_control_input(evidence=run.evidence, working=run.working)
-            + tool_schema_tokens
-        )
-        accounted = boundaries.accounted_input(estimated)
-        if should_compact(
-            run.model_profile,
-            input_tokens=accounted,
-            context_policy=self._context_policy,
-        ):
-            self._require_compactable_floor(run, tool_schema_tokens)
-            await self._compaction_coordinator(run).ensure_fits(
-                boundaries=boundaries,
-                remeasure=self._remeasure_closure(run, boundaries, tool_schema_tokens),
-                trace=run.trace,
-            )
-        call_messages = await run.context.control_turn(
-            evidence=run.evidence,
-            working=run.working,
-            tool_schema_tokens=tool_schema_tokens,
-        )
-        max_output_tokens = run.context.control_output_allowance(
-            call_messages,
-            tool_schema_tokens=tool_schema_tokens,
-        )
-
-        def observation_budget(transcript: list[dict[str, Any]]) -> int:
-            residual = run.context.observation_residual(
-                transcript,
-                tool_schema_tokens=tool_schema_tokens,
-            )
-            if residual < 1:
-                raise AnswerInputOverflowError(
-                    "Research tool calls exhausted the resolved model input residual"
-                )
-            call_count = max(1, len(transcript[-1].get("tool_calls") or ()))
-            self._text_window_budget.update(max(1, residual // call_count))
-            return residual
-
-        prepared = await executor.prepare_turn(
-            call_messages,
-            run.tools,
-            tool_choice="auto",
-            max_tokens=max_output_tokens,
-        )
-        return _PreparedControlTurn(
-            prepared=prepared,
-            executor=executor,
-            call_messages_len=len(call_messages),
-            observation_budget=observation_budget,
-        )
-
-    async def _execute_prepared_turn(
-        self,
-        run: PreparedRun,
-        holder: _PreparedControlTurn,
-        boundaries: RunBoundaries,
-        *,
-        turn_number: int,
-    ) -> ExecutedTurn:
-        """Run the prepared tool batch, settling each intent in source order."""
-        try:
-            executed = await holder.executor.execute_prepared(
-                holder.prepared,
-                run.tools,
-                observation_budget=holder.observation_budget,
-                execution_scope=boundaries.tool_execution_scope,
-                on_result=lambda intent, execution, is_last: boundaries.settle_intent(
-                    intent,
-                    execution,
-                    turn_number=turn_number,
-                    is_last=is_last,
-                ),
-            )
-        except ToolResultCapacityError as exc:
-            raise AnswerInputOverflowError(str(exc)) from exc
-        run.trace["tool_observations"].extend(
-            execution.observation.as_dict() for execution in executed.results
-        )
-        if isinstance(boundaries, _NoBoundaries):
-            run.working.record(executed.messages[holder.call_messages_len :])
-        return executed
-
-    async def _durable_control_turn(
-        self,
-        run: PreparedRun,
-        boundaries: RunBoundaries,
-        *,
-        turn_number: int,
-        on_event: EventSink | None = None,
-    ) -> ExecutedTurn:
-        """One journaled control turn: persist intents, then execute and settle.
-
-        Intents land before any tool executes, so a crash between the two steps
-        leaves recoverable unsettled intents instead of effects with no durable
-        trace (Blocker 2).
-        """
-        holder = await self._prepare_control_turn(
-            run,
-            boundaries,
-            on_event=on_event,
-        )
-        await boundaries.commit_intents(holder.prepared)
-        try:
-            # Cancellation linearizes after durable intent commit and before
-            # dispatch. If it races with execution, join the tool tasks first,
-            # then close every still-unsettled source position.
-            await boundaries.check_cancelled()
-            return await self._execute_prepared_turn(
-                run, holder, boundaries, turn_number=turn_number
-            )
-        except RunCancelledError, AnswerRunCancelledError, asyncio.CancelledError:
-            await boundaries.close_committed_turn()
-            raise
-
     def _compaction_coordinator(self, run: PreparedRun) -> CompactionCoordinator:
         if run.model_role not in self._compaction:
             if run.stream_model_func is None:
@@ -974,75 +772,6 @@ class AnswerOrchestrator:
             )
         except AgentInputOverflowError as exc:
             raise AnswerInputOverflowError(str(exc)) from exc
-
-    def _remeasure_closure(
-        self,
-        run: PreparedRun,
-        boundaries: RunBoundaries,
-        tool_schema_tokens: int,
-    ) -> Callable[[], Awaitable[int]]:
-        async def remeasure() -> int:
-            await self._rebuild_working(run, boundaries)
-            estimated = (
-                run.context.measure_control_input(evidence=run.evidence, working=run.working)
-                + tool_schema_tokens
-            )
-            return boundaries.accounted_input(estimated)
-
-        return remeasure
-
-    async def _rebuild_working(self, run: PreparedRun, boundaries: RunBoundaries) -> None:
-        snapshot = await boundaries.load_snapshot()
-        self._record_working_fold(run, snapshot)
-
-    async def _handle_overflow_retry(
-        self,
-        exc: BaseException,
-        run: PreparedRun,
-        boundaries: RunBoundaries,
-        *,
-        turn_number: int,
-        on_event: EventSink | None = None,
-    ) -> ExecutedTurn:
-        """Compact-and-retry one genuine provider overflow, then fail loudly."""
-        if not is_provider_context_overflow(exc):
-            raise exc
-        accounted = self._accounted_control_input(run, boundaries)
-        if run.compaction_overflow_retried:
-            raise _overflow_retry_error(accounted) from exc
-        run.compaction_overflow_retried = True
-        tool_schema_tokens = _tool_schema_tokens(run.tools)
-        self._require_compactable_floor(run, tool_schema_tokens)
-        await self._compaction_coordinator(run).ensure_fits(
-            boundaries=boundaries,
-            remeasure=self._remeasure_closure(run, boundaries, tool_schema_tokens),
-            trace=run.trace,
-            force=True,
-        )
-        try:
-            holder = await self._prepare_control_turn(
-                run,
-                boundaries,
-                on_event=on_event,
-            )
-            await boundaries.commit_intents(holder.prepared)
-            executed = await self._execute_prepared_turn(
-                run, holder, boundaries, turn_number=turn_number
-            )
-        except Exception as retry_exc:
-            if is_provider_context_overflow(retry_exc):
-                raise _overflow_retry_error(
-                    self._accounted_control_input(run, boundaries)
-                ) from retry_exc
-            raise
-        run.compaction_overflow_retried = False
-        return executed
-
-    def _accounted_control_input(self, run: PreparedRun, boundaries: RunBoundaries) -> int:
-        estimated = run.context.measure_control_input(
-            evidence=run.evidence, working=run.working
-        ) + _tool_schema_tokens(run.tools)
-        return boundaries.accounted_input(estimated)
 
 
 def _read_committed_spill(
@@ -1093,16 +822,7 @@ def _read_committed_spill(
 
 
 def _tool_guidance(tools: list[AgentTool]) -> tuple[str, ...]:
-    """Concatenate only the active tools' short usage guidance."""
     return tuple(f"- {tool.guidance}" for tool in tools if tool.guidance)
-
-
-def _overflow_retry_error(accounted: int) -> AnswerInputOverflowError:
-    return AnswerInputOverflowError(
-        "Research overflowed the model context window again after one "
-        f"compact-and-retry ({accounted} accounted input tokens). "
-        "Use a larger-context model or shorten the request."
-    )
 
 
 def _fresh_research_trace() -> dict[str, Any]:
@@ -1174,10 +894,6 @@ def research_history_input_measure(
     return measure
 
 
-async def _discard_agent_event(_event: AgentEvent) -> None:
-    return None
-
-
 async def _single_chunk(text: str) -> AsyncIterator[str]:
     if text:
         yield text
@@ -1187,7 +903,6 @@ __all__ = [
     "AnswerOrchestrator",
     "PhaseBoundaries",
     "PreparedRun",
-    "RunBoundaries",
     "child_question",
     "research_history_input_measure",
 ]

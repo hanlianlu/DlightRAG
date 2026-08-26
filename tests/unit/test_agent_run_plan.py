@@ -27,6 +27,8 @@ def test_agent_run_plan_round_trips_one_canonical_payload() -> None:
         tools,
         model_role="query",
         context_policy_revision="agent-v3-reserves",
+        model_identity={"provider": "openai", "model": "query"},
+        model_profile={"context_window_tokens": 100000},
     )
     restored = AgentRunPlan.from_payload(plan.canonical_payload())
 
@@ -37,12 +39,17 @@ def test_agent_run_plan_round_trips_one_canonical_payload() -> None:
             tuple(reversed(tools)),
             model_role="query",
             context_policy_revision="agent-v3-reserves",
+            model_identity={"provider": "openai", "model": "query"},
+            model_profile={"context_window_tokens": 100000},
         ).digest
         == plan.digest
     )
     policies = {tool.name: tool.replay_policy for tool in restored.tools}
     assert policies == {"mutate": "never", "search": "replayable"}
     assert restored.canonical_json() == plan.canonical_json()
+    assert restored.canonical_payload()["model_identity"]["model"] == "query"
+    assert restored.provider_attempt_limit == 2
+    assert restored.compaction_attempt_limit == 3
 
 
 def test_agent_run_plan_digest_pins_provider_definition_and_execution_contract() -> None:

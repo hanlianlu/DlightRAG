@@ -838,7 +838,7 @@ def _smoke_root_interfaces() -> None:
     import dlightrag
     from dlightrag import Application
     from dlightrag.access import DEPLOYMENT_OWNER_ID
-    from dlightrag.agent import AgentLoop, ContextContribution, ToolRegistry
+    from dlightrag.agent import AgentSessionRuntime, ContextContribution, ToolRegistry
     from dlightrag.ai.settings import ModelsSettings
     from dlightrag.ai.telemetry import NoopTelemetry
     from dlightrag.config import AnswerSectionSettings, DlightragConfig, RuntimeConfig
@@ -1011,8 +1011,8 @@ def _smoke_root_interfaces() -> None:
         )
     ):
         raise ValueError("installed SDK is missing the Agent 3.0 Answer controls")
-    if AgentLoop.__module__ != "dlightrag.agent.loop":
-        raise ValueError("installed Agent kernel did not expose AgentLoop")
+    if AgentSessionRuntime.__module__ != "dlightrag.agent.session.runtime":
+        raise ValueError("installed Agent kernel did not expose AgentSessionRuntime")
     ToolRegistry()
     ContextContribution(
         source="wheel.smoke",

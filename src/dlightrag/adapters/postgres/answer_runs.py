@@ -34,6 +34,7 @@ from dlightrag.adapters.postgres.memory_settings import (
 )
 from dlightrag.adapters.postgres.session_journal import PGJournalStore, PGProgressStore
 from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
+from dlightrag.agent.tool_content import decode_tool_content, tool_content_message_fields
 from dlightrag.answer.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.runtime.cancellation import RunCancellationListener, cancellation_notify_key
 from dlightrag.runtime.contracts import AnswerRunPhase
@@ -161,7 +162,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_sessions (
     commit_sequence      BIGINT      NOT NULL DEFAULT 0,
     fencing_epoch        BIGINT      NOT NULL,
     last_sequence        BIGINT      NOT NULL DEFAULT 0,
-    active_projection_id UUID,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (owner_id, run_id, session_id),
@@ -171,18 +171,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_sessions (
     CONSTRAINT dlightrag_agent_sessions_fencing_check CHECK (fencing_epoch >= 1),
     CONSTRAINT dlightrag_agent_sessions_sequence_check CHECK (last_sequence >= 0)
 )
-"""
-
-# The session's active projection pointer is a deferrable composite foreign key
-# (M3-D40): both tables exist before this constraint is added, and the deferred
-# check lets the initial session and projection commit in one transaction.
-_ADD_SESSION_PROJECTION_FK = """
-ALTER TABLE dlightrag_agent_sessions
-ADD CONSTRAINT dlightrag_agent_sessions_projection_fkey
-FOREIGN KEY (owner_id, run_id, session_id, active_projection_id)
-REFERENCES dlightrag_agent_context_projections
-    (owner_id, run_id, session_id, projection_id)
-DEFERRABLE INITIALLY DEFERRED
 """
 
 _CREATE_ENTRIES = """
@@ -208,8 +196,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_session_entries (
         DEFERRABLE INITIALLY DEFERRED,
     CONSTRAINT dlightrag_agent_session_entries_sequence_check CHECK (sequence >= 1),
     CONSTRAINT dlightrag_agent_session_entries_type_check CHECK (entry_type IN (
-        'run_segment', 'user_message', 'assistant_message', 'effect_intent', 'effect_result',
-        'context_injection', 'compaction', 'profile_fact', 'session_terminal'
+        'user_message', 'assistant_message', 'tool_result',
+        'control_message', 'compaction', 'adoption'
     )),
     CONSTRAINT dlightrag_agent_session_entries_version_check CHECK (schema_version >= 1)
 )
@@ -228,77 +216,12 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_session_registers (
     FOREIGN KEY (owner_id, run_id, session_id)
         REFERENCES dlightrag_agent_sessions (owner_id, run_id, session_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_agent_session_registers_kind_check
-        CHECK (register_kind IN ('lane_head', 'lane_state')),
+        CHECK (register_kind IN (
+            'lane_head', 'lane_state', 'operation_meta', 'operation_state',
+            'request_snapshot', 'tool_arguments', 'pending_input', 'context_projection',
+            'session_fault'
+        )),
     CONSTRAINT dlightrag_agent_session_registers_sequence_check CHECK (sequence >= 1)
-)
-"""
-
-_CREATE_PROJECTIONS = """
-CREATE TABLE IF NOT EXISTS dlightrag_agent_context_projections (
-    owner_id                  TEXT        NOT NULL,
-    run_id                    UUID        NOT NULL,
-    session_id                UUID        NOT NULL,
-    projection_id             UUID        NOT NULL,
-    first_retained_sequence   BIGINT      NOT NULL,
-    covered_through_sequence  BIGINT      NOT NULL,
-    covered_through_entry_id  UUID,
-    first_retained_entry_id   UUID,
-    source_digest             TEXT,
-    summary                   TEXT,
-    token_anchors             JSONB       NOT NULL DEFAULT '[]'::jsonb,
-    schema_version            INTEGER     NOT NULL,
-    created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (owner_id, run_id, session_id, projection_id),
-    FOREIGN KEY (owner_id, run_id, session_id)
-        REFERENCES dlightrag_agent_sessions (owner_id, run_id, session_id) ON DELETE CASCADE,
-    CONSTRAINT dlightrag_agent_context_projections_range_check
-        CHECK (covered_through_sequence >= 0
-               AND first_retained_sequence > covered_through_sequence),
-    CONSTRAINT dlightrag_agent_context_projections_summary_check
-        CHECK ((covered_through_sequence = 0) = (summary IS NULL)),
-    CONSTRAINT dlightrag_agent_context_projections_source_check
-        CHECK ((covered_through_sequence = 0
-                AND covered_through_entry_id IS NULL AND source_digest IS NULL)
-               OR (covered_through_sequence > 0
-                   AND covered_through_entry_id IS NOT NULL
-                   AND source_digest ~ '^[0-9a-f]{64}$')),
-    CONSTRAINT dlightrag_agent_context_projections_version_check CHECK (schema_version >= 1)
-)
-"""
-
-_CREATE_EFFECTS = """
-CREATE TABLE IF NOT EXISTS dlightrag_agent_effects (
-    owner_id            TEXT        NOT NULL,
-    run_id              UUID        NOT NULL,
-    session_id          UUID        NOT NULL,
-    intent_id           UUID        NOT NULL,
-    tool_name           TEXT        NOT NULL,
-    replay_policy       TEXT        NOT NULL,
-    contract_version    INTEGER     NOT NULL,
-    input_schema_digest TEXT        NOT NULL,
-    canonical_input     JSONB       NOT NULL,
-    source_call_id      TEXT,
-    outcome             TEXT,
-    result_entry_sequence BIGINT,
-    result_digest       TEXT,
-    host_update_digest  TEXT,
-    settled_at          TIMESTAMPTZ,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (owner_id, run_id, session_id, intent_id),
-    FOREIGN KEY (owner_id, run_id, session_id)
-        REFERENCES dlightrag_agent_sessions (owner_id, run_id, session_id) ON DELETE CASCADE,
-    CONSTRAINT dlightrag_agent_effects_policy_check
-        CHECK (replay_policy IN ('replayable', 'never')),
-    CONSTRAINT dlightrag_agent_effects_contract_check
-        CHECK (contract_version >= 1),
-    CONSTRAINT dlightrag_agent_effects_digest_check
-        CHECK (input_schema_digest ~ '^[0-9a-f]{64}$'),
-    CONSTRAINT dlightrag_agent_effects_settlement_check
-        CHECK ((settled_at IS NULL) = (outcome IS NULL)
-               AND (settled_at IS NULL) = (result_digest IS NULL)),
-    CONSTRAINT dlightrag_agent_effects_outcome_check
-        CHECK (outcome IS NULL OR outcome IN
-               ('succeeded', 'interrupted', 'outcome_unknown', 'tool_contract_changed'))
 )
 """
 
@@ -614,8 +537,6 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_SESSIONS,
             _CREATE_ENTRIES,
             _CREATE_SESSION_REGISTERS,
-            _CREATE_PROJECTIONS,
-            _CREATE_EFFECTS,
             _CREATE_STAGES,
             _CREATE_EVIDENCE,
             _CREATE_RESOURCES,
@@ -625,7 +546,6 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_ROUTING,
             _CREATE_CHILD_SESSIONS,
             _CREATE_AGENT_CONTROLS,
-            _ADD_SESSION_PROJECTION_FK,
             *_CREATE_INDEXES,
             _M4_WORKSPACE_DDL[3],
             _M4_WORKSPACE_DDL[4],
@@ -714,7 +634,6 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "commit_sequence",
             "fencing_epoch",
             "last_sequence",
-            "active_projection_id",
             "created_at",
             "updated_at",
         ),
@@ -792,72 +711,6 @@ ANSWER_RUN_SCHEMA_TABLES = (
         checks=(
             "dlightrag_agent_session_registers_kind_check",
             "dlightrag_agent_session_registers_sequence_check",
-        ),
-    ),
-    TableRequirement(
-        name="dlightrag_agent_context_projections",
-        columns=(
-            "owner_id",
-            "run_id",
-            "session_id",
-            "projection_id",
-            "first_retained_sequence",
-            "covered_through_sequence",
-            "covered_through_entry_id",
-            "first_retained_entry_id",
-            "source_digest",
-            "summary",
-            "token_anchors",
-            "schema_version",
-            "created_at",
-        ),
-        primary_key=("owner_id", "run_id", "session_id", "projection_id"),
-        foreign_keys=(
-            ForeignKeyRequirement(
-                columns=("owner_id", "run_id", "session_id"),
-                references="dlightrag_agent_sessions",
-            ),
-        ),
-        checks=(
-            "dlightrag_agent_context_projections_range_check",
-            "dlightrag_agent_context_projections_summary_check",
-            "dlightrag_agent_context_projections_source_check",
-            "dlightrag_agent_context_projections_version_check",
-        ),
-    ),
-    TableRequirement(
-        name="dlightrag_agent_effects",
-        columns=(
-            "owner_id",
-            "run_id",
-            "session_id",
-            "intent_id",
-            "tool_name",
-            "replay_policy",
-            "contract_version",
-            "input_schema_digest",
-            "canonical_input",
-            "source_call_id",
-            "outcome",
-            "result_entry_sequence",
-            "result_digest",
-            "host_update_digest",
-            "settled_at",
-            "created_at",
-        ),
-        primary_key=("owner_id", "run_id", "session_id", "intent_id"),
-        foreign_keys=(
-            ForeignKeyRequirement(
-                columns=("owner_id", "run_id", "session_id"),
-                references="dlightrag_agent_sessions",
-            ),
-        ),
-        checks=(
-            "dlightrag_agent_effects_policy_check",
-            "dlightrag_agent_effects_contract_check",
-            "dlightrag_agent_effects_digest_check",
-            "dlightrag_agent_effects_settlement_check",
-            "dlightrag_agent_effects_outcome_check",
         ),
     ),
     TableRequirement(
@@ -1273,7 +1126,7 @@ _SELECT_AGENT_TRANSCRIPT = """
 SELECT entry_type, payload_json
 FROM dlightrag_agent_session_entries
 WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
-  AND entry_type IN ('user_message', 'assistant_message', 'effect_result', 'context_injection')
+  AND entry_type IN ('user_message', 'assistant_message', 'tool_result', 'control_message')
 ORDER BY sequence DESC
 LIMIT $4
 """
@@ -2230,7 +2083,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
             for row in reversed(rows):
                 payload = _json_object(row["payload_json"])
                 entry_type = str(row["entry_type"])
-                if entry_type in {"user_message", "context_injection"}:
+                if entry_type in {"user_message", "control_message"}:
                     messages.append({"role": "user", "content": payload.get("content")})
                 elif entry_type == "assistant_message":
                     messages.append(
@@ -2240,14 +2093,16 @@ class PGAnswerRunStore(PostgresOperationRunner):
                             "tool_calls": list(payload.get("tool_calls") or ()),
                         }
                     )
-                elif entry_type == "effect_result":
+                elif entry_type == "tool_result":
                     outcome = str(payload.get("outcome") or "failed")
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": str(payload.get("call_id") or ""),
                             "name": str(payload.get("tool_name") or ""),
-                            "content": str(payload.get("content") or ""),
+                            **tool_content_message_fields(
+                                decode_tool_content(payload.get("content"))
+                            ),
                             "is_error": outcome != "succeeded",
                         }
                     )

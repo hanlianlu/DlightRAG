@@ -7,7 +7,6 @@ import inspect
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -17,62 +16,48 @@ from dlightrag.agent.environment import (
     ExecutionEnvironment,
     resolve_execution_adapter,
 )
-from dlightrag.agent.events import AgentEvent
 from dlightrag.agent.extensions import TrustedExtensions
 from dlightrag.agent.session.effects import (
     EffectIntent,
-    EffectSettlement,
     ToolResultEntry,
     canonical_json,
 )
-from dlightrag.agent.session.entries import (
-    AssistantMessageEntry,
-    CompactionEntry,
-    ContextInjectionEntry,
-    EffectIntentEntry,
-    EffectResultEntry,
-    ProfileFactEntry,
-    RunSegmentEntry,
-    SessionEntry,
-    SessionTerminalEntry,
-)
-from dlightrag.agent.session.fold import PriorTurns, fold_entries
+from dlightrag.agent.session.fold import PriorTurns
 from dlightrag.agent.session.ids import (
-    EntryId,
+    AttemptId,
     IntentId,
-    ProjectionId,
+    LaneId,
+    OperationId,
     SessionId,
     StageIntentId,
 )
+from dlightrag.agent.session.operation import (
+    OperationCancelled,
+    OperationCompleted,
+    OperationFailed,
+    ToolBatchItem,
+)
 from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.agent.session.projection import (
-    ContextProjection,
-    TokenAnchor,
-    accounted_input_tokens,
-    live_anchor,
-    projection_with_anchor,
-    token_anchor_from_usage,
+from dlightrag.agent.session.registers import RequestSnapshot
+from dlightrag.agent.session.runtime import (
+    AgentOperationCancelled,
+    AgentSessionEvent,
+    AgentSessionRuntime,
+    FollowUpCommand,
+    OperationEffectFailed,
+    ProviderAttemptFailed,
+    ProviderContextOverflow,
+    RuntimeContext,
+    SessionLeaseLostError,
+    SteerCommand,
+    ToolEffectResult,
 )
 from dlightrag.agent.session.store import (
     AgentSessionStore,
-    EffectAlreadySettled,
-    EffectCommit,
-    EffectContractChanged,
-    EffectMissing,
-    EvidenceConflict,
-    LeaseLost,
-    SessionCommit,
-    SettleCommit,
-    VersionConflict,
 )
-from dlightrag.agent.tool_content import ToolContent, ToolTextPart
 from dlightrag.agent.tools import (
     AgentTool,
-    ExecutedTurn,
-    PreparedToolTurn,
     ToolEffects,
-    ToolExecution,
-    ToolPreflight,
     ToolResult,
     ToolRuntime,
     fit_tool_result,
@@ -80,10 +65,10 @@ from dlightrag.agent.tools import (
 from dlightrag.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.ai.messages import AssistantTurn
+from dlightrag.ai.providers.base import is_provider_context_overflow
 from dlightrag.ai.scheduler import model_call_scope
 from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.ai.telemetry import Telemetry, safe_log_text
-from dlightrag.ai.tokens import estimate_messages_tokens
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.capabilities import AnswerCapabilityCoordinator, RequestModelContext
 from dlightrag.answer.capability import AnswerImageCapability, check_answer_image_capability
@@ -555,60 +540,6 @@ class AnswerResourceResolver:
         return await asyncio.to_thread(build)
 
 
-async def _resolve_profile_memory_snapshot(
-    *,
-    memory: Memory | None,
-    journal: AgentSessionStore[EffectHostUpdate],
-    snapshot: Any,
-    session_id: SessionId,
-    owner_id: str,
-    run_id: str,
-    query: str,
-) -> tuple[str, int, int, Any]:
-    """Load or durably pin one run-scoped Profile Memory contribution."""
-    if memory is None:
-        return "", 0, 0, snapshot
-    snapshot_key = f"profile_memory_snapshot:{run_id}"
-    for entry in snapshot.entries:
-        if isinstance(entry, ProfileFactEntry) and entry.key == snapshot_key:
-            value = entry.value if isinstance(entry.value, dict) else {}
-            return (
-                str(value.get("text") or ""),
-                int(value.get("record_count") or 0),
-                int(value.get("content_chars") or 0),
-                snapshot,
-            )
-    text = ""
-    count = 0
-    content_chars = 0
-    recalled = await memory.recall(owner_id=owner_id, query=query)
-    text = render_auto_recall(recalled.records)
-    count = len(recalled.records)
-    content_chars = recalled.content_chars
-    commit = await journal.append(
-        session_id=session_id,
-        expected_version=snapshot.version,
-        entries=[
-            ProfileFactEntry(
-                entry_id=EntryId.new(),
-                session_id=session_id,
-                timestamp=_entry_timestamp(),
-                key=snapshot_key,
-                value={
-                    "text": text,
-                    "record_count": count,
-                    "content_chars": content_chars,
-                },
-            )
-        ],
-    )
-    if not isinstance(commit, SessionCommit):
-        raise RunExecutionError(
-            "run_execution_failed", "Cannot pin the Profile Memory recall snapshot."
-        )
-    return text, count, content_chars, await journal.load(session_id)
-
-
 async def _memory_recall_allowed(
     checker: Callable[..., Awaitable[bool]] | None, *, owner_id: str
 ) -> bool:
@@ -812,8 +743,10 @@ class AnswerExecutor:
             episodic_summary=request.episodic_summary,
         )
 
-        boundaries: JournalRunBoundaries | None = None
         fast_boundaries: FastRunBoundaries | None = None
+        agent_runtime: AgentSessionRuntime[EffectHostUpdate] | None = None
+        research_operation_id: OperationId | None = None
+        agent_session_id: SessionId | None = None
 
         fetched_buffer = FetchedResourceBuffer()
 
@@ -883,6 +816,7 @@ class AnswerExecutor:
                 session_id = SessionId(
                     request.session_id or research_session_id or SessionId.new().value
                 )
+                agent_session_id = session_id
                 store = self._store
                 run.orchestrator.bind_memory(
                     owner_id=session.owner_id,
@@ -922,25 +856,16 @@ class AnswerExecutor:
                 self.validate_pinned_model_profiles(request)
                 self.validate_pinned_agent_run_plan(request, pin_probe.tools)
                 snapshot = await journal.load(session_id)
-                is_new_session = snapshot.version == 0
-                if is_new_session:
-                    snapshot = await self._seed_session(journal, session_id, request, snapshot)
-                else:
-                    snapshot = await self._resume_session(journal, session_id, snapshot)
-                (
-                    memory_text,
-                    memory_recall_record_count,
-                    memory_recall_chars,
-                    snapshot,
-                ) = await _resolve_profile_memory_snapshot(
-                    memory=self._memory if recall_allowed else None,
-                    journal=journal,
-                    snapshot=snapshot,
-                    session_id=session_id,
-                    owner_id=session.owner_id,
-                    run_id=session.run_id,
-                    query=request.query,
-                )
+                is_new_session = snapshot.commit_sequence == 0
+                memory_text = ""
+                if self._memory is not None and recall_allowed:
+                    recalled = await self._memory.recall(
+                        owner_id=session.owner_id,
+                        query=request.query,
+                    )
+                    memory_text = render_auto_recall(recalled.records)
+                    memory_recall_record_count = len(recalled.records)
+                    memory_recall_chars = recalled.content_chars
                 run.orchestrator.bind_recall(memory_text)
                 prepared_early = run.orchestrator.prepare_run(
                     request.query,
@@ -951,28 +876,85 @@ class AnswerExecutor:
                 self.validate_pinned_model_profiles(request)
                 self.validate_pinned_agent_run_plan(request, prepared_early.tools)
                 if not is_new_session:
-                    await run.orchestrator.recover_from_fold(prepared_early, snapshot)
                     await _adopt_durable_evidence(prepared_early, journal, session_id)
-                boundaries = JournalRunBoundaries(
+                plan = request.agent_run_plan
+                if plan is None:
+                    raise RunExecutionError(
+                        "run_execution_failed",
+                        "Research answer run is missing its accepted Agent Plan",
+                    )
+
+                def validate_research_pins() -> None:
+                    self.validate_pinned_model_profiles(request)
+                    self.validate_pinned_agent_run_plan(request, prepared_early.tools)
+
+                effects = ResearchRuntimeEffects(
+                    orchestrator=run.orchestrator,
+                    prepared=prepared_early,
                     session=session,
-                    journal=journal,
                     session_id=session_id,
-                    tools_by_name={tool.name: tool for tool in prepared_early.tools},
-                    ledger_state=lambda: prepared_early.evidence.ledger_state_json(),
                     fetched_buffer=fetched_buffer,
-                    run_id=session.run_id,
-                    initial_version=snapshot.version,
-                    last_sequence=_last_entry_sequence(snapshot),
-                    active_projection=snapshot.active_projection,
-                    entries=snapshot.entries,
                     persist_child_intent=_fenced_child_writer(
                         store, "upsert_child_session", session
                     ),
-                    control_reader=_fenced_control_reader(store, session),
-                    control_ack=_fenced_control_ack(store, session),
+                    validate_pins=validate_research_pins,
                 )
-                if snapshot.version > 0:
-                    await boundaries.recover_pending_intents(snapshot)
+                control_reader = _fenced_control_reader(store, session)
+                control_ack = _fenced_control_ack(store, session)
+                controls = (
+                    AnswerRuntimeControls(reader=control_reader, acknowledge=control_ack)
+                    if control_reader is not None and control_ack is not None
+                    else None
+                )
+                agent_runtime = AgentSessionRuntime(
+                    transactions=journal,
+                    load=journal.load,
+                    effects=effects,
+                    tools=prepared_early.tools,
+                    fencing_epoch=session.execution.fencing_epoch,
+                    provider_attempt_limit=plan.provider_attempt_limit,
+                    event_sink=_answer_runtime_event_sink(session),
+                    controls=controls,
+                )
+                accepted = await agent_runtime.accept(
+                    session_id=session_id,
+                    lane_id=LaneId.main(),
+                    idempotency_key=f"answer-run:{session.run_id}",
+                    content=request.query,
+                    plan=plan,
+                )
+                research_operation_id = accepted.operation_id
+                await session.enter_phase("researching")
+                try:
+                    operation = await agent_runtime.drive(
+                        session_id=session_id,
+                        operation_id=accepted.operation_id,
+                    )
+                except (
+                    asyncio.CancelledError,
+                    RunCancelledError,
+                    AgentOperationCancelled,
+                ) as exc:
+                    await agent_runtime.cancel(
+                        session_id=session_id,
+                        operation_id=accepted.operation_id,
+                    )
+                    await agent_runtime.close(
+                        session_id=session_id,
+                        operation_id=accepted.operation_id,
+                    )
+                    if isinstance(exc, AgentOperationCancelled):
+                        raise exc.reason from exc
+                    raise
+                except SessionLeaseLostError as exc:
+                    raise LeaseLostError from exc
+                if not isinstance(operation.state, OperationCompleted):
+                    raise RunExecutionError(
+                        "run_execution_failed",
+                        f"Research Agent operation ended as {operation.state.state_type}.",
+                    )
+                snapshot = await journal.load(session_id)
+                run.orchestrator.adopt_runtime_snapshot(prepared_early, snapshot)
             else:
                 fast_boundaries = FastRunBoundaries(
                     session=session,
@@ -1001,13 +983,20 @@ class AnswerExecutor:
                 },
             ) as pipeline_trace:
                 prepared = prepared_early
-                limit = boundaries if boundaries is not None else fast_boundaries
-                contexts, stream = await run.orchestrator.answer_stream(
-                    request.query,
-                    conversation_history=run.history,
-                    run=prepared,
-                    boundaries=limit,
-                )
+                if resolved_mode == "research":
+                    if prepared is None:
+                        raise RunExecutionError(
+                            "run_execution_failed",
+                            "Research Runtime lost its prepared Host state.",
+                        )
+                    await session.enter_phase("generating")
+                    contexts, stream = run.orchestrator.runtime_answer_stream(prepared)
+                else:
+                    contexts, stream = await run.orchestrator.answer_stream(
+                        request.query,
+                        conversation_history=run.history,
+                        boundaries=fast_boundaries,
+                    )
                 answer_parts: list[str] = []
                 if stream is not None:
                     async for chunk in stream:
@@ -1021,19 +1010,6 @@ class AnswerExecutor:
                     answer=finalized.answer,
                     limits=self._settings.publication,
                 )
-                if publication.repairable and boundaries is not None and prepared is not None:
-                    corrected = await run.orchestrator.correct_publication(
-                        prepared,
-                        boundaries=boundaries,
-                        feedback=publication.correction_feedback(),
-                    )
-                    if corrected is not None:
-                        finalized = finalize_answer(corrected, contexts)
-                        publication = _publication_plan(
-                            run.orchestrator.artifact_root(),
-                            answer=finalized.answer,
-                            limits=self._settings.publication,
-                        )
                 finalized.answer = publication.answer
                 if request.semantic_highlights:
                     finalized.sources = await enrich_semantic_highlights(
@@ -1043,8 +1019,12 @@ class AnswerExecutor:
                         model_factory=self._models.new_highlight_model,
                     )
                 trace = dict(getattr(stream, "trace", None) or {})
-                if boundaries is not None:
-                    root_usage = _usage_from_snapshot(await boundaries.load_snapshot()) or {}
+                if (
+                    agent_runtime is not None
+                    and research_operation_id is not None
+                    and agent_session_id is not None
+                ):
+                    root_usage = _usage_from_snapshot(await journal.load(agent_session_id)) or {}
                     child_usage = await _durable_child_usage(
                         self._store,
                         owner_id=session.owner_id,
@@ -1103,84 +1083,6 @@ class AnswerExecutor:
                 return stored
         finally:
             await _close_execution_resources(stream, run.registry)
-
-    async def _seed_session(
-        self,
-        journal: AgentSessionStore[EffectHostUpdate],
-        session_id: SessionId,
-        request: AnswerRunInput,
-        snapshot: Any,
-    ) -> Any:
-        """Append immutable facts without duplicating conversation messages.
-
-        Projected conversation history is one context contribution. The journal
-        owns only messages produced inside this Agent Session.
-        """
-        entries: list[SessionEntry] = [
-            RunSegmentEntry(
-                entry_id=EntryId.new(),
-                session_id=session_id,
-                timestamp=_entry_timestamp(),
-                segment_id=EntryId.new().value,
-                kind="start",
-            ),
-            ProfileFactEntry(
-                entry_id=EntryId.new(),
-                session_id=session_id,
-                timestamp=_entry_timestamp(),
-                key="objective",
-                value=request.query,
-            ),
-            ProfileFactEntry(
-                entry_id=EntryId.new(),
-                session_id=session_id,
-                timestamp=_entry_timestamp(),
-                key="profile_facts",
-                value={
-                    "workspaces": list(request.workspaces),
-                    "context_policy_revision": request.context_policy_revision,
-                    "model_catalog_revision": request.model_catalog_revision,
-                },
-            ),
-        ]
-        initial = _initial_projection()
-        commit = await journal.append(
-            session_id=session_id, expected_version=0, entries=entries, projection=initial
-        )
-        if not isinstance(commit, SessionCommit):
-            raise RunExecutionError(
-                "run_execution_failed", "Cannot seed the pinned research session journal."
-            )
-        return await journal.load(session_id)
-
-    async def _resume_session(
-        self,
-        journal: AgentSessionStore[EffectHostUpdate],
-        session_id: SessionId,
-        snapshot: Any,
-    ) -> Any:
-        """Append one immutable resume segment at the currently selected head."""
-        graph = snapshot.graph
-        head = graph.head_entry_id
-        commit = await journal.append(
-            session_id=session_id,
-            expected_version=snapshot.version,
-            entries=[
-                RunSegmentEntry(
-                    entry_id=EntryId.new(),
-                    session_id=session_id,
-                    timestamp=_entry_timestamp(),
-                    segment_id=EntryId.new().value,
-                    kind="resume",
-                    parent_head_id=head.value if head is not None else None,
-                )
-            ],
-        )
-        if not isinstance(commit, SessionCommit):
-            raise RunExecutionError(
-                "run_execution_failed", "Cannot resume the research Agent Session."
-            )
-        return await journal.load(session_id)
 
     async def prepare_orchestrated_run(
         self,
@@ -1370,7 +1272,11 @@ class AnswerExecutor:
             model_role="query",
             context_policy_revision=request.context_policy_revision,
         )
-        if actual.digest != pinned.digest:
+        if (
+            actual.model_role != pinned.model_role
+            or actual.context_policy_revision != pinned.context_policy_revision
+            or actual.tools != pinned.tools
+        ):
             raise IncompatibleActiveRunError(
                 "answer run Agent Plan differs from its accepted tool contracts"
             )
@@ -1467,355 +1373,405 @@ def _memory_operation_settlement(
     )
 
 
-class JournalRunBoundaries:
-    """Journal each complete turn and append every result in source order.
+def _build_effect_host_update(
+    *,
+    session_id: SessionId,
+    intent: EffectIntent,
+    ledger_state: Callable[[], str],
+    fetched_buffer: FetchedResourceBuffer,
+    execution_scope: str,
+    tool_effects: ToolEffects,
+    details: Mapping[str, Any] | None = None,
+) -> EffectHostUpdate:
+    """Convert one product Tool result into its typed atomic HostDelta."""
+    evidence: tuple[OpaqueEvidenceWrite, ...] = ()
+    encoded_ledger = ledger_state()
+    if encoded_ledger != "{}":
+        content = encoded_ledger.encode("utf-8")
+        evidence = (
+            OpaqueEvidenceWrite(
+                session_id=session_id.value,
+                intent_id=intent.intent_id.value,
+                result_ordinal=0,
+                content_digest=blob_digest(content),
+                locator_digest=blob_digest(b"{}"),
+                content=content,
+                locator=b"{}",
+            ),
+        )
+    fetched_updates: list[FetchedResourceSettlementUpdate] = []
+    for fetched in fetched_buffer.drain(
+        scope=execution_scope,
+        intent_id=intent.intent_id,
+    ):
+        plan = plan_blob(fetched.content)
+        fetched_updates.append(
+            FetchedResourceSettlementUpdate(
+                resource=OpaqueFetchedResourceWrite(
+                    resource_id=fetched.resource_id,
+                    safe_name=fetched.filename,
+                    media_type=fetched.mime_type,
+                    capabilities={},
+                    blob_digest=plan.digest,
+                    source_locator_digest=blob_digest(fetched.url.encode("utf-8")),
+                    source_locator=fetched.url.encode("utf-8"),
+                    session_id=session_id.value,
+                    intent_id=intent.intent_id.value,
+                ),
+                complete_blob=CompleteBlobDescriptor(
+                    digest=plan.digest,
+                    total_bytes=plan.total_bytes,
+                    chunks=tuple(
+                        plan.chunk(fetched.content, index) for index in range(plan.chunk_count)
+                    ),
+                ),
+            )
+        )
+    inventory = tool_effects.workspace_inventory
 
-    One append commits the assistant entry, pinned deterministic preflight
-    results, and all valid intents before effects execute. Source-position
-    callbacks then settle executable effects or append validation results in the
-    exact order the provider emitted them (M3-D12, M3-D26).
-    """
+    def blob_descriptor(content: bytes) -> CompleteBlobDescriptor:
+        plan = plan_blob(content)
+        return CompleteBlobDescriptor(
+            digest=plan.digest,
+            total_bytes=plan.total_bytes,
+            chunks=tuple(plan.chunk(content, index) for index in range(plan.chunk_count)),
+        )
+
+    attached_updates = [
+        FetchedResourceSettlementUpdate(
+            resource=OpaqueFetchedResourceWrite(
+                resource_id=attached.resource_id,
+                safe_name=attached.filename,
+                media_type=attached.mime_type,
+                capabilities={"tool_attachment": True},
+                blob_digest=blob_digest(attached.content),
+                source_locator_digest=blob_digest(attached.source_locator.encode("utf-8")),
+                source_locator=attached.source_locator.encode("utf-8"),
+                session_id=session_id.value,
+                intent_id=intent.intent_id.value,
+            ),
+            complete_blob=blob_descriptor(attached.content),
+        )
+        for attached in tool_effects.attached_resources
+    ]
+    return EffectHostUpdate(
+        evidence=evidence,
+        fetched=(*fetched_updates, *attached_updates),
+        committed_outputs=tuple(
+            CommittedSpillUpdate(
+                resource_id=output.resource_id,
+                content_digest=output.content_digest,
+                size_bytes=output.size_bytes,
+                session_id=session_id.value,
+                intent_id=intent.intent_id.value,
+            )
+            for output in tool_effects.committed_outputs
+        ),
+        workspace_inventory=(
+            None
+            if inventory is None
+            else WorkspaceInventoryUpdate(
+                upserts=tuple(
+                    InventoryPathRecord(
+                        relative_path=record.relative_path,
+                        entry_type=record.entry_type,
+                        size_bytes=record.size_bytes,
+                        mode=record.mode,
+                        content_digest=record.content_digest,
+                    )
+                    for record in inventory.upserts
+                ),
+                deletes=inventory.deletes,
+                replace_all=inventory.replace_all,
+            )
+        ),
+        memory_operation=_memory_operation_settlement(details),
+    )
+
+
+class AnswerRuntimeControls:
+    """Translate ordered Answer control rows into typed Runtime controls."""
 
     def __init__(
         self,
         *,
-        session: RunSession,
-        journal: AgentSessionStore[EffectHostUpdate],
-        session_id: SessionId,
-        tools_by_name: Mapping[str, AgentTool],
-        ledger_state: Callable[[], str],
-        fetched_buffer: FetchedResourceBuffer,
-        run_id: str,
-        initial_version: int = 0,
-        last_sequence: int = 0,
-        active_projection: ContextProjection | None = None,
-        entries: Sequence[SessionEntry] = (),
-        persist_child_intent: Callable[..., Awaitable[Any]] | None = None,
-        control_reader: Callable[[], Awaitable[tuple[Mapping[str, Any], ...]]] | None = None,
-        control_ack: Callable[[tuple[int, ...]], Awaitable[bool]] | None = None,
+        reader: Callable[[], Awaitable[tuple[Mapping[str, Any], ...]]],
+        acknowledge: Callable[[tuple[int, ...]], Awaitable[bool]],
     ) -> None:
-        self._session = session
-        self._journal = journal
-        self._session_id = session_id
-        self._tools_by_name = tools_by_name
-        self._ledger_state = ledger_state
-        self._fetched_buffer = fetched_buffer
-        self._run_id = run_id
-        self._version = initial_version
-        self._last_sequence = last_sequence
-        self._active_projection = active_projection
-        self._persist_child_intent = persist_child_intent
-        self._control_reader = control_reader
-        self._control_ack = control_ack
-        self._tail_tokens = _initial_tail_tokens(entries, active_projection, last_sequence)
+        self._reader = reader
+        self._acknowledge = acknowledge
+        self._sequences: dict[str, int] = {}
 
-    @property
-    def tool_execution_scope(self) -> str:
-        return self._session_id.value
-
-    def accounted_input(self, estimated_input_tokens: int) -> int:
-        """Correct a full estimate with the newest live measured anchor."""
-        if self._active_projection is None:
-            return estimated_input_tokens
-        live = live_anchor(self._active_projection, last_retained_sequence=self._last_sequence)
-        return accounted_input_tokens(
-            estimated_input_tokens=estimated_input_tokens,
-            measured_anchor=live,
-            unanchored_tail_tokens=self._tail_tokens,
-        )
-
-    async def load_snapshot(self) -> Any:
-        return await self._journal.load(self._session_id)
-
-    async def commit_compaction(self, *, projection: ContextProjection) -> SessionCommit:
-        """Commit the validated compaction projection and its entry atomically."""
-        if self._active_projection is None:
-            raise RunExecutionError("run_execution_failed", "No active projection to compact from.")
-        entry = CompactionEntry(
-            entry_id=EntryId.new(),
-            session_id=self._session_id,
-            timestamp=_entry_timestamp(),
-            projection_id=projection.projection_id,
-            summary=projection.summary,
-            covered_through_sequence=projection.covered_through_sequence,
-            first_retained_sequence=projection.first_retained_sequence,
-            covered_through_entry_id=projection.covered_through_entry_id,
-            first_retained_entry_id=projection.first_retained_entry_id,
-            source_digest=projection.source_digest,
-        )
-        commit = await self._journal.append(
-            session_id=self._session_id,
-            expected_version=self._version,
-            entries=[entry],
-            projection=projection,
-        )
-        if isinstance(commit, (VersionConflict, LeaseLost)):
-            raise LeaseLostError
-        self._version = commit.version
-        self._last_sequence = commit.appended_sequences[-1]
-        self._active_projection = projection
-        snapshot = await self._journal.load(self._session_id)
-        self._tail_tokens = _initial_tail_tokens(
-            snapshot.entries, snapshot.active_projection, self._last_sequence
-        )
-        return commit
-
-    async def recover_pending_intents(self, snapshot: Any) -> None:
-        """Complete unsettled tool batches in their assistant source order."""
-        for intent, result in self._pending_tool_positions(snapshot):
-            if intent is not None:
-                await self._recover_intent(intent)
-            elif result is not None:
-                await self._append_preflight_result(result)
-
-    async def close_committed_turn(self) -> None:
-        """Close all source positions left unsettled by cancellation."""
-        await self.close_pending_intents(await self._journal.load(self._session_id))
-
-    async def close_pending_intents(self, snapshot: Any) -> None:
-        """Close every unsettled source position without executing another effect.
-
-        Cancellation cannot prove whether a concurrently dispatched effect ran.
-        Every durable intent therefore closes as outcome-unknown, including an
-        otherwise replayable tool. Deterministic preflight failures are appended
-        normally so the terminal child transcript keeps every call paired.
-        """
-        for intent, result in self._pending_tool_positions(snapshot):
-            if intent is None:
-                if result is not None:
-                    await self._append_preflight_result(result)
-                continue
-            await self._settle_intent_recovery(
-                intent,
-                effect_outcome="outcome_unknown",
-                result_outcome="outcome_unknown",
-                parts=(
-                    ToolTextPart(
-                        f'Tool "{intent.tool_name}" did not settle before cancellation; '
-                        "its prior effect may have happened and its outcome is unknown."
-                    ),
-                ),
-                cached=False,
-                tool_effects=ToolEffects(),
-                details=None,
-                progress="prelude",
-            )
-
-    @staticmethod
-    def _pending_tool_positions(
-        snapshot: Any,
-    ) -> tuple[tuple[EffectIntent | None, ToolResultEntry | None], ...]:
-        """Return unsettled calls in their assistant-declared source order."""
-        intents_by_call = {
-            entry.intent.source_call_id: entry.intent
-            for entry in snapshot.entries
-            if isinstance(entry, EffectIntentEntry) and entry.intent.source_call_id is not None
-        }
-        settled_calls = {
-            entry.result.call_id
-            for entry in snapshot.entries
-            if isinstance(entry, EffectResultEntry)
-        }
-        pending: list[tuple[EffectIntent | None, ToolResultEntry | None]] = []
-        for entry in snapshot.entries:
-            if not isinstance(entry, AssistantMessageEntry) or not entry.tool_calls:
-                continue
-            validation_by_call = {result.call_id: result for result in entry.preflight_results}
-            for call in entry.tool_calls:
-                if call.id in settled_calls:
-                    continue
-                intent = intents_by_call.get(call.id)
-                result = None if intent is not None else validation_by_call.get(call.id)
-                if result is None and intent is None and entry.stop_reason == "length":
-                    result = ToolResultEntry.text(
-                        tool_name=call.name,
-                        call_id=call.id,
-                        outcome="truncated_arguments",
-                        text=(
-                            f'Tool "{call.name}" was not executed because the model hit '
-                            "its output token limit and the arguments may be truncated."
-                        ),
+    async def poll(self, context: RuntimeContext) -> tuple[Any, ...]:
+        del context
+        commands: list[Any] = []
+        for row in await self._reader():
+            sequence = int(row.get("control_sequence") or 0)
+            kind = str(row.get("kind") or "steer")
+            content = str(row.get("content") or "")
+            command_id = f"answer-control:{sequence}"
+            self._sequences[command_id] = sequence
+            if kind == "follow_up":
+                commands.append(
+                    FollowUpCommand(
+                        command_id=command_id,
+                        input_id=command_id,
+                        idempotency_key=command_id,
+                        content=content,
                     )
-                if intent is None and result is None:
-                    raise RunExecutionError(
-                        "run_execution_failed",
-                        "Durable tool preflight lost one source-position result.",
-                    )
-                pending.append((intent, result))
-                settled_calls.add(call.id)
-        return tuple(pending)
-
-    async def _recover_intent(self, intent: EffectIntent) -> None:
-        """Settle one source-position intent according to its pinned replay policy."""
-        import json as _json
-
-        # A crash may land the journal append before roster precreation.
-        # Rebind deterministic child rows before replaying the spawn effect.
-        await self._bind_subagents_parent_intents((intent,))
-        tool = self._tools_by_name.get(intent.tool_name)
-        contract_matches = (
-            tool is not None
-            and tool.replay_policy == intent.replay_policy
-            and tool.contract_version == intent.contract_version
-            and tool.input_schema_digest == intent.input_schema_digest
-        )
-        progress: Literal["live", "prelude"] = "prelude"
-        tool_effects = ToolEffects()
-        details: Mapping[str, Any] | None = None
-        if intent.replay_policy == "replayable" and contract_matches:
-            if tool is None:
-                raise RuntimeError("matched contract lost its tool")
-            try:
-                arguments = tool.input_model.model_validate(_json.loads(intent.canonical_input))
-
-                async def ignore_update(_result: ToolResult) -> None:
-                    return None
-
-                runtime = ToolRuntime(
-                    call_id=intent.source_call_id or intent.intent_id.value,
-                    tool_name=intent.tool_name,
-                    intent_id=intent.intent_id,
-                    execution_scope=self.tool_execution_scope,
-                    _update_sink=ignore_update,
                 )
-                result = await tool.execute(arguments, runtime)
-                effect_outcome = "succeeded"
-                result_outcome = "failed" if result.is_error else "succeeded"
-                parts = fit_tool_result(
-                    result,
-                    max_tokens=CONTEXT_POLICY.observation_reserve_tokens,
-                ).parts
-                cached = result.cached
-                tool_effects = result.effects
-                details = result.details
-            except Exception as exc:
-                # The replayable effect ran and settled, but its provider-visible
-                # result remains an error on every replay.
-                effect_outcome = "succeeded"
-                result_outcome = "failed"
-                parts = (ToolTextPart(f'Tool "{intent.tool_name}" failed: {exc}'),)
-                cached = False
-            progress = "live"
-        elif intent.replay_policy == "replayable":
-            effect_outcome = "tool_contract_changed"
-            result_outcome = "tool_contract_changed"
-            parts = (
-                ToolTextPart(f'Tool "{intent.tool_name}" contract changed; result discarded.'),
-            )
-            cached = False
-        else:
-            effect_outcome = "outcome_unknown"
-            result_outcome = "outcome_unknown"
-            parts = (
-                ToolTextPart(
-                    f'Tool "{intent.tool_name}" was not replayed because its prior '
-                    "effect may have happened before recovery. Its outcome is unknown."
-                ),
-            )
-            cached = False
-        await self._settle_intent_recovery(
-            intent,
-            effect_outcome=effect_outcome,
-            result_outcome=result_outcome,
-            parts=parts,
-            cached=cached,
-            tool_effects=tool_effects,
-            details=details,
-            progress=progress,
-        )
+            else:
+                commands.append(SteerCommand(command_id=command_id, content=content))
+        return tuple(commands)
 
-    async def _settle_intent_recovery(
+    async def acknowledge(self, command_ids: tuple[str, ...]) -> bool:
+        sequences = tuple(self._sequences[command_id] for command_id in command_ids)
+        return await self._acknowledge(sequences)
+
+
+class ResearchRuntimeEffects:
+    """Answer Host adapters for the product-neutral AgentSessionRuntime effects."""
+
+    def __init__(
         self,
-        intent: EffectIntent,
         *,
-        effect_outcome: str,
-        result_outcome: str,
-        parts: ToolContent,
-        cached: bool,
-        tool_effects: ToolEffects,
-        details: Mapping[str, Any] | None,
-        progress: Literal["live", "prelude"],
+        orchestrator: AnswerOrchestrator,
+        prepared: Any,
+        session: RunSession,
+        session_id: SessionId,
+        fetched_buffer: FetchedResourceBuffer,
+        persist_child_intent: Callable[..., Awaitable[Any]] | None,
+        validate_pins: Callable[[], None] | None = None,
     ) -> None:
-        result_entry = EffectResultEntry(
-            entry_id=EntryId.new(),
-            session_id=self._session_id,
-            timestamp=_entry_timestamp(),
-            intent_id=intent.intent_id,
-            result=ToolResultEntry(
-                tool_name=intent.tool_name,
-                call_id=intent.source_call_id or "",
-                outcome=result_outcome,  # type: ignore[arg-type]
-                parts=parts,
-                details=details,
-                cached=cached,
-            ),
+        self._orchestrator = orchestrator
+        self._prepared = prepared
+        self._session = session
+        self._session_id = session_id
+        self._fetched_buffer = fetched_buffer
+        self._persist_child_intent = persist_child_intent
+        self._validate_pins = validate_pins
+        self._tools = {tool.name: tool for tool in prepared.tools}
+
+    async def assemble_request(self, context: RuntimeContext) -> RequestSnapshot | Any:
+        await self._check_cancelled()
+        self._check_pins()
+        try:
+            return await self._orchestrator.assemble_runtime_request(self._prepared, context)
+        except AnswerInputError as exc:
+            raise OperationEffectFailed("context_overflow", str(exc)) from exc
+
+    async def call_provider(
+        self,
+        context: RuntimeContext,
+        request: RequestSnapshot,
+        attempt_id: AttemptId,
+        emit_ephemeral: Any,
+    ) -> AssistantTurn:
+        await self._check_cancelled()
+        self._check_pins()
+        await emit_ephemeral(
+            AgentSessionEvent(
+                kind="model_start",
+                session_id=context.session_id,
+                lane_id=context.lane_id,
+                operation_id=context.operation_id,
+                commit_sequence=None,
+                data={"attempt_id": attempt_id.value},
+                ephemeral=True,
+            )
         )
-        committed = await self._journal.settle_effect(
-            session_id=self._session_id,
-            expected_version=self._version,
-            intent_id=intent.intent_id,
-            settlement=EffectSettlement(
-                outcome=effect_outcome,  # type: ignore[arg-type]
-                result=result_entry.result,
-                host_update=self._host_update(intent, tool_effects, details),
-            ),
-            entries=[result_entry],
-            progress=progress,
+        try:
+            assistant = await self._orchestrator.call_runtime_provider(request)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if is_provider_context_overflow(exc):
+                raise ProviderContextOverflow from exc
+            raise ProviderAttemptFailed(str(exc), retryable=True) from exc
+        await emit_ephemeral(
+            AgentSessionEvent(
+                kind="model_end",
+                session_id=context.session_id,
+                lane_id=context.lane_id,
+                operation_id=context.operation_id,
+                commit_sequence=None,
+                data={
+                    "attempt_id": attempt_id.value,
+                    "stop_reason": assistant.stop_reason,
+                    "tool_calls": len(assistant.tool_calls),
+                },
+                ephemeral=True,
+            )
         )
-        await self._handle_settlement(
-            committed,
-            intent,
-            appended_tokens=estimate_messages_tokens(fold_entries([result_entry])),
+        return assistant
+
+    async def execute_tool(
+        self,
+        context: RuntimeContext,
+        item: ToolBatchItem,
+        arguments: Mapping[str, Any],
+        attempt_id: AttemptId,
+        emit_ephemeral: Any,
+    ) -> ToolEffectResult[EffectHostUpdate]:
+        await self._check_cancelled()
+        self._check_pins()
+        if item.intent_id is None:
+            raise RuntimeError("executable Tool item lost its IntentId")
+        tool = self._tools.get(item.tool_name)
+        if tool is None:
+            raise RuntimeError(f"Tool contract unavailable: {item.tool_name}")
+        await self._bind_subagent_intent(item, arguments)
+        validated = tool.input_model.model_validate(arguments)
+
+        async def update(result: ToolResult) -> None:
+            await emit_ephemeral(
+                AgentSessionEvent(
+                    kind="tool_update",
+                    session_id=context.session_id,
+                    lane_id=context.lane_id,
+                    operation_id=context.operation_id,
+                    commit_sequence=None,
+                    data={
+                        "tool_name": item.tool_name,
+                        "call_id": item.call_id,
+                        "source_position": item.source_index,
+                        "text_chars": len(result.text_content),
+                    },
+                    ephemeral=True,
+                )
+            )
+
+        await emit_ephemeral(
+            AgentSessionEvent(
+                kind="tool_start",
+                session_id=context.session_id,
+                lane_id=context.lane_id,
+                operation_id=context.operation_id,
+                commit_sequence=None,
+                data={
+                    "tool_name": item.tool_name,
+                    "call_id": item.call_id,
+                    "source_position": item.source_index,
+                    "attempt_id": attempt_id.value,
+                },
+                ephemeral=True,
+            )
+        )
+        runtime = ToolRuntime(
+            call_id=item.call_id,
+            tool_name=item.tool_name,
+            intent_id=item.intent_id,
+            execution_scope=self._session_id.value,
+            _update_sink=update,
+        )
+        result = await tool.execute(validated, runtime)
+        fitted = fit_tool_result(
+            result,
+            max_tokens=CONTEXT_POLICY.observation_reserve_tokens,
+        )
+        outcome = "failed" if fitted.is_error else "succeeded"
+        durable = ToolResultEntry(
+            tool_name=item.tool_name,
+            call_id=item.call_id,
+            outcome=outcome,
+            parts=fitted.parts,
+            details=fitted.details,
+            cached=fitted.cached,
+        )
+        self._prepared.trace["tool_observations"].append(
+            {
+                "tool": item.tool_name,
+                "call_id": item.call_id,
+                "outcome": outcome,
+                "cached": fitted.cached,
+                "is_error": fitted.is_error,
+                "content_chars": len(fitted.text_content),
+            }
+        )
+        intent = EffectIntent(
+            intent_id=item.intent_id,
+            tool_name=item.tool_name,
+            replay_policy=item.replay_policy,
+            contract_version=item.contract_version,
+            input_schema_digest=item.input_schema_digest,
+            canonical_input=canonical_json(arguments),
+            source_call_id=item.call_id,
+        )
+        delta = _build_effect_host_update(
+            session_id=self._session_id,
+            intent=intent,
+            ledger_state=lambda: self._prepared.evidence.ledger_state_json(),
+            fetched_buffer=self._fetched_buffer,
+            execution_scope=self._session_id.value,
+            tool_effects=fitted.effects,
+            details=fitted.details,
+        )
+        return ToolEffectResult(durable, delta)
+
+    async def compact(self, context: RuntimeContext, attempt: int) -> Any:
+        return await self._orchestrator.compact_runtime_context(
+            self._prepared,
+            context,
+            attempt,
         )
 
-    async def _bind_subagents_parent_intents(self, intents: Sequence[EffectIntent]) -> None:
-        """Create each child roster row with its parent intent before execution."""
-        if self._persist_child_intent is None:
+    async def _bind_subagent_intent(
+        self,
+        item: ToolBatchItem,
+        arguments: Mapping[str, Any],
+    ) -> None:
+        if (
+            self._persist_child_intent is None
+            or item.tool_name != "spawn_agent"
+            or item.intent_id is None
+        ):
             return
         from dlightrag.answer.tools.subagents import child_session_id
 
-        for intent in intents:
-            if intent.tool_name != "spawn_agent" or not intent.source_call_id:
-                continue
-            try:
-                spawn = SpawnAgentInput.model_validate_json(intent.canonical_input)
-            except ValueError:
-                continue
-            for position, request in enumerate(spawn.children):
-                child_id = child_session_id(
-                    run_id=self._run_id,
-                    parent_session_id=self._session_id,
-                    parent_intent_id=intent.intent_id,
-                    position=position,
-                )
-                await self._persist_child_intent(
-                    owner_id=self._session.owner_id,
-                    run_id=self._run_id,
-                    child_session_id=child_id.value,
-                    parent_session_id=self._session_id.value,
-                    parent_call_id=intent.source_call_id,
-                    parent_intent_id=intent.intent_id.value,
-                    objective=request.objective,
-                    context_mode=request.context,
-                    model_role=request.model_role,
-                    tools=request.tools,
-                )
+        spawn = SpawnAgentInput.model_validate(arguments)
+        for position, request in enumerate(spawn.children):
+            child_id = child_session_id(
+                run_id=self._session.run_id,
+                parent_session_id=self._session_id,
+                parent_intent_id=item.intent_id,
+                position=position,
+            )
+            await self._persist_child_intent(
+                owner_id=self._session.owner_id,
+                run_id=self._session.run_id,
+                child_session_id=child_id.value,
+                parent_session_id=self._session_id.value,
+                parent_call_id=item.call_id,
+                parent_intent_id=item.intent_id.value,
+                objective=request.objective,
+                context_mode=request.context,
+                model_role=request.model_role,
+                tools=request.tools,
+            )
 
-    @property
-    def version(self) -> int:
-        return self._version
+    def _check_pins(self) -> None:
+        if self._validate_pins is None:
+            return
+        try:
+            self._validate_pins()
+        except IncompatibleActiveRunError as exc:
+            raise OperationEffectFailed("plan_unavailable", str(exc)) from exc
 
-    async def enter_phase(self, phase: str) -> None:
-        await self._session.enter_phase(phase)  # type: ignore[arg-type]
+    async def _check_cancelled(self) -> None:
+        try:
+            await self._session.check_cancelled()
+        except RunCancelledError as exc:
+            raise AgentOperationCancelled(exc) from exc
 
-    async def check_cancelled(self) -> None:
-        await self._session.check_cancelled()
 
-    async def publish_agent_event(self, event: AgentEvent) -> None:
+def _answer_runtime_event_sink(
+    session: RunSession,
+) -> Callable[[AgentSessionEvent], Awaitable[None]]:
+    async def publish(event: AgentSessionEvent) -> None:
         event_type = {
             "tool_start": "tool_start",
             "tool_update": "tool_progress",
-            "tool_end": "tool_end",
+            "tool_result_committed": "tool_end",
         }.get(event.kind)
         if event_type is None:
             return
@@ -1823,432 +1779,21 @@ class JournalRunBoundaries:
             "tool_name",
             "call_id",
             "source_position",
-            "update_sequence",
+            "source_index",
             "outcome",
-            "duration_ms",
-            "elapsed_ms",
-            "output_bytes",
-            "spill_state",
-            "attachment_count",
+            "text_chars",
+            "attempt_id",
         }
         payload = {
             key: value
             for key, value in event.data.items()
             if key in allowed and isinstance(value, (str, int, float, bool))
         }
-        await self._session.emit_tool_event(event_type, payload)
+        if event.commit_sequence is not None:
+            payload["session_commit_sequence"] = event.commit_sequence
+        await session.emit_tool_event(event_type, payload)
 
-    async def apply_controls(self) -> bool:
-        """Drain ordered run controls into the canonical session journal."""
-        if self._control_reader is None:
-            return False
-        controls = await self._control_reader()
-        if not controls:
-            return False
-        snapshot = await self._journal.load(self._session_id)
-        existing = {
-            entry.label
-            for entry in snapshot.entries
-            if isinstance(entry, ContextInjectionEntry) and entry.label is not None
-        }
-        entries: list[ContextInjectionEntry] = []
-        sequences: list[int] = []
-        for control in controls:
-            sequence = int(control.get("control_sequence") or 0)
-            kind = str(control.get("kind") or "steer")
-            label = f"control:{kind}:{sequence}"
-            sequences.append(sequence)
-            if label in existing:
-                continue
-            entries.append(
-                ContextInjectionEntry(
-                    entry_id=EntryId.new(),
-                    session_id=self._session_id,
-                    timestamp=_entry_timestamp(),
-                    label=label,
-                    content=str(control.get("content") or ""),
-                )
-            )
-        if entries:
-            commit = await self._journal.append(
-                session_id=self._session_id,
-                expected_version=self._version,
-                entries=entries,
-            )
-            if not isinstance(commit, SessionCommit):
-                raise LeaseLostError
-            self._version = commit.version
-            if commit.appended_sequences:
-                self._last_sequence = commit.appended_sequences[-1]
-            self._tail_tokens += estimate_messages_tokens(fold_entries(entries))
-        if self._control_ack is not None and not await self._control_ack(tuple(sequences)):
-            raise LeaseLostError
-        return bool(entries)
-
-    async def commit_intents(self, prepared: PreparedToolTurn) -> None:
-        """Durably append one assistant, its preflight plan, and valid intents.
-
-        This persist step lands before any tool executes. Invalid-call results
-        remain pinned on the assistant but are not model-visible until every
-        earlier source position has settled.
-        """
-        assistant = _assistant_entry(
-            prepared.assistant,
-            self._session_id,
-            preflight_results=prepared.preflight.validation_results,
-        )
-        intents = tuple(
-            EffectIntentEntry(
-                entry_id=EntryId.new(),
-                session_id=self._session_id,
-                timestamp=_entry_timestamp(),
-                intent=intent,
-            )
-            for intent in prepared.preflight.intents
-        )
-        next_projection = None
-        if self._active_projection is not None:
-            # Provider input usage covers the pre-call head, not the assistant
-            # response that this commit is about to append.
-            anchor = token_anchor_from_usage(
-                self._last_sequence,
-                prepared.assistant.usage_details,
-            )
-            if anchor is not None:
-                next_projection = projection_with_anchor(self._active_projection, anchor)
-        commit = await self._journal.append(
-            session_id=self._session_id,
-            expected_version=self._version,
-            entries=(assistant, *intents),
-            projection=next_projection,
-        )
-        if isinstance(commit, (VersionConflict, LeaseLost)):
-            raise LeaseLostError
-        self._version = commit.version
-        self._last_sequence = commit.appended_sequences[-1]
-        if next_projection is not None:
-            self._active_projection = next_projection
-            tail_messages = fold_entries((assistant, *intents))
-            self._tail_tokens = estimate_messages_tokens(tail_messages) if tail_messages else 0
-        else:
-            batch_messages = fold_entries((assistant, *intents))
-            self._tail_tokens += estimate_messages_tokens(batch_messages) if batch_messages else 0
-        await self._bind_subagents_parent_intents(prepared.preflight.intents)
-
-    async def settle_intent(
-        self,
-        intent: EffectIntent | None,
-        execution: ToolExecution | None,
-        *,
-        turn_number: int,
-        is_last: bool,
-    ) -> None:
-        """Append one fitted source-position result, settling an intent when present."""
-        del turn_number, is_last
-        if intent is None:
-            if execution is None:
-                raise RuntimeError("validation result lost its tool execution")
-            await self._append_validation_result(execution)
-            return
-        if execution is None:
-            effect_outcome: str = "interrupted"
-            result_outcome: str = "interrupted"
-            parts = (ToolTextPart(f'Tool "{intent.tool_name}" was interrupted before it settled.'),)
-            cached = False
-        else:
-            effect_outcome = "succeeded"
-            result_outcome = "failed" if execution.is_error else "succeeded"
-            parts = execution.result.parts
-            cached = execution.result.cached
-        result_entry = EffectResultEntry(
-            entry_id=EntryId.new(),
-            session_id=self._session_id,
-            timestamp=_entry_timestamp(),
-            intent_id=intent.intent_id,
-            result=ToolResultEntry(
-                tool_name=intent.tool_name,
-                call_id=intent.source_call_id or "",
-                outcome=result_outcome,  # type: ignore[arg-type]
-                parts=parts,
-                details=None if execution is None else execution.result.details,
-                cached=cached,
-            ),
-        )
-        settlement = EffectSettlement(
-            outcome=effect_outcome,  # type: ignore[arg-type]
-            result=result_entry.result,
-            host_update=self._host_update(
-                intent,
-                ToolEffects() if execution is None else execution.result.effects,
-                None if execution is None else execution.result.details,
-            ),
-        )
-        committed = await self._journal.settle_effect(
-            session_id=self._session_id,
-            expected_version=self._version,
-            intent_id=intent.intent_id,
-            settlement=settlement,
-            entries=[result_entry],
-        )
-        await self._handle_settlement(
-            committed,
-            intent,
-            appended_tokens=estimate_messages_tokens(fold_entries([result_entry])),
-        )
-
-    async def _append_validation_result(self, execution: ToolExecution) -> None:
-        """Append a deterministic no-effect result at its assistant source position."""
-        outcome = execution.observation.outcome
-        if outcome not in {"unknown_tool", "invalid_arguments", "truncated_arguments"}:
-            raise RuntimeError(f"tool result without intent has invalid outcome: {outcome}")
-        await self._append_preflight_result(
-            ToolResultEntry(
-                tool_name=execution.call.name,
-                call_id=execution.call.id,
-                outcome=outcome,  # type: ignore[arg-type]
-                parts=execution.result.parts,
-                details=execution.result.details,
-                cached=execution.result.cached,
-            )
-        )
-
-    async def _append_preflight_result(self, result: ToolResultEntry) -> None:
-        entry = EffectResultEntry(
-            entry_id=EntryId.new(),
-            session_id=self._session_id,
-            timestamp=_entry_timestamp(),
-            result=result,
-        )
-        committed = await self._journal.append(
-            session_id=self._session_id,
-            expected_version=self._version,
-            entries=[entry],
-        )
-        if not isinstance(committed, SessionCommit):
-            raise LeaseLostError
-        self._version = committed.version
-        self._last_sequence = committed.appended_sequences[-1]
-        self._tail_tokens += estimate_messages_tokens(fold_entries([entry]))
-
-    async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None:
-        """Append and settle one already-executed turn in one step.
-
-        Convenience for hosts that persist after execution (in-process paths
-        and tests); the live Research loop uses ``commit_intents`` before
-        execution plus incremental ``settle_intent`` calls instead.
-        """
-        prepared = PreparedToolTurn(
-            assistant=executed.assistant,
-            preflight=ToolPreflight(
-                intents=executed.intents,
-                validation_results=executed.validation_results,
-            ),
-            transcript=executed.messages,
-        )
-        await self.commit_intents(prepared)
-        intents_by_call = {
-            intent.source_call_id: intent
-            for intent in executed.intents
-            if intent.source_call_id is not None
-        }
-        for position, execution in enumerate(executed.results):
-            await self.settle_intent(
-                intents_by_call.get(execution.call.id),
-                execution,
-                turn_number=turn_number,
-                is_last=position == len(executed.results) - 1,
-            )
-
-    def _host_update(
-        self,
-        intent: EffectIntent,
-        tool_effects: ToolEffects,
-        details: Mapping[str, Any] | None = None,
-    ) -> EffectHostUpdate:
-        evidence: tuple[OpaqueEvidenceWrite, ...] = ()
-        ledger_state = self._ledger_state()
-        if ledger_state != "{}":
-            content = ledger_state.encode("utf-8")
-            evidence = (
-                OpaqueEvidenceWrite(
-                    session_id=self._session_id.value,
-                    intent_id=intent.intent_id.value,
-                    result_ordinal=0,
-                    content_digest=blob_digest(content),
-                    locator_digest=blob_digest(b"{}"),
-                    content=content,
-                    locator=b"{}",
-                ),
-            )
-        fetched_updates: list[FetchedResourceSettlementUpdate] = []
-        for fetched in self._fetched_buffer.drain(
-            scope=self.tool_execution_scope,
-            intent_id=intent.intent_id,
-        ):
-            plan = plan_blob(fetched.content)
-            fetched_updates.append(
-                FetchedResourceSettlementUpdate(
-                    resource=OpaqueFetchedResourceWrite(
-                        resource_id=fetched.resource_id,
-                        safe_name=fetched.filename,
-                        media_type=fetched.mime_type,
-                        capabilities={},
-                        blob_digest=plan.digest,
-                        source_locator_digest=blob_digest(fetched.url.encode("utf-8")),
-                        source_locator=fetched.url.encode("utf-8"),
-                        session_id=self._session_id.value,
-                        intent_id=intent.intent_id.value,
-                    ),
-                    complete_blob=CompleteBlobDescriptor(
-                        digest=plan.digest,
-                        total_bytes=plan.total_bytes,
-                        chunks=tuple(
-                            plan.chunk(fetched.content, index) for index in range(plan.chunk_count)
-                        ),
-                    ),
-                )
-            )
-        inventory = tool_effects.workspace_inventory
-
-        def blob_descriptor(content: bytes) -> CompleteBlobDescriptor:
-            plan = plan_blob(content)
-            return CompleteBlobDescriptor(
-                digest=plan.digest,
-                total_bytes=plan.total_bytes,
-                chunks=tuple(plan.chunk(content, index) for index in range(plan.chunk_count)),
-            )
-
-        attached_updates = [
-            FetchedResourceSettlementUpdate(
-                resource=OpaqueFetchedResourceWrite(
-                    resource_id=attached.resource_id,
-                    safe_name=attached.filename,
-                    media_type=attached.mime_type,
-                    capabilities={"tool_attachment": True},
-                    blob_digest=blob_digest(attached.content),
-                    source_locator_digest=blob_digest(attached.source_locator.encode("utf-8")),
-                    source_locator=attached.source_locator.encode("utf-8"),
-                    session_id=self._session_id.value,
-                    intent_id=intent.intent_id.value,
-                ),
-                complete_blob=blob_descriptor(attached.content),
-            )
-            for attached in tool_effects.attached_resources
-        ]
-        return EffectHostUpdate(
-            evidence=evidence,
-            fetched=(*fetched_updates, *attached_updates),
-            committed_outputs=tuple(
-                CommittedSpillUpdate(
-                    resource_id=output.resource_id,
-                    content_digest=output.content_digest,
-                    size_bytes=output.size_bytes,
-                    session_id=self._session_id.value,
-                    intent_id=intent.intent_id.value,
-                )
-                for output in tool_effects.committed_outputs
-            ),
-            workspace_inventory=(
-                None
-                if inventory is None
-                else WorkspaceInventoryUpdate(
-                    upserts=tuple(
-                        InventoryPathRecord(
-                            relative_path=record.relative_path,
-                            entry_type=record.entry_type,
-                            size_bytes=record.size_bytes,
-                            mode=record.mode,
-                            content_digest=record.content_digest,
-                        )
-                        for record in inventory.upserts
-                    ),
-                    deletes=inventory.deletes,
-                    replace_all=inventory.replace_all,
-                )
-            ),
-            memory_operation=_memory_operation_settlement(details),
-        )
-
-    async def _handle_settlement(
-        self,
-        committed: SettleCommit,
-        intent: EffectIntent,
-        *,
-        appended_tokens: int = 0,
-    ) -> None:
-        if isinstance(committed, EffectCommit):
-            self._version = committed.version
-            if committed.appended_sequences:
-                self._last_sequence = committed.appended_sequences[-1]
-            self._tail_tokens += appended_tokens
-            return
-        if isinstance(committed, (VersionConflict, LeaseLost)):
-            raise LeaseLostError
-        if isinstance(committed, EffectAlreadySettled):
-            # Load and fold the committed settlement; never re-execute.
-            snapshot = await self._journal.load(self._session_id)
-            self._version = snapshot.version
-            self._last_sequence = _last_entry_sequence(snapshot)
-            self._active_projection = snapshot.active_projection
-            self._tail_tokens = _initial_tail_tokens(
-                snapshot.entries, snapshot.active_projection, self._last_sequence
-            )
-            return
-        if isinstance(committed, EffectContractChanged):
-            settled = await self._journal.settle_effect(
-                session_id=self._session_id,
-                expected_version=self._version,
-                intent_id=intent.intent_id,
-                settlement=EffectSettlement(
-                    outcome="tool_contract_changed",
-                    result=ToolResultEntry(
-                        tool_name=intent.tool_name,
-                        call_id=intent.source_call_id or "",
-                        outcome="tool_contract_changed",
-                        parts=(
-                            ToolTextPart(
-                                f'Tool "{intent.tool_name}" contract changed; result discarded.'
-                            ),
-                        ),
-                    ),
-                    host_update=EffectHostUpdate(),
-                ),
-                entries=[
-                    EffectResultEntry(
-                        entry_id=EntryId.new(),
-                        session_id=self._session_id,
-                        timestamp=_entry_timestamp(),
-                        intent_id=intent.intent_id,
-                        result=ToolResultEntry(
-                            tool_name=intent.tool_name,
-                            call_id=intent.source_call_id or "",
-                            outcome="tool_contract_changed",
-                            parts=(
-                                ToolTextPart(
-                                    f'Tool "{intent.tool_name}" contract changed; result discarded.'
-                                ),
-                            ),
-                        ),
-                    )
-                ],
-            )
-            if isinstance(settled, EffectCommit):
-                self._version = settled.version
-                if settled.appended_sequences:
-                    self._last_sequence = settled.appended_sequences[-1]
-                self._tail_tokens += appended_tokens
-                return
-            raise LeaseLostError
-        if isinstance(committed, EvidenceConflict):
-            raise RunExecutionError(
-                "evidence_settlement_conflict",
-                "Evidence identity conflict during settlement.",
-            )
-        if isinstance(committed, EffectMissing):
-            raise RunExecutionError(
-                "run_execution_failed", "Journal lost a committed effect intent."
-            )
-        raise RunExecutionError("run_execution_failed", "Unknown settlement outcome.")
+    return publish
 
 
 def _bound_child_runner(
@@ -2287,183 +1832,73 @@ async def run_child_session(
     parent_call_id: str,
     parent_session_id: SessionId,
 ) -> ChildOutcome:
-    """Run or resume one child Agent Session under the parent lease."""
+    """Run or restore one Child through the same deep AgentSessionRuntime."""
+    del parent_call_id, parent_session_id
     prepared = orchestrator.prepare_child_session(request, child_session_id=child_id.value)
-    snapshot = await journal.load(child_id)
-    if snapshot.version == 0:
-        snapshot = await _seed_child_session(
-            journal,
-            child_id,
-            objective=request.objective,
-            parent_session_id=parent_session_id,
-            parent_call_id=parent_call_id,
-            context_mode=request.context,
-            model_role=request.model_role,
-            tool_names=request.tools,
-        )
-    else:
-        await orchestrator.recover_from_fold(prepared, snapshot)
-        await _adopt_durable_evidence(prepared, journal, child_id)
-    terminal = _child_terminal(snapshot)
-    if terminal is not None:
-        return _outcome_from_terminal(child_id, prepared, snapshot, terminal)
-    boundaries = JournalRunBoundaries(
+    plan = AgentRunPlan.from_tools(
+        prepared.tools,
+        model_role=request.model_role,
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+    )
+    effects = ResearchRuntimeEffects(
+        orchestrator=orchestrator,
+        prepared=prepared,
         session=session,
-        journal=journal,
         session_id=child_id,
-        tools_by_name={tool.name: tool for tool in prepared.tools},
-        ledger_state=lambda: prepared.evidence.ledger_state_json(),
         fetched_buffer=fetched_buffer,
-        run_id=session.run_id,
-        initial_version=snapshot.version,
-        last_sequence=_last_entry_sequence(snapshot),
-        active_projection=snapshot.active_projection,
-        entries=snapshot.entries,
+        persist_child_intent=None,
     )
-    if snapshot.version > 0:
-        await boundaries.recover_pending_intents(snapshot)
+    runtime = AgentSessionRuntime(
+        transactions=journal,
+        load=journal.load,
+        effects=effects,
+        tools=prepared.tools,
+        fencing_epoch=session.execution.fencing_epoch,
+        provider_attempt_limit=plan.provider_attempt_limit,
+        event_sink=_answer_runtime_event_sink(session),
+    )
+    accepted = await runtime.accept(
+        session_id=child_id,
+        lane_id=LaneId.main(),
+        idempotency_key=f"child-session:{child_id.value}",
+        content=request.objective,
+        plan=plan,
+    )
     try:
-        await orchestrator.research_until_stopped(prepared, boundaries=boundaries)
-        status, journal_reason = _child_status(prepared.stop_reason)
-        summary = _child_summary(prepared, status)
-    except asyncio.CancelledError:
-        await boundaries.close_pending_intents(await journal.load(child_id))
-        await _append_child_terminal(
-            journal,
-            child_id,
-            version=boundaries.version,
-            reason="cancelled",
-            summary="Child session cancelled.",
+        operation = await runtime.drive(
+            session_id=child_id,
+            operation_id=accepted.operation_id,
         )
+    except (
+        asyncio.CancelledError,
+        RunCancelledError,
+        AgentOperationCancelled,
+    ) as exc:
+        await runtime.cancel(session_id=child_id, operation_id=accepted.operation_id)
+        await runtime.close(session_id=child_id, operation_id=accepted.operation_id)
+        if isinstance(exc, AgentOperationCancelled):
+            raise exc.reason from exc
         raise
-    except LeaseLostError:
-        raise
-    except Exception as exc:
-        status, journal_reason = "failed", "abandoned"
-        summary = f"Child session failed: {exc}"
-    await _append_child_terminal(
-        journal,
-        child_id,
-        version=boundaries.version,
-        reason=journal_reason,
-        summary=summary,
-    )
-    return ChildOutcome(
-        status=status,
-        summary=summary,
-        handles=tuple(prepared.evidence.citation_handles()),
-        usage=_usage_from_snapshot(await journal.load(child_id)),
-        delta=_delta_from_ledger(prepared.evidence),
-        child_session_id=child_id.value,
-        evidence_state=prepared.evidence.durable_state(),
-    )
-
-
-async def _seed_child_session(
-    journal: AgentSessionStore[EffectHostUpdate],
-    session_id: SessionId,
-    *,
-    objective: str,
-    parent_session_id: SessionId,
-    parent_call_id: str,
-    context_mode: str = "isolated",
-    model_role: str = "query",
-    tool_names: tuple[str, ...] | None = None,
-) -> Any:
-    entries: list[SessionEntry] = [
-        RunSegmentEntry(
-            entry_id=EntryId.new(),
-            session_id=session_id,
-            timestamp=_entry_timestamp(),
-            segment_id=EntryId.new().value,
-            kind="start",
-        ),
-        ProfileFactEntry(
-            entry_id=EntryId.new(),
-            session_id=session_id,
-            timestamp=_entry_timestamp(),
-            key="objective",
-            value=objective,
-        ),
-        ProfileFactEntry(
-            entry_id=EntryId.new(),
-            session_id=session_id,
-            timestamp=_entry_timestamp(),
-            key="parent",
-            value={
-                "session_id": parent_session_id.value,
-                "call_id": parent_call_id,
-            },
-        ),
-        ProfileFactEntry(
-            entry_id=EntryId.new(),
-            session_id=session_id,
-            timestamp=_entry_timestamp(),
-            key="child_invocation",
-            value={
-                "context": context_mode,
-                "model_role": model_role,
-                "tools": list(tool_names) if tool_names is not None else None,
-            },
-        ),
-    ]
-    initial = _initial_projection()
-    commit = await journal.append(
-        session_id=session_id, expected_version=0, entries=entries, projection=initial
-    )
-    if not isinstance(commit, SessionCommit):
-        raise RunExecutionError(
-            "run_execution_failed", "Cannot seed the child research session journal."
-        )
-    return await journal.load(session_id)
-
-
-async def _append_child_terminal(
-    journal: AgentSessionStore[EffectHostUpdate],
-    session_id: SessionId,
-    *,
-    version: int,
-    reason: str,
-    summary: str,
-) -> None:
-    commit = await journal.append(
-        session_id=session_id,
-        expected_version=version,
-        entries=[
-            SessionTerminalEntry(
-                entry_id=EntryId.new(),
-                session_id=session_id,
-                timestamp=_entry_timestamp(),
-                reason=reason,  # type: ignore[arg-type]
-                detail=summary,
-            )
-        ],
-    )
-    if isinstance(commit, (VersionConflict, LeaseLost)):
-        raise LeaseLostError
-
-
-def _child_terminal(snapshot: Any) -> SessionTerminalEntry | None:
-    terminals = [entry for entry in snapshot.entries if isinstance(entry, SessionTerminalEntry)]
-    return terminals[-1] if terminals else None
-
-
-def _outcome_from_terminal(
-    child_id: SessionId,
-    prepared: Any,
-    snapshot: Any,
-    terminal: SessionTerminalEntry,
-) -> ChildOutcome:
-    status: Literal["succeeded", "failed", "cancelled"]
-    if terminal.reason == "cancelled":
+    except SessionLeaseLostError as exc:
+        raise LeaseLostError from exc
+    snapshot = await journal.load(child_id)
+    orchestrator.adopt_runtime_snapshot(prepared, snapshot)
+    await _adopt_durable_evidence(prepared, journal, child_id)
+    if isinstance(operation.state, OperationCompleted):
+        status: Literal["succeeded", "failed", "cancelled"] = "succeeded"
+    elif isinstance(operation.state, OperationCancelled):
         status = "cancelled"
-    elif terminal.reason == "abandoned":
+    elif isinstance(operation.state, OperationFailed):
         status = "failed"
     else:
-        status = "succeeded"
+        raise RunExecutionError(
+            "run_execution_failed",
+            "Child Agent Runtime returned a non-terminal operation.",
+        )
+    summary = _child_summary(prepared, status)
     return ChildOutcome(
         status=status,
-        summary=str(terminal.detail or f"Child session {status}."),
+        summary=summary,
         handles=tuple(prepared.evidence.citation_handles()),
         usage=_usage_from_snapshot(snapshot),
         delta=_delta_from_ledger(prepared.evidence),
@@ -2581,61 +2016,6 @@ class FastRunBoundaries:
             self._progress_version = committed.progress_version
             return
         raise LeaseLostError
-
-
-def _initial_projection() -> ContextProjection:
-    """The seed projection every fresh parent or child journal commits."""
-    return ContextProjection(
-        projection_id=ProjectionId.new(),
-        first_retained_sequence=1,
-        covered_through_sequence=0,
-        summary=None,
-        token_anchors=(
-            TokenAnchor(through_sequence=0, measured_input_tokens=0, measured_output_tokens=0),
-        ),
-    )
-
-
-def _last_entry_sequence(snapshot: Any) -> int:
-    sequences = [entry.sequence for entry in snapshot.entries]
-    return max(sequences) if sequences else 0
-
-
-def _initial_tail_tokens(
-    entries: Sequence[SessionEntry],
-    projection: ContextProjection | None,
-    last_sequence: int,
-) -> int:
-    """Estimate the unanchored tail a resumed run will still send verbatim."""
-    if projection is None:
-        return 0
-    live = live_anchor(projection, last_retained_sequence=last_sequence)
-    if live is None:
-        return 0
-    after = [entry for entry in entries if entry.sequence > live.through_sequence]
-    folded = fold_entries(after)
-    return estimate_messages_tokens(folded) if folded else 0
-
-
-def _assistant_entry(
-    assistant: AssistantTurn,
-    session_id: SessionId,
-    *,
-    preflight_results: tuple[ToolResultEntry, ...] = (),
-) -> AssistantMessageEntry:
-    return AssistantMessageEntry(
-        entry_id=EntryId.new(),
-        session_id=session_id,
-        timestamp=_entry_timestamp(),
-        content=assistant.text,
-        stop_reason=assistant.stop_reason,
-        reasoning=assistant.reasoning,
-        tool_calls=assistant.tool_calls,
-        preflight_results=preflight_results,
-        usage=assistant.usage_details,
-        cost=assistant.cost_details,
-        provider_state=assistant.provider_state,
-    )
 
 
 def _contexts_summary(contexts: Any) -> list[dict[str, Any]]:
@@ -2861,17 +2241,6 @@ __all__ = [
     "answer_trace_output",
     "run_child_session",
 ]
-
-
-def _entry_timestamp() -> datetime:
-    return datetime.now(UTC)
-
-
-def _agent_turn_count_from_snapshot(snapshot: Any) -> int:
-    """Count complete assistant turns from the folded journal."""
-    return sum(
-        1 for entry in snapshot.entries if entry.__class__.__name__ == "AssistantMessageEntry"
-    )
 
 
 async def _adopt_durable_evidence(prepared: Any, journal: Any, session_id: SessionId) -> None:

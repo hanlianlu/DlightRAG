@@ -3,7 +3,11 @@
 
 from dataclasses import dataclass
 
-from dlightrag.agent.session.entries import AssistantMessageEntry, EffectResultEntry, SessionEntry
+from dlightrag.agent.session.entries import (
+    AssistantMessageEntry,
+    SessionEntry,
+    ToolResultMessageEntry,
+)
 from dlightrag.agent.session.graph import AgentSessionGraph
 from dlightrag.agent.session.ids import EntryId, LaneId, SessionId
 from dlightrag.agent.session.registers import LaneHead, LaneState, RegisterRecord
@@ -85,7 +89,7 @@ class AgentSessionTree:
         for entry in ancestry:
             if isinstance(entry, AssistantMessageEntry):
                 pending.update(call.id for call in entry.tool_calls)
-            elif isinstance(entry, EffectResultEntry):
+            elif isinstance(entry, ToolResultMessageEntry):
                 pending.discard(entry.result.call_id)
         return not pending
 

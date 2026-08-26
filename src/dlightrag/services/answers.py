@@ -3,7 +3,7 @@
 
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, aclosing
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
 
 from dlightrag.agent.session.plan import AgentRunPlan
@@ -1221,6 +1221,8 @@ class AnswerService:
                     tools,
                     model_role="query",
                     context_policy_revision=CONTEXT_POLICY_REVISION,
+                    model_identity=asdict(self._model_fingerprint_for_role("query")),
+                    model_profile=asdict(models.query),
                 )
                 measure = research_history_input_measure(
                     model_profile=models.query,

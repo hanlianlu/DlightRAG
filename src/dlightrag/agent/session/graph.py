@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Immutable parent-linked views over one canonical Agent Session Tree."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
-from dlightrag.agent.session.entries import RunSegmentEntry, SessionEntry
+from dlightrag.agent.session.entries import SessionEntry
 from dlightrag.agent.session.ids import EntryId, SessionId
 
 
@@ -62,36 +62,6 @@ class AgentSessionGraph:
             session_id=session_id,
             nodes=tuple(SessionNode(entry=entry) for entry in entries),
             head_entry_id=selected,
-        )
-
-    @classmethod
-    def from_linear_entries(
-        cls,
-        session_id: SessionId,
-        entries: tuple[SessionEntry, ...],
-    ) -> AgentSessionGraph:
-        """Build physical placement for pre-M2 in-process callers.
-
-        Durable adapters always load ``parent_entry_id`` from storage. This
-        helper remains only while the existing Answer interpreter migrates in
-        M3 and deliberately does not model alternate Heads.
-        """
-        parent: EntryId | None = None
-        placed: list[SessionEntry] = []
-        for entry in entries:
-            if (
-                isinstance(entry, RunSegmentEntry)
-                and entry.parent_head_id is not None
-                and (parent is None or entry.parent_head_id != parent.value)
-            ):
-                raise ValueError("run segment parent head does not match the selected head")
-            placed_entry = replace(entry, parent_entry_id=parent)
-            placed.append(placed_entry)
-            parent = placed_entry.entry_id
-        return cls.from_entries(
-            session_id,
-            tuple(placed),
-            head_entry_id=parent,
         )
 
     def select_head(self, head_entry_id: EntryId) -> AgentSessionGraph:

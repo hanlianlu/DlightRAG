@@ -11,13 +11,12 @@ shrink-and-retry loop with halved retained tails. Pure vocabulary stays in
 
 from __future__ import annotations
 
-import json
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
-from dlightrag.agent.session.entries import CompactionEntry, EffectIntentEntry, SessionEntry
+from dlightrag.agent.session.entries import CompactionEntry, SessionEntry
 from dlightrag.agent.session.fold import (
     exchange_starts,
     fold_entries,
@@ -29,22 +28,17 @@ from dlightrag.agent.session.projection import (
     ContextProjection,
     projection_source_digest,
     render_compaction_summary,
-    should_compact,
     validate_projection_commit,
 )
-from dlightrag.agent.session.store import AgentSessionSnapshot, SessionCommit
+from dlightrag.agent.session.store import AgentSessionSnapshot
 from dlightrag.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.ai.tokens import estimate_messages_tokens, estimate_tokens
-from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.prompts.compaction import COMPACTION_SYSTEM_PROMPT, compaction_user_prompt
 
 StreamModel = Callable[..., AsyncIterator[str]]
 
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _FENCE_RE = re.compile(r"^```(?:markdown|md)?\s*\n(.*)\n```\s*$", re.DOTALL)
-_PATH_LIKE_RE = re.compile(r"^(?:\.{0,2}/|/|[A-Za-z]:[\\/]|~)[^\s]*$")
-_URL_RE = re.compile(r"^https?://\S+$")
-
 #: Fixed envelope margin over the rendered prompt texts for one summarizer call.
 _SUMMARIZER_ENVELOPE_MARGIN = 16
 
@@ -59,25 +53,6 @@ _KNOWN_HEADINGS = {
     "next steps": "next_steps",
     "critical context": "critical_context",
 }
-
-_PATH_KEYS = {"path", "paths", "file", "files", "file_path", "workspace", "directory", "dir"}
-_HANDLE_KEYS = {
-    "url",
-    "urls",
-    "resource_id",
-    "resource_handle",
-    "resource_handles",
-    "link",
-    "links",
-}
-
-
-class CompactionBoundary(Protocol):
-    """The durable seams one compaction needs from run boundaries."""
-
-    async def load_snapshot(self) -> AgentSessionSnapshot: ...
-
-    async def commit_compaction(self, *, projection: ContextProjection) -> SessionCommit: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,46 +157,16 @@ def _transcript(messages: Sequence[Mapping[str, Any]]) -> str:
     return "\n\n".join(lines)
 
 
-def _flatten_strings(value: Any) -> list[tuple[str, str]]:
-    pairs: list[tuple[str, str]] = []
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            if isinstance(item, str):
-                pairs.append((str(key), item))
-            elif isinstance(item, (list, Mapping)):
-                pairs.extend(_flatten_strings(item))
-    elif isinstance(value, list):
-        for item in value:
-            pairs.extend(_flatten_strings(item))
-    return pairs
-
-
 def _extract_paths_and_handles(
     entries: Sequence[SessionEntry],
 ) -> tuple[list[str] | None, list[str] | None]:
-    """Recover paths and durable handles from covered intents, never from the model."""
-    paths: set[str] = set()
-    handles: set[str] = set()
-    for entry in entries:
-        if not isinstance(entry, EffectIntentEntry):
-            continue
-        try:
-            payload = json.loads(entry.intent.canonical_input)
-        except json.JSONDecodeError, TypeError:
-            continue
-        for key, value in _flatten_strings(payload):
-            lowered = key.lower()
-            if lowered in _PATH_KEYS and _PATH_LIKE_RE.match(value):
-                paths.add(value)
-            elif lowered in _HANDLE_KEYS and (
-                _URL_RE.match(value) or value.startswith("resource_")
-            ):
-                handles.add(value)
-    return (sorted(paths) or None, sorted(handles) or None)
+    """Return no inferred authority after transient Tool Arguments are deleted."""
+    del entries
+    return None, None
 
 
 class CompactionCoordinator:
-    """Run the bounded shrink-and-retry compaction loop for one session."""
+    """Prepare one bounded automatic compaction effect for Runtime settlement."""
 
     def __init__(
         self,
@@ -229,77 +174,20 @@ class CompactionCoordinator:
         model_profile: ModelProfile,
         context_policy: ContextPolicy,
         stream_model: StreamModel,
-        max_attempts: int = 3,
     ) -> None:
-        if max_attempts < 1:
-            raise ValueError("max_attempts must be positive")
         self._model_profile = model_profile
         self._context_policy = context_policy
         self._stream_model = stream_model
-        self._max_attempts = max_attempts
 
-    async def ensure_fits(
+    async def prepare(
         self,
-        *,
-        boundaries: CompactionBoundary,
-        remeasure: Callable[[], Awaitable[int]],
-        trace: dict[str, Any],
-        force: bool = False,
-    ) -> CompactionOutcome | None:
-        """Compact until the proactive trigger clears, at most ``max_attempts``.
-
-        ``force`` compacts at least once even when the gate reads under the
-        trigger (the reactive overflow path). Failing attempts shrink the
-        retained tail by half each time; exhaustion raises the loud overflow
-        error. Summarizer provider errors propagate — compaction never hides
-        a dead model.
-        """
-        outcome: CompactionOutcome | None = None
-        for attempt in range(self._max_attempts):
-            accounted = await remeasure()
-            over = should_compact(
-                self._model_profile,
-                input_tokens=accounted,
-                context_policy=self._context_policy,
-            )
-            if not over and not (force and outcome is None):
-                return outcome
-            tail_target = self._context_policy.retained_tail_target(self._model_profile) // (
-                2**attempt
-            )
-            try:
-                outcome = await self._compact_once(
-                    boundaries,
-                    tail_target_tokens=tail_target,
-                    accounted_before=accounted,
-                    trace=trace,
-                )
-            except _CompactionAttemptFailed:
-                outcome = None
-        # The final attempt may have just brought the reading under the trigger.
-        accounted = await remeasure()
-        if not should_compact(
-            self._model_profile,
-            input_tokens=accounted,
-            context_policy=self._context_policy,
-        ):
-            return outcome
-        trigger = self._context_policy.compaction_trigger(self._model_profile)
-        raise AnswerInputOverflowError(
-            "Research input still exceeds the proactive compaction threshold after "
-            f"{self._max_attempts} compaction attempts: {accounted} > {trigger} "
-            "accounted input tokens. Use a larger-context model or shorten the request."
-        )
-
-    async def _compact_once(
-        self,
-        boundaries: CompactionBoundary,
+        snapshot: AgentSessionSnapshot,
         *,
         tail_target_tokens: int,
         accounted_before: int,
         trace: dict[str, Any],
-    ) -> CompactionOutcome:
-        snapshot = await boundaries.load_snapshot()
+    ) -> tuple[ContextProjection, CompactionOutcome]:
+        """Prepare one projection effect result; Runtime owns its atomic commit."""
         entries = snapshot.graph.ancestry()
         previous = snapshot.active_projection
         if previous is None:
@@ -398,7 +286,6 @@ class CompactionCoordinator:
         if violation is not None:
             raise _CompactionAttemptFailed(violation)
 
-        await boundaries.commit_compaction(projection=candidate)
         outcome = CompactionOutcome(
             covered_through_sequence=covered_through,
             first_retained_sequence=first_retained,
@@ -419,7 +306,7 @@ class CompactionCoordinator:
                 "tail_target_tokens": tail_target_tokens,
             }
         )
-        return outcome
+        return candidate, outcome
 
     async def _summarize(
         self,
@@ -544,7 +431,6 @@ def _with_framework_fields(
 
 
 __all__ = [
-    "CompactionBoundary",
     "CompactionCoordinator",
     "CompactionOutcome",
     "parse_compaction_summary",

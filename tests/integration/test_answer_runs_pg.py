@@ -14,7 +14,6 @@ Requires PostgreSQL at localhost:5432 (dlightrag/dlightrag); skipped otherwise.
 """
 
 import asyncio
-import datetime
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -170,8 +169,6 @@ class TestSchema:
             "dlightrag_agent_sessions",
             "dlightrag_agent_session_entries",
             "dlightrag_agent_session_registers",
-            "dlightrag_agent_context_projections",
-            "dlightrag_agent_effects",
             "dlightrag_answer_run_stages",
             "dlightrag_answer_evidence",
             "dlightrag_answer_resources",
@@ -591,8 +588,9 @@ class TestLeaseFencing:
             )
         ).committed is False
         assert await store.release_for_shutdown(**stale_args) == "lease_lost"
-        from dlightrag.agent.session.entries import UserMessageEntry
-        from dlightrag.agent.session.ids import EntryId, SessionId
+        from dlightrag.agent.session.ids import LaneId, SessionId
+        from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
+        from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
 
         assert creation.run.prepared_input is not None
         stale_session = SessionId(str(creation.run.prepared_input["session_id"]))
@@ -606,19 +604,20 @@ class TestLeaseFencing:
             lease_owner=_WORKER,
             fencing_epoch=int(stale_args["fencing_epoch"]),
         )
-        stale_append = await stale_journal.append(
+        head = LaneHead(LaneId.main(), None)
+        state = LaneState(LaneId.main())
+        stale_append = await stale_journal.transact(
             session_id=stale_session,
-            expected_version=0,
-            entries=[
-                UserMessageEntry(
-                    entry_id=EntryId.new(),
-                    session_id=stale_session,
-                    timestamp=datetime.datetime.now(datetime.UTC),
-                    content="stale",
-                )
-            ],
+            fencing_epoch=int(stale_args["fencing_epoch"]),
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(head), SetRegister(state)],
+                expectations=[
+                    RegisterExpectation(head.ref, None),
+                    RegisterExpectation(state.ref, None),
+                ],
+            ),
         )
-        assert stale_append.__class__.__name__ == "LeaseLost"
+        assert stale_append.__class__.__name__ == "TransactionLeaseLost"
 
         record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
         assert record is not None

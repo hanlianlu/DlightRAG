@@ -6,14 +6,15 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from dlightrag.agent.session.entries import SessionEntry
-from dlightrag.agent.session.ids import LaneId, SessionId
-from dlightrag.agent.session.projection import ContextProjection
+from dlightrag.agent.session.ids import IntentId, LaneId, SessionId
 from dlightrag.agent.session.registers import (
     DeleteRegister,
     LaneHead,
     LaneState,
+    OperationMetaRegister,
     RegisterRef,
     RegisterWrite,
+    SessionFault,
     SetRegister,
 )
 
@@ -35,17 +36,30 @@ class RegisterExpectation:
 
 
 @dataclass(frozen=True, slots=True)
+class HostDeltaSettlement[HostDeltaT]:
+    """One typed Host mutation bound to the Tool intent that produced it."""
+
+    intent_id: IntentId
+    value: HostDeltaT
+
+
+@dataclass(frozen=True, slots=True)
 class SessionTransaction[HostDeltaT]:
-    """One all-or-none mutation over the two canonical durable forms."""
+    """One all-or-none mutation over Runtime state and one typed HostDelta.
+
+    ``advances_durable_progress`` defaults from whether the transaction appends
+    semantic Entries or a HostDelta. Recovery closure that makes no new external
+    progress overrides it to false.
+    """
 
     entries: tuple[SessionEntry, ...] = ()
     register_writes: tuple[RegisterWrite, ...] = ()
     expectations: tuple[RegisterExpectation, ...] = ()
-    projection: ContextProjection | None = None
-    host_delta: HostDeltaT | None = None
+    host_delta: HostDeltaSettlement[HostDeltaT] | None = None
+    advances_durable_progress: bool = False
 
     def __post_init__(self) -> None:
-        if not self.entries and not self.register_writes and self.projection is None:
+        if not self.entries and not self.register_writes:
             raise ValueError("a Session transaction requires at least one mutation")
         expectation_refs = [expectation.ref for expectation in self.expectations]
         if len(expectation_refs) != len(set(expectation_refs)):
@@ -54,11 +68,30 @@ class SessionTransaction[HostDeltaT]:
         if len(write_refs) != len(set(write_refs)):
             raise ValueError("a Session transaction cannot write one register twice")
         expected = set(expectation_refs)
+        expectation_by_ref = {
+            expectation.ref: expectation.sequence for expectation in self.expectations
+        }
         missing = [ref for ref in write_refs if ref not in expected]
         if missing:
             raise ValueError("every register write requires an exact expectation")
         for write in self.register_writes:
-            if isinstance(write, DeleteRegister) and write.ref.key == LaneId.main().value:
+            if (
+                isinstance(write, SetRegister)
+                and isinstance(write.value, OperationMetaRegister | SessionFault)
+                and expectation_by_ref[write.ref] is not None
+            ):
+                raise ValueError("Operation Meta and Session Fault are immutable")
+            if isinstance(write, DeleteRegister) and write.ref.kind in {
+                "operation_meta",
+                "operation_state",
+                "session_fault",
+            }:
+                raise ValueError("Operation Meta/State registers cannot be deleted")
+            if (
+                isinstance(write, DeleteRegister)
+                and write.ref.kind in {"lane_head", "lane_state"}
+                and write.ref.key == LaneId.main().value
+            ):
                 raise ValueError("main Lane registers cannot be deleted")
             if (
                 isinstance(write, SetRegister)
@@ -86,15 +119,20 @@ class SessionTransaction[HostDeltaT]:
         entries: Sequence[SessionEntry] = (),
         register_writes: Sequence[RegisterWrite] = (),
         expectations: Sequence[RegisterExpectation] = (),
-        projection: ContextProjection | None = None,
-        host_delta: HostDeltaT | None = None,
+        host_delta: HostDeltaSettlement[HostDeltaT] | None = None,
+        advances_durable_progress: bool | None = None,
     ) -> SessionTransaction[HostDeltaT]:
+        frozen_entries = tuple(entries)
         return cls(
-            entries=tuple(entries),
+            entries=frozen_entries,
             register_writes=tuple(register_writes),
             expectations=tuple(expectations),
-            projection=projection,
             host_delta=host_delta,
+            advances_durable_progress=(
+                bool(frozen_entries or host_delta)
+                if advances_durable_progress is None
+                else advances_durable_progress
+            ),
         )
 
 
@@ -137,6 +175,7 @@ class SessionTransactionPort[HostDeltaT](Protocol):
 
 
 __all__ = [
+    "HostDeltaSettlement",
     "RegisterConflict",
     "RegisterExpectation",
     "SessionTransaction",

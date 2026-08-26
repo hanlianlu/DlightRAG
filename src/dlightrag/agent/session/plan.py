@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """The canonical immutable execution contract accepted for one Agent run."""
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from hashlib import sha256
@@ -10,7 +11,7 @@ from dlightrag.agent.session.effects import ReplayPolicy, canonical_json
 from dlightrag.agent.tools.contracts import AgentTool
 from dlightrag.ai.tokens import estimate_tokens
 
-AGENT_RUN_PLAN_SCHEMA_VERSION = 1
+AGENT_RUN_PLAN_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,8 +61,6 @@ class AgentToolPlan:
 
     @property
     def definition(self) -> dict[str, Any]:
-        import json
-
         value = json.loads(self.definition_json)
         if not isinstance(value, dict):
             raise ValueError("Agent Tool Plan definition is not an object")
@@ -88,6 +87,14 @@ class AgentRunPlan:
     model_role: str
     context_policy_revision: str
     tools: tuple[AgentToolPlan, ...]
+    model_identity_json: str = "{}"
+    model_profile_json: str = "{}"
+    prompt_revision: str = "answer-prompts-v1"
+    provider_attempt_limit: int = 2
+    compaction_attempt_limit: int = 3
+    max_pending_steers: int = 16
+    max_pending_follow_ups: int = 16
+    host_contract_version: int = 1
     schema_version: int = AGENT_RUN_PLAN_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -97,6 +104,22 @@ class AgentRunPlan:
             raise ValueError("Agent Run Plan context policy revision cannot be empty")
         if self.schema_version != AGENT_RUN_PLAN_SCHEMA_VERSION:
             raise ValueError("Agent Run Plan schema version is not current")
+        if not self.prompt_revision:
+            raise ValueError("Agent Run Plan prompt revision cannot be empty")
+        if (
+            self.provider_attempt_limit < 1
+            or self.compaction_attempt_limit < 1
+            or self.max_pending_steers < 1
+            or self.max_pending_follow_ups < 1
+            or self.host_contract_version < 1
+        ):
+            raise ValueError("Agent Run Plan bounded policies must be positive")
+        for label, value in (
+            ("model identity", self.model_identity_json),
+            ("model profile", self.model_profile_json),
+        ):
+            if not isinstance(json.loads(value), dict):
+                raise ValueError(f"Agent Run Plan {label} must be an object")
         names = [tool.name for tool in self.tools]
         if len(names) != len(set(names)):
             raise ValueError("Agent Run Plan tool names must be unique")
@@ -108,6 +131,9 @@ class AgentRunPlan:
         *,
         model_role: str,
         context_policy_revision: str,
+        model_identity: Mapping[str, Any] | None = None,
+        model_profile: Mapping[str, Any] | None = None,
+        prompt_revision: str = "answer-prompts-v1",
     ) -> AgentRunPlan:
         return cls(
             model_role=model_role,
@@ -115,6 +141,9 @@ class AgentRunPlan:
             tools=tuple(
                 AgentToolPlan.from_tool(tool) for tool in sorted(tools, key=lambda item: item.name)
             ),
+            model_identity_json=canonical_json(dict(model_identity or {})),
+            model_profile_json=canonical_json(dict(model_profile or {})),
+            prompt_revision=prompt_revision,
         )
 
     @classmethod
@@ -128,6 +157,14 @@ class AgentRunPlan:
             model_role=str(payload["model_role"]),
             context_policy_revision=str(payload["context_policy_revision"]),
             tools=tuple(AgentToolPlan.from_payload(tool) for tool in raw_tools),  # type: ignore[arg-type]
+            model_identity_json=canonical_json(dict(payload.get("model_identity") or {})),
+            model_profile_json=canonical_json(dict(payload.get("model_profile") or {})),
+            prompt_revision=str(payload["prompt_revision"]),
+            provider_attempt_limit=int(payload["provider_attempt_limit"]),
+            compaction_attempt_limit=int(payload["compaction_attempt_limit"]),
+            max_pending_steers=int(payload["max_pending_steers"]),
+            max_pending_follow_ups=int(payload["max_pending_follow_ups"]),
+            host_contract_version=int(payload["host_contract_version"]),
             schema_version=int(payload["schema_version"]),
         )
 
@@ -136,6 +173,14 @@ class AgentRunPlan:
             "schema_version": self.schema_version,
             "model_role": self.model_role,
             "context_policy_revision": self.context_policy_revision,
+            "model_identity": json.loads(self.model_identity_json),
+            "model_profile": json.loads(self.model_profile_json),
+            "prompt_revision": self.prompt_revision,
+            "provider_attempt_limit": self.provider_attempt_limit,
+            "compaction_attempt_limit": self.compaction_attempt_limit,
+            "max_pending_steers": self.max_pending_steers,
+            "max_pending_follow_ups": self.max_pending_follow_ups,
+            "host_contract_version": self.host_contract_version,
             "tools": [tool.canonical_payload() for tool in self.tools],
         }
 

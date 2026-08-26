@@ -171,15 +171,17 @@ async def test_journaled_turn_survives_a_new_worker(store: FingerprintingAnswerR
     seen: list[int] = []
 
     from dlightrag.agent.session.entries import AssistantMessageEntry
-    from dlightrag.agent.session.ids import EntryId, SessionId
+    from dlightrag.agent.session.ids import EntryId, LaneId, SessionId
+    from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
+    from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
 
     async def body(session: RunSession) -> Mapping[str, Any]:
         journal = session.execution.session_store
         assert session.prepared_input is not None
         session_id = SessionId(str(session.prepared_input["session_id"]))
         snapshot = await journal.load(session_id)
-        seen.append(snapshot.version)
-        if snapshot.version == 0:
+        seen.append(snapshot.commit_sequence)
+        if snapshot.commit_sequence == 0:
             entry = AssistantMessageEntry(
                 entry_id=EntryId.new(),
                 session_id=session_id,
@@ -187,12 +189,23 @@ async def test_journaled_turn_survives_a_new_worker(store: FingerprintingAnswerR
                 content="searched",
                 stop_reason="stop",
             )
-            committed = await journal.append(
-                session_id=session_id, expected_version=0, entries=[entry]
+            head = LaneHead(LaneId.main(), entry.entry_id)
+            state = LaneState(LaneId.main())
+            committed = await journal.transact(
+                session_id=session_id,
+                fencing_epoch=session.execution.fencing_epoch,
+                transaction=SessionTransaction.from_parts(
+                    entries=[entry],
+                    register_writes=[SetRegister(head), SetRegister(state)],
+                    expectations=[
+                        RegisterExpectation(head.ref, None),
+                        RegisterExpectation(state.ref, None),
+                    ],
+                ),
             )
-            assert committed.__class__.__name__ == "SessionCommit"
+            assert committed.__class__.__name__ == "TransactionCommit"
             await asyncio.sleep(30)
-        return {"answer": "second attempt", "turns": snapshot.version}
+        return {"answer": "second attempt", "turns": snapshot.commit_sequence}
 
     first = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
     await first.start()
@@ -401,13 +414,16 @@ async def test_journal_round_trips_through_jsonb(store: FingerprintingAnswerRunS
 
     from dlightrag.agent.session.entries import AssistantMessageEntry, UserMessageEntry
     from dlightrag.agent.session.fold import fold_entries
-    from dlightrag.agent.session.ids import EntryId, SessionId
+    from dlightrag.agent.session.ids import EntryId, LaneId, SessionId
+    from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
+    from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
 
     assert creation.run.prepared_input is not None
     session_id = SessionId(str(creation.run.prepared_input["session_id"]))
+    user_entry_id = EntryId.new()
     entries = [
         UserMessageEntry(
-            entry_id=EntryId.new(),
+            entry_id=user_entry_id,
             session_id=session_id,
             timestamp=datetime.datetime.now(datetime.UTC),
             content="question",
@@ -415,14 +431,28 @@ async def test_journal_round_trips_through_jsonb(store: FingerprintingAnswerRunS
         AssistantMessageEntry(
             entry_id=EntryId.new(),
             session_id=session_id,
+            parent_entry_id=user_entry_id,
             timestamp=datetime.datetime.now(datetime.UTC),
             content="searched",
             stop_reason="stop",
             provider_state={"native": True},
         ),
     ]
-    committed = await journal.append(session_id=session_id, expected_version=0, entries=entries)
-    assert committed.__class__.__name__ == "SessionCommit"
+    head = LaneHead(LaneId.main(), entries[-1].entry_id)
+    state = LaneState(LaneId.main())
+    committed = await journal.transact(
+        session_id=session_id,
+        fencing_epoch=claimed.execution.fencing_epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=entries,
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
+        ),
+    )
+    assert committed.__class__.__name__ == "TransactionCommit"
 
     await store.release_for_shutdown(
         owner_id=_OWNER,
@@ -434,7 +464,7 @@ async def test_journal_round_trips_through_jsonb(store: FingerprintingAnswerRunS
     assert reclaimed is not None
 
     snapshot = await reclaimed.execution.session_store.load(session_id)
-    assert snapshot.version == 1
+    assert snapshot.commit_sequence == 1
     folded = fold_entries(snapshot.entries)
     assert [message["role"] for message in folded] == ["user", "assistant"]
     assert folded[1]["provider_state"] == {"native": True}

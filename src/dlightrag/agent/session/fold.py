@@ -15,12 +15,9 @@ from typing import Any, cast
 from dlightrag.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
-    ContextInjectionEntry,
-    EffectResultEntry,
-    ProfileFactEntry,
-    RunSegmentEntry,
+    ControlMessageEntry,
     SessionEntry,
-    SessionTerminalEntry,
+    ToolResultMessageEntry,
     UserMessageEntry,
 )
 from dlightrag.agent.session.projection import render_compaction_summary
@@ -93,7 +90,7 @@ def fold_assistant_message(entry: AssistantMessageEntry) -> dict[str, Any]:
     return message
 
 
-def fold_tool_message(entry: EffectResultEntry) -> dict[str, Any]:
+def fold_tool_message(entry: ToolResultMessageEntry) -> dict[str, Any]:
     """Project one effect result entry to its model-message shape."""
     return {
         "role": "tool",
@@ -117,14 +114,11 @@ def fold_entries(entries: Sequence[SessionEntry]) -> list[dict[str, Any]]:
             messages.append({"role": "user", "content": entry.content})
         elif isinstance(entry, AssistantMessageEntry):
             messages.append(fold_assistant_message(entry))
-        elif isinstance(entry, EffectResultEntry):
+        elif isinstance(entry, ToolResultMessageEntry):
             messages.append(fold_tool_message(entry))
-        elif isinstance(entry, ContextInjectionEntry):
+        elif isinstance(entry, ControlMessageEntry):
             messages.append({"role": "user", "content": entry.content})
-        elif isinstance(
-            entry,
-            (CompactionEntry, ProfileFactEntry, RunSegmentEntry, SessionTerminalEntry),
-        ):
+        elif isinstance(entry, CompactionEntry):
             continue
     return messages
 
@@ -207,7 +201,7 @@ def exchange_starts(entries: Sequence[SessionEntry]) -> tuple[int, ...]:
                 if open_calls == 0:
                     starts.append(index)
                 open_calls += len(entry.tool_calls)
-        elif isinstance(entry, EffectResultEntry):
+        elif isinstance(entry, ToolResultMessageEntry):
             open_calls = max(0, open_calls - 1)
     return tuple(starts)
 

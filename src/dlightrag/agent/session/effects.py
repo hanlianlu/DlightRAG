@@ -1,37 +1,29 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Effect intents, settlements, replay policy, and tool-contract digests.
+"""Transient Tool intent values, replay policy, and contract digests.
 
-An effect is one validated model-visible tool call. Intents persist before
-execution in assistant source order; settlements commit results one at a time
-in the same source order (M3-D12). Replayable effects require the tool name,
-replay policy, contract version, and canonical input-schema digest to match
-exactly (M3-D13, M3-D18).
+Durable intent/current progress lives only in typed OperationState and
+ToolArguments registers. ToolResult Entries retain non-sensitive provenance;
+there is no parallel permanent effect journal.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal
 
 from dlightrag.agent.session.ids import IntentId
 from dlightrag.agent.tool_content import ToolContent, tool_content_text
 
 type ReplayPolicy = Literal["replayable", "never"]
-type EffectOutcome = Literal[
-    "succeeded",
-    "interrupted",
-    "outcome_unknown",
-    "tool_contract_changed",
-]
 type ToolResultOutcome = Literal[
     "succeeded",
     "interrupted",
     "outcome_unknown",
     "tool_contract_changed",
     "failed",
-    "validation_failed",
     "unknown_tool",
     "invalid_arguments",
+    "plan_denied",
     "truncated_arguments",
 ]
 type JsonValue = Any
@@ -158,23 +150,8 @@ class ToolResultEntry:
         return tool_content_text(self.parts)
 
 
-HostUpdateT = TypeVar("HostUpdateT")
-
-
-@dataclass(frozen=True, slots=True)
-class EffectSettlement[HostUpdateT]:
-    """One atomic settlement: outcome, ordered result, and host update."""
-
-    outcome: EffectOutcome
-    result: ToolResultEntry
-    host_update: HostUpdateT
-
-
 __all__ = [
     "EffectIntent",
-    "EffectOutcome",
-    "EffectSettlement",
-    "HostUpdateT",
     "JsonValue",
     "ReplayPolicy",
     "ToolResultEntry",

@@ -99,6 +99,44 @@ class EntryId:
 
 
 @dataclass(frozen=True, slots=True)
+class OperationId:
+    """One accepted Agent operation within a Session Lane."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        _require_canonical_uuid(self.value, "OperationId")
+
+    @classmethod
+    def new(cls) -> Self:
+        return cls(new_uuid7())
+
+    @classmethod
+    def deterministic(cls, *, idempotency_key: str) -> Self:
+        return cls(deterministic_uuid(seed=idempotency_key, name="agent-operation"))
+
+    def __str__(self) -> str:
+        return self.value
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptId:
+    """One provider or Tool effect attempt identity."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        _require_canonical_uuid(self.value, "AttemptId")
+
+    @classmethod
+    def new(cls) -> Self:
+        return cls(new_uuid7())
+
+    def __str__(self) -> str:
+        return self.value
+
+
+@dataclass(frozen=True, slots=True)
 class IntentId:
     """One effect intent identity, unique within its session."""
 
@@ -150,9 +188,11 @@ class StageIntentId:
 
 
 __all__ = [
+    "AttemptId",
     "EntryId",
     "IntentId",
     "LaneId",
+    "OperationId",
     "ProjectionId",
     "SessionId",
     "StageIntentId",

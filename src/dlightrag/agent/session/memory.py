@@ -4,10 +4,8 @@
 from collections.abc import Sequence
 from dataclasses import replace
 
-from dlightrag.agent.session.effects import EffectSettlement
-from dlightrag.agent.session.entries import EffectIntentEntry, EffectResultEntry, SessionEntry
+from dlightrag.agent.session.entries import SessionEntry
 from dlightrag.agent.session.ids import EntryId, IntentId, LaneId, SessionId
-from dlightrag.agent.session.projection import ContextProjection
 from dlightrag.agent.session.registers import (
     DeleteRegister,
     LaneHead,
@@ -18,13 +16,6 @@ from dlightrag.agent.session.registers import (
 )
 from dlightrag.agent.session.store import (
     AgentSessionSnapshot,
-    AppendCommit,
-    EffectAlreadySettled,
-    EffectCommit,
-    EffectMissing,
-    SessionCommit,
-    SessionProgressClass,
-    SettleCommit,
 )
 from dlightrag.agent.session.transactions import (
     RegisterConflict,
@@ -42,8 +33,13 @@ class MemoryAgentSessionStore[HostDeltaT]:
     def __init__(self, *, fencing_epoch: int = 1) -> None:
         if fencing_epoch < 1:
             raise ValueError("fencing epoch must be positive")
-        self._sessions: dict[SessionId, _Session] = {}
+        self._sessions: dict[SessionId, _Session[HostDeltaT]] = {}
         self._fencing_epoch = fencing_epoch
+
+    def applied_host_deltas(self, session_id: SessionId) -> tuple[tuple[IntentId, HostDeltaT], ...]:
+        """Return HostDelta settlements committed atomically in this adapter."""
+        session = self._sessions.get(session_id)
+        return () if session is None else tuple(session.host_deltas)
 
     def transfer_lease(self, fencing_epoch: int) -> None:
         """Fence prior writers in tests just as a durable lease transfer would."""
@@ -58,7 +54,6 @@ class MemoryAgentSessionStore[HostDeltaT]:
                 session_id=session_id,
                 commit_sequence=0,
                 entries=(),
-                active_projection=None,
                 registers=(),
             )
         return self._snapshot(session_id, session)
@@ -72,8 +67,6 @@ class MemoryAgentSessionStore[HostDeltaT]:
     ) -> TransactionOutcome:
         if fencing_epoch != self._fencing_epoch:
             return TransactionLeaseLost()
-        if transaction.host_delta is not None:
-            raise TypeError("HostDelta settlement is not consumed until M3")
         session = self._sessions.setdefault(session_id, _Session())
         for expectation in transaction.expectations:
             current = session.registers.get(expectation.ref)
@@ -110,8 +103,10 @@ class MemoryAgentSessionStore[HostDeltaT]:
             elif isinstance(write, DeleteRegister):
                 session.registers.pop(write.ref, None)
                 register_sequences.append((write.ref, commit_sequence))
-        if transaction.projection is not None:
-            session.active_projection = transaction.projection
+        if transaction.host_delta is not None:
+            session.host_deltas.append(
+                (transaction.host_delta.intent_id, transaction.host_delta.value)
+            )
         session.commit_sequence = commit_sequence
         return TransactionCommit(
             commit_sequence=commit_sequence,
@@ -126,7 +121,6 @@ class MemoryAgentSessionStore[HostDeltaT]:
         lane_id: LaneId,
         expected_head: RegisterRecord,
         entries: Sequence[SessionEntry],
-        projection: ContextProjection | None = None,
     ) -> TransactionOutcome:
         """Place a short Entry chain and advance exactly one Lane Head."""
         if not entries:
@@ -155,7 +149,6 @@ class MemoryAgentSessionStore[HostDeltaT]:
                     RegisterExpectation(expected_head.ref, expected_head.sequence),
                     RegisterExpectation(lane.state.ref, lane.state.sequence),
                 ],
-                projection=projection,
             ),
         )
 
@@ -218,124 +211,6 @@ class MemoryAgentSessionStore[HostDeltaT]:
             ),
         )
 
-    async def append(
-        self,
-        *,
-        session_id: SessionId,
-        expected_version: int,
-        entries: Sequence[SessionEntry],
-        projection: ContextProjection | None = None,
-    ) -> AppendCommit:
-        """Transitional main-Lane writer used until M3 removes JournalRunBoundaries."""
-        if not entries:
-            raise ValueError("a session transaction requires at least one entry")
-        del expected_version
-        session = self._sessions.get(session_id)
-        head_record, bootstrap = self._main_lane(session)
-        head_value = head_record.value
-        if not isinstance(head_value, LaneHead):
-            raise TypeError("main Lane Head register has the wrong value type")
-        parent = head_value.entry_id
-        placed: list[SessionEntry] = []
-        for entry in entries:
-            placed_entry = replace(entry, parent_entry_id=parent)
-            placed.append(placed_entry)
-            parent = placed_entry.entry_id
-        if bootstrap:
-            final_head = LaneHead(LaneId.main(), parent)
-            state = LaneState(LaneId.main())
-            writes = [SetRegister(final_head), SetRegister(state)]
-            expectations = [
-                RegisterExpectation(final_head.ref, None),
-                RegisterExpectation(state.ref, None),
-            ]
-        else:
-            final_head = LaneHead(LaneId.main(), parent)
-            writes = [SetRegister(final_head)]
-            expectations = [RegisterExpectation(head_record.ref, head_record.sequence)]
-        outcome = await self.transact(
-            session_id=session_id,
-            fencing_epoch=self._fencing_epoch,
-            transaction=SessionTransaction.from_parts(
-                entries=placed,
-                register_writes=writes,
-                expectations=expectations,
-                projection=projection,
-            ),
-        )
-        if isinstance(outcome, RegisterConflict):
-            raise RuntimeError("single-owner main Lane changed during one append")
-        if isinstance(outcome, TransactionLeaseLost):
-            from dlightrag.agent.session.store import LeaseLost
-
-            return LeaseLost()
-        return SessionCommit(
-            version=outcome.commit_sequence,
-            appended_sequences=outcome.appended_sequences,
-        )
-
-    async def settle_effect(
-        self,
-        *,
-        session_id: SessionId,
-        expected_version: int,
-        intent_id: IntentId,
-        settlement: EffectSettlement[HostDeltaT],
-        entries: Sequence[SessionEntry],
-        projection: ContextProjection | None = None,
-        progress: SessionProgressClass = "live",
-        lane_id: LaneId | None = None,
-    ) -> SettleCommit:
-        del progress
-        lane_id = lane_id or LaneId.main()
-        session = self._sessions.get(session_id)
-        if session is None:
-            return EffectMissing(intent_id=intent_id)
-        del expected_version
-        intent_entry = self._unsettled_intent(session, intent_id)
-        if intent_entry is None:
-            if intent_id in session.settled_intents:
-                return EffectAlreadySettled(intent_id=intent_id)
-            return EffectMissing(intent_id=intent_id)
-        if any(
-            not isinstance(entry, EffectResultEntry) or entry.intent_id != intent_id
-            for entry in entries
-        ):
-            raise ValueError("settlement entries must belong to the settled intent")
-        snapshot = self._snapshot(session_id, session)
-        lane = snapshot.tree.lane(lane_id)
-        if intent_entry.entry_id not in {
-            entry.entry_id for entry in snapshot.tree.ancestry(lane_id)
-        }:
-            raise ValueError("settled intent does not belong to the selected Lane")
-        committed = await self.append_to_lane(
-            session_id=session_id,
-            lane_id=lane_id,
-            expected_head=lane.head,
-            entries=entries,
-            projection=projection,
-        )
-        if isinstance(committed, TransactionLeaseLost):
-            from dlightrag.agent.session.store import LeaseLost
-
-            return LeaseLost()
-        if isinstance(committed, RegisterConflict):
-            raise RuntimeError("selected Lane changed during Effect settlement")
-        session.settled_intents[intent_id] = intent_entry
-        return EffectCommit(
-            version=committed.commit_sequence,
-            appended_sequences=committed.appended_sequences,
-            intent_id=intent_id,
-            outcome=settlement.outcome,
-        )
-
-    @staticmethod
-    def _unsettled_intent(session: _Session, intent_id: IntentId) -> EffectIntentEntry | None:
-        for entry in session.entries:
-            if isinstance(entry, EffectIntentEntry) and entry.intent_id == intent_id:
-                return entry if intent_id not in session.settled_intents else None
-        return None
-
     @staticmethod
     def _validate_register_writes(
         session: _Session,
@@ -387,7 +262,7 @@ class MemoryAgentSessionStore[HostDeltaT]:
             known.add(entry.entry_id)
 
     @staticmethod
-    def _main_lane(session: _Session | None) -> tuple[RegisterRecord, bool]:
+    def _main_lane(session: _Session[HostDeltaT] | None) -> tuple[RegisterRecord, bool]:
         ref = LaneHead(LaneId.main(), None).ref
         if session is not None and ref in session.registers:
             return session.registers[ref], False
@@ -395,12 +270,11 @@ class MemoryAgentSessionStore[HostDeltaT]:
         return placeholder, True
 
     @staticmethod
-    def _snapshot(session_id: SessionId, session: _Session) -> AgentSessionSnapshot:
+    def _snapshot(session_id: SessionId, session: _Session[HostDeltaT]) -> AgentSessionSnapshot:
         return AgentSessionSnapshot(
             session_id=session_id,
             commit_sequence=session.commit_sequence,
             entries=tuple(session.entries),
-            active_projection=session.active_projection,
             registers=tuple(
                 record
                 for _, record in sorted(
@@ -411,14 +285,13 @@ class MemoryAgentSessionStore[HostDeltaT]:
         )
 
 
-class _Session:
+class _Session[HostDeltaT]:
     def __init__(self) -> None:
         self.entries: list[SessionEntry] = []
         self.registers: dict[RegisterRef, RegisterRecord] = {}
-        self.settled_intents: dict[IntentId, EffectIntentEntry] = {}
         self.last_entry_sequence = 0
         self.commit_sequence = 0
-        self.active_projection: ContextProjection | None = None
+        self.host_deltas: list[tuple[IntentId, HostDeltaT]] = []
 
 
 __all__ = ["MemoryAgentSessionStore"]

@@ -1,132 +1,70 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for the agent session store contract and its in-memory adapter."""
+"""Canonical Memory Session transaction/store behavior."""
 
 from datetime import UTC, datetime
 
 import pytest
 
-from dlightrag.agent.session.effects import EffectSettlement
-from dlightrag.agent.session.entries import (
-    EffectIntentEntry,
-    EffectResultEntry,
-    UserMessageEntry,
+from dlightrag.agent.session.entries import UserMessageEntry
+from dlightrag.agent.session.ids import EntryId, IntentId, LaneId, OperationId, SessionId
+from dlightrag.agent.session.memory import MemoryAgentSessionStore
+from dlightrag.agent.session.operation import OperationMeta, ReadyForProvider
+from dlightrag.agent.session.registers import (
+    DeleteRegister,
+    LaneHead,
+    LaneState,
+    OperationMetaRegister,
+    OperationStateRegister,
+    RegisterRef,
+    SessionFault,
+    SetRegister,
 )
-from dlightrag.agent.session.ids import EntryId, IntentId, LaneId, ProjectionId, SessionId
-from dlightrag.agent.session.projection import ContextProjection
-from dlightrag.agent.session.store import (
-    EffectAlreadySettled,
-    EffectCommit,
-    EffectMissing,
-    SessionCommit,
+from dlightrag.agent.session.transactions import (
+    HostDeltaSettlement,
+    RegisterConflict,
+    RegisterExpectation,
+    SessionTransaction,
+    TransactionCommit,
 )
-from tests.in_memory_session_store import InMemoryAgentSessionStore, NoHostUpdate
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
 
 
 def _user(session_id: SessionId, content: str) -> UserMessageEntry:
     return UserMessageEntry(
-        entry_id=EntryId.new(), session_id=session_id, timestamp=_now(), content=content
-    )
-
-
-def _intent(session_id: SessionId, *, intent_id: IntentId | None = None) -> EffectIntentEntry:
-    from dlightrag.agent.session.effects import EffectIntent
-
-    return EffectIntentEntry(
         entry_id=EntryId.new(),
         session_id=session_id,
-        timestamp=_now(),
-        intent=EffectIntent(
-            intent_id=intent_id or IntentId.new(),
-            tool_name="search_knowledge_base",
-            replay_policy="replayable",
-            contract_version=1,
-            input_schema_digest="a" * 64,
-            canonical_input='{"q":"x"}',
-            source_call_id="c1",
+        timestamp=datetime.now(UTC),
+        content=content,
+    )
+
+
+async def _seed(store: MemoryAgentSessionStore[None], session_id: SessionId) -> None:
+    head = LaneHead(LaneId.main(), None)
+    state = LaneState(LaneId.main())
+    entry = _user(session_id, "root")
+    outcome = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=[entry],
+            register_writes=[
+                SetRegister(LaneHead(LaneId.main(), entry.entry_id)),
+                SetRegister(state),
+            ],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
         ),
     )
-
-
-def _settlement(intent_id: IntentId) -> EffectSettlement[NoHostUpdate]:
-    from dlightrag.agent.session.effects import ToolResultEntry
-
-    result = ToolResultEntry.text(
-        tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", text="found"
-    )
-    return EffectSettlement(outcome="succeeded", result=result, host_update=NoHostUpdate())
-
-
-def _result_entry(
-    session_id: SessionId, intent_id: IntentId, *, sequence: int = 0
-) -> EffectResultEntry:
-    from dlightrag.agent.session.effects import ToolResultEntry
-
-    return EffectResultEntry(
-        entry_id=EntryId.new(),
-        session_id=session_id,
-        timestamp=_now(),
-        intent_id=intent_id,
-        result=ToolResultEntry.text(
-            tool_name="search_knowledge_base", call_id="c1", outcome="succeeded", text="found"
-        ),
-    )
+    assert isinstance(outcome, TransactionCommit)
 
 
 @pytest.mark.asyncio
-async def test_stale_global_version_does_not_conflict_with_single_owner_append() -> None:
-    store = InMemoryAgentSessionStore()
+async def test_exact_lane_cas_ignores_unrelated_branch_commit() -> None:
+    store = MemoryAgentSessionStore[None]()
     session_id = SessionId.new()
-    first = await store.append(
-        session_id=session_id, expected_version=0, entries=[_user(session_id, "hi")]
-    )
-    assert isinstance(first, SessionCommit)
-
-    second = await store.append(
-        session_id=session_id, expected_version=0, entries=[_user(session_id, "again")]
-    )
-    assert isinstance(second, SessionCommit)
-
-    snapshot = await store.load(session_id)
-    assert snapshot.commit_sequence == 2
-    assert [entry.canonical_payload()["content"] for entry in snapshot.entries] == [
-        "hi",
-        "again",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_append_never_settles_an_intent() -> None:
-    store = InMemoryAgentSessionStore()
-    session_id = SessionId.new()
-    intent = _intent(session_id)
-    commit = await store.append(session_id=session_id, expected_version=0, entries=[intent])
-    assert isinstance(commit, SessionCommit)
-
-    # The intent exists but is unsettled: a settlement of a missing intent id
-    # still reports EffectMissing, and settling it works exactly once.
-    missing = await store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
-        intent_id=IntentId.new(),
-        settlement=_settlement(intent.intent_id),
-        entries=[_result_entry(session_id, intent.intent_id)],
-    )
-    assert isinstance(missing, EffectMissing)
-
-
-@pytest.mark.asyncio
-async def test_settle_effect_appends_on_the_lane_that_owns_the_intent() -> None:
-    store = InMemoryAgentSessionStore()
-    session_id = SessionId.new()
-    await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_user(session_id, "root")],
-    )
+    await _seed(store, session_id)
+    main = (await store.load(session_id)).tree.lane()
     branch_id = LaneId.new()
     await store.fork_lane(
         session_id=session_id,
@@ -134,169 +72,156 @@ async def test_settle_effect_appends_on_the_lane_that_owns_the_intent() -> None:
         lane_id=branch_id,
     )
     branch = (await store.load(session_id)).tree.lane(branch_id)
-    intent = _intent(session_id)
     await store.append_to_lane(
         session_id=session_id,
         lane_id=branch_id,
         expected_head=branch.head,
-        entries=[intent],
+        entries=[_user(session_id, "branch")],
     )
-
-    settled = await store.settle_effect(
+    main_commit = await store.append_to_lane(
         session_id=session_id,
-        expected_version=0,
-        intent_id=intent.intent_id,
-        settlement=_settlement(intent.intent_id),
-        entries=[_result_entry(session_id, intent.intent_id)],
-        lane_id=branch_id,
+        lane_id=LaneId.main(),
+        expected_head=main.head,
+        entries=[_user(session_id, "main")],
     )
-    assert isinstance(settled, EffectCommit)
-    snapshot = await store.load(session_id)
-    assert len(snapshot.tree.ancestry(LaneId.main())) == 1
-    assert [entry.entry_type for entry in snapshot.tree.ancestry(branch_id)] == [
-        "user_message",
-        "effect_intent",
-        "effect_result",
+    assert isinstance(main_commit, TransactionCommit)
+
+
+@pytest.mark.asyncio
+async def test_same_lane_stale_head_conflicts_without_writing() -> None:
+    store = MemoryAgentSessionStore[None]()
+    session_id = SessionId.new()
+    await _seed(store, session_id)
+    stale = (await store.load(session_id)).tree.lane().head
+    await store.append_to_lane(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        expected_head=stale,
+        entries=[_user(session_id, "first")],
+    )
+    conflict = await store.append_to_lane(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        expected_head=stale,
+        entries=[_user(session_id, "lost")],
+    )
+    assert isinstance(conflict, RegisterConflict)
+    ancestry = (await store.load(session_id)).tree.ancestry()
+    assert all(isinstance(entry, UserMessageEntry) for entry in ancestry)
+    assert [entry.content for entry in ancestry if isinstance(entry, UserMessageEntry)] == [
+        "root",
+        "first",
     ]
 
 
-@pytest.mark.asyncio
-async def test_settle_effect_atomically_marks_and_appends_ordered_results() -> None:
-    store = InMemoryAgentSessionStore()
-    session_id = SessionId.new()
-    intent = _intent(session_id)
-    await store.append(session_id=session_id, expected_version=0, entries=[intent])
-
-    settled = await store.settle_effect(
-        session_id=session_id,
-        expected_version=1,
-        intent_id=intent.intent_id,
-        settlement=_settlement(intent.intent_id),
-        entries=[_result_entry(session_id, intent.intent_id)],
-    )
-    assert isinstance(settled, EffectCommit)
-    assert settled.version == 2
-    assert settled.intent_id == intent.intent_id
-    assert settled.outcome == "succeeded"
-
-    again = await store.settle_effect(
-        session_id=session_id,
-        expected_version=2,
-        intent_id=intent.intent_id,
-        settlement=_settlement(intent.intent_id),
-        entries=[_result_entry(session_id, intent.intent_id)],
-    )
-    assert isinstance(again, EffectAlreadySettled)
-
-
-@pytest.mark.asyncio
-async def test_settlement_uses_intent_and_lane_cas_not_global_version() -> None:
-    store = InMemoryAgentSessionStore()
-    session_id = SessionId.new()
-    intent = _intent(session_id)
-    await store.append(session_id=session_id, expected_version=0, entries=[intent])
-
-    settled = await store.settle_effect(
-        session_id=session_id,
-        expected_version=0,
-        intent_id=intent.intent_id,
-        settlement=_settlement(intent.intent_id),
-        entries=[_result_entry(session_id, intent.intent_id)],
-    )
-    assert isinstance(settled, EffectCommit)
-    snapshot = await store.load(session_id)
-    assert snapshot.commit_sequence == 2
-    assert len(snapshot.entries) == 2
-    assert isinstance(snapshot.entries[0], EffectIntentEntry)
-
-
-@pytest.mark.asyncio
-async def test_sequences_are_contiguous_per_transaction() -> None:
-    store = InMemoryAgentSessionStore()
-    session_id = SessionId.new()
-    first = await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_user(session_id, "a"), _user(session_id, "b")],
-    )
-    assert isinstance(first, SessionCommit)
-    assert first.appended_sequences == (1, 2)
-
-    intent = _intent(session_id)
-    second = await store.append(session_id=session_id, expected_version=1, entries=[intent])
-    assert isinstance(second, SessionCommit)
-    assert second.appended_sequences == (3,)
-
-    snapshot = await store.load(session_id)
-    assert [entry.sequence for entry in snapshot.entries] == [1, 2, 3]
-
-
-@pytest.mark.asyncio
-async def test_projection_commits_with_the_transaction() -> None:
-    from dlightrag.agent.session.projection import TokenAnchor
-
-    store = InMemoryAgentSessionStore()
-    session_id = SessionId.new()
-    projection = ContextProjection(
-        projection_id=ProjectionId.new(),
-        first_retained_sequence=1,
-        covered_through_sequence=0,
-        summary=None,
-        token_anchors=(
-            TokenAnchor(through_sequence=0, measured_input_tokens=10, measured_output_tokens=2),
+def _operation_registers() -> tuple[OperationMetaRegister, OperationStateRegister]:
+    operation_id = OperationId.new()
+    return (
+        OperationMetaRegister(
+            OperationMeta(
+                operation_id=operation_id,
+                lane_id=LaneId.main(),
+                idempotency_key="operation",
+                acceptance_digest="a" * 64,
+                plan_json="{}",
+                plan_digest="b" * 64,
+            )
         ),
+        OperationStateRegister(ReadyForProvider(operation_id)),
     )
-    commit = await store.append(
-        session_id=session_id,
-        expected_version=0,
-        entries=[_user(session_id, "hi")],
-        projection=projection,
-    )
-    assert isinstance(commit, SessionCommit)
-    snapshot = await store.load(session_id)
-    assert snapshot.active_projection == projection
 
 
-@pytest.mark.asyncio
-async def test_empty_transaction_is_rejected() -> None:
-    store = InMemoryAgentSessionStore()
+@pytest.mark.parametrize("immutable", ["operation_meta", "session_fault"])
+def test_transaction_rejects_updates_to_immutable_registers(immutable: str) -> None:
+    meta, _state = _operation_registers()
+    value = meta if immutable == "operation_meta" else SessionFault("fault")
+    with pytest.raises(ValueError, match="immutable"):
+        SessionTransaction.from_parts(
+            register_writes=[SetRegister(value)],
+            expectations=[RegisterExpectation(value.ref, 1)],
+        )
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        RegisterRef("operation_meta", "operation"),
+        RegisterRef("operation_state", "operation"),
+        RegisterRef("session_fault", "session"),
+        RegisterRef("lane_head", LaneId.main().value),
+        RegisterRef("lane_state", LaneId.main().value),
+    ],
+)
+def test_transaction_rejects_deleting_permanent_or_main_registers(ref: RegisterRef) -> None:
+    with pytest.raises(ValueError, match="cannot be deleted"):
+        SessionTransaction.from_parts(
+            register_writes=[DeleteRegister(ref)],
+            expectations=[RegisterExpectation(ref, 1)],
+        )
+
+
+def test_transaction_rejects_archiving_main_lane() -> None:
+    state = LaneState(LaneId.main(), archived=True)
+    with pytest.raises(ValueError, match="main Lane cannot be archived"):
+        SessionTransaction.from_parts(
+            register_writes=[SetRegister(state)],
+            expectations=[RegisterExpectation(state.ref, 1)],
+        )
+
+
+def test_entry_transaction_must_advance_lane_head_to_final_entry() -> None:
     session_id = SessionId.new()
-    with pytest.raises(ValueError):
-        await store.append(session_id=session_id, expected_version=0, entries=[])
-
-
-@pytest.mark.asyncio
-async def test_settlement_entries_must_belong_to_the_intent() -> None:
-    store = InMemoryAgentSessionStore()
-    session_id = SessionId.new()
-    intent = _intent(session_id)
-    await store.append(session_id=session_id, expected_version=0, entries=[intent])
-
-    with pytest.raises(ValueError):
-        await store.settle_effect(
-            session_id=session_id,
-            expected_version=1,
-            intent_id=intent.intent_id,
-            settlement=_settlement(intent.intent_id),
-            entries=[_result_entry(session_id, IntentId.new())],
+    entry = _user(session_id, "unplaced")
+    state = LaneState(LaneId.main())
+    with pytest.raises(ValueError, match="advance a Lane Head"):
+        SessionTransaction.from_parts(
+            entries=[entry],
+            register_writes=[SetRegister(state)],
+            expectations=[RegisterExpectation(state.ref, 1)],
+        )
+    wrong_head = LaneHead(LaneId.main(), EntryId.new())
+    with pytest.raises(ValueError, match="advance a Lane Head"):
+        SessionTransaction.from_parts(
+            entries=[entry],
+            register_writes=[SetRegister(wrong_head)],
+            expectations=[RegisterExpectation(wrong_head.ref, 1)],
         )
 
 
 @pytest.mark.asyncio
-async def test_prelude_settlement_still_commits_the_effect() -> None:
-    store = InMemoryAgentSessionStore()
+async def test_memory_host_delta_is_exactly_once_under_register_cas() -> None:
+    store = MemoryAgentSessionStore[dict[str, str]]()
     session_id = SessionId.new()
-    intent = _intent(session_id)
-    await store.append(session_id=session_id, expected_version=0, entries=[intent])
-
-    settled = await store.settle_effect(
+    head = LaneHead(LaneId.main(), None)
+    state = LaneState(LaneId.main())
+    initial = await store.transact(
         session_id=session_id,
-        expected_version=1,
-        intent_id=intent.intent_id,
-        settlement=_settlement(intent.intent_id),
-        entries=[_result_entry(session_id, intent.intent_id)],
-        progress="prelude",
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
+        ),
     )
-    assert isinstance(settled, EffectCommit)
-    snapshot = await store.load(session_id)
-    assert snapshot.version == 2
+    assert isinstance(initial, TransactionCommit)
+    intent_id = IntentId.new()
+    transaction = SessionTransaction.from_parts(
+        register_writes=[SetRegister(state)],
+        expectations=[RegisterExpectation(state.ref, initial.commit_sequence)],
+        host_delta=HostDeltaSettlement(intent_id, {"memory": "changed"}),
+    )
+    first = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=transaction,
+    )
+    replay = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=transaction,
+    )
+    assert isinstance(first, TransactionCommit)
+    assert isinstance(replay, RegisterConflict)
+    assert store.applied_host_deltas(session_id) == ((intent_id, {"memory": "changed"}),)

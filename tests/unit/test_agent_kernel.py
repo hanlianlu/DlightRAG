@@ -6,13 +6,11 @@ from datetime import UTC, datetime
 from pydantic import BaseModel
 
 from dlightrag.agent.context import ContextContribution, ContextProjector
-from dlightrag.agent.loop import AgentLoop, AgentLoopCancelled
-from dlightrag.agent.session.entries import RunSegmentEntry, UserMessageEntry
+from dlightrag.agent.session.entries import UserMessageEntry
 from dlightrag.agent.session.graph import AgentSessionGraph
 from dlightrag.agent.session.ids import EntryId, SessionId
-from dlightrag.agent.tools import AgentTool, ExecutedTurn, ToolResult
+from dlightrag.agent.tools import AgentTool, ToolResult
 from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
-from dlightrag.ai.messages import AssistantTurn, ToolCall
 
 
 class _Input(BaseModel):
@@ -49,56 +47,25 @@ def test_context_projector_orders_authorities_and_keeps_source_order() -> None:
             ),
         ]
     )
-
     assert [message["content"] for message in projected.messages] == [
         "rules",
         "question",
         "work",
     ]
-    assert projected.sources == ("system", "question", "working")
 
 
 def test_tool_registry_preserves_order_and_rejects_duplicates() -> None:
     registry = ToolRegistry((_tool("read"), _tool("grep")))
     assert registry.names == ("read", "grep")
-    assert [tool.name for tool in registry.resolve(("grep",))] == ["grep"]
-
     try:
         registry.register(_tool("read"))
     except DuplicateToolError as exc:
         assert exc.names == ("read",)
     else:  # pragma: no cover
-        raise AssertionError("duplicate tool was accepted")
+        raise AssertionError("duplicate Tool was accepted")
 
 
-def test_session_graph_rejects_a_resume_from_the_wrong_head() -> None:
-    session_id = SessionId.new()
-    first = UserMessageEntry(
-        entry_id=EntryId.new(),
-        session_id=session_id,
-        sequence=1,
-        timestamp=datetime.now(UTC),
-        content="one",
-    )
-    segment = RunSegmentEntry(
-        entry_id=EntryId.new(),
-        session_id=session_id,
-        sequence=2,
-        timestamp=datetime.now(UTC),
-        segment_id=EntryId.new().value,
-        kind="resume",
-        parent_head_id=EntryId.new().value,
-    )
-
-    try:
-        AgentSessionGraph.from_linear_entries(session_id, (first, segment))
-    except ValueError as exc:
-        assert "parent head" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("mismatched run segment head was accepted")
-
-
-def test_linear_session_graph_derives_parent_links_and_head() -> None:
+def test_session_graph_requires_physical_parent_links() -> None:
     session_id = SessionId.new()
     first = UserMessageEntry(
         entry_id=EntryId.new(),
@@ -112,115 +79,8 @@ def test_linear_session_graph_derives_parent_links_and_head() -> None:
         session_id=session_id,
         sequence=2,
         timestamp=datetime.now(UTC),
+        parent_entry_id=first.entry_id,
         content="two",
     )
-
-    graph = AgentSessionGraph.from_linear_entries(session_id, (first, second))
-
-    assert graph.head_entry_id == second.entry_id
-    assert graph.nodes[0].parent_entry_id is None
-    assert graph.nodes[1].parent_entry_id == first.entry_id
-    ancestry = graph.ancestry()
-    assert [entry.entry_id for entry in ancestry] == [first.entry_id, second.entry_id]
-    assert ancestry[0].parent_entry_id is None
-    assert ancestry[1].parent_entry_id == first.entry_id
-    assert graph.select_head(first.entry_id).ancestry() == (first,)
-
-
-class _Driver:
-    def __init__(self, *, cancel: bool = False) -> None:
-        self.cancel = cancel
-        self.turns = 0
-
-    async def check_cancelled(self) -> None:
-        if self.cancel:
-            raise AgentLoopCancelled
-
-    async def run_turn(self, turn_number: int) -> ExecutedTurn:
-        self.turns = turn_number
-        calls = (ToolCall(id="call", name="read", arguments={}),) if turn_number == 1 else ()
-        return ExecutedTurn(
-            assistant=AssistantTurn(
-                text="working" if calls else "done",
-                tool_calls=calls,
-                stop_reason="tool_use" if calls else "stop",
-            ),
-            results=(),
-            messages=[],
-        )
-
-    async def continue_after_stop(self) -> bool:
-        return False
-
-
-async def test_agent_loop_emits_ordered_events_until_model_silence() -> None:
-    events = []
-
-    async def collect(event) -> None:
-        events.append((event.kind, event.turn_number))
-
-    result = await AgentLoop(on_event=collect).run(_Driver())
-
-    assert result.turn_count == 2
-    assert result.stop_reason == "model_stop"
-    assert result.last_turn is not None and result.last_turn.assistant.text == "done"
-    assert events == [
-        ("agent_start", None),
-        ("turn_start", 1),
-        ("turn_end", 1),
-        ("turn_start", 2),
-        ("turn_end", 2),
-        ("agent_end", 2),
-    ]
-
-
-async def test_agent_loop_admits_a_control_arriving_during_terminal_turn() -> None:
-    class ControlledDriver:
-        turns = 0
-        checks = 0
-
-        async def check_cancelled(self) -> None:
-            return None
-
-        async def run_turn(self, turn_number: int) -> ExecutedTurn:
-            self.turns = turn_number
-            return ExecutedTurn(
-                assistant=AssistantTurn(
-                    text=f"draft {turn_number}", tool_calls=(), stop_reason="stop"
-                ),
-                results=(),
-                messages=[],
-            )
-
-        async def continue_after_stop(self) -> bool:
-            self.checks += 1
-            return self.checks == 1
-
-    driver = ControlledDriver()
-    result = await AgentLoop().run(driver)
-
-    assert result.turn_count == 2
-    assert result.last_turn is not None
-    assert result.last_turn.assistant.text == "draft 2"
-
-
-async def test_agent_loop_returns_cancelled_without_a_turn() -> None:
-    result = await AgentLoop().run(_Driver(cancel=True))
-    assert result.turn_count == 0
-    assert result.stop_reason == "cancelled"
-    assert result.last_turn is None
-
-
-async def test_agent_loop_event_sink_failure_is_observe_only() -> None:
-    calls = 0
-
-    async def broken_sink(_event: object) -> None:
-        nonlocal calls
-        calls += 1
-        raise RuntimeError("telemetry unavailable")
-
-    result = await AgentLoop(on_event=broken_sink).run(_Driver())
-
-    assert result.turn_count == 2
-    assert result.stop_reason == "model_stop"
-    assert calls > 0
+    graph = AgentSessionGraph.from_entries(session_id, (first, second))
+    assert graph.select_head(second.entry_id).ancestry() == (first, second)

@@ -1,32 +1,23 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The finite Agent Session entry union with canonical serialization.
-
-Each concrete entry is immutable and carries common identity fields plus a
-typed payload. The closed union grows only together with a real writer.
-
-``canonical_payload`` returns the exact ``payload_json`` a durable store keeps;
-``to_canonical_json`` adds identity, parent placement, sequence, and schema
-columns for tests. The fold consumes typed records, never raw mappings.
-"""
+"""Closed semantic Entry Tree union with canonical serialization."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar, Literal
 
-from dlightrag.agent.session.effects import (
-    EffectIntent,
-    JsonValue,
-    ToolResultEntry,
+from dlightrag.agent.session.effects import JsonValue, ToolResultEntry
+from dlightrag.agent.session.ids import (
+    AttemptId,
+    EntryId,
+    IntentId,
+    ProjectionId,
+    SessionId,
 )
-from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
 from dlightrag.agent.tool_content import decode_tool_content, encode_tool_content
 from dlightrag.ai.messages import ToolCall
 
-SESSION_ENTRY_SCHEMA_VERSION = 1
-
-SessionTerminalReason = Literal["completed", "cancelled", "abandoned"]
-RunSegmentKind = Literal["start", "resume"]
+SESSION_ENTRY_SCHEMA_VERSION = 2
 
 
 def _utc_now() -> datetime:
@@ -35,12 +26,7 @@ def _utc_now() -> datetime:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SessionEntry:
-    """Base record for every immutable journal entry.
-
-    ``sequence`` is allocated by the store as one contiguous range per
-    transaction (M3-D16); entries under construction may carry ``0`` and are
-    stamped with their durable sequence when committed.
-    """
+    """Base record physically placed under exactly one parent Entry."""
 
     entry_id: EntryId
     session_id: SessionId
@@ -53,23 +39,21 @@ class SessionEntry:
 
     def __post_init__(self) -> None:
         if self.sequence < 0:
-            raise ValueError("journal entry sequence cannot be negative")
+            raise ValueError("Entry sequence cannot be negative")
         if self.schema_version != SESSION_ENTRY_SCHEMA_VERSION:
-            raise ValueError("journal entry schema version is not current")
+            raise ValueError("Entry schema version is not current")
         if self.timestamp.tzinfo is None:
-            raise ValueError("journal entry timestamp must be timezone-aware")
+            raise ValueError("Entry timestamp must be timezone-aware")
 
     def canonical_payload(self) -> JsonValue:
-        """Return this variant's typed payload as canonical JSON data."""
         raise NotImplementedError
 
     def to_canonical_json(self) -> JsonValue:
-        """Return one complete canonical Entry record for tests and hashes."""
         return {
-            "entry_id": str(self.entry_id),
-            "session_id": str(self.session_id),
+            "entry_id": self.entry_id.value,
+            "session_id": self.session_id.value,
             "parent_entry_id": (
-                str(self.parent_entry_id) if self.parent_entry_id is not None else None
+                self.parent_entry_id.value if self.parent_entry_id is not None else None
             ),
             "sequence": self.sequence,
             "timestamp": self.timestamp.isoformat(),
@@ -79,32 +63,7 @@ class SessionEntry:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class RunSegmentEntry(SessionEntry):
-    """One start or resume interval over a selected Agent Session head."""
-
-    segment_id: str
-    kind: RunSegmentKind
-    parent_head_id: str | None = None
-
-    entry_type: ClassVar[str] = "run_segment"
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if not self.segment_id.strip():
-            raise ValueError("run segment id cannot be empty")
-
-    def canonical_payload(self) -> JsonValue:
-        return {
-            "segment_id": self.segment_id,
-            "kind": self.kind,
-            "parent_head_id": self.parent_head_id,
-        }
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
 class UserMessageEntry(SessionEntry):
-    """One user message: a question, a pinned history turn, or a prompt injection."""
-
     content: JsonValue
 
     entry_type: ClassVar[str] = "user_message"
@@ -115,17 +74,12 @@ class UserMessageEntry(SessionEntry):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AssistantMessageEntry(SessionEntry):
-    """One complete assistant response: content, stop reason, and usage/cost anchor.
-
-    Only a fully exhausted provider response is journaled; cancellation or crash
-    mid-stream leaves no partial assistant entry (M3-D11).
-    """
+    """One complete validated provider response; partial streams are never durable."""
 
     content: str
     stop_reason: Literal["stop", "length", "tool_use"]
     reasoning: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
-    preflight_results: tuple[ToolResultEntry, ...] = ()
     usage: JsonValue | None = None
     cost: JsonValue | None = None
     provider_state: JsonValue | None = None
@@ -135,7 +89,7 @@ class AssistantMessageEntry(SessionEntry):
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.stop_reason == "tool_use" and not self.tool_calls:
-            raise ValueError("tool_use assistant entry requires tool calls")
+            raise ValueError("tool_use AssistantMessage requires Tool calls")
 
     def canonical_payload(self) -> JsonValue:
         payload: dict[str, Any] = {
@@ -153,18 +107,6 @@ class AssistantMessageEntry(SessionEntry):
                 for call in self.tool_calls
             ],
         }
-        if self.preflight_results:
-            payload["preflight_results"] = [
-                {
-                    "tool_name": result.tool_name,
-                    "call_id": result.call_id,
-                    "outcome": result.outcome,
-                    "content": encode_tool_content(result.parts),
-                    "details": result.details,
-                    "cached": result.cached,
-                }
-                for result in self.preflight_results
-            ]
         if self.usage is not None:
             payload["usage"] = self.usage
         if self.cost is not None:
@@ -175,70 +117,69 @@ class AssistantMessageEntry(SessionEntry):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class EffectIntentEntry(SessionEntry):
-    """One ordered effect intent, persisted before its effect executes."""
-
-    intent: EffectIntent
-
-    entry_type: ClassVar[str] = "effect_intent"
-
-    @property
-    def intent_id(self) -> IntentId:
-        return self.intent.intent_id
-
-    def canonical_payload(self) -> JsonValue:
-        intent = self.intent
-        return {
-            "intent_id": str(intent.intent_id),
-            "tool_name": intent.tool_name,
-            "replay_policy": intent.replay_policy,
-            "contract_version": intent.contract_version,
-            "input_schema_digest": intent.input_schema_digest,
-            "canonical_input": intent.canonical_input,
-            "source_call_id": intent.source_call_id,
-        }
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class EffectResultEntry(SessionEntry):
-    """One ordered effect result or one deterministic validation result."""
+class ToolResultMessageEntry(SessionEntry):
+    """One source-position ToolResult with permanent recovery provenance."""
 
     result: ToolResultEntry
-    intent_id: IntentId | None = None
+    intent_id: IntentId | None
+    source_index: int
+    contract_version: int
+    input_schema_digest: str
+    replay_policy: Literal["replayable", "never"]
+    attempt_id: AttemptId | None
+    effective_input_digest: str
 
-    entry_type: ClassVar[str] = "effect_result"
+    entry_type: ClassVar[str] = "tool_result"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.source_index < 0 or self.contract_version < 0:
+            raise ValueError("ToolResult provenance position/version is invalid")
+        if self.intent_id is not None and (
+            self.contract_version < 1
+            or len(self.input_schema_digest) != 64
+            or len(self.effective_input_digest) != 64
+        ):
+            raise ValueError("executable ToolResult provenance must be complete")
 
     def canonical_payload(self) -> JsonValue:
         return {
-            "intent_id": str(self.intent_id) if self.intent_id is not None else None,
+            "intent_id": self.intent_id.value if self.intent_id is not None else None,
+            "source_index": self.source_index,
             "tool_name": self.result.tool_name,
             "call_id": self.result.call_id,
             "outcome": self.result.outcome,
             "content": encode_tool_content(self.result.parts),
-            "details": self.result.details,
             "cached": self.result.cached,
+            "contract_version": self.contract_version,
+            "input_schema_digest": self.input_schema_digest,
+            "replay_policy": self.replay_policy,
+            "attempt_id": self.attempt_id.value if self.attempt_id is not None else None,
+            "effective_input_digest": self.effective_input_digest,
         }
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class ContextInjectionEntry(SessionEntry):
-    """One injected context message the framework, not the user, authored."""
+class ControlMessageEntry(SessionEntry):
+    """One accepted Steer consumed at a stable checkpoint."""
 
+    control_id: str
     content: JsonValue
-    label: str | None = None
 
-    entry_type: ClassVar[str] = "context_injection"
+    entry_type: ClassVar[str] = "control_message"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not self.control_id:
+            raise ValueError("ControlMessage identity cannot be empty")
 
     def canonical_payload(self) -> JsonValue:
-        payload: dict[str, Any] = {"content": self.content}
-        if self.label is not None:
-            payload["label"] = self.label
-        return payload
+        return {"control_id": self.control_id, "content": self.content}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CompactionEntry(SessionEntry):
-    """One committed compaction: summary, covered prefix, and retained start."""
+    """One branch-local immutable context projection checkpoint."""
 
     projection_id: ProjectionId
     summary: str | None
@@ -267,7 +208,7 @@ class CompactionEntry(SessionEntry):
 
     def canonical_payload(self) -> JsonValue:
         return {
-            "projection_id": str(self.projection_id),
+            "projection_id": self.projection_id.value,
             "summary": self.summary,
             "covered_through_sequence": self.covered_through_sequence,
             "first_retained_sequence": self.first_retained_sequence,
@@ -286,70 +227,46 @@ class CompactionEntry(SessionEntry):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class ProfileFactEntry(SessionEntry):
-    """One pinned run/session fact recorded for audit and recovery inspection."""
+class AdoptionEntry(SessionEntry):
+    """One explicit bounded cross-Lane adoption with immutable provenance."""
 
-    key: str
-    value: JsonValue
+    source_session_id: SessionId
+    source_entry_id: EntryId
+    content: JsonValue
 
-    entry_type: ClassVar[str] = "profile_fact"
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if not self.key.strip():
-            raise ValueError("profile fact key cannot be empty")
+    entry_type: ClassVar[str] = "adoption"
 
     def canonical_payload(self) -> JsonValue:
-        return {"key": self.key, "value": self.value}
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SessionTerminalEntry(SessionEntry):
-    """One terminal session fact: how and why the session ended."""
-
-    reason: SessionTerminalReason
-    detail: str | None = None
-
-    entry_type: ClassVar[str] = "session_terminal"
-
-    def canonical_payload(self) -> JsonValue:
-        payload: dict[str, Any] = {"reason": self.reason}
-        if self.detail is not None:
-            payload["detail"] = self.detail
-        return payload
+        return {
+            "source_session_id": self.source_session_id.value,
+            "source_entry_id": self.source_entry_id.value,
+            "content": self.content,
+        }
 
 
 type SessionEntryKind = (
-    RunSegmentEntry
-    | UserMessageEntry
+    UserMessageEntry
     | AssistantMessageEntry
-    | EffectIntentEntry
-    | EffectResultEntry
-    | ContextInjectionEntry
+    | ToolResultMessageEntry
+    | ControlMessageEntry
     | CompactionEntry
-    | ProfileFactEntry
-    | SessionTerminalEntry
+    | AdoptionEntry
 )
 
-#: The closed M3 entry union by durable type tag.
 ENTRY_TYPE_TO_CLASS: dict[str, type[SessionEntry]] = {
     entry.entry_type: entry  # type: ignore[type-abstract]
     for entry in (
-        RunSegmentEntry,
         UserMessageEntry,
         AssistantMessageEntry,
-        EffectIntentEntry,
-        EffectResultEntry,
-        ContextInjectionEntry,
+        ToolResultMessageEntry,
+        ControlMessageEntry,
         CompactionEntry,
-        ProfileFactEntry,
-        SessionTerminalEntry,
+        AdoptionEntry,
     )
 }
 
 
 def entry_type_of(entry: SessionEntry) -> str:
-    """Return the durable type tag of one journal entry."""
     return entry.entry_type
 
 
@@ -361,13 +278,9 @@ def new_session_entry(
     timestamp: datetime | None = None,
     **payload: Any,
 ) -> SessionEntry:
-    """Construct one journal entry of the closed union.
-
-    Unknown type tags raise immediately, before any durable store is touched.
-    """
     entry_class = ENTRY_TYPE_TO_CLASS.get(entry_type)
     if entry_class is None:
-        raise ValueError(f"unknown journal entry type: {entry_type}")
+        raise ValueError(f"unknown Entry type: {entry_type}")
     return entry_class(
         entry_id=EntryId.new(),
         session_id=session_id,
@@ -387,7 +300,6 @@ def decode_entry_payload(
     payload: Mapping[str, Any],
     parent_entry_id: EntryId | None = None,
 ) -> SessionEntry:
-    """Rebuild one typed entry from its canonical durable payload."""
     common = {
         "entry_id": entry_id,
         "session_id": session_id,
@@ -395,15 +307,6 @@ def decode_entry_payload(
         "timestamp": timestamp,
         "parent_entry_id": parent_entry_id,
     }
-    if entry_type == "run_segment":
-        return RunSegmentEntry(
-            **common,
-            segment_id=str(payload["segment_id"]),
-            kind=payload["kind"],
-            parent_head_id=(
-                str(payload["parent_head_id"]) if payload.get("parent_head_id") else None
-            ),
-        )
     if entry_type == "user_message":
         return UserMessageEntry(**common, content=payload["content"])
     if entry_type == "assistant_message":
@@ -417,59 +320,42 @@ def decode_entry_payload(
             )
             for call in payload.get("tool_calls") or ()
         )
-        preflight_results = tuple(
-            ToolResultEntry(
-                tool_name=str(result["tool_name"]),
-                call_id=str(result["call_id"]),
-                outcome=result["outcome"],
-                parts=decode_tool_content(result["content"]),
-                details=result.get("details"),
-                cached=bool(result.get("cached") or False),
-            )
-            for result in payload.get("preflight_results") or ()
-        )
         return AssistantMessageEntry(
             **common,
             content=str(payload["content"]),
             stop_reason=payload["stop_reason"],
             reasoning=str(payload.get("reasoning") or ""),
             tool_calls=calls,
-            preflight_results=preflight_results,
             usage=payload.get("usage"),
             cost=payload.get("cost"),
             provider_state=payload.get("provider_state"),
         )
-    if entry_type == "effect_intent":
-        return EffectIntentEntry(
-            **common,
-            intent=EffectIntent(
-                intent_id=IntentId(str(payload["intent_id"])),
-                tool_name=str(payload["tool_name"]),
-                replay_policy=payload["replay_policy"],
-                contract_version=int(payload["contract_version"]),
-                input_schema_digest=str(payload["input_schema_digest"]),
-                canonical_input=str(payload["canonical_input"]),
-                source_call_id=payload.get("source_call_id"),
-            ),
-        )
-    if entry_type == "effect_result":
-        return EffectResultEntry(
+    if entry_type == "tool_result":
+        return ToolResultMessageEntry(
             **common,
             intent_id=(IntentId(str(payload["intent_id"])) if payload.get("intent_id") else None),
+            source_index=int(payload["source_index"]),
             result=ToolResultEntry(
                 tool_name=str(payload["tool_name"]),
                 call_id=str(payload["call_id"]),
                 outcome=payload["outcome"],
                 parts=decode_tool_content(payload["content"]),
-                details=payload.get("details"),
+                details=None,
                 cached=bool(payload.get("cached") or False),
             ),
+            contract_version=int(payload["contract_version"]),
+            input_schema_digest=str(payload["input_schema_digest"]),
+            replay_policy=payload["replay_policy"],
+            attempt_id=(
+                AttemptId(str(payload["attempt_id"])) if payload.get("attempt_id") else None
+            ),
+            effective_input_digest=str(payload["effective_input_digest"]),
         )
-    if entry_type == "context_injection":
-        return ContextInjectionEntry(
+    if entry_type == "control_message":
+        return ControlMessageEntry(
             **common,
+            control_id=str(payload["control_id"]),
             content=payload["content"],
-            label=payload.get("label"),
         )
     if entry_type == "compaction":
         return CompactionEntry(
@@ -490,30 +376,26 @@ def decode_entry_payload(
             ),
             source_digest=str(payload.get("source_digest") or ""),
         )
-    if entry_type == "profile_fact":
-        return ProfileFactEntry(**common, key=str(payload["key"]), value=payload["value"])
-    if entry_type == "session_terminal":
-        return SessionTerminalEntry(
-            **common, reason=payload["reason"], detail=payload.get("detail")
+    if entry_type == "adoption":
+        return AdoptionEntry(
+            **common,
+            source_session_id=SessionId(str(payload["source_session_id"])),
+            source_entry_id=EntryId(str(payload["source_entry_id"])),
+            content=payload["content"],
         )
-    raise ValueError(f"unknown journal entry type: {entry_type}")
+    raise ValueError(f"unknown Entry type: {entry_type}")
 
 
 __all__ = [
     "ENTRY_TYPE_TO_CLASS",
     "SESSION_ENTRY_SCHEMA_VERSION",
+    "AdoptionEntry",
     "AssistantMessageEntry",
     "CompactionEntry",
-    "ContextInjectionEntry",
-    "EffectIntentEntry",
-    "EffectResultEntry",
-    "ProfileFactEntry",
-    "RunSegmentEntry",
-    "RunSegmentKind",
+    "ControlMessageEntry",
     "SessionEntry",
     "SessionEntryKind",
-    "SessionTerminalEntry",
-    "SessionTerminalReason",
+    "ToolResultMessageEntry",
     "UserMessageEntry",
     "decode_entry_payload",
     "entry_type_of",

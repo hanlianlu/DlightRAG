@@ -2,16 +2,15 @@
 """Foreground subagent composition, controls, replay, and durable children."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.agent.session.effects import EffectIntent
 from dlightrag.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.agent.session.ids import IntentId, SessionId
-from dlightrag.agent.tools import AgentTool, PreparedToolTurn, ToolPreflight, ToolResult
 from dlightrag.ai.capacity import CONTEXT_POLICY
 from dlightrag.ai.messages import AssistantTurn
 from dlightrag.ai.telemetry import NOOP_TELEMETRY
@@ -19,8 +18,6 @@ from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.executor import (
     FetchedResourceBuffer,
-    JournalRunBoundaries,
-    _seed_child_session,
     run_child_session,
 )
 from dlightrag.answer.resources.models import TextWindowBudget
@@ -351,11 +348,15 @@ async def test_failed_child_is_recorded_failed() -> None:
 class _FakeSession:
     run_id: str
     owner_id: str = "owner"
+    execution: Any = field(default_factory=lambda: SimpleNamespace(fencing_epoch=1))
 
     async def check_cancelled(self) -> None:
         return None
 
     async def enter_phase(self, _phase: str) -> None:
+        return None
+
+    async def emit_tool_event(self, _event_type: str, _payload: object) -> None:
         return None
 
 
@@ -388,8 +389,6 @@ def _child_orchestrator(
 
 
 async def test_child_session_journals_and_replays_without_rerun() -> None:
-    from dlightrag.agent.session.entries import ProfileFactEntry
-
     calls = {"n": 0}
 
     async def model(**_kwargs: object) -> AssistantTurn:
@@ -422,17 +421,12 @@ async def test_child_session_journals_and_replays_without_rerun() -> None:
     assert first.usage == {"input_tokens": 3, "output_tokens": 2}
     assert calls["n"] == 1
     snapshot = await journal.load(child_id)
-    assert snapshot.version >= 2
-    lineage = next(
-        entry.value
-        for entry in snapshot.entries
-        if isinstance(entry, ProfileFactEntry) and entry.key == "parent"
-    )
-    assert lineage == {
-        "session_id": parent_id.value,
-        "call_id": "call-1",
-    }
-    assert any(entry.entry_type == "session_terminal" for entry in snapshot.entries)
+    assert snapshot.commit_sequence >= 2
+    assert [entry.entry_type for entry in snapshot.entries] == [
+        "user_message",
+        "assistant_message",
+    ]
+    assert any(record.ref.kind == "operation_state" for record in snapshot.registers)
 
     second = await run_child_session(
         orchestrator=orchestrator,
@@ -501,7 +495,9 @@ def test_child_inherits_parent_path_tools_except_spawn() -> None:
 
 
 async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
-    from dlightrag.agent.session.entries import EffectResultEntry
+    from dlightrag.agent.session.entries import ToolResultMessageEntry
+    from dlightrag.agent.session.operation import OperationCancelled
+    from dlightrag.agent.session.registers import OperationStateRegister
     from dlightrag.ai.messages import ToolCall
 
     async def model(**_kwargs: object) -> AssistantTurn:
@@ -536,10 +532,15 @@ async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
         )
 
     snapshot = await journal.load(child_id)
-    result = next(entry for entry in snapshot.entries if isinstance(entry, EffectResultEntry))
+    result = next(entry for entry in snapshot.entries if isinstance(entry, ToolResultMessageEntry))
     assert result.result.call_id == "search-cancelled"
     assert result.result.outcome == "outcome_unknown"
-    assert snapshot.entries[-1].entry_type == "session_terminal"
+    state = next(
+        record.value.state
+        for record in snapshot.registers
+        if isinstance(record.value, OperationStateRegister)
+    )
+    assert isinstance(state, OperationCancelled)
 
 
 async def test_parent_cancel_marks_the_child_cancelled() -> None:
@@ -551,165 +552,14 @@ async def test_parent_cancel_marks_the_child_cancelled() -> None:
             raise RunCancelledError
 
     parent_id = SessionId.new()
-    outcome = await run_child_session(
-        orchestrator=_child_orchestrator(model),
-        journal=InMemoryAgentSessionStore(),  # type: ignore[arg-type]
-        session=_CancelSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
-        fetched_buffer=FetchedResourceBuffer(),
-        child_id=SessionId.deterministic(run_id=str(parent_id.value), name="c"),
-        request=ChildRequest(objective="stop"),
-        parent_call_id="call-c",
-        parent_session_id=parent_id,
-    )
-    assert outcome.status == "cancelled"
-
-
-async def test_reclaim_resumes_a_nonterminal_child() -> None:
-    calls = {"n": 0}
-
-    async def model(**_kwargs: object) -> AssistantTurn:
-        calls["n"] += 1
-        return AssistantTurn(text="Resumed child.", tool_calls=(), stop_reason="stop")
-
-    parent_id = SessionId.new()
-    run_id = str(parent_id.value)
-    child_id = SessionId.deterministic(run_id=run_id, name="reclaim")
-    journal = InMemoryAgentSessionStore()
-    await _seed_child_session(
-        journal,  # type: ignore[arg-type]
-        child_id,
-        objective="continue",
-        parent_session_id=parent_id,
-        parent_call_id="call-r",
-    )
-    outcome = await run_child_session(
-        orchestrator=_child_orchestrator(model),
-        journal=journal,  # type: ignore[arg-type]
-        session=_FakeSession(run_id=run_id),  # type: ignore[arg-type]
-        fetched_buffer=FetchedResourceBuffer(),
-        child_id=child_id,
-        request=ChildRequest(objective="continue"),
-        parent_call_id="call-r",
-        parent_session_id=parent_id,
-    )
-    assert outcome.status == "succeeded"
-    assert outcome.summary == "Resumed child."
-    assert calls["n"] == 1
-
-
-async def test_recovery_backfills_child_effect_intent_before_spawn_replay() -> None:
-    from pydantic import BaseModel
-
-    from dlightrag.agent.session.entries import EffectIntentEntry
-    from dlightrag.ai.messages import ToolCall
-
-    seen: dict[str, str] = {}
-
-    async def link(**kwargs: Any) -> None:
-        seen.update({key: str(value) for key, value in kwargs.items()})
-
-    async def execute(_raw: BaseModel, _runtime: object) -> ToolResult:
-        return ToolResult.text("child replayed")
-
-    parent_id = SessionId.new()
-    run_id = str(parent_id.value)
-    journal = InMemoryAgentSessionStore()
-    tool = AgentTool(
-        "spawn_agent",
-        "Replay spawn.",
-        SpawnAgentInput,
-        execute,
-        replay_policy="replayable",
-    )
-    call = ToolCall(
-        id="call-recovery",
-        name=tool.name,
-        arguments=_spawn_input("recover lineage").model_dump(mode="json"),
-    )
-    intent = EffectIntent(
-        intent_id=IntentId.new(),
-        tool_name=tool.name,
-        replay_policy=tool.replay_policy,
-        contract_version=tool.contract_version,
-        input_schema_digest=tool.input_schema_digest,
-        canonical_input=_spawn_input("recover lineage").model_dump_json(),
-        source_call_id=call.id,
-    )
-    initial = JournalRunBoundaries(
-        session=_FakeSession(run_id=run_id),  # type: ignore[arg-type]
-        journal=journal,  # type: ignore[arg-type]
-        session_id=parent_id,
-        tools_by_name={},
-        ledger_state=lambda: "{}",
-        fetched_buffer=FetchedResourceBuffer(),
-        run_id=run_id,
-    )
-    await initial.commit_intents(
-        PreparedToolTurn(
-            assistant=AssistantTurn(text="", tool_calls=(call,), stop_reason="tool_use"),
-            preflight=ToolPreflight(intents=(intent,), validation_results=()),
-            transcript=[],
-        )
-    )
-    snapshot = await journal.load(parent_id)
-    assert any(isinstance(entry, EffectIntentEntry) for entry in snapshot.entries)
-    recovered = JournalRunBoundaries(
-        session=_FakeSession(run_id=run_id),  # type: ignore[arg-type]
-        journal=journal,  # type: ignore[arg-type]
-        session_id=parent_id,
-        tools_by_name={tool.name: tool},
-        ledger_state=lambda: "{}",
-        fetched_buffer=FetchedResourceBuffer(),
-        run_id=run_id,
-        initial_version=snapshot.version,
-        last_sequence=snapshot.entries[-1].sequence,
-        entries=snapshot.entries,
-        persist_child_intent=link,
-    )
-
-    await recovered.recover_pending_intents(snapshot)
-
-    assert seen["parent_intent_id"] == intent.intent_id.value
-    assert seen["objective"] == "recover lineage"
-
-
-async def test_parent_turn_binds_child_effect_intent() -> None:
-    seen: dict[str, str] = {}
-
-    async def link(**kwargs: Any) -> None:
-        seen.update({key: str(value) for key, value in kwargs.items()})
-
-    parent_id = SessionId.new()
-    run_id = str(parent_id.value)
-    bounds = JournalRunBoundaries(
-        session=_FakeSession(run_id=run_id),  # type: ignore[arg-type]
-        journal=InMemoryAgentSessionStore(),  # type: ignore[arg-type]
-        session_id=parent_id,
-        tools_by_name={},
-        ledger_state=lambda: "{}",
-        fetched_buffer=FetchedResourceBuffer(),
-        run_id=run_id,
-        persist_child_intent=link,
-    )
-    intent = EffectIntent(
-        intent_id=IntentId.new(),
-        tool_name="spawn_agent",
-        replay_policy="replayable",
-        contract_version=1,
-        input_schema_digest="a" * 64,
-        canonical_input=_spawn_input("research").model_dump_json(),
-        source_call_id="call-9",
-    )
-    await bounds._bind_subagents_parent_intents((intent,))
-    assert seen["parent_intent_id"] == intent.intent_id.value
-    assert seen["parent_session_id"] == parent_id.value
-    assert seen["objective"] == "research"
-    assert seen["context_mode"] == "isolated"
-    assert (
-        seen["child_session_id"]
-        == child_session_id(
-            run_id=run_id,
+    with pytest.raises(RunCancelledError):
+        await run_child_session(
+            orchestrator=_child_orchestrator(model),
+            journal=InMemoryAgentSessionStore(),  # type: ignore[arg-type]
+            session=_CancelSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
+            fetched_buffer=FetchedResourceBuffer(),
+            child_id=SessionId.deterministic(run_id=str(parent_id.value), name="c"),
+            request=ChildRequest(objective="stop"),
+            parent_call_id="call-c",
             parent_session_id=parent_id,
-            parent_intent_id=intent.intent_id,
-        ).value
-    )
+        )
