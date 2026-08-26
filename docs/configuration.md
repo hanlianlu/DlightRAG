@@ -907,6 +907,41 @@ and may reclaim later, never earlier. Lease duration, heartbeat and sweep
 cadence, batch sizes, token coalescing, and the crash-recovery bound are fixed
 internal constants.
 
+### Agent Artifact publication and browser preview
+
+Agent-authored Artifacts use independent working-set, publication, image, and
+active-preview limits:
+
+```yaml
+answer:
+  agent:
+    publication:
+      max_artifacts: 20
+      max_file_bytes: 31457280          # 30 MiB per published Artifact
+      max_total_bytes: 104857600        # 100 MiB per Answer run
+      workspace_max_bytes: 1073741824   # 1 GiB; maximum configurable value is 5 GiB
+      preview_image_max_pixels: 16000000
+      preview_image_max_edge: 4096
+      original_image_max_pixels: 64000000
+      original_image_max_edge: 8000
+      active_html_max_bytes: 20971520    # 20 MiB
+  conversations:
+    active_html_preview_enabled: true
+```
+
+Publication rejects an over-limit Artifact whole; it does not truncate or
+archive it. `workspace_max_bytes` counts the Agent Workspace working set, while
+`max_file_bytes`, `max_total_bytes`, and `max_artifacts` govern only explicitly
+referenced published output. Preview and original image limits are separate so
+a valid download may still be unavailable for inline preview.
+
+`answer.conversations.active_html_preview_enabled` defaults to `true`. Set it
+to `false` to remove the interactive opt-in: HTML Artifacts remain in an
+isolated script-disabled frame, with Source and Download still available. The
+environment equivalents follow the nested settings names, for example
+`DLIGHTRAG_ANSWER__AGENT__PUBLICATION__MAX_ARTIFACTS` and
+`DLIGHTRAG_ANSWER__CONVERSATIONS__ACTIVE_HTML_PREVIEW_ENABLED`.
+
 ## Web Search (optional)
 
 The answer research path can call the open web when an Exa key is set:

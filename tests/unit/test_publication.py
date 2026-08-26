@@ -326,6 +326,27 @@ def test_svg_static_projection_removes_scripts_events_and_external_links(tmp_pat
     assert "evil.test" not in settled
 
 
+def test_svg_static_projection_rejects_nested_svg_data_but_keeps_raster_data(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "chart.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg">'
+        '<image id="active" href="data:image/svg+xml,%3Csvg%20onload%3Dsteal()%3E"/>'
+        '<image id="raster" href="data:image/png;base64,iVBORw0KGgo="/>'
+        "</svg>",
+        encoding="utf-8",
+    )
+
+    plan = validate_publication(root, answer="![Chart](artifact:chart.svg)")
+
+    assert plan.outcome["status"] == "complete"
+    settled = plan.artifacts[0].content.decode("utf-8")
+    assert "data:image/svg+xml" not in settled
+    assert "data:image/png;base64,iVBORw0KGgo=" in settled
+
+
 def test_active_html_must_be_self_contained_and_within_preview_budget(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()

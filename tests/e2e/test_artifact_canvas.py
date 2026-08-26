@@ -198,6 +198,44 @@ def test_desktop_conversation_area_dismisses_a_lone_artifact_canvas(page: Page) 
     )
 
 
+def test_svg_top_level_navigation_is_script_disabled_and_opaque(page: Page) -> None:
+    path = f"/web/api/answer/{_RUN_ID}/artifacts/svg-image"
+    svg = """<svg xmlns="http://www.w3.org/2000/svg"
+      onload="document.documentElement.dataset.executed='event'">
+      <script>document.documentElement.dataset.executed='script'</script>
+      <text>Safe chart</text>
+    </svg>"""
+    page.route(
+        f"**{path}",
+        lambda route: route.fulfill(
+            status=200,
+            body=svg,
+            headers={
+                "Content-Type": "image/svg+xml",
+                "Content-Disposition": 'inline; filename="chart.svg"',
+                "Content-Security-Policy": "sandbox; default-src 'none'; img-src data:",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, no-store",
+            },
+        ),
+    )
+
+    response = page.goto(path)
+
+    assert response is not None
+    assert response.headers["content-security-policy"] == (
+        "sandbox; default-src 'none'; img-src data:"
+    )
+    assert page.locator("svg").get_attribute("data-executed") is None
+    assert page.evaluate("window.origin") == "null"
+    assert page.evaluate(
+        """() => {
+          try { localStorage.setItem('svg', 'active'); return false; }
+          catch (_) { return true; }
+        }"""
+    )
+
+
 _MALICIOUS_HTML = """<!doctype html><html><body>
 <div id="results"></div>
 <script>

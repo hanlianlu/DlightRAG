@@ -234,11 +234,14 @@ export class DlArtifactCanvas extends LightElement {
 
   #htmlPreview(): TemplateResult {
     if (!this.activePreviewEnabled) {
-      return html`<dl-active-artifact-frame
-        .source=${this.textPreview}
-        .active=${false}
-        .label=${this.artifact?.label || 'HTML Artifact'}
-      ></dl-active-artifact-frame>`;
+      return html`
+        <dl-active-artifact-frame
+          .source=${this.textPreview}
+          .active=${false}
+          .label=${this.artifact?.label || 'HTML Artifact'}
+        ></dl-active-artifact-frame>
+        ${this.#htmlSource('Source')}
+      `;
     }
     if (!this.interactive) {
       return html`
@@ -249,7 +252,7 @@ export class DlArtifactCanvas extends LightElement {
             Open interactive report
           </button>
         </div>
-        <details><summary>Static source</summary><pre class="artifact-source">${this.textPreview}</pre></details>
+        ${this.#htmlSource('Static source')}
       `;
     }
     return html`
@@ -259,8 +262,15 @@ export class DlArtifactCanvas extends LightElement {
         .label=${this.artifact?.label || 'HTML Artifact'}
         @artifact-frame-escape=${() => this.close()}
       ></dl-active-artifact-frame>
-      <details><summary>Source</summary><pre class="artifact-source">${this.textPreview}</pre></details>
+      ${this.#htmlSource('Source')}
     `;
+  }
+
+  #htmlSource(summary: 'Source' | 'Static source'): TemplateResult {
+    return html`<details>
+      <summary>${summary}</summary>
+      <pre class="artifact-source">${this.textPreview}</pre>
+    </details>`;
   }
 
   #downloadOnly(): TemplateResult {
@@ -285,7 +295,9 @@ export class DlArtifactCanvas extends LightElement {
         if (!artifact.presentation_url) throw new Error('missing presentation URL');
         const response = await fetch(artifact.presentation_url, {signal: controller.signal});
         if (!response.ok) throw new Error('presentation failed');
-        this.presentation = await response.json() as AnswerPresentation;
+        const presentation = await response.json() as AnswerPresentation;
+        if (this.#controller !== controller) return;
+        this.presentation = presentation;
       } else if (artifact.presentation === 'html' || artifact.presentation === 'text') {
         if (!artifact.data_url) throw new Error('missing Artifact URL');
         const response = await fetch(artifact.data_url, {
@@ -295,7 +307,9 @@ export class DlArtifactCanvas extends LightElement {
           signal: controller.signal,
         });
         if (!response.ok) throw new Error('Artifact data failed');
-        this.textPreview = await response.text();
+        const textPreview = await response.text();
+        if (this.#controller !== controller) return;
+        this.textPreview = textPreview;
       }
       if (this.#controller === controller) this.canvasState = 'ready';
     } catch {

@@ -317,6 +317,7 @@
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-control);
     color: var(--color-text-primary);
+    font: inherit;
     font-size: var(--font-size-detail);
     margin: var(--space-component) 0;
     outline: none;

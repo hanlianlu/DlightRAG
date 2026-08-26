@@ -772,23 +772,30 @@ async def test_schema_validation_error_is_a_safe_503(
 _ARTIFACT_ID = "artifact-report"
 
 
-def _publish_test_artifact(application: _RunApplication) -> None:
+def _publish_test_artifact(
+    application: _RunApplication,
+    *,
+    media_type: str = "text/markdown",
+    presentation: str = "markdown",
+    filename: str = "report.md",
+    content: bytes = b"0123456789",
+) -> None:
     result = _stored_result()
     result["artifacts"] = [
         {
             "resource_id": _ARTIFACT_ID,
             "role": "primary_report",
-            "media_type": "text/markdown",
+            "media_type": media_type,
             "label": "Report",
-            "filename": "report.md",
-            "byte_size": 10,
+            "filename": filename,
+            "byte_size": len(content),
             "digest": "a" * 64,
-            "presentation": "markdown",
+            "presentation": presentation,
             "status": "available",
         }
     ]
     application.record = _record(status="succeeded", result=result)
-    application.artifact_bytes = b"0123456789"
+    application.artifact_bytes = content
 
 
 async def test_artifact_list_does_not_invent_an_in_flight_outcome(
@@ -852,6 +859,30 @@ async def test_full_artifact_read_streams_without_a_range(
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["content-disposition"].startswith("attachment")
     assert "content-range" not in response.headers
+
+
+async def test_svg_artifact_is_inline_only_under_an_inert_document_policy(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+    _publish_test_artifact(
+        run_application,
+        media_type="image/svg+xml",
+        presentation="image",
+        filename="chart.svg",
+        content=svg,
+    )
+
+    response = await client.get(f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}")
+
+    assert response.status_code == 200
+    assert response.content == svg
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert response.headers["content-disposition"].startswith("inline")
+    assert response.headers["content-security-policy"] == (
+        "sandbox; default-src 'none'; img-src data:"
+    )
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 async def test_open_ended_range_returns_206_with_a_content_range(

@@ -63,7 +63,8 @@ it('does not restore stale focus when close is immediately followed by reopen', 
   await reopened;
   await new Promise((resolve) => requestAnimationFrame(resolve));
 
-  expect(lightbox.openState).to.equal(true);
+  expect(lightbox.getAttribute('aria-hidden')).to.equal('false');
+  expect(lightbox.inert).to.equal(false);
   expect(document.activeElement).not.to.equal(firstTrigger);
   expect(document.activeElement).to.equal(lightbox);
 });

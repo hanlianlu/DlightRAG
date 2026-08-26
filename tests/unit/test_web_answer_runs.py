@@ -504,6 +504,32 @@ async def test_browser_artifact_data_is_attachment_nosniff_and_no_store(
     assert response.headers["cache-control"] == "private, no-store"
 
 
+async def test_browser_svg_artifact_is_inline_only_under_an_inert_document_policy(
+    client: AsyncClient, service: AsyncMock, application_double: AsyncMock
+) -> None:
+    result = _with_primary_report(stored_result())
+    result["artifacts"][0].update(
+        media_type="image/svg+xml", presentation="image", filename="chart.svg"
+    )
+    service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
+    application_double.answers.artifact_size = AsyncMock(return_value=46)
+
+    async def stream():
+        yield b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+
+    application_double.answers.open_artifact = AsyncMock(return_value=stream())
+
+    response = await client.get(f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert response.headers["content-disposition"].startswith("inline")
+    assert response.headers["content-security-policy"] == (
+        "sandbox; default-src 'none'; img-src data:"
+    )
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
 async def test_general_artifact_presentation_is_404_without_a_descriptor(
     client: AsyncClient, service: AsyncMock
 ) -> None:

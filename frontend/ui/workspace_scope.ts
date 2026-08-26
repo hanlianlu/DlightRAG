@@ -9,6 +9,7 @@ import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
+import {publishModalState, showOwnedModal} from './modal.ts';
 import type {ToastRequestDetail} from './toast.ts';
 import './workspace_create.ts';
 
@@ -46,11 +47,17 @@ export class DlWorkspaceScope extends LightElement {
   }
 
   override disconnectedCallback(): void {
+    const dialog = this.querySelector<HTMLDialogElement>('#delete-workspace-dialog');
+    if (dialog?.open) dialog.close();
     this.#deleteOperation?.abort();
     this.#deleteOperation = null;
     this.#deleteReturnFocus = null;
+    this.open = false;
+    this.deleteWorkspace = null;
     this.deletePending = false;
+    this.deleteConfirmed = false;
     this.#dismiss.deactivate();
+    publishModalState(this);
     super.disconnectedCallback();
   }
 
@@ -203,7 +210,7 @@ export class DlWorkspaceScope extends LightElement {
     const dialog = this.querySelector<HTMLDialogElement>('#delete-workspace-dialog');
     if (!dialog) return;
     dialog.returnValue = '';
-    dialog.showModal();
+    showOwnedModal(this, dialog);
     window.requestAnimationFrame(() => {
       this.querySelector<HTMLInputElement>('#delete-workspace-confirm-input')?.focus();
     });
@@ -291,6 +298,7 @@ export class DlWorkspaceScope extends LightElement {
   };
 
   #deleteClosed = (): void => {
+    publishModalState(this);
     this.#deleteOperation?.abort();
     this.#deleteOperation = null;
     this.deleteWorkspace = null;

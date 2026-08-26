@@ -164,6 +164,7 @@ export class DlConversationSidebar extends LightElement {
       }
     }
     if (!dialog || await modalResult(
+      this,
       dialog,
       () => {
         if (returnFocus?.isConnected && !returnFocus.inert) returnFocus.focus();
@@ -310,7 +311,7 @@ export class DlConversationSidebar extends LightElement {
     if (!this.#hasUnsavedDraft()) return true;
     const dialog = this.#dialog('discard-draft-dialog');
     if (!dialog) return false;
-    return await modalResult(dialog, restoreFocus, this.#events?.signal) === 'discard';
+    return await modalResult(this, dialog, restoreFocus, this.#events?.signal) === 'discard';
   }
 
   async #guardNavigation(next: WebRoute): Promise<boolean> {
@@ -459,6 +460,7 @@ export class DlConversationSidebar extends LightElement {
       );
     }
     if (!dialog || await modalResult(
+      this,
       dialog,
       () => this.#focusConversationActions(conversationId),
       this.#events?.signal,

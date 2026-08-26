@@ -69,7 +69,8 @@ it('owns a native expanded trigger and closes after typed creation intent', asyn
   const input = scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')!;
   input.value = 'Research';
   scope.querySelector<HTMLButtonElement>('[aria-label="Create workspace"]')?.click();
-  await waitFor(() => workspaceStore.primary === 'research' && !scope.open);
+  await waitFor(() => workspaceStore.primary === 'research'
+    && trigger.getAttribute('aria-expanded') === 'false');
   await scope.updateComplete;
 
   expect(scope.textContent).to.contain('Research');
@@ -164,7 +165,8 @@ it('aborts a submitted creation only when its Feature disconnects', async () => 
 
   document.body.appendChild(scope);
   await scope.updateComplete;
-  expect(scope.querySelector('dl-workspace-create')?.pending).to.equal(false);
+  expect(scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')?.disabled)
+    .to.equal(false);
 });
 
 it('reports a submitted creation failure after its popover is dismissed', async () => {
@@ -211,9 +213,10 @@ it('keeps a pending deletion modal and isolates the next deletion operation', as
   input.dispatchEvent(new Event('input'));
   await scope.updateComplete;
   buttonNamed(scope, 'Delete')?.click();
-  await waitFor(() => requests.length === 1 && scope.deletePending);
+  await waitFor(() => requests.length === 1
+    && buttonNamed(scope, 'Deleting…')?.disabled === true);
 
-  const dialog = scope.querySelector<HTMLDialogElement>('dialog')!;
+  let dialog = scope.querySelector<HTMLDialogElement>('dialog')!;
   const cancel = buttonNamed(scope, 'Cancel')!;
   expect(cancel.disabled).to.equal(true);
   cancel.click();
@@ -226,27 +229,43 @@ it('keeps a pending deletion modal and isolates the next deletion operation', as
     status: 500,
     headers: {'Content-Type': 'application/json'},
   }));
-  await waitFor(() => !scope.deletePending);
+  await waitFor(() => buttonNamed(scope, 'Cancel')?.disabled === false
+    && input.readOnly === false);
   buttonNamed(scope, 'Cancel')?.click();
-  await waitFor(() => !dialog.open && scope.deleteWorkspace === null);
-
-  trigger.click();
+  await waitFor(() => !scope.querySelector<HTMLDialogElement>('dialog')?.open
+    && document.activeElement === buttonNamed(scope, 'Choose search workspaces'));
   await scope.updateComplete;
-  scope.querySelector<HTMLButtonElement>('[aria-label="Delete workspace Research"]')?.click();
-  await waitFor(() => dialog.open);
+
+  const nextTrigger = buttonNamed(scope, 'Choose search workspaces')!;
+  nextTrigger.click();
+  await scope.updateComplete;
+  expect(nextTrigger.getAttribute('aria-expanded')).to.equal('true');
+  const deleteResearch = scope.querySelector<HTMLButtonElement>(
+    '[aria-label="Delete workspace Research"]',
+  )!;
+  expect(deleteResearch).not.to.equal(null);
+  deleteResearch.click();
+  await waitFor(() => Boolean(scope.querySelector<HTMLInputElement>(
+    '[aria-label="Type Research to confirm"]',
+  )) && Boolean(scope.querySelector<HTMLDialogElement>('dialog[open]')));
+  dialog = scope.querySelector<HTMLDialogElement>('dialog[open]')!;
   input = scope.querySelector<HTMLInputElement>('[aria-label="Type Research to confirm"]')!;
   input.value = 'Research';
   input.dispatchEvent(new Event('input'));
   await scope.updateComplete;
-  buttonNamed(scope, 'Delete')?.click();
-  await waitFor(() => requests.length === 2 && scope.deletePending);
+  const submit = buttonNamed(scope, 'Delete')!;
+  expect(submit.disabled).to.equal(false);
+  submit.click();
+  await waitFor(() => requests.length === 2);
+  expect(scope.querySelector<HTMLInputElement>('[aria-label="Type Research to confirm"]')?.readOnly)
+    .to.equal(true);
   requests[1]!(new Response(JSON.stringify({
     workspace: 'research', next_workspace: 'default',
   }), {status: 200, headers: {'Content-Type': 'application/json'}}));
   await waitFor(() => !dialog.open);
 
   expect(workspaceStore.records.some((record) => record.workspace === 'research')).to.equal(false);
-  expect(scope.deletePending).to.equal(false);
+  expect(dialog.open).to.equal(false);
 });
 
 it('uses native dialog popover controls and restores ingest-trigger focus', async () => {
@@ -288,6 +307,72 @@ it('uses native dialog popover controls and restores ingest-trigger focus', asyn
     {detail: {workspace: 'new'}, bubbles: true, composed: true},
   ));
   await waitFor(() => popover.hidden && document.activeElement === trigger);
+});
+
+it('resets workspace popover and deletion state across disconnect and reconnect', async () => {
+  const scope = mountScope();
+  const modalStates: boolean[] = [];
+  scope.addEventListener('dl-modal-state-change', (event) => {
+    modalStates.push(event.detail.open);
+  });
+  await scope.updateComplete;
+  const trigger = buttonNamed(scope, 'Choose search workspaces')!;
+  trigger.click();
+  await scope.updateComplete;
+  scope.querySelector<HTMLButtonElement>('[aria-label="Delete workspace Default"]')?.click();
+  const dialog = scope.querySelector<HTMLDialogElement>('dialog')!;
+  await waitFor(() => dialog.open);
+  expect(modalStates.at(-1)).to.equal(true);
+
+  scope.remove();
+  document.body.appendChild(scope);
+  await scope.updateComplete;
+
+  const reconnectedTrigger = buttonNamed(scope, 'Choose search workspaces')!;
+  const popover = scope.querySelector<HTMLElement>('[role="dialog"][aria-label="Workspaces"]')!;
+  expect(reconnectedTrigger.getAttribute('aria-expanded')).to.equal('false');
+  expect(popover.hidden).to.equal(true);
+  expect(dialog.open).to.equal(false);
+  await waitFor(() => modalStates.at(-1) === false);
+
+  reconnectedTrigger.click();
+  await scope.updateComplete;
+  document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape', bubbles: true, cancelable: true,
+  }));
+  await waitFor(() => popover.hidden && document.activeElement === reconnectedTrigger);
+});
+
+it('resets ingest popover state and document listeners across reconnect', async () => {
+  const ingest = document.createElement('dl-ingest-target') as DlIngestTarget;
+  ingest.active = true;
+  document.body.appendChild(ingest);
+  await ingest.updateComplete;
+  const trigger = ingest.querySelector<HTMLButtonElement>(
+    '[aria-label="Files in Default; choose file workspace"]',
+  )!;
+  trigger.click();
+  await ingest.updateComplete;
+  expect(trigger.getAttribute('aria-expanded')).to.equal('true');
+
+  ingest.remove();
+  document.body.appendChild(ingest);
+  await ingest.updateComplete;
+  const reconnectedTrigger = ingest.querySelector<HTMLButtonElement>(
+    '[aria-label="Files in Default; choose file workspace"]',
+  )!;
+  const popover = ingest.querySelector<HTMLElement>(
+    '[role="dialog"][aria-label="Select ingest workspace"]',
+  )!;
+  expect(reconnectedTrigger.getAttribute('aria-expanded')).to.equal('false');
+  expect(popover.hidden).to.equal(true);
+
+  reconnectedTrigger.click();
+  await ingest.updateComplete;
+  document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape', bubbles: true, cancelable: true,
+  }));
+  await waitFor(() => popover.hidden && document.activeElement === reconnectedTrigger);
 });
 
 it('restores workspace-selector trigger focus when deletion is cancelled', async () => {

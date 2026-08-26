@@ -157,6 +157,7 @@ body.conversation-drawer-open {
     border-radius: var(--radius-control);
     color: var(--color-text-primary);
     flex: 1;
+    font: inherit;
     font-size: var(--font-size-detail);
     min-width: 0;
     outline: none;

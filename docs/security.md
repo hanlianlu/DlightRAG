@@ -497,8 +497,11 @@ authorization before its own acceptance transaction.
 Artifact descriptors expose validated media and owner-scoped URLs, never Blob
 bytes or Agent Workspace paths. Authenticated Artifact data and Markdown
 presentation responses use `Cache-Control: private, no-store`; active and unknown
-formats are attachments with `nosniff`. PDF preview is sandboxed and carries no
-same-origin capability.
+formats are attachments with `nosniff`. Published SVG removes scripts, event
+handlers, external references, styles with external loads, and nested SVG data
+URLs; its inline data response also carries a CSP `sandbox` without script or
+same-origin capability. PDF preview is sandboxed and carries no same-origin
+capability.
 
 HTML Artifact bytes are never served as executable same-origin documents. The
 browser fetches them through the authenticated inert data route and, only after

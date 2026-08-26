@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 page_router = APIRouter()
+_INERT_SVG_CSP = "sandbox; default-src 'none'; img-src data:"
 
 
 class _WebAgentControl(BaseModel):
@@ -377,6 +378,9 @@ async def answer_artifact_data(
             "Cache-Control": "private, no-store",
             "Content-Disposition": f'{disposition}; filename="{filename}"',
             "X-Content-Type-Options": "nosniff",
+            **(
+                {"Content-Security-Policy": _INERT_SVG_CSP} if media_type == "image/svg+xml" else {}
+            ),
             **({"Content-Range": content_range} if content_range else {}),
         },
     )

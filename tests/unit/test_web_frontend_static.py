@@ -396,7 +396,7 @@ def test_lit_shell_completion_has_one_owner_and_no_compatibility_layer() -> None
     assert "#chat-area" not in app and "open-artifact" not in app
     assert "@dl-image-open" in app
     assert "@dl-toast-request" in app
-    assert ".shellInert=${shellModal || this.lightboxOpen}" in app
+    assert "@dl-modal-state-change" in app
     assert "@dl-artifact-canvas-state-change" in app
     assert "document.getElementById" not in app
     assert "document.querySelector" not in app

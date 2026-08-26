@@ -33,6 +33,7 @@ import type {DlImageLightbox} from './image_lightbox.ts';
 import './image_lightbox.ts';
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
 import './inspector.ts';
+import type {ModalStateDetail} from './modal.ts';
 import type {DlSettingsDialog} from './settings.ts';
 import './settings.ts';
 import {syncPanelSplitState} from './split_panel.ts';
@@ -80,6 +81,7 @@ export class DlApp extends LightElement {
     canvasOverlay: {state: true},
     chatRunning: {state: true},
     lightboxOpen: {state: true},
+    nativeModalOpen: {state: true},
   };
 
   declare bootState: 'loading' | 'ready' | 'error';
@@ -94,8 +96,10 @@ export class DlApp extends LightElement {
   declare canvasOverlay: boolean;
   declare chatRunning: boolean;
   declare lightboxOpen: boolean;
+  declare nativeModalOpen: boolean;
 
   #bootstrap: WebBootstrap = EMPTY_BOOTSTRAP;
+  readonly #nativeModalOwners = new Set<HTMLElement>();
   #controller: AbortController | null = null;
   #pendingContinuation: {kind: 'follow-up' | 'fork'; runId: string} | null = null;
   readonly #ready: Promise<WebBootstrap>;
@@ -116,6 +120,7 @@ export class DlApp extends LightElement {
     this.canvasOverlay = false;
     this.chatRunning = false;
     this.lightboxOpen = false;
+    this.nativeModalOpen = false;
     this.#ready = new Promise((resolve) => { this.#resolveReady = resolve; });
   }
 
@@ -132,6 +137,8 @@ export class DlApp extends LightElement {
     super.disconnectedCallback();
     this.#controller?.abort();
     this.#controller = null;
+    this.#nativeModalOwners.clear();
+    this.nativeModalOpen = false;
     document.body.classList.remove(
       'conversation-sidebar-open',
       'conversation-drawer-open',
@@ -185,7 +192,8 @@ export class DlApp extends LightElement {
     const chatFeature = this.querySelector<DlChatFeature>('dl-chat-feature');
     const conversationModal = this.conversationExpanded && this.conversationCompact;
     const inspectorModal = this.inspectorOpen && this.inspectorCompact;
-    const shellModal = conversationModal || inspectorModal || this.canvasModal;
+    const shellModal = conversationModal || inspectorModal || this.canvasModal
+      || this.nativeModalOpen;
     return html`
       <div class="app${this.hasMessages ? ' has-messages' : ''}" id="app"
         @artifact-open=${this.#openArtifact}
@@ -196,6 +204,7 @@ export class DlApp extends LightElement {
         @dl-chat-running-change=${this.#runningChanged}
         @dl-settings-request=${this.#settingsRequested}
         @dl-toast-request=${this.#toastRequested}
+        @dl-modal-state-change=${this.#modalStateChanged}
         @dl-conversation-sidebar-opening=${this.#conversationSidebarOpening}
         @dl-conversation-sidebar-state-change=${this.#conversationSidebarStateChanged}
         @dl-conversation-route-change=${this.#conversationRouteChanged}
@@ -295,6 +304,14 @@ export class DlApp extends LightElement {
 
   #runningChanged(event: CustomEvent<ChatRunningChangeDetail>): void {
     this.chatRunning = event.detail.active;
+  }
+
+  #modalStateChanged(event: CustomEvent<ModalStateDetail>): void {
+    const owner = event.target;
+    if (!(owner instanceof HTMLElement)) return;
+    if (event.detail.open) this.#nativeModalOwners.add(owner);
+    else this.#nativeModalOwners.delete(owner);
+    this.nativeModalOpen = this.#nativeModalOwners.size > 0;
   }
 
   #inspector(): DlInspector | null {

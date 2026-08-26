@@ -3,6 +3,7 @@
 
 import {html} from 'lit';
 import {LightElement} from '../lib/lit_host.ts';
+import {publishModalState, showOwnedModal} from './modal.ts';
 
 export type ContinuationKind = 'follow-up' | 'fork';
 
@@ -25,7 +26,7 @@ export class DlContinuationDialog extends LightElement {
         input.value = '';
         window.requestAnimationFrame(() => input.focus());
       }
-      dialog.showModal();
+      showOwnedModal(this, dialog);
     });
   }
 
@@ -61,6 +62,7 @@ export class DlContinuationDialog extends LightElement {
   }
 
   #emitClose(): void {
+    publishModalState(this);
     const dialog = this.#dialog();
     const value = dialog?.returnValue;
     this.dispatchEvent(
@@ -89,7 +91,7 @@ export class DlChildrenRoster extends LightElement {
     this.fetcher = fetcher;
     void this.updateComplete.then(() => {
       const dialog = this.querySelector<HTMLDialogElement>('dialog');
-      dialog?.showModal();
+      if (dialog) showOwnedModal(this, dialog);
       void this.refresh();
     });
   }
@@ -121,7 +123,8 @@ export class DlChildrenRoster extends LightElement {
 
   override render() {
     return html`
-      <dialog class="confirm-dialog" aria-labelledby="dl-roster-title">
+      <dialog class="confirm-dialog" aria-labelledby="dl-roster-title"
+              @close=${() => publishModalState(this)}>
         <form method="dialog">
           <h2 id="dl-roster-title">Child agents</h2>
           <ul class="roster-list"></ul>

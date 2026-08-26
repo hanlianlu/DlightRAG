@@ -12,7 +12,7 @@ import {
 import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import type {ChatMemoryOperationDetail} from './chat_feature.ts';
-import {modalResult} from './modal.ts';
+import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
 import type {ToastRequestDetail} from './toast.ts';
 
 const MAX_SEEN_MEMORY_OPERATIONS = 500;
@@ -94,7 +94,7 @@ export class DlSettingsDialog extends LightElement {
     const dialog = this.#dialog();
     if (!dialog || dialog.open) return;
     dialog.returnValue = '';
-    dialog.showModal();
+    showOwnedModal(this, dialog);
     document.body.classList.add('settings-open');
   }
 
@@ -209,6 +209,7 @@ export class DlSettingsDialog extends LightElement {
   };
 
   #closed = (): void => {
+    publishModalState(this);
     document.body.classList.remove('settings-open');
     const returnFocus = this.#returnFocus;
     this.#returnFocus = null;
@@ -240,7 +241,7 @@ export class DlSettingsDialog extends LightElement {
     const button = event.currentTarget as HTMLButtonElement;
     const confirm = this.querySelector<HTMLDialogElement>('#clear-memory-dialog');
     if (!signal || signal.aborted || !confirm || this.memoryPending) return;
-    if (await modalResult(confirm, () => button.focus(), signal) !== 'clear') return;
+    if (await modalResult(this, confirm, () => button.focus(), signal) !== 'clear') return;
     this.memoryPending = true;
     this.#invalidateMemoryReads();
     try {

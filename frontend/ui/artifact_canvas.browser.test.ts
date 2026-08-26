@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
-import type {AnswerArtifact} from '../api/conversations.ts';
+import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
 import './artifact_canvas.ts';
 import type {DlArtifactCanvas} from './artifact_canvas.ts';
 
@@ -42,11 +42,124 @@ function htmlArtifact(): AnswerArtifact {
   };
 }
 
+function artifact(id: string, label: string, presentation: 'markdown' | 'html'): AnswerArtifact {
+  const extension = presentation === 'markdown' ? 'md' : 'html';
+  const mediaType = presentation === 'markdown' ? 'text/markdown' : 'text/html';
+  return {
+    ...htmlArtifact(),
+    resource_id: id,
+    media_type: mediaType,
+    label,
+    filename: `${id}.${extension}`,
+    presentation,
+    uri: `dlightrag://answer/run-1/artifacts/${id}`,
+    data_url: `/web/api/answer/run-1/artifacts/${id}`,
+    download_url: `/web/api/answer/run-1/artifacts/${id}?download=1`,
+    presentation_url: `/web/api/answer/run-1/artifacts/${id}/presentation`,
+  };
+}
+
+function markdownPresentation(text: string): AnswerPresentation {
+  return {
+    answer_text: text,
+    parts: [{
+      type: 'markdown', text, html: `<p>${text}</p>`, artifact: null,
+      evidence_image: null, inline: false,
+    }],
+    sources: [],
+    evidence_images: [],
+    artifacts: [],
+    artifact_outcome: {status: 'complete', issues: []},
+  };
+}
+
 afterEach(() => {
   window.fetch = originalFetch;
   window.matchMedia = originalMatchMedia;
   document.body.replaceChildren();
   document.body.className = '';
+});
+
+it('ignores a previous Markdown response that finishes decoding after an Artifact switch', async () => {
+  let finishStaleDecode!: (value: AnswerPresentation) => void;
+  let markDecodeStarted!: () => void;
+  const staleDecode = new Promise<AnswerPresentation>((resolve) => { finishStaleDecode = resolve; });
+  const decodeStarted = new Promise<void>((resolve) => { markDecodeStarted = resolve; });
+  const currentPresentation = markdownPresentation('Current report');
+  window.fetch = async (input) => {
+    if (String(input).includes('/stale-markdown/')) {
+      return {
+        ok: true,
+        json: async () => {
+          markDecodeStarted();
+          return staleDecode;
+        },
+      } as Response;
+    }
+    return new Response(JSON.stringify(currentPresentation));
+  };
+  const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
+  document.body.appendChild(canvas);
+
+  const staleOpen = canvas.open(artifact('stale-markdown', 'Stale report', 'markdown'));
+  await decodeStarted;
+  await canvas.open(artifact('current-markdown', 'Current report', 'markdown'));
+  await canvas.updateComplete;
+  await canvas.querySelector('dl-answer-presentation')?.updateComplete;
+
+  expect(canvas.querySelector('.artifact-canvas-title')?.textContent).to.equal('Current report');
+  expect(canvas.querySelector<HTMLAnchorElement>('[download]')?.getAttribute('href'))
+    .to.equal(`${window.location.origin}/web/api/answer/run-1/artifacts/current-markdown?download=1`);
+  expect(canvas.querySelector('.answer-rich-content')?.textContent).to.equal('Current report');
+
+  finishStaleDecode(markdownPresentation('Stale report'));
+  await staleOpen;
+  await canvas.updateComplete;
+  await canvas.querySelector('dl-answer-presentation')?.updateComplete;
+
+  expect(canvas.querySelector('.artifact-canvas-title')?.textContent).to.equal('Current report');
+  expect(canvas.querySelector('.answer-rich-content')?.textContent).to.equal('Current report');
+  expect(canvas.textContent).not.to.contain('Stale report');
+});
+
+it('ignores previous HTML text that finishes decoding after an Artifact switch', async () => {
+  let finishStaleDecode!: (value: string) => void;
+  let markDecodeStarted!: () => void;
+  const staleDecode = new Promise<string>((resolve) => { finishStaleDecode = resolve; });
+  const decodeStarted = new Promise<void>((resolve) => { markDecodeStarted = resolve; });
+  window.fetch = async (input) => {
+    if (String(input).includes('/stale-html')) {
+      return {
+        ok: true,
+        text: async () => {
+          markDecodeStarted();
+          return staleDecode;
+        },
+      } as Response;
+    }
+    return new Response('<!doctype html><html><body>Current HTML</body></html>');
+  };
+  const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
+  canvas.activePreviewEnabled = false;
+  document.body.appendChild(canvas);
+
+  const staleOpen = canvas.open(artifact('stale-html', 'Stale HTML', 'html'));
+  await decodeStarted;
+  await canvas.open(artifact('current-html', 'Current HTML', 'html'));
+  await canvas.updateComplete;
+
+  expect(canvas.querySelector('.artifact-canvas-title')?.textContent).to.equal('Current HTML');
+  expect(canvas.querySelector<HTMLAnchorElement>('[download]')?.getAttribute('href'))
+    .to.equal(`${window.location.origin}/web/api/answer/run-1/artifacts/current-html?download=1`);
+  expect(canvas.querySelector('details pre')?.textContent).to.contain('Current HTML');
+
+  finishStaleDecode('<!doctype html><html><body>Stale HTML</body></html>');
+  await staleOpen;
+  await canvas.updateComplete;
+
+  expect(canvas.querySelector('.artifact-canvas-title')?.textContent).to.equal('Current HTML');
+  expect(canvas.querySelector('details pre')?.textContent).to.contain('Current HTML');
+  expect(canvas.querySelector('details pre')?.textContent).not.to.contain('Stale HTML');
 });
 
 it('requires explicit user intent before creating the active iframe', async () => {
@@ -162,6 +275,11 @@ it('operator-disabled HTML uses only the script-disabled static frame', async ()
   expect(frame).not.to.equal(null);
   expect(frame?.active).to.equal(false);
   expect(canvas.textContent).not.to.contain('Open interactive report');
+  const source = canvas.querySelector<HTMLDetailsElement>('details');
+  expect(source?.querySelector('summary')?.textContent).to.equal('Source');
+  source?.querySelector<HTMLElement>('summary')?.click();
+  expect(source?.open).to.equal(true);
+  expect(source?.querySelector('pre')?.textContent).to.contain('Static');
 });
 
 it('isolates PDF preview in a sandboxed no-referrer iframe', async () => {

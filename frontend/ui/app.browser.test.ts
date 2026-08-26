@@ -6,6 +6,8 @@ import './app.ts';
 import type {DlApp} from './app.ts';
 import type {DlChatFeature} from './chat_feature.ts';
 import type {ImageOpenDetail} from './image_lightbox.ts';
+import type {DlContinuationDialog} from './run_dialogs.ts';
+import type {DlSettingsDialog} from './settings.ts';
 import type {
   AnswerPresentationElement,
   AnswerSourceOpenDetail,
@@ -73,6 +75,15 @@ function response(body: unknown, status = 200): Response {
 
 function bootstrapResponse(input: RequestInfo | URL): Response {
   return String(input) === '/web/api/conversations' ? response([]) : response(bootstrap);
+}
+
+function dialogNamed(root: ParentNode, name: string): HTMLDialogElement | null {
+  return Array.from(root.querySelectorAll<HTMLDialogElement>('dialog')).find((dialog) => {
+    const labelledBy = dialog.getAttribute('aria-labelledby');
+    return labelledBy
+      ? root.querySelector<HTMLElement>(`#${labelledBy}`)?.textContent?.trim() === name
+      : dialog.getAttribute('aria-label') === name;
+  }) ?? null;
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -182,11 +193,11 @@ it('pauses an actionable receipt while the Image Lightbox makes the app inert', 
     bubbles: true,
     composed: true,
   }));
-  await waitFor(() => app.lightboxOpen);
+  const lightbox = app.querySelector<HTMLElement>('[role="dialog"][aria-label="Image viewer"]')!;
+  await waitFor(() => lightbox.getAttribute('aria-hidden') === 'false');
   await app.updateComplete;
   await toast.updateComplete;
 
-  expect(toast.shellInert).to.equal(true);
   expect(toast.inert).to.equal(true);
   await new Promise((resolve) => setTimeout(resolve, 60));
   await toast.updateComplete;
@@ -196,11 +207,10 @@ it('pauses an actionable receipt while the Image Lightbox makes the app inert', 
   document.dispatchEvent(new KeyboardEvent('keydown', {
     key: 'Escape', bubbles: true, cancelable: true,
   }));
-  await waitFor(() => !app.lightboxOpen);
+  await waitFor(() => lightbox.getAttribute('aria-hidden') === 'true');
   await app.updateComplete;
   await toast.updateComplete;
   await new Promise((resolve) => requestAnimationFrame(resolve));
-  expect(toast.shellInert).to.equal(false);
   expect(toast.inert).to.equal(false);
   expect(document.activeElement).to.equal(returnFocus);
 
@@ -208,6 +218,59 @@ it('pauses an actionable receipt while the Image Lightbox makes the app inert', 
   await toast.updateComplete;
   expect(toast.textContent?.trim()).to.equal('');
   expect(toast.querySelector('button')).to.equal(null);
+});
+
+it('keeps Undo available across Settings and a sibling native modal', async () => {
+  window.fetch = async (input) => String(input) === '/web/api/memory/settings'
+    ? response({enabled: true, active_count: 0})
+    : bootstrapResponse(input);
+  const app = document.createElement('dl-app') as DlApp;
+  document.body.appendChild(app);
+  await app.ready;
+
+  const settings = app.querySelector<DlSettingsDialog>('dl-settings-dialog')!;
+  const trigger = app.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!;
+  await settings.open(trigger);
+  const settingsDialog = dialogNamed(settings, 'Settings')!;
+  await waitFor(() => settingsDialog.open);
+
+  let undone = false;
+  settings.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
+    detail: {
+      message: 'Undo available',
+      action: {
+        actionLabel: 'Undo',
+        duration: 40,
+        onAction: async () => { undone = true; },
+      },
+    },
+    bubbles: true,
+    composed: true,
+  }));
+  const toast = app.querySelector<DlToastRegion>('dl-toast-region')!;
+  await app.updateComplete;
+  await toast.updateComplete;
+  expect(toast.inert).to.equal(true);
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  expect(toast.querySelector<HTMLButtonElement>('button')?.textContent).to.equal('Undo');
+
+  const continuation = app.querySelector<DlContinuationDialog>('dl-continuation-dialog')!;
+  continuation.open('follow-up');
+  const continuationDialog = dialogNamed(continuation, 'Follow up')!;
+  await waitFor(() => continuationDialog.open);
+  settingsDialog.close();
+  await waitFor(() => !settingsDialog.open);
+  await app.updateComplete;
+  await toast.updateComplete;
+  expect(toast.inert).to.equal(true);
+
+  continuationDialog.close();
+  await waitFor(() => !continuationDialog.open && !toast.inert);
+  expect(toast.inert).to.equal(false);
+  toast.querySelector<HTMLButtonElement>('button')?.click();
+  await waitFor(() => undone && toast.textContent?.includes('Change undone.') === true);
+  expect(toast.textContent).to.contain('Change undone.');
 });
 
 it('routes typed toast intent through Shell composition to the public Toast command', async () => {

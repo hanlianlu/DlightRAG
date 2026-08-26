@@ -36,8 +36,9 @@ export class DlIngestTarget extends LightElement {
     }
 
     override disconnectedCallback(): void {
-        super.disconnectedCallback();
+        this.open = false;
         this.#dismiss.deactivate();
+        super.disconnectedCallback();
     }
 
     close(): void {

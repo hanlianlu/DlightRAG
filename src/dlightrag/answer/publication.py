@@ -64,6 +64,7 @@ _HTML_STYLESHEET = re.compile(
 )
 _CSS_EXTERNAL_URL = re.compile(r"url\(\s*[\"']?(?!data:|blob:)[^)]+\)", re.IGNORECASE)
 _CSS_EXTERNAL_IMPORT = re.compile(r"@import\s+(?!url\(\s*[\"']?data:)", re.IGNORECASE)
+_SVG_RASTER_DATA_URL = re.compile(r"^data:image/(?:gif|jpeg|png|webp)(?:;[^,]*)?,", re.IGNORECASE)
 _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _HTML_SUBSTANTIVE_ELEMENT = re.compile(
     r"<(?:audio|embed|iframe|img|object|source|video)\b[^>]*(?:src|data)\s*="
@@ -615,7 +616,7 @@ def _sanitize_svg(content: bytes) -> bytes:
             if (
                 name.startswith("on")
                 or name in {"href", "src"}
-                and not normalized.startswith(("#", "data:image/"))
+                and not (normalized.startswith("#") or _SVG_RASTER_DATA_URL.match(normalized))
                 or name == "style"
                 and ("url(" in normalized or "@import" in normalized)
             ):

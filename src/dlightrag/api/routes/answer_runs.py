@@ -54,6 +54,7 @@ router = APIRouter()
 
 _ALLOWED_ANSWER_PARTS = {"request", "attachments"}
 _MAX_ANSWER_FORM_FIELDS = 8
+_INERT_SVG_CSP = "sandbox; default-src 'none'; img-src data:"
 
 
 class _AgentControlBody(BaseModel):
@@ -496,6 +497,11 @@ async def read_answer_artifact(
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": disposition,
+            **(
+                {"Content-Security-Policy": _INERT_SVG_CSP}
+                if descriptor.get("media_type") == "image/svg+xml"
+                else {}
+            ),
             **({"Content-Range": content_range} if content_range else {}),
         },
         status_code=status_code,

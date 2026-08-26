@@ -157,7 +157,10 @@ it('includes typed Answer images in previous and next gallery navigation', async
   const next = lightbox.querySelector<HTMLButtonElement>('[aria-label="Next"]')!;
   expect(next.hidden).to.equal(false);
   next.click();
-  expect(lightbox.current).to.equal(images[1].dataset.src);
+  await lightbox.updateComplete;
+  expect(lightbox.querySelector<HTMLImageElement>('img')?.src).to.equal(
+    new URL(images[1].dataset.src ?? '', window.location.origin).href,
+  );
   lightbox.close();
 });
 
