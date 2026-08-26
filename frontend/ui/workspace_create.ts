@@ -67,7 +67,7 @@ export class DlWorkspaceCreate extends LightElement {
           message: error instanceof WorkspaceApiError
             ? error.message
             : 'Failed to create workspace',
-          duration: 5000,
+          duration: 3000,
         });
       }
     } finally {

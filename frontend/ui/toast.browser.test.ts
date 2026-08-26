@@ -15,6 +15,21 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+it('caps every requested duration at three seconds while preserving shorter receipts', () => {
+  const toast = mountToast();
+
+  toast.show('Long receipt', 5000);
+  expect(toast.request?.duration).to.equal(3000);
+  toast.showAction('Long action receipt', {
+    actionLabel: 'Undo',
+    onAction: async () => {},
+    duration: 12_000,
+  });
+  expect(toast.request?.duration).to.equal(3000);
+  toast.show('Short receipt', 1500);
+  expect(toast.request?.duration).to.equal(1500);
+});
+
 it('renders escaped text and settles an asynchronous public Undo command in place', async () => {
   const toast = mountToast();
   let calls = 0;

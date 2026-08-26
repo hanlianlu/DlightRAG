@@ -190,7 +190,7 @@ export class DlConversationSidebar extends LightElement {
       result = await conversationStore.deleteAll(signal);
       if (signal.aborted) return false;
       if (result === 'error') {
-        this.#requestToast({message: 'Could not delete conversations.', duration: 5000});
+        this.#requestToast({message: 'Could not delete conversations.', duration: 3000});
       } else {
         this.chatFeature?.clearDraft();
         if (alsoClearMemory) {
@@ -200,7 +200,7 @@ export class DlConversationSidebar extends LightElement {
             if (!signal.aborted) {
               this.#requestToast({
                 message: 'Conversations deleted; could not clear Profile memory.',
-                duration: 5000,
+                duration: 3000,
               });
             }
           }
@@ -303,7 +303,7 @@ export class DlConversationSidebar extends LightElement {
 
   #lifecycleBlocked(): boolean {
     if (!this.chatFeature?.submissionPending) return false;
-    this.#requestToast({message: 'Wait for the current question to be accepted.', duration: 4000});
+    this.#requestToast({message: 'Wait for the current question to be accepted.', duration: 3000});
     return true;
   }
 
@@ -433,14 +433,14 @@ export class DlConversationSidebar extends LightElement {
     const result = await conversationStore.rename(conversationId, title, signal);
     if (signal.aborted || result === 'ok') return;
     if (result === 'missing') {
-      this.#requestToast({message: 'Conversation unavailable.', duration: 4000});
+      this.#requestToast({message: 'Conversation unavailable.', duration: 3000});
       return;
     }
     this.#requestToast({
       message: title.trim().length > 120
         ? 'Conversation titles must be 1 to 120 characters.'
         : 'Could not rename the conversation.',
-      duration: 5000,
+      duration: 3000,
     });
   }
 
@@ -476,7 +476,7 @@ export class DlConversationSidebar extends LightElement {
       result = await conversationStore.delete(conversationId, signal);
       if (signal.aborted) return;
       if (result === 'error') {
-        this.#requestToast({message: 'Could not delete the conversation.', duration: 5000});
+        this.#requestToast({message: 'Could not delete the conversation.', duration: 3000});
       } else if (wasActive) {
         this.chatFeature?.clearDraft();
         const fallback = conversationStore.fallbackConversationId;

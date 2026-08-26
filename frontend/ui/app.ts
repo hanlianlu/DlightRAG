@@ -328,7 +328,7 @@ export class DlApp extends LightElement {
     if (!inspector?.open) return;
     if (inspector.hasActiveFileMutation) {
       event.preventDefault();
-      this.#toast()?.show('Wait for the file change to finish before opening conversations.', 5000);
+      this.#toast()?.show('Wait for the file change to finish before opening conversations.', 3000);
       return;
     }
     inspector.close();

@@ -169,7 +169,7 @@ function mountPrimitives(): void {
     {
       actionLabel: 'Undo',
       onAction: async () => 'Profile Memory change undone.',
-      duration: 3_600_000,
+      duration: 3000,
     },
   );
   const notificationOffer = document.querySelector<DlNotificationOffer>('.ds-notify-demo');

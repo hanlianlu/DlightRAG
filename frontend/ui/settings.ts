@@ -82,7 +82,7 @@ export class DlSettingsDialog extends LightElement {
       const read = await this.#readMemory();
       if (read === 'failed') {
         this.memory = null;
-        this.#requestToast({message: 'Could not load memory settings.', duration: 5000});
+        this.#requestToast({message: 'Could not load memory settings.', duration: 3000});
       }
       if (!signal.aborted) this.memoryLoading = false;
     }
@@ -107,7 +107,7 @@ export class DlSettingsDialog extends LightElement {
     this.#seenMemoryOperations.add(identity);
     const message = memorySummary(event);
     if (event.outcome !== 'changed' || !event.change_id) {
-      this.#requestToast({message, duration: 5000});
+      this.#requestToast({message, duration: 3000});
       return;
     }
     const changeId = event.change_id;
@@ -116,7 +116,7 @@ export class DlSettingsDialog extends LightElement {
       message,
       action: {
         actionLabel: 'Undo',
-        duration: 12_000,
+        duration: 3000,
         onAction: async () => {
           this.#invalidateMemoryReads();
           const receipt = await undoMemoryChange(changeId, signal);
@@ -218,7 +218,7 @@ export class DlSettingsDialog extends LightElement {
     } catch {
       if (!signal.aborted) {
         input.checked = !requested;
-        this.#requestToast({message: 'Could not save memory settings.', duration: 5000});
+        this.#requestToast({message: 'Could not save memory settings.', duration: 3000});
       }
     } finally {
       if (!signal.aborted) this.memoryPending = false;
@@ -239,7 +239,7 @@ export class DlSettingsDialog extends LightElement {
       if (!signal.aborted) this.#requestToast({message: 'Memory cleared.', duration: 3000});
     } catch {
       if (!signal.aborted) {
-        this.#requestToast({message: 'Could not clear memory.', duration: 5000});
+        this.#requestToast({message: 'Could not clear memory.', duration: 3000});
       }
     } finally {
       if (!signal.aborted) this.memoryPending = false;

@@ -4,6 +4,8 @@
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {LightElement} from '../lib/lit_host.ts';
 
+const MAX_TOAST_DURATION = 3000;
+
 export interface ActionToastOptions {
   actionLabel: string;
   onAction: () => Promise<string | void>;
@@ -83,7 +85,7 @@ export class DlToastRegion extends LightElement {
   showAction(message: string, options: ActionToastOptions): void {
     this.#show({
       message,
-      duration: options.duration ?? 12_000,
+      duration: options.duration ?? MAX_TOAST_DURATION,
       action: options,
     });
   }
@@ -110,10 +112,14 @@ export class DlToastRegion extends LightElement {
   }
 
   #show(request: ToastRequest): void {
-    this.request = request;
+    const bounded = {
+      ...request,
+      duration: Math.min(request.duration, MAX_TOAST_DURATION),
+    };
+    this.request = bounded;
     this.visible = true;
     this.pending = false;
-    this.#startTimer(request.duration);
+    this.#startTimer(bounded.duration);
   }
 
   #hide(): void {
@@ -188,7 +194,7 @@ export class DlToastRegion extends LightElement {
       duration = 3000;
     } catch {
       message = 'Could not undo the change.';
-      duration = 5000;
+      duration = 3000;
     }
     if (this.request !== request) return;
     const settled: ToastRequest = {message, duration, action: null};

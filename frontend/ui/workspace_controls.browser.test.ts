@@ -189,7 +189,7 @@ it('reports a submitted creation failure after its popover is dismissed', async 
   rejectCreate(new TypeError('network unavailable'));
   await waitFor(() => receipt !== null);
 
-  expect(receipt).to.deep.equal({message: 'Failed to create workspace', duration: 5000});
+  expect(receipt).to.deep.equal({message: 'Failed to create workspace', duration: 3000});
   expect(scope.querySelector<HTMLElement>('[role="dialog"][aria-label="Workspaces"]')?.hidden)
     .to.equal(true);
 });

@@ -278,7 +278,7 @@ export class DlWorkspaceScope extends LightElement {
           message: error instanceof WorkspaceApiError
             ? error.message
             : 'Could not delete workspace.',
-          duration: 4000,
+          duration: 3000,
         });
       }
     } finally {

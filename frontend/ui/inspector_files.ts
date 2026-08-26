@@ -152,7 +152,7 @@ export class DlInspectorFiles extends LightElement {
       if (isAbortError(error) || !this.#isCurrent(controller, workspace)) return;
       const message = error instanceof FilesApiError ? error.message : 'Upload failed.';
       this.error = message;
-      this.#requestToast({message, duration: 5000});
+      this.#requestToast({message, duration: 3000});
     } finally {
       this.#finishMutation();
       if (this.#request === controller) {
@@ -188,7 +188,7 @@ export class DlInspectorFiles extends LightElement {
       if (isAbortError(error) || !this.#isCurrent(controller, workspace)) return;
       const message = error instanceof FilesApiError ? error.message : 'Deletion failed.';
       this.error = message;
-      this.#requestToast({message, duration: 5000});
+      this.#requestToast({message, duration: 3000});
     } finally {
       this.#finishMutation();
       if (this.#request === controller) this.#request = null;
