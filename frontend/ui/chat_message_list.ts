@@ -63,6 +63,21 @@ export const MAX_CHAT_TURNS = 100;
 export const MAX_STEERING_MESSAGES = 50;
 const STICK_TO_BOTTOM_PX = 160;
 
+function terminal(state: ChatTurnView['state']): boolean {
+  return state === 'succeeded' || state === 'failed' || state === 'cancelled';
+}
+
+function newlyCompletedTurn(
+  previous: readonly ChatTurnView[],
+  current: readonly ChatTurnView[],
+): string | null {
+  const previousStates = new Map(previous.map((turn) => [turn.id, turn.state]));
+  return [...current].reverse().find((turn) => {
+    const previousState = previousStates.get(turn.id);
+    return previousState !== undefined && !terminal(previousState) && terminal(turn.state);
+  })?.id ?? null;
+}
+
 function liveObjectUrls(turns: readonly ChatTurnView[]): Set<string> {
   const urls = new Set<string>();
   for (const turn of turns) {
@@ -99,6 +114,7 @@ export class DlChatMessageList extends LightElement {
   #imageRevision = 0;
   #stickAfterUpdate = true;
   #scrollFrame = 0;
+  #pendingTurnAnchor: string | null = null;
 
   constructor() {
     super();
@@ -117,6 +133,11 @@ export class DlChatMessageList extends LightElement {
     const area = this.querySelector<HTMLElement>('#chat-area');
     this.#stickAfterUpdate = changed.has('scrollRequest') || !area
       || area.scrollHeight - area.scrollTop - area.clientHeight <= STICK_TO_BOTTOM_PX;
+    if (changed.has('turns')) {
+      const previous = (changed.get('turns') as readonly ChatTurnView[] | undefined) ?? [];
+      this.#pendingTurnAnchor = newlyCompletedTurn(previous, this.turns)
+        ?? this.#pendingTurnAnchor;
+    }
   }
 
   protected override updated(changed: PropertyValues<this>): void {
@@ -135,11 +156,28 @@ export class DlChatMessageList extends LightElement {
       }
     }
     if (this.#showWelcome()) return;
-    if (!this.#stickAfterUpdate || this.#scrollFrame) return;
+    if (this.#pendingTurnAnchor && this.#scrollFrame) {
+      cancelAnimationFrame(this.#scrollFrame);
+      this.#scrollFrame = 0;
+    }
+    if ((!this.#stickAfterUpdate && !this.#pendingTurnAnchor) || this.#scrollFrame) return;
+    const stickToBottom = this.#stickAfterUpdate;
     this.#scrollFrame = requestAnimationFrame(() => {
       this.#scrollFrame = 0;
       const area = this.querySelector<HTMLElement>('#chat-area');
-      if (area) area.scrollTop = area.scrollHeight;
+      if (!area) return;
+      const turnId = this.#pendingTurnAnchor;
+      this.#pendingTurnAnchor = null;
+      const anchor = turnId
+        ? Array.from(this.querySelectorAll<HTMLElement>('[data-turn-id]')).find(
+            (element) => element.dataset.turnId === turnId,
+          )
+        : null;
+      if (anchor) {
+        area.scrollTop += anchor.getBoundingClientRect().top - area.getBoundingClientRect().top;
+      } else if (stickToBottom) {
+        area.scrollTop = area.scrollHeight;
+      }
     });
   }
 
@@ -204,7 +242,7 @@ export class DlChatMessageList extends LightElement {
 
   #turn(turn: ChatTurnView): TemplateResult {
     return html`
-      <div class=${chatStyles.userMessageWrapper}>
+      <div class=${chatStyles.userMessageWrapper} data-turn-id=${turn.id}>
         ${this.#attachments(turn.userAttachments)}
         <div class=${chatStyles.userMessage}>${turn.userText}</div>
       </div>

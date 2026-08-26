@@ -185,9 +185,12 @@ it('renders cancelled history without a simultaneous stopping phase', async () =
 });
 
 it('forces a submitted turn into view without forcing later stream updates', async () => {
-  window.fetch = async () => new Response('{}', {
-    status: 503,
-    headers: {'Content-Type': 'application/json'},
+  let finishRequest!: () => void;
+  window.fetch = () => new Promise<Response>((resolve) => {
+    finishRequest = () => resolve(new Response('{}', {
+      status: 503,
+      headers: {'Content-Type': 'application/json'},
+    }));
   });
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {
@@ -220,6 +223,7 @@ it('forces a submitted turn into view without forcing later stream updates', asy
   await new Promise((resolve) => requestAnimationFrame(resolve));
   expect(scrollTop).to.equal(1000);
 
+  finishRequest();
   await waitFor(() => feature.turns.at(-1)?.state === 'failed');
   scrollTop = 0;
   feature.turns = feature.turns.map((turn, index) => index === feature.turns.length - 1
@@ -488,6 +492,58 @@ it('shows cancel-aware reconnect state and preserves stopping when reconnecting'
 
   expect(feature.querySelector('dl-chat-composer')?.stopping).to.equal(true);
   expect(feature.turns[0].progress).to.equal('Stopping...');
+});
+
+it('Message List anchors the completed turn at its latest user question', async () => {
+  const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
+  const earlier: ChatTurnView = {
+    id: 'turn-earlier', userText: 'Earlier question', runId: 'run-earlier', state: 'succeeded',
+    userAttachments: [], streamText: presentation.answer_text, presentation, usage: {}, evidence: {},
+    error: '', progress: '', liveStatus: '', sawChildren: false, cancelRequested: false,
+    steeringMessages: [],
+  };
+  const latest: ChatTurnView = {
+    ...earlier,
+    id: 'turn-latest',
+    userText: 'Latest question',
+    runId: 'run-latest',
+    state: 'streaming',
+    streamText: 'Working',
+    presentation: null,
+  };
+  list.turns = [earlier, latest];
+  document.body.appendChild(list);
+  await list.updateComplete;
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+
+  const area = list.querySelector<HTMLElement>('main[aria-label="Chat"]')!;
+  const latestQuestion = Array.from(list.querySelectorAll<HTMLElement>('div')).find(
+    (element) => element.textContent === 'Latest question',
+  )?.parentElement as HTMLElement;
+  let scrollTop = 0;
+  Object.defineProperties(area, {
+    scrollHeight: {configurable: true, value: 2000},
+    clientHeight: {configurable: true, value: 300},
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; },
+    },
+    getBoundingClientRect: {
+      configurable: true,
+      value: () => ({top: 100}),
+    },
+  });
+  Object.defineProperty(latestQuestion, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({top: 600 - scrollTop}),
+  });
+
+  list.turns = [earlier, {...latest, state: 'succeeded', presentation}];
+  await list.updateComplete;
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+
+  expect(scrollTop).to.equal(500);
 });
 
 it('Message List bounds steering wrappers within one retained turn', async () => {
