@@ -2,7 +2,7 @@
 """Contract tests for the local Answer run coordinator and its subscribers.
 
 The coordinator is the only local owner of accepted-run execution: it reserves
-an execution slot before it claims a row, heartbeats a fenced lease, journals
+an execution slot before it claims a row, heartbeats a fenced lease, commits
 completed control turns, coalesces tokens, and writes exactly one terminal
 event. Subscribers replay durable events and detach without touching the run.
 """
@@ -146,7 +146,7 @@ class _MemoryStore:
             row["lease_live"] = True
             row["fencing_epoch"] = int(row["fencing_epoch"]) + 1
             from dlightrag.runtime.records import RunExecutionContext
-            from tests.in_memory_session_store import InMemoryAgentSessionStore
+            from tests.in_memory_session_repository import InMemoryAgentSessionRepository
 
             class _Progress:
                 def __init__(self, store, run_id):
@@ -175,7 +175,7 @@ class _MemoryStore:
                     worker_id=worker_id,
                     lease_owner=worker_id,
                     fencing_epoch=int(row["fencing_epoch"]),
-                    session_store=InMemoryAgentSessionStore(),  # type: ignore[arg-type]
+                    session_repository=InMemoryAgentSessionRepository(),  # type: ignore[arg-type]
                     progress_store=_Progress(self, str(row["run_id"])),  # type: ignore[arg-type]
                 ),
             )

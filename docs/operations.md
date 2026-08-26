@@ -51,8 +51,8 @@ concern rather than a request concern.
   cancel active/queued runs, back up business data, apply the writer first, then
   start readers. Development deployments use the full reset above.
 - **Rolling upgrades.** All workers sharing one database must run a compatible
-  revision and the same model roles, execution adapters, extension set, outbound
-  MCP allowlists, and Answer policies; heterogeneous execution is unsupported.
+  revision and the same model roles, execution mode, outbound MCP allowlists,
+  and Answer policies; heterogeneous execution is unsupported.
 - **Migration order.** A writer applies migrations; readers validate the migrated
   schema and issue no DDL. Roll the writer first, then readers. A reader on an
   older schema fails startup with a diagnostic instead of degrading.
@@ -62,24 +62,26 @@ concern rather than a request concern.
   Azure Files); DlightRAG emulates no object store.
 - **Shutdown.** A graceful stop finalizes cancel-pending runs and fenced-requeues
   every other owned run so it is immediately reclaimable. A crash leaves the
-  lease to expire, after which any worker reclaims the run from the journal or
-  Fast stages. Four consecutive reclaims without durable progress fail the
+  lease to expire, after which any worker restores the Agent OperationState or
+  resumes Fast stages. Four consecutive reclaims without durable progress fail the
   run with `run_abandoned`.
 - **Retention.** Every run-owning process trims event logs and prunes terminal
   runs past the `answer.runtime.answer_run_retention_days` floor (default 365) hourly in
   bounded `SKIP LOCKED` batches. There is no
-  knob and no separate cron job. A succeeded run a Web conversation still
-  references survives until that conversation is deleted or expires; its event log
-  is trimmed on schedule regardless, after which its events endpoint returns 410
-  and clients read the canonical result from the status endpoint.
+  separate retention knob and no cron job. Conversation-linked runs prune at the
+  same floor and their turn rows cascade. Candidate Agent Sessions are removed
+  when no remaining routing row names them; empty Web Conversation identity does
+  not extend model-history retention, while Sessions shared by live routes survive.
+  Event logs may trim before run deletion, after which
+  the events endpoint returns 410 and clients read the canonical result from status.
 - **Storage.** Queued runs are never rejected for capacity, so bound and monitor
   PostgreSQL storage: `dlightrag_blobs`/`dlightrag_blob_chunks` hold uploaded and fetched
   bytes, and `dlightrag_answer_run_events` holds token batches until trimmed.
   When `answer.agent.execution_environment` is `trust` or `sandbox`, every
   Answer worker including readers must mount the same RWX
   `answer.agent.workspace_root` (Compose:
-  `/app/dlightrag_agent_workspaces`). Trust is host/network capable; sandbox
-  requires an installed adapter and never falls back to trust.
+  `/app/dlightrag_agent_workspaces`). Trust is host/network capable; this
+  distribution has no sandbox backend, so sandbox selection fails without fallback.
 - **Probes.** Route traffic on unauthenticated `GET /ready` (database and corpus
   readiness, short-cached). `GET /health` is liveness only and never touches
   PostgreSQL.

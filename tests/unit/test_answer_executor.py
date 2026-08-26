@@ -12,7 +12,7 @@ import pytest
 from PIL import Image
 
 from dlightrag.agent.session.ids import LaneId, SessionId
-from dlightrag.agent.session.memory import MemoryAgentSessionStore
+from dlightrag.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.agent.session.plan import AgentRunPlan
 from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
@@ -27,7 +27,6 @@ from dlightrag.answer.executor import (
     AnswerResourceResolver,
     AnswerResourceSettings,
     _close_execution_resources,
-    _ensure_selected_lane,
     _memory_recall_allowed,
 )
 from dlightrag.answer.highlights import SemanticHighlightSettings
@@ -39,16 +38,19 @@ from dlightrag.answer.runs.execution import (
     build_current_answer_resources,
     in_memory_attachment_loader,
 )
+from dlightrag.answer.session_host import ensure_session_lane
 from dlightrag.runtime import RunExecutionError, RunSession, artifact_digest
 
 
 @pytest.mark.asyncio
 async def test_missing_fork_session_is_a_typed_run_conflict() -> None:
-    store = MemoryAgentSessionStore[None]()
+    store = MemoryAgentSessionRepository[None]()
 
     with pytest.raises(RunExecutionError) as raised:
-        await _ensure_selected_lane(
-            cast(Any, store),
+        await ensure_session_lane(
+            transactions=store,
+            load=store.load,
+            fencing_epoch=1,
             session_id=SessionId.new(),
             lane_id=LaneId.new(),
             source_lane_id=LaneId.main(),

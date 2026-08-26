@@ -83,7 +83,7 @@ class LaneId:
 
 @dataclass(frozen=True, slots=True)
 class EntryId:
-    """One immutable journal entry identity."""
+    """One immutable Session Entry identity."""
 
     value: str
 

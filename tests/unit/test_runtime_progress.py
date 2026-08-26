@@ -119,7 +119,7 @@ class TestBoundStores:
 
 class TestRunExecutionContext:
     def test_context_is_frozen_and_carries_the_claim_binding(self) -> None:
-        from tests.in_memory_session_store import InMemoryAgentSessionStore
+        from tests.in_memory_session_repository import InMemoryAgentSessionRepository
 
         class _NoopProgress:
             async def load_stage(self, stage_intent_id):  # type: ignore[no-untyped-def]
@@ -134,7 +134,7 @@ class TestRunExecutionContext:
             worker_id="worker",
             lease_owner="worker",
             fencing_epoch=3,
-            session_store=InMemoryAgentSessionStore(),  # type: ignore[arg-type]
+            session_repository=InMemoryAgentSessionRepository(),  # type: ignore[arg-type]
             progress_store=_NoopProgress(),  # type: ignore[arg-type]
         )
         from dataclasses import FrozenInstanceError

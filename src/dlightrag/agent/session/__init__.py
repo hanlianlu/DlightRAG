@@ -8,15 +8,15 @@ without creating a package-initialization cycle.
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from dlightrag.agent.session.repository import AgentSessionRepository, AgentSessionSnapshot
     from dlightrag.agent.session.runtime import AgentSessionRuntime
-    from dlightrag.agent.session.store import AgentSessionSnapshot, AgentSessionStore
     from dlightrag.agent.session.transactions import SessionTransactionPort
     from dlightrag.agent.session.tree import AgentSessionTree
 
 __all__ = [
+    "AgentSessionRepository",
     "AgentSessionRuntime",
     "AgentSessionSnapshot",
-    "AgentSessionStore",
     "AgentSessionTree",
     "SessionTransactionPort",
 ]
@@ -27,12 +27,12 @@ def __getattr__(name: str) -> Any:
         from dlightrag.agent.session.runtime import AgentSessionRuntime
 
         return AgentSessionRuntime
-    if name in {"AgentSessionSnapshot", "AgentSessionStore"}:
-        from dlightrag.agent.session.store import AgentSessionSnapshot, AgentSessionStore
+    if name in {"AgentSessionRepository", "AgentSessionSnapshot"}:
+        from dlightrag.agent.session.repository import AgentSessionRepository, AgentSessionSnapshot
 
         return {
+            "AgentSessionRepository": AgentSessionRepository,
             "AgentSessionSnapshot": AgentSessionSnapshot,
-            "AgentSessionStore": AgentSessionStore,
         }[name]
     if name == "AgentSessionTree":
         from dlightrag.agent.session.tree import AgentSessionTree

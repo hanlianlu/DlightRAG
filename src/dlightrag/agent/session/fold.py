@@ -2,7 +2,7 @@
 """Fold canonical session entries into one derived working context.
 
 Durable Research rebuilds this projection from the selected session head before
-every provider call. In-process callers without a journal may append exchanges
+every provider call. In-process callers without a Repository may append exchanges
 to the same bounded projection directly.
 """
 
@@ -23,11 +23,7 @@ from dlightrag.agent.session.entries import (
 from dlightrag.agent.session.projection import render_compaction_summary
 from dlightrag.agent.tool_content import tool_content_message_fields
 from dlightrag.ai.messages import ToolCall
-from dlightrag.ai.tokens import (
-    estimate_messages_tokens,
-    estimate_tokens,
-    truncate_to_estimated_tokens,
-)
+from dlightrag.ai.tokens import estimate_messages_tokens
 
 
 class PriorTurns:
@@ -238,41 +234,6 @@ def select_compaction_boundary(
     return retained_start
 
 
-def head_tail_text(text: str, *, head_tokens: int, tail_tokens: int) -> str:
-    """Bound one individually oversized body to a head and a tail.
-
-    Durable evidence/resource/journal handles are appended by the caller after
-    this cut, so a truncated body still keeps its retrievable provenance.
-    """
-    if head_tokens <= 0 or tail_tokens <= 0:
-        raise ValueError("head and tail token budgets must be positive")
-    if estimate_tokens(text) <= head_tokens + tail_tokens:
-        return text
-    head = truncate_to_estimated_tokens(text, head_tokens)
-    tail_cut = _tail_prefix_within(text, tail_tokens)
-    if not head.strip() and not tail_cut.strip():
-        return ""
-    if head and tail_cut:
-        return f"{head}\n…\n{tail_cut}"
-    return head or tail_cut
-
-
-def _tail_prefix_within(text: str, tail_tokens: int) -> str:
-    """Return the longest suffix of text within the estimator token budget."""
-    if tail_tokens <= 0:
-        return ""
-    low = 0
-    high = min(len(text), tail_tokens * 4 + 16)
-    while low < high:
-        midpoint = (low + high + 1) // 2
-        suffix = text[-midpoint:]
-        if estimate_tokens(suffix) <= tail_tokens:
-            low = midpoint
-        else:
-            high = midpoint - 1
-    return text[-low:] if low else ""
-
-
 def _without_reasoning(message: dict[str, Any]) -> dict[str, Any]:
     if message.get("role") != "assistant":
         return message
@@ -296,7 +257,7 @@ class WorkingContextProjection:
 
     In durable Research it is only a projection cache rebuilt from the active
     session graph before each provider call. In-process callers may append to it
-    directly because they have no journal.
+    directly because they have no durable Session Repository.
     """
 
     def __init__(self, *, retained_tail_tokens: int) -> None:
@@ -362,7 +323,6 @@ __all__ = [
     "fold_entries",
     "fold_tool_call",
     "fold_tool_message",
-    "head_tail_text",
     "project_session_messages",
     "select_compaction_boundary",
 ]

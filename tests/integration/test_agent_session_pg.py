@@ -14,7 +14,7 @@ import pytest
 from pydantic import BaseModel
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-from dlightrag.adapters.postgres.session_journal import PGJournalStore
+from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository
 from dlightrag.agent.session.effects import ToolResultEntry
 from dlightrag.agent.session.entries import (
     AssistantMessageEntry,
@@ -30,10 +30,16 @@ from dlightrag.agent.session.ids import (
     SessionId,
     StageIntentId,
 )
-from dlightrag.agent.session.memory import MemoryAgentSessionStore
+from dlightrag.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.agent.session.operation import OperationCompleted, ToolBatchItem
 from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.agent.session.registers import LaneHead, LaneState, RequestSnapshot, SetRegister
+from dlightrag.agent.session.registers import (
+    LaneHead,
+    LaneState,
+    RegisterRecord,
+    RequestSnapshot,
+    SetRegister,
+)
 from dlightrag.agent.session.runtime import (
     AgentSessionRuntime,
     RuntimeContext,
@@ -49,7 +55,7 @@ from dlightrag.agent.session.transactions import (
 from dlightrag.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
 from dlightrag.agent.tools import AgentTool, ToolResult
 from dlightrag.ai.messages import AssistantTurn, ToolCall
-from dlightrag.answer.session_host import FastSessionHost
+from dlightrag.answer.session_host import FastSessionHost, ensure_session_lane
 from dlightrag.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
 from dlightrag.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
 from dlightrag.runtime.settlements import (
@@ -67,10 +73,15 @@ from dlightrag.services.answers import AnswerService
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
+
+async def _no_settled_result() -> None:
+    return None
+
+
 _ADMIN: dict[str, Any] = dict(
     host="localhost", port=5432, user="dlightrag", password="dlightrag", database="dlightrag"
 )
-_TEST_DATABASE = "dlightrag_m3_journal_test"
+_TEST_DATABASE = "dlightrag_agent_session_test"
 _OWNER = "owner-alpha"
 _WORKER = "worker-1"
 
@@ -280,6 +291,28 @@ async def _seed_transaction_session(
     return outcome
 
 
+async def _append_lane_entry(
+    store,
+    session_id: SessionId,
+    lane_id: LaneId,
+    expected_head: RegisterRecord,
+    entry: SessionEntry,
+    *,
+    fencing_epoch: int,
+):
+    assert isinstance(expected_head.value, LaneHead)
+    placed = replace(entry, parent_entry_id=expected_head.value.entry_id)
+    return await store.transact(
+        session_id=session_id,
+        fencing_epoch=fencing_epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=[placed],
+            register_writes=[SetRegister(LaneHead(lane_id, placed.entry_id))],
+            expectations=[RegisterExpectation(expected_head.ref, expected_head.sequence)],
+        ),
+    )
+
+
 async def _append_transaction_entry(
     store,
     session_id: SessionId,
@@ -354,8 +387,8 @@ async def _progress(pool, run_id: str) -> int:
 
 async def test_agent_session_runtime_memory_and_pg_have_atomic_state_parity(pool) -> None:
     claimed = await _claim(pool)
-    pg = claimed.execution.session_store
-    memory = MemoryAgentSessionStore[EffectHostUpdate](
+    pg = claimed.execution.session_repository
+    memory = MemoryAgentSessionRepository[EffectHostUpdate](
         fencing_epoch=claimed.execution.fencing_epoch
     )
     memory_id = SessionId.new()
@@ -385,10 +418,10 @@ async def test_agent_session_runtime_memory_and_pg_have_atomic_state_parity(pool
 
 
 async def test_host_delta_identity_conflict_rolls_back_entry_and_register(pool) -> None:
-    from dlightrag.adapters.postgres.session_journal import _EvidenceIdentityConflict
+    from dlightrag.adapters.postgres.session_repository import _EvidenceIdentityConflict
 
     claimed = await _claim(pool)
-    store = claimed.execution.session_store
+    store = claimed.execution.session_repository
     epoch = claimed.execution.fencing_epoch
     session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
@@ -449,7 +482,7 @@ async def test_host_delta_identity_conflict_rolls_back_entry_and_register(pool) 
 
 async def test_fetched_resource_host_delta_writes_complete_blob(pool) -> None:
     claimed = await _claim(pool)
-    store = claimed.execution.session_store
+    store = claimed.execution.session_repository
     epoch = claimed.execution.fencing_epoch
     session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
@@ -566,7 +599,7 @@ async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:
 
 async def test_host_delta_commits_workspace_inventory_and_spill(pool) -> None:
     claimed = await _claim(pool)
-    store = claimed.execution.session_store
+    store = claimed.execution.session_repository
     epoch = claimed.execution.fencing_epoch
     session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
@@ -614,7 +647,7 @@ async def test_host_delta_commits_workspace_inventory_and_spill(pool) -> None:
 
 async def test_memory_operation_event_is_exactly_once_with_transaction(pool) -> None:
     claimed = await _claim(pool)
-    store = claimed.execution.session_store
+    store = claimed.execution.session_repository
     epoch = claimed.execution.fencing_epoch
     session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
@@ -683,7 +716,7 @@ async def test_live_session_progress_and_passive_events_are_distinct(pool) -> No
     register_only_session = _claimed_session(claimed)
     head = LaneHead(LaneId.main(), None)
     state = LaneState(LaneId.main())
-    register_commit = await claimed.execution.session_store.transact(
+    register_commit = await claimed.execution.session_repository.transact(
         session_id=register_only_session,
         fencing_epoch=claimed.execution.fencing_epoch,
         transaction=SessionTransaction.from_parts(
@@ -704,14 +737,14 @@ async def test_live_session_progress_and_passive_events_are_distinct(pool) -> No
         content="question",
     )
     root_commit = await _append_transaction_entry(
-        claimed.execution.session_store,
+        claimed.execution.session_repository,
         session_id,
         root,
         fencing_epoch=claimed.execution.fencing_epoch,
     )
     assert isinstance(root_commit, TransactionCommit)
     assert await _progress(pool, claimed.run.run_id) == 1
-    snapshot = await claimed.execution.session_store.load(session_id)
+    snapshot = await claimed.execution.session_repository.load(session_id)
     head = snapshot.tree.lane().head
     assert isinstance(head.value, LaneHead)
     recovery_intent = IntentId.new()
@@ -719,7 +752,7 @@ async def test_live_session_progress_and_passive_events_are_distinct(pool) -> No
         _tool_result(session_id, recovery_intent),
         parent_entry_id=head.value.entry_id,
     )
-    recovery = await claimed.execution.session_store.transact(
+    recovery = await claimed.execution.session_repository.transact(
         session_id=session_id,
         fencing_epoch=claimed.execution.fencing_epoch,
         transaction=SessionTransaction.from_parts(
@@ -733,7 +766,7 @@ async def test_live_session_progress_and_passive_events_are_distinct(pool) -> No
     assert await _progress(pool, claimed.run.run_id) == 1
     live_intent = IntentId.new()
     await _append_transaction_entry(
-        claimed.execution.session_store,
+        claimed.execution.session_repository,
         session_id,
         _tool_result(session_id, live_intent),
         fencing_epoch=claimed.execution.fencing_epoch,
@@ -773,7 +806,7 @@ async def test_fast_stage_progress_never_creates_agent_session(pool) -> None:
 async def test_postgres_and_service_transcript_project_typed_tool_result_parts(pool) -> None:
     session_id = SessionId.new()
     claimed = await _claim(pool, session_id=session_id)
-    store = claimed.execution.session_store
+    store = claimed.execution.session_repository
     epoch = claimed.execution.fencing_epoch
     await _seed_transaction_session(store, session_id, epoch)
     assistant = AssistantMessageEntry(
@@ -863,8 +896,9 @@ async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool
     session_id = SessionId.new()
     first = await _claim(pool, session_id=session_id)
     first_host = FastSessionHost(
-        transactions=first.execution.session_store,
-        load=first.execution.session_store.load,
+        transactions=first.execution.session_repository,
+        load=first.execution.session_repository.load,
+        load_settled_result=_no_settled_result,
         fencing_epoch=first.execution.fencing_epoch,
     )
     await first_host.accept(
@@ -891,8 +925,9 @@ async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool
 
     second = await _claim(pool, session_id=session_id)
     second_host = FastSessionHost(
-        transactions=second.execution.session_store,
-        load=second.execution.session_store.load,
+        transactions=second.execution.session_repository,
+        load=second.execution.session_repository.load,
+        load_settled_result=_no_settled_result,
         fencing_epoch=second.execution.fencing_epoch,
     )
     await second_host.accept(
@@ -923,15 +958,18 @@ async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool
         lane_id=branch_id,
         source_lane_id=LaneId.main(),
     )
-    forked = await branch.execution.session_store.fork_lane(
+    await ensure_session_lane(
+        transactions=branch.execution.session_repository,
+        load=branch.execution.session_repository.load,
+        fencing_epoch=branch.execution.fencing_epoch,
         session_id=session_id,
         source_lane_id=LaneId.main(),
         lane_id=branch_id,
     )
-    assert isinstance(forked, TransactionCommit)
     branch_host = FastSessionHost(
-        transactions=branch.execution.session_store,
-        load=branch.execution.session_store.load,
+        transactions=branch.execution.session_repository,
+        load=branch.execution.session_repository.load,
+        load_settled_result=_no_settled_result,
         fencing_epoch=branch.execution.fencing_epoch,
     )
     await branch_host.accept(
@@ -947,7 +985,7 @@ async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool
         reservation_id=branch.run.run_id,
         content="branch answer",
     )
-    snapshot = await branch.execution.session_store.load(session_id)
+    snapshot = await branch.execution.session_repository.load(session_id)
     assert [
         entry.content
         for entry in snapshot.tree.ancestry(LaneId.main())
@@ -988,7 +1026,7 @@ async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool
 
 async def test_lane_register_cas_does_not_conflict_across_branches(pool) -> None:
     claimed = await _claim(pool)
-    store = claimed.execution.session_store
+    store = claimed.execution.session_repository
     session_id = _claimed_session(claimed)
     await _drive(
         store,
@@ -998,7 +1036,10 @@ async def test_lane_register_cas_does_not_conflict_across_branches(pool) -> None
     initial = await store.load(session_id)
     main = initial.tree.lane()
     branch_id = LaneId.new()
-    await store.fork_lane(
+    await ensure_session_lane(
+        transactions=store,
+        load=store.load,
+        fencing_epoch=claimed.execution.fencing_epoch,
         session_id=session_id,
         source_lane_id=LaneId.main(),
         lane_id=branch_id,
@@ -1016,27 +1057,33 @@ async def test_lane_register_cas_does_not_conflict_across_branches(pool) -> None
         timestamp=datetime.now(UTC),
         content="branch future",
     )
-    assert (
-        await store.append_to_lane(
-            session_id=session_id,
-            lane_id=LaneId.main(),
-            expected_head=main.head,
-            entries=[user_main],
-        )
-    ).__class__.__name__ == "TransactionCommit"
-    assert (
-        await store.append_to_lane(
-            session_id=session_id,
-            lane_id=branch_id,
-            expected_head=branch.head,
-            entries=[user_branch],
-        )
-    ).__class__.__name__ == "TransactionCommit"
+    assert isinstance(
+        await _append_lane_entry(
+            store,
+            session_id,
+            LaneId.main(),
+            main.head,
+            user_main,
+            fencing_epoch=claimed.execution.fencing_epoch,
+        ),
+        TransactionCommit,
+    )
+    assert isinstance(
+        await _append_lane_entry(
+            store,
+            session_id,
+            branch_id,
+            branch.head,
+            user_branch,
+            fencing_epoch=claimed.execution.fencing_epoch,
+        ),
+        TransactionCommit,
+    )
 
 
 async def test_stale_epoch_writes_zero_rows(pool) -> None:
     claimed = await _claim(pool)
-    stale = PGJournalStore(
+    stale = PGAgentSessionRepository(
         pool=pool,
         owner_id=_OWNER,
         run_id=uuid.UUID(claimed.run.run_id),

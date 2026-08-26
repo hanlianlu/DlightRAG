@@ -23,7 +23,6 @@ from dlightrag.agent.environment.access import AccessScheduler
 from dlightrag.agent.environment.errors import TOOL_RESULT_MAX_BYTES, TOOL_RESULT_MAX_LINES
 from dlightrag.agent.environment.execution import ExecutionEnvironment
 from dlightrag.agent.events import AgentEvent
-from dlightrag.agent.extensions import TrustedExtensions
 from dlightrag.agent.session.entries import AssistantMessageEntry, CompactionEntry
 from dlightrag.agent.session.fold import (
     PriorTurns,
@@ -110,7 +109,7 @@ class PreparedRun:
     """One run's live memory plus the wiring that executes it here.
 
     The working and evidence are request-local materializers rebuilt from the
-    durable journal on recovery; they carry no export/restore interface.
+    durable Session on recovery; they carry no export/restore interface.
     """
 
     context: ContextAssembler
@@ -153,7 +152,6 @@ class AnswerOrchestrator:
         resolved_mode: ResolvedMode,
         subagent_host: SubagentHost | None = None,
         memory_host: MemoryHost | None = None,
-        trusted_extensions: TrustedExtensions | None = None,
         skills_global_root: Path | None = None,
         child_model_resolver: Callable[[str], tuple[ToolModelFunc, StreamModel, ModelProfile]]
         | None = None,
@@ -180,7 +178,6 @@ class AnswerOrchestrator:
         self._memory_text = ""
         self._parent_query = ""
         self._parent_history = PriorTurns()
-        self._trusted_extensions = trusted_extensions or TrustedExtensions()
         self._skills_global_root = skills_global_root
         self._child_model_resolver = child_model_resolver
         self._access = AccessScheduler()
@@ -461,7 +458,7 @@ class AnswerOrchestrator:
             projection=projection,
         )
 
-    def adopt_runtime_snapshot(self, run: PreparedRun, snapshot: Any) -> None:
+    def restore_runtime_snapshot(self, run: PreparedRun, snapshot: Any) -> None:
         """Project a terminal Runtime snapshot into the product's live result cache."""
         self._record_working_fold(run, snapshot)
         assistants = [
@@ -562,7 +559,7 @@ class AnswerOrchestrator:
             )
         evidence = EvidenceLedger(image_budget=self._image_budget)
         if request.context == "parent" and context_snapshot.evidence_state:
-            evidence.adopt_ledger_state(context_snapshot.evidence_state)
+            evidence.restore_ledger_state(context_snapshot.evidence_state)
         retained_tail_tokens = self._context_policy.retained_tail_target(child_profile)
         trace = _fresh_research_trace()
         trace["child_context"] = request.context
@@ -646,16 +643,16 @@ class AnswerOrchestrator:
         subagent_host = self._subagent_host
         if subagent_host is not None and not child:
 
-            def adopt_child(state: Any, child_id: str, call_id: str) -> tuple[str, ...]:
+            def merge_child(state: Any, child_id: str, call_id: str) -> tuple[str, ...]:
                 before = len(evidence.contexts["chunks"])
-                evidence.adopt_child_state(
+                evidence.merge_child_state(
                     state,
                     child_session_id=child_id,
                     parent_call_id=call_id,
                 )
                 return tuple(evidence.citation_handles(after_chunk_count=before))
 
-            subagent_host.adopt_evidence = adopt_child
+            subagent_host.merge_evidence = merge_child
 
             def record_child_usage(usage: Mapping[str, int]) -> None:
                 inclusive = trace.setdefault("child_usage", {})
@@ -685,9 +682,8 @@ class AnswerOrchestrator:
             skill_catalog=skill_catalog,
             child=child,
         )
-        registry = ToolRegistry(composed)
         try:
-            self._trusted_extensions.register_tools(registry)
+            registry = ToolRegistry(composed)
         except DuplicateToolError as exc:
             raise InvalidToolConfigurationError(exc.names) from exc
         return list(
@@ -737,10 +733,7 @@ class AnswerOrchestrator:
         self, skill_catalog: SkillCatalog | None
     ) -> tuple[ContextContribution, ...]:
         skill = None if skill_catalog is None else skill_catalog.contribution()
-        return (
-            *self._trusted_extensions.context_contributions(),
-            *((skill,) if skill is not None else ()),
-        )
+        return (skill,) if skill is not None else ()
 
     def _output_stage_factory(self) -> Any:
         from dlightrag.answer.workspace import FileOutputStage
@@ -784,7 +777,7 @@ class AnswerOrchestrator:
 
     def _require_compactable_floor(self, run: PreparedRun, tool_schema_tokens: int) -> None:
         """Fail before any compaction or model call when the fixed envelope alone
-        cannot fit the hard limit — shrinking the journal can never help."""
+        cannot fit the hard limit — shrinking branch ancestry can never help."""
         fixed = (
             run.context.measure_control_input(
                 evidence=EvidenceLedger(),

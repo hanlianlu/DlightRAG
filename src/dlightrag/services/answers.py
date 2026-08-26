@@ -43,6 +43,7 @@ from dlightrag.answer.mode import (
     resource_role,
     valid_modes,
 )
+from dlightrag.answer.prepared_input import require_prepared_input_bounds
 from dlightrag.answer.resources.images import QueryImageDescriber, prepare_query_images
 from dlightrag.answer.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.answer.routing import RoutingAcceptance
@@ -326,15 +327,6 @@ def _prepared_input_payload(
     return payload
 
 
-def _require_prepared_input_bounds(prepared_input: Mapping[str, Any]) -> None:
-    from dlightrag.agent.session.effects import canonical_json
-    from dlightrag.answer.prepared_input import MAX_PREPARED_INPUT_BYTES, PreparedInputTooLargeError
-
-    encoded = canonical_json(dict(prepared_input)).encode("utf-8")
-    if len(encoded) > MAX_PREPARED_INPUT_BYTES:
-        raise PreparedInputTooLargeError(encoded_bytes=len(encoded))
-
-
 def _accepted_resource_payloads(
     run_input: Any, *, attachment_bytes: Sequence[bytes]
 ) -> list[dict[str, Any]]:
@@ -583,7 +575,7 @@ class AnswerService:
         )
         prepared_input["profile_memory_enabled"] = memory_enabled
         prepared_input["profile_memory_epoch"] = memory_epoch
-        _require_prepared_input_bounds(prepared_input)
+        require_prepared_input_bounds(prepared_input)
         resources_payload = _accepted_resource_payloads(
             run_input, attachment_bytes=attachment_bytes
         )

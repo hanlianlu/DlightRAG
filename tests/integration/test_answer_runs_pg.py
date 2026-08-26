@@ -3,7 +3,7 @@
 
 Exercises the real contract against a live database: the declared schema and its
 constraints, owner-scoped creation and idempotency, queued cancellation, slot-safe
-claiming across workers, lease fencing, gap-free event sequences, journal
+claiming across workers, lease fencing, gap-free event sequences, Session
 compare-and-set, terminal transitions, graceful requeue, the crash-recovery bound,
 event trimming, retention pruning, and ownership-safe artifact cleanup.
 
@@ -90,8 +90,7 @@ async def pool() -> AsyncIterator[Any]:
 async def store(pool: Any) -> PGAnswerRunStore:
     created = FingerprintingAnswerRunStore(pool=pool)
     await created.initialize()
-    # Retention exempts conversation-linked runs, so the whole operational schema
-    # is established here exactly as a real process establishes it at startup.
+    # Establish the complete operational schema exactly as a real process does.
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
 
     await PGWebConversationStore(pool=pool, run_store=created).initialize()
@@ -600,9 +599,9 @@ class TestLeaseFencing:
 
         assert creation.run.prepared_input is not None
         stale_session = SessionId(str(creation.run.prepared_input["agent_session_id"]))
-        from dlightrag.adapters.postgres.session_journal import PGJournalStore
+        from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository
 
-        stale_journal = PGJournalStore(
+        stale_repository = PGAgentSessionRepository(
             pool=pool,
             owner_id=_OWNER,
             run_id=uuid.UUID(creation.run.run_id),
@@ -612,7 +611,7 @@ class TestLeaseFencing:
         )
         head = LaneHead(LaneId.main(), None)
         state = LaneState(LaneId.main())
-        stale_append = await stale_journal.transact(
+        stale_append = await stale_repository.transact(
             session_id=stale_session,
             fencing_epoch=int(stale_args["fencing_epoch"]),
             transaction=SessionTransaction.from_parts(
@@ -1023,6 +1022,55 @@ class TestArtifacts:
         deletion = await store.delete_runs(owner_id=_OTHER_OWNER, run_ids=[creation.run.run_id])
         assert deletion.runs == 0
         assert await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id) is not None
+
+    async def test_unlinked_session_is_removed_only_after_its_final_run_route(
+        self, store, pool
+    ) -> None:
+        session_id = str(uuid.uuid7())
+        first = await store.create_run(
+            owner_id=_OWNER,
+            request=_request("first", agent_session_id=session_id),
+        )
+        second = await store.create_run(
+            owner_id=_OWNER,
+            request=_request("second", agent_session_id=session_id),
+        )
+        claimed = await _claimed(store)
+        from dlightrag.agent.session.ids import LaneId, SessionId
+        from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
+        from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
+
+        head = LaneHead(LaneId.main(), None)
+        state = LaneState(LaneId.main())
+        await claimed.execution.session_repository.transact(
+            session_id=SessionId(session_id),
+            fencing_epoch=claimed.execution.fencing_epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(head), SetRegister(state)],
+                expectations=[
+                    RegisterExpectation(head.ref, None),
+                    RegisterExpectation(state.ref, None),
+                ],
+            ),
+        )
+
+        assert (await store.delete_runs(owner_id=_OWNER, run_ids=[first.run.run_id])).runs == 1
+        async with pool.acquire() as conn:
+            assert await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM dlightrag_agent_sessions"
+                " WHERE owner_id = $1 AND session_id = $2)",
+                _OWNER,
+                uuid.UUID(session_id),
+            )
+
+        assert (await store.delete_runs(owner_id=_OWNER, run_ids=[second.run.run_id])).runs == 1
+        async with pool.acquire() as conn:
+            assert not await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM dlightrag_agent_sessions"
+                " WHERE owner_id = $1 AND session_id = $2)",
+                _OWNER,
+                uuid.UUID(session_id),
+            )
 
     async def test_cleanup_yields_to_a_run_still_adopting_the_blob(self, store, pool) -> None:
         """An uncommitted adoption holds the blob's key-share lock, so cleanup skips it."""
@@ -1439,7 +1487,7 @@ class TestAgentControlsAndChildren:
                 TransactionLeaseLost,
             )
 
-            child_store = claim.execution.session_store.for_child(
+            child_store = claim.execution.session_repository.for_child(
                 SessionId(child_id),
                 fencing_epoch=child_epoch,
             )
@@ -1457,7 +1505,7 @@ class TestAgentControlsAndChildren:
                 ),
             )
             assert isinstance(child_commit, TransactionCommit)
-            parent_write = await claim.execution.session_store.transact(
+            parent_write = await claim.execution.session_repository.transact(
                 session_id=SessionId(child_id),
                 fencing_epoch=claim.run.fencing_epoch,
                 transaction=SessionTransaction.from_parts(
@@ -1473,6 +1521,14 @@ class TestAgentControlsAndChildren:
                 status="succeeded",
                 summary="done",
                 usage={"input_tokens": 10 + position},
+                outcome={
+                    "status": "succeeded",
+                    "summary": "done",
+                    "handles": [],
+                    "usage": {"input_tokens": 10 + position},
+                    "child_session_id": child_id,
+                    "evidence_state": {"contexts": {}},
+                },
                 worker_id=_WORKER,
                 fencing_epoch=claim.run.fencing_epoch,
             )
@@ -1488,6 +1544,14 @@ class TestAgentControlsAndChildren:
         assert all(item["context_snapshot"]["messages"] for item in roster)
         assert all(item["plan"]["tools"] == ["search_knowledge_base"] for item in roster)
         assert all(item["budget"]["provider_attempt_limit"] == 2 for item in roster)
+        assert [item["host_state"]["terminal_outcome"]["status"] for item in roster] == [
+            "succeeded",
+            "succeeded",
+        ]
+        assert all(
+            item["host_state"]["terminal_outcome"]["evidence_state"] == {"contexts": {}}
+            for item in roster
+        )
 
     async def test_child_lease_heartbeat_survives_original_window_and_fences_takeover(
         self, store, pool
@@ -1545,7 +1609,7 @@ class TestAgentControlsAndChildren:
             TransactionLeaseLost,
         )
 
-        child_store = claim.execution.session_store.for_child(
+        child_store = claim.execution.session_repository.for_child(
             SessionId(child_id), fencing_epoch=child_epoch
         )
         head = LaneHead(LaneId.main(), None)

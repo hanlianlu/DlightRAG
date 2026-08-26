@@ -1,13 +1,14 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Canonical Memory Session transaction/store behavior."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 
 from dlightrag.agent.session.entries import UserMessageEntry
 from dlightrag.agent.session.ids import EntryId, IntentId, LaneId, OperationId, SessionId
-from dlightrag.agent.session.memory import MemoryAgentSessionStore
+from dlightrag.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.agent.session.operation import OperationMeta, ReadyForProvider
 from dlightrag.agent.session.registers import (
     DeleteRegister,
@@ -15,6 +16,7 @@ from dlightrag.agent.session.registers import (
     LaneState,
     OperationMetaRegister,
     OperationStateRegister,
+    RegisterRecord,
     RegisterRef,
     SessionFault,
     SetRegister,
@@ -37,7 +39,64 @@ def _user(session_id: SessionId, content: str) -> UserMessageEntry:
     )
 
 
-async def _seed(store: MemoryAgentSessionStore[None], session_id: SessionId) -> None:
+async def _append_entries(
+    store: MemoryAgentSessionRepository[None],
+    *,
+    session_id: SessionId,
+    lane_id: LaneId,
+    expected_head: RegisterRecord,
+    entries: list[UserMessageEntry],
+):
+    snapshot = await store.load(session_id)
+    lane = snapshot.tree.lane(lane_id)
+    assert isinstance(expected_head.value, LaneHead)
+    parent = expected_head.value.entry_id
+    placed: list[UserMessageEntry] = []
+    for entry in entries:
+        item = replace(entry, parent_entry_id=parent)
+        placed.append(item)
+        parent = item.entry_id
+    return await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=placed,
+            register_writes=[SetRegister(LaneHead(lane_id, parent))],
+            expectations=[
+                RegisterExpectation(expected_head.ref, expected_head.sequence),
+                RegisterExpectation(lane.state.ref, lane.state.sequence),
+            ],
+        ),
+    )
+
+
+async def _fork_branch(
+    store: MemoryAgentSessionRepository[None],
+    *,
+    session_id: SessionId,
+    source_lane_id: LaneId,
+    lane_id: LaneId,
+) -> None:
+    snapshot = await store.load(session_id)
+    target = snapshot.tree.lane(source_lane_id).head_entry_id
+    assert target is not None and snapshot.tree.is_stable_checkpoint(target)
+    head = LaneHead(lane_id, target)
+    state = LaneState(lane_id)
+    outcome = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(outcome, TransactionCommit)
+
+
+async def _seed(store: MemoryAgentSessionRepository[None], session_id: SessionId) -> None:
     head = LaneHead(LaneId.main(), None)
     state = LaneState(LaneId.main())
     entry = _user(session_id, "root")
@@ -61,24 +120,27 @@ async def _seed(store: MemoryAgentSessionStore[None], session_id: SessionId) -> 
 
 @pytest.mark.asyncio
 async def test_exact_lane_cas_ignores_unrelated_branch_commit() -> None:
-    store = MemoryAgentSessionStore[None]()
+    store = MemoryAgentSessionRepository[None]()
     session_id = SessionId.new()
     await _seed(store, session_id)
     main = (await store.load(session_id)).tree.lane()
     branch_id = LaneId.new()
-    await store.fork_lane(
+    await _fork_branch(
+        store,
         session_id=session_id,
         source_lane_id=LaneId.main(),
         lane_id=branch_id,
     )
     branch = (await store.load(session_id)).tree.lane(branch_id)
-    await store.append_to_lane(
+    await _append_entries(
+        store,
         session_id=session_id,
         lane_id=branch_id,
         expected_head=branch.head,
         entries=[_user(session_id, "branch")],
     )
-    main_commit = await store.append_to_lane(
+    main_commit = await _append_entries(
+        store,
         session_id=session_id,
         lane_id=LaneId.main(),
         expected_head=main.head,
@@ -89,17 +151,19 @@ async def test_exact_lane_cas_ignores_unrelated_branch_commit() -> None:
 
 @pytest.mark.asyncio
 async def test_same_lane_stale_head_conflicts_without_writing() -> None:
-    store = MemoryAgentSessionStore[None]()
+    store = MemoryAgentSessionRepository[None]()
     session_id = SessionId.new()
     await _seed(store, session_id)
     stale = (await store.load(session_id)).tree.lane().head
-    await store.append_to_lane(
+    await _append_entries(
+        store,
         session_id=session_id,
         lane_id=LaneId.main(),
         expected_head=stale,
         entries=[_user(session_id, "first")],
     )
-    conflict = await store.append_to_lane(
+    conflict = await _append_entries(
+        store,
         session_id=session_id,
         lane_id=LaneId.main(),
         expected_head=stale,
@@ -190,7 +254,7 @@ def test_entry_transaction_must_advance_lane_head_to_final_entry() -> None:
 
 @pytest.mark.asyncio
 async def test_memory_host_delta_is_exactly_once_under_register_cas() -> None:
-    store = MemoryAgentSessionStore[dict[str, str]]()
+    store = MemoryAgentSessionRepository[dict[str, str]]()
     session_id = SessionId.new()
     head = LaneHead(LaneId.main(), None)
     state = LaneState(LaneId.main())

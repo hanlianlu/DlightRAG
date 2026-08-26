@@ -165,16 +165,18 @@ blob references:
 | `dlightrag_answer_run_events` | `(owner_id, run_id, event_sequence)` | gap-free `progress` / `token` / `reset` / `done` / `error` events |
 | `dlightrag_blobs` | `(owner_id, digest)` | immutable content-addressed blob metadata within one owner |
 | `dlightrag_answer_run_artifacts` | `(owner_id, run_id, resource_id)` | ordered run inputs, fetched resources, spill/publication references |
-| `dlightrag_answer_run_routing` | `(owner_id, run_id)` | requested/valid/resolved mode, model fingerprints, Research Session id |
-| `dlightrag_agent_sessions` / `dlightrag_agent_session_entries` / `dlightrag_agent_context_projections` | Session id / sequence | canonical typed linear journal, its derived parent-linked view, and active projection |
-| `dlightrag_agent_effects` / `dlightrag_answer_evidence` / resource tables | intent/result identity | at-most-once effect outcomes and atomic durable Evidence/resource state |
-| `dlightrag_answer_child_sessions` | parent run + child Session id | parent/call/intent lineage, child status, objective, model/context/tools, inclusive usage |
+| `dlightrag_answer_run_routing` | `(owner_id, run_id)` | requested/valid/resolved mode and canonical Agent Session/Lane mapping |
+| `dlightrag_agent_sessions` | `(owner_id, session_id)` | Session commit sequence, Entry sequence, current run owner and fencing epoch |
+| `dlightrag_agent_session_entries` | `(owner_id, session_id, sequence)` | immutable parent-linked User/Assistant/ToolResult/Control/Compaction Entries |
+| `dlightrag_agent_session_registers` | `(owner_id, session_id, kind, key)` | exact-CAS Lane heads/state, total OperationState, Plan metadata, request/tool snapshots, bounded inputs and Fast reservation |
+| `dlightrag_answer_evidence` / resource tables | run/session/intent/result identity | atomic durable Evidence, fetched resources, workspace inventory, spills, and blobs |
+| `dlightrag_answer_child_sessions` | parent run + child Session id | parent/call/intent lineage, ContextSnapshot, depth, independent lease/epoch, pinned plan/budget/tools/Host state, status and usage |
 | `dlightrag_agent_controls` | run + control sequence | ordered steer inbox and append-before-ack state |
 
 `run_id` is a UUIDv7. A partial unique index makes one idempotency key unique per
 owner, and a second one allows exactly one terminal event per run. The
 run-artifact join carries `ON DELETE CASCADE` to the run and `ON DELETE RESTRICT`
-to the blob, so adopting a digest takes the key-share lock that serializes
+to the blob, so linking a digest takes the key-share lock that serializes
 against cleanup. Deleting a run removes its events and references, never shared
 bytes; a blob is deleted only once no reference for that owner survives.
 
@@ -198,9 +200,15 @@ on every host and needs no leader election:
 - **Terminal run rows** are pruned after the same floor counted from `finished_at`,
   conversation-linked or not; the turn cascade empties the conversation and an
   hourly sweep reclaims conversation rows with no turns left.
+- **Agent Sessions** named by deleted routing or child rows are candidates in
+  that same transaction. A Session is deleted when no remaining routing row names
+  its owner/session identity. Session-row locks serialize that decision with new
+  routing inserts: a concurrent accepted route either preserves the existing tree
+  or observes deletion and starts fresh. Empty Web Conversation rows do not extend
+  history retention; their next accepted turn rebases to a fresh `main` Lane.
 - **Blobs** are released in the same transaction once no run-artifact row
-  references the digest for that owner. A digest a concurrent run adopted is left
-  alone and released when that run is itself deleted.
+  references the digest for that owner. A digest linked by a concurrent run is
+  left alone and released when that run is itself deleted.
 
 Conversation deletion removes linked runs before the conversation row, matching
 the retention lock order. The 100-turn conversation snapshot is only a read

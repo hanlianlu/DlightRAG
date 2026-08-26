@@ -110,7 +110,7 @@ class RunSession:
     half. The first zero-row write means the lease is gone: the session latches
     closed so no later event, settlement, or terminal transition can be written
     by a worker the run no longer belongs to. Checkpoint and artifact methods
-    are gone: journal settlements and acceptance carry those facts.
+    are gone: Session settlements and acceptance carry those facts.
     """
 
     def __init__(

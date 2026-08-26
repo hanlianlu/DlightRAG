@@ -5,7 +5,7 @@ The summarizer writes one structured markdown document whose headings map
 onto :class:`~dlightrag.agent.session.projection.CompactionSummary` fields.
 The framework parses the headings back into the typed summary; the model is
 never asked to invent paths or durable handles — those are extracted from the
-covered journal prefix by the framework. Prompts modules stay import-free:
+covered branch-ancestry prefix by the framework. Prompts modules stay import-free:
 the caller passes the pre-rendered previous summary text.
 """
 

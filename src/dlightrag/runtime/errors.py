@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Storage- and policy-neutral durable runtime failures.
 
-Checkpoint-era errors, codecs, and constants are gone: journal settlements,
+Checkpoint-era errors, codecs, and constants are gone: Session settlements,
 durable progress, and effect outcomes carry the M3 conflict vocabulary as
 values, and run failures surface through :class:`RunExecutionError`.
 """

@@ -888,7 +888,10 @@ run — conversation-linked or not — is reclaimed once after the shared
 hourly task then reclaims conversations that have no turns left. The snapshot
 and history endpoint return the most recent turns as a read window; older turns
 stay durable until retention reclaims them. Cleanup releases blobs no surviving
-run references, without touching ingest documents, chunks, vectors, graph data,
+run references and deletes an Agent Session when no remaining run routing row
+names it. Empty Web Conversation rows do not extend model-history retention;
+Session trees shared by another routed run are preserved. Cleanup never touches
+ingest documents, chunks, vectors, graph data,
 source files, visual assets, or jobs.
 
 Uploaded answer attachments are stored once as owner-scoped content-addressed
@@ -1055,7 +1058,7 @@ Running the bundled local stack is covered in
 
 Memory recall contributes usage accounting only: `memory_recall_record_count`
 and `memory_recall_chars` in the answer trace, with no record bodies in logs.
-The exact rendered Profile facts are journaled before a Research model call so
+The exact rendered Profile facts are committed in the Session request state before a Research model call so
 recovery is replay-stable. JWT owners and the stable local single-user owner
 (`auth_mode: none`) are eligible; shared simple-auth callers are not. Forget is
 idempotent and leaves a tombstone. Hosts may form a proposal and commit it
@@ -1110,9 +1113,9 @@ answer:
 
 `disabled` exposes no path, Bash, spill, or publication tools. `trust` runs the
 rooted local adapter as the service user; rooted file tools prevent traversal
-but Bash can reach the host/container filesystem and network. `sandbox` requires
-a trusted Python ExecutionEnvironment adapter and fails explicitly if none is
-installed. It never downgrades to trust.
+but Bash can reach the host/container filesystem and network. This distribution
+ships no sandbox backend: selecting `sandbox` fails explicitly and never
+downgrades to trust.
 
 For `trust` or `sandbox`, an omitted root defaults to
 `~/.dlightrag/agent_workspaces`. An explicit root must be absolute, must not
@@ -1146,9 +1149,11 @@ Workspace's `.agents/skills/`, with workspace precedence. Initial context gets
 name, description, and global/workspace source metadata only. `load_skill` reads `SKILL.md` or a contained
 reference on demand and never executes Skill code.
 
-Trusted in-process composition accepts only three extension seams: run-local
-tool registration, Context Contributions, and an ExecutionEnvironment adapter.
-These are trusted host-code constructor inputs, not YAML-loaded user plugins.
+There is no in-process extension wrapper or plugin discovery. First-party tools,
+Skills metadata, and deployment-allowlisted outbound MCP tools are composed into
+one run-local closed ToolRegistry; the accepted AgentRunPlan pins their contracts.
+Context is assembled by the typed Answer Host ContextAssembler, and execution
+policy is enforced by concrete rooted tools.
 
 Research ends when the model writes the answer and makes no tool call, or when
 the run is cancelled or the provider fails. There is no turn cap.

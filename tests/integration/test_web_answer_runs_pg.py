@@ -5,8 +5,8 @@ Exercises the real contract against a live database: the baseline schema and its
 foreign keys, the single transaction that creates a run, its uploaded bytes, and
 its conversation turn, owner-wide submission idempotency and its conflicts,
 concurrent replay, conversation deletion with ownership-safe artifact cleanup,
-the retention exemption a successful linked turn grants, and the cascade that
-removes a pruned failed run's visible turn.
+the unified run/Session retention floor, and the cascade that removes a pruned
+run's visible turn while leaving only empty conversation navigation state.
 
 Every test runs inside a throwaway database created and dropped per test, so the
 developer's ``dlightrag`` database is never mutated.
@@ -321,8 +321,17 @@ async def test_a_foreign_conversation_is_never_written_to(
 
 async def test_forked_conversation_maps_to_a_new_lane_in_the_parent_session(
     store: PGWebConversationStore,
+    pool: Any,
 ) -> None:
     parent_conversation = await _conversation(store)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_sessions"
+            " (owner_id, session_id, lease_run_id, commit_sequence, fencing_epoch)"
+            " VALUES ($1, $2, $2, 0, 1)",
+            _OWNER,
+            uuid.UUID(parent_conversation),
+        )
     parent = await store.snapshot(_OWNER, parent_conversation)
     assert parent is not None
     branch_conversation = str(uuid.uuid4())
@@ -735,6 +744,15 @@ async def test_a_successful_linked_run_prunes_after_the_retention_floor(
     conversation_id = await _conversation(store)
     creation = await _submit(store, conversation_id)
     assert creation is not None
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_sessions"
+            " (owner_id, session_id, lease_run_id, commit_sequence, fencing_epoch)"
+            " VALUES ($1, $2, $3, 0, 1)",
+            _OWNER,
+            uuid.UUID(conversation_id),
+            uuid.UUID(creation.turn.answer_run_id),
+        )
     await _finish(pool, creation.turn.answer_run_id, status="succeeded")
     await _backdate_finish(pool, creation.turn.answer_run_id, days=370)
 
@@ -743,6 +761,86 @@ async def test_a_successful_linked_run_prunes_after_the_retention_floor(
     assert deletion.runs == 1
     assert await _count(pool, "web_conversation_turns") == 0
     assert await _count(pool, "web_conversations") == 1
+    assert await _count(pool, "dlightrag_agent_sessions") == 0
+
+
+async def test_empty_conversation_rebases_to_a_fresh_main_lane_after_session_retention(
+    store: PGWebConversationStore,
+    runs: PGAnswerRunStore,
+    pool: Any,
+) -> None:
+    conversation_id = await _conversation(store)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE web_conversations SET agent_lane_id = 'expired-branch'"
+            " WHERE principal_id = $1 AND conversation_id = $2",
+            _OWNER,
+            uuid.UUID(conversation_id),
+        )
+
+    creation = await _submit(
+        store,
+        conversation_id,
+        request=_request(agent_lane_id="expired-branch", source_lane_id="main"),
+    )
+
+    assert creation is not None
+    assert creation.summary["agent_lane_id"] == "main"
+    run = await runs.get_run(owner_id=_OWNER, run_id=creation.turn.answer_run_id)
+    assert run is not None
+    assert run.prepared_input is not None
+    assert run.prepared_input["agent_lane_id"] == "main"
+    assert run.prepared_input["source_lane_id"] is None
+    routing = await runs.load_routing(owner_id=_OWNER, run_id=creation.turn.answer_run_id)
+    assert routing is not None
+    assert routing.agent_lane_id == "main"
+    assert routing.source_lane_id is None
+
+
+async def test_session_delete_wins_race_before_empty_conversation_acceptance(
+    store: PGWebConversationStore,
+    runs: PGAnswerRunStore,
+    pool: Any,
+) -> None:
+    conversation_id = await _conversation(store)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE web_conversations SET agent_lane_id = 'expired-branch'"
+            " WHERE principal_id = $1 AND conversation_id = $2",
+            _OWNER,
+            uuid.UUID(conversation_id),
+        )
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_sessions"
+            " (owner_id, session_id, lease_run_id, commit_sequence, fencing_epoch)"
+            " VALUES ($1, $2, $2, 0, 1)",
+            _OWNER,
+            uuid.UUID(conversation_id),
+        )
+        transaction = conn.transaction()
+        await transaction.start()
+        await conn.execute(
+            "DELETE FROM dlightrag_agent_sessions WHERE owner_id = $1 AND session_id = $2",
+            _OWNER,
+            uuid.UUID(conversation_id),
+        )
+        submission = asyncio.create_task(
+            _submit(
+                store,
+                conversation_id,
+                request=_request(agent_lane_id="expired-branch", source_lane_id="main"),
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not submission.done()
+        await transaction.commit()
+
+    creation = await asyncio.wait_for(submission, timeout=5)
+    assert creation is not None
+    routing = await runs.load_routing(owner_id=_OWNER, run_id=creation.turn.answer_run_id)
+    assert routing is not None
+    assert routing.agent_lane_id == "main"
+    assert routing.source_lane_id is None
 
 
 async def test_an_expired_event_log_is_still_trimmed_for_a_linked_run(

@@ -3,7 +3,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, ClassVar, Literal
 
 from dlightrag.agent.session.effects import JsonValue, ToolResultEntry
@@ -18,10 +18,6 @@ from dlightrag.agent.tool_content import decode_tool_content, encode_tool_conten
 from dlightrag.ai.messages import ToolCall
 
 SESSION_ENTRY_SCHEMA_VERSION = 2
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -87,6 +83,7 @@ class AssistantMessageEntry(SessionEntry):
     usage: JsonValue | None = None
     cost: JsonValue | None = None
     provider_state: JsonValue | None = None
+    acceptance_id: str | None = None
 
     entry_type: ClassVar[str] = "assistant_message"
 
@@ -117,6 +114,8 @@ class AssistantMessageEntry(SessionEntry):
             payload["cost"] = self.cost
         if self.provider_state is not None:
             payload["provider_state"] = self.provider_state
+        if self.acceptance_id is not None:
+            payload["acceptance_id"] = self.acceptance_id
         return payload
 
 
@@ -230,31 +229,12 @@ class CompactionEntry(SessionEntry):
         }
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class AdoptionEntry(SessionEntry):
-    """One explicit bounded cross-Lane adoption with immutable provenance."""
-
-    source_session_id: SessionId
-    source_entry_id: EntryId
-    content: JsonValue
-
-    entry_type: ClassVar[str] = "adoption"
-
-    def canonical_payload(self) -> JsonValue:
-        return {
-            "source_session_id": self.source_session_id.value,
-            "source_entry_id": self.source_entry_id.value,
-            "content": self.content,
-        }
-
-
 type SessionEntryKind = (
     UserMessageEntry
     | AssistantMessageEntry
     | ToolResultMessageEntry
     | ControlMessageEntry
     | CompactionEntry
-    | AdoptionEntry
 )
 
 ENTRY_TYPE_TO_CLASS: dict[str, type[SessionEntry]] = {
@@ -265,33 +245,8 @@ ENTRY_TYPE_TO_CLASS: dict[str, type[SessionEntry]] = {
         ToolResultMessageEntry,
         ControlMessageEntry,
         CompactionEntry,
-        AdoptionEntry,
     )
 }
-
-
-def entry_type_of(entry: SessionEntry) -> str:
-    return entry.entry_type
-
-
-def new_session_entry(
-    *,
-    entry_type: str,
-    session_id: SessionId,
-    sequence: int = 0,
-    timestamp: datetime | None = None,
-    **payload: Any,
-) -> SessionEntry:
-    entry_class = ENTRY_TYPE_TO_CLASS.get(entry_type)
-    if entry_class is None:
-        raise ValueError(f"unknown Entry type: {entry_type}")
-    return entry_class(
-        entry_id=EntryId.new(),
-        session_id=session_id,
-        sequence=sequence,
-        timestamp=timestamp or _utc_now(),
-        **payload,
-    )
 
 
 def decode_entry_payload(
@@ -337,6 +292,7 @@ def decode_entry_payload(
             usage=payload.get("usage"),
             cost=payload.get("cost"),
             provider_state=payload.get("provider_state"),
+            acceptance_id=(str(payload["acceptance_id"]) if payload.get("acceptance_id") else None),
         )
     if entry_type == "tool_result":
         return ToolResultMessageEntry(
@@ -384,20 +340,12 @@ def decode_entry_payload(
             ),
             source_digest=str(payload.get("source_digest") or ""),
         )
-    if entry_type == "adoption":
-        return AdoptionEntry(
-            **common,
-            source_session_id=SessionId(str(payload["source_session_id"])),
-            source_entry_id=EntryId(str(payload["source_entry_id"])),
-            content=payload["content"],
-        )
     raise ValueError(f"unknown Entry type: {entry_type}")
 
 
 __all__ = [
     "ENTRY_TYPE_TO_CLASS",
     "SESSION_ENTRY_SCHEMA_VERSION",
-    "AdoptionEntry",
     "AssistantMessageEntry",
     "CompactionEntry",
     "ControlMessageEntry",
@@ -406,6 +354,4 @@ __all__ = [
     "ToolResultMessageEntry",
     "UserMessageEntry",
     "decode_entry_payload",
-    "entry_type_of",
-    "new_session_entry",
 ]

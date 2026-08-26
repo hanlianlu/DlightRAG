@@ -1,13 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Canonical Agent Session repository/store read and transaction contract."""
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 from dlightrag.agent.session.entries import SessionEntry
 from dlightrag.agent.session.graph import AgentSessionGraph
-from dlightrag.agent.session.ids import EntryId, LaneId, SessionId
+from dlightrag.agent.session.ids import LaneId, SessionId
 from dlightrag.agent.session.projection import ContextProjection
 from dlightrag.agent.session.registers import (
     ContextProjectionRegister,
@@ -79,8 +78,8 @@ class AgentSessionSnapshot:
         )
 
 
-class AgentSessionStore[HostDeltaT](Protocol):
-    """Deep storage seam: immutable reads plus atomic exact-CAS transactions."""
+class AgentSessionRepository[HostDeltaT](Protocol):
+    """Host-facing immutable opens plus the atomic transaction adapter seam."""
 
     async def load(self, session_id: SessionId) -> AgentSessionSnapshot: ...
 
@@ -92,30 +91,5 @@ class AgentSessionStore[HostDeltaT](Protocol):
         transaction: SessionTransaction[HostDeltaT],
     ) -> TransactionOutcome: ...
 
-    async def append_to_lane(
-        self,
-        *,
-        session_id: SessionId,
-        lane_id: LaneId,
-        expected_head: RegisterRecord,
-        entries: Sequence[SessionEntry],
-    ) -> TransactionOutcome: ...
 
-    async def fork_lane(
-        self,
-        *,
-        session_id: SessionId,
-        source_lane_id: LaneId,
-        lane_id: LaneId,
-        at_entry_id: EntryId | None = None,
-    ) -> TransactionOutcome: ...
-
-    async def archive_lane(
-        self,
-        *,
-        session_id: SessionId,
-        lane_id: LaneId,
-    ) -> TransactionOutcome: ...
-
-
-__all__ = ["AgentSessionSnapshot", "AgentSessionStore"]
+__all__ = ["AgentSessionRepository", "AgentSessionSnapshot"]

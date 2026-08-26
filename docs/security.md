@@ -457,17 +457,29 @@ Images pass MIME and decoded-pixel checks before inspection.
 
 Full attachment bytes never enter model context: only bounded text windows,
 capped tool observations, and budgeted image blocks do. Research Context
-Contributions do not make Profile Memory, Skills, extension context, or child
-summaries citable; only rows admitted to the Evidence ledger can become
+assembly does not make Profile Memory, Skills metadata, or child summaries
+citable; only rows admitted to the Evidence ledger can become
 sources. Child Evidence carries child-session and parent-call provenance before
 the parent spawn effect settles.
+
+Every Agent Session mutation is predicated on owner, run lease owner, unexpired
+lease, and fencing epoch, then applies exact register-sequence CAS. Child Sessions
+renew a separate lease under both the live parent epoch and current child epoch;
+a takeover fences the prior provider/tool drive. A terminal Child roster row
+pins the exact parent-visible outcome, so `spawn_agent` replay cannot re-enter a
+completed child. Fast uses an atomic HostTurnReservation; its canonical result is
+staged under the fenced run before Assistant settlement, and settled replay reads
+that exact payload instead of issuing another model call. Research rejects a Lane
+while a Fast reservation is active.
 
 The execution modes are exactly `disabled`, `trust`, and `sandbox`. Trust runs
 as the service user and Bash can access the host/container network and every
 path that user can reach; rooted file-tool checks are not a shell sandbox.
-Sandbox selection without a trusted backend fails explicitly. Trusted Python
-extensions are deployment code and have only tool, context, and execution
-adapter seams—there is no model-facing approval or permission system.
+Sandbox selection fails explicitly because this distribution ships no backend;
+there is no extension wrapper, package discovery, lifecycle hook, model-facing
+approval, or generic permission system. Concrete rooted tools enforce local
+execution policy, and deployment-allowlisted MCP tools enter the same closed
+ToolRegistry and immutable AgentRunPlan.
 
 Outbound MCP endpoints and tool names are deployment allowlists. Remote tools
 run in foreground sessions and receive only their declared arguments; DlightRAG
@@ -483,7 +495,7 @@ Admitted bytes become owner-scoped content-addressed artifacts owned by the
 durable run, so deduplication never crosses an owner. Run-scoped fetched web
 bytes are stored only after the HTTPS, redirect, DNS, SSRF, and byte validation
 above passes, and the blob plus its run reference commit in one transaction
-before the tool result may settle on the journal — a resumed run therefore reads the
+before the ToolResult and HostDelta may settle in the Session transaction — a resumed run therefore reads the
 bytes it originally fetched rather than whatever the page serves now. Workspace
 authorization is evaluated once before the run-creation transaction and only the
 resulting workspace set is stored, never a token or mutable claims; a later policy

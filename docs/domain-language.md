@@ -25,7 +25,7 @@ A caller-awaited corpus-evidence use case implemented with asynchronous I/O that
 _Avoid_: Fast Answer
 
 **Fast Answer**:
-A durable Answer Run that plans, retrieves, and generates without creating an Agent Session or research workspace.
+A durable Answer Run that plans, retrieves, and generates without an Agent Operation or research workspace. Its Host turn still commits User and Assistant Entries to the routed Agent Session.
 _Avoid_: Retrieval, non-durable fast path
 
 **Web Conversation**:
@@ -63,11 +63,15 @@ A named, authorized corpus scope whose ingestion and retrieval state is owned by
 _Avoid_: Workspace when it could mean an agent filesystem
 
 **Agent Session**:
-A durable research conversation within one Answer Run, reconstructed from its source journal.
-_Avoid_: Run, thread
+The owner-scoped durable parent-linked Entry Tree shared by routed Fast and Research Answer Runs. Stable Lane heads select branches, and the tree remains durable only while at least one Answer Run routing row names it; a Web Conversation identity alone is not a second history authority.
+_Avoid_: Answer Run, linear journal, thread
+
+**Agent Session Repository**:
+The narrow Host-facing read/transaction seam for immutable Session snapshots. Runtime mutations go through exact-register CAS transactions; Hosts do not receive append/fork/archive storage shortcuts.
+_Avoid_: generic store, lifecycle hook registry, mutable transcript
 
 **Child Session**:
-A first-class foreground Agent Session inside the same Answer Run. It has durable parent/call lineage, bounded depth and concurrency, selected context/model/tools, inclusive usage, and no independent lease.
+A first-class foreground Agent Session inside one parent Answer Run. It has explicit parent/call lineage and ContextSnapshot, bounded depth and concurrency, pinned plan/model/tool allowlist/budget/Host state, and an independently renewed lease and fencing epoch.
 _Avoid_: child run, detached job, mission, background swarm
 
 **Subagent Roster**:
@@ -79,7 +83,7 @@ The immutable, bounded execution description accepted for a new Answer Run after
 _Avoid_: Request payload, checkpoint
 
 **Routing Record**:
-The Answer-owned one-to-one durable fact of requested mode, valid modes, and nullable resolved mode for one Answer Run. An `auto`→research Agent Session id is issued here, not by mutating Prepared Input.
+The Answer-owned one-to-one durable mapping from an Answer Run to requested/valid/resolved mode and its canonical Agent Session/Lane. It is the transcript authorization anchor and does not make Answer Run and Agent Operation identities equivalent.
 _Avoid_: Prepared Input, second policy source, inferred research bool
 
 **Public Request Fingerprint**:
@@ -117,21 +121,25 @@ _Avoid_: Answer Event Log, Agent Journal, browser cache, out-of-band undo snapsh
 _Avoid_: state rollback, silent transcript promotion, confidence score
 
 **Retention Floor**:
-The single deployment clock (`answer.runtime.answer_run_retention_days`, default 365) that bounds how long terminal Answer runs, their event logs, and superseded Memory history stay durable. The sweep is best-effort: it may reclaim later, never earlier.
+The single deployment clock (`answer.runtime.answer_run_retention_days`, default 365) that bounds how long terminal Answer runs, their event logs, routed Agent Session history, and superseded Memory history stay durable. The sweep is best-effort: it may reclaim later, never earlier.
 _Avoid_: deadline, SLA, per-aggregate TTL, inactivity expiry
 
 **Conversation Read Window**:
 The bounded number of recent turns a Web Conversation snapshot and the history endpoint return. It is a UI and payload bound, not retention: older turns stay durable until the Retention Floor reclaims their runs.
 _Avoid_: max_turns, trim window, retention window
 
-## Journal And Effects
+## Session Entries And Effects
 
-**Journal Entry**:
-An immutable source fact in an Agent Session whose ordered fold reconstructs active model context.
-_Avoid_: Message when the fact may be an intent, result, compaction, or terminal outcome
+**Session Entry**:
+An immutable semantic fact with one physical `parent_entry_id` in an Agent Session Tree. The closed variants are UserMessage, AssistantMessage, ToolResult, ControlMessage, and Compaction; transaction sequence records commit order but never defines ancestry.
+_Avoid_: generic journal row, custom entry, mutable message
+
+**Agent Session Tree**:
+The immutable Entry set plus stable Lane heads and Lane state. Branch ancestry follows parent links; Fork creates a new Lane at a stable checkpoint without copying or deleting shared Entries.
+_Avoid_: linear log, DAG merge, navigation operation
 
 **Context Projection**:
-The bounded model-facing projection of the selected head in the canonical linear Agent Session journal. The parent-linked graph is a derived view; 3.0 does not persist alternate heads. Exactly one active compaction summary precedes the retained non-compaction suffix; historical summaries remain audit facts.
+The bounded model-facing projection of one selected Lane ancestry. Exactly one active branch-local compaction summary precedes the retained suffix; historical summaries remain immutable audit facts and never Evidence.
 _Avoid_: authority, checkpoint, transcript snapshot
 
 **Context Contribution**:
@@ -139,7 +147,7 @@ A typed model-ready contribution with source, authority, citable and compressibl
 _Avoid_: global prompt registry, second state authority
 
 **Compaction Summary**:
-Typed continuation memory for one contiguous journal prefix, validated and rendered by the framework but never treated as citable Evidence.
+Typed continuation memory for one contiguous branch-ancestry prefix, validated and rendered by the framework but never treated as citable Evidence.
 _Avoid_: Free-form checkpoint, evidence summary, Memory Record
 
 **Effect Intent**:
@@ -155,8 +163,8 @@ A monotonically increasing run fact advanced only by live fenced execution bound
 _Avoid_: Heartbeat, phase, turn count, recovery interrupt, Workspace Epoch handoff
 
 **Fast Stage**:
-A deterministic durable progress boundary inside a Fast Answer, used for recovery without creating an Agent Session.
-_Avoid_: Agent step, retrieval request
+A deterministic Answer Run progress boundary inside Fast. Fast shares the Agent Session Entry Tree through a HostTurnReservation but creates no Agent Operation.
+_Avoid_: Agent step, retrieval request, Session replacement
 
 ## Evidence And Resources
 

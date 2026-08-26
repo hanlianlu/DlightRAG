@@ -21,9 +21,9 @@ class ToolTextPart:
 class ToolResourceAttachmentPart:
     """A durable resource snapshot attached to a tool result.
 
-    The part carries identity and integrity metadata for the journal. Raw bytes
+    The part carries identity and integrity metadata for the Session Entry. Raw bytes
     live in the owner-scoped Blob store durably and ride along only as the
-    transport-private ``data`` field, which is never journaled, logged, or
+    transport-private ``data`` field, which is never stored, logged, or
     persisted by telemetry; providers encode it into their wire format at
     projection time.
     """

@@ -9,7 +9,7 @@ import pytest
 
 from dlightrag.agent.session.entries import CompactionEntry, ToolResultMessageEntry
 from dlightrag.agent.session.ids import LaneId, SessionId
-from dlightrag.agent.session.memory import MemoryAgentSessionStore
+from dlightrag.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.agent.session.operation import OperationCompleted
 from dlightrag.agent.session.plan import AgentRunPlan
 from dlightrag.agent.session.runtime import AgentSessionRuntime
@@ -73,7 +73,7 @@ async def test_research_host_uses_runtime_instead_of_a_second_answer_interpreter
         model_profile=asdict(profile),
     )
     session_id = SessionId.new()
-    store = MemoryAgentSessionStore[EffectHostUpdate]()
+    store = MemoryAgentSessionRepository[EffectHostUpdate]()
     effects = ResearchRuntimeEffects(
         orchestrator=orchestrator,
         prepared=prepared,
@@ -107,7 +107,7 @@ async def test_research_host_uses_runtime_instead_of_a_second_answer_interpreter
         "user_message",
         "assistant_message",
     ]
-    orchestrator.adopt_runtime_snapshot(prepared, snapshot)
+    orchestrator.restore_runtime_snapshot(prepared, snapshot)
     assert prepared.last_turn is not None
     assert prepared.last_turn.assistant.text == "runtime answer"
     assert calls == 1
@@ -180,7 +180,7 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
         model_profile=asdict(profile),
     )
     session_id = SessionId.new()
-    store = MemoryAgentSessionStore[EffectHostUpdate]()
+    store = MemoryAgentSessionRepository[EffectHostUpdate]()
     runtime = AgentSessionRuntime(
         transactions=store,
         load=store.load,
@@ -297,7 +297,7 @@ async def test_provider_overflow_compacts_shrinks_and_retries_through_host_effec
         compaction_attempt_limit=3,
     )
     session_id = SessionId.new()
-    store = MemoryAgentSessionStore[EffectHostUpdate]()
+    store = MemoryAgentSessionRepository[EffectHostUpdate]()
     runtime = AgentSessionRuntime(
         transactions=store,
         load=store.load,

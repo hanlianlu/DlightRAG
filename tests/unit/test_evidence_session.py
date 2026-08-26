@@ -333,12 +333,12 @@ def test_child_evidence_adoption_is_citable_idempotent_and_records_lineage() -> 
     child.add_rows([_corpus_row(chunk="child-c1", content="child finding")])
     parent = EvidenceLedger()
 
-    first = parent.adopt_child_state(
+    first = parent.merge_child_state(
         child.durable_state(),
         child_session_id="child-session",
         parent_call_id="spawn-call",
     )
-    second = parent.adopt_child_state(
+    second = parent.merge_child_state(
         child.durable_state(),
         child_session_id="child-session",
         parent_call_id="spawn-call",
@@ -363,7 +363,7 @@ def test_ledger_state_round_trips_identities_without_image_bytes() -> None:
     payload = json.loads(source.ledger_state_json())
     assert "image_data" not in payload["contexts"]["chunks"][0]
     restored = EvidenceLedger()
-    restored.adopt_ledger_state(payload)
+    restored.restore_ledger_state(payload)
     assert [row["content"] for row in restored.contexts["chunks"]] == [
         row["content"] for row in source.contexts["chunks"]
     ]

@@ -3,7 +3,7 @@
 
 Durable intent/current progress lives only in typed OperationState and
 ToolArguments registers. ToolResult Entries retain non-sensitive provenance;
-there is no parallel permanent effect journal.
+there is no parallel permanent effect table.
 """
 
 from collections.abc import Mapping

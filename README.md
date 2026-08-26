@@ -18,7 +18,7 @@ This is intentionally a system-context view: it shows DlightRAG as one system
 and does not mix internal modules, execution steps, package imports, or database
 entities into the same arrows.
 
-DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. Research mode is a full agent loop with seven Pi-parity filesystem tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`), durable per-run workspaces, foreground child agents, streamed tool progress, and verified image snapshots attached straight into the model call. The full runtime, deployment, and code-layer views are in
+DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. Research mode runs the durable product-neutral Agent Session Runtime with seven Pi-parity filesystem tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`), durable per-run workspaces, independently leased foreground child sessions, streamed tool progress, and verified image snapshots attached straight into the model call. Fast and Research share one canonical parent-linked conversation tree; Fast creates no Agent Operation. The full runtime, deployment, and code-layer views are in
 [docs/architecture.md](docs/architecture.md).
 
 The repository is one UV workspace with two lockstep distributions. The root
@@ -247,12 +247,15 @@ Every answer is one durable run with one identifier and one lifecycle, shared by
 REST, MCP, Web, the SDK, and evaluation. `POST /answer` returns HTTP 202
 with the run's status, events, and cancel URLs; the run outlives its creating
 request, so a disconnected client only detaches. Events are reconnectable SSE
-resumed by durable sequence, and a restart folds the selected Agent Session head
+resumed by durable sequence, and a restart restores typed Agent OperationState
 or restarts an unfinished Fast stage. Clients may inspect status, usage,
 evidence, and child lineage; steer a live Research run; start follow-up or fork
 continuations; resume observation; or explicitly cancel. Event logs and
 terminal rows follow `answer.runtime.answer_run_retention_days` (default 365);
 an expired event log returns 410 while an unpruned result remains readable.
+Run pruning deletes an Agent Session once no remaining run routing row names it.
+A Web Conversation identity does not extend Session history; Sessions shared by
+another routed run remain durable.
 See [docs/durable-answer-runs.md](docs/durable-answer-runs.md).
 
 ### REST
@@ -290,7 +293,12 @@ import os
 
 from dlightrag import Application
 from dlightrag.access import DEPLOYMENT_OWNER_ID
-from dlightrag.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings, ModelsSettings
+from dlightrag.ai.settings import (
+    EmbeddingSettings,
+    ModelRoleSettings,
+    ModelSettings,
+    ModelsSettings,
+)
 from dlightrag.config import DeploymentSettings, DlightragConfig
 from dlightrag.services.answers import AnswerRequest
 from dlightrag.services.corpora import IngestSpec

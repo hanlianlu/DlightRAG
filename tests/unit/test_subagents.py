@@ -34,7 +34,7 @@ from dlightrag.answer.tools.subagents import (
     subagent_tools,
 )
 from dlightrag.runtime import RunCancelledError
-from tests.in_memory_session_store import InMemoryAgentSessionStore
+from tests.in_memory_session_repository import InMemoryAgentSessionRepository
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
@@ -75,6 +75,30 @@ def test_child_identity_uses_durable_intent_not_provider_call_id() -> None:
 def test_subagent_cancel_is_never_replayed_without_durable_reconciliation() -> None:
     tools = {tool.name: tool for tool in subagent_tools(host=SubagentHost())}
     assert tools["cancel_subagent"].replay_policy == "never"
+
+
+def test_child_outcome_durable_payload_round_trips_evidence_state() -> None:
+    evidence_state = {
+        "contexts": {
+            "chunks": [{"chunk_id": "c1", "content": "finding"}],
+            "entities": [],
+            "relationships": [],
+        }
+    }
+    outcome = ChildOutcome(
+        status="succeeded",
+        summary="finding",
+        handles=("[1] report.pdf",),
+        usage={"input_tokens": 8},
+        child_session_id="child-1",
+        evidence_state=evidence_state,
+    )
+
+    assert ChildOutcome.from_durable_payload(outcome.durable_payload()) == outcome
+    invalid = outcome.durable_payload()
+    invalid["evidence_state"] = []
+    with pytest.raises(ValueError, match="evidence state"):
+        ChildOutcome.from_durable_payload(invalid)
 
 
 def test_parent_tools_include_spawn_and_child_omits_it() -> None:
@@ -219,46 +243,84 @@ async def test_cancel_tool_joins_a_known_foreground_child() -> None:
     assert host.outcomes["child-1"].status == "cancelled"
 
 
-async def test_replay_returns_journal_outcome_not_sidecar_summary() -> None:
+async def test_terminal_persisted_spawn_replay_never_reenters_child_execution() -> None:
     persist = AsyncMock()
     finish = AsyncMock()
+    run_child = AsyncMock()
+    ledger = EvidenceLedger()
+    evidence_state = {
+        "contexts": {
+            "chunks": [{"chunk_id": "c1", "content": "persisted finding"}],
+            "entities": [],
+            "relationships": [],
+        }
+    }
 
-    async def run_child(
-        _child_id: SessionId,
-        _request: ChildRequest,
-        _call_id: str,
-        _snapshot: ChildContextSnapshot,
-    ) -> ChildOutcome:
-        return ChildOutcome(
-            status="succeeded",
-            summary="Journaled child finding.",
-            handles=("[1] report.pdf",),
-            usage={"input_tokens": 8},
-            child_session_id="child",
+    def remerge_evidence(state: Any, child_id: str, call_id: str) -> tuple[str, ...]:
+        before = len(ledger.contexts["chunks"])
+        ledger.merge_child_state(
+            state,
+            child_session_id=child_id,
+            parent_call_id=call_id,
         )
+        return tuple(ledger.citation_handles(after_chunk_count=before))
+
+    merge_evidence = MagicMock(side_effect=remerge_evidence)
+
+    async def load_child(**kwargs: Any) -> dict[str, Any]:
+        child_id = kwargs["child_session_id"]
+        return {
+            "status": "succeeded",
+            "summary": "Persisted child finding.",
+            "host_state": {
+                "terminal_outcome": {
+                    "status": "succeeded",
+                    "summary": "Persisted child finding.",
+                    "handles": ["[1] report.pdf"],
+                    "usage": {"input_tokens": 8},
+                    "child_session_id": child_id,
+                    "evidence_state": evidence_state,
+                }
+            },
+        }
 
     host = SubagentHost(
         parent_session_id=SessionId.new(),
         run_id=str(SessionId.new().value),
         owner_id="owner",
-        load_child=AsyncMock(
-            return_value={"status": "succeeded", "summary": "Sidecar-only summary."}
-        ),
+        load_child=load_child,
         persist=persist,
         finish_child=finish,
         run_child=run_child,
         context_snapshot=_context_snapshot(),
+        merge_evidence=merge_evidence,
     )
     tool = subagent_tools(host=host)[0]
-    result = await tool.execute(
-        _spawn_input("what happened?"),
-        tool_runtime(call_id="call-1", tool_name="spawn_agent"),
-    )
-    assert "Journaled child finding." in result.text_content
+    runtime = tool_runtime(call_id="call-1", tool_name="spawn_agent")
+    result = await tool.execute(_spawn_input("what happened?"), runtime)
+    replayed = await tool.execute(_spawn_input("what happened?"), runtime)
+
+    assert "Persisted child finding." in result.text_content
     assert "[1] report.pdf" in result.text_content
     assert result.details is not None
     assert result.details["inclusive_usage"] == {"input_tokens": 8}
-    assert "Sidecar-only summary." not in result.text_content
+    assert result.details["children"][0]["evidence_handles"] == ["[1] report.pdf"]
+    assert replayed.details is not None
+    assert replayed.details["children"][0]["evidence_handles"] == ["[1] report.pdf"]
+    assert len(ledger.contexts["chunks"]) == 1
+    assert merge_evidence.call_count == 2
+    assert all(
+        call.args
+        == (
+            evidence_state,
+            result.details["children"][0]["child_session_id"],
+            "call-1",
+        )
+        for call in merge_evidence.call_args_list
+    )
+    persist.assert_not_awaited()
+    finish.assert_not_awaited()
+    run_child.assert_not_awaited()
 
 
 async def test_spawn_reports_child_outcome_and_usage() -> None:
@@ -334,7 +396,7 @@ async def test_spawn_adopts_child_evidence_before_returning_result() -> None:
         owner_id="owner",
         run_child=run_child,
         context_snapshot=_context_snapshot(),
-        adopt_evidence=adopted,
+        merge_evidence=adopted,
     )
     tool = subagent_tools(host=host)[0]
     result = await tool.execute(
@@ -424,27 +486,27 @@ def _child_orchestrator(
     )
 
 
-async def test_child_session_journals_and_replays_without_rerun() -> None:
+async def test_child_session_persists_and_replays_without_rerun() -> None:
     calls = {"n": 0}
 
     async def model(**_kwargs: object) -> AssistantTurn:
         calls["n"] += 1
         return AssistantTurn(
-            text="Journaled child summary.",
+            text="Persisted child summary.",
             tool_calls=(),
             stop_reason="stop",
             usage_details={"input_tokens": 3, "output_tokens": 2},
         )
 
     orchestrator = _child_orchestrator(model)
-    journal = InMemoryAgentSessionStore()
+    repository = InMemoryAgentSessionRepository()
     parent_id = SessionId.new()
     child_id = SessionId.deterministic(run_id=str(parent_id.value), name="child:test:1")
     session = _FakeSession(run_id=str(parent_id.value))
 
     first = await run_child_session(
         orchestrator=orchestrator,
-        journal=journal,  # type: ignore[arg-type]
+        repository=repository,  # type: ignore[arg-type]
         session=session,  # type: ignore[arg-type]
         fetched_buffer=FetchedResourceBuffer(),
         child_id=child_id,
@@ -456,10 +518,10 @@ async def test_child_session_journals_and_replays_without_rerun() -> None:
         claim_child=AsyncMock(return_value=1),
     )
     assert first.status == "succeeded"
-    assert first.summary == "Journaled child summary."
+    assert first.summary == "Persisted child summary."
     assert first.usage == {"input_tokens": 3, "output_tokens": 2}
     assert calls["n"] == 1
-    snapshot = await journal.load(child_id)
+    snapshot = await repository.load(child_id)
     assert snapshot.commit_sequence >= 2
     assert [entry.entry_type for entry in snapshot.entries] == [
         "user_message",
@@ -469,7 +531,7 @@ async def test_child_session_journals_and_replays_without_rerun() -> None:
 
     second = await run_child_session(
         orchestrator=orchestrator,
-        journal=journal,  # type: ignore[arg-type]
+        repository=repository,  # type: ignore[arg-type]
         session=session,  # type: ignore[arg-type]
         fetched_buffer=FetchedResourceBuffer(),
         child_id=child_id,
@@ -501,7 +563,7 @@ async def test_child_renews_its_lease_while_a_provider_call_is_in_flight(
     renew_child = AsyncMock(return_value=True)
     outcome = await run_child_session(
         orchestrator=_child_orchestrator(model),
-        journal=InMemoryAgentSessionStore(),  # type: ignore[arg-type]
+        repository=InMemoryAgentSessionRepository(),  # type: ignore[arg-type]
         session=_FakeSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
         fetched_buffer=FetchedResourceBuffer(),
         child_id=child_id,
@@ -606,11 +668,11 @@ async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
 
     parent_id = SessionId.new()
     child_id = SessionId.deterministic(run_id=str(parent_id.value), name="pending-cancel")
-    journal = InMemoryAgentSessionStore()
+    repository = InMemoryAgentSessionRepository()
     with pytest.raises(asyncio.CancelledError):
         await run_child_session(
             orchestrator=_child_orchestrator(model, retrieve_func=cancel_during_search),
-            journal=journal,  # type: ignore[arg-type]
+            repository=repository,  # type: ignore[arg-type]
             session=_FakeSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
             fetched_buffer=FetchedResourceBuffer(),
             child_id=child_id,
@@ -622,7 +684,7 @@ async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
             claim_child=AsyncMock(return_value=1),
         )
 
-    snapshot = await journal.load(child_id)
+    snapshot = await repository.load(child_id)
     result = next(entry for entry in snapshot.entries if isinstance(entry, ToolResultMessageEntry))
     assert result.result.call_id == "search-cancelled"
     assert result.result.outcome == "outcome_unknown"
@@ -646,7 +708,7 @@ async def test_parent_cancel_marks_the_child_cancelled() -> None:
     with pytest.raises(RunCancelledError):
         await run_child_session(
             orchestrator=_child_orchestrator(model),
-            journal=InMemoryAgentSessionStore(),  # type: ignore[arg-type]
+            repository=InMemoryAgentSessionRepository(),  # type: ignore[arg-type]
             session=_CancelSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
             fetched_buffer=FetchedResourceBuffer(),
             child_id=SessionId.deterministic(run_id=str(parent_id.value), name="c"),

@@ -9,7 +9,6 @@ import pytest
 from dlightrag.agent.session.effects import ToolResultEntry
 from dlightrag.agent.session.entries import (
     ENTRY_TYPE_TO_CLASS,
-    AdoptionEntry,
     AssistantMessageEntry,
     CompactionEntry,
     ControlMessageEntry,
@@ -42,7 +41,6 @@ def test_entry_union_contains_only_approved_semantic_variants() -> None:
         "tool_result",
         "control_message",
         "compaction",
-        "adoption",
     }
 
 
@@ -62,6 +60,7 @@ def test_every_semantic_entry_round_trips_its_canonical_payload() -> None:
             content="",
             stop_reason="tool_use",
             tool_calls=(ToolCall("c1", "lookup", {"value": "x"}),),
+            acceptance_id="host-turn-1",
         ),
         ToolResultMessageEntry(
             **common,
@@ -83,12 +82,6 @@ def test_every_semantic_entry_round_trips_its_canonical_payload() -> None:
             summary=None,
             covered_through_sequence=0,
             first_retained_sequence=1,
-        ),
-        AdoptionEntry(
-            **common,
-            source_session_id=SessionId.new(),
-            source_entry_id=EntryId.new(),
-            content={"summary": "adopted"},
         ),
     )
     for entry in variants:

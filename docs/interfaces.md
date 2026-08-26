@@ -394,9 +394,16 @@ ephemeral answer mode and no `stream` request field.
 | `POST /answer/{run_id}/follow-up` | Start a new run that includes the selected terminal answer as context. |
 | `POST /answer/{run_id}/fork` | Start a sibling branch from the selected run's accepted context. |
 | `POST /answer/{run_id}/resume` | Return current state before reattaching to events. |
-| `GET /answer/{run_id}/transcript` | Return a bounded transport-neutral transcript tail. |
-| `GET /answer/{run_id}/children` | Return the foreground Child Session roster and usage. |
+| `GET /answer/{run_id}/transcript` | Return the bounded canonical ancestry selected by that run's Agent Session/Lane routing row. ToolResult content is projected transport-neutrally. |
+| `GET /answer/{run_id}/children` | Return foreground Child Session lineage, status, depth, pinned context/model/tools, and usage. |
 | `DELETE /answer/{run_id}` | Explicit cancellation. 200 when complete/terminal, 202 while a worker must observe it. |
+
+An Answer Run is not an Agent Operation identity. Fast records zero Operations;
+ordinary Research normally records one; bounded follow-up/terminal-race and
+publication-correction work records linked Operation ids, purpose, outcome, and
+per-operation plus child-inclusive usage in the result trace. Fork creates a new
+Lane in the same Agent Session and a new Product Conversation projection when
+called through Web.
 
 Durable event types are exactly `progress`, `token`, `reset`, `tool_start`,
 `tool_progress`, `tool_end`, `done`, and `error`. Tool events carry only safe
@@ -516,11 +523,13 @@ bytes. Manual deletion and the shared run-retention floor delete linked runs,
 cascade their events/references, and release blobs no surviving run references.
 The 100-turn read window never trims storage.
 
-`AnswerOrchestrator` owns every answer. Callers set `mode` to `auto`, `fast`, or
+`AnswerExecutor` is the product façade and `AnswerOrchestrator` prepares typed
+Host context, tools, and effects. Callers set `mode` to `auto`, `fast`, or
 `research` (omitted means `auto`). Capability resolves a Valid Mode Set; routing
-writes a durable Resolved Mode. Fast plans, retrieves, and synthesizes with no
-Agent Session. Research runs the Agent Loop until the model emits no tool call; the
-last silent turn is the answer. One explicitly referenced, non-blank
+writes a durable Resolved Mode plus canonical Agent Session/Lane mapping. Fast
+uses an atomic Host reservation on that Session and creates no Agent Operation.
+Research accepts and drives `AgentSessionRuntime` until the model emits no tool
+call; the last no-tool turn is the answer. One explicitly referenced, non-blank
 `artifacts/report.md`, `artifacts/report.html`, or `artifacts/report.pdf` may
 publish as the Primary Report Artifact. Other referenced files use the same
 descriptor and byte data plane; unreferenced Workspace files remain private.

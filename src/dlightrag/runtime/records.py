@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from dlightrag.agent.session.ids import SessionId
-from dlightrag.agent.session.store import AgentSessionStore
+from dlightrag.agent.session.repository import AgentSessionRepository
 from dlightrag.runtime.contracts import AnswerRunPhase, AnswerRunStatus
 from dlightrag.runtime.policy import MAX_RECLAIMS_WITHOUT_PROGRESS
 from dlightrag.runtime.progress import RunProgressStore
@@ -248,7 +248,7 @@ class RunExecutionContext:
     worker_id: str
     lease_owner: str
     fencing_epoch: int
-    session_store: AgentSessionStore[EffectHostUpdate]
+    session_repository: AgentSessionRepository[EffectHostUpdate]
     progress_store: RunProgressStore
     workspace_store: WorkspaceStore | None = None
 

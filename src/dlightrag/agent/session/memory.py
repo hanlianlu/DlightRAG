@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 
 from dlightrag.agent.session.entries import SessionEntry
-from dlightrag.agent.session.ids import EntryId, IntentId, LaneId, SessionId
+from dlightrag.agent.session.ids import IntentId, LaneId, SessionId
 from dlightrag.agent.session.registers import (
     DeleteRegister,
     LaneHead,
@@ -14,12 +14,11 @@ from dlightrag.agent.session.registers import (
     RegisterRef,
     SetRegister,
 )
-from dlightrag.agent.session.store import (
+from dlightrag.agent.session.repository import (
     AgentSessionSnapshot,
 )
 from dlightrag.agent.session.transactions import (
     RegisterConflict,
-    RegisterExpectation,
     SessionTransaction,
     TransactionCommit,
     TransactionLeaseLost,
@@ -27,7 +26,7 @@ from dlightrag.agent.session.transactions import (
 )
 
 
-class MemoryAgentSessionStore[HostDeltaT]:
+class MemoryAgentSessionRepository[HostDeltaT]:
     """Process-local adapter with the PostgreSQL adapter's exact CAS semantics."""
 
     def __init__(self, *, fencing_epoch: int = 1) -> None:
@@ -114,103 +113,6 @@ class MemoryAgentSessionStore[HostDeltaT]:
             register_sequences=tuple(register_sequences),
         )
 
-    async def append_to_lane(
-        self,
-        *,
-        session_id: SessionId,
-        lane_id: LaneId,
-        expected_head: RegisterRecord,
-        entries: Sequence[SessionEntry],
-    ) -> TransactionOutcome:
-        """Place a short Entry chain and advance exactly one Lane Head."""
-        if not entries:
-            raise ValueError("a Lane append requires at least one Entry")
-        if not isinstance(expected_head.value, LaneHead):
-            raise TypeError("expected_head must be a LaneHead record")
-        if expected_head.value.lane_id != lane_id:
-            raise ValueError("expected Lane Head belongs to another Lane")
-        snapshot = await self.load(session_id)
-        lane = snapshot.tree.lane(lane_id)
-        if lane.archived:
-            raise ValueError("an archived Lane is not writable")
-        parent = expected_head.value.entry_id
-        placed: list[SessionEntry] = []
-        for entry in entries:
-            placed_entry = replace(entry, parent_entry_id=parent)
-            placed.append(placed_entry)
-            parent = placed_entry.entry_id
-        return await self.transact(
-            session_id=session_id,
-            fencing_epoch=self._fencing_epoch,
-            transaction=SessionTransaction.from_parts(
-                entries=placed,
-                register_writes=[SetRegister(LaneHead(lane_id=lane_id, entry_id=parent))],
-                expectations=[
-                    RegisterExpectation(expected_head.ref, expected_head.sequence),
-                    RegisterExpectation(lane.state.ref, lane.state.sequence),
-                ],
-            ),
-        )
-
-    async def fork_lane(
-        self,
-        *,
-        session_id: SessionId,
-        source_lane_id: LaneId,
-        lane_id: LaneId,
-        at_entry_id: EntryId | None = None,
-    ) -> TransactionOutcome:
-        session = self._sessions.get(session_id)
-        if session is None:
-            raise KeyError(f"unknown Agent Session: {session_id}")
-        snapshot = self._snapshot(session_id, session)
-        source = snapshot.tree.lane(source_lane_id)
-        target_head = source.head_entry_id if at_entry_id is None else at_entry_id
-        if target_head is None:
-            raise ValueError("a Lane cannot fork from an empty Head")
-        ancestry_ids = {entry.entry_id for entry in snapshot.tree.ancestry(source_lane_id)}
-        if target_head is not None and target_head not in ancestry_ids:
-            raise ValueError("a fork target must belong to the source Lane ancestry")
-        if not snapshot.tree.is_stable_checkpoint(target_head):
-            raise ValueError("a Lane can fork only from a stable checkpoint")
-        head = LaneHead(lane_id=lane_id, entry_id=target_head)
-        state = LaneState(lane_id=lane_id)
-        return await self.transact(
-            session_id=session_id,
-            fencing_epoch=self._fencing_epoch,
-            transaction=SessionTransaction.from_parts(
-                register_writes=[SetRegister(head), SetRegister(state)],
-                expectations=[
-                    RegisterExpectation(head.ref, None),
-                    RegisterExpectation(state.ref, None),
-                ],
-            ),
-        )
-
-    async def archive_lane(
-        self,
-        *,
-        session_id: SessionId,
-        lane_id: LaneId,
-    ) -> TransactionOutcome:
-        if lane_id == LaneId.main():
-            raise ValueError("the main Lane cannot be archived")
-        snapshot = await self.load(session_id)
-        lane = snapshot.tree.lane(lane_id)
-        state = lane.state.value
-        if not isinstance(state, LaneState):
-            raise TypeError("Lane State register has the wrong value type")
-        if state.active_operation_id is not None:
-            raise ValueError("an active Lane cannot be archived")
-        return await self.transact(
-            session_id=session_id,
-            fencing_epoch=self._fencing_epoch,
-            transaction=SessionTransaction.from_parts(
-                register_writes=[SetRegister(replace(state, archived=True))],
-                expectations=[RegisterExpectation(lane.state.ref, lane.state.sequence)],
-            ),
-        )
-
     @staticmethod
     def _validate_register_writes(
         session: _Session,
@@ -294,4 +196,4 @@ class _Session[HostDeltaT]:
         self.host_deltas: list[tuple[IntentId, HostDeltaT]] = []
 
 
-__all__ = ["MemoryAgentSessionStore"]
+__all__ = ["MemoryAgentSessionRepository"]

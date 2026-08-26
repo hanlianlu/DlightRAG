@@ -16,7 +16,6 @@ from dlightrag.agent.environment import (
     ExecutionEnvironment,
     resolve_execution_adapter,
 )
-from dlightrag.agent.extensions import TrustedExtensions
 from dlightrag.agent.session.effects import (
     EffectIntent,
     ToolResultEntry,
@@ -39,6 +38,9 @@ from dlightrag.agent.session.operation import (
 )
 from dlightrag.agent.session.plan import AgentRunPlan
 from dlightrag.agent.session.registers import PendingInput, RequestSnapshot
+from dlightrag.agent.session.repository import (
+    AgentSessionRepository,
+)
 from dlightrag.agent.session.runtime import (
     AgentOperationCancelled,
     AgentSessionEvent,
@@ -52,10 +54,6 @@ from dlightrag.agent.session.runtime import (
     SteerCommand,
     ToolEffectResult,
 )
-from dlightrag.agent.session.store import (
-    AgentSessionStore,
-)
-from dlightrag.agent.session.transactions import TransactionCommit
 from dlightrag.agent.tools import (
     AgentTool,
     ToolEffects,
@@ -116,7 +114,7 @@ from dlightrag.answer.runs.execution import (
     build_current_answer_resources,
 )
 from dlightrag.answer.runs.results import store_answer_result
-from dlightrag.answer.session_host import FastSessionHost
+from dlightrag.answer.session_host import FastSessionHost, ensure_session_lane
 from dlightrag.answer.sources import project_contexts_for_client
 from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.tools.resources import build_resource_tools, make_resource_reader
@@ -579,7 +577,6 @@ class AnswerExecutor:
         memory_recall_enabled: Callable[..., Awaitable[bool]] | None = None,
         memory_capability_current: Callable[..., Awaitable[bool]] | None = None,
         external_tools: tuple[AgentTool, ...] = (),
-        trusted_extensions: TrustedExtensions | None = None,
         skills_global_root: Path | None = None,
     ) -> None:
         self._store = store
@@ -599,16 +596,11 @@ class AnswerExecutor:
         self._memory_recall_enabled = memory_recall_enabled
         self._memory_capability_current = memory_capability_current
         self._external_tools = external_tools
-        self._trusted_extensions = trusted_extensions or TrustedExtensions()
         self._skills_global_root = skills_global_root
         if execution_environment not in {"disabled", "trust", "sandbox"}:
             raise ValueError(f"unknown agent execution mode: {execution_environment}")
-        mode = execution_environment
-        extension_adapter = self._trusted_extensions.execution_adapter(mode)  # type: ignore[arg-type]
         self._execution_adapter = resolve_execution_adapter(
-            mode,  # type: ignore[arg-type]
-            trust=extension_adapter if mode == "trust" else None,
-            sandbox=extension_adapter if mode == "sandbox" else None,
+            execution_environment,  # type: ignore[arg-type]
         )
 
     def acceptance_research_tools(self) -> tuple[AgentTool, ...]:
@@ -654,9 +646,7 @@ class AnswerExecutor:
             # Membership follows configured roots, not discovered contents, so
             # workspace changes cannot alter an accepted Plan.
             tools.append(load_skill_tool(SkillCatalog((placeholder,))))
-        registry = ToolRegistry(tools)
-        self._trusted_extensions.register_tools(registry)
-        return registry.resolve()
+        return ToolRegistry(tools).resolve()
 
     async def execute(self, session: RunSession) -> Mapping[str, Any]:
         with model_call_scope((session.owner_id, session.run_id)):
@@ -739,8 +729,8 @@ class AnswerExecutor:
         await session.enter_phase("planning")
         agent_session_id = SessionId(request.agent_session_id)
         agent_lane_id = LaneId(request.agent_lane_id)
-        journal = session.execution.session_store
-        canonical_snapshot = await journal.load(agent_session_id)
+        repository = session.execution.session_repository
+        canonical_snapshot = await repository.load(agent_session_id)
         if canonical_snapshot.entries:
             history_lane_id = (
                 agent_lane_id
@@ -807,8 +797,10 @@ class AnswerExecutor:
             )
         stream: AsyncIterator[str] | None = None
         try:
-            await _ensure_selected_lane(
-                journal,
+            await ensure_session_lane(
+                transactions=repository,
+                load=repository.load,
+                fencing_epoch=session.execution.fencing_epoch,
                 session_id=agent_session_id,
                 lane_id=agent_lane_id,
                 source_lane_id=(
@@ -874,7 +866,7 @@ class AnswerExecutor:
                     finish_child=_fenced_child_writer(store, "finish_child_session", session),
                     run_child=_bound_child_runner(
                         orchestrator=run.orchestrator,
-                        journal=journal,
+                        repository=repository,
                         session=session,
                         fetched_buffer=fetched_buffer,
                         parent_session_id=session_id,
@@ -895,7 +887,7 @@ class AnswerExecutor:
                 )
                 self.validate_pinned_model_profiles(request)
                 self.validate_pinned_agent_run_plan(request, pin_probe.tools)
-                snapshot = await journal.load(session_id)
+                snapshot = await repository.load(session_id)
                 is_new_session = snapshot.commit_sequence == 0
                 memory_text = ""
                 if self._memory is not None and recall_allowed:
@@ -916,7 +908,7 @@ class AnswerExecutor:
                 self.validate_pinned_model_profiles(request)
                 self.validate_pinned_agent_run_plan(request, prepared_early.tools)
                 if not is_new_session:
-                    await _adopt_durable_evidence(prepared_early, journal, session_id)
+                    await _restore_durable_evidence(prepared_early, repository, session_id)
                 plan = request.agent_run_plan
                 if plan is None:
                     raise RunExecutionError(
@@ -948,8 +940,8 @@ class AnswerExecutor:
                     else None
                 )
                 agent_runtime = AgentSessionRuntime(
-                    transactions=journal,
-                    load=journal.load,
+                    transactions=repository,
+                    load=repository.load,
                     effects=effects,
                     tools=prepared_early.tools,
                     fencing_epoch=session.execution.fencing_epoch,
@@ -967,7 +959,7 @@ class AnswerExecutor:
                 research_operation_id = accepted.operation_id
                 await session.enter_phase("researching")
                 while True:
-                    before = await journal.load(session_id)
+                    before = await repository.load(session_id)
                     operation = await _drive_answer_operation(
                         agent_runtime,
                         session=session,
@@ -979,7 +971,7 @@ class AnswerExecutor:
                             "run_execution_failed",
                             f"Research Agent operation ended as {operation.state.state_type}.",
                         )
-                    snapshot = await journal.load(session_id)
+                    snapshot = await repository.load(session_id)
                     operation_usage = (
                         _usage_from_snapshot_entries(
                             snapshot_entries=(
@@ -1031,11 +1023,24 @@ class AnswerExecutor:
                     if command_ids and controls is not None:
                         if not await controls.acknowledge(command_ids):
                             raise LeaseLostError
-                run.orchestrator.adopt_runtime_snapshot(prepared_early, snapshot)
+                run.orchestrator.restore_runtime_snapshot(prepared_early, snapshot)
             else:
+                fast_boundaries = FastRunBoundaries(
+                    session=session,
+                    progress=session.execution.progress_store,
+                    run_id=session.run_id,
+                    initial_progress_version=session.durable_progress_version,
+                    plan={
+                        "query": request.query,
+                        "workspaces": list(request.workspaces),
+                        "top_k": request.top_k,
+                        "chunk_top_k": request.chunk_top_k,
+                    },
+                )
                 fast_session_host = FastSessionHost(
-                    transactions=journal,
-                    load=journal.load,
+                    transactions=repository,
+                    load=repository.load,
+                    load_settled_result=fast_boundaries.load_settled_result,
                     fencing_epoch=session.execution.fencing_epoch,
                 )
                 fast_turn = await fast_session_host.accept(
@@ -1045,21 +1050,16 @@ class AnswerExecutor:
                     idempotency_key=request.idempotency_fingerprint,
                     content=request.query,
                 )
+                if fast_turn.progress_advanced:
+                    fast_boundaries.observe_session_progress()
+                if fast_turn.settled_payload is not None:
+                    stored = dict(fast_turn.settled_payload)
+                    await fast_boundaries.settle_final(
+                        result=stored,
+                        result_digest=canonical_json(stored),
+                    )
+                    return stored
                 fast_reservation_active = True
-                fast_boundaries = FastRunBoundaries(
-                    session=session,
-                    progress=session.execution.progress_store,
-                    run_id=session.run_id,
-                    initial_progress_version=(
-                        session.durable_progress_version + (1 if fast_turn.created else 0)
-                    ),
-                    plan={
-                        "query": request.query,
-                        "workspaces": list(request.workspaces),
-                        "top_k": request.top_k,
-                        "chunk_top_k": request.chunk_top_k,
-                    },
-                )
                 await fast_boundaries.settle_planner()
 
             async with self._telemetry.observe(
@@ -1117,7 +1117,7 @@ class AnswerExecutor:
                         content=publication.correction_feedback(),
                         plan=research_plan,
                     )
-                    before_correction = await journal.load(agent_session_id)
+                    before_correction = await repository.load(agent_session_id)
                     corrected = await _drive_answer_operation(
                         agent_runtime,
                         session=session,
@@ -1129,7 +1129,7 @@ class AnswerExecutor:
                             "run_execution_failed",
                             "Publication correction Agent operation did not complete.",
                         )
-                    corrected_snapshot = await journal.load(agent_session_id)
+                    corrected_snapshot = await repository.load(agent_session_id)
                     correction_usage = (
                         _usage_from_snapshot_entries(
                             snapshot_entries=(
@@ -1148,7 +1148,7 @@ class AnswerExecutor:
                     }
                     agent_operations.append(correction_record)
                     research_operation_id = correction.operation_id
-                    run.orchestrator.adopt_runtime_snapshot(
+                    run.orchestrator.restore_runtime_snapshot(
                         prepared_early,
                         corrected_snapshot,
                     )
@@ -1235,6 +1235,10 @@ class AnswerExecutor:
                 )
                 if fast_boundaries is not None:
                     await fast_boundaries.settle_retrieval(contexts)
+                    await fast_boundaries.stage_result(
+                        result=stored,
+                        result_digest=canonical_json(stored),
+                    )
                 if fast_session_host is not None:
                     fast_commit = await fast_session_host.complete(
                         session_id=agent_session_id,
@@ -1369,7 +1373,6 @@ class AnswerExecutor:
                     else None
                 ),
                 child_model_resolver=resolve_child_model,
-                trusted_extensions=self._trusted_extensions,
                 skills_global_root=self._skills_global_root,
             )
             return OrchestratorRun(
@@ -2018,42 +2021,10 @@ def _last_entry_sequence(snapshot: Any) -> int:
     return max((entry.sequence for entry in snapshot.entries), default=0)
 
 
-async def _ensure_selected_lane(
-    journal: AgentSessionStore[EffectHostUpdate],
-    *,
-    session_id: SessionId,
-    lane_id: LaneId,
-    source_lane_id: LaneId | None,
-) -> None:
-    snapshot = await journal.load(session_id)
-    try:
-        snapshot.tree.lane(lane_id)
-        return
-    except KeyError:
-        pass
-    if source_lane_id is None:
-        if snapshot.commit_sequence == 0 and lane_id == LaneId.main():
-            return
-        raise RunExecutionError("run_execution_failed", "Agent Lane mapping is missing.")
-    try:
-        outcome = await journal.fork_lane(
-            session_id=session_id,
-            source_lane_id=source_lane_id,
-            lane_id=lane_id,
-        )
-    except KeyError as exc:
-        raise RunExecutionError(
-            "agent_session_conflict",
-            "The Agent Session changed before its branch could be created.",
-        ) from exc
-    if not isinstance(outcome, TransactionCommit):
-        raise LeaseLostError
-
-
 def _bound_child_runner(
     *,
     orchestrator: AnswerOrchestrator,
-    journal: AgentSessionStore[EffectHostUpdate],
+    repository: AgentSessionRepository[EffectHostUpdate],
     session: RunSession,
     fetched_buffer: FetchedResourceBuffer,
     parent_session_id: SessionId,
@@ -2069,7 +2040,7 @@ def _bound_child_runner(
     ) -> ChildOutcome:
         return await run_child_session(
             orchestrator=orchestrator,
-            journal=journal,
+            repository=repository,
             session=session,
             fetched_buffer=fetched_buffer,
             child_id=child_id,
@@ -2088,7 +2059,7 @@ def _bound_child_runner(
 async def run_child_session(
     *,
     orchestrator: AnswerOrchestrator,
-    journal: AgentSessionStore[EffectHostUpdate],
+    repository: AgentSessionRepository[EffectHostUpdate],
     session: RunSession,
     fetched_buffer: FetchedResourceBuffer,
     child_id: SessionId,
@@ -2145,11 +2116,11 @@ async def run_child_session(
     )
     if not isinstance(child_epoch, int):
         raise LeaseLostError
-    child_journal = journal
-    bind_child = getattr(journal, "for_child", None)
+    child_repository = repository
+    bind_child = getattr(repository, "for_child", None)
     if callable(bind_child):
-        child_journal = cast(
-            AgentSessionStore[EffectHostUpdate],
+        child_repository = cast(
+            AgentSessionRepository[EffectHostUpdate],
             bind_child(child_id, fencing_epoch=child_epoch),
         )
     effects = ResearchRuntimeEffects(
@@ -2161,8 +2132,8 @@ async def run_child_session(
         persist_child_intent=None,
     )
     runtime = AgentSessionRuntime(
-        transactions=child_journal,
-        load=child_journal.load,
+        transactions=child_repository,
+        load=child_repository.load,
         effects=effects,
         tools=prepared.tools,
         fencing_epoch=child_epoch,
@@ -2196,9 +2167,9 @@ async def run_child_session(
         raise
     except SessionLeaseLostError as exc:
         raise LeaseLostError from exc
-    snapshot = await child_journal.load(child_id)
-    orchestrator.adopt_runtime_snapshot(prepared, snapshot)
-    await _adopt_durable_evidence(prepared, child_journal, child_id)
+    snapshot = await child_repository.load(child_id)
+    orchestrator.restore_runtime_snapshot(prepared, snapshot)
+    await _restore_durable_evidence(prepared, child_repository, child_id)
     if isinstance(operation.state, OperationCompleted):
         status: Literal["succeeded", "failed", "cancelled"] = "succeeded"
     elif isinstance(operation.state, OperationCancelled):
@@ -2365,14 +2336,45 @@ class FastRunBoundaries:
         )
         await self._observe(committed)
 
+    async def load_settled_result(self) -> Mapping[str, Any] | None:
+        """Load the canonical Host result staged before Session settlement."""
+        stage = await self._progress.load_stage(self._final_stage_id())
+        if stage is None:
+            return None
+        state = stage.state
+        if stage.stage_name != "final_generation" or not isinstance(state, Mapping):
+            raise RunExecutionError(
+                "run_execution_failed",
+                "The settled Fast Host result is malformed.",
+            )
+        result = state.get("result")
+        digest = state.get("result_digest")
+        if not isinstance(result, Mapping) or digest != canonical_json(result):
+            raise RunExecutionError(
+                "run_execution_failed",
+                "The settled Fast Host result failed its canonical digest check.",
+            )
+        return dict(result)
+
+    async def stage_result(self, *, result: Mapping[str, Any], result_digest: str) -> None:
+        committed = await self._progress.settle_stage(
+            expected_progress_version=self._progress_version,
+            stage_intent_id=self._final_stage_id(),
+            stage_name="final_generation",
+            state={"result": dict(result), "result_digest": result_digest},
+            evidence=(),
+        )
+        await self._observe(committed)
+
     async def settle_final(self, *, result: Mapping[str, Any], result_digest: str) -> None:
-        stage_id = StageIntentId.deterministic(run_id=self._run_id, name="fast:final_generation:2")
+        stage_id = self._final_stage_id()
+        state = {"result": dict(result), "result_digest": result_digest}
         terminal = getattr(self._progress, "settle_terminal", None)
         if terminal is not None:
             committed = await terminal(
                 expected_progress_version=self._progress_version,
                 stage_intent_id=stage_id,
-                state={"result_digest": result_digest},
+                state=state,
                 result=result,
             )
             await self._observe(committed)
@@ -2381,10 +2383,16 @@ class FastRunBoundaries:
             expected_progress_version=self._progress_version,
             stage_intent_id=stage_id,
             stage_name="final_generation",
-            state={"result_digest": result_digest},
+            state=state,
             evidence=(),
         )
         await self._observe(committed)
+
+    def _final_stage_id(self) -> StageIntentId:
+        return StageIntentId.deterministic(
+            run_id=self._run_id,
+            name="fast:final_generation:2",
+        )
 
     async def _observe(self, committed: Any) -> None:
         if isinstance(committed, StageCommit):
@@ -2618,9 +2626,9 @@ __all__ = [
 ]
 
 
-async def _adopt_durable_evidence(prepared: Any, journal: Any, session_id: SessionId) -> None:
-    """Adopt the latest durable evidence state into the live ledger (recovery)."""
-    loader = getattr(journal, "load_evidence", None)
+async def _restore_durable_evidence(prepared: Any, repository: Any, session_id: SessionId) -> None:
+    """Restore the latest durable Evidence state into the live ledger."""
+    loader = getattr(repository, "load_evidence", None)
     if loader is None or prepared is None:
         return
     writes = await loader(session_id)
@@ -2629,4 +2637,4 @@ async def _adopt_durable_evidence(prepared: Any, journal: Any, session_id: Sessi
     import json as _json
 
     latest = writes[-1]
-    prepared.evidence.adopt_ledger_state(_json.loads(latest.content.decode("utf-8")))
+    prepared.evidence.restore_ledger_state(_json.loads(latest.content.decode("utf-8")))

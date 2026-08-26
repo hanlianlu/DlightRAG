@@ -1,10 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Integration tests for the durable Answer coordinator on PostgreSQL 18.
 
-Exercises the coordinator against the real fenced store: claim, durable
-journal progress, process restart from the committed journal, gap-free event
+Exercises the coordinator against the real fenced repository: claim, durable
+Session progress, process restart from committed Session state, gap-free event
 replay across a reconnect, observed cancellation, graceful-shutdown requeue,
-and the journal's round trip through JSONB.
+and Session Entry/register round trips through JSONB.
 
 Every test runs inside a throwaway database created and dropped per test, so the
 developer's ``dlightrag`` database is never mutated.
@@ -25,12 +25,13 @@ import asyncpg
 import pytest
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-from dlightrag.adapters.postgres.session_journal import PGJournalStore
+from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+from dlightrag.agent.session.effects import canonical_json
 from dlightrag.agent.session.entries import UserMessageEntry
 from dlightrag.agent.session.fold import PriorTurns
 from dlightrag.agent.session.fold import WorkingContextProjection as _RunWorking
-from dlightrag.agent.session.ids import SessionId
+from dlightrag.agent.session.ids import SessionId, StageIntentId
 from dlightrag.agent.session.plan import AgentRunPlan
 from dlightrag.agent.session.registers import HostTurnReservation
 from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
@@ -42,6 +43,7 @@ from dlightrag.answer.citations.streaming import AnswerStream
 from dlightrag.answer.executor import (
     AnswerExecutor,
     AnswerResourceResolver,
+    FastRunBoundaries,
     OrchestratorRun,
 )
 from dlightrag.answer.publication import ArtifactIssue, PublicationPlan
@@ -136,8 +138,7 @@ async def store() -> AsyncIterator[FingerprintingAnswerRunStore]:
         assert pool is not None
         created = FingerprintingAnswerRunStore(pool=pool)
         await created.initialize()
-        # Retention exempts conversation-linked runs, so the whole operational
-        # schema is established here exactly as a real process establishes it.
+        # Establish the complete operational schema exactly as a real process does.
         await PGWebConversationStore(pool=pool, run_store=created).initialize()
         yield created
     finally:
@@ -176,7 +177,7 @@ def _status_is(store: PGAnswerRunStore, run_id: str, status: str) -> Any:
     return _check
 
 
-async def test_journaled_turn_survives_a_new_worker(store: FingerprintingAnswerRunStore) -> None:
+async def test_session_turn_survives_a_new_worker(store: FingerprintingAnswerRunStore) -> None:
     creation = await store.create_run(
         owner_id=_OWNER,
         request=_REQUEST,
@@ -191,10 +192,10 @@ async def test_journaled_turn_survives_a_new_worker(store: FingerprintingAnswerR
     from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
 
     async def body(session: RunSession) -> Mapping[str, Any]:
-        journal = session.execution.session_store
+        repository = session.execution.session_repository
         assert session.prepared_input is not None
         session_id = SessionId(str(session.prepared_input["agent_session_id"]))
-        snapshot = await journal.load(session_id)
+        snapshot = await repository.load(session_id)
         seen.append(snapshot.commit_sequence)
         if snapshot.commit_sequence == 0:
             entry = AssistantMessageEntry(
@@ -206,7 +207,7 @@ async def test_journaled_turn_survives_a_new_worker(store: FingerprintingAnswerR
             )
             head = LaneHead(LaneId.main(), entry.entry_id)
             state = LaneState(LaneId.main())
-            committed = await journal.transact(
+            committed = await repository.transact(
                 session_id=session_id,
                 fencing_epoch=session.execution.fencing_epoch,
                 transaction=SessionTransaction.from_parts(
@@ -224,7 +225,7 @@ async def test_journaled_turn_survives_a_new_worker(store: FingerprintingAnswerR
 
     first = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
     await first.start()
-    await _settle(_journal_committed(store, run_id))
+    await _settle(_session_committed(store, run_id))
     await first.aclose()
 
     second = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
@@ -241,7 +242,7 @@ async def test_journaled_turn_survives_a_new_worker(store: FingerprintingAnswerR
     assert seen == [0, 1]
 
 
-def _journal_committed(store: PGAnswerRunStore, run_id: str) -> Any:
+def _session_committed(store: PGAnswerRunStore, run_id: str) -> Any:
     async def _check() -> bool:
         run = await store.get_run(owner_id=_OWNER, run_id=run_id)
         return run is not None and run.durable_progress_version == 1
@@ -416,7 +417,7 @@ async def test_running_run_observes_cancellation_and_commits_cancelled(
     assert events[-1].payload == {"status": "cancelled"}
 
 
-async def test_journal_round_trips_through_jsonb(store: FingerprintingAnswerRunStore) -> None:
+async def test_session_round_trips_through_jsonb(store: FingerprintingAnswerRunStore) -> None:
     creation = await store.create_run(
         owner_id=_OWNER,
         request=_REQUEST,
@@ -425,7 +426,7 @@ async def test_journal_round_trips_through_jsonb(store: FingerprintingAnswerRunS
     run_id = creation.run.run_id
     claimed = await store.claim_next(worker_id="worker-1")
     assert claimed is not None
-    journal = claimed.execution.session_store
+    repository = claimed.execution.session_repository
 
     from dlightrag.agent.session.entries import AssistantMessageEntry, UserMessageEntry
     from dlightrag.agent.session.fold import fold_entries
@@ -455,7 +456,7 @@ async def test_journal_round_trips_through_jsonb(store: FingerprintingAnswerRunS
     ]
     head = LaneHead(LaneId.main(), entries[-1].entry_id)
     state = LaneState(LaneId.main())
-    committed = await journal.transact(
+    committed = await repository.transact(
         session_id=session_id,
         fencing_epoch=claimed.execution.fencing_epoch,
         transaction=SessionTransaction.from_parts(
@@ -478,7 +479,7 @@ async def test_journal_round_trips_through_jsonb(store: FingerprintingAnswerRunS
     reclaimed = await store.claim_next(worker_id="worker-2")
     assert reclaimed is not None
 
-    snapshot = await reclaimed.execution.session_store.load(session_id)
+    snapshot = await reclaimed.execution.session_repository.load(session_id)
     assert snapshot.commit_sequence == 1
     folded = fold_entries(snapshot.entries)
     assert [message["role"] for message in folded] == ["user", "assistant"]
@@ -513,7 +514,7 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     agent_snapshot = await store.claim_next(worker_id="unused")
     assert agent_snapshot is None
     session_id = SessionId(session_snapshot.agent_session_id)
-    journal = PGJournalStore(
+    repository = PGAgentSessionRepository(
         pool=cast(Any, store)._operation_pool,
         owner_id=_OWNER,
         run_id=uuid.UUID(run_id),
@@ -521,7 +522,7 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
         lease_owner="reader",
         fencing_epoch=1,
     )
-    canonical = await journal.load(session_id)
+    canonical = await repository.load(session_id)
     assert [entry.entry_type for entry in canonical.tree.ancestry()] == [
         "user_message",
         "assistant_message",
@@ -546,6 +547,100 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert result["evidence_images"][0]["chunk_id"] == "c1"
     assert "answer_images" not in result
     assert result["trace"]["retrieval"] == "ok"
+
+
+async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_interleaving(
+    store: FingerprintingAnswerRunStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CountingSynthesizer(_CitingSynthesizer):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_stream(self, *args: Any, **kwargs: Any) -> Any:
+            self.calls += 1
+            return await super().generate_stream(*args, **kwargs)
+
+    synthesizer = CountingSynthesizer()
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(AnswerSynthesizer, synthesizer),
+        retrieve_knowledge_base=_retrieve_visual,
+        model_profile=ModelProfile(context_window_tokens=1_000_000),
+        telemetry=NOOP_TELEMETRY,
+        text_window_budget=TextWindowBudget(tokens=850_000),
+        resolved_mode="fast",
+    )
+    application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=_answer_run_input().as_request(),
+        idempotency_fingerprint=_REQUEST_FINGERPRINT,
+    )
+    final_stage_id = StageIntentId.deterministic(
+        run_id=creation.run.run_id,
+        name="fast:final_generation:2",
+    )
+    original_observe = FastRunBoundaries._observe
+    crashed = False
+
+    async def cancel_at_stage_observation(
+        self: FastRunBoundaries,
+        committed: Any,
+    ) -> None:
+        nonlocal crashed
+        if not crashed and getattr(committed, "stage_intent_id", None) == final_stage_id:
+            crashed = True
+            raise asyncio.CancelledError
+        await original_observe(self, committed)
+
+    monkeypatch.setattr(FastRunBoundaries, "_observe", cancel_at_stage_observation)
+    await coordinator.start()
+    coordinator.wake()
+    try:
+        await _settle(_status_is(store, creation.run.run_id, "succeeded"))
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    run = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
+    assert run is not None
+    assert run.result is not None
+    assert crashed is True
+    assert synthesizer.calls == 1
+    routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
+    assert routing is not None
+    reader = PGAgentSessionRepository(
+        pool=cast(Any, store)._operation_pool,
+        owner_id=_OWNER,
+        run_id=uuid.UUID(creation.run.run_id),
+        worker_id="reader",
+        lease_owner="reader",
+        fencing_epoch=1,
+    )
+    snapshot = await reader.load(SessionId(routing.agent_session_id))
+    ancestry = snapshot.tree.ancestry()
+    assert [entry.entry_type for entry in ancestry] == [
+        "user_message",
+        "assistant_message",
+    ]
+    assert [getattr(entry, "acceptance_id", None) for entry in ancestry] == [
+        creation.run.run_id,
+        creation.run.run_id,
+    ]
+    assert ancestry[1].parent_entry_id == ancestry[0].entry_id
+    assert not any(isinstance(record.value, HostTurnReservation) for record in snapshot.registers)
+
+    async with cast(Any, store)._operation_pool.acquire() as conn:
+        state = await conn.fetchval(
+            "SELECT state FROM dlightrag_answer_run_stages"
+            " WHERE owner_id = $1 AND run_id = $2 AND stage_intent_id = $3",
+            _OWNER,
+            uuid.UUID(creation.run.run_id),
+            uuid.UUID(final_stage_id.value),
+        )
+    staged = json.loads(state) if isinstance(state, str) else state
+    assert staged["result"] == run.result
+    assert staged["result_digest"] == canonical_json(run.result)
 
 
 async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
@@ -581,7 +676,7 @@ async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
 
     routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
     assert routing is not None
-    reader = PGJournalStore(
+    reader = PGAgentSessionRepository(
         pool=cast(Any, store)._operation_pool,
         owner_id=_OWNER,
         run_id=uuid.UUID(creation.run.run_id),
@@ -749,7 +844,7 @@ async def test_publication_correction_is_one_linked_agent_operation(
     assert sum(event.event_type == "reset" for event in events) == 1
     routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
     assert routing is not None
-    reader = PGJournalStore(
+    reader = PGAgentSessionRepository(
         pool=cast(Any, store)._operation_pool,
         owner_id=_OWNER,
         run_id=uuid.UUID(creation.run.run_id),

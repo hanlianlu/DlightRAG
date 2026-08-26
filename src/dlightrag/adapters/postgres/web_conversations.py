@@ -12,6 +12,7 @@ finalizer, or reconnect has to commit it afterwards.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 from uuid import uuid4
 
@@ -235,6 +236,23 @@ WHERE principal_id = $1
 FOR UPDATE
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
+_LOCK_AGENT_SESSION_IF_PRESENT = """
+SELECT 1
+FROM dlightrag_agent_sessions
+WHERE owner_id = $1 AND session_id = $2::text::uuid
+FOR UPDATE
+"""
+
+_REBASE_EMPTY_CONVERSATION = f"""
+UPDATE web_conversations
+SET agent_lane_id = 'main',
+    content_revision = content_revision + 1,
+    updated_at = NOW()
+WHERE principal_id = $1
+  AND conversation_id = $2::text::uuid
+RETURNING {_SUMMARY_COLUMNS}
+"""  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
+
 _SELECT_CONVERSATION_RUNS = """
 SELECT answer_run_id::text AS answer_run_id
 FROM web_conversation_turns
@@ -269,9 +287,9 @@ _DELETE_AGENT_SESSION_IF_UNREFERENCED = """
 DELETE FROM dlightrag_agent_sessions AS sessions
 WHERE sessions.owner_id = $1 AND sessions.session_id = $2::text::uuid
   AND NOT EXISTS (
-      SELECT 1 FROM web_conversations AS conversations
-      WHERE conversations.principal_id = sessions.owner_id
-        AND conversations.agent_session_id = sessions.session_id
+      SELECT 1 FROM dlightrag_answer_run_routing AS routing
+      WHERE routing.owner_id = sessions.owner_id
+        AND routing.agent_session_id = sessions.session_id
   )
 """
 
@@ -756,16 +774,45 @@ class PGWebConversationStore(PostgresOperationRunner):
                         summary=_row_dict(existing),
                         replayed=True,
                     )
+                accepted_request = request
+                accepted_routing = routing
+                session_exists = await conn.fetchval(
+                    _LOCK_AGENT_SESSION_IF_PRESENT,
+                    principal_id,
+                    str(summary_row["agent_session_id"]),
+                )
+                if session_exists is None:
+                    accepted_request = {
+                        **request,
+                        "agent_lane_id": "main",
+                        "source_lane_id": None,
+                    }
+                    accepted_routing = replace(
+                        routing or RoutingAcceptance.fallback(request),
+                        agent_lane_id="main",
+                        source_lane_id=None,
+                    )
+                    if str(summary_row["agent_lane_id"]) != "main":
+                        rebased = await conn.fetchrow(
+                            _REBASE_EMPTY_CONVERSATION,
+                            principal_id,
+                            conversation_id,
+                        )
+                        if rebased is None:
+                            raise ConversationSubmissionConflict(
+                                "conversation Agent Session/Lane mapping changed"
+                            )
+                        summary_row = rebased
                 try:
                     creation = await self._run_store.create_run_in(
                         conn,
                         owner_id=principal_id,
-                        request=request,
+                        request=accepted_request,
                         idempotency_fingerprint=fingerprint,
                         idempotency_key=submission_id,
                         artifacts=artifacts,
                         references=references,
-                        routing=routing,
+                        routing=accepted_routing,
                     )
                 except IdempotencyKeyConflict as exc:
                     accepted = await conn.fetchrow(

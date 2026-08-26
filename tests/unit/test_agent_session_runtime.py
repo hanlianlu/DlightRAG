@@ -16,7 +16,7 @@ from dlightrag.agent.session.entries import (
     UserMessageEntry,
 )
 from dlightrag.agent.session.ids import AttemptId, LaneId, SessionId
-from dlightrag.agent.session.memory import MemoryAgentSessionStore
+from dlightrag.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.agent.session.operation import (
     Cancelling,
     CompletionReady,
@@ -181,7 +181,7 @@ def _assistant(*calls: ToolCall, text: str = "", stop: str | None = None) -> Ass
 
 
 def _runtime(
-    store: MemoryAgentSessionStore[dict[str, Any]],
+    store: MemoryAgentSessionRepository[dict[str, Any]],
     effects: _Effects,
     tool: AgentTool,
     *,
@@ -215,7 +215,7 @@ async def test_live_runtime_commits_exact_request_ordered_batch_host_delta_and_t
             _assistant(text="done"),
         ]
     )
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     events: list[AgentSessionEvent] = []
     runtime = _runtime(store, effects, tool, events=events)
     session_id = SessionId.new()
@@ -258,7 +258,7 @@ async def test_never_tool_crash_recovers_as_outcome_unknown_without_reexecution(
         [_assistant(ToolCall("c1", "lookup", {"value": "x"}))],
         crash_tool=True,
     )
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = _runtime(store, first_effects, tool)
     session_id = SessionId.new()
     accepted = await runtime.accept(
@@ -295,7 +295,7 @@ async def test_replayable_tool_recovery_uses_fresh_attempt_and_settles_once() ->
         [_assistant(ToolCall("c1", "lookup", {"value": "x"}))],
         crash_tool=True,
     )
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = _runtime(store, first_effects, tool)
     session_id = SessionId.new()
     accepted = await runtime.accept(
@@ -323,7 +323,7 @@ async def test_replayable_tool_recovery_uses_fresh_attempt_and_settles_once() ->
 async def test_provider_crash_reuses_exact_snapshot_with_fresh_attempt() -> None:
     tool = _agent_tool()
     first_effects = _Effects([_assistant(text="unused")], crash_provider=True)
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = _runtime(store, first_effects, tool)
     session_id = SessionId.new()
     accepted = await runtime.accept(
@@ -354,7 +354,7 @@ async def test_provider_crash_reuses_exact_snapshot_with_fresh_attempt() -> None
 async def test_steer_is_consumed_at_terminal_checkpoint_and_cancel_closes_batch() -> None:
     tool = _agent_tool()
     effects = _Effects([_assistant(text="first"), _assistant(text="after steer")])
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
 
     class Controls:
         issued = False
@@ -416,7 +416,7 @@ async def test_steer_is_consumed_at_terminal_checkpoint_and_cancel_closes_batch(
 async def test_follow_up_is_bounded_unaccepted_fifo_and_compaction_is_automatic() -> None:
     tool = _agent_tool()
     effects = _Effects([_assistant(text="done")], compaction_required=True)
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = _runtime(store, effects, tool)
     session_id = SessionId.new()
     accepted = await runtime.accept(
@@ -459,7 +459,7 @@ async def test_follow_up_is_bounded_unaccepted_fifo_and_compaction_is_automatic(
 @pytest.mark.asyncio
 async def test_runtime_event_sink_failure_is_observe_only() -> None:
     tool = _agent_tool()
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     effects = _Effects([_assistant(text="done")])
 
     async def broken(_event: AgentSessionEvent) -> None:
@@ -508,7 +508,7 @@ async def test_runtime_invariant_faults_session_and_rejects_new_work() -> None:
                 max_tokens=10,
             )
 
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = _runtime(store, BrokenEffects([]), tool)
     session_id = SessionId.new()
     accepted = await runtime.accept(
@@ -544,7 +544,7 @@ async def test_recovery_contract_change_is_source_position_synthetic_result() ->
         [_assistant(ToolCall("c1", "lookup", {"value": "x"}))],
         crash_tool=True,
     )
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     first = _runtime(store, first_effects, original)
     session_id = SessionId.new()
     accepted = await first.accept(
@@ -583,7 +583,7 @@ async def test_recovery_contract_change_is_source_position_synthetic_result() ->
 @pytest.mark.asyncio
 async def test_steer_while_cancelling_is_rejected_without_faulting_session() -> None:
     tool = _agent_tool()
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = _runtime(store, _Effects([]), tool)
     session_id = SessionId.new()
     accepted = await runtime.accept(
@@ -631,7 +631,7 @@ async def test_compaction_retries_exactly_the_plan_attempt_limit() -> None:
             raise RuntimeError("summary invalid")
 
     effects = FailedCompaction([_assistant(text="unreachable")], compaction_required=True)
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = _runtime(store, effects, tool)
     session_id = SessionId.new()
     plan = replace(_plan(tool), compaction_attempt_limit=3)
@@ -665,7 +665,7 @@ async def test_provider_retry_exhaustion_is_typed_operation_failure() -> None:
             raise ProviderAttemptFailed("provider unavailable", retryable=True)
 
     effects = UnavailableProvider([])
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = AgentSessionRuntime(
         transactions=store,
         load=store.load,
@@ -700,7 +700,7 @@ async def test_steer_inbox_limit_and_invalid_arguments_are_typed() -> None:
             _assistant(text="done"),
         ]
     )
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = _runtime(store, effects, tool)
     session_id = SessionId.new()
     accepted = await runtime.accept(
@@ -749,7 +749,7 @@ async def test_plan_denied_tool_is_synthetic_even_when_runtime_can_resolve_it() 
             _assistant(text="done"),
         ]
     )
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = AgentSessionRuntime(
         transactions=store,
         load=store.load,
@@ -788,7 +788,7 @@ async def test_length_stopped_tool_call_is_never_executed() -> None:
             _assistant(text="done"),
         ]
     )
-    store = MemoryAgentSessionStore[dict[str, Any]]()
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = _runtime(store, effects, tool)
     session_id = SessionId.new()
     accepted = await runtime.accept(

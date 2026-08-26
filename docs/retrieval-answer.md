@@ -279,22 +279,26 @@ unbounded data URIs.
 
 ## Answer Orchestration
 
-One `AnswerOrchestrator` executes the durable Resolved Mode:
+`AnswerExecutor` owns the product workflow; `AnswerOrchestrator` prepares typed
+Host context, tools, and effects for the durable Resolved Mode:
 
 - **Fast Answer** — requested or routed `fast`. Planning, KB retrieval, and one
   lightweight model invocation use shared Context Contribution, Evidence,
   citation, model-call, and usage infrastructure. Fast never enters Profile
-  Memory and creates no Agent Session, workspace, tools, or publication.
-- **Research** — requested or routed `research`. The product-neutral AgentLoop
-  projects the canonical linear journal as a parent-linked selected-head view and selects from the
+  Memory or the Agent interpreter and creates no Agent Operation, workspace,
+  tools, or publication; atomic Host turns still share the canonical Session Tree.
+- **Research** — requested or routed `research`. Product-neutral
+  `AgentSessionRuntime` selects one Lane ancestry and resolves its immutable Plan
+  through the
   run-local ToolRegistry: KB/resource/Web tools, the seven-tool filesystem set
   (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, in Pi order with
   metadata-only live tool progress), parent Profile Memory
   remember/forget/recall tools (children recall only), progressive
   `load_skill`, outbound MCP tools, and
-  `spawn_agent` plus child status/wait/cancel. Foreground children may run in
-  parallel with selected context/model/inherited tools; adopted Evidence is
-  parent-citable and persists before spawn settlement. A no-tool assistant turn
+  `spawn_agent` plus child status/wait/cancel. Foreground Child Sessions may run
+  in parallel with explicit ContextSnapshot, pinned tools/budget, and an
+  independently renewed lease; their EvidenceDelta is parent-citable and
+  persists with the parent ToolResult settlement. A no-tool assistant turn
   ends Research and its text is the answer. There is no hidden finalizer model
   call. One explicitly referenced, non-blank `artifacts/report.md`,
   `artifacts/report.html`, or `artifacts/report.pdf` may publish as the typed
@@ -359,8 +363,7 @@ builds OpenAI-style messages with explicit evidence and task boundaries:
             {
                 "type": "text",
                 "text": (
-                    "## Knowledge Graph Context\n..."
-                    "\n\n## Question\nWhat are the key findings?"
+                    "## Knowledge Graph Context\n...\n\n## Question\nWhat are the key findings?"
                 ),
             },
         ],
@@ -497,7 +500,7 @@ requests. A cursor is single-use. Its compact durable state records the original
 focus-plan budget, current rank position, and absolute character offset; the
 deterministic focus plan is cached in memory and rebuilt once after recovery.
 Changing a later observation budget therefore neither skips nor repeats text,
-and consumed cursors do not accumulate in the journal.
+and consumed cursors do not accumulate in Session registers.
 
 `inspect` performs focused visual inspection through the VLM role
 (falling back to the default LLM). Images are bounded through the one canonical

@@ -34,7 +34,7 @@ class TestMigrationDeclaration:
         assert versions == sorted(versions)
         assert len(set(versions)) == len(versions)
 
-    def test_declares_the_m3_tables_and_additive_workspace_tables(self) -> None:
+    def test_declares_the_final_answer_and_session_tables(self) -> None:
         created = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", _all_statements()))
         assert created == {
             "dlightrag_answer_runs",
@@ -63,12 +63,11 @@ class TestMigrationDeclaration:
         assert "recovery_count" not in statements
         assert "dlightrag_answer_artifacts" not in statements
 
-    def test_publication_kinds_are_declared(self) -> None:
-        from dlightrag.adapters.postgres.answer_runs import _M5_PUBLICATION_DDL
-
-        statements = _all_statements() + "\n".join(_M5_PUBLICATION_DDL)
+    def test_final_baseline_has_publication_kinds_and_no_compatibility_alters(self) -> None:
+        statements = _all_statements()
         assert "primary_report" in statements
         assert "published_artifact" in statements
+        assert "ALTER TABLE" not in statements
 
     def test_run_artifacts_reference_blobs_not_a_content_table(self) -> None:
         statements = _all_statements()

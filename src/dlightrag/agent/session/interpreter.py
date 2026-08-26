@@ -28,7 +28,6 @@ class AssembleProviderRequest:
 @dataclass(frozen=True, slots=True)
 class CallProvider:
     turn_number: int
-    recovery: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,10 +112,7 @@ def next_action(state: RunOperationState) -> NextAction:
             return ConsumeSteer(state.steers[0].control_id)
         return AssembleProviderRequest(state.turn_count + 1)
     if isinstance(state, ProviderRequestPending):
-        return CallProvider(
-            state.turn_number,
-            recovery=state.provider_attempts > 0,
-        )
+        return CallProvider(state.turn_number)
     if isinstance(state, ToolBatchReady):
         if state.next_source_index == len(state.batch.items):
             return ContinueAfterToolBatch(state.turn_number)

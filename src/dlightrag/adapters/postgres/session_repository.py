@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Claim-bound PostgreSQL journal, progress, evidence, resource, and blob stores.
+"""Claim-bound PostgreSQL Session, progress, evidence, resource, and blob repositories.
 
 Every bound store embeds owner, run, worker, lease owner, and fencing epoch at
 claim time; its public methods carry no fencing parameters (M3 claim-bound
@@ -17,7 +17,6 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from typing import Any
 
 from dlightrag.adapters.postgres._operations import ConnectionPool
@@ -42,12 +41,11 @@ from dlightrag.agent.session.registers import (
     SetRegister,
     decode_register,
 )
-from dlightrag.agent.session.store import (
+from dlightrag.agent.session.repository import (
     AgentSessionSnapshot,
 )
 from dlightrag.agent.session.transactions import (
     RegisterConflict,
-    RegisterExpectation,
     SessionTransaction,
     TransactionCommit,
     TransactionLeaseLost,
@@ -253,8 +251,8 @@ def _uuid(value: Any) -> Any:
     return uuid.UUID(str(value))
 
 
-class PGJournalStore:
-    """One claim-bound AgentSessionStore over PostgreSQL."""
+class PGAgentSessionRepository:
+    """One claim-bound Agent Session Repository over PostgreSQL."""
 
     def __init__(
         self,
@@ -277,9 +275,11 @@ class PGJournalStore:
         self._primary_session_id = primary_session_id
         self._child_session_id = child_session_id
 
-    def for_child(self, child_session_id: SessionId, *, fencing_epoch: int) -> PGJournalStore:
+    def for_child(
+        self, child_session_id: SessionId, *, fencing_epoch: int
+    ) -> PGAgentSessionRepository:
         """Bind the same HostDelta owner to one independently leased Child Session."""
-        return PGJournalStore(
+        return PGAgentSessionRepository(
             pool=self._pool,
             owner_id=self._owner_id,
             run_id=self._run_id,
@@ -495,99 +495,6 @@ class PGJournalStore:
                     appended_sequences=entry_sequences,
                     register_sequences=tuple(register_sequences),
                 )
-
-    async def append_to_lane(
-        self,
-        *,
-        session_id: SessionId,
-        lane_id: LaneId,
-        expected_head: RegisterRecord,
-        entries: Sequence[SessionEntry],
-    ) -> TransactionOutcome:
-        if not entries:
-            raise ValueError("a Lane append requires at least one Entry")
-        if not isinstance(expected_head.value, LaneHead):
-            raise TypeError("expected_head must be a LaneHead record")
-        if expected_head.value.lane_id != lane_id:
-            raise ValueError("expected Lane Head belongs to another Lane")
-        snapshot = await self.load(session_id)
-        lane = snapshot.tree.lane(lane_id)
-        if lane.archived:
-            raise ValueError("an archived Lane is not writable")
-        parent = expected_head.value.entry_id
-        placed: list[SessionEntry] = []
-        for entry in entries:
-            placed_entry = replace(entry, parent_entry_id=parent)
-            placed.append(placed_entry)
-            parent = placed_entry.entry_id
-        return await self.transact(
-            session_id=session_id,
-            fencing_epoch=self._fencing_epoch,
-            transaction=SessionTransaction.from_parts(
-                entries=placed,
-                register_writes=[SetRegister(LaneHead(lane_id, parent))],
-                expectations=[
-                    RegisterExpectation(expected_head.ref, expected_head.sequence),
-                    RegisterExpectation(lane.state.ref, lane.state.sequence),
-                ],
-            ),
-        )
-
-    async def fork_lane(
-        self,
-        *,
-        session_id: SessionId,
-        source_lane_id: LaneId,
-        lane_id: LaneId,
-        at_entry_id: EntryId | None = None,
-    ) -> TransactionOutcome:
-        snapshot = await self.load(session_id)
-        source = snapshot.tree.lane(source_lane_id)
-        target = source.head_entry_id if at_entry_id is None else at_entry_id
-        if target is None:
-            raise ValueError("a Lane cannot fork from an empty Head")
-        ancestry_ids = {entry.entry_id for entry in snapshot.tree.ancestry(source_lane_id)}
-        if target is not None and target not in ancestry_ids:
-            raise ValueError("a fork target must belong to the source Lane ancestry")
-        if not snapshot.tree.is_stable_checkpoint(target):
-            raise ValueError("a Lane can fork only from a stable checkpoint")
-        head = LaneHead(lane_id=lane_id, entry_id=target)
-        state = LaneState(lane_id=lane_id)
-        return await self.transact(
-            session_id=session_id,
-            fencing_epoch=self._fencing_epoch,
-            transaction=SessionTransaction.from_parts(
-                register_writes=[SetRegister(head), SetRegister(state)],
-                expectations=[
-                    RegisterExpectation(head.ref, None),
-                    RegisterExpectation(state.ref, None),
-                ],
-            ),
-        )
-
-    async def archive_lane(
-        self,
-        *,
-        session_id: SessionId,
-        lane_id: LaneId,
-    ) -> TransactionOutcome:
-        if lane_id == LaneId.main():
-            raise ValueError("the main Lane cannot be archived")
-        snapshot = await self.load(session_id)
-        lane = snapshot.tree.lane(lane_id)
-        state = lane.state.value
-        if not isinstance(state, LaneState):
-            raise TypeError("Lane State register has the wrong value type")
-        if state.active_operation_id is not None:
-            raise ValueError("an active Lane cannot be archived")
-        return await self.transact(
-            session_id=session_id,
-            fencing_epoch=self._fencing_epoch,
-            transaction=SessionTransaction.from_parts(
-                register_writes=[SetRegister(replace(state, archived=True))],
-                expectations=[RegisterExpectation(lane.state.ref, lane.state.sequence)],
-            ),
-        )
 
     async def _validate_transaction_registers(
         self,
@@ -1264,7 +1171,7 @@ def _decode_entry(row: Any, *, session_id: SessionId) -> SessionEntry:
 
     entry_class = ENTRY_TYPE_TO_CLASS.get(str(row["entry_type"]))
     if entry_class is None:
-        raise ValueError(f"unknown journal entry type in storage: {row['entry_type']}")
+        raise ValueError(f"unknown Session Entry type in storage: {row['entry_type']}")
     payload = _json_payload(row["payload_json"])
     return decode_entry_payload(
         entry_type=str(row["entry_type"]),
@@ -1280,6 +1187,6 @@ def _decode_entry(row: Any, *, session_id: SessionId) -> SessionEntry:
 
 
 __all__ = [
-    "PGJournalStore",
+    "PGAgentSessionRepository",
     "PGProgressStore",
 ]

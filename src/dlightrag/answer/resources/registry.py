@@ -89,7 +89,7 @@ class ResourceEffectOwner:
     intent_id: IntentId
 
 
-# Persist validated fetched bytes before their tool result settles on the journal.
+# Persist validated fetched bytes before their ToolResult settles in the Session.
 FetchedBytesSink = Callable[
     [FetchedResourceBytes, ResourceEffectOwner | None],
     Awaitable[None],
@@ -296,7 +296,7 @@ class ResourceRegistry:
         return dict(self._fetched_ordinals)
 
     def restore_fetched_bytes(self, resource_id: str, content: bytes) -> None:
-        """Adopt one settled fetch so a resumed read never repeats it.
+        """Restore one settled fetch so a resumed read never repeats it.
 
         These bytes are durable run state, not a cache: they are charged once
         against the request total and their replay slot is frozen, so a resumed
@@ -770,7 +770,7 @@ class ResourceRegistry:
         """Bind validated web bytes to a durable replay slot before they are used.
 
         The sink runs after every HTTPS, redirect, DNS, SSRF, and byte check has
-        passed and before the tool result can settle on the journal, so a resumed
+        passed and before the ToolResult can settle in the Session, so a resumed
         run never silently re-fetches a page that changed underneath it.
         """
         resource = self._resources.get(resource_id)

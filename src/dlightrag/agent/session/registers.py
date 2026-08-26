@@ -26,7 +26,7 @@ from dlightrag.agent.session.operation import (
     decode_operation_state,
     operation_state_payload,
 )
-from dlightrag.agent.session.projection import ContextProjection, TokenAnchor
+from dlightrag.agent.session.projection import ContextProjection
 
 REGISTER_SCHEMA_VERSION = 2
 
@@ -325,14 +325,6 @@ class ContextProjectionRegister:
             ),
             "source_digest": value.source_digest,
             "summary": value.summary,
-            "token_anchors": [
-                {
-                    "through_sequence": anchor.through_sequence,
-                    "measured_input_tokens": anchor.measured_input_tokens,
-                    "measured_output_tokens": anchor.measured_output_tokens,
-                }
-                for anchor in value.token_anchors
-            ],
         }
 
 
@@ -515,14 +507,6 @@ def decode_register(*, kind: str, payload: dict[str, Any]) -> SessionRegister:
                 ),
                 source_digest=str(payload.get("source_digest") or ""),
                 summary=payload.get("summary"),
-                token_anchors=tuple(
-                    TokenAnchor(
-                        through_sequence=int(anchor["through_sequence"]),
-                        measured_input_tokens=int(anchor["measured_input_tokens"]),
-                        measured_output_tokens=int(anchor["measured_output_tokens"]),
-                    )
-                    for anchor in payload.get("token_anchors") or ()
-                ),
             ),
         )
     if kind == "pending_input":

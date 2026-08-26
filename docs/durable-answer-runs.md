@@ -4,8 +4,8 @@ This document defines durable Answer behavior across two owners. The neutral
 `dlightrag.runtime` package owns lifecycle records, the store port, fenced
 sessions, subscriptions, durable progress, the cancellation listener, and
 `RunCoordinator`. The Answer executor owns retrieval/synthesis, converts
-product failures to `RunExecutionError`, and journals research turns through
-the agent-core session journal. `AnswerService` gives REST, MCP, Web, and
+product failures to `RunExecutionError`, and drives Research through the
+product-neutral Agent Session Runtime. `AnswerService` gives REST, MCP, Web, and
 in-process Python callers the same coordinator-backed lifecycle.
 
 `dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore` implements the store
@@ -17,16 +17,17 @@ persists from Runtime. No `dlightrag.storage` compatibility package exists.
 
 - Every answer is one durable run with one identifier and one lifecycle.
 - Client disconnect does not cancel the run.
-- A process restart resumes research from the durable session journal: the
-  folded entries reconstruct the active model context, committed effects never
-  execute again, and unsettled intents replay only under their pinned policy.
+- A process restart opens the durable Agent Session and restores complete typed
+  OperationState. Committed effects never execute again, and pending effects
+  replay only under their pinned AgentRunPlan policy.
 - REST, MCP, Web, and Python use the same run state, artifacts, events, and
   final result.
 - Durability does not change retrieval, citation, workspace, or round-robin
   semantics.
 - Durability adds no workflow framework. Research hosts the product-neutral
-  event-driven AgentLoop over a typed linear journal with a parent-linked projection, while Fast uses
-  deterministic stages without fabricating an Agent Session.
+  `AgentSessionRuntime` over an immutable parent-linked Entry Tree and typed
+  registers. Fast shares that Tree through a Host reservation but has no Agent
+  Operation.
 
 ## Non-Goals
 
@@ -141,7 +142,7 @@ old turn and recovery counters: `durable_progress_version` advances
 only on fenced model turn appends, compaction appends, effect settlements, and
 Fast stage settlements; `reclaims_without_progress` counts consecutive
 expired-lease reclaims without such progress, and four of them abandon the run
-with `run_abandoned` and its `error` event. A long run that commits journal
+with `run_abandoned` and its `error` event. A long run that commits Session
 progress between reclaims survives more total process restarts. The bound is
 not configurable.
 
@@ -163,7 +164,7 @@ terminal transition, lease loss, or process shutdown; there is no run-timeout
 setting.
 
 On graceful shutdown the coordinator stops claiming rows first. Active workers
-may finish an in-flight terminal transition or journal settlement during the
+may finish an in-flight terminal transition or Session settlement during the
 application's shutdown grace; remaining work is then cancelled and joined.
 Each owned cancel-pending run is finalized as `cancelled` with its terminal
 `done` event. Every other owned nonterminal run receives a fenced `running` to
@@ -323,9 +324,14 @@ Queued and expired-running rows are reclaimable. Active workers renew a lease.
 Terminal rows and event logs follow the single
 `answer.runtime.answer_run_retention_days` floor (default 365) from
 `finished_at`, using bounded `SKIP LOCKED` batches. Conversation turns are read
-windows over those runs, not a separate inactivity clock. When a run row still
-exists but its events were trimmed, `events_trimmed_at` makes the event endpoint
-return 410 and the canonical result remains available from status.
+windows over those runs, not a separate inactivity clock. Run deletion also
+reclaims candidate Agent Sessions when no remaining routing row names them.
+A Web Conversation row is navigation identity, not a second durable-history
+reference; it may remain briefly after its final turn and Session are reclaimed.
+Sessions shared by another routed Answer Run survive. Child Session trees are
+candidates when their owning run is pruned. When a run row still exists but its
+events were trimmed, `events_trimmed_at` makes the event endpoint return 410 and
+the canonical result remains available from status.
 
 `run_id` is a UUIDv7. Run creation takes one optional idempotency key unique per
 owner. REST uses the `Idempotency-Key` header, MCP and Python expose an
@@ -357,14 +363,15 @@ global arithmetic-policy revision changed.
 
 The run row is the sole authority for lifecycle status, phase, durable
 progress, stop reason, cancellation, lease, final result, and terminal error.
-Research state lives in the append-only session journal. One transaction commits
-the complete assistant response plus its
-ordered intents; each effect then settles one at a time in assistant source
-order, and every settlement advances session version and durable progress
-under the live lease/epoch predicate. Recovery folds committed entries into
-the model context, replays unsettled `safe` intents only when the tool
-contract matches exactly, settles unsettled `never` intents interrupted, and
-settles changed contracts `tool_contract_changed`.
+Research state lives in the Agent Session's immutable parent-linked Entries and
+closed typed registers. Before each provider call the Runtime commits the exact
+RequestSnapshot and attempt identity. An Assistant settlement commits the
+complete response plus a ToolBatchPlan covering every source position; tool
+clearance, effect settlement, ToolResult placement, HostDelta, and durable
+progress then commit in source order under the live lease/epoch predicate.
+Recovery plans from the same total OperationState: explicit `replayable` effects
+may reconcile under an unchanged contract, `never` effects close as
+`outcome_unknown`, and changed contracts settle `tool_contract_changed`.
 
 ### `dlightrag_answer_run_events`
 
@@ -467,44 +474,59 @@ evidence, not a cross-run cache.
 Deleting a run removes that run's references, not shared bytes. A blob is
 deleted only when no run/resource reference keeps its digest for that owner.
 Reference checks and deletion occur in one transaction, and the foreign key
-rejects deletion if a concurrent run has adopted the digest. A deferred cleanup
+rejects deletion if a concurrent run has linked the digest. A deferred cleanup
 pass may retry a blob that remained because of that race.
 
-## Journal And Recovery
+## Agent Session Recovery
 
-Research reconstructs model context by folding the canonical append-only typed
-journal through its parent-linked linear view. The durable selected head is the
-latest committed entry; alternate Session heads are not persisted in 3.0. Each
-start/resume Run Segment records its parent head. Model context is a projection,
-never a second authority. Historical compaction entries remain
-audit facts; exactly one active summary is rendered before the retained suffix.
-There is no legacy session-schema reader.
+Each Answer Run routing row authorizes one Agent Session/Lane. The immutable
+Entry Tree is canonical conversation ancestry across Fast and Research runs;
+LaneHead and LaneState registers select branches without copying shared Entries.
+Research restores OperationMeta plus the closed total OperationState and invokes
+the same pure NextAction interpreter used live. Historical Compaction Entries
+remain audit facts; one branch-local ContextProjection controls model context and
+never becomes Evidence. There is no legacy schema reader.
 
-Steer controls enter an ordered run inbox. Before the next provider call the
-worker appends each instruction as a typed Context Injection, then acknowledges
-the sequence. Recovery deduplicates an append-before-ack crash by sequence.
+Steer controls enter an ordered Answer inbox. Runtime consumes a steer only at a
+stable checkpoint, appends a ControlMessage Entry, then acknowledges its durable
+sequence. PendingInput is an unaccepted bounded FIFO; dequeue creates a fresh
+Operation acceptance and immutable Plan. A steer observed after terminal commit
+also becomes a fresh linked Operation.
 
-There is no per-turn checkpoint JSON, restored exact-call cache, or
-`checkpoint_*` error kind.
+There is no per-turn checkpoint JSON, restored exact-call cache, inferred phase
+recovery, or `checkpoint_*` error kind.
 
 Image blocks stay as Resource Handle and corpus sidecar identities, never data
 URIs. Claim-time rehydration restores those blocks before the first model call.
 A missing corpus visual drops the image and keeps the text and citation identity;
 a missing attachment blob fails the run.
 
-Durable progress advances only on fenced live settlements: journal appends,
-compaction, effect settlement, and Fast stages. Recovery folds committed
-entries, replays unsettled `safe` intents only when the tool contract still
-matches, and settles interrupted `never` intents without executing them.
-Changed tool contracts settle `tool_contract_changed`.
+Durable progress advances only on fenced live Session/HostDelta settlements and
+Fast stage commits. Register-only recovery bookkeeping never advances it.
+Changed tool contracts settle `tool_contract_changed` without dispatch.
 
-Fast has no Agent Session. It shares the same model-call wrapper, Context
-Contribution projection, Evidence identity/citation ledger, Profile Memory
-placement, and usage/result projection as Research. Unfinished Fast stages
-re-execute from immutable Prepared Input. Interrupted generation appends
-`reset`; DlightRAG does not claim exactly-once token generation.
+Fast shares the Agent Session Entry Tree but never enters the interpreter. Host
+acceptance atomically appends UserMessage plus HostTurnReservation. Before the
+Assistant settlement, the Answer Host stages the complete canonical result on
+the run's deterministic final-generation stage. Success appends AssistantMessage
+with the same acceptance identity and clears the reservation. A crash after that
+Assistant commit reloads the staged result and terminalizes the run without
+retrieval, generation, or publication work. Failure before result staging clears
+only the reservation and preserves the unanswered user entry; after staging,
+failure or cancellation preserves the reservation so replay can commit the exact
+Assistant without lane interleaving. Interrupted pre-settlement generation appends
+`reset`; DlightRAG does not claim exactly-once token generation before a result is
+staged.
 
-If the process dies during a read-only tool batch, that batch may run again.
+`spawn_agent` is replayable because each child id derives from the parent Effect
+intent and each terminal roster row stores the exact parent-visible Child outcome,
+including its Evidence state and stable citation handles. Replay re-merges that
+state into the existing parent ledger and returns the persisted outcome without
+persistence, claim, or drive re-entry. A nonterminal child may restore under its
+deterministic id and fenced child epoch.
+
+If the process dies during another replayable read-only tool batch, that batch may
+run again.
 
 ## Web Conversation Adapter
 
@@ -530,11 +552,15 @@ visible until their run reaches the configured retention floor; they are never
 fed back to the model as conversation history.
 
 The conversation-turn reference uses `ON DELETE CASCADE`, so run pruning cannot
-leave a dangling entry. A linked turn becomes model history only when its run
-succeeds; user input, answer, usage, Evidence summary, and source snapshot are
-projected from the run instead of copied into another execution record.
-Follow-up adds a turn to the current conversation. Fork atomically creates a
-new conversation branch whose first run carries parent lineage.
+leave a dangling entry. Pruning the final routed run also removes its Agent
+Session tree even while an empty Conversation row still names that identity;
+the row contains no hidden model history. If another turn is accepted before the
+empty-row sweep, the adapter rebases it to a fresh `main` Lane and starts a new
+Session tree. A linked turn becomes model history only when its run succeeds;
+user input, answer, usage, Evidence summary, and source snapshot are projected
+from the run instead of copied into another execution record. Follow-up adds a
+turn to the current conversation. Fork atomically creates a new conversation
+branch whose first run carries parent lineage.
 
 Conversation deletion deletes its linked runs in one transaction; lease-fenced
 workers can no longer append after the run row disappears. Cascades remove
@@ -593,9 +619,9 @@ This contract is held by:
 
 - unit tests for every status transition and recovery boundary named in this
   document;
-- PostgreSQL integration tests for claim, lease loss, journal recovery, event replay,
+- PostgreSQL integration tests for claim, lease loss, Session recovery, event replay,
   cancellation, pruning, and artifact ownership;
 - transport contract tests for REST, MCP, Web, and Python;
-- a process-restart test that resumes from the journal or Fast stages;
+- a process-restart test that restores OperationState or resumes Fast stages;
 - reconnect tests that replay events without duplicate sequence numbers;
 - the full local GitHub Actions equivalent (`make ci`).

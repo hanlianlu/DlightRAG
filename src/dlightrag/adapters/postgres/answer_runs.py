@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""PostgreSQL adapters for the M3 durable Answer run, journal, and blob state.
+"""PostgreSQL adapters for durable Answer runs, Agent Sessions, and blobs.
 
-This module owns every concrete PostgreSQL implementation for the M3 run
+This module owns every concrete PostgreSQL implementation for the Answer Run
 lifecycle: the rewritten baseline schema (``answer_runs:0001_answer_runs``),
-claim-bound journal/progress store construction, acceptance, events, terminal
+claim-bound Session/progress repository construction, acceptance, events, terminal
 transitions, sweeping, retention, and blob-backed artifacts.
 
 There is no checkpoint column, single-row artifact ``content`` table, dual
@@ -32,7 +32,7 @@ from dlightrag.adapters.postgres.memory_settings import (
     MEMORY_SETTINGS_DDL,
     MEMORY_SETTINGS_SCHEMA_TABLE,
 )
-from dlightrag.adapters.postgres.session_journal import PGJournalStore, PGProgressStore
+from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository, PGProgressStore
 from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
 from dlightrag.agent.session.ids import SessionId
 from dlightrag.agent.tool_content import decode_tool_content, tool_content_message_fields
@@ -76,7 +76,7 @@ _BATCH_LIMIT = 200
 _EVENT_PAGE_LIMIT = 500
 
 # ─────────────────────────────────────────────────────────────────
-# Final M3 baseline schema
+# Final clean-break baseline schema
 # ─────────────────────────────────────────────────────────────────
 
 _CREATE_RUNS = """
@@ -116,8 +116,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
         CHECK (fencing_epoch >= 0 AND next_event_sequence >= 1
                AND durable_progress_version >= 0
                AND last_reclaim_progress_version >= 0
-               AND reclaims_without_progress >= 0
-               AND (workspace_epoch IS NULL OR workspace_epoch >= 1)),
+               AND reclaims_without_progress >= 0),
     CONSTRAINT dlightrag_answer_runs_lease_check
         CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
     CONSTRAINT dlightrag_answer_runs_terminal_check
@@ -195,7 +194,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_session_entries (
     CONSTRAINT dlightrag_agent_session_entries_sequence_check CHECK (sequence >= 1),
     CONSTRAINT dlightrag_agent_session_entries_type_check CHECK (entry_type IN (
         'user_message', 'assistant_message', 'tool_result',
-        'control_message', 'compaction', 'adoption'
+        'control_message', 'compaction'
     )),
     CONSTRAINT dlightrag_agent_session_entries_version_check CHECK (schema_version >= 1)
 )
@@ -456,14 +455,7 @@ _CREATE_INDEXES = (
     "WHERE blob_digest IS NOT NULL",
 )
 
-_M4_WORKSPACE_DDL = (
-    "ALTER TABLE dlightrag_answer_runs ADD COLUMN IF NOT EXISTS workspace_epoch BIGINT",
-    "ALTER TABLE dlightrag_answer_runs "
-    "DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_workspace_epoch_check",
-    "ALTER TABLE dlightrag_answer_runs "
-    "ADD CONSTRAINT dlightrag_answer_runs_workspace_epoch_check "
-    "CHECK (workspace_epoch IS NULL OR workspace_epoch >= 1)",
-    """
+_CREATE_WORKSPACE_INVENTORY = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_workspace_inventory (
     owner_id        TEXT        NOT NULL,
     run_id          UUID        NOT NULL,
@@ -476,8 +468,9 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_workspace_inventory (
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE
 )
-""",
-    """
+"""
+
+_CREATE_COMMITTED_SPILLS = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
     owner_id        TEXT        NOT NULL,
     run_id          UUID        NOT NULL,
@@ -490,56 +483,15 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE
 )
-""",
-    "ALTER TABLE dlightrag_answer_resources "
-    "DROP CONSTRAINT IF EXISTS dlightrag_answer_resources_kind_check",
-    "ALTER TABLE dlightrag_answer_resources "
-    "ADD CONSTRAINT dlightrag_answer_resources_kind_check "
-    "CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill'))",
-    "ALTER TABLE dlightrag_answer_resources "
-    "DROP CONSTRAINT IF EXISTS dlightrag_answer_resources_blob_link_check",
-    "ALTER TABLE dlightrag_answer_resources "
-    "ADD CONSTRAINT dlightrag_answer_resources_blob_link_check "
-    "CHECK ((kind = 'accepted_blob' AND blob_digest IS NOT NULL) "
-    "OR (kind = 'fetched_blob' AND blob_digest IS NOT NULL AND locator_digest IS NOT NULL) "
-    "OR (kind = 'evidence' AND locator_digest IS NOT NULL) "
-    "OR (kind = 'committed_spill' AND blob_digest IS NULL AND locator_digest IS NULL))",
-)
+"""
 
-_M6_ROUTING_DDL = (
-    _CREATE_ROUTING,
-    "ALTER TABLE dlightrag_answer_run_routing "
-    "DROP CONSTRAINT IF EXISTS dlightrag_answer_run_routing_valid_check",
-    "ALTER TABLE dlightrag_answer_run_routing "
-    "ADD CONSTRAINT dlightrag_answer_run_routing_valid_check "
-    "CHECK (COALESCE(array_length(valid_modes, 1), 0) >= 1 "
-    "AND valid_modes <@ ARRAY['fast', 'research']::text[])",
-    "ALTER TABLE dlightrag_answer_runs DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_phase_check",
-    "ALTER TABLE dlightrag_answer_runs "
-    "ADD CONSTRAINT dlightrag_answer_runs_phase_check "
-    "CHECK (phase IS NULL OR phase IN ("
-    "'routing', 'planning', 'searching', 'researching', 'generating'))",
-    _CREATE_CHILD_SESSIONS,
-    "ALTER TABLE dlightrag_answer_child_sessions ADD COLUMN IF NOT EXISTS parent_intent_id UUID",
-)
-
-_M5_PUBLICATION_DDL = (
-    "ALTER TABLE dlightrag_answer_run_artifacts "
-    "DROP CONSTRAINT IF EXISTS dlightrag_answer_run_artifacts_kind_check",
-    "ALTER TABLE dlightrag_answer_run_artifacts "
-    "ADD CONSTRAINT dlightrag_answer_run_artifacts_kind_check "
-    "CHECK (reference_kind IN ("
-    "'current_attachment', 'history_attachment', 'fetched_resource', "
-    "'primary_report', 'published_artifact'))",
-)
-
-# The single final baseline bakes every evolved column and constraint directly
-# into its CREATE statements; incremental migrations are gone by design.
+# The single final baseline bakes every column and constraint directly into its
+# CREATE statements; compatibility ALTER paths are intentionally absent.
 
 ANSWER_RUN_MIGRATIONS = (
     Migration(
         "0001_answer_runs",
-        "Create the final Answer run, journal, tool-contract, evidence, and blob state",
+        "Create the final Answer run, Agent Session, evidence, and blob state",
         (
             _CREATE_RUNS,
             _CREATE_EVENTS,
@@ -556,8 +508,8 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_CHILD_SESSIONS,
             _CREATE_AGENT_CONTROLS,
             *_CREATE_INDEXES,
-            _M4_WORKSPACE_DDL[3],
-            _M4_WORKSPACE_DDL[4],
+            _CREATE_WORKSPACE_INVENTORY,
+            _CREATE_COMMITTED_SPILLS,
             *MEMORY_SETTINGS_DDL,
         ),
     ),
@@ -1070,6 +1022,13 @@ LIMIT 1
 FOR UPDATE OF r SKIP LOCKED
 """
 
+_LOCK_AGENT_SESSION_IF_PRESENT = """
+SELECT 1
+FROM dlightrag_agent_sessions
+WHERE owner_id = $1 AND session_id = $2
+FOR UPDATE
+"""
+
 _INSERT_ROUTING = """
 INSERT INTO dlightrag_answer_run_routing (
     owner_id, run_id, requested_mode, valid_modes, resolved_mode,
@@ -1246,7 +1205,16 @@ WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
 
 _FINISH_CHILD_SESSION = """
 UPDATE dlightrag_answer_child_sessions
-SET status = $4, summary = $5, usage_json = $6, updated_at = NOW()
+SET status = $4,
+    summary = $5,
+    usage_json = $6,
+    host_state_json = jsonb_set(
+        host_state_json,
+        '{terminal_outcome}',
+        $7::jsonb,
+        true
+    ),
+    updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
 """
 
@@ -1461,6 +1429,39 @@ WITH deleted AS (
 SELECT count(*)::int FROM deleted
 """
 
+_SELECT_RUN_AGENT_SESSIONS = """
+SELECT owner_id, agent_session_id AS session_id
+FROM dlightrag_answer_run_routing
+WHERE (owner_id, run_id) IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
+UNION
+SELECT owner_id, child_session_id AS session_id
+FROM dlightrag_answer_child_sessions
+WHERE (owner_id, run_id) IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
+"""
+
+_LOCK_AGENT_SESSION_CANDIDATES = """
+SELECT owner_id, session_id
+FROM dlightrag_agent_sessions
+WHERE (owner_id, session_id) IN (
+    SELECT * FROM unnest($1::text[], $2::uuid[])
+)
+ORDER BY owner_id, session_id
+FOR UPDATE
+"""
+
+_DELETE_UNREFERENCED_AGENT_SESSIONS = """
+DELETE FROM dlightrag_agent_sessions AS sessions
+WHERE (sessions.owner_id, sessions.session_id) IN (
+    SELECT * FROM unnest($1::text[], $2::uuid[])
+)
+AND NOT EXISTS (
+    SELECT 1 FROM dlightrag_answer_run_routing AS routing
+    WHERE routing.owner_id = sessions.owner_id
+      AND routing.agent_session_id = sessions.session_id
+)
+RETURNING 1
+"""
+
 # Retention order: references first, then blob chunks/metadata only when no
 # run/resource reference remains (M3 blob store contract). Resources cascade
 # with their run; orphan reference rows are gone with the run row too.
@@ -1532,10 +1533,22 @@ def _digest_pairs(rows: Sequence[Any]) -> tuple[list[str], list[str]]:
     return owners, digests
 
 
+async def _delete_unreferenced_agent_sessions(conn: Any, rows: Sequence[Any]) -> int:
+    candidates = {(str(row["owner_id"]), uuid.UUID(str(row["session_id"]))) for row in rows}
+    if not candidates:
+        return 0
+    ordered = sorted(candidates, key=lambda item: (item[0], str(item[1])))
+    owners = [owner for owner, _session_id in ordered]
+    session_ids = [session_id for _owner, session_id in ordered]
+    await conn.fetch(_LOCK_AGENT_SESSION_CANDIDATES, owners, session_ids)
+    deleted = await conn.fetch(_DELETE_UNREFERENCED_AGENT_SESSIONS, owners, session_ids)
+    return len(deleted)
+
+
 async def _try_delete_unreferenced(
     conn: Any, owners: Sequence[str], digests: Sequence[str]
 ) -> int | None:
-    """Delete one savepointed blob batch, or None when an adopter refused it."""
+    """Delete one savepointed blob batch, or None when a concurrent reference wins."""
     try:
         async with conn.transaction():
             deleted = await conn.fetchval(_DELETE_UNREFERENCED_BLOBS, owners, digests)
@@ -1547,9 +1560,9 @@ async def _try_delete_unreferenced(
 
 
 async def _delete_unreferenced(conn: Any, owners: Sequence[str], digests: Sequence[str]) -> int:
-    """Delete blobs no run or resource still references, yielding to adopters.
+    """Delete blobs no run or resource still references, yielding to concurrent links.
 
-    Each delete runs inside its own savepoint. A RESTRICT raised by an adoption
+    Each delete runs inside its own savepoint. A RESTRICT raised by a reference
     that beat the reference check must not abort the caller's transaction, or the
     run deletion it already performed would silently roll back and retention would
     never advance past a contended batch. One contended blob must not shield the
@@ -1604,7 +1617,7 @@ def _optional_int(row: Any, name: str) -> int | None:
 
 
 def answer_run_record(row: Any) -> AnswerRunRecord:
-    """Project one stored run row into the storage-neutral M3 record."""
+    """Project one stored run row into the storage-neutral Runtime record."""
     prepared = row["prepared_input"]
     return AnswerRunRecord(
         owner_id=str(row["owner_id"]),
@@ -1677,7 +1690,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         return await self._run_once(operation)
 
     async def initialize(self, *, validate_only: bool = False) -> None:
-        """Create the durable M3 Answer run schema, or validate it (reader)."""
+        """Create the final durable Answer schema, or validate it for a reader."""
         if self._initialized:
             return
 
@@ -1697,12 +1710,6 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 migrations=ANSWER_RUN_MIGRATIONS,
                 schema_error=RunSchemaError,
             )
-            for statement in _M4_WORKSPACE_DDL:
-                await conn.execute(statement)
-            for statement in _M5_PUBLICATION_DDL:
-                await conn.execute(statement)
-            for statement in _M6_ROUTING_DDL:
-                await conn.execute(statement)
 
         await self._run(_operation)
         self._initialized = True
@@ -1740,7 +1747,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
     ) -> RunCreation:
-        """Accept one M3 run with its bounded prepared input (3E)."""
+        """Accept one run with its bounded prepared input."""
         return await self.accept_run(
             owner_id=owner_id,
             run_id=str(_new_run_id()),
@@ -1891,7 +1898,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         This is the composition seam another durable table uses to link its own
         row to the accepted run atomically. It performs no transaction control
         of its own, so the caller's commit is what makes the run and its link
-        durable together. ``request`` is the bounded M3 prepared input.
+        durable together. ``request`` is the bounded accepted execution input.
         """
         owner = _require_owner(owner_id)
         if any(reference.reference_kind == "fetched_resource" for reference in references):
@@ -1950,6 +1957,8 @@ class PGAnswerRunStore(PostgresOperationRunner):
         prepared_input: Mapping[str, Any],
     ) -> None:
         record = routing or RoutingAcceptance.fallback(prepared_input)
+        session_uuid = uuid.UUID(record.agent_session_id)
+        await conn.fetchval(_LOCK_AGENT_SESSION_IF_PRESENT, owner, session_uuid)
         await conn.execute(
             _INSERT_ROUTING,
             owner,
@@ -2229,7 +2238,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         session_id: str,
         limit: int,
     ) -> tuple[dict[str, Any], ...]:
-        """Project one canonical parent Session tail without exposing journal rows."""
+        """Project one canonical parent Session ancestry without exposing storage rows."""
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
         session_uuid = parse_run_id(session_id)
@@ -2382,6 +2391,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         child_session_id: str,
         status: str,
         summary: str,
+        outcome: Mapping[str, Any],
         worker_id: str,
         fencing_epoch: int,
         usage: Mapping[str, int] | None = None,
@@ -2407,6 +2417,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
                     status,
                     summary,
                     json.dumps(dict(usage)) if usage is not None else None,
+                    json.dumps(dict(outcome), ensure_ascii=False, sort_keys=True),
                 )
                 return not str(tag).endswith(" 0")
 
@@ -2458,7 +2469,9 @@ class PGAnswerRunStore(PostgresOperationRunner):
             return RunDeletion(runs=0, artifacts=0)
         owners = [owner] * len(run_uuids)
         pairs = await conn.fetch(_SELECT_RUN_DIGESTS, owners, run_uuids)
+        session_rows = await conn.fetch(_SELECT_RUN_AGENT_SESSIONS, owners, run_uuids)
         deleted = await conn.fetchval(_DELETE_RUNS, owners, run_uuids)
+        await _delete_unreferenced_agent_sessions(conn, session_rows)
         artifacts = await _delete_unreferenced(conn, *_digest_pairs(pairs))
         return RunDeletion(runs=int(deleted or 0), artifacts=artifacts)
 
@@ -2791,7 +2804,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
             worker_id=worker,
             lease_owner=worker,
             fencing_epoch=run.fencing_epoch,
-            session_store=PGJournalStore(
+            session_repository=PGAgentSessionRepository(
                 pool=self._operation_pool,
                 owner_id=owner,
                 run_id=run_uuid,
@@ -3218,7 +3231,9 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 owners = [row["owner_id"] for row in rows]
                 run_ids = [row["run_id"] for row in rows]
                 digest_rows = await conn.fetch(_SELECT_RUN_DIGESTS, owners, run_ids)
+                session_rows = await conn.fetch(_SELECT_RUN_AGENT_SESSIONS, owners, run_ids)
                 deleted = await conn.fetchval(_DELETE_RUNS, owners, run_ids)
+                await _delete_unreferenced_agent_sessions(conn, session_rows)
                 artifacts = await _delete_unreferenced(conn, *_digest_pairs(digest_rows))
                 return RunDeletion(runs=int(deleted), artifacts=artifacts)
 

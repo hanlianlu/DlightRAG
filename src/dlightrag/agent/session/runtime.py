@@ -96,7 +96,7 @@ from dlightrag.agent.session.registers import (
     SetRegister,
     ToolArguments,
 )
-from dlightrag.agent.session.store import AgentSessionSnapshot
+from dlightrag.agent.session.repository import AgentSessionSnapshot
 from dlightrag.agent.session.transactions import (
     HostDeltaSettlement,
     RegisterConflict,

@@ -58,7 +58,7 @@ class EvidenceLedger:
         return sum(len(rows) for rows in self.contexts.values())
 
     def ledger_state_json(self) -> str:
-        """Return the canonical durable evidence state for journal settlement.
+        """Return the canonical durable Evidence state for Session settlement.
 
         Rendered image blocks are deliberately excluded: they are derived from
         the rows under a run-local budget, so recovery re-derives them in the
@@ -102,8 +102,8 @@ class EvidenceLedger:
             handles.append(f"[{reference_id}] {title}{suffix}")
         return handles
 
-    def adopt_ledger_state(self, state: Mapping[str, Any]) -> None:
-        """Replace the ledger with durable journal-recovered state."""
+    def restore_ledger_state(self, state: Mapping[str, Any]) -> None:
+        """Replace the ledger with durable Session-recovered state."""
         contexts = state.get("contexts")
         if not isinstance(contexts, Mapping):
             raise ValueError("evidence state has no contexts")
@@ -132,7 +132,7 @@ class EvidenceLedger:
     def add_rows(self, rows: list[ContextRow]) -> EvidenceDelta:
         return self.add_contexts({"chunks": rows})
 
-    def adopt_child_state(
+    def merge_child_state(
         self,
         state: Mapping[str, Any],
         *,
@@ -142,13 +142,13 @@ class EvidenceLedger:
         """Admit child rows into the parent ledger with explicit lineage.
 
         The caller invokes this before settling the parent spawn intent, so
-        the parent's ordinary fenced evidence settlement persists the adoption
-        atomically with the tool result.
+        the parent's ordinary fenced evidence settlement persists the merge
+        atomically with the ToolResult.
         """
         contexts = state.get("contexts")
         if not isinstance(contexts, Mapping):
             raise ValueError("child evidence state has no contexts")
-        adopted: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
+        merged: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
         for key, raw_rows in cast(Mapping[str, Any], contexts).items():
             rows: list[ContextRow] = []
             for raw in cast(list[Any], raw_rows):
@@ -156,15 +156,15 @@ class EvidenceLedger:
                 metadata = dict(cast(Mapping[str, Any], row.get("metadata") or {}))
                 metadata.update(
                     {
-                        "adopted_from_child": True,
+                        "merged_from_child": True,
                         "child_session_id": child_session_id,
                         "parent_call_id": parent_call_id,
                     }
                 )
                 row["metadata"] = metadata
                 rows.append(row)
-            adopted[key] = rows
-        return self.add_contexts(adopted)
+            merged[key] = rows
+        return self.add_contexts(merged)
 
     def add_contexts(self, contexts: RetrievalContexts) -> EvidenceDelta:
         new_chunks = 0

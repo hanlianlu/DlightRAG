@@ -96,25 +96,36 @@ workspace, LightRAG storage, or a durable cache:
 answer request (query + optional attachments + mode auto|fast|research)
   -> Access + capability → Valid Mode Set; Prepared Input pins profiles
   -> Routing Record stores requested / valid / nullable resolved mode
-  -> Fast invocation: planner + retrieval + shared Context/Evidence/model/usage
-       no Agent Session, workspace, tools, or publication
-  -> Research: product-neutral AgentLoop over the selected linear journal head
-       Context Contributions project conversation, working state, Evidence,
-       Profile Memory, Skills metadata, and trusted extension context
-       run-local ToolRegistry exposes every configured tool
-       foreground spawn_agent children inherit tools except spawn, run in
-       parallel under the parent lease, and adopt citable Evidence atomically
+  -> Agent Session/Lane mapping selects canonical parent-linked ancestry
+  -> Fast Host turn: atomically reserve + append UserMessage; planner/retrieval/
+       generation stages the canonical Host result before AssistantMessage settles;
+       replay terminalizes from that result without regenerating; no Agent Operation,
+       workspace, tools, or publication
+  -> Research: product-neutral AgentSessionRuntime accepts and drives one or
+       more bounded linked Operations on the selected Lane
+       typed Host ContextAssembler projects ancestry, working state, Evidence,
+       Profile Memory, and Skills metadata without side effects
+       AgentRunPlan + closed ToolRegistry expose first-party and allowlisted MCP tools
+       foreground spawn_agent children use explicit ContextSnapshot and their
+       own renewed lease/epoch; EvidenceDelta returns through the parent ToolResult
        explicitly referenced outputs publish as typed Artifacts; one non-blank
        report.md, report.html, or report.pdf may hold the Primary Report role
 ```
 
-The execution setting is exactly `disabled | trust | sandbox`. Trust binds a
-rooted local adapter; Bash is intentionally host/network capable while rooted
-file tools reject traversal and symlink escape. Sandbox is only an adapter seam
-and fails explicitly when no trusted backend is installed. The access scheduler
-uses Path, Workspace, and External claims: Bash conflicts with workspace file
-operations but not independent retrieval. Trusted Python extensions may only
-register tools, contribute context, or supply an execution adapter.
+The Agent kernel exposes three Host-facing concepts: `AgentSessionRepository`
+for immutable reads plus the atomic transaction adapter, `AgentSessionRuntime`
+for Operation lifecycle, and `AgentSessionTree` for ancestry/Lane queries.
+`SessionTransactionPort[HostDelta]` is the storage adapter seam. Append/fork/
+archive pass-through stores, custom Entries, generic registers, and extension
+hooks do not exist.
+
+The execution setting is exactly `disabled | trust | sandbox`. Trust binds the
+concrete rooted local adapter; Bash is intentionally host/network capable while
+rooted file tools reject traversal and symlink escape. Sandbox fails explicitly
+because this distribution ships no sandbox backend and never downgrades to host
+execution. The access scheduler uses Path, Workspace, and External claims: Bash
+conflicts with workspace file operations but not independent retrieval. There is
+no Python extension wrapper or lifecycle-hook surface.
 
 Skills are progressively disclosed from `~/.agents/skills/` and the Agent
 Workspace `.agents/skills/`; initial context carries metadata only and
@@ -173,9 +184,10 @@ and research-answer requests; the later retrieval joins those same services.
 Research control turns receive identity, tool-selection policy, trust
 boundaries, and stopping rules. The last no-tool assistant text is the answer;
 citation/source finalization is deterministic and never makes a hidden second
-LLM call. Fast never enters the AgentLoop, but uses the same model-call,
-Context Contribution, Evidence identity, citation, Profile Memory, and usage
-infrastructure without fabricating an Agent Session.
+LLM call. Fast never enters `AgentSessionRuntime`, but uses the same typed Context,
+Evidence identity, citation, Profile Memory, and usage infrastructure. It shares
+the canonical Agent Session Tree through an atomic Host reservation and creates
+no Agent Operation.
 
 When `answer.web_search.api_key` (Exa) is set, Exa Search is an optional peer
 capability. Its passages belong to no workspace and are packed beside corpus
@@ -194,17 +206,19 @@ and a disconnected client only detaches.
 ```text
 create (202)  -> run row + routing row + Prepared Input + blobs (one txn)
 claim         -> FOR UPDATE SKIP LOCKED, fencing epoch++, lease heartbeat
-execute       -> phase progress, coalesced token batches, journal / Fast stages
+execute       -> phase progress, coalesced token batches, Session transactions / Fast stages
 finish        -> canonical result + exactly one terminal event, same txn
-recover       -> expired lease reclaimed; journal fold or Fast stage replay
+recover       -> expired lease reclaimed; Runtime restores total OperationState
 ```
 
-A process restart folds the canonical Research journal. Its immutable entries
-form a parent-linked in-memory view of the selected linear head; durable
-alternate Session heads are not a 3.0 feature. Fast instead replays unfinished
-stages. Interrupted generation emits `reset` and
-regenerates from pinned input. Ordered steer controls are journaled before
-acknowledgement; follow-up and fork create ordinary runs with parent lineage.
+A process restart opens the canonical Agent Session and restores the selected
+Lane's total OperationState, exact RequestSnapshot, ToolBatchPlan, and typed
+registers. Immutable Entries retain parent links and multiple durable Lane heads.
+Fast replays unfinished Answer stages while its unanswered UserMessage and Host
+reservation remain durable. Interrupted generation emits `reset` and regenerates
+from pinned input. Steers become ControlMessage Entries at stable checkpoints;
+queued follow-ups and terminal-race steers become fresh linked Operations, while
+fork creates a new Lane on the same Session.
 See [durable-answer-runs.md](durable-answer-runs.md) for the contract and
 [postgresql.md](postgresql.md#durable-answer-run-state) for the schema.
 
@@ -294,9 +308,11 @@ lazily as request-local resources on every follow-up, newest first up to the
 available attachment-count limit. An attachment-bearing conversation therefore
 remains on the research path. Browser thumbnails are derived on demand. Manual
 deletion and the shared `answer.runtime.answer_run_retention_days` floor (default 365,
-counted from `finished_at`) delete the linked runs, cascade their events and
-references, and release blobs no surviving run references; a conversation row
-whose last turn aged out is reclaimed by the empty-conversation sweep.
+counted from `finished_at`) delete linked runs, cascade events/references, and
+release blobs no surviving run references. The final routing-row deletion also
+removes the Agent Session tree; an empty conversation row may remain briefly as
+navigation identity but owns no hidden model history. If reused before the empty
+sweep, it starts from a fresh `main` Lane.
 
 ## Retrieval And Answer Flow
 

@@ -30,7 +30,7 @@ from dlightrag.agent.session.projection import (
     render_compaction_summary,
     validate_projection_commit,
 )
-from dlightrag.agent.session.store import AgentSessionSnapshot
+from dlightrag.agent.session.repository import AgentSessionSnapshot
 from dlightrag.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.ai.tokens import estimate_messages_tokens, estimate_tokens
 from dlightrag.answer.prompts.compaction import COMPACTION_SYSTEM_PROMPT, compaction_user_prompt
@@ -257,10 +257,6 @@ class CompactionCoordinator:
         summary = _with_framework_fields(parsed, paths=paths, durable_handles=handles)
         summary_json = summary.canonical_json()
 
-        # Replacing the active summary changes every provider input represented
-        # by the prior measured anchors. They cannot remain live after this
-        # projection even when their sequence lies in the retained suffix.
-        anchors: tuple[Any, ...] = ()
         accounted_after = self._estimate_retained(entries, first_retained, summary_json)
         estimated_before = self._estimate_retained(
             entries,
@@ -272,7 +268,6 @@ class CompactionCoordinator:
             first_retained_sequence=first_retained,
             covered_through_sequence=covered_through,
             summary=summary_json,
-            token_anchors=anchors,
             covered_through_entry_id=covered_entry_id,
             first_retained_entry_id=first_retained_entry_id,
             source_digest=source_digest,

@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 
-from dlightrag.agent.session.memory import MemoryAgentSessionStore
+from dlightrag.agent.session.memory import MemoryAgentSessionRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,7 +11,7 @@ class NoHostUpdate:
     """Session settlement mutates no external Host state."""
 
 
-class InMemoryAgentSessionStore(MemoryAgentSessionStore[NoHostUpdate]):
+class InMemoryAgentSessionRepository(MemoryAgentSessionRepository[NoHostUpdate]):
     """Compatibility test name while Answer tests migrate to the public adapter."""
 
     def __init__(self, *, initial_version: int = 0) -> None:
@@ -20,4 +20,4 @@ class InMemoryAgentSessionStore(MemoryAgentSessionStore[NoHostUpdate]):
         super().__init__()
 
 
-__all__ = ["InMemoryAgentSessionStore", "NoHostUpdate"]
+__all__ = ["InMemoryAgentSessionRepository", "NoHostUpdate"]

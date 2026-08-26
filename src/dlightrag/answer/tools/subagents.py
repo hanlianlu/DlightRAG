@@ -134,7 +134,7 @@ class ChildContextSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class ChildOutcome:
-    """Distilled child result adopted by the parent."""
+    """Distilled Child result returned to the parent ToolResult."""
 
     status: ChildStatus
     summary: str
@@ -143,6 +143,46 @@ class ChildOutcome:
     delta: EvidenceDelta | None = None
     child_session_id: str = ""
     evidence_state: Mapping[str, Any] | None = None
+
+    def durable_payload(self) -> dict[str, Any]:
+        """Return the exact parent-visible outcome needed for replay."""
+        return {
+            "status": self.status,
+            "summary": self.summary,
+            "handles": list(self.handles),
+            "usage": dict(self.usage or {}),
+            "child_session_id": self.child_session_id,
+            "evidence_state": (
+                dict(self.evidence_state) if self.evidence_state is not None else None
+            ),
+        }
+
+    @classmethod
+    def from_durable_payload(cls, payload: Mapping[str, Any]) -> ChildOutcome:
+        status = payload.get("status")
+        if status not in {"running", "succeeded", "failed", "cancelled"}:
+            raise ValueError("persisted Child outcome has an invalid status")
+        handles = payload.get("handles")
+        usage = payload.get("usage")
+        evidence_state = payload.get("evidence_state")
+        if not isinstance(handles, list) or not all(isinstance(item, str) for item in handles):
+            raise ValueError("persisted Child outcome has invalid handles")
+        if not isinstance(usage, Mapping) or not all(
+            isinstance(key, str) and isinstance(value, int) for key, value in usage.items()
+        ):
+            raise ValueError("persisted Child outcome has invalid usage")
+        if "evidence_state" not in payload or (
+            evidence_state is not None and not isinstance(evidence_state, Mapping)
+        ):
+            raise ValueError("persisted Child outcome has invalid evidence state")
+        return cls(
+            status=cast(ChildStatus, status),
+            summary=str(payload.get("summary") or ""),
+            handles=tuple(handles),
+            usage={str(key): int(value) for key, value in usage.items()},
+            child_session_id=str(payload.get("child_session_id") or ""),
+            evidence_state=(dict(evidence_state) if isinstance(evidence_state, Mapping) else None),
+        )
 
 
 @dataclass
@@ -163,7 +203,7 @@ class SubagentHost:
     ) = None
     context_snapshot: ChildContextSnapshot | None = None
     depth: int = 0
-    adopt_evidence: Callable[[Mapping[str, Any], str, str], tuple[str, ...]] | None = None
+    merge_evidence: Callable[[Mapping[str, Any], str, str], tuple[str, ...]] | None = None
     record_usage: Callable[[Mapping[str, int]], None] | None = None
     tasks: dict[str, asyncio.Task[ChildOutcome]] = field(default_factory=dict)
     outcomes: dict[str, ChildOutcome] = field(default_factory=dict)
@@ -270,6 +310,14 @@ async def _spawn(
 
     async def run_one(child_id: SessionId, request: ChildRequest) -> ChildOutcome:
         await _check_cancelled(host)
+        persisted = await _load_terminal_child(host, child_id.value)
+        if persisted is not None:
+            if persisted.evidence_state is not None and host.merge_evidence is not None:
+                host.merge_evidence(persisted.evidence_state, child_id.value, call_id)
+            if persisted.usage is not None and host.record_usage is not None:
+                host.record_usage(persisted.usage)
+            host.outcomes[child_id.value] = persisted
+            return persisted
         if host.persist is not None:
             await host.persist(
                 owner_id=host.owner_id,
@@ -296,10 +344,10 @@ async def _spawn(
             raise
         except asyncio.CancelledError:
             return await _finish_cancelled_child(host, child_id.value)
-        if outcome.evidence_state is not None and host.adopt_evidence is not None:
+        if outcome.evidence_state is not None and host.merge_evidence is not None:
             outcome = replace(
                 outcome,
-                handles=host.adopt_evidence(outcome.evidence_state, child_id.value, call_id),
+                handles=host.merge_evidence(outcome.evidence_state, child_id.value, call_id),
             )
         if outcome.usage is not None and host.record_usage is not None:
             host.record_usage(outcome.usage)
@@ -311,6 +359,7 @@ async def _spawn(
                 status=outcome.status,
                 summary=outcome.summary,
                 usage=outcome.usage,
+                outcome=outcome.durable_payload(),
             )
         host.outcomes[child_id.value] = outcome
         return outcome
@@ -360,8 +409,22 @@ async def _finish_cancelled_child(host: SubagentHost, child_id: str) -> ChildOut
             status="cancelled",
             summary=cancelled.summary,
             usage=None,
+            outcome=cancelled.durable_payload(),
         )
     return cancelled
+
+
+async def _load_terminal_child(host: SubagentHost, child_id: str) -> ChildOutcome | None:
+    if host.load_child is None:
+        return None
+    row = await host.load_child(
+        owner_id=host.owner_id,
+        run_id=host.run_id,
+        child_session_id=child_id,
+    )
+    if row is None or str(row.get("status") or "running") == "running":
+        return None
+    return _terminal_outcome_from_row(row, child_id)
 
 
 async def _status(host: SubagentHost, child_id: str) -> ChildOutcome:
@@ -383,8 +446,11 @@ async def _status(host: SubagentHost, child_id: str) -> ChildOutcome:
             child_session_id=child_id,
         )
         if row is not None:
+            status = str(row.get("status") or "failed")
+            if status != "running":
+                return _terminal_outcome_from_row(row, child_id)
             return ChildOutcome(
-                status=str(row.get("status") or "failed"),  # type: ignore[arg-type]
+                status="running",
                 summary=str(row.get("summary") or ""),
                 child_session_id=child_id,
             )
@@ -393,6 +459,17 @@ async def _status(host: SubagentHost, child_id: str) -> ChildOutcome:
         summary="Unknown child session.",
         child_session_id=child_id,
     )
+
+
+def _terminal_outcome_from_row(row: Mapping[str, Any], child_id: str) -> ChildOutcome:
+    host_state = row.get("host_state")
+    payload = host_state.get("terminal_outcome") if isinstance(host_state, Mapping) else None
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("terminal Child session lost its durable outcome")
+    outcome = ChildOutcome.from_durable_payload(payload)
+    if outcome.child_session_id != child_id or outcome.status != str(row.get("status")):
+        raise RuntimeError("terminal Child session outcome identity changed")
+    return outcome
 
 
 def child_session_id(
@@ -424,7 +501,7 @@ def _many_result(outcomes: tuple[ChildOutcome, ...]) -> ToolResult:
             f"{outcome.summary.strip() or '(no summary)'}"
         )
         if outcome.handles:
-            lines.extend(f"- adopted {item}" for item in outcome.handles)
+            lines.extend(f"- merged {item}" for item in outcome.handles)
         if outcome.usage:
             for key, value in outcome.usage.items():
                 inclusive_usage[key] = inclusive_usage.get(key, 0) + int(value)
