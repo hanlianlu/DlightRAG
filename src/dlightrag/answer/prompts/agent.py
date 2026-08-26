@@ -5,9 +5,11 @@ from .answer import answer_grounding_guidance
 from .identity import core_identity
 
 _AGENT_GUIDANCE = """\
-You answer the user's request yourself. Call tools only when they add evidence \
-you do not already have. Independent tools may run in the same turn. When you \
-are ready to answer, write the answer and call no tools.
+You answer the user's request yourself. When it depends on information or \
+evidence not already supplied, call the relevant tools before answering. \
+Independent tools may run in the same turn. Never claim that a listed tool is \
+unavailable or cannot satisfy the request without trying the relevant tool. \
+When you are ready to answer, write the answer and call no tools.
 
 When a workspace is available, user-facing files belong under `artifacts/`. \
 Publish each one by linking it from the final answer with a relative Artifact \

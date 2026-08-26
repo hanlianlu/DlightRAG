@@ -6,6 +6,8 @@ import json
 import httpx
 import pytest
 
+from dlightrag.answer.evidence import EvidenceLedger
+from dlightrag.answer.tools.search import web_search_tool
 from dlightrag.answer.tools.web import (
     ExaSearch,
     WebSearchHit,
@@ -20,6 +22,22 @@ _PAGE = {
     "image": "https://example.org/figure-1.png",
     "highlights": ["a is usually about 1.5", "b is usually about 0.5"],
 }
+
+
+async def _unused_search(_query: str):
+    raise RuntimeError("tool contract test never executes search")
+
+
+def test_web_search_tool_guides_external_resource_discovery() -> None:
+    tool = web_search_tool(
+        search=_unused_search,
+        evidence=EvidenceLedger(),
+        trace={"web_search_cost_dollars": 0.0},
+        register_web_source=None,
+    )
+
+    assert "source page, document, image, or file" in tool.description
+    assert "before claiming open-web search is unavailable" in tool.description
 
 
 def _client(handler) -> httpx.AsyncClient:

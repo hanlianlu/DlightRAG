@@ -68,7 +68,8 @@ def web_search_tool(
 
     return AgentTool(
         "search_web",
-        "Search the open web for one concrete unresolved or current fact.",
+        "Search the open web for one concrete unresolved or current fact, source page, "
+        "document, image, or file. Use it before claiming open-web search is unavailable.",
         SearchInput,
         execute,
     )
