@@ -49,6 +49,7 @@ from dlightrag.agent.session.transactions import (
 from dlightrag.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
 from dlightrag.agent.tools import AgentTool, ToolResult
 from dlightrag.ai.messages import AssistantTurn, ToolCall
+from dlightrag.answer.session_host import FastSessionHost
 from dlightrag.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
 from dlightrag.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
 from dlightrag.runtime.settlements import (
@@ -114,7 +115,13 @@ async def _store(pool) -> PGAnswerRunStore:
     return store
 
 
-async def _claim(pool, *, session_id: SessionId | None = None) -> ClaimedRun:
+async def _claim(
+    pool,
+    *,
+    session_id: SessionId | None = None,
+    lane_id: LaneId = LaneId.main(),
+    source_lane_id: LaneId | None = None,
+) -> ClaimedRun:
     store = await _store(pool)
     await store.accept_run(
         owner_id=_OWNER,
@@ -122,7 +129,9 @@ async def _claim(pool, *, session_id: SessionId | None = None) -> ClaimedRun:
         idempotency_key=None,
         fingerprint="f" * 64,
         prepared_input={
-            "session_id": (session_id or SessionId.new()).value,
+            "agent_session_id": (session_id or SessionId.new()).value,
+            "agent_lane_id": lane_id.value,
+            "source_lane_id": source_lane_id.value if source_lane_id else None,
             "fingerprint": "f" * 64,
             "query": "question?",
             "workspaces": ["default"],
@@ -327,6 +336,11 @@ def _tool_result(
     )
 
 
+def _claimed_session(claimed: ClaimedRun) -> SessionId:
+    assert claimed.run.prepared_input is not None
+    return SessionId(str(claimed.run.prepared_input["agent_session_id"]))
+
+
 async def _progress(pool, run_id: str) -> int:
     async with pool.acquire() as conn:
         value = await conn.fetchval(
@@ -345,7 +359,7 @@ async def test_agent_session_runtime_memory_and_pg_have_atomic_state_parity(pool
         fencing_epoch=claimed.execution.fencing_epoch
     )
     memory_id = SessionId.new()
-    pg_id = SessionId.new()
+    pg_id = _claimed_session(claimed)
     memory_snapshot = await _drive(
         memory,
         session_id=memory_id,
@@ -376,7 +390,7 @@ async def test_host_delta_identity_conflict_rolls_back_entry_and_register(pool) 
     claimed = await _claim(pool)
     store = claimed.execution.session_store
     epoch = claimed.execution.fencing_epoch
-    session_id = SessionId.new()
+    session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
     intent_id = IntentId.new()
     identity_session = SessionId.new()
@@ -437,7 +451,7 @@ async def test_fetched_resource_host_delta_writes_complete_blob(pool) -> None:
     claimed = await _claim(pool)
     store = claimed.execution.session_store
     epoch = claimed.execution.fencing_epoch
-    session_id = SessionId.new()
+    session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
     intent_id = IntentId.new()
     body = b"z" * (BLOB_CHUNK_BYTES + 7)
@@ -503,7 +517,8 @@ async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:
         idempotency_key="attachment-acceptance",
         fingerprint="f" * 64,
         prepared_input={
-            "session_id": SessionId.new().value,
+            "agent_session_id": SessionId.new().value,
+            "agent_lane_id": "main",
             "fingerprint": "f" * 64,
             "query": "question?",
             "workspaces": ["default"],
@@ -553,7 +568,7 @@ async def test_host_delta_commits_workspace_inventory_and_spill(pool) -> None:
     claimed = await _claim(pool)
     store = claimed.execution.session_store
     epoch = claimed.execution.fencing_epoch
-    session_id = SessionId.new()
+    session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
     intent_id = IntentId.new()
     update = EffectHostUpdate(
@@ -601,7 +616,7 @@ async def test_memory_operation_event_is_exactly_once_with_transaction(pool) -> 
     claimed = await _claim(pool)
     store = claimed.execution.session_store
     epoch = claimed.execution.fencing_epoch
-    session_id = SessionId.new()
+    session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
     snapshot = await store.load(session_id)
     head = snapshot.tree.lane().head
@@ -665,7 +680,7 @@ async def test_live_session_progress_and_passive_events_are_distinct(pool) -> No
         text="ephemeral progress",
     )
     assert await _progress(pool, claimed.run.run_id) == 0
-    register_only_session = SessionId.new()
+    register_only_session = _claimed_session(claimed)
     head = LaneHead(LaneId.main(), None)
     state = LaneState(LaneId.main())
     register_commit = await claimed.execution.session_store.transact(
@@ -681,12 +696,20 @@ async def test_live_session_progress_and_passive_events_are_distinct(pool) -> No
     )
     assert isinstance(register_commit, TransactionCommit)
     assert await _progress(pool, claimed.run.run_id) == 0
-    session_id = SessionId.new()
-    await _seed_transaction_session(
+    session_id = register_only_session
+    root = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="question",
+    )
+    root_commit = await _append_transaction_entry(
         claimed.execution.session_store,
         session_id,
-        claimed.execution.fencing_epoch,
+        root,
+        fencing_epoch=claimed.execution.fencing_epoch,
     )
+    assert isinstance(root_commit, TransactionCommit)
     assert await _progress(pool, claimed.run.run_id) == 1
     snapshot = await claimed.execution.session_store.load(session_id)
     head = snapshot.tree.lane().head
@@ -738,7 +761,8 @@ async def test_fast_stage_progress_never_creates_agent_session(pool) -> None:
     async with pool.acquire() as conn:
         assert (
             await conn.fetchval(
-                "SELECT count(*) FROM dlightrag_agent_sessions WHERE owner_id = $1 AND run_id = $2",
+                "SELECT count(*) FROM dlightrag_agent_sessions"
+                " WHERE owner_id = $1 AND lease_run_id = $2",
                 _OWNER,
                 uuid.UUID(claimed.run.run_id),
             )
@@ -835,10 +859,137 @@ async def test_postgres_and_service_transcript_project_typed_tool_result_parts(p
     assert transcript.messages[-1] == projected[-1]
 
 
+async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool) -> None:
+    session_id = SessionId.new()
+    first = await _claim(pool, session_id=session_id)
+    first_host = FastSessionHost(
+        transactions=first.execution.session_store,
+        load=first.execution.session_store.load,
+        fencing_epoch=first.execution.fencing_epoch,
+    )
+    await first_host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id=first.run.run_id,
+        idempotency_key="first",
+        content="first question",
+    )
+    await first_host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id=first.run.run_id,
+        content="first answer",
+    )
+    run_store = await _store(pool)
+    await run_store.finish_success(
+        owner_id=_OWNER,
+        run_id=first.run.run_id,
+        worker_id=_WORKER,
+        fencing_epoch=first.execution.fencing_epoch,
+        result={"answer": "first answer"},
+    )
+
+    second = await _claim(pool, session_id=session_id)
+    second_host = FastSessionHost(
+        transactions=second.execution.session_store,
+        load=second.execution.session_store.load,
+        fencing_epoch=second.execution.fencing_epoch,
+    )
+    await second_host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id=second.run.run_id,
+        idempotency_key="second",
+        content="second question",
+    )
+    await second_host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id=second.run.run_id,
+        content="second answer",
+    )
+    await run_store.finish_success(
+        owner_id=_OWNER,
+        run_id=second.run.run_id,
+        worker_id=_WORKER,
+        fencing_epoch=second.execution.fencing_epoch,
+        result={"answer": "second answer"},
+    )
+
+    branch_id = LaneId.new()
+    branch = await _claim(
+        pool,
+        session_id=session_id,
+        lane_id=branch_id,
+        source_lane_id=LaneId.main(),
+    )
+    forked = await branch.execution.session_store.fork_lane(
+        session_id=session_id,
+        source_lane_id=LaneId.main(),
+        lane_id=branch_id,
+    )
+    assert isinstance(forked, TransactionCommit)
+    branch_host = FastSessionHost(
+        transactions=branch.execution.session_store,
+        load=branch.execution.session_store.load,
+        fencing_epoch=branch.execution.fencing_epoch,
+    )
+    await branch_host.accept(
+        session_id=session_id,
+        lane_id=branch_id,
+        reservation_id=branch.run.run_id,
+        idempotency_key="branch",
+        content="branch question",
+    )
+    await branch_host.complete(
+        session_id=session_id,
+        lane_id=branch_id,
+        reservation_id=branch.run.run_id,
+        content="branch answer",
+    )
+    snapshot = await branch.execution.session_store.load(session_id)
+    assert [
+        entry.content
+        for entry in snapshot.tree.ancestry(LaneId.main())
+        if isinstance(entry, UserMessageEntry | AssistantMessageEntry)
+    ] == [
+        "first question",
+        "first answer",
+        "second question",
+        "second answer",
+    ]
+    assert [
+        entry.content
+        for entry in snapshot.tree.ancestry(branch_id)
+        if isinstance(entry, UserMessageEntry | AssistantMessageEntry)
+    ] == [
+        "first question",
+        "first answer",
+        "second question",
+        "second answer",
+        "branch question",
+        "branch answer",
+    ]
+    transcript = await run_store.load_agent_transcript(
+        owner_id=_OWNER,
+        run_id=branch.run.run_id,
+        session_id=session_id.value,
+        limit=20,
+    )
+    assert [message["content"] for message in transcript] == [
+        "first question",
+        "first answer",
+        "second question",
+        "second answer",
+        "branch question",
+        "branch answer",
+    ]
+
+
 async def test_lane_register_cas_does_not_conflict_across_branches(pool) -> None:
     claimed = await _claim(pool)
     store = claimed.execution.session_store
-    session_id = SessionId.new()
+    session_id = _claimed_session(claimed)
     await _drive(
         store,
         session_id=session_id,

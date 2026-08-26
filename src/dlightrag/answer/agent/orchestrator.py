@@ -78,7 +78,7 @@ from dlightrag.answer.resources.registry import ResourceRegistry
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
 from dlightrag.answer.tools.memory import MemoryHost
-from dlightrag.answer.tools.subagents import ChildRequest, SubagentHost
+from dlightrag.answer.tools.subagents import ChildContextSnapshot, ChildRequest, SubagentHost
 from dlightrag.answer.workspace import RunWorkspace
 from dlightrag.rag.retrieval import RetrievalContexts
 
@@ -208,6 +208,33 @@ class AnswerOrchestrator:
         self._subagent_host.finish_child = finish_child
         self._subagent_host.run_child = run_child
         self._subagent_host.check_cancelled = check_cancelled
+
+    def bind_child_context(
+        self,
+        run: PreparedRun,
+        runtime_context: RuntimeContext,
+    ) -> None:
+        """Capture the exact parent ancestry handed to a spawned Child."""
+        if self._subagent_host is None:
+            return
+        lane = runtime_context.snapshot.tree.lane(runtime_context.lane_id)
+        parent_entry_id = lane.head_entry_id
+        if parent_entry_id is None:
+            raise RuntimeError("Child ContextSnapshot requires a parent Entry")
+        selected = replace(
+            runtime_context.snapshot,
+            selected_lane_id=runtime_context.lane_id,
+        )
+        self._subagent_host.context_snapshot = ChildContextSnapshot.from_values(
+            parent_session_id=runtime_context.session_id,
+            parent_entry_id=parent_entry_id,
+            depth=self._subagent_host.depth,
+            messages=project_session_messages(
+                selected.tree.ancestry(runtime_context.lane_id),
+                selected.active_projection,
+            ),
+            evidence_state=run.evidence.durable_state(),
+        )
 
     def bind_memory(
         self,
@@ -516,7 +543,11 @@ class AnswerOrchestrator:
         )
 
     def prepare_child_session(
-        self, request: ChildRequest, *, child_session_id: str = ""
+        self,
+        request: ChildRequest,
+        *,
+        context_snapshot: ChildContextSnapshot,
+        child_session_id: str = "",
     ) -> PreparedRun:
         """Build a bounded child with selected context and inherited tool subset."""
         if self._child_model_resolver is None:
@@ -530,6 +561,8 @@ class AnswerOrchestrator:
                 request.model_role
             )
         evidence = EvidenceLedger(image_budget=self._image_budget)
+        if request.context == "parent" and context_snapshot.evidence_state:
+            evidence.adopt_ledger_state(context_snapshot.evidence_state)
         retained_tail_tokens = self._context_policy.retained_tail_target(child_profile)
         trace = _fresh_research_trace()
         trace["child_context"] = request.context
@@ -545,13 +578,9 @@ class AnswerOrchestrator:
         )
         history = PriorTurns()
         if request.context == "parent":
-            history = PriorTurns(
-                [
-                    *self._parent_history.messages,
-                    {"role": "user", "content": self._parent_query},
-                ],
-                episodic_summary=self._parent_history.episodic_summary,
-            )
+            history = PriorTurns(context_snapshot.messages)
+        trace["child_depth"] = context_snapshot.depth + 1
+        trace["parent_entry_id"] = context_snapshot.parent_entry_id.value
         return PreparedRun(
             context=ContextAssembler(
                 model_profile=child_profile,

@@ -128,6 +128,7 @@ class RunSession:
         self.run_id = execution.run_id
         self.worker_id = execution.worker_id
         self.fencing_epoch = execution.fencing_epoch
+        self.durable_progress_version = run.durable_progress_version
         self.execution = execution
         self.prepared_input: Mapping[str, Any] | None = run.prepared_input
         self.workspace_epoch: int | None = run.workspace_epoch
@@ -196,6 +197,19 @@ class RunSession:
         if self._pending_chars >= TOKEN_BATCH_CHARS or now >= self._flush_deadline:
             await self.flush_tokens()
             await self.check_cancelled()
+
+    async def reset_output(self) -> None:
+        """Clear the current streamed draft before a linked corrective operation."""
+        await self.flush_tokens()
+        self._reset_pending = False
+        await self._fenced(
+            self._store.append_reset(
+                owner_id=self.owner_id,
+                run_id=self.run_id,
+                worker_id=self.worker_id,
+                fencing_epoch=self.fencing_epoch,
+            )
+        )
 
     async def emit_tool_event(
         self,

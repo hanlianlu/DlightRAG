@@ -36,6 +36,7 @@ from dlightrag.adapters.postgres.answer_runs import (
 )
 from dlightrag.answer.routing import RoutingAcceptance
 from dlightrag.runtime import (
+    IdempotencyKeyConflict,
     PendingArtifact,
     PendingArtifactReference,
     RunSchemaError,
@@ -53,6 +54,8 @@ _CREATE_CONVERSATIONS = """
 CREATE TABLE IF NOT EXISTS web_conversations (
     principal_id TEXT NOT NULL,
     conversation_id UUID NOT NULL,
+    agent_session_id UUID NOT NULL,
+    agent_lane_id TEXT NOT NULL,
     title TEXT,
     content_revision BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -134,6 +137,8 @@ WEB_CONVERSATION_SCHEMA_TABLES = (
         columns=(
             "principal_id",
             "conversation_id",
+            "agent_session_id",
+            "agent_lane_id",
             "title",
             "content_revision",
             "created_at",
@@ -176,6 +181,8 @@ WEB_CONVERSATION_SCHEMA_TABLES = (
 
 _SUMMARY_COLUMNS = """
 conversation_id::text AS conversation_id,
+agent_session_id::text AS agent_session_id,
+agent_lane_id,
 title,
 content_revision,
 created_at,
@@ -189,15 +196,17 @@ forked_from_conversation_id::text AS forked_from_conversation_id,
 """
 
 _CREATE_CONVERSATION = f"""
-INSERT INTO web_conversations (principal_id, conversation_id)
-VALUES ($1, $2::text::uuid)
+INSERT INTO web_conversations (
+    principal_id, conversation_id, agent_session_id, agent_lane_id)
+VALUES ($1, $2::text::uuid, $2::text::uuid, 'main')
 RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
 _CREATE_CONVERSATION_IF_MISSING = f"""
 INSERT INTO web_conversations (
-    principal_id, conversation_id, forked_from_conversation_id)
-VALUES ($1, $2::text::uuid, $3::text::uuid)
+    principal_id, conversation_id, forked_from_conversation_id,
+    agent_session_id, agent_lane_id)
+VALUES ($1, $2::text::uuid, $3::text::uuid, $4::text::uuid, $5)
 ON CONFLICT (principal_id, conversation_id) DO NOTHING
 RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
@@ -243,7 +252,7 @@ WHERE principal_id = $1
 # The order matches creation and retention: the conversation first, its runs
 # second. Ordering by conversation_id keeps two owner-wide deletes deadlock-free.
 _LOCK_PRINCIPAL_CONVERSATIONS = """
-SELECT conversation_id
+SELECT conversation_id, agent_session_id
 FROM web_conversations
 WHERE principal_id = $1
 ORDER BY conversation_id
@@ -254,6 +263,16 @@ _DELETE_CONVERSATION = """
 DELETE FROM web_conversations
 WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
+"""
+
+_DELETE_AGENT_SESSION_IF_UNREFERENCED = """
+DELETE FROM dlightrag_agent_sessions AS sessions
+WHERE sessions.owner_id = $1 AND sessions.session_id = $2::text::uuid
+  AND NOT EXISTS (
+      SELECT 1 FROM web_conversations AS conversations
+      WHERE conversations.principal_id = sessions.owner_id
+        AND conversations.agent_session_id = sessions.session_id
+  )
 """
 
 _DELETE_ALL_CONVERSATIONS = """
@@ -270,6 +289,8 @@ _GET_CONVERSATION = """
 SELECT
     principal_id,
     conversation_id::text AS conversation_id,
+    agent_session_id::text AS agent_session_id,
+    agent_lane_id,
     content_revision,
     title,
     created_at,
@@ -378,7 +399,7 @@ RETURNING turn_id::text AS turn_id, turn_number
 """
 
 _SELECT_EMPTY_CONVERSATIONS = """
-SELECT principal_id, conversation_id
+SELECT principal_id, conversation_id, agent_session_id
 FROM web_conversations AS conversations
 WHERE NOT EXISTS (
     SELECT 1
@@ -570,7 +591,8 @@ class PGWebConversationStore(PostgresOperationRunner):
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
-                if await conn.fetchrow(_LOCK_CONVERSATION, principal_id, conversation_id) is None:
+                summary_row = await conn.fetchrow(_LOCK_CONVERSATION, principal_id, conversation_id)
+                if summary_row is None:
                     return False
                 run_ids = [
                     str(row["answer_run_id"])
@@ -578,8 +600,14 @@ class PGWebConversationStore(PostgresOperationRunner):
                         _SELECT_CONVERSATION_RUNS, principal_id, conversation_id
                     )
                 ]
+                agent_session_id = str(summary_row["agent_session_id"])
                 await self._run_store.delete_runs_in(conn, owner_id=principal_id, run_ids=run_ids)
                 await conn.execute(_DELETE_CONVERSATION, principal_id, conversation_id)
+                await conn.execute(
+                    _DELETE_AGENT_SESSION_IF_UNREFERENCED,
+                    principal_id,
+                    agent_session_id,
+                )
                 return True
 
         return await self._run_write(_operation)
@@ -590,13 +618,20 @@ class PGWebConversationStore(PostgresOperationRunner):
 
         async def _operation(conn: Any) -> int:
             async with conn.transaction():
-                await conn.fetch(_LOCK_PRINCIPAL_CONVERSATIONS, principal_id)
+                conversations = await conn.fetch(_LOCK_PRINCIPAL_CONVERSATIONS, principal_id)
+                session_ids = {str(row["agent_session_id"]) for row in conversations}
                 run_ids = [
                     str(row["answer_run_id"])
                     for row in await conn.fetch(_SELECT_PRINCIPAL_RUNS, principal_id)
                 ]
                 await self._run_store.delete_runs_in(conn, owner_id=principal_id, run_ids=run_ids)
                 row = await conn.fetchrow(_DELETE_ALL_CONVERSATIONS, principal_id)
+                for session_id in session_ids:
+                    await conn.execute(
+                        _DELETE_AGENT_SESSION_IF_UNREFERENCED,
+                        principal_id,
+                        session_id,
+                    )
                 return int(row["deleted_count"]) if row is not None else 0
 
         return await self._run_write(_operation)
@@ -633,6 +668,8 @@ class PGWebConversationStore(PostgresOperationRunner):
                     title=row["title"],
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
+                    agent_session_id=str(row["agent_session_id"]),
+                    agent_lane_id=str(row["agent_lane_id"]),
                     turns=tuple(_linked_turn(turn) for turn in reversed(turn_rows)),
                 )
 
@@ -685,6 +722,8 @@ class PGWebConversationStore(PostgresOperationRunner):
                         principal_id,
                         conversation_id,
                         forked_from_conversation_id,
+                        str(request["agent_session_id"]),
+                        str(request.get("agent_lane_id") or "main"),
                     )
                     if summary_row is None:
                         summary_row = await conn.fetchrow(
@@ -694,6 +733,14 @@ class PGWebConversationStore(PostgresOperationRunner):
                         )
                 if summary_row is None:
                     return None
+                if str(summary_row["agent_session_id"]) != str(
+                    request.get("agent_session_id") or ""
+                ) or str(summary_row["agent_lane_id"]) != str(
+                    request.get("agent_lane_id") or "main"
+                ):
+                    raise ConversationSubmissionConflict(
+                        "conversation Agent Session/Lane mapping changed"
+                    )
                 existing = await conn.fetchrow(_GET_TURN_BY_SUBMISSION, principal_id, submission_id)
                 if existing is not None:
                     if str(existing["turn_conversation_id"]) != str(conversation_id):
@@ -709,16 +756,30 @@ class PGWebConversationStore(PostgresOperationRunner):
                         summary=_row_dict(existing),
                         replayed=True,
                     )
-                creation = await self._run_store.create_run_in(
-                    conn,
-                    owner_id=principal_id,
-                    request=request,
-                    idempotency_fingerprint=fingerprint,
-                    idempotency_key=submission_id,
-                    artifacts=artifacts,
-                    references=references,
-                    routing=routing,
-                )
+                try:
+                    creation = await self._run_store.create_run_in(
+                        conn,
+                        owner_id=principal_id,
+                        request=request,
+                        idempotency_fingerprint=fingerprint,
+                        idempotency_key=submission_id,
+                        artifacts=artifacts,
+                        references=references,
+                        routing=routing,
+                    )
+                except IdempotencyKeyConflict as exc:
+                    accepted = await conn.fetchrow(
+                        _GET_TURN_BY_SUBMISSION,
+                        principal_id,
+                        submission_id,
+                    )
+                    if accepted is not None and str(accepted["turn_conversation_id"]) != str(
+                        conversation_id
+                    ):
+                        raise ConversationSubmissionConflict(
+                            "submission id was reused in a different conversation"
+                        ) from exc
+                    raise
                 try:
                     turn_row = await conn.fetchrow(
                         _INSERT_TURN,
@@ -809,7 +870,16 @@ class PGWebConversationStore(PostgresOperationRunner):
                     return 0
                 principals = [str(row["principal_id"]) for row in rows]
                 conversation_ids = [row["conversation_id"] for row in rows]
+                session_mappings = {
+                    (str(row["principal_id"]), str(row["agent_session_id"])) for row in rows
+                }
                 deleted = await conn.fetchrow(_DELETE_CONVERSATIONS, principals, conversation_ids)
+                for principal, session_id in session_mappings:
+                    await conn.execute(
+                        _DELETE_AGENT_SESSION_IF_UNREFERENCED,
+                        principal,
+                        session_id,
+                    )
                 return int(deleted["count"]) if deleted is not None else 0
 
         return await self._run_write(_operation)

@@ -185,6 +185,9 @@ class AnswerRunRequest:
     mode: str = "auto"
     parent_run_id: str | None = None
     continuation_kind: str | None = None
+    agent_session_id: str = ""
+    agent_lane_id: str = "main"
+    source_lane_id: str | None = None
 
     def as_request(self) -> dict[str, Any]:
         return {
@@ -202,6 +205,9 @@ class AnswerRunRequest:
             "mode": canonical_answer_mode(self.mode),
             "parent_run_id": self.parent_run_id,
             "continuation_kind": self.continuation_kind,
+            "agent_session_id": self.agent_session_id,
+            "agent_lane_id": self.agent_lane_id,
+            "source_lane_id": self.source_lane_id,
         }
 
     @classmethod
@@ -224,6 +230,11 @@ class AnswerRunRequest:
             parent_run_id=(str(request["parent_run_id"]) if request.get("parent_run_id") else None),
             continuation_kind=(
                 str(request["continuation_kind"]) if request.get("continuation_kind") else None
+            ),
+            agent_session_id=str(request.get("agent_session_id") or ""),
+            agent_lane_id=str(request.get("agent_lane_id") or "main"),
+            source_lane_id=(
+                str(request["source_lane_id"]) if request.get("source_lane_id") else None
             ),
         )
 
@@ -256,8 +267,10 @@ class AnswerRunInput:
     #: current-turn image; they point at artifacts an earlier run already stored.
     history_attachments: tuple[AttachmentReference, ...] = ()
     image_descriptions: tuple[str, ...] = ()
-    #: The UUIDv7 Research session id pinned at acceptance for explicit research.
-    session_id: str = ""
+    #: Canonical Agent Session and selected Lane pinned at acceptance for every mode.
+    agent_session_id: str = ""
+    agent_lane_id: str = "main"
+    source_lane_id: str | None = None
     #: The accepted resource manifest, present for research runs.
     resource_manifest: tuple[Mapping[str, Any], ...] = ()
     parent_run_id: str | None = None
@@ -284,7 +297,9 @@ class AnswerRunInput:
                 self.agent_run_plan.canonical_payload() if self.agent_run_plan is not None else None
             ),
             "image_descriptions": list(self.image_descriptions),
-            "session_id": self.session_id,
+            "agent_session_id": self.agent_session_id,
+            "agent_lane_id": self.agent_lane_id,
+            "source_lane_id": self.source_lane_id,
             "resource_manifest": [dict(item) for item in self.resource_manifest],
             "parent_run_id": self.parent_run_id,
             "continuation_kind": self.continuation_kind,
@@ -333,7 +348,11 @@ class AnswerRunInput:
             attachments=attachments,
             history_attachments=history_attachments,
             image_descriptions=tuple(str(item) for item in request.get("image_descriptions") or ()),
-            session_id=str(request.get("session_id") or ""),
+            agent_session_id=str(request.get("agent_session_id") or ""),
+            agent_lane_id=str(request.get("agent_lane_id") or "main"),
+            source_lane_id=(
+                str(request["source_lane_id"]) if request.get("source_lane_id") else None
+            ),
             resource_manifest=tuple(dict(item) for item in request.get("resource_manifest") or ()),
             parent_run_id=(str(request["parent_run_id"]) if request.get("parent_run_id") else None),
             continuation_kind=(

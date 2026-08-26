@@ -18,17 +18,24 @@ import datetime
 import json
 import uuid
 from collections.abc import AsyncIterator, Mapping
+from dataclasses import replace
 from typing import Any, cast
 
 import asyncpg
 import pytest
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
+from dlightrag.adapters.postgres.session_journal import PGJournalStore
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+from dlightrag.agent.session.entries import UserMessageEntry
 from dlightrag.agent.session.fold import PriorTurns
 from dlightrag.agent.session.fold import WorkingContextProjection as _RunWorking
+from dlightrag.agent.session.ids import SessionId
+from dlightrag.agent.session.plan import AgentRunPlan
+from dlightrag.agent.session.registers import HostTurnReservation
 from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
+from dlightrag.ai.messages import AssistantTurn
 from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.citations.streaming import AnswerStream
@@ -37,6 +44,7 @@ from dlightrag.answer.executor import (
     AnswerResourceResolver,
     OrchestratorRun,
 )
+from dlightrag.answer.publication import ArtifactIssue, PublicationPlan
 from dlightrag.answer.resources.models import TextWindowBudget
 from dlightrag.answer.runs.execution import AnswerRunInput, PinnedModelProfile
 from dlightrag.answer.synthesizer import AnswerSynthesizer
@@ -65,7 +73,12 @@ _PG_CONN_KWARGS: dict[str, Any] = dict(
 )
 
 _OWNER = "owner-alpha"
-_REQUEST: dict[str, Any] = {"query": "why", "workspaces": ["default"]}
+_REQUEST: dict[str, Any] = {
+    "query": "why",
+    "workspaces": ["default"],
+    "agent_session_id": "00000000-0000-7000-8000-000000000001",
+    "agent_lane_id": "main",
+}
 _REQUEST_FINGERPRINT = answer_run_request_fingerprint(_REQUEST)
 _VISUAL_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("ascii")
 
@@ -89,6 +102,8 @@ def _answer_run_input() -> AnswerRunInput:
         context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision="2026-08-14",
         idempotency_fingerprint="public-request-hash",
+        agent_session_id="00000000-0000-7000-8000-000000000001",
+        agent_lane_id="main",
     )
 
 
@@ -178,7 +193,7 @@ async def test_journaled_turn_survives_a_new_worker(store: FingerprintingAnswerR
     async def body(session: RunSession) -> Mapping[str, Any]:
         journal = session.execution.session_store
         assert session.prepared_input is not None
-        session_id = SessionId(str(session.prepared_input["session_id"]))
+        session_id = SessionId(str(session.prepared_input["agent_session_id"]))
         snapshot = await journal.load(session_id)
         seen.append(snapshot.commit_sequence)
         if snapshot.commit_sequence == 0:
@@ -419,7 +434,7 @@ async def test_journal_round_trips_through_jsonb(store: FingerprintingAnswerRunS
     from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
 
     assert creation.run.prepared_input is not None
-    session_id = SessionId(str(creation.run.prepared_input["session_id"]))
+    session_id = SessionId(str(creation.run.prepared_input["agent_session_id"]))
     user_entry_id = EntryId.new()
     entries = [
         UserMessageEntry(
@@ -493,6 +508,24 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert run is not None
     result = run.result
     assert result is not None
+    session_snapshot = await store.load_routing(owner_id=_OWNER, run_id=run_id)
+    assert session_snapshot is not None
+    agent_snapshot = await store.claim_next(worker_id="unused")
+    assert agent_snapshot is None
+    session_id = SessionId(session_snapshot.agent_session_id)
+    journal = PGJournalStore(
+        pool=cast(Any, store)._operation_pool,
+        owner_id=_OWNER,
+        run_id=uuid.UUID(run_id),
+        worker_id="reader",
+        lease_owner="reader",
+        fencing_epoch=1,
+    )
+    canonical = await journal.load(session_id)
+    assert [entry.entry_type for entry in canonical.tree.ancestry()] == [
+        "user_message",
+        "assistant_message",
+    ]
     chunk = result["contexts"]["chunks"][0]
     assert "image_data" not in chunk
     assert "_evidence_key" not in chunk
@@ -515,7 +548,236 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert result["trace"]["retrieval"] == "ok"
 
 
-def _answer_runtime(store: FingerprintingAnswerRunStore) -> tuple[Application, RunCoordinator]:
+async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
+    store: FingerprintingAnswerRunStore,
+) -> None:
+    class FailingSynthesizer:
+        async def generate_stream(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("generation failed")
+
+    profile = ModelProfile(context_window_tokens=1_000_000)
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(AnswerSynthesizer, FailingSynthesizer()),
+        retrieve_knowledge_base=_retrieve_visual,
+        model_profile=profile,
+        telemetry=NOOP_TELEMETRY,
+        text_window_budget=TextWindowBudget(tokens=850_000),
+        resolved_mode="fast",
+    )
+    application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
+    await coordinator.start()
+    request = _answer_run_input().as_request()
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=request,
+        idempotency_fingerprint=answer_run_request_fingerprint(request),
+    )
+    coordinator.wake()
+    try:
+        await _settle(_status_is(store, creation.run.run_id, "failed"))
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
+    assert routing is not None
+    reader = PGJournalStore(
+        pool=cast(Any, store)._operation_pool,
+        owner_id=_OWNER,
+        run_id=uuid.UUID(creation.run.run_id),
+        worker_id="reader",
+        lease_owner="reader",
+        fencing_epoch=1,
+    )
+    snapshot = await reader.load(SessionId(routing.agent_session_id))
+    assert [entry.entry_type for entry in snapshot.tree.ancestry()] == ["user_message"]
+    assert not any(isinstance(record.value, HostTurnReservation) for record in snapshot.registers)
+
+
+async def test_publication_correction_is_one_linked_agent_operation(
+    store: FingerprintingAnswerRunStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = [
+        AssistantTurn(
+            text="Draft answer with broken Artifact.",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"input_tokens": 3, "output_tokens": 2},
+        ),
+        AssistantTurn(
+            text="Answer after queued follow-up.",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"input_tokens": 4, "output_tokens": 2},
+        ),
+        AssistantTurn(
+            text="Answer after terminal-race steer.",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"input_tokens": 5, "output_tokens": 2},
+        ),
+        AssistantTurn(
+            text="Corrected answer.",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"input_tokens": 6, "output_tokens": 2},
+        ),
+    ]
+
+    async def model(**_kwargs: Any) -> AssistantTurn:
+        return turns.pop(0)
+
+    profile = ModelProfile(context_window_tokens=1_000_000)
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
+        retrieve_knowledge_base=_retrieve_visual,
+        model_func=model,
+        model_profile=profile,
+        telemetry=NOOP_TELEMETRY,
+        text_window_budget=TextWindowBudget(tokens=850_000),
+        resolved_mode="research",
+    )
+    probe = orchestrator.prepare_run("why")
+    plan = AgentRunPlan.from_tools(
+        probe.tools,
+        model_role="query",
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+    )
+    publication_calls = 0
+
+    def publication_plan(_root: Any, *, answer: str, limits: Any) -> PublicationPlan:
+        nonlocal publication_calls
+        del limits
+        publication_calls += 1
+        if publication_calls == 1:
+            return PublicationPlan(
+                answer=answer,
+                issues=(
+                    ArtifactIssue(
+                        kind="missing_file",
+                        description="report is missing",
+                    ),
+                ),
+            )
+        return PublicationPlan(
+            answer=answer,
+            issues=(
+                ArtifactIssue(
+                    kind="missing_file",
+                    description="report is still missing after correction",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr("dlightrag.answer.executor._publication_plan", publication_plan)
+    control_polls = 0
+    acknowledged_controls: set[int] = set()
+
+    async def pending_controls(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        nonlocal control_polls
+        control_polls += 1
+        if control_polls == 1 and 1 not in acknowledged_controls:
+            return (
+                {
+                    "control_sequence": 1,
+                    "kind": "follow_up",
+                    "content": "queued follow-up",
+                },
+            )
+        if control_polls == 6 and 2 not in acknowledged_controls:
+            return (
+                {
+                    "control_sequence": 2,
+                    "kind": "steer",
+                    "content": "late steer becomes follow-up",
+                },
+            )
+        return ()
+
+    async def acknowledge_controls(**kwargs: Any) -> bool:
+        acknowledged_controls.update(int(item) for item in kwargs["control_sequences"])
+        return True
+
+    store.load_pending_agent_controls = pending_controls  # type: ignore[method-assign]
+    store.acknowledge_agent_controls = acknowledge_controls  # type: ignore[method-assign]
+    application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
+    await coordinator.start()
+    request = replace(_answer_run_input(), agent_run_plan=plan).as_request()
+    request["mode"] = "research"
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=request,
+        idempotency_fingerprint=answer_run_request_fingerprint(request),
+    )
+    coordinator.wake()
+    try:
+        await _settle(_status_is(store, creation.run.run_id, "succeeded"))
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    run = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
+    assert run is not None and run.result is not None
+    assert run.result["answer"] == "Corrected answer."
+    operations = run.result["trace"]["agent_operations"]
+    assert [item["purpose"] for item in operations] == [
+        "research",
+        "follow_up",
+        "follow_up",
+        "publication_correction",
+    ]
+    assert len({item["operation_id"] for item in operations}) == 4
+    assert publication_calls == 2
+    residual_outcome = {
+        "status": "failed",
+        "issues": [
+            {
+                "kind": "missing_file",
+                "description": "report is still missing after correction",
+            }
+        ],
+    }
+    assert run.result["artifact_outcome"] == residual_outcome
+    assert operations[-1]["publication_outcome"] == residual_outcome
+    assert run.result["trace"]["usage"]["usage_details"] == {
+        "input_tokens": 18,
+        "output_tokens": 8,
+    }
+    assert acknowledged_controls == {1, 2}
+    events = await store.read_event_page(owner_id=_OWNER, run_id=creation.run.run_id)
+    assert sum(event.event_type == "reset" for event in events) == 1
+    routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
+    assert routing is not None
+    reader = PGJournalStore(
+        pool=cast(Any, store)._operation_pool,
+        owner_id=_OWNER,
+        run_id=uuid.UUID(creation.run.run_id),
+        worker_id="reader",
+        lease_owner="reader",
+        fencing_epoch=1,
+    )
+    snapshot = await reader.load(SessionId(routing.agent_session_id))
+    assert [entry.entry_type for entry in snapshot.tree.ancestry()] == [
+        "user_message",
+        "assistant_message",
+        "user_message",
+        "assistant_message",
+        "user_message",
+        "assistant_message",
+        "user_message",
+        "assistant_message",
+    ]
+    users = [entry for entry in snapshot.tree.ancestry() if isinstance(entry, UserMessageEntry)]
+    assert users[1].content == "queued follow-up"
+    assert users[2].content == "late steer becomes follow-up"
+
+
+def _answer_runtime(
+    store: FingerprintingAnswerRunStore,
+    *,
+    orchestrator: AnswerOrchestrator | None = None,
+) -> tuple[Application, RunCoordinator]:
     """Compose the final executor and coordinator over the throwaway database."""
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         answer={
@@ -524,7 +786,7 @@ def _answer_runtime(store: FingerprintingAnswerRunStore) -> tuple[Application, R
     )
     components = _compose(config)
     application = Application(config, components)
-    orchestrator = AnswerOrchestrator(
+    orchestrator = orchestrator or AnswerOrchestrator(
         synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
         retrieve_knowledge_base=_retrieve_visual,
         model_profile=ModelProfile(context_window_tokens=1_000_000),

@@ -45,9 +45,14 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
         from dlightrag.agent.session.ids import SessionId
 
         if prepared_input is not None:
+            prepared = {
+                "agent_session_id": SessionId.new().value,
+                "agent_lane_id": "main",
+                **dict(prepared_input),
+            }
             return await super().create_run(
                 owner_id=owner_id,
-                prepared_input=dict(prepared_input),
+                prepared_input=prepared,
                 idempotency_fingerprint=(
                     idempotency_fingerprint or answer_run_request_fingerprint(prepared_input)
                 ),
@@ -57,7 +62,8 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
             )
         request = request or {}
         prepared: dict[str, Any] = {
-            "session_id": SessionId.new().value,
+            "agent_session_id": SessionId.new().value,
+            "agent_lane_id": "main",
             **dict(request),
         }
         return await super().create_run(
@@ -87,7 +93,8 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
         from dlightrag.agent.session.ids import SessionId
 
         prepared: dict[str, Any] = {
-            "session_id": SessionId.new().value,
+            "agent_session_id": SessionId.new().value,
+            "agent_lane_id": "main",
             **dict(request),
         }
         return await super().create_run_in(

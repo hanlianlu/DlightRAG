@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from dlightrag.agent.session.fold import PriorTurns, WorkingContextProjection
-from dlightrag.agent.session.ids import IntentId, SessionId
+from dlightrag.agent.session.ids import EntryId, IntentId, SessionId
 from dlightrag.ai.capacity import CONTEXT_POLICY
 from dlightrag.ai.messages import AssistantTurn
 from dlightrag.ai.telemetry import NOOP_TELEMETRY
@@ -24,6 +24,7 @@ from dlightrag.answer.resources.models import TextWindowBudget
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools.composition import compose_research_tools
 from dlightrag.answer.tools.subagents import (
+    ChildContextSnapshot,
     ChildControlInput,
     ChildOutcome,
     ChildRequest,
@@ -40,6 +41,15 @@ from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 def _spawn_input(objective: str) -> SpawnAgentInput:
     return SpawnAgentInput(children=(ChildRequest(objective=objective),))
+
+
+def _context_snapshot(parent_id: SessionId | None = None) -> ChildContextSnapshot:
+    return ChildContextSnapshot.from_values(
+        parent_session_id=parent_id or SessionId.new(),
+        parent_entry_id=EntryId.new(),
+        depth=0,
+        messages=[{"role": "user", "content": "parent question"}],
+    )
 
 
 async def _retrieve(_query: str) -> object:
@@ -98,7 +108,12 @@ async def test_spawn_many_runs_in_parallel_and_aggregates_usage() -> None:
     started = 0
     both_started = asyncio.Event()
 
-    async def run_child(child_id: SessionId, request: ChildRequest, _call_id: str) -> ChildOutcome:
+    async def run_child(
+        child_id: SessionId,
+        request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
+    ) -> ChildOutcome:
         nonlocal started
         started += 1
         if started == 2:
@@ -115,6 +130,7 @@ async def test_spawn_many_runs_in_parallel_and_aggregates_usage() -> None:
         parent_session_id=SessionId.new(),
         run_id=SessionId.new().value,
         run_child=run_child,
+        context_snapshot=_context_snapshot(),
     )
     result = await subagent_tools(host=host)[0].execute(
         SpawnAgentInput(
@@ -155,7 +171,10 @@ async def test_spawn_propagates_parent_cancel_and_finishes_persisted_child() -> 
     finish = AsyncMock()
 
     async def run_child(
-        _child_id: SessionId, _request: ChildRequest, _call_id: str
+        _child_id: SessionId,
+        _request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
     ) -> ChildOutcome:
         raise RunCancelledError
 
@@ -165,6 +184,7 @@ async def test_spawn_propagates_parent_cancel_and_finishes_persisted_child() -> 
         persist=AsyncMock(),
         finish_child=finish,
         run_child=run_child,
+        context_snapshot=_context_snapshot(),
     )
 
     with pytest.raises(asyncio.CancelledError):
@@ -204,7 +224,10 @@ async def test_replay_returns_journal_outcome_not_sidecar_summary() -> None:
     finish = AsyncMock()
 
     async def run_child(
-        _child_id: SessionId, _request: ChildRequest, _call_id: str
+        _child_id: SessionId,
+        _request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
     ) -> ChildOutcome:
         return ChildOutcome(
             status="succeeded",
@@ -224,6 +247,7 @@ async def test_replay_returns_journal_outcome_not_sidecar_summary() -> None:
         persist=persist,
         finish_child=finish,
         run_child=run_child,
+        context_snapshot=_context_snapshot(),
     )
     tool = subagent_tools(host=host)[0]
     result = await tool.execute(
@@ -242,7 +266,10 @@ async def test_spawn_reports_child_outcome_and_usage() -> None:
     finish = AsyncMock()
 
     async def run_child(
-        _child_id: SessionId, _request: ChildRequest, _call_id: str
+        _child_id: SessionId,
+        _request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
     ) -> ChildOutcome:
         return ChildOutcome(
             status="succeeded",
@@ -260,6 +287,7 @@ async def test_spawn_reports_child_outcome_and_usage() -> None:
         load_child=AsyncMock(return_value=None),
         finish_child=finish,
         run_child=run_child,
+        context_snapshot=_context_snapshot(),
     )
     tool = subagent_tools(host=host)[0]
     result = await tool.execute(
@@ -288,7 +316,10 @@ async def test_spawn_adopts_child_evidence_before_returning_result() -> None:
     }
 
     async def run_child(
-        _child_id: SessionId, _request: ChildRequest, _call_id: str
+        _child_id: SessionId,
+        _request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
     ) -> ChildOutcome:
         return ChildOutcome(
             status="succeeded",
@@ -302,6 +333,7 @@ async def test_spawn_adopts_child_evidence_before_returning_result() -> None:
         run_id=str(SessionId.new().value),
         owner_id="owner",
         run_child=run_child,
+        context_snapshot=_context_snapshot(),
         adopt_evidence=adopted,
     )
     tool = subagent_tools(host=host)[0]
@@ -320,7 +352,10 @@ async def test_failed_child_is_recorded_failed() -> None:
     finish = AsyncMock()
 
     async def run_child(
-        _child_id: SessionId, _request: ChildRequest, _call_id: str
+        _child_id: SessionId,
+        _request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
     ) -> ChildOutcome:
         return ChildOutcome(status="failed", summary="provider down", child_session_id="child")
 
@@ -332,6 +367,7 @@ async def test_failed_child_is_recorded_failed() -> None:
         load_child=AsyncMock(return_value=None),
         finish_child=finish,
         run_child=run_child,
+        context_snapshot=_context_snapshot(),
     )
     tool = subagent_tools(host=host)[0]
     result = await tool.execute(
@@ -415,6 +451,9 @@ async def test_child_session_journals_and_replays_without_rerun() -> None:
         request=ChildRequest(objective="summarize filings"),
         parent_call_id="call-1",
         parent_session_id=parent_id,
+        context_snapshot=_context_snapshot(parent_id),
+        persist_child_runtime=AsyncMock(),
+        claim_child=AsyncMock(return_value=1),
     )
     assert first.status == "succeeded"
     assert first.summary == "Journaled child summary."
@@ -437,12 +476,51 @@ async def test_child_session_journals_and_replays_without_rerun() -> None:
         request=ChildRequest(objective="summarize filings"),
         parent_call_id="call-1",
         parent_session_id=parent_id,
+        context_snapshot=_context_snapshot(parent_id),
+        persist_child_runtime=AsyncMock(),
+        claim_child=AsyncMock(return_value=1),
     )
     assert second.summary == first.summary
     assert second.usage == first.usage
     assert second.handles == first.handles
     assert second.status == first.status
     assert calls["n"] == 1
+
+
+async def test_child_renews_its_lease_while_a_provider_call_is_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.answer.executor._CHILD_LEASE_HEARTBEAT_SECONDS", 0.005)
+
+    async def model(**_kwargs: object) -> AssistantTurn:
+        await asyncio.sleep(0.03)
+        return AssistantTurn(text="renewed child", tool_calls=(), stop_reason="stop")
+
+    parent_id = SessionId.new()
+    child_id = SessionId.deterministic(run_id=str(parent_id.value), name="child:renew")
+    renew_child = AsyncMock(return_value=True)
+    outcome = await run_child_session(
+        orchestrator=_child_orchestrator(model),
+        journal=InMemoryAgentSessionStore(),  # type: ignore[arg-type]
+        session=_FakeSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
+        fetched_buffer=FetchedResourceBuffer(),
+        child_id=child_id,
+        request=ChildRequest(objective="wait for a slow provider"),
+        parent_call_id="call-renew",
+        parent_session_id=parent_id,
+        context_snapshot=_context_snapshot(parent_id),
+        persist_child_runtime=AsyncMock(),
+        claim_child=AsyncMock(return_value=1),
+        renew_child=renew_child,
+    )
+
+    assert outcome.status == "succeeded"
+    assert renew_child.await_count >= 1
+    assert renew_child.await_args is not None
+    assert renew_child.await_args.kwargs == {
+        "child_session_id": child_id.value,
+        "child_fencing_epoch": 1,
+    }
 
 
 async def test_child_selects_parent_context_and_an_inherited_tool_subset() -> None:
@@ -464,7 +542,17 @@ async def test_child_selects_parent_context_and_an_inherited_tool_subset() -> No
             objective="focused",
             context="parent",
             tools=("search_knowledge_base",),
-        )
+        ),
+        context_snapshot=ChildContextSnapshot.from_values(
+            parent_session_id=SessionId.new(),
+            parent_entry_id=EntryId.new(),
+            depth=0,
+            messages=[
+                {"role": "user", "content": "older question"},
+                {"role": "assistant", "content": "older answer"},
+                {"role": "user", "content": "parent question"},
+            ],
+        ),
     )
 
     messages = await child.context.control_turn(
@@ -529,6 +617,9 @@ async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
             request=ChildRequest(objective="cancel while searching"),
             parent_call_id="call-pending",
             parent_session_id=parent_id,
+            context_snapshot=_context_snapshot(parent_id),
+            persist_child_runtime=AsyncMock(),
+            claim_child=AsyncMock(return_value=1),
         )
 
     snapshot = await journal.load(child_id)
@@ -562,4 +653,7 @@ async def test_parent_cancel_marks_the_child_cancelled() -> None:
             request=ChildRequest(objective="stop"),
             parent_call_id="call-c",
             parent_session_id=parent_id,
+            context_snapshot=_context_snapshot(parent_id),
+            persist_child_runtime=AsyncMock(),
+            claim_child=AsyncMock(return_value=1),
         )

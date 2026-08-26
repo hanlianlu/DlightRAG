@@ -157,7 +157,11 @@ def accepted_input_envelope(prepared: Mapping[str, Any]) -> dict[str, Any]:
         "links": [dict(item) for item in prepared.get("links") or ()],
         "attachments": [dict(item) for item in prepared.get("attachments") or ()],
         "history_attachments": [dict(item) for item in prepared.get("history_attachments") or ()],
-        "session_id": str(prepared.get("session_id") or ""),
+        "agent_session_id": str(prepared.get("agent_session_id") or ""),
+        "agent_lane_id": str(prepared.get("agent_lane_id") or "main"),
+        "source_lane_id": (
+            str(prepared["source_lane_id"]) if prepared.get("source_lane_id") else None
+        ),
     }
     if prepared.get("parent_run_id"):
         envelope["parent_run_id"] = str(prepared["parent_run_id"])

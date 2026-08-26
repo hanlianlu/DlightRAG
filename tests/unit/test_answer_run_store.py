@@ -127,7 +127,9 @@ class TestFixedRuntimeBounds:
             "links": [],
             "attachments": [{"ordinal": 1, "digest": "d" * 64}],
             "history_attachments": [],
-            "session_id": "",
+            "agent_session_id": "",
+            "agent_lane_id": "main",
+            "source_lane_id": None,
         }
         assert "pinned_models" not in envelope
         assert "resource_manifest" not in envelope

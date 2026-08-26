@@ -55,7 +55,8 @@ def _request(query: str = "why") -> dict[str, Any]:
     import uuid as _uuid
 
     return {
-        "session_id": str(_uuid.uuid7()),
+        "agent_session_id": str(_uuid.uuid7()),
+        "agent_lane_id": "main",
         "query": query,
         "workspaces": ["default"],
     }

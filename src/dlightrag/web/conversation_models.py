@@ -36,6 +36,8 @@ class ConversationSnapshot:
     title: str | None
     created_at: datetime.datetime
     updated_at: datetime.datetime
+    agent_session_id: str
+    agent_lane_id: str
     turns: tuple[LinkedTurn, ...]
 
 

@@ -18,8 +18,10 @@ class RoutingAcceptance:
     valid_modes: tuple[str, ...]
     context_policy_revision: str
     model_fingerprints: Mapping[str, Any]
+    agent_session_id: str
+    agent_lane_id: str
+    source_lane_id: str | None = None
     resolved_mode: str | None = None
-    research_session_id: str | None = None
 
     @classmethod
     def fallback(cls, prepared_input: Mapping[str, Any]) -> RoutingAcceptance:
@@ -33,6 +35,13 @@ class RoutingAcceptance:
                 prepared_input.get("context_policy_revision") or CONTEXT_POLICY_REVISION
             ),
             model_fingerprints={},
+            agent_session_id=str(prepared_input["agent_session_id"]),
+            agent_lane_id=str(prepared_input.get("agent_lane_id") or "main"),
+            source_lane_id=(
+                str(prepared_input["source_lane_id"])
+                if prepared_input.get("source_lane_id")
+                else None
+            ),
         )
 
 
@@ -43,7 +52,9 @@ class RoutingRecord:
     requested_mode: str
     valid_modes: tuple[str, ...]
     resolved_mode: str | None
-    research_session_id: str | None
+    agent_session_id: str
+    agent_lane_id: str
+    source_lane_id: str | None
 
 
 def decide_resolved_mode(
@@ -77,7 +88,6 @@ class AnswerRoutingStore(Protocol):
         worker_id: str,
         fencing_epoch: int,
         resolved_mode: str,
-        research_session_id: str | None = None,
     ) -> str | None: ...
 
 

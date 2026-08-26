@@ -65,11 +65,15 @@ class SessionEntry:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UserMessageEntry(SessionEntry):
     content: JsonValue
+    acceptance_id: str | None = None
 
     entry_type: ClassVar[str] = "user_message"
 
     def canonical_payload(self) -> JsonValue:
-        return {"content": self.content}
+        payload: dict[str, Any] = {"content": self.content}
+        if self.acceptance_id is not None:
+            payload["acceptance_id"] = self.acceptance_id
+        return payload
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -308,7 +312,11 @@ def decode_entry_payload(
         "parent_entry_id": parent_entry_id,
     }
     if entry_type == "user_message":
-        return UserMessageEntry(**common, content=payload["content"])
+        return UserMessageEntry(
+            **common,
+            content=payload["content"],
+            acceptance_id=(str(payload["acceptance_id"]) if payload.get("acceptance_id") else None),
+        )
     if entry_type == "assistant_message":
         calls = tuple(
             ToolCall(

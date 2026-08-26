@@ -6,6 +6,7 @@ from contextlib import AbstractAsyncContextManager, aclosing
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
 
+from dlightrag.agent.session.ids import LaneId, SessionId
 from dlightrag.agent.session.plan import AgentRunPlan
 from dlightrag.agent.tools import AgentTool
 from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
@@ -119,6 +120,9 @@ class AnswerRequest:
     mode: str | None = None
     parent_run_id: str | None = None
     continuation_kind: str | None = None
+    agent_session_id: str = ""
+    agent_lane_id: str = "main"
+    source_lane_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,16 +319,10 @@ def _attachment_bytes(resources: Sequence[ResourceInput]) -> list[bytes]:
 def _prepared_input_payload(
     run_input: Any, *, requested_mode: str, auth_mode: str = "none"
 ) -> dict[str, Any]:
-    """Encode the M3 prepared input. Research session ids pin only for explicit research."""
-    from dlightrag.agent.session.ids import SessionId
-
+    """Encode one accepted run with its canonical Session/Lane mapping."""
     payload = dict(run_input.as_request())
     payload["auth_mode"] = auth_mode
     payload["mode"] = requested_mode
-    if requested_mode == "research":
-        payload["session_id"] = str(payload.get("session_id") or "") or SessionId.new().value
-    else:
-        payload["session_id"] = ""
     return payload
 
 
@@ -405,6 +403,9 @@ def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
         mode=request.mode or "auto",
         parent_run_id=request.parent_run_id,
         continuation_kind=request.continuation_kind,
+        agent_session_id=request.agent_session_id,
+        agent_lane_id=request.agent_lane_id,
+        source_lane_id=request.source_lane_id,
         history_attachments=tuple(
             AttachmentReference(
                 digest=resource.digest,
@@ -609,6 +610,9 @@ class AnswerService:
                         }
                         for item in run_input.pinned_models
                     },
+                    agent_session_id=run_input.agent_session_id,
+                    agent_lane_id=run_input.agent_lane_id,
+                    source_lane_id=run_input.source_lane_id,
                 ),
             )
             if accepted is not None:
@@ -773,13 +777,7 @@ class AnswerService:
             return None
         request = record.request_input()
         cap = max(1, min(int(limit), 100))
-        session_id = str(request.get("session_id") or "")
-        if not session_id:
-            load_routing = getattr(self._store, "load_routing", None)
-            if callable(load_routing):
-                routing_loader = cast(Callable[..., Awaitable[Any]], load_routing)
-                routing = await routing_loader(owner_id=owner_id, run_id=run_id)
-                session_id = str(getattr(routing, "research_session_id", "") or "")
+        session_id = str(request.get("agent_session_id") or "")
         load_transcript = getattr(self._store, "load_agent_transcript", None)
         if session_id and callable(load_transcript):
             loader = cast(
@@ -943,6 +941,10 @@ class AnswerService:
             if isinstance(item, Mapping) and item.get("url")
         )
         filters = accepted.get("filters")
+        agent_session_id = str(accepted.get("agent_session_id") or "") or SessionId.new().value
+        parent_lane_id = str(accepted.get("agent_lane_id") or LaneId.main().value)
+        continuation_kind = "follow_up" if include_answer else "fork"
+        agent_lane_id = parent_lane_id if include_answer else LaneId.new().value
         return AnswerRequest(
             query=text,
             workspaces=tuple(str(item) for item in authorized_workspaces),
@@ -960,7 +962,10 @@ class AnswerService:
             history_resources=tuple(history_resources),
             mode=str(accepted.get("mode") or "auto"),
             parent_run_id=run_id,
-            continuation_kind="follow_up" if include_answer else "fork",
+            continuation_kind=continuation_kind,
+            agent_session_id=agent_session_id,
+            agent_lane_id=agent_lane_id,
+            source_lane_id=(parent_lane_id if not include_answer else None),
         )
 
     async def cancel(self, *, owner_id: str, run_id: str) -> CancellationOutcome:
@@ -1130,6 +1135,9 @@ class AnswerService:
             image_descriptions=projection.image_descriptions,
             parent_run_id=request.parent_run_id,
             continuation_kind=request.continuation_kind,
+            agent_session_id=request.agent_session_id or SessionId.new().value,
+            agent_lane_id=request.agent_lane_id,
+            source_lane_id=request.source_lane_id,
         )
 
     async def _project_acceptance(

@@ -80,35 +80,51 @@ WHERE owner_id = $1 AND run_id = $2
 FOR UPDATE
 """
 
+_CHILD_LEASE_PREDICATE = """
+SELECT 1
+FROM dlightrag_answer_child_sessions
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND lease_owner = $4 AND fencing_epoch = $5
+  AND status = 'running' AND lease_expires_at > NOW()
+FOR UPDATE
+"""
+
 _LOCK_SESSION = """
-SELECT commit_sequence, fencing_epoch, last_sequence
+SELECT lease_run_id::text, commit_sequence, fencing_epoch, last_sequence
 FROM dlightrag_agent_sessions
-WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
+WHERE owner_id = $1 AND session_id = $2
 FOR UPDATE
 """
 
 _CREATE_SESSION = """
 INSERT INTO dlightrag_agent_sessions (
-    owner_id, run_id, session_id, commit_sequence, fencing_epoch
+    owner_id, session_id, lease_run_id, commit_sequence, fencing_epoch
 )
 VALUES ($1, $2, $3, 0, $4)
-ON CONFLICT (owner_id, run_id, session_id) DO NOTHING
+ON CONFLICT (owner_id, session_id) DO NOTHING
+"""
+
+_ACTIVE_SESSION_RUN = """
+SELECT 1
+FROM dlightrag_answer_runs
+WHERE owner_id = $1 AND run_id = $2
+  AND status = 'running' AND lease_expires_at > NOW()
 """
 
 _INSERT_ENTRY = """
 INSERT INTO dlightrag_agent_session_entries (
-    owner_id, run_id, session_id, sequence, entry_id, parent_entry_id,
+    owner_id, session_id, sequence, entry_id, parent_entry_id,
     entry_type, schema_version, timestamp, payload_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
 """
 
 _ADVANCE_SESSION = """
 UPDATE dlightrag_agent_sessions
 SET commit_sequence = commit_sequence + 1,
-    last_sequence = last_sequence + $4,
+    last_sequence = last_sequence + $3,
     updated_at = NOW()
-WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
+WHERE owner_id = $1 AND session_id = $2
 RETURNING commit_sequence
 """
 
@@ -139,45 +155,45 @@ FROM bumped
 _SELECT_SESSION_SNAPSHOT = """
 SELECT commit_sequence
 FROM dlightrag_agent_sessions
-WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
+WHERE owner_id = $1 AND session_id = $2
 """
 
 _SELECT_ENTRIES = """
 SELECT sequence, entry_id::text, parent_entry_id::text, entry_type,
        schema_version, timestamp, payload_json
 FROM dlightrag_agent_session_entries
-WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
+WHERE owner_id = $1 AND session_id = $2
 ORDER BY sequence
 """
 
 _SELECT_REGISTERS = """
 SELECT register_kind, register_key, sequence, payload_json
 FROM dlightrag_agent_session_registers
-WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
+WHERE owner_id = $1 AND session_id = $2
 ORDER BY register_kind, register_key
 """
 
 _SELECT_REGISTER_FOR_UPDATE = """
 SELECT sequence, payload_json
 FROM dlightrag_agent_session_registers
-WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
-  AND register_kind = $4 AND register_key = $5
+WHERE owner_id = $1 AND session_id = $2
+  AND register_kind = $3 AND register_key = $4
 FOR UPDATE
 """
 
 _SET_REGISTER = """
 INSERT INTO dlightrag_agent_session_registers (
-    owner_id, run_id, session_id, register_kind, register_key, sequence, payload_json
+    owner_id, session_id, register_kind, register_key, sequence, payload_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-ON CONFLICT (owner_id, run_id, session_id, register_kind, register_key)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+ON CONFLICT (owner_id, session_id, register_kind, register_key)
 DO UPDATE SET sequence = EXCLUDED.sequence, payload_json = EXCLUDED.payload_json
 """
 
 _DELETE_REGISTER = """
 DELETE FROM dlightrag_agent_session_registers
-WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
-  AND register_kind = $4 AND register_key = $5
+WHERE owner_id = $1 AND session_id = $2
+  AND register_kind = $3 AND register_key = $4
 """
 
 _INSERT_EVIDENCE = """
@@ -249,6 +265,8 @@ class PGJournalStore:
         worker_id: str,
         lease_owner: str,
         fencing_epoch: int,
+        primary_session_id: SessionId | None = None,
+        child_session_id: SessionId | None = None,
     ) -> None:
         self._pool = pool
         self._owner_id = owner_id
@@ -256,6 +274,21 @@ class PGJournalStore:
         self._worker_id = worker_id
         self._lease_owner = lease_owner
         self._fencing_epoch = fencing_epoch
+        self._primary_session_id = primary_session_id
+        self._child_session_id = child_session_id
+
+    def for_child(self, child_session_id: SessionId, *, fencing_epoch: int) -> PGJournalStore:
+        """Bind the same HostDelta owner to one independently leased Child Session."""
+        return PGJournalStore(
+            pool=self._pool,
+            owner_id=self._owner_id,
+            run_id=self._run_id,
+            worker_id=self._worker_id,
+            lease_owner=self._lease_owner,
+            fencing_epoch=fencing_epoch,
+            primary_session_id=self._primary_session_id,
+            child_session_id=child_session_id,
+        )
 
     @asynccontextmanager
     async def _connection(self) -> AsyncIterator[Any]:
@@ -266,7 +299,7 @@ class PGJournalStore:
     async def load(self, session_id: SessionId) -> AgentSessionSnapshot:
         async with self._connection() as conn:
             session_row = await conn.fetchrow(
-                _SELECT_SESSION_SNAPSHOT, self._owner_id, self._run_id, _uuid(session_id.value)
+                _SELECT_SESSION_SNAPSHOT, self._owner_id, _uuid(session_id.value)
             )
             if session_row is None:
                 return AgentSessionSnapshot(
@@ -285,26 +318,16 @@ class PGJournalStore:
             )
 
     async def _load_entries(self, conn: Any, session_id: SessionId) -> list[SessionEntry]:
-        rows = await conn.fetch(
-            _SELECT_ENTRIES, self._owner_id, self._run_id, _uuid(session_id.value)
-        )
+        rows = await conn.fetch(_SELECT_ENTRIES, self._owner_id, _uuid(session_id.value))
         entries: list[SessionEntry] = []
         for row in rows:
-            entries.append(
-                _decode_entry(
-                    row,
-                    owner_id=self._owner_id,
-                    run_id=str(self._run_id),
-                    session_id=session_id,
-                )
-            )
+            entries.append(_decode_entry(row, session_id=session_id))
         return entries
 
     async def _load_registers(self, conn: Any, session_id: SessionId) -> list[RegisterRecord]:
         rows = await conn.fetch(
             _SELECT_REGISTERS,
             self._owner_id,
-            self._run_id,
             _uuid(session_id.value),
         )
         records: list[RegisterRecord] = []
@@ -332,6 +355,14 @@ class PGJournalStore:
         """Apply one exact-register-CAS Session transaction."""
         if fencing_epoch != self._fencing_epoch:
             return TransactionLeaseLost()
+        if self._child_session_id is not None and session_id != self._child_session_id:
+            return TransactionLeaseLost()
+        if (
+            self._child_session_id is None
+            and self._primary_session_id is not None
+            and session_id != self._primary_session_id
+        ):
+            return TransactionLeaseLost()
         async with self._connection() as conn:
             async with conn.transaction():
                 if await self._hold_lease(conn) is None:
@@ -339,22 +370,42 @@ class PGJournalStore:
                 await conn.execute(
                     _CREATE_SESSION,
                     self._owner_id,
-                    self._run_id,
                     _uuid(session_id.value),
+                    self._run_id,
                     fencing_epoch,
                 )
                 session_row = await conn.fetchrow(
-                    _LOCK_SESSION, self._owner_id, self._run_id, _uuid(session_id.value)
+                    _LOCK_SESSION, self._owner_id, _uuid(session_id.value)
                 )
                 stored_epoch = int(session_row["fencing_epoch"])
-                if stored_epoch > fencing_epoch:
-                    return TransactionLeaseLost()
-                if stored_epoch < fencing_epoch:
+                stored_run_id = str(session_row["lease_run_id"])
+                current_run_id = str(self._run_id)
+                if stored_run_id != current_run_id:
+                    if (
+                        await conn.fetchval(
+                            _ACTIVE_SESSION_RUN,
+                            self._owner_id,
+                            _uuid(stored_run_id),
+                        )
+                        is not None
+                    ):
+                        return TransactionLeaseLost()
                     await conn.execute(
-                        "UPDATE dlightrag_agent_sessions SET fencing_epoch = $4"
-                        " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
+                        "UPDATE dlightrag_agent_sessions"
+                        " SET lease_run_id = $3, fencing_epoch = $4"
+                        " WHERE owner_id = $1 AND session_id = $2",
                         self._owner_id,
+                        _uuid(session_id.value),
                         self._run_id,
+                        fencing_epoch,
+                    )
+                elif stored_epoch > fencing_epoch:
+                    return TransactionLeaseLost()
+                elif stored_epoch < fencing_epoch:
+                    await conn.execute(
+                        "UPDATE dlightrag_agent_sessions SET fencing_epoch = $3"
+                        " WHERE owner_id = $1 AND session_id = $2",
+                        self._owner_id,
                         _uuid(session_id.value),
                         fencing_epoch,
                     )
@@ -363,7 +414,6 @@ class PGJournalStore:
                     row = await conn.fetchrow(
                         _SELECT_REGISTER_FOR_UPDATE,
                         self._owner_id,
-                        self._run_id,
                         _uuid(session_id.value),
                         expectation.ref.kind,
                         expectation.ref.key,
@@ -417,7 +467,6 @@ class PGJournalStore:
                         await conn.execute(
                             _SET_REGISTER,
                             self._owner_id,
-                            self._run_id,
                             _uuid(session_id.value),
                             write.ref.kind,
                             write.ref.key,
@@ -428,7 +477,6 @@ class PGJournalStore:
                         await conn.execute(
                             _DELETE_REGISTER,
                             self._owner_id,
-                            self._run_id,
                             _uuid(session_id.value),
                             write.ref.kind,
                             write.ref.key,
@@ -437,7 +485,6 @@ class PGJournalStore:
                 await conn.execute(
                     _ADVANCE_SESSION,
                     self._owner_id,
-                    self._run_id,
                     _uuid(session_id.value),
                     len(transaction.entries),
                 )
@@ -551,9 +598,8 @@ class PGJournalStore:
         rows = await conn.fetch(
             "SELECT register_kind, register_key, payload_json"
             " FROM dlightrag_agent_session_registers"
-            " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
+            " WHERE owner_id = $1 AND session_id = $2",
             self._owner_id,
-            self._run_id,
             _uuid(session_id.value),
         )
         values = {}
@@ -598,9 +644,8 @@ class PGJournalStore:
         rows = await conn.fetch(
             "SELECT entry_id::text, parent_entry_id::text"
             " FROM dlightrag_agent_session_entries"
-            " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
+            " WHERE owner_id = $1 AND session_id = $2",
             self._owner_id,
-            self._run_id,
             _uuid(session_id.value),
         )
         known = {EntryId(str(row["entry_id"])) for row in rows}
@@ -628,7 +673,6 @@ class PGJournalStore:
         await conn.execute(
             _INSERT_ENTRY,
             self._owner_id,
-            self._run_id,
             _uuid(session_id.value),
             sequence,
             _uuid(entry.entry_id.value),
@@ -640,6 +684,15 @@ class PGJournalStore:
         )
 
     async def _hold_lease(self, conn: Any) -> Any:
+        if self._child_session_id is not None:
+            return await conn.fetchval(
+                _CHILD_LEASE_PREDICATE,
+                self._owner_id,
+                self._run_id,
+                _uuid(self._child_session_id.value),
+                self._lease_owner,
+                self._fencing_epoch,
+            )
         return await conn.fetchval(
             _LEASE_PREDICATE,
             self._owner_id,
@@ -1205,7 +1258,7 @@ def _json_payload(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-def _decode_entry(row: Any, *, owner_id: str, run_id: str, session_id: SessionId) -> SessionEntry:
+def _decode_entry(row: Any, *, session_id: SessionId) -> SessionEntry:
     from dlightrag.agent.session.entries import ENTRY_TYPE_TO_CLASS, decode_entry_payload
     from dlightrag.agent.session.ids import EntryId
 

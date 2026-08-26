@@ -258,7 +258,8 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         run_request = {
             "query": "reader operational write",
             "workspaces": [workspace],
-            "session_id": "00000000-0000-7000-8000-000000000001",
+            "agent_session_id": "00000000-0000-7000-8000-000000000001",
+            "agent_lane_id": "main",
         }
         creation = await store.create_run(
             owner_id="reader-owner",

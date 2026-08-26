@@ -16,7 +16,8 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from dlightrag.agent.session.ids import IntentId, SessionId
+from dlightrag.agent.session.effects import canonical_json
+from dlightrag.agent.session.ids import EntryId, IntentId, SessionId
 from dlightrag.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.answer.evidence import EvidenceDelta
 from dlightrag.runtime import AnswerRunCancelledError, RunCancelledError
@@ -72,6 +73,66 @@ class ChildControlInput(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class ChildContextSnapshot:
+    """Bounded immutable parent context explicitly handed to one Child Session."""
+
+    parent_session_id: SessionId
+    parent_entry_id: EntryId
+    depth: int
+    messages_json: str
+    evidence_state_json: str = "{}"
+
+    def __post_init__(self) -> None:
+        import json
+
+        if self.depth < 0:
+            raise ValueError("Child context depth cannot be negative")
+        if not isinstance(json.loads(self.messages_json), list):
+            raise ValueError("Child context messages must be an array")
+        if not isinstance(json.loads(self.evidence_state_json), dict):
+            raise ValueError("Child context evidence state must be an object")
+
+    @classmethod
+    def from_values(
+        cls,
+        *,
+        parent_session_id: SessionId,
+        parent_entry_id: EntryId,
+        depth: int,
+        messages: list[dict[str, Any]],
+        evidence_state: Mapping[str, Any] | None = None,
+    ) -> ChildContextSnapshot:
+        return cls(
+            parent_session_id=parent_session_id,
+            parent_entry_id=parent_entry_id,
+            depth=depth,
+            messages_json=canonical_json(messages),
+            evidence_state_json=canonical_json(dict(evidence_state or {})),
+        )
+
+    @property
+    def messages(self) -> list[dict[str, Any]]:
+        import json
+
+        return json.loads(self.messages_json)
+
+    @property
+    def evidence_state(self) -> dict[str, Any]:
+        import json
+
+        return json.loads(self.evidence_state_json)
+
+    def canonical_payload(self) -> dict[str, Any]:
+        return {
+            "parent_session_id": self.parent_session_id.value,
+            "parent_entry_id": self.parent_entry_id.value,
+            "depth": self.depth,
+            "messages": self.messages,
+            "evidence_state": self.evidence_state,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ChildOutcome:
     """Distilled child result adopted by the parent."""
 
@@ -96,7 +157,12 @@ class SubagentHost:
     persist: Callable[..., Awaitable[Any]] | None = None
     load_child: Callable[..., Awaitable[Any]] | None = None
     finish_child: Callable[..., Awaitable[Any]] | None = None
-    run_child: Callable[[SessionId, ChildRequest, str], Awaitable[ChildOutcome]] | None = None
+    run_child: (
+        Callable[[SessionId, ChildRequest, str, ChildContextSnapshot], Awaitable[ChildOutcome]]
+        | None
+    ) = None
+    context_snapshot: ChildContextSnapshot | None = None
+    depth: int = 0
     adopt_evidence: Callable[[Mapping[str, Any], str, str], tuple[str, ...]] | None = None
     record_usage: Callable[[Mapping[str, int]], None] | None = None
     tasks: dict[str, asyncio.Task[ChildOutcome]] = field(default_factory=dict)
@@ -188,6 +254,9 @@ async def _spawn(
     parent_session_id = host.parent_session_id
     run_child = host.run_child
     call_id = runtime.call_id
+    context_snapshot = host.context_snapshot
+    if context_snapshot is None:
+        raise RuntimeError("spawn_agent has no explicit parent ContextSnapshot")
     semaphore = asyncio.Semaphore(max(1, host.max_concurrency))
     child_ids = [
         child_session_id(
@@ -212,11 +281,13 @@ async def _spawn(
                 context_mode=request.context,
                 model_role=request.model_role,
                 tools=request.tools,
+                depth=context_snapshot.depth + 1,
+                context_snapshot=context_snapshot.canonical_payload(),
             )
         try:
             async with semaphore:
                 await _check_cancelled(host)
-                outcome = await run_child(child_id, request, call_id)
+                outcome = await run_child(child_id, request, call_id, context_snapshot)
         except (RunCancelledError, AnswerRunCancelledError) as exc:
             await _finish_cancelled_child(host, child_id.value)
             raise _ParentRunCancelled from exc
@@ -373,6 +444,7 @@ def _many_result(outcomes: tuple[ChildOutcome, ...]) -> ToolResult:
 
 __all__ = [
     "ChildContextMode",
+    "ChildContextSnapshot",
     "ChildControlInput",
     "ChildModelRole",
     "ChildOutcome",

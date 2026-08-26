@@ -38,6 +38,7 @@ RegisterKind = Literal[
     "request_snapshot",
     "tool_arguments",
     "pending_input",
+    "host_turn_reservation",
     "context_projection",
     "session_fault",
 ]
@@ -50,6 +51,7 @@ _REGISTER_KINDS = frozenset(
         "request_snapshot",
         "tool_arguments",
         "pending_input",
+        "host_turn_reservation",
         "context_projection",
         "session_fault",
     }
@@ -266,6 +268,33 @@ class ToolArguments:
 
 
 @dataclass(frozen=True, slots=True)
+class HostTurnReservation:
+    """One Fast Host turn accepted on a Lane but not yet settled."""
+
+    lane_id: LaneId
+    reservation_id: str
+    idempotency_key: str
+    user_entry_id: EntryId
+
+    def __post_init__(self) -> None:
+        if not self.reservation_id or not self.idempotency_key:
+            raise ValueError("Host turn reservation identity cannot be empty")
+
+    @property
+    def ref(self) -> RegisterRef:
+        return RegisterRef("host_turn_reservation", self.lane_id.value)
+
+    def canonical_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": REGISTER_SCHEMA_VERSION,
+            "lane_id": self.lane_id.value,
+            "reservation_id": self.reservation_id,
+            "idempotency_key": self.idempotency_key,
+            "user_entry_id": self.user_entry_id.value,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ContextProjectionRegister:
     """Current branch-local compaction projection for one Lane."""
 
@@ -364,6 +393,7 @@ type SessionRegister = (
     | RequestSnapshot
     | ToolArguments
     | PendingInput
+    | HostTurnReservation
     | ContextProjectionRegister
     | SessionFault
 )
@@ -459,6 +489,13 @@ def decode_register(*, kind: str, payload: dict[str, Any]) -> SessionRegister:
             intent_id=IntentId(str(payload["intent_id"])),
             canonical_input=canonical_json(dict(payload.get("arguments") or {})),
         )
+    if kind == "host_turn_reservation":
+        return HostTurnReservation(
+            lane_id=LaneId(str(payload["lane_id"])),
+            reservation_id=str(payload["reservation_id"]),
+            idempotency_key=str(payload["idempotency_key"]),
+            user_entry_id=EntryId(str(payload["user_entry_id"])),
+        )
     if kind == "context_projection":
         return ContextProjectionRegister(
             lane_id=LaneId(str(payload["lane_id"])),
@@ -508,6 +545,7 @@ __all__ = [
     "ContextProjectionRegister",
     "DeleteRegister",
     "FollowUpInput",
+    "HostTurnReservation",
     "LaneHead",
     "LaneState",
     "OperationMetaRegister",

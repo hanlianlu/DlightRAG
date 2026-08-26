@@ -539,6 +539,8 @@ def _empty_snapshot(principal_id: str, conversation_id: str) -> ConversationSnap
         title=None,
         created_at=now,
         updated_at=now,
+        agent_session_id=conversation_id,
+        agent_lane_id="main",
         turns=(),
     )
 
@@ -611,6 +613,8 @@ def _prepare_submission(
             )
             for run_id, item in carried
         ),
+        agent_session_id=snapshot.agent_session_id,
+        agent_lane_id=snapshot.agent_lane_id,
     )
     return _PreparedSubmission(request=request)
 

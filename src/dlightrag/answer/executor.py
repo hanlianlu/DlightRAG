@@ -6,9 +6,9 @@ import base64
 import inspect
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from dlightrag_memory import Memory, MemoryStore
 
@@ -22,7 +22,7 @@ from dlightrag.agent.session.effects import (
     ToolResultEntry,
     canonical_json,
 )
-from dlightrag.agent.session.fold import PriorTurns
+from dlightrag.agent.session.fold import PriorTurns, project_session_messages
 from dlightrag.agent.session.ids import (
     AttemptId,
     IntentId,
@@ -38,7 +38,7 @@ from dlightrag.agent.session.operation import (
     ToolBatchItem,
 )
 from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.agent.session.registers import RequestSnapshot
+from dlightrag.agent.session.registers import PendingInput, RequestSnapshot
 from dlightrag.agent.session.runtime import (
     AgentOperationCancelled,
     AgentSessionEvent,
@@ -55,6 +55,7 @@ from dlightrag.agent.session.runtime import (
 from dlightrag.agent.session.store import (
     AgentSessionStore,
 )
+from dlightrag.agent.session.transactions import TransactionCommit
 from dlightrag.agent.tools import (
     AgentTool,
     ToolEffects,
@@ -115,10 +116,12 @@ from dlightrag.answer.runs.execution import (
     build_current_answer_resources,
 )
 from dlightrag.answer.runs.results import store_answer_result
+from dlightrag.answer.session_host import FastSessionHost
 from dlightrag.answer.sources import project_contexts_for_client
 from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.tools.resources import build_resource_tools, make_resource_reader
 from dlightrag.answer.tools.subagents import (
+    ChildContextSnapshot,
     ChildOutcome,
     ChildRequest,
     SpawnAgentInput,
@@ -140,6 +143,7 @@ from dlightrag.rag.retrieval import (
 from dlightrag.rag.sourcing.source_contract import safe_source_filename
 from dlightrag.rag.sourcing.url import afetch_public_https_bytes, avalidate_public_https_url
 from dlightrag.runtime import (
+    ANSWER_RUN_LEASE_SECONDS,
     LeaseLostError,
     RunCancelledError,
     RunExecutionError,
@@ -161,6 +165,8 @@ from dlightrag.runtime.settlements import (
 )
 
 logger = logging.getLogger(__name__)
+
+_CHILD_LEASE_HEARTBEAT_SECONDS = ANSWER_RUN_LEASE_SECONDS / 3
 
 
 class ArtifactReader(Protocol):
@@ -675,12 +681,12 @@ class AnswerExecutor:
 
     async def _ensure_resolved_mode(
         self, session: RunSession, request: AnswerRunInput
-    ) -> tuple[ResolvedMode, str | None]:
+    ) -> ResolvedMode:
         record = await self._store.load_routing(owner_id=session.owner_id, run_id=session.run_id)
         if record is None:
             raise RunExecutionError("routing_failed", "Routing record is missing.")
         if record.resolved_mode:
-            return _require_resolved_mode(record.resolved_mode), record.research_session_id
+            return _require_resolved_mode(record.resolved_mode)
         try:
             decided = decide_resolved_mode(
                 requested_mode=record.requested_mode,
@@ -692,21 +698,14 @@ class AnswerExecutor:
             decided = _require_resolved_mode(
                 await self._route_with_model(request, valid_modes=record.valid_modes)
             )
-        research_session_id = None
-        if decided == "research" and record.requested_mode == "auto":
-            research_session_id = SessionId.new().value
         written = await self._store.resolve(
             owner_id=session.owner_id,
             run_id=session.run_id,
             worker_id=session.worker_id,
             fencing_epoch=session.fencing_epoch,
             resolved_mode=decided,
-            research_session_id=research_session_id,
         )
-        return (
-            _require_resolved_mode(written or decided),
-            research_session_id or record.research_session_id,
-        )
+        return _require_resolved_mode(written or decided)
 
     async def _route_with_model(
         self, request: AnswerRunInput, *, valid_modes: tuple[str, ...]
@@ -736,17 +735,43 @@ class AnswerExecutor:
         request = AnswerRunInput.from_prepared_input(session.prepared_input)
         model_profiles = self.validate_pinned_model_profiles(request)
         await session.enter_phase("routing")
-        resolved_mode, research_session_id = await self._ensure_resolved_mode(session, request)
+        resolved_mode = await self._ensure_resolved_mode(session, request)
         await session.enter_phase("planning")
-        projected_history = PriorTurns(
-            [dict(message) for message in request.history],
-            episodic_summary=request.episodic_summary,
-        )
+        agent_session_id = SessionId(request.agent_session_id)
+        agent_lane_id = LaneId(request.agent_lane_id)
+        journal = session.execution.session_store
+        canonical_snapshot = await journal.load(agent_session_id)
+        if canonical_snapshot.entries:
+            history_lane_id = (
+                agent_lane_id
+                if any(lane.lane_id == agent_lane_id for lane in canonical_snapshot.tree.lanes)
+                else LaneId(request.source_lane_id or LaneId.main().value)
+            )
+            selected_snapshot = replace(
+                canonical_snapshot,
+                selected_lane_id=history_lane_id,
+            )
+            projected_history = PriorTurns(
+                project_session_messages(
+                    canonical_snapshot.tree.ancestry(history_lane_id),
+                    selected_snapshot.active_projection,
+                )
+                if resolved_mode == "fast"
+                else []
+            )
+        else:
+            projected_history = PriorTurns(
+                [dict(message) for message in request.history],
+                episodic_summary=request.episodic_summary,
+            )
 
         fast_boundaries: FastRunBoundaries | None = None
+        fast_session_host: FastSessionHost | None = None
+        fast_reservation_active = False
         agent_runtime: AgentSessionRuntime[EffectHostUpdate] | None = None
         research_operation_id: OperationId | None = None
-        agent_session_id: SessionId | None = None
+        research_plan: AgentRunPlan | None = None
+        agent_operations: list[dict[str, Any]] = []
 
         fetched_buffer = FetchedResourceBuffer()
 
@@ -782,7 +807,14 @@ class AnswerExecutor:
             )
         stream: AsyncIterator[str] | None = None
         try:
-            journal = session.execution.session_store
+            await _ensure_selected_lane(
+                journal,
+                session_id=agent_session_id,
+                lane_id=agent_lane_id,
+                source_lane_id=(
+                    LaneId(request.source_lane_id) if request.source_lane_id is not None else None
+                ),
+            )
             prepared_early: Any = None
             if resolved_mode == "research":
                 from dlightrag.answer.execution_settings import validate_agent_execution
@@ -813,10 +845,7 @@ class AnswerExecutor:
                     except WorkspaceIntegrityError as exc:
                         raise RunExecutionError("workspace_integrity_error", str(exc)) from exc
                     run.orchestrator.bind_workspace(bound)
-                session_id = SessionId(
-                    request.session_id or research_session_id or SessionId.new().value
-                )
-                agent_session_id = session_id
+                session_id = agent_session_id
                 store = self._store
                 run.orchestrator.bind_memory(
                     owner_id=session.owner_id,
@@ -828,6 +857,14 @@ class AnswerExecutor:
                     epoch=memory_epoch,
                     capability_current=self._memory_capability_current,
                 )
+                persist_child_runtime = _fenced_child_writer(store, "upsert_child_session", session)
+                claim_child = _fenced_child_writer(store, "claim_child_session", session)
+                renew_child = _fenced_child_writer(store, "heartbeat_child_session", session)
+                if persist_child_runtime is None or claim_child is None or renew_child is None:
+                    raise RunExecutionError(
+                        "run_execution_failed",
+                        "Child Session persistence is unavailable.",
+                    )
                 run.orchestrator.bind_subagents(
                     parent_session_id=session_id,
                     run_id=session.run_id,
@@ -841,6 +878,9 @@ class AnswerExecutor:
                         session=session,
                         fetched_buffer=fetched_buffer,
                         parent_session_id=session_id,
+                        persist_child_runtime=persist_child_runtime,
+                        claim_child=claim_child,
+                        renew_child=renew_child,
                     ),
                     check_cancelled=session.check_cancelled,
                 )
@@ -883,6 +923,7 @@ class AnswerExecutor:
                         "run_execution_failed",
                         "Research answer run is missing its accepted Agent Plan",
                     )
+                research_plan = plan
 
                 def validate_research_pins() -> None:
                     self.validate_pinned_model_profiles(request)
@@ -918,48 +959,100 @@ class AnswerExecutor:
                 )
                 accepted = await agent_runtime.accept(
                     session_id=session_id,
-                    lane_id=LaneId.main(),
+                    lane_id=agent_lane_id,
                     idempotency_key=f"answer-run:{session.run_id}",
                     content=request.query,
                     plan=plan,
                 )
                 research_operation_id = accepted.operation_id
                 await session.enter_phase("researching")
-                try:
-                    operation = await agent_runtime.drive(
+                while True:
+                    before = await journal.load(session_id)
+                    operation = await _drive_answer_operation(
+                        agent_runtime,
+                        session=session,
                         session_id=session_id,
                         operation_id=accepted.operation_id,
                     )
-                except (
-                    asyncio.CancelledError,
-                    RunCancelledError,
-                    AgentOperationCancelled,
-                ) as exc:
-                    await agent_runtime.cancel(
+                    if not isinstance(operation.state, OperationCompleted):
+                        raise RunExecutionError(
+                            "run_execution_failed",
+                            f"Research Agent operation ended as {operation.state.state_type}.",
+                        )
+                    snapshot = await journal.load(session_id)
+                    operation_usage = (
+                        _usage_from_snapshot_entries(
+                            snapshot_entries=(
+                                entry
+                                for entry in snapshot.entries
+                                if entry.sequence > _last_entry_sequence(before)
+                            )
+                        )
+                        or {}
+                    )
+                    agent_operations.append(
+                        {
+                            "operation_id": accepted.operation_id.value,
+                            "purpose": "research" if not agent_operations else "follow_up",
+                            "status": "completed",
+                            "usage": operation_usage,
+                        }
+                    )
+                    next_input = _oldest_pending_input(snapshot, agent_lane_id)
+                    command_ids: tuple[str, ...] = ()
+                    if next_input is None and controls is not None:
+                        commands = await controls.poll(operation.context)
+                        if commands:
+                            command = commands[0]
+                            command_ids = (command.command_id,)
+                            if isinstance(command, FollowUpCommand):
+                                next_input = (
+                                    command.idempotency_key,
+                                    command.content,
+                                )
+                            else:
+                                next_input = (command.command_id, command.content)
+                    if next_input is None:
+                        break
+                    if len(agent_operations) >= 1 + plan.max_pending_follow_ups:
+                        raise RunExecutionError(
+                            "run_execution_failed",
+                            "Research linked-operation bound was exhausted.",
+                        )
+                    validate_research_pins()
+                    accepted = await agent_runtime.accept(
                         session_id=session_id,
-                        operation_id=accepted.operation_id,
+                        lane_id=agent_lane_id,
+                        idempotency_key=next_input[0],
+                        content=next_input[1],
+                        plan=plan,
                     )
-                    await agent_runtime.close(
-                        session_id=session_id,
-                        operation_id=accepted.operation_id,
-                    )
-                    if isinstance(exc, AgentOperationCancelled):
-                        raise exc.reason from exc
-                    raise
-                except SessionLeaseLostError as exc:
-                    raise LeaseLostError from exc
-                if not isinstance(operation.state, OperationCompleted):
-                    raise RunExecutionError(
-                        "run_execution_failed",
-                        f"Research Agent operation ended as {operation.state.state_type}.",
-                    )
-                snapshot = await journal.load(session_id)
+                    research_operation_id = accepted.operation_id
+                    if command_ids and controls is not None:
+                        if not await controls.acknowledge(command_ids):
+                            raise LeaseLostError
                 run.orchestrator.adopt_runtime_snapshot(prepared_early, snapshot)
             else:
+                fast_session_host = FastSessionHost(
+                    transactions=journal,
+                    load=journal.load,
+                    fencing_epoch=session.execution.fencing_epoch,
+                )
+                fast_turn = await fast_session_host.accept(
+                    session_id=agent_session_id,
+                    lane_id=agent_lane_id,
+                    reservation_id=session.run_id,
+                    idempotency_key=request.idempotency_fingerprint,
+                    content=request.query,
+                )
+                fast_reservation_active = True
                 fast_boundaries = FastRunBoundaries(
                     session=session,
                     progress=session.execution.progress_store,
                     run_id=session.run_id,
+                    initial_progress_version=(
+                        session.durable_progress_version + (1 if fast_turn.created else 0)
+                    ),
                     plan={
                         "query": request.query,
                         "workspaces": list(request.workspaces),
@@ -1011,6 +1104,71 @@ class AnswerExecutor:
                     limits=self._settings.publication,
                 )
                 finalized.answer = publication.answer
+                if (
+                    publication.issues
+                    and agent_runtime is not None
+                    and research_plan is not None
+                    and prepared_early is not None
+                ):
+                    correction = await agent_runtime.accept(
+                        session_id=agent_session_id,
+                        lane_id=agent_lane_id,
+                        idempotency_key=f"publication-correction:{session.run_id}",
+                        content=publication.correction_feedback(),
+                        plan=research_plan,
+                    )
+                    before_correction = await journal.load(agent_session_id)
+                    corrected = await _drive_answer_operation(
+                        agent_runtime,
+                        session=session,
+                        session_id=agent_session_id,
+                        operation_id=correction.operation_id,
+                    )
+                    if not isinstance(corrected.state, OperationCompleted):
+                        raise RunExecutionError(
+                            "run_execution_failed",
+                            "Publication correction Agent operation did not complete.",
+                        )
+                    corrected_snapshot = await journal.load(agent_session_id)
+                    correction_usage = (
+                        _usage_from_snapshot_entries(
+                            snapshot_entries=(
+                                entry
+                                for entry in corrected_snapshot.entries
+                                if entry.sequence > _last_entry_sequence(before_correction)
+                            )
+                        )
+                        or {}
+                    )
+                    correction_record = {
+                        "operation_id": correction.operation_id.value,
+                        "purpose": "publication_correction",
+                        "status": "completed",
+                        "usage": correction_usage,
+                    }
+                    agent_operations.append(correction_record)
+                    research_operation_id = correction.operation_id
+                    run.orchestrator.adopt_runtime_snapshot(
+                        prepared_early,
+                        corrected_snapshot,
+                    )
+                    contexts, stream = run.orchestrator.runtime_answer_stream(prepared_early)
+                    await session.reset_output()
+                    corrected_parts: list[str] = []
+                    if stream is not None:
+                        async for chunk in stream:
+                            corrected_parts.append(chunk)
+                            await session.emit_token(chunk)
+                    await session.flush_tokens()
+                    answer_text = getattr(stream, "answer", "") or "".join(corrected_parts)
+                    finalized = finalize_answer(answer_text, contexts)
+                    publication = _publication_plan(
+                        run.orchestrator.artifact_root(),
+                        answer=finalized.answer,
+                        limits=self._settings.publication,
+                    )
+                    finalized.answer = publication.answer
+                    correction_record["publication_outcome"] = publication.outcome
                 if request.semantic_highlights:
                     finalized.sources = await enrich_semantic_highlights(
                         finalized.sources,
@@ -1019,12 +1177,11 @@ class AnswerExecutor:
                         model_factory=self._models.new_highlight_model,
                     )
                 trace = dict(getattr(stream, "trace", None) or {})
-                if (
-                    agent_runtime is not None
-                    and research_operation_id is not None
-                    and agent_session_id is not None
-                ):
-                    root_usage = _usage_from_snapshot(await journal.load(agent_session_id)) or {}
+                if agent_runtime is not None and research_operation_id is not None:
+                    root_usage: dict[str, int] = {}
+                    for item in agent_operations:
+                        for key, value in item["usage"].items():
+                            root_usage[key] = root_usage.get(key, 0) + int(value)
                     child_usage = await _durable_child_usage(
                         self._store,
                         owner_id=session.owner_id,
@@ -1044,6 +1201,8 @@ class AnswerExecutor:
                         "child_usage_details": child_usage,
                         "inclusive_usage_details": inclusive,
                     }
+                    trace["agent_operations"] = list(agent_operations)
+                trace.setdefault("agent_operations", list(agent_operations))
                 trace["query_image_description_count"] = len(run.image_descriptions)
                 trace["memory_recall_record_count"] = memory_recall_record_count
                 trace["memory_recall_chars"] = memory_recall_chars
@@ -1076,11 +1235,36 @@ class AnswerExecutor:
                 )
                 if fast_boundaries is not None:
                     await fast_boundaries.settle_retrieval(contexts)
+                if fast_session_host is not None:
+                    fast_commit = await fast_session_host.complete(
+                        session_id=agent_session_id,
+                        lane_id=agent_lane_id,
+                        reservation_id=session.run_id,
+                        content=finalized.answer,
+                        usage=(
+                            trace.get("usage") if isinstance(trace.get("usage"), Mapping) else None
+                        ),
+                    )
+                    fast_reservation_active = False
+                    if fast_boundaries is not None and fast_commit is not None:
+                        fast_boundaries.observe_session_progress()
+                if fast_boundaries is not None:
                     await fast_boundaries.settle_final(
                         result=stored,
                         result_digest=canonical_json(stored),
                     )
                 return stored
+        except BaseException:
+            if fast_session_host is not None and fast_reservation_active:
+                try:
+                    await fast_session_host.fail(
+                        session_id=agent_session_id,
+                        lane_id=agent_lane_id,
+                        reservation_id=session.run_id,
+                    )
+                except Exception:
+                    logger.exception("Failed to clear Fast Host turn reservation")
+            raise
         finally:
             await _close_execution_resources(stream, run.registry)
 
@@ -1615,6 +1799,7 @@ class ResearchRuntimeEffects:
     ) -> ToolEffectResult[EffectHostUpdate]:
         await self._check_cancelled()
         self._check_pins()
+        self._orchestrator.bind_child_context(self._prepared, context)
         if item.intent_id is None:
             raise RuntimeError("executable Tool item lost its IntentId")
         tool = self._tools.get(item.tool_name)
@@ -1796,6 +1981,75 @@ def _answer_runtime_event_sink(
     return publish
 
 
+async def _drive_answer_operation(
+    runtime: AgentSessionRuntime[EffectHostUpdate],
+    *,
+    session: RunSession,
+    session_id: SessionId,
+    operation_id: OperationId,
+) -> Any:
+    try:
+        return await runtime.drive(session_id=session_id, operation_id=operation_id)
+    except (
+        asyncio.CancelledError,
+        RunCancelledError,
+        AgentOperationCancelled,
+    ) as exc:
+        await runtime.cancel(session_id=session_id, operation_id=operation_id)
+        await runtime.close(session_id=session_id, operation_id=operation_id)
+        if isinstance(exc, AgentOperationCancelled):
+            raise exc.reason from exc
+        raise
+    except SessionLeaseLostError as exc:
+        raise LeaseLostError from exc
+
+
+def _oldest_pending_input(snapshot: Any, lane_id: LaneId) -> tuple[str, Any] | None:
+    for record in snapshot.registers:
+        if isinstance(record.value, PendingInput) and record.value.lane_id == lane_id:
+            if not record.value.items:
+                return None
+            item = record.value.items[0]
+            return item.idempotency_key, item.content
+    return None
+
+
+def _last_entry_sequence(snapshot: Any) -> int:
+    return max((entry.sequence for entry in snapshot.entries), default=0)
+
+
+async def _ensure_selected_lane(
+    journal: AgentSessionStore[EffectHostUpdate],
+    *,
+    session_id: SessionId,
+    lane_id: LaneId,
+    source_lane_id: LaneId | None,
+) -> None:
+    snapshot = await journal.load(session_id)
+    try:
+        snapshot.tree.lane(lane_id)
+        return
+    except KeyError:
+        pass
+    if source_lane_id is None:
+        if snapshot.commit_sequence == 0 and lane_id == LaneId.main():
+            return
+        raise RunExecutionError("run_execution_failed", "Agent Lane mapping is missing.")
+    try:
+        outcome = await journal.fork_lane(
+            session_id=session_id,
+            source_lane_id=source_lane_id,
+            lane_id=lane_id,
+        )
+    except KeyError as exc:
+        raise RunExecutionError(
+            "agent_session_conflict",
+            "The Agent Session changed before its branch could be created.",
+        ) from exc
+    if not isinstance(outcome, TransactionCommit):
+        raise LeaseLostError
+
+
 def _bound_child_runner(
     *,
     orchestrator: AnswerOrchestrator,
@@ -1803,9 +2057,15 @@ def _bound_child_runner(
     session: RunSession,
     fetched_buffer: FetchedResourceBuffer,
     parent_session_id: SessionId,
-) -> Callable[[SessionId, ChildRequest, str], Awaitable[ChildOutcome]]:
+    persist_child_runtime: Callable[..., Awaitable[Any]],
+    claim_child: Callable[..., Awaitable[Any]],
+    renew_child: Callable[..., Awaitable[Any]],
+) -> Callable[[SessionId, ChildRequest, str, ChildContextSnapshot], Awaitable[ChildOutcome]]:
     async def run_child(
-        child_id: SessionId, request: ChildRequest, parent_call_id: str
+        child_id: SessionId,
+        request: ChildRequest,
+        parent_call_id: str,
+        context_snapshot: ChildContextSnapshot,
     ) -> ChildOutcome:
         return await run_child_session(
             orchestrator=orchestrator,
@@ -1816,6 +2076,10 @@ def _bound_child_runner(
             request=request,
             parent_call_id=parent_call_id,
             parent_session_id=parent_session_id,
+            context_snapshot=context_snapshot,
+            persist_child_runtime=persist_child_runtime,
+            claim_child=claim_child,
+            renew_child=renew_child,
         )
 
     return run_child
@@ -1831,15 +2095,63 @@ async def run_child_session(
     request: ChildRequest,
     parent_call_id: str,
     parent_session_id: SessionId,
+    context_snapshot: ChildContextSnapshot,
+    persist_child_runtime: Callable[..., Awaitable[Any]],
+    claim_child: Callable[..., Awaitable[Any]],
+    renew_child: Callable[..., Awaitable[Any]] | None = None,
 ) -> ChildOutcome:
     """Run or restore one Child through the same deep AgentSessionRuntime."""
-    del parent_call_id, parent_session_id
-    prepared = orchestrator.prepare_child_session(request, child_session_id=child_id.value)
+    if context_snapshot.parent_session_id != parent_session_id:
+        raise RunExecutionError(
+            "run_execution_failed",
+            "Child ContextSnapshot parent identity changed.",
+        )
+    prepared = orchestrator.prepare_child_session(
+        request,
+        context_snapshot=context_snapshot,
+        child_session_id=child_id.value,
+    )
     plan = AgentRunPlan.from_tools(
         prepared.tools,
         model_role=request.model_role,
         context_policy_revision=CONTEXT_POLICY_REVISION,
+        model_identity={"role": request.model_role, "scope": "child"},
+        model_profile=asdict(prepared.model_profile),
     )
+    await persist_child_runtime(
+        owner_id=session.owner_id,
+        run_id=session.run_id,
+        child_session_id=child_id.value,
+        parent_session_id=parent_session_id.value,
+        parent_call_id=parent_call_id,
+        objective=request.objective,
+        context_mode=request.context,
+        model_role=request.model_role,
+        tools=request.tools,
+        depth=context_snapshot.depth + 1,
+        context_snapshot=context_snapshot.canonical_payload(),
+        plan=plan.canonical_payload(),
+        budget={
+            "provider_attempt_limit": plan.provider_attempt_limit,
+            "compaction_attempt_limit": plan.compaction_attempt_limit,
+            "model_profile": asdict(prepared.model_profile),
+        },
+        host_state={"inherits_parent_evidence": bool(context_snapshot.evidence_state)},
+    )
+    child_epoch = await claim_child(
+        owner_id=session.owner_id,
+        run_id=session.run_id,
+        child_session_id=child_id.value,
+    )
+    if not isinstance(child_epoch, int):
+        raise LeaseLostError
+    child_journal = journal
+    bind_child = getattr(journal, "for_child", None)
+    if callable(bind_child):
+        child_journal = cast(
+            AgentSessionStore[EffectHostUpdate],
+            bind_child(child_id, fencing_epoch=child_epoch),
+        )
     effects = ResearchRuntimeEffects(
         orchestrator=orchestrator,
         prepared=prepared,
@@ -1849,11 +2161,11 @@ async def run_child_session(
         persist_child_intent=None,
     )
     runtime = AgentSessionRuntime(
-        transactions=journal,
-        load=journal.load,
+        transactions=child_journal,
+        load=child_journal.load,
         effects=effects,
         tools=prepared.tools,
-        fencing_epoch=session.execution.fencing_epoch,
+        fencing_epoch=child_epoch,
         provider_attempt_limit=plan.provider_attempt_limit,
         event_sink=_answer_runtime_event_sink(session),
     )
@@ -1865,9 +2177,12 @@ async def run_child_session(
         plan=plan,
     )
     try:
-        operation = await runtime.drive(
+        operation = await _drive_child_with_lease_renewal(
+            runtime,
             session_id=child_id,
             operation_id=accepted.operation_id,
+            child_fencing_epoch=child_epoch,
+            renew_child=renew_child,
         )
     except (
         asyncio.CancelledError,
@@ -1881,9 +2196,9 @@ async def run_child_session(
         raise
     except SessionLeaseLostError as exc:
         raise LeaseLostError from exc
-    snapshot = await journal.load(child_id)
+    snapshot = await child_journal.load(child_id)
     orchestrator.adopt_runtime_snapshot(prepared, snapshot)
-    await _adopt_durable_evidence(prepared, journal, child_id)
+    await _adopt_durable_evidence(prepared, child_journal, child_id)
     if isinstance(operation.state, OperationCompleted):
         status: Literal["succeeded", "failed", "cancelled"] = "succeeded"
     elif isinstance(operation.state, OperationCancelled):
@@ -1905,6 +2220,61 @@ async def run_child_session(
         child_session_id=child_id.value,
         evidence_state=prepared.evidence.durable_state(),
     )
+
+
+async def _drive_child_with_lease_renewal(
+    runtime: AgentSessionRuntime[EffectHostUpdate],
+    *,
+    session_id: SessionId,
+    operation_id: OperationId,
+    child_fencing_epoch: int,
+    renew_child: Callable[..., Awaitable[Any]] | None,
+) -> Any:
+    if renew_child is None:
+        return await runtime.drive(session_id=session_id, operation_id=operation_id)
+
+    async def renew_forever() -> None:
+        while True:
+            await asyncio.sleep(_CHILD_LEASE_HEARTBEAT_SECONDS)
+            try:
+                renewed = await renew_child(
+                    child_session_id=session_id.value,
+                    child_fencing_epoch=child_fencing_epoch,
+                )
+            except LeaseLostError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Child Session %s lease heartbeat failed; retrying next cadence",
+                    session_id.value,
+                    exc_info=True,
+                )
+                continue
+            if renewed is not True:
+                raise LeaseLostError
+
+    drive_task = asyncio.create_task(
+        runtime.drive(session_id=session_id, operation_id=operation_id)
+    )
+    heartbeat_task = asyncio.create_task(renew_forever())
+    try:
+        done, _pending = await asyncio.wait(
+            (drive_task, heartbeat_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if drive_task in done:
+            return await drive_task
+        drive_task.cancel()
+        await asyncio.gather(drive_task, return_exceptions=True)
+        exception = heartbeat_task.exception()
+        if exception is not None:
+            raise exception
+        raise LeaseLostError
+    finally:
+        if not drive_task.done():
+            drive_task.cancel()
+        heartbeat_task.cancel()
+        await asyncio.gather(drive_task, heartbeat_task, return_exceptions=True)
 
 
 def _child_status(reason: str) -> tuple[Literal["succeeded", "failed", "cancelled"], str]:
@@ -1954,13 +2324,18 @@ class FastRunBoundaries:
         session: RunSession,
         progress: RunProgressStore,
         run_id: str,
+        initial_progress_version: int,
         plan: Mapping[str, Any],
     ) -> None:
         self._session = session
         self._progress = progress
         self._run_id = run_id
         self._plan = plan
-        self._progress_version = 0
+        self._progress_version = initial_progress_version
+
+    def observe_session_progress(self) -> None:
+        """Account for the canonical Fast Assistant Session commit."""
+        self._progress_version += 1
 
     async def enter_phase(self, phase: str) -> None:
         await self._session.enter_phase(phase)  # type: ignore[arg-type]

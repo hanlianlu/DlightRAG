@@ -34,6 +34,7 @@ from dlightrag.adapters.postgres.memory_settings import (
 )
 from dlightrag.adapters.postgres.session_journal import PGJournalStore, PGProgressStore
 from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
+from dlightrag.agent.session.ids import SessionId
 from dlightrag.agent.tool_content import decode_tool_content, tool_content_message_fields
 from dlightrag.answer.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.runtime.cancellation import RunCancellationListener, cancellation_notify_key
@@ -157,16 +158,14 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_events (
 _CREATE_SESSIONS = """
 CREATE TABLE IF NOT EXISTS dlightrag_agent_sessions (
     owner_id             TEXT        NOT NULL,
-    run_id               UUID        NOT NULL,
     session_id           UUID        NOT NULL,
+    lease_run_id         UUID        NOT NULL,
     commit_sequence      BIGINT      NOT NULL DEFAULT 0,
     fencing_epoch        BIGINT      NOT NULL,
     last_sequence        BIGINT      NOT NULL DEFAULT 0,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (owner_id, run_id, session_id),
-    FOREIGN KEY (owner_id, run_id)
-        REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE,
+    PRIMARY KEY (owner_id, session_id),
     CONSTRAINT dlightrag_agent_sessions_commit_sequence_check CHECK (commit_sequence >= 0),
     CONSTRAINT dlightrag_agent_sessions_fencing_check CHECK (fencing_epoch >= 1),
     CONSTRAINT dlightrag_agent_sessions_sequence_check CHECK (last_sequence >= 0)
@@ -176,7 +175,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_sessions (
 _CREATE_ENTRIES = """
 CREATE TABLE IF NOT EXISTS dlightrag_agent_session_entries (
     owner_id       TEXT        NOT NULL,
-    run_id         UUID        NOT NULL,
     session_id     UUID        NOT NULL,
     sequence       BIGINT      NOT NULL,
     entry_id       UUID        NOT NULL,
@@ -185,14 +183,14 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_session_entries (
     schema_version INTEGER     NOT NULL,
     timestamp      TIMESTAMPTZ NOT NULL,
     payload_json   JSONB       NOT NULL,
-    PRIMARY KEY (owner_id, run_id, session_id, sequence),
+    PRIMARY KEY (owner_id, session_id, sequence),
     UNIQUE (entry_id),
-    UNIQUE (owner_id, run_id, session_id, entry_id),
-    FOREIGN KEY (owner_id, run_id, session_id)
-        REFERENCES dlightrag_agent_sessions (owner_id, run_id, session_id) ON DELETE CASCADE,
-    FOREIGN KEY (owner_id, run_id, session_id, parent_entry_id)
+    UNIQUE (owner_id, session_id, entry_id),
+    FOREIGN KEY (owner_id, session_id)
+        REFERENCES dlightrag_agent_sessions (owner_id, session_id) ON DELETE CASCADE,
+    FOREIGN KEY (owner_id, session_id, parent_entry_id)
         REFERENCES dlightrag_agent_session_entries
-            (owner_id, run_id, session_id, entry_id)
+            (owner_id, session_id, entry_id)
         DEFERRABLE INITIALLY DEFERRED,
     CONSTRAINT dlightrag_agent_session_entries_sequence_check CHECK (sequence >= 1),
     CONSTRAINT dlightrag_agent_session_entries_type_check CHECK (entry_type IN (
@@ -206,20 +204,19 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_session_entries (
 _CREATE_SESSION_REGISTERS = """
 CREATE TABLE IF NOT EXISTS dlightrag_agent_session_registers (
     owner_id       TEXT        NOT NULL,
-    run_id         UUID        NOT NULL,
     session_id     UUID        NOT NULL,
     register_kind  TEXT        NOT NULL,
     register_key   TEXT        NOT NULL,
     sequence       BIGINT      NOT NULL,
     payload_json   JSONB       NOT NULL,
-    PRIMARY KEY (owner_id, run_id, session_id, register_kind, register_key),
-    FOREIGN KEY (owner_id, run_id, session_id)
-        REFERENCES dlightrag_agent_sessions (owner_id, run_id, session_id) ON DELETE CASCADE,
+    PRIMARY KEY (owner_id, session_id, register_kind, register_key),
+    FOREIGN KEY (owner_id, session_id)
+        REFERENCES dlightrag_agent_sessions (owner_id, session_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_agent_session_registers_kind_check
         CHECK (register_kind IN (
             'lane_head', 'lane_state', 'operation_meta', 'operation_state',
-            'request_snapshot', 'tool_arguments', 'pending_input', 'context_projection',
-            'session_fault'
+            'request_snapshot', 'tool_arguments', 'pending_input', 'host_turn_reservation',
+            'context_projection', 'session_fault'
         )),
     CONSTRAINT dlightrag_agent_session_registers_sequence_check CHECK (sequence >= 1)
 )
@@ -358,7 +355,9 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_routing (
     resolved_mode            TEXT,
     model_fingerprints       JSONB       NOT NULL DEFAULT '{}'::jsonb,
     context_policy_revision  TEXT        NOT NULL,
-    research_session_id      TEXT,
+    agent_session_id         UUID        NOT NULL,
+    agent_lane_id            TEXT        NOT NULL,
+    source_lane_id           TEXT,
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (owner_id, run_id),
@@ -391,13 +390,23 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_child_sessions (
     model_role         TEXT,
     tools_json         JSONB,
     usage_json         JSONB,
+    depth              INTEGER     NOT NULL,
+    context_snapshot_json JSONB    NOT NULL,
+    plan_json          JSONB,
+    budget_json        JSONB,
+    host_state_json    JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    lease_owner        TEXT,
+    lease_expires_at   TIMESTAMPTZ,
+    fencing_epoch      BIGINT      NOT NULL DEFAULT 0,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (owner_id, run_id, child_session_id),
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_answer_child_sessions_status_check
-        CHECK (status IN ('running', 'succeeded', 'failed', 'cancelled'))
+        CHECK (status IN ('running', 'succeeded', 'failed', 'cancelled')),
+    CONSTRAINT dlightrag_answer_child_sessions_depth_check CHECK (depth >= 1),
+    CONSTRAINT dlightrag_answer_child_sessions_fencing_check CHECK (fencing_epoch >= 0)
 )
 """
 
@@ -629,20 +638,15 @@ ANSWER_RUN_SCHEMA_TABLES = (
         name="dlightrag_agent_sessions",
         columns=(
             "owner_id",
-            "run_id",
             "session_id",
+            "lease_run_id",
             "commit_sequence",
             "fencing_epoch",
             "last_sequence",
             "created_at",
             "updated_at",
         ),
-        primary_key=("owner_id", "run_id", "session_id"),
-        foreign_keys=(
-            ForeignKeyRequirement(
-                columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
-            ),
-        ),
+        primary_key=("owner_id", "session_id"),
         checks=(
             "dlightrag_agent_sessions_commit_sequence_check",
             "dlightrag_agent_sessions_fencing_check",
@@ -653,7 +657,6 @@ ANSWER_RUN_SCHEMA_TABLES = (
         name="dlightrag_agent_session_entries",
         columns=(
             "owner_id",
-            "run_id",
             "session_id",
             "sequence",
             "entry_id",
@@ -663,18 +666,18 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "timestamp",
             "payload_json",
         ),
-        primary_key=("owner_id", "run_id", "session_id", "sequence"),
+        primary_key=("owner_id", "session_id", "sequence"),
         unique=(
             ("entry_id",),
-            ("owner_id", "run_id", "session_id", "entry_id"),
+            ("owner_id", "session_id", "entry_id"),
         ),
         foreign_keys=(
             ForeignKeyRequirement(
-                columns=("owner_id", "run_id", "session_id"),
+                columns=("owner_id", "session_id"),
                 references="dlightrag_agent_sessions",
             ),
             ForeignKeyRequirement(
-                columns=("owner_id", "run_id", "session_id", "parent_entry_id"),
+                columns=("owner_id", "session_id", "parent_entry_id"),
                 references="dlightrag_agent_session_entries",
             ),
         ),
@@ -688,7 +691,6 @@ ANSWER_RUN_SCHEMA_TABLES = (
         name="dlightrag_agent_session_registers",
         columns=(
             "owner_id",
-            "run_id",
             "session_id",
             "register_kind",
             "register_key",
@@ -697,14 +699,13 @@ ANSWER_RUN_SCHEMA_TABLES = (
         ),
         primary_key=(
             "owner_id",
-            "run_id",
             "session_id",
             "register_kind",
             "register_key",
         ),
         foreign_keys=(
             ForeignKeyRequirement(
-                columns=("owner_id", "run_id", "session_id"),
+                columns=("owner_id", "session_id"),
                 references="dlightrag_agent_sessions",
             ),
         ),
@@ -869,7 +870,9 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "resolved_mode",
             "model_fingerprints",
             "context_policy_revision",
-            "research_session_id",
+            "agent_session_id",
+            "agent_lane_id",
+            "source_lane_id",
             "created_at",
             "updated_at",
         ),
@@ -901,6 +904,14 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "model_role",
             "tools_json",
             "usage_json",
+            "depth",
+            "context_snapshot_json",
+            "plan_json",
+            "budget_json",
+            "host_state_json",
+            "lease_owner",
+            "lease_expires_at",
+            "fencing_epoch",
             "created_at",
             "updated_at",
         ),
@@ -910,7 +921,11 @@ ANSWER_RUN_SCHEMA_TABLES = (
                 columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
             ),
         ),
-        checks=("dlightrag_answer_child_sessions_status_check",),
+        checks=(
+            "dlightrag_answer_child_sessions_status_check",
+            "dlightrag_answer_child_sessions_depth_check",
+            "dlightrag_answer_child_sessions_fencing_check",
+        ),
     ),
     TableRequirement(
         name="dlightrag_agent_controls",
@@ -1058,13 +1073,15 @@ FOR UPDATE OF r SKIP LOCKED
 _INSERT_ROUTING = """
 INSERT INTO dlightrag_answer_run_routing (
     owner_id, run_id, requested_mode, valid_modes, resolved_mode,
-    model_fingerprints, context_policy_revision, research_session_id
+    model_fingerprints, context_policy_revision,
+    agent_session_id, agent_lane_id, source_lane_id
 )
-VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
 """
 
 _SELECT_ROUTING = """
-SELECT requested_mode, valid_modes, resolved_mode, research_session_id
+SELECT requested_mode, valid_modes, resolved_mode,
+       agent_session_id::text, agent_lane_id, source_lane_id
 FROM dlightrag_answer_run_routing
 WHERE owner_id = $1 AND run_id = $2
 """
@@ -1072,7 +1089,6 @@ WHERE owner_id = $1 AND run_id = $2
 _RESOLVE_ROUTING = """
 UPDATE dlightrag_answer_run_routing AS rt
 SET resolved_mode = $5,
-    research_session_id = COALESCE($6, rt.research_session_id),
     updated_at = NOW()
 FROM dlightrag_answer_runs AS r
 WHERE rt.owner_id = r.owner_id AND rt.run_id = r.run_id
@@ -1095,20 +1111,53 @@ FOR UPDATE
 _UPSERT_CHILD_SESSION = """
 INSERT INTO dlightrag_answer_child_sessions (
     owner_id, run_id, child_session_id, parent_session_id, parent_call_id,
-    parent_intent_id, status, objective, context_mode, model_role, tools_json
+    parent_intent_id, status, objective, context_mode, model_role, tools_json,
+    depth, context_snapshot_json, plan_json, budget_json, host_state_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, $8, $9, $10)
+VALUES (
+    $1, $2, $3, $4, $5, $6, 'running', $7, $8, $9, $10,
+    $11, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb
+)
 ON CONFLICT (owner_id, run_id, child_session_id) DO UPDATE
 SET parent_intent_id = COALESCE(
         dlightrag_answer_child_sessions.parent_intent_id,
         EXCLUDED.parent_intent_id
     ),
+    plan_json = COALESCE(EXCLUDED.plan_json, dlightrag_answer_child_sessions.plan_json),
+    budget_json = COALESCE(EXCLUDED.budget_json, dlightrag_answer_child_sessions.budget_json),
+    host_state_json = COALESCE(
+        EXCLUDED.host_state_json, dlightrag_answer_child_sessions.host_state_json
+    ),
     updated_at = NOW()
+"""
+
+_CLAIM_CHILD_SESSION = """
+UPDATE dlightrag_answer_child_sessions
+SET lease_owner = $4,
+    lease_expires_at = NOW() + ($5 * INTERVAL '1 second'),
+    fencing_epoch = fencing_epoch + 1,
+    updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND status = 'running'
+  AND (lease_expires_at IS NULL OR lease_expires_at < NOW() OR lease_owner = $4)
+RETURNING fencing_epoch
+"""
+
+_RENEW_CHILD_SESSION_LEASE = """
+UPDATE dlightrag_answer_child_sessions
+SET lease_expires_at = NOW() + ($6 * INTERVAL '1 second'),
+    updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND lease_owner = $4 AND fencing_epoch = $5
+  AND status = 'running' AND lease_expires_at > NOW()
+RETURNING 1
 """
 
 _SELECT_CHILD_SESSION = """
 SELECT child_session_id, status, summary, parent_intent_id,
-       objective, context_mode, model_role, tools_json, usage_json
+       objective, context_mode, model_role, tools_json, usage_json,
+       depth, context_snapshot_json, plan_json, budget_json, host_state_json,
+       lease_owner, lease_expires_at, fencing_epoch
 FROM dlightrag_answer_child_sessions
 WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
 """
@@ -1116,17 +1165,37 @@ WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
 _SELECT_CHILD_SESSIONS = """
 SELECT child_session_id, parent_session_id, parent_call_id, parent_intent_id,
        status, summary, objective, context_mode, model_role, tools_json, usage_json,
-       created_at, updated_at
+       depth, context_snapshot_json, plan_json, budget_json, host_state_json,
+       lease_owner, lease_expires_at, fencing_epoch, created_at, updated_at
 FROM dlightrag_answer_child_sessions
 WHERE owner_id = $1 AND run_id = $2
 ORDER BY created_at, child_session_id
 """
 
 _SELECT_AGENT_TRANSCRIPT = """
+WITH RECURSIVE authorized AS (
+    SELECT agent_session_id, agent_lane_id
+    FROM dlightrag_answer_run_routing
+    WHERE owner_id = $1 AND run_id = $2 AND agent_session_id = $3
+), ancestry AS (
+    SELECT e.entry_id, e.parent_entry_id, e.sequence, e.entry_type, e.payload_json
+    FROM authorized AS a
+    JOIN dlightrag_agent_session_entries AS e
+      ON e.owner_id = $1 AND e.session_id = a.agent_session_id
+    JOIN dlightrag_agent_session_registers AS r
+      ON r.owner_id = e.owner_id AND r.session_id = e.session_id
+     AND r.register_kind = 'lane_head' AND r.register_key = a.agent_lane_id
+     AND e.entry_id = NULLIF(r.payload_json->>'entry_id', '')::uuid
+    UNION ALL
+    SELECT parent.entry_id, parent.parent_entry_id, parent.sequence,
+           parent.entry_type, parent.payload_json
+    FROM dlightrag_agent_session_entries AS parent
+    JOIN ancestry AS child ON child.parent_entry_id = parent.entry_id
+    WHERE parent.owner_id = $1 AND parent.session_id = $3
+)
 SELECT entry_type, payload_json
-FROM dlightrag_agent_session_entries
-WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
-  AND entry_type IN ('user_message', 'assistant_message', 'tool_result', 'control_message')
+FROM ancestry
+WHERE entry_type IN ('user_message', 'assistant_message', 'tool_result', 'control_message')
 ORDER BY sequence DESC
 LIMIT $4
 """
@@ -1890,7 +1959,9 @@ class PGAnswerRunStore(PostgresOperationRunner):
             record.resolved_mode,
             json.dumps(dict(record.model_fingerprints), ensure_ascii=False),
             record.context_policy_revision,
-            record.research_session_id,
+            uuid.UUID(record.agent_session_id),
+            record.agent_lane_id,
+            record.source_lane_id,
         )
 
     async def load_routing(self, *, owner_id: str, run_id: str) -> RoutingRecord | None:
@@ -1908,7 +1979,9 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 requested_mode=str(row["requested_mode"]),
                 valid_modes=valid,
                 resolved_mode=row["resolved_mode"],
-                research_session_id=row["research_session_id"],
+                agent_session_id=str(row["agent_session_id"]),
+                agent_lane_id=str(row["agent_lane_id"]),
+                source_lane_id=(str(row["source_lane_id"]) if row["source_lane_id"] else None),
             )
 
         return await self._run_read(_operation)
@@ -1921,7 +1994,6 @@ class PGAnswerRunStore(PostgresOperationRunner):
         worker_id: str,
         fencing_epoch: int,
         resolved_mode: str,
-        research_session_id: str | None = None,
     ) -> str | None:
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
@@ -1936,7 +2008,6 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 worker_id,
                 fencing_epoch,
                 resolved_mode,
-                research_session_id,
             )
             return str(value) if value is not None else None
 
@@ -1957,6 +2028,11 @@ class PGAnswerRunStore(PostgresOperationRunner):
         context_mode: str | None = None,
         model_role: str | None = None,
         tools: Sequence[str] | None = None,
+        depth: int = 1,
+        context_snapshot: Mapping[str, Any] | None = None,
+        plan: Mapping[str, Any] | None = None,
+        budget: Mapping[str, Any] | None = None,
+        host_state: Mapping[str, Any] | None = None,
     ) -> bool:
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
@@ -1987,8 +2063,85 @@ class PGAnswerRunStore(PostgresOperationRunner):
                     context_mode,
                     model_role,
                     json.dumps(list(tools)) if tools is not None else None,
+                    depth,
+                    json.dumps(dict(context_snapshot or {}), ensure_ascii=False),
+                    json.dumps(dict(plan), ensure_ascii=False) if plan is not None else None,
+                    json.dumps(dict(budget), ensure_ascii=False) if budget is not None else None,
+                    json.dumps(dict(host_state or {}), ensure_ascii=False),
                 )
                 return True
+
+        return await self._run_write(_operation)
+
+    async def claim_child_session(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+    ) -> int | None:
+        """Acquire the Child's independent lease under the live parent run claim."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        if run_uuid is None or child_uuid is None:
+            raise ValueError("child session ids must be canonical UUIDs")
+
+        async def _operation(conn: Any) -> int | None:
+            async with conn.transaction():
+                held = await conn.fetchval(
+                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
+                )
+                if held is None:
+                    return None
+                value = await conn.fetchval(
+                    _CLAIM_CHILD_SESSION,
+                    owner,
+                    run_uuid,
+                    child_uuid,
+                    worker_id,
+                    ANSWER_RUN_LEASE_SECONDS,
+                )
+                return int(value) if value is not None else None
+
+        return await self._run_write(_operation)
+
+    async def heartbeat_child_session(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        child_fencing_epoch: int,
+    ) -> bool:
+        """Renew one unexpired Child lease under its live parent run claim."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        if run_uuid is None or child_uuid is None:
+            raise ValueError("child session ids must be canonical UUIDs")
+
+        async def _operation(conn: Any) -> bool:
+            async with conn.transaction():
+                held = await conn.fetchval(
+                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
+                )
+                if held is None:
+                    return False
+                renewed = await conn.fetchval(
+                    _RENEW_CHILD_SESSION_LEASE,
+                    owner,
+                    run_uuid,
+                    child_uuid,
+                    worker_id,
+                    child_fencing_epoch,
+                    ANSWER_RUN_LEASE_SECONDS,
+                )
+                return renewed is not None
 
         return await self._run_write(_operation)
 
@@ -2017,6 +2170,12 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 "model_role": row["model_role"],
                 "tools": _json_value(row["tools_json"]),
                 "usage": _json_value(row["usage_json"]),
+                "depth": int(row["depth"]),
+                "context_snapshot": _json_value(row["context_snapshot_json"]),
+                "plan": _json_value(row["plan_json"]),
+                "budget": _json_value(row["budget_json"]),
+                "host_state": _json_value(row["host_state_json"]),
+                "fencing_epoch": int(row["fencing_epoch"]),
             }
 
         return await self._run_read(_operation)
@@ -2048,6 +2207,12 @@ class PGAnswerRunStore(PostgresOperationRunner):
                     "model_role": row["model_role"],
                     "tools": _json_value(row["tools_json"]),
                     "usage": _json_value(row["usage_json"]),
+                    "depth": int(row["depth"]),
+                    "context_snapshot": _json_value(row["context_snapshot_json"]),
+                    "plan": _json_value(row["plan_json"]),
+                    "budget": _json_value(row["budget_json"]),
+                    "host_state": _json_value(row["host_state_json"]),
+                    "fencing_epoch": int(row["fencing_epoch"]),
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 }
@@ -2615,6 +2780,11 @@ class PGAnswerRunStore(PostgresOperationRunner):
         run_uuid = parse_run_id(run.run_id)
         if run_uuid is None:
             raise RuntimeError("claimed run id is not a canonical UUID")
+        prepared = run.prepared_input or run.accepted_input or {}
+        raw_session_id = prepared.get("agent_session_id")
+        if not raw_session_id:
+            raise RuntimeError("claimed run has no canonical Agent Session mapping")
+        primary_session_id = SessionId(str(raw_session_id))
         execution = RunExecutionContext(
             owner_id=owner,
             run_id=run.run_id,
@@ -2628,6 +2798,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 worker_id=worker,
                 lease_owner=worker,
                 fencing_epoch=run.fencing_epoch,
+                primary_session_id=primary_session_id,
             ),
             progress_store=PGProgressStore(
                 pool=self._operation_pool,

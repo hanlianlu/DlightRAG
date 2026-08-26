@@ -82,6 +82,7 @@ from dlightrag.agent.session.registers import (
     ContextProjectionRegister,
     DeleteRegister,
     FollowUpInput,
+    HostTurnReservation,
     LaneHead,
     LaneState,
     OperationMetaRegister,
@@ -369,6 +370,14 @@ class AgentSessionRuntime[HostDeltaT]:
         snapshot = await self._load(session_id)
         if _register(snapshot, RegisterRef("session_fault", "session")) is not None:
             raise AgentSessionRuntimeError("a faulted Session cannot accept new work")
+        reservation = _register(
+            snapshot,
+            RegisterRef("host_turn_reservation", lane_id.value),
+        )
+        if reservation is not None:
+            if not isinstance(reservation.value, HostTurnReservation):
+                raise TypeError("Host turn reservation register has the wrong value type")
+            raise OperationConflictError("Lane already owns an active Host turn")
         existing = _register(snapshot, RegisterRef("operation_meta", operation_id.value))
         if existing is not None:
             value = existing.value

@@ -99,7 +99,13 @@ async def store(pool: Any) -> PGAnswerRunStore:
 
 
 def _request(query: str = "why", **extra: Any) -> dict[str, Any]:
-    return {"query": query, "workspaces": ["alpha"], **extra}
+    return {
+        "query": query,
+        "workspaces": ["alpha"],
+        "agent_session_id": "00000000-0000-7000-8000-000000000001",
+        "agent_lane_id": "main",
+        **extra,
+    }
 
 
 async def _expire_lease(pool: Any, run_id: str) -> None:
@@ -593,7 +599,7 @@ class TestLeaseFencing:
         from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
 
         assert creation.run.prepared_input is not None
-        stale_session = SessionId(str(creation.run.prepared_input["session_id"]))
+        stale_session = SessionId(str(creation.run.prepared_input["agent_session_id"]))
         from dlightrag.adapters.postgres.session_journal import PGJournalStore
 
         stale_journal = PGJournalStore(
@@ -1375,6 +1381,7 @@ class TestAgentControlsAndChildren:
         parent_id = str(uuid.uuid7())
         children = (str(uuid.uuid7()), str(uuid.uuid7()))
         parent_intent_id = str(uuid.uuid7())
+        child_epochs: list[int] = []
 
         for position, child_id in enumerate(children):
             held = await store.upsert_child_session(
@@ -1390,6 +1397,17 @@ class TestAgentControlsAndChildren:
                 context_mode="parent",
                 model_role="extract",
                 tools=("search_knowledge_base",),
+                depth=1,
+                context_snapshot={
+                    "parent_session_id": parent_id,
+                    "parent_entry_id": str(uuid.uuid7()),
+                    "depth": 0,
+                    "messages": [{"role": "user", "content": "parent"}],
+                    "evidence_state": {},
+                },
+                plan={"schema_version": 1, "tools": ["search_knowledge_base"]},
+                budget={"provider_attempt_limit": 2},
+                host_state={"evidence": {}},
             )
             assert held
             # Tool execution repeats the roster upsert after the intent-bound
@@ -1403,6 +1421,51 @@ class TestAgentControlsAndChildren:
                 worker_id=_WORKER,
                 fencing_epoch=claim.run.fencing_epoch,
             )
+            child_epoch = await store.claim_child_session(
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                child_session_id=child_id,
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+            )
+            assert child_epoch is not None
+            child_epochs.append(child_epoch)
+            from dlightrag.agent.session.ids import LaneId, SessionId
+            from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
+            from dlightrag.agent.session.transactions import (
+                RegisterExpectation,
+                SessionTransaction,
+                TransactionCommit,
+                TransactionLeaseLost,
+            )
+
+            child_store = claim.execution.session_store.for_child(
+                SessionId(child_id),
+                fencing_epoch=child_epoch,
+            )
+            head = LaneHead(LaneId.main(), None)
+            state = LaneState(LaneId.main())
+            child_commit = await child_store.transact(
+                session_id=SessionId(child_id),
+                fencing_epoch=child_epoch,
+                transaction=SessionTransaction.from_parts(
+                    register_writes=[SetRegister(head), SetRegister(state)],
+                    expectations=[
+                        RegisterExpectation(head.ref, None),
+                        RegisterExpectation(state.ref, None),
+                    ],
+                ),
+            )
+            assert isinstance(child_commit, TransactionCommit)
+            parent_write = await claim.execution.session_store.transact(
+                session_id=SessionId(child_id),
+                fencing_epoch=claim.run.fencing_epoch,
+                transaction=SessionTransaction.from_parts(
+                    register_writes=[SetRegister(state)],
+                    expectations=[RegisterExpectation(state.ref, child_commit.commit_sequence)],
+                ),
+            )
+            assert isinstance(parent_write, TransactionLeaseLost)
             assert await store.finish_child_session(
                 owner_id=_OWNER,
                 run_id=creation.run.run_id,
@@ -1420,3 +1483,117 @@ class TestAgentControlsAndChildren:
         assert {item["parent_intent_id"] for item in roster} == {parent_intent_id}
         assert [item["objective"] for item in roster] == ["child 0", "child 1"]
         assert [item["usage"]["input_tokens"] for item in roster] == [10, 11]
+        assert child_epochs == [1, 1]
+        assert [item["depth"] for item in roster] == [1, 1]
+        assert all(item["context_snapshot"]["messages"] for item in roster)
+        assert all(item["plan"]["tools"] == ["search_knowledge_base"] for item in roster)
+        assert all(item["budget"]["provider_attempt_limit"] == 2 for item in roster)
+
+    async def test_child_lease_heartbeat_survives_original_window_and_fences_takeover(
+        self, store, pool
+    ) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        parent_id = str(uuid.uuid7())
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            parent_call_id="lease-call",
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child_epoch = await store.claim_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        assert child_epoch == 1
+
+        async with pool.acquire() as conn:
+            original_expiry = await conn.fetchval(
+                "UPDATE dlightrag_answer_child_sessions"
+                " SET lease_expires_at = NOW() + INTERVAL '200 milliseconds'"
+                " WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3"
+                " RETURNING lease_expires_at",
+                _OWNER,
+                uuid.UUID(creation.run.run_id),
+                uuid.UUID(child_id),
+            )
+        assert await store.heartbeat_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            child_fencing_epoch=child_epoch,
+        )
+        await asyncio.sleep(0.3)
+        async with pool.acquire() as conn:
+            assert await conn.fetchval("SELECT NOW() > $1", original_expiry)
+
+        from dlightrag.agent.session.ids import LaneId, SessionId
+        from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
+        from dlightrag.agent.session.transactions import (
+            RegisterExpectation,
+            SessionTransaction,
+            TransactionCommit,
+            TransactionLeaseLost,
+        )
+
+        child_store = claim.execution.session_store.for_child(
+            SessionId(child_id), fencing_epoch=child_epoch
+        )
+        head = LaneHead(LaneId.main(), None)
+        state = LaneState(LaneId.main())
+        commit = await child_store.transact(
+            session_id=SessionId(child_id),
+            fencing_epoch=child_epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(head), SetRegister(state)],
+                expectations=[
+                    RegisterExpectation(head.ref, None),
+                    RegisterExpectation(state.ref, None),
+                ],
+            ),
+        )
+        assert isinstance(commit, TransactionCommit)
+
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE dlightrag_answer_child_sessions"
+                " SET lease_expires_at = NOW() - INTERVAL '1 second'"
+                " WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3",
+                _OWNER,
+                uuid.UUID(creation.run.run_id),
+                uuid.UUID(child_id),
+            )
+        next_epoch = await store.claim_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        assert next_epoch == child_epoch + 1
+        assert not await store.heartbeat_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            child_fencing_epoch=child_epoch,
+        )
+        stale_write = await child_store.transact(
+            session_id=SessionId(child_id),
+            fencing_epoch=child_epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(state)],
+                expectations=[RegisterExpectation(state.ref, commit.commit_sequence)],
+            ),
+        )
+        assert isinstance(stale_write, TransactionLeaseLost)

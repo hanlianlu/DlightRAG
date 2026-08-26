@@ -215,6 +215,8 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
     store.snapshot.return_value = ConversationSnapshot(
         principal_id="anonymous",
         conversation_id=_CID,
+        agent_session_id=_CID,
+        agent_lane_id="main",
         content_revision=1,
         title="Conversation",
         created_at=now,
@@ -314,6 +316,8 @@ async def test_first_submission_uses_one_stable_server_conversation_and_atomic_s
     assert store.replay_answer_turn.await_args.kwargs["conversation_id"] == generated_id
     assert store.create_answer_turn.await_args.kwargs["conversation_id"] == generated_id
     assert store.create_answer_turn.await_args.kwargs["create_conversation"] is True
+    assert answers.prepared[0].agent_session_id == generated_id
+    assert answers.prepared[0].agent_lane_id == "main"
 
 
 async def test_replaying_first_submission_returns_its_created_conversation_before_preparation() -> (
@@ -1001,6 +1005,8 @@ async def test_history_attachments_load_from_the_run_that_accepted_them() -> Non
     store.snapshot.return_value = ConversationSnapshot(
         principal_id="anonymous",
         conversation_id=_CID,
+        agent_session_id=_CID,
+        agent_lane_id="main",
         content_revision=1,
         title="Conversation",
         created_at=now,
@@ -1074,6 +1080,8 @@ async def test_terminal_turns_project_history_from_the_accepted_envelope() -> No
     store.snapshot.return_value = ConversationSnapshot(
         principal_id="anonymous",
         conversation_id=_CID,
+        agent_session_id=_CID,
+        agent_lane_id="main",
         content_revision=1,
         title="Conversation",
         created_at=now,

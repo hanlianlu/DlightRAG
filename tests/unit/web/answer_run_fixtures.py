@@ -58,7 +58,9 @@ class FakeAnswers(AnswerService):
             prepared_input={
                 "query": request.query,
                 "workspaces": list(request.workspaces),
-                "session_id": "00000000-0000-7000-8000-000000000001",
+                "agent_session_id": request.agent_session_id,
+                "agent_lane_id": request.agent_lane_id,
+                "source_lane_id": request.source_lane_id,
             },
             artifacts=tuple(
                 PendingArtifact(content=resource.content)

@@ -79,13 +79,26 @@ def test_research_preparation_composes_closed_host_tools() -> None:
 
 
 def test_child_preparation_excludes_every_parent_subagent_control() -> None:
-    from dlightrag.answer.tools.subagents import ChildRequest, SubagentHost
+    from dlightrag.agent.session.ids import EntryId, SessionId
+    from dlightrag.answer.tools.subagents import (
+        ChildContextSnapshot,
+        ChildRequest,
+        SubagentHost,
+    )
 
     async def model(**_kwargs):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
     orchestrator = _orchestrator(mode="research", model=model)
     orchestrator._subagent_host = SubagentHost()  # same Host composition owner
-    child = orchestrator.prepare_child_session(ChildRequest(objective="investigate"))
+    child = orchestrator.prepare_child_session(
+        ChildRequest(objective="investigate"),
+        context_snapshot=ChildContextSnapshot.from_values(
+            parent_session_id=SessionId.new(),
+            parent_entry_id=EntryId.new(),
+            depth=0,
+            messages=[],
+        ),
+    )
     names = {tool.name for tool in child.tools}
     assert names.isdisjoint({"spawn_agent", "subagent_status", "wait_subagent", "cancel_subagent"})

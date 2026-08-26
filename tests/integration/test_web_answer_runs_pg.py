@@ -119,7 +119,8 @@ def _request(query: str = "why", **extra: Any) -> dict[str, Any]:
         "query": query,
         "workspaces": ["alpha"],
         "history": [],
-        "session_id": "00000000-0000-7000-8000-000000000001",
+        "agent_session_id": "00000000-0000-7000-8000-000000000001",
+        "agent_lane_id": "main",
         **extra,
     }
 
@@ -141,7 +142,10 @@ async def _submit(
     idempotency_fingerprint: str | None = None,
     create_conversation: bool = False,
 ):
-    effective_request = request if request is not None else _request()
+    effective_request = {
+        **(request if request is not None else _request()),
+        "agent_session_id": conversation_id,
+    }
     return await store.create_answer_turn(
         principal_id=owner,
         conversation_id=conversation_id,
@@ -313,6 +317,42 @@ async def test_a_foreign_conversation_is_never_written_to(
 # ---------------------------------------------------------------------------
 # Owner-wide submission idempotency
 # ---------------------------------------------------------------------------
+
+
+async def test_forked_conversation_maps_to_a_new_lane_in_the_parent_session(
+    store: PGWebConversationStore,
+) -> None:
+    parent_conversation = await _conversation(store)
+    parent = await store.snapshot(_OWNER, parent_conversation)
+    assert parent is not None
+    branch_conversation = str(uuid.uuid4())
+    branch_lane = str(uuid.uuid4())
+    request = {
+        **_request("branch question"),
+        "agent_session_id": parent.agent_session_id,
+        "agent_lane_id": branch_lane,
+        "source_lane_id": parent.agent_lane_id,
+        "parent_run_id": str(uuid.uuid4()),
+        "continuation_kind": "fork",
+    }
+    created = await store.create_answer_turn(
+        principal_id=_OWNER,
+        conversation_id=branch_conversation,
+        submission_id=str(uuid.uuid4()),
+        request=request,
+        idempotency_fingerprint=answer_run_request_fingerprint(request),
+        artifacts=(),
+        references=(),
+        title_hint="branch",
+        create_conversation=True,
+        forked_from_conversation_id=parent_conversation,
+    )
+    assert created is not None
+    branch = await store.snapshot(_OWNER, branch_conversation)
+    assert branch is not None
+    assert branch.agent_session_id == parent.agent_session_id
+    assert branch.agent_lane_id == branch_lane
+    assert branch.agent_lane_id != parent.agent_lane_id
 
 
 async def test_replaying_a_submission_returns_the_same_run_and_turn(
@@ -880,8 +920,13 @@ async def test_turns_beyond_the_read_window_stay_durable(
             principal_id=_OWNER,
             conversation_id=conversation_id,
             submission_id=str(uuid.uuid4()),
-            request=_request(f"question {index}"),
-            idempotency_fingerprint=answer_run_request_fingerprint(_request(f"question {index}")),
+            request={
+                **_request(f"question {index}"),
+                "agent_session_id": conversation_id,
+            },
+            idempotency_fingerprint=answer_run_request_fingerprint(
+                {**_request(f"question {index}"), "agent_session_id": conversation_id}
+            ),
             title_hint="why",
         )
 

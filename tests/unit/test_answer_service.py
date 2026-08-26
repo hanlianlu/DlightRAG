@@ -860,7 +860,8 @@ async def test_transcript_and_child_roster_are_owner_scoped() -> None:
         accepted_input={
             "query": "parent question",
             "workspaces": ["finance"],
-            "session_id": "0199a0a0-0000-7000-8000-000000000099",
+            "agent_session_id": "0199a0a0-0000-7000-8000-000000000099",
+            "agent_lane_id": "main",
         },
     )
     store = _Store(run=record)
@@ -933,6 +934,8 @@ async def test_follow_up_and_fork_reenter_one_acceptance_interface() -> None:
                 }
             ],
             "mode": "research",
+            "agent_session_id": "0199a0a0-0000-7000-8000-000000000099",
+            "agent_lane_id": "main",
         },
     )
     service = _service(store=_Store(run=terminal))
@@ -981,3 +984,9 @@ async def test_follow_up_and_fork_reenter_one_acceptance_interface() -> None:
     assert follow_request.continuation_kind == "follow_up"
     assert fork_request.parent_run_id == "run-1"
     assert fork_request.continuation_kind == "fork"
+    assert follow_request.agent_session_id == "0199a0a0-0000-7000-8000-000000000099"
+    assert follow_request.agent_lane_id == "main"
+    assert follow_request.source_lane_id is None
+    assert fork_request.agent_session_id == follow_request.agent_session_id
+    assert fork_request.agent_lane_id != "main"
+    assert fork_request.source_lane_id == "main"
