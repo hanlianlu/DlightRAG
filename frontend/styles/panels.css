@@ -14,7 +14,7 @@ dl-inspector[aria-hidden='true'] {
     pointer-events: none;
 }
 
-.inspector-surface {
+.panel.inspector-surface {
     inset: 0;
     position: absolute;
 }

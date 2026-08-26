@@ -674,7 +674,7 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
 
 
 @pytest.mark.e2e
-def test_compact_files_panel_keeps_visible_conversation_scrollable(page: Page) -> None:
+def test_compact_files_panel_and_visible_conversation_scroll_independently(page: Page) -> None:
     _install_conversation_routes(page)
     page.set_viewport_size({"width": 1000, "height": 900})
     page.goto("/web/")
@@ -696,6 +696,23 @@ def test_compact_files_panel_keeps_visible_conversation_scrollable(page: Page) -
 
     page.get_by_role("button", name="Files", exact=True).click()
     page.locator("#panel.open").wait_for()
+    panel = page.locator("#panel-content")
+    panel.evaluate(
+        """element => {
+            const filler = document.createElement('div');
+            filler.style.height = '3000px';
+            filler.textContent = 'Panel scroll probe';
+            element.append(filler);
+            element.scrollTop = 0;
+        }"""
+    )
+    assert panel.evaluate("element => element.scrollHeight > element.clientHeight") is True
+    panel_bounds = panel.bounding_box()
+    assert panel_bounds is not None
+    page.mouse.move(panel_bounds["x"] + panel_bounds["width"] / 2, 450)
+    page.mouse.wheel(0, 600)
+    page.wait_for_function("document.querySelector('#panel-content').scrollTop > 0")
+
     bounds = chat.bounding_box()
     assert bounds is not None
     page.mouse.move(bounds["x"] + 100, bounds["y"] + bounds["height"] / 2)
