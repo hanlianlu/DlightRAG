@@ -32,14 +32,12 @@ function memorySummary(event: ChatMemoryOperationDetail): string {
 /** Owns Settings state, asynchronous mutations, focus, and native Dialog semantics. */
 export class DlSettingsDialog extends LightElement {
   static properties = {
-    activeHtmlPreviewEnabled: {attribute: false},
     deleteAllConversations: {attribute: false},
     memory: {state: true},
     memoryLoading: {state: true},
     memoryPending: {state: true},
   };
 
-  declare activeHtmlPreviewEnabled: boolean;
   declare deleteAllConversations: (returnFocus?: HTMLElement | null) => Promise<boolean>;
   declare memory: MemorySettings | null;
   declare memoryLoading: boolean;
@@ -52,7 +50,6 @@ export class DlSettingsDialog extends LightElement {
 
   constructor() {
     super();
-    this.activeHtmlPreviewEnabled = true;
     this.deleteAllConversations = async () => false;
     this.memory = null;
     this.memoryLoading = false;
@@ -163,14 +160,6 @@ export class DlSettingsDialog extends LightElement {
                         ?hidden=${!this.memory?.enabled} ?disabled=${this.memoryPending}
                         @click=${this.#clearMemory}>Clear memory</button>
               </div>
-            </section>
-            <section class="settings-section">
-              <h3>Active HTML Preview</h3>
-              <p class="settings-note">
-                ${this.activeHtmlPreviewEnabled
-                  ? 'Enabled by the operator. Interactive reports require an explicit open action.'
-                  : 'Disabled by the operator. HTML Artifacts are shown with scripts disabled.'}
-              </p>
             </section>
             <section class="settings-section">
               <h3 id="settings-data">Conversation Sessions</h3>

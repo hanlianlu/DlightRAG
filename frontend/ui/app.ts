@@ -256,7 +256,6 @@ export class DlApp extends LightElement {
           aria-label="Answer notifications" .running=${this.chatRunning}
           ?inert=${shellModal}></dl-notification-offer>
         <dl-settings-dialog
-          .activeHtmlPreviewEnabled=${bootstrap.active_html_preview_enabled}
           .deleteAllConversations=${this.#requestDeleteAllConversations}
         ></dl-settings-dialog>
         ${this.#dialogs()}
