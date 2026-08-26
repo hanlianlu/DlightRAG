@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""PostgreSQL parity tests for canonical M3 AgentSessionRuntime."""
+"""PostgreSQL parity tests for the canonical AgentSessionRuntime."""
 
 import hashlib
 import json

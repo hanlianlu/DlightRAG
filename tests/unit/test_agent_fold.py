@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""M3 semantic Entry fold and complete exchange boundaries."""
+"""Semantic Entry fold and complete exchange boundaries."""
 
 from datetime import UTC, datetime
 

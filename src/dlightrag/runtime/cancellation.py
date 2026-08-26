@@ -3,11 +3,11 @@
 
 One dedicated reconnecting LISTEN connection per Runtime process watches a
 fixed channel. A NOTIFY payload is only a wake digest — ``sha256(owner_id +
-NUL + run_id)`` — never authorization (M3-D19): the listener re-reads the
-authoritative owner/run/cancellation/lease/epoch row before signaling a local
-task. On every reconnect the listener re-establishes LISTEN and repeats the
-locally leased cancel-pending rescan, so a cancellation missed while
-disconnected is still observed (M3-D41).
+NUL + run_id)`` — never authorization: the listener re-reads the authoritative
+owner/run/cancellation/lease/epoch row before signaling a local task. On every
+reconnect the listener re-establishes LISTEN and repeats the locally leased
+cancel-pending rescan, so a cancellation missed while disconnected is still
+observed.
 """
 
 from __future__ import annotations
@@ -154,7 +154,7 @@ class RunCancellationListener:
         if not payload or len(payload) != 64:
             return  # a wake digest is a 64-char hex; anything else is noise
         # The payload never cancels a task directly: only the authoritative
-        # rescan decides which locally leased runs to signal (M3-D19).
+        # rescan decides which locally leased runs to signal.
         await self._rescan_cancel_pending()
 
     async def _rescan_cancel_pending(self) -> None:

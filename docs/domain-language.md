@@ -244,6 +244,6 @@ _Avoid_: Journal Entry, checkpoint, historical epoch listing
 The monotonically increasing write-generation of one Answer Run lease; every durable write is predicated on the current epoch and a live lease.
 _Avoid_: Workspace Epoch, Durable Progress
 
-**Journal Schema Reset**:
-The pre-release replacement of all development data with the journal, progress, resource, evidence, and chunked-Blob schema.
-_Avoid_: Migration, compatibility cutover
+**Full Development Reset**:
+The explicit replacement of the development database and local runtime/corpus files. It recreates the required PostgreSQL extensions and leaves baseline schema creation to the next writer startup.
+_Avoid_: Migration, Workspace reset, compatibility cutover

@@ -4,7 +4,7 @@
 Blobs are content-addressed: one digest over the complete byte string, chunked
 into exactly 1,048,576 bytes per non-final chunk. The chunk plan is a pure
 function of the content, so retries and re-uploads produce identical layouts
-and dedupe on the same digest (M3-D15, M3-D21).
+and dedupe on the same digest.
 """
 
 import hashlib

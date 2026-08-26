@@ -197,7 +197,7 @@ def advance_reclaim(
     Progress since the last reclaim resets the no-progress counter to one (this
     reclaim itself). Consecutive reclaims without durable progress abandon the
     run once the declared bound is reached: the fourth such reclaim abandons
-    under the default bound (M3 durable progress contract).
+    under the default bound.
     """
     if max_reclaims < 1:
         raise ValueError("max_reclaims must be positive")
@@ -239,8 +239,8 @@ class RunExecutionContext:
 
     The PostgreSQL adapter creates this binding at claim/reclaim: owner id,
     run id, worker id, lease owner, and fencing epoch are embedded, and the
-    bound session and progress stores carry no fencing parameters, so callers
-    can neither pass nor mutate them (M3 claim-bound execution stores).
+    bound Session repository and progress store carry no fencing parameters, so
+    callers can neither pass nor mutate them.
     """
 
     owner_id: str

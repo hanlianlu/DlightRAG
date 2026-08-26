@@ -7,7 +7,7 @@ claim-bound Session/progress repository construction, acceptance, events, termin
 transitions, sweeping, retention, and blob-backed artifacts.
 
 There is no checkpoint column, single-row artifact ``content`` table, dual
-write, or compatibility decoder anywhere in this adapter (M3-D5).
+write, or compatibility decoder anywhere in this adapter.
 """
 
 from __future__ import annotations
@@ -1265,7 +1265,7 @@ SELECT event_sequence FROM inserted
 """
 
 # One fenced terminal transition that also appends the run's single terminal
-# event. Prepared input is cleared on every terminal transition (M3-D5).
+# event. Prepared input is cleared on every terminal transition.
 _FINISH_RUN = """
 WITH bumped AS (
     UPDATE dlightrag_answer_runs
@@ -1463,8 +1463,8 @@ RETURNING 1
 """
 
 # Retention order: references first, then blob chunks/metadata only when no
-# run/resource reference remains (M3 blob store contract). Resources cascade
-# with their run; orphan reference rows are gone with the run row too.
+# run/resource reference remains. Resources cascade with their run; orphan
+# reference rows are gone with the run row too.
 _DELETE_UNREFERENCED_BLOBS = """
 WITH referenced AS (
     SELECT DISTINCT owner_id, digest FROM dlightrag_answer_run_artifacts
@@ -1777,7 +1777,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
 
         The public request fingerprint is computed before enrichment and is
         compared against any idempotent replay; a mismatch is an
-        :class:`IdempotencyKeyConflict` (M3 acceptance ordering).
+        :class:`IdempotencyKeyConflict`.
         """
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
@@ -2638,7 +2638,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         """Return locally leased cancel-pending runs for this worker.
 
         The listener calls this on every connect/reconnect and on every wake
-        notification; the payload itself never cancels anything (M3-D19).
+        notification; the payload itself never cancels anything.
         """
 
         async def _operation(conn: Any) -> list[tuple[str, str]]:

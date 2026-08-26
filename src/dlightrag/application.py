@@ -567,9 +567,9 @@ class Application:
         """Begin executing accepted runs once startup validated their schema.
 
         The cancellation listener's initial LISTEN and locally leased rescan
-        must succeed before the coordinator claims work (M3-D41); connection
-        failure keeps readiness false while the listener retries and never
-        permits heartbeat-only claiming.
+        must succeed before the coordinator claims work; connection failure
+        keeps readiness false while the listener retries and never permits
+        heartbeat-only claiming.
         """
         if not self._runs_ready:
             return

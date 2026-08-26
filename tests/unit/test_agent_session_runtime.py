@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Interface-level live, recovery, control, and crash tests for M3 Runtime."""
+"""Interface-level live, recovery, control, and crash tests for the Runtime."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace

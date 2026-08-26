@@ -73,7 +73,7 @@ class CompleteBlobDescriptor:
     """A fully verified blob: every chunk and the complete-content digest.
 
     Metadata existence means complete: one transaction writes all chunks and
-    inserts metadata last, so a partial blob is never visible (M3-D21).
+    inserts metadata last, so a partial blob is never visible.
     """
 
     digest: str

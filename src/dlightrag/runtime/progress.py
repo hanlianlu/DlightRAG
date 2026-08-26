@@ -3,8 +3,8 @@
 
 Fast Answers settle three typed stages (planner, retrieval, final_generation)
 against a durable progress version. Every settlement includes the live
-lease/epoch predicate in the same transaction (M3-D22, M3-D28). Stage outcomes
-are closed values, never database exceptions (M3-D3).
+lease/epoch predicate in the same transaction. Stage outcomes are closed values,
+never database exceptions.
 """
 
 from collections.abc import Sequence
@@ -75,7 +75,7 @@ class RunProgressStore(Protocol):
 
     The PostgreSQL adapter binds owner, run, lease owner, and fencing epoch at
     claim time; public methods carry no fencing fields, so callers can neither
-    pass nor mutate them (M3 claim-bound execution stores).
+    pass nor mutate them.
     """
 
     async def load_stage(self, stage_intent_id: StageIntentId) -> StageRecord | None: ...

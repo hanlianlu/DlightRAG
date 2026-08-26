@@ -2,10 +2,9 @@
 """Claim-bound PostgreSQL Session, progress, evidence, resource, and blob repositories.
 
 Every bound store embeds owner, run, worker, lease owner, and fencing epoch at
-claim time; its public methods carry no fencing parameters (M3 claim-bound
-execution stores). Each mutating transaction starts by locking the run row
-under the live lease/epoch predicate, so a stale or lost lease changes zero
-rows (M3 transactional invariant 1).
+claim time; its public methods carry no fencing parameters. Each mutating
+transaction starts by locking the run row under the live lease/epoch predicate,
+so a stale or lost lease changes zero rows.
 
 Runtime transitions atomically commit HostDelta, ordered Entries, exact typed
 registers, Session commit sequence, and durable run progress.
@@ -885,7 +884,7 @@ class PGProgressStore:
     ) -> StageCommitResult:
         """Settle the final Fast stage and the run's succeeded terminal in ONE
         transaction: stage record, result, unique done event, lease release,
-        and one Durable Progress increment (M3-D22).
+        and one Durable Progress increment.
         """
         async with self._connection() as conn:
             async with conn.transaction():

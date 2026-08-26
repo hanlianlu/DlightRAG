@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Contract tests for durable M3 Answer run storage that need no database."""
+"""Contract tests for durable Answer run storage that need no database."""
 
 import datetime
 import re

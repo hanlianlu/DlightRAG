@@ -44,7 +44,7 @@ def canonical_json(value: JsonValue) -> str:
 
 # JSON Schema fields that describe presentation, not the accepted input shape.
 # Canonicalization removes them so a contract digest never changes when only a
-# description, example, or declaration order moves (M3-D18).
+# description, example, or declaration order moves.
 _PRESENTATION_SCHEMA_FIELDS = frozenset(
     {
         "$comment",

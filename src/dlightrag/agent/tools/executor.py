@@ -95,10 +95,9 @@ def preflight_tool_calls(
 ) -> ToolPreflight:
     """Create ordered intents for valid calls and validation results for invalid ones.
 
-    Intents keep assistant source order (M3-D12). Unknown tools and invalid
-    arguments produce deterministic validation-result entries instead of intents
-    (M3-D26); a length-stopped response must not be preflighted at all because
-    its calls are never executed (M3-D11).
+    Intents keep assistant source order. Unknown tools and invalid arguments
+    produce deterministic validation-result entries instead of intents; a
+    length-stopped response must not be preflighted because its calls never run.
     """
     _require_unique_tool_call_ids(assistant)
     tools_by_name = {tool.name: tool for tool in tools}
@@ -181,7 +180,7 @@ class PreparedToolTurn:
 
     The host may durably persist the assistant entry and its EffectIntents
     between ``prepare_turn`` and ``execute_prepared`` so no external effect
-    can run without a durable intent behind it (M3-D12 ordering).
+    can run without a durable intent behind it.
     """
 
     assistant: AssistantTurn
@@ -213,9 +212,8 @@ class ToolTurnExecutor:
     ) -> PreparedToolTurn:
         """Call the model once and preflight its tool calls; no side effects.
 
-        A length-stopped response must not be preflighted at all because its
-        calls are never executed (M3-D11); its results are fabricated at
-        execution time as before.
+        A length-stopped response must not be preflighted because its calls
+        never run; its results are fabricated at execution time as before.
         """
         model_kwargs: dict[str, Any] = {
             "messages": messages,

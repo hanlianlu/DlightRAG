@@ -9,7 +9,7 @@ from dlightrag.answer.agent.compaction import parse_compaction_summary
 def test_compaction_summary_parser_preserves_typed_sections() -> None:
     summary = parse_compaction_summary(
         """## Goal
-Ship M3.
+Ship the runtime.
 
 ## Constraints & Preferences
 No generic workflow.
@@ -27,7 +27,7 @@ Review.
 Recovery uses the same interpreter.
 """
     )
-    assert summary.goal == "Ship M3."
+    assert summary.goal == "Ship the runtime."
     assert summary.constraints_preferences == "No generic workflow."
     assert summary.progress == "Done: Runtime."
     assert summary.decisions == "Total state."

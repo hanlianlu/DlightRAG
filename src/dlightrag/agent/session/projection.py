@@ -2,8 +2,8 @@
 """Immutable context projections, typed compaction summaries, and validity checks.
 
 A projection selects one branch-ancestry suffix and, when needed, summarizes a
-contiguous older prefix. Every committed projection is immutable (M3-D24);
-the session row points at the active one. Validity checks here are pure: they
+contiguous older prefix. Every committed projection is immutable; the session
+row points at the active one. Validity checks here are pure: they
 classify candidate projections against ``ContextPolicy`` numbers without
 calling a provider or opening a store.
 """
@@ -39,7 +39,7 @@ class CompactionSummary:
 
     Sequence coverage is not model-authored: the framework chooses the
     compacted contiguous prefix and stores ``covered_through_sequence`` /
-    ``first_retained_sequence`` on the projection (M3-D17).
+    ``first_retained_sequence`` on the projection.
     """
 
     goal: str
@@ -171,7 +171,7 @@ def require_compactable(
     The caller passes the mandatory fixed input (system prompt, question,
     tool schemas, smallest valid summary) plus the measured active input. A
     request above the hard limit fails as ``agent_input_overflow`` instead of
-    looping on compaction (M3 compaction rule).
+    looping on compaction.
     """
     if input_tokens < 0 or fixed_input_tokens < 0:
         raise ValueError("token estimates cannot be negative")

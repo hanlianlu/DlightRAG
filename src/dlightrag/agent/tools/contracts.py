@@ -159,8 +159,8 @@ class AgentTool:
     """Executable tool with a Pydantic argument contract.
 
     ``replay_policy``, ``contract_version``, and ``input_schema_digest`` are the
-    intent facts replay must match exactly (M3-D13, M3-D18). Replay is fail-closed:
-    tools opt in only when identical persisted arguments are safe to execute again.
+    intent facts replay must match exactly. Replay is fail-closed: tools opt in
+    only when identical persisted arguments are safe to execute again.
     The digest is the SHA-256 of the canonicalized input schema, so presentation
     fields and declaration order never change it.
     """

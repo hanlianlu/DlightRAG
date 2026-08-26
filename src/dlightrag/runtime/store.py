@@ -28,7 +28,7 @@ class AnswerRunStore(Protocol):
     Claim returns a run with its claim-bound execution surface; checkpoint-era
     commit/attach methods are gone. Accepted attachments register through the
     acceptance transaction, evidence and fetched resources through effect or
-    stage settlements (M3 registration paths).
+    stage settlements.
     """
 
     async def claim_next(self, *, worker_id: str) -> ClaimedRun | None: ...
@@ -122,8 +122,8 @@ class AnswerAcceptanceStore(Protocol):
     """Acceptance-side durable operations for one new run.
 
     Prepared input, accepted blob resources, and the run row commit in one
-    atomic acceptance transaction (M3 registration paths); queued and running
-    rows store exactly one bounded ``prepared_input_json``.
+    atomic acceptance transaction; queued and running rows store exactly one
+    bounded ``prepared_input_json``.
     """
 
     async def accept_run(

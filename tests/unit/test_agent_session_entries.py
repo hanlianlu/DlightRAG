@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Closed M3 semantic Entry union contracts."""
+"""Closed semantic Entry union contracts."""
 
 from datetime import UTC, datetime
 from typing import Any

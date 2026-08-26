@@ -230,6 +230,6 @@ async def test_working_dir_verification_continues_after_pg_failure(tmp_path: Pat
     )
     assert report.failures  # connection failure is reported
 
-    # Independent file cleanup still runs and is verified (M3-D39).
+    # Independent file cleanup still runs and is verified.
     _reset.clear_working_dir_children(working_dir, report)
     assert _reset.verify_working_dir_empty(working_dir) == []

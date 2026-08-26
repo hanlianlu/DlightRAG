@@ -2,8 +2,8 @@
 """Storage- and policy-neutral durable runtime failures.
 
 Checkpoint-era errors, codecs, and constants are gone: Session settlements,
-durable progress, and effect outcomes carry the M3 conflict vocabulary as
-values, and run failures surface through :class:`RunExecutionError`.
+durable progress, and effect outcomes carry closed conflict values, and run
+failures surface through :class:`RunExecutionError`.
 """
 
 
