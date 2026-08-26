@@ -123,7 +123,7 @@ class _FakeBoundary:
 
     def __init__(self, entries: list[Any]) -> None:
         self.store = InMemoryAgentSessionStore()
-        self.session_id = SessionId.new()
+        self.session_id = entries[0].session_id if entries else SessionId.new()
         self.entries = list(entries)
         self.commits: list[dict[str, Any]] = []
         self.seeded = False
@@ -158,6 +158,9 @@ class _FakeBoundary:
             summary=projection.summary,
             covered_through_sequence=projection.covered_through_sequence,
             first_retained_sequence=projection.first_retained_sequence,
+            covered_through_entry_id=projection.covered_through_entry_id,
+            first_retained_entry_id=projection.first_retained_entry_id,
+            source_digest=projection.source_digest,
         )
         snapshot = await self.store.load(self.session_id)
         return await self.store.append(

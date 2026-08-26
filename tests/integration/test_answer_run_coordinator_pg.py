@@ -27,7 +27,7 @@ from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
 from dlightrag.agent.session.fold import PriorTurns
 from dlightrag.agent.session.fold import WorkingContextProjection as _RunWorking
-from dlightrag.ai.capacity import ModelProfile
+from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
@@ -86,7 +86,7 @@ def _answer_run_input() -> AnswerRunInput:
             )
             for role in ("extract", "keyword", "query", "vlm")
         ),
-        context_policy_revision="m1-v1",
+        context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision="2026-08-14",
         idempotency_fingerprint="public-request-hash",
     )
@@ -516,6 +516,9 @@ def _answer_runtime(store: FingerprintingAnswerRunStore) -> tuple[Application, R
         ),
         settings=answer_executor_settings(config),
         telemetry=NOOP_TELEMETRY,
+        model_fingerprint_for_role=lambda role: ModelFingerprint(
+            "openai", f"test-{role}-model", None
+        ),
     )
 
     async def _prepare(**kwargs: Any) -> OrchestratorRun:

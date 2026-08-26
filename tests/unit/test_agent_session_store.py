@@ -11,14 +11,13 @@ from dlightrag.agent.session.entries import (
     EffectResultEntry,
     UserMessageEntry,
 )
-from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
+from dlightrag.agent.session.ids import EntryId, IntentId, LaneId, ProjectionId, SessionId
 from dlightrag.agent.session.projection import ContextProjection
 from dlightrag.agent.session.store import (
     EffectAlreadySettled,
     EffectCommit,
     EffectMissing,
     SessionCommit,
-    VersionConflict,
 )
 from tests.in_memory_session_store import InMemoryAgentSessionStore, NoHostUpdate
 
@@ -78,7 +77,7 @@ def _result_entry(
 
 
 @pytest.mark.asyncio
-async def test_append_with_wrong_expected_version_changes_nothing() -> None:
+async def test_stale_global_version_does_not_conflict_with_single_owner_append() -> None:
     store = InMemoryAgentSessionStore()
     session_id = SessionId.new()
     first = await store.append(
@@ -86,17 +85,17 @@ async def test_append_with_wrong_expected_version_changes_nothing() -> None:
     )
     assert isinstance(first, SessionCommit)
 
-    conflict = await store.append(
+    second = await store.append(
         session_id=session_id, expected_version=0, entries=[_user(session_id, "again")]
     )
-    assert isinstance(conflict, VersionConflict)
-    assert conflict.expected_version == 0
-    assert conflict.current_version == 1
+    assert isinstance(second, SessionCommit)
 
     snapshot = await store.load(session_id)
-    assert snapshot.version == 1
-    assert len(snapshot.entries) == 1
-    assert snapshot.entries[0].canonical_payload()["content"] == "hi"
+    assert snapshot.commit_sequence == 2
+    assert [entry.canonical_payload()["content"] for entry in snapshot.entries] == [
+        "hi",
+        "again",
+    ]
 
 
 @pytest.mark.asyncio
@@ -117,6 +116,48 @@ async def test_append_never_settles_an_intent() -> None:
         entries=[_result_entry(session_id, intent.intent_id)],
     )
     assert isinstance(missing, EffectMissing)
+
+
+@pytest.mark.asyncio
+async def test_settle_effect_appends_on_the_lane_that_owns_the_intent() -> None:
+    store = InMemoryAgentSessionStore()
+    session_id = SessionId.new()
+    await store.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_user(session_id, "root")],
+    )
+    branch_id = LaneId.new()
+    await store.fork_lane(
+        session_id=session_id,
+        source_lane_id=LaneId.main(),
+        lane_id=branch_id,
+    )
+    branch = (await store.load(session_id)).tree.lane(branch_id)
+    intent = _intent(session_id)
+    await store.append_to_lane(
+        session_id=session_id,
+        lane_id=branch_id,
+        expected_head=branch.head,
+        entries=[intent],
+    )
+
+    settled = await store.settle_effect(
+        session_id=session_id,
+        expected_version=0,
+        intent_id=intent.intent_id,
+        settlement=_settlement(intent.intent_id),
+        entries=[_result_entry(session_id, intent.intent_id)],
+        lane_id=branch_id,
+    )
+    assert isinstance(settled, EffectCommit)
+    snapshot = await store.load(session_id)
+    assert len(snapshot.tree.ancestry(LaneId.main())) == 1
+    assert [entry.entry_type for entry in snapshot.tree.ancestry(branch_id)] == [
+        "user_message",
+        "effect_intent",
+        "effect_result",
+    ]
 
 
 @pytest.mark.asyncio
@@ -149,23 +190,23 @@ async def test_settle_effect_atomically_marks_and_appends_ordered_results() -> N
 
 
 @pytest.mark.asyncio
-async def test_version_conflict_on_settlement_rolls_back_everything() -> None:
+async def test_settlement_uses_intent_and_lane_cas_not_global_version() -> None:
     store = InMemoryAgentSessionStore()
     session_id = SessionId.new()
     intent = _intent(session_id)
     await store.append(session_id=session_id, expected_version=0, entries=[intent])
 
-    conflict = await store.settle_effect(
+    settled = await store.settle_effect(
         session_id=session_id,
         expected_version=0,
         intent_id=intent.intent_id,
         settlement=_settlement(intent.intent_id),
         entries=[_result_entry(session_id, intent.intent_id)],
     )
-    assert isinstance(conflict, VersionConflict)
+    assert isinstance(settled, EffectCommit)
     snapshot = await store.load(session_id)
-    assert snapshot.version == 1
-    assert len(snapshot.entries) == 1
+    assert snapshot.commit_sequence == 2
+    assert len(snapshot.entries) == 2
     assert isinstance(snapshot.entries[0], EffectIntentEntry)
 
 

@@ -158,7 +158,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_sessions (
     owner_id             TEXT        NOT NULL,
     run_id               UUID        NOT NULL,
     session_id           UUID        NOT NULL,
-    version              BIGINT      NOT NULL DEFAULT 0,
+    commit_sequence      BIGINT      NOT NULL DEFAULT 0,
+    fencing_epoch        BIGINT      NOT NULL,
     last_sequence        BIGINT      NOT NULL DEFAULT 0,
     active_projection_id UUID,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -166,7 +167,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_sessions (
     PRIMARY KEY (owner_id, run_id, session_id),
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE,
-    CONSTRAINT dlightrag_agent_sessions_version_check CHECK (version >= 0),
+    CONSTRAINT dlightrag_agent_sessions_commit_sequence_check CHECK (commit_sequence >= 0),
+    CONSTRAINT dlightrag_agent_sessions_fencing_check CHECK (fencing_epoch >= 1),
     CONSTRAINT dlightrag_agent_sessions_sequence_check CHECK (last_sequence >= 0)
 )
 """
@@ -190,20 +192,44 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_session_entries (
     session_id     UUID        NOT NULL,
     sequence       BIGINT      NOT NULL,
     entry_id       UUID        NOT NULL,
+    parent_entry_id UUID,
     entry_type     TEXT        NOT NULL,
     schema_version INTEGER     NOT NULL,
     timestamp      TIMESTAMPTZ NOT NULL,
     payload_json   JSONB       NOT NULL,
     PRIMARY KEY (owner_id, run_id, session_id, sequence),
     UNIQUE (entry_id),
+    UNIQUE (owner_id, run_id, session_id, entry_id),
     FOREIGN KEY (owner_id, run_id, session_id)
         REFERENCES dlightrag_agent_sessions (owner_id, run_id, session_id) ON DELETE CASCADE,
+    FOREIGN KEY (owner_id, run_id, session_id, parent_entry_id)
+        REFERENCES dlightrag_agent_session_entries
+            (owner_id, run_id, session_id, entry_id)
+        DEFERRABLE INITIALLY DEFERRED,
     CONSTRAINT dlightrag_agent_session_entries_sequence_check CHECK (sequence >= 1),
     CONSTRAINT dlightrag_agent_session_entries_type_check CHECK (entry_type IN (
         'run_segment', 'user_message', 'assistant_message', 'effect_intent', 'effect_result',
         'context_injection', 'compaction', 'profile_fact', 'session_terminal'
     )),
     CONSTRAINT dlightrag_agent_session_entries_version_check CHECK (schema_version >= 1)
+)
+"""
+
+_CREATE_SESSION_REGISTERS = """
+CREATE TABLE IF NOT EXISTS dlightrag_agent_session_registers (
+    owner_id       TEXT        NOT NULL,
+    run_id         UUID        NOT NULL,
+    session_id     UUID        NOT NULL,
+    register_kind  TEXT        NOT NULL,
+    register_key   TEXT        NOT NULL,
+    sequence       BIGINT      NOT NULL,
+    payload_json   JSONB       NOT NULL,
+    PRIMARY KEY (owner_id, run_id, session_id, register_kind, register_key),
+    FOREIGN KEY (owner_id, run_id, session_id)
+        REFERENCES dlightrag_agent_sessions (owner_id, run_id, session_id) ON DELETE CASCADE,
+    CONSTRAINT dlightrag_agent_session_registers_kind_check
+        CHECK (register_kind IN ('lane_head', 'lane_state')),
+    CONSTRAINT dlightrag_agent_session_registers_sequence_check CHECK (sequence >= 1)
 )
 """
 
@@ -215,6 +241,9 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_context_projections (
     projection_id             UUID        NOT NULL,
     first_retained_sequence   BIGINT      NOT NULL,
     covered_through_sequence  BIGINT      NOT NULL,
+    covered_through_entry_id  UUID,
+    first_retained_entry_id   UUID,
+    source_digest             TEXT,
     summary                   TEXT,
     token_anchors             JSONB       NOT NULL DEFAULT '[]'::jsonb,
     schema_version            INTEGER     NOT NULL,
@@ -227,6 +256,12 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_context_projections (
                AND first_retained_sequence > covered_through_sequence),
     CONSTRAINT dlightrag_agent_context_projections_summary_check
         CHECK ((covered_through_sequence = 0) = (summary IS NULL)),
+    CONSTRAINT dlightrag_agent_context_projections_source_check
+        CHECK ((covered_through_sequence = 0
+                AND covered_through_entry_id IS NULL AND source_digest IS NULL)
+               OR (covered_through_sequence > 0
+                   AND covered_through_entry_id IS NOT NULL
+                   AND source_digest ~ '^[0-9a-f]{64}$')),
     CONSTRAINT dlightrag_agent_context_projections_version_check CHECK (schema_version >= 1)
 )
 """
@@ -578,6 +613,7 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_EVENTS,
             _CREATE_SESSIONS,
             _CREATE_ENTRIES,
+            _CREATE_SESSION_REGISTERS,
             _CREATE_PROJECTIONS,
             _CREATE_EFFECTS,
             _CREATE_STAGES,
@@ -675,7 +711,8 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "owner_id",
             "run_id",
             "session_id",
-            "version",
+            "commit_sequence",
+            "fencing_epoch",
             "last_sequence",
             "active_projection_id",
             "created_at",
@@ -688,7 +725,8 @@ ANSWER_RUN_SCHEMA_TABLES = (
             ),
         ),
         checks=(
-            "dlightrag_agent_sessions_version_check",
+            "dlightrag_agent_sessions_commit_sequence_check",
+            "dlightrag_agent_sessions_fencing_check",
             "dlightrag_agent_sessions_sequence_check",
         ),
     ),
@@ -700,13 +738,51 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "session_id",
             "sequence",
             "entry_id",
+            "parent_entry_id",
             "entry_type",
             "schema_version",
             "timestamp",
             "payload_json",
         ),
         primary_key=("owner_id", "run_id", "session_id", "sequence"),
-        unique=(("entry_id",),),
+        unique=(
+            ("entry_id",),
+            ("owner_id", "run_id", "session_id", "entry_id"),
+        ),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id", "session_id"),
+                references="dlightrag_agent_sessions",
+            ),
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id", "session_id", "parent_entry_id"),
+                references="dlightrag_agent_session_entries",
+            ),
+        ),
+        checks=(
+            "dlightrag_agent_session_entries_sequence_check",
+            "dlightrag_agent_session_entries_type_check",
+            "dlightrag_agent_session_entries_version_check",
+        ),
+    ),
+    TableRequirement(
+        name="dlightrag_agent_session_registers",
+        columns=(
+            "owner_id",
+            "run_id",
+            "session_id",
+            "register_kind",
+            "register_key",
+            "sequence",
+            "payload_json",
+        ),
+        primary_key=(
+            "owner_id",
+            "run_id",
+            "session_id",
+            "register_kind",
+            "register_key",
+        ),
         foreign_keys=(
             ForeignKeyRequirement(
                 columns=("owner_id", "run_id", "session_id"),
@@ -714,9 +790,8 @@ ANSWER_RUN_SCHEMA_TABLES = (
             ),
         ),
         checks=(
-            "dlightrag_agent_session_entries_sequence_check",
-            "dlightrag_agent_session_entries_type_check",
-            "dlightrag_agent_session_entries_version_check",
+            "dlightrag_agent_session_registers_kind_check",
+            "dlightrag_agent_session_registers_sequence_check",
         ),
     ),
     TableRequirement(
@@ -728,6 +803,9 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "projection_id",
             "first_retained_sequence",
             "covered_through_sequence",
+            "covered_through_entry_id",
+            "first_retained_entry_id",
+            "source_digest",
             "summary",
             "token_anchors",
             "schema_version",
@@ -743,6 +821,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
         checks=(
             "dlightrag_agent_context_projections_range_check",
             "dlightrag_agent_context_projections_summary_check",
+            "dlightrag_agent_context_projections_source_check",
             "dlightrag_agent_context_projections_version_check",
         ),
     ),

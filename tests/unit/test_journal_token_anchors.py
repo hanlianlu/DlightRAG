@@ -11,6 +11,7 @@ from dlightrag.agent.session.projection import (
     ContextProjection,
     TokenAnchor,
     live_anchor,
+    projection_source_digest,
 )
 from dlightrag.agent.session.store import SessionCommit
 from dlightrag.agent.tools.contracts import ExecutedTurn
@@ -147,12 +148,16 @@ async def test_accounted_input_falls_back_to_the_estimate_without_usage() -> Non
 async def test_commit_compaction_writes_entry_and_projection_atomically() -> None:
     store, session_id, bounds = await _seeded_boundaries()
     summary = CompactionSummary(goal="answer", progress="three sources read").canonical_json()
+    seeded = await store.load(session_id)
+    covered_id = seeded.entries[0].entry_id
     projection = ContextProjection(
         projection_id=ProjectionId.new(),
         first_retained_sequence=2,
         covered_through_sequence=1,
         summary=summary,
         token_anchors=(),
+        covered_through_entry_id=covered_id,
+        source_digest=projection_source_digest((covered_id,)),
     )
     commit = await bounds.commit_compaction(projection=projection)
     assert commit.version == 2
@@ -168,6 +173,8 @@ async def test_commit_compaction_writes_entry_and_projection_atomically() -> Non
         covered_through_sequence=2,
         summary=summary,
         token_anchors=(),
+        covered_through_entry_id=compaction_entries[0].entry_id,
+        source_digest=projection_source_digest((covered_id, compaction_entries[0].entry_id)),
     )
     second = await bounds.commit_compaction(projection=second_projection)
     assert second.version == 3

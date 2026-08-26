@@ -25,6 +25,7 @@ from typing import Any, Literal
 
 import httpx
 
+from dlightrag.agent.session.ids import IntentId
 from dlightrag.ai.media import verify_web_image_bytes
 from dlightrag.ai.tokens import estimate_tokens
 from dlightrag.answer.resources.converters import (
@@ -85,7 +86,7 @@ class ResourceEffectOwner:
     """Explicit Agent effect identity for a resource materialization."""
 
     execution_scope: str
-    call_id: str
+    intent_id: IntentId
 
 
 # Persist validated fetched bytes before their tool result settles on the journal.

@@ -289,6 +289,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         resources=resources,
         settings=answer_executor_settings(config),
         telemetry=telemetry,
+        model_fingerprint_for_role=lambda role: model_fingerprint(
+            model_settings_for_role(config, role)
+        ),
         execution_environment=config.answer.agent.execution_environment,
         workspace_root=config.answer.agent.workspace_root,
         working_dir=config.deployment.working_dir,

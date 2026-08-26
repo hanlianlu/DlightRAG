@@ -37,7 +37,13 @@ from dlightrag.agent.session.entries import (
     SessionTerminalEntry,
 )
 from dlightrag.agent.session.fold import PriorTurns, fold_entries
-from dlightrag.agent.session.ids import EntryId, ProjectionId, SessionId, StageIntentId
+from dlightrag.agent.session.ids import (
+    EntryId,
+    IntentId,
+    ProjectionId,
+    SessionId,
+    StageIntentId,
+)
 from dlightrag.agent.session.plan import AgentRunPlan
 from dlightrag.agent.session.projection import (
     ContextProjection,
@@ -71,7 +77,8 @@ from dlightrag.agent.tools import (
     ToolRuntime,
     fit_tool_result,
 )
-from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
+from dlightrag.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.ai.messages import AssistantTurn
 from dlightrag.ai.scheduler import model_call_scope
 from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
@@ -627,6 +634,7 @@ class AnswerExecutor:
         resources: AnswerResourceResolver,
         settings: AnswerExecutorSettings,
         telemetry: Telemetry,
+        model_fingerprint_for_role: Callable[[ModelRole], ModelFingerprint],
         execution_environment: str = "disabled",
         workspace_root: str | None = None,
         working_dir: str = "./dlightrag_storage",
@@ -645,6 +653,7 @@ class AnswerExecutor:
         self._resources = resources
         self._settings = settings
         self._telemetry = telemetry
+        self._model_fingerprint_for_role = model_fingerprint_for_role
         self._execution_environment = execution_environment
         self._workspace_root_setting = workspace_root
         self._working_dir = working_dir
@@ -901,6 +910,17 @@ class AnswerExecutor:
                     ),
                     check_cancelled=session.check_cancelled,
                 )
+                # Resolve and compare every accepted execution pin before the
+                # first Session mutation. The later post-recall comparison is
+                # a second guard immediately before provider/tool effects.
+                pin_probe = run.orchestrator.prepare_run(
+                    request.query,
+                    conversation_history=run.history,
+                    query_images=run.query_images,
+                    registry=run.registry,
+                )
+                self.validate_pinned_model_profiles(request)
+                self.validate_pinned_agent_run_plan(request, pin_probe.tools)
                 snapshot = await journal.load(session_id)
                 is_new_session = snapshot.version == 0
                 if is_new_session:
@@ -928,6 +948,7 @@ class AnswerExecutor:
                     query_images=run.query_images,
                     registry=run.registry,
                 )
+                self.validate_pinned_model_profiles(request)
                 self.validate_pinned_agent_run_plan(request, prepared_early.tools)
                 if not is_new_session:
                     await run.orchestrator.recover_from_fold(prepared_early, snapshot)
@@ -1341,7 +1362,9 @@ class AnswerExecutor:
         """Reject execution when runtime tools differ from acceptance."""
         pinned = request.agent_run_plan
         if pinned is None:
-            return
+            raise IncompatibleActiveRunError(
+                "Research answer run is missing its accepted Agent Plan"
+            )
         actual = AgentRunPlan.from_tools(
             tools,
             model_role="query",
@@ -1352,8 +1375,8 @@ class AnswerExecutor:
                 "answer run Agent Plan differs from its accepted tool contracts"
             )
 
-    @staticmethod
     def validate_pinned_model_profiles(
+        self,
         request: AnswerRunInput,
     ) -> dict[ModelRole, ModelProfile]:
         # Capacity is recalculated from the pinned model facts for each segment.
@@ -1365,6 +1388,15 @@ class AnswerExecutor:
         ):
             raise IncompatibleActiveRunError(
                 "answer run does not contain the complete pinned model role set"
+            )
+        if request.context_policy_revision != CONTEXT_POLICY_REVISION:
+            raise IncompatibleActiveRunError("answer run uses another context policy revision")
+        if any(
+            pinned[role].fingerprint != self._model_fingerprint_for_role(role)
+            for role in MODEL_ROLE_NAMES
+        ):
+            raise IncompatibleActiveRunError(
+                "answer run targets another model endpoint configuration"
             )
         return {role: pinned[role].profile for role in MODEL_ROLE_NAMES}
 
@@ -1380,11 +1412,11 @@ class FetchedResourceBuffer:
         fetched: FetchedResourceBytes,
         owner: ResourceEffectOwner | None,
     ) -> None:
-        key = (owner.execution_scope, owner.call_id) if owner is not None else ("", "")
+        key = (owner.execution_scope, owner.intent_id.value) if owner is not None else ("", "")
         self._items.setdefault(key, []).append(fetched)
 
-    def drain(self, *, scope: str, call_id: str) -> tuple[FetchedResourceBytes, ...]:
-        fetched = [*self._items.pop((scope, call_id), ())]
+    def drain(self, *, scope: str, intent_id: IntentId) -> tuple[FetchedResourceBytes, ...]:
+        fetched = [*self._items.pop((scope, intent_id.value), ())]
         # Acceptance-time fetches happen before a tool task has a scope. Bind
         # them to the first durable settlement rather than sharing a live list.
         fetched.extend(self._items.pop(("", ""), ()))
@@ -1507,6 +1539,9 @@ class JournalRunBoundaries:
             summary=projection.summary,
             covered_through_sequence=projection.covered_through_sequence,
             first_retained_sequence=projection.first_retained_sequence,
+            covered_through_entry_id=projection.covered_through_entry_id,
+            first_retained_entry_id=projection.first_retained_entry_id,
+            source_digest=projection.source_digest,
         )
         commit = await self._journal.append(
             session_id=self._session_id,
@@ -1532,6 +1567,10 @@ class JournalRunBoundaries:
                 await self._recover_intent(intent)
             elif result is not None:
                 await self._append_preflight_result(result)
+
+    async def close_committed_turn(self) -> None:
+        """Close all source positions left unsettled by cancellation."""
+        await self.close_pending_intents(await self._journal.load(self._session_id))
 
     async def close_pending_intents(self, snapshot: Any) -> None:
         """Close every unsettled source position without executing another effect.
@@ -1746,7 +1785,7 @@ class JournalRunBoundaries:
                 child_id = child_session_id(
                     run_id=self._run_id,
                     parent_session_id=self._session_id,
-                    call_id=intent.source_call_id,
+                    parent_intent_id=intent.intent_id,
                     position=position,
                 )
                 await self._persist_child_intent(
@@ -2044,7 +2083,7 @@ class JournalRunBoundaries:
         fetched_updates: list[FetchedResourceSettlementUpdate] = []
         for fetched in self._fetched_buffer.drain(
             scope=self.tool_execution_scope,
-            call_id=intent.source_call_id or "",
+            intent_id=intent.intent_id,
         ):
             plan = plan_blob(fetched.content)
             fetched_updates.append(

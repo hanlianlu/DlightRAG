@@ -239,7 +239,7 @@ def _evidence_effects(resource_id: str, source: dict[str, str]) -> ToolEffects:
 def _effect_owner(runtime: ToolRuntime) -> ResourceEffectOwner:
     return ResourceEffectOwner(
         execution_scope=runtime.execution_scope,
-        call_id=runtime.call_id,
+        intent_id=runtime.intent_id,
     )
 
 

@@ -532,6 +532,63 @@ async def test_intents_persist_before_any_tool_executes() -> None:
     assert effect_results[0].result.outcome == "succeeded"
 
 
+async def test_cancellation_after_intent_commit_closes_every_source_position() -> None:
+    from dlightrag.agent.session.entries import EffectResultEntry
+    from dlightrag.agent.session.ids import SessionId
+    from dlightrag.answer.executor import JournalRunBoundaries
+    from dlightrag.runtime import RunCancelledError
+    from tests.in_memory_session_store import InMemoryAgentSessionStore
+
+    checks = 0
+    tool_calls = 0
+
+    class _CancellingSession:
+        run_id = "run-1"
+        owner_id = "owner"
+
+        async def check_cancelled(self) -> None:
+            nonlocal checks
+            checks += 1
+            if checks >= 2:
+                raise RunCancelledError
+
+        async def enter_phase(self, _phase: str) -> None:
+            return None
+
+    session_id = SessionId.new()
+    journal = InMemoryAgentSessionStore()
+    boundaries = JournalRunBoundaries(
+        session=_CancellingSession(),  # type: ignore[arg-type]
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={},
+        ledger_state=lambda: "{}",
+        fetched_buffer=FetchedResourceBuffer(),
+        run_id="run-1",
+    )
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        nonlocal tool_calls
+        tool_calls += 1
+        return _corpus_result()
+
+    orchestrator = _research(
+        ScriptedAgent(_tool(_call(query="q", source="knowledge_base", call_id="c1"))),
+        retrieve,
+        None,
+    )
+    run = orchestrator.prepare_run("Find it")
+
+    with pytest.raises(RunCancelledError):
+        await orchestrator.research_until_stopped(run, boundaries=boundaries)  # type: ignore[arg-type]
+
+    assert tool_calls == 0
+    snapshot = await journal.load(session_id)
+    results = [entry for entry in snapshot.entries if isinstance(entry, EffectResultEntry)]
+    assert len(results) == 1
+    assert results[0].result.outcome == "outcome_unknown"
+
+
 async def test_fast_path_streams_one_synthesis() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()

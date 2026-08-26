@@ -40,6 +40,10 @@ from dlightrag.ai.tokens import estimate_tokens, truncate_to_estimated_tokens
 logger = logging.getLogger(__name__)
 
 
+class DuplicateToolCallIdError(ValueError):
+    """A provider response reused one call identity across source positions."""
+
+
 class _LatestToolUpdatePump:
     """Deliver latest snapshots without applying sink backpressure to a tool."""
 
@@ -96,6 +100,7 @@ def preflight_tool_calls(
     (M3-D26); a length-stopped response must not be preflighted at all because
     its calls are never executed (M3-D11).
     """
+    _require_unique_tool_call_ids(assistant)
     tools_by_name = {tool.name: tool for tool in tools}
     intents: list[EffectIntent] = []
     validation_results: list[ToolResultEntry] = []
@@ -127,6 +132,20 @@ def preflight_tool_calls(
             )
         )
     return ToolPreflight(intents=tuple(intents), validation_results=tuple(validation_results))
+
+
+def _require_unique_tool_call_ids(assistant: AssistantTurn) -> None:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for call in assistant.tool_calls:
+        if call.id in seen:
+            duplicates.add(call.id)
+        seen.add(call.id)
+    duplicate_ids = sorted(duplicates)
+    if duplicate_ids:
+        raise DuplicateToolCallIdError(
+            f"provider response contains duplicate tool call ids: {duplicate_ids}"
+        )
 
 
 def _validate_call(
@@ -255,6 +274,7 @@ class ToolTurnExecutor:
         appended only when their source position is reached.
         """
         assistant = prepared.assistant
+        _require_unique_tool_call_ids(assistant)
         transcript = prepared.transcript
         if not assistant.tool_calls:
             return ExecutedTurn(
@@ -305,26 +325,27 @@ class ToolTurnExecutor:
         intents_by_call = {
             intent.source_call_id: intent for intent in intents if intent.source_call_id is not None
         }
-        tasks = {
-            call.id: asyncio.create_task(
+        intents_by_position = tuple(intents_by_call.get(call.id) for call in assistant.tool_calls)
+        tasks = [
+            asyncio.create_task(
                 _execute_call(
                     call,
                     tools_by_name,
                     self._telemetry,
-                    intent=intents_by_call.get(call.id),
+                    intent=intents_by_position[position],
                     execution_scope=execution_scope,
                     source_position=position,
                     on_event=self._emit,
                 )
             )
             for position, call in enumerate(assistant.tool_calls)
-        }
+        ]
         completed = False
         try:
             fitted_items: list[ToolExecution] = []
             remaining_tokens = max_observation_tokens
-            for position, call in enumerate(assistant.tool_calls):
-                execution = await tasks[call.id]
+            for position, _call in enumerate(assistant.tool_calls):
+                execution = await tasks[position]
                 if remaining_tokens is not None:
                     result_count = len(assistant.tool_calls) - position
                     execution = _fit_execution(
@@ -338,7 +359,7 @@ class ToolTurnExecutor:
                 fitted_items.append(execution)
                 if on_result is not None:
                     await on_result(
-                        intents_by_call.get(execution.call.id),
+                        intents_by_position[position],
                         execution,
                         position == len(assistant.tool_calls) - 1,
                     )
@@ -346,9 +367,9 @@ class ToolTurnExecutor:
             completed = True
         finally:
             if not completed:
-                for task in tasks.values():
+                for task in tasks:
                     task.cancel()
-                await asyncio.gather(*tasks.values(), return_exceptions=True)
+                await asyncio.gather(*tasks, return_exceptions=True)
         return _assemble_turn(
             assistant,
             transcript,
@@ -693,6 +714,7 @@ def _tool_message(execution: ToolExecution) -> dict[str, Any]:
 
 
 __all__ = [
+    "DuplicateToolCallIdError",
     "PreparedToolTurn",
     "ToolPreflight",
     "ToolTurnExecutor",

@@ -14,7 +14,8 @@ from PIL import Image
 
 from dlightrag.agent.session.entries import ContextInjectionEntry
 from dlightrag.agent.session.fold import PriorTurns
-from dlightrag.ai.capacity import ModelProfile
+from dlightrag.agent.session.plan import AgentRunPlan
+from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.ai.scheduler import ModelScheduler
 from dlightrag.ai.telemetry import NOOP_TELEMETRY
@@ -45,6 +46,10 @@ from dlightrag.answer.runs.execution import (
 from dlightrag.runtime import RunExecutionError, RunSession, artifact_digest
 
 
+def _fingerprint(role: str) -> ModelFingerprint:
+    return ModelFingerprint("openai", f"test-{role}", None)
+
+
 def _executor() -> AnswerExecutor:
     return AnswerExecutor(
         store=MagicMock(),
@@ -66,6 +71,7 @@ def _executor() -> AnswerExecutor:
             ),
         ),
         telemetry=NOOP_TELEMETRY,
+        model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
     )
 
 
@@ -89,6 +95,7 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         resources=MagicMock(),
         settings=_executor()._settings,
         telemetry=NOOP_TELEMETRY,
+        model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
         execution_environment="trust",
         memory_store=MagicMock(),
         external_tools=(AgentTool("remote_lookup", "Remote lookup.", Args, external),),
@@ -131,6 +138,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         resources=MagicMock(),
         settings=_executor()._settings,
         telemetry=NOOP_TELEMETRY,
+        model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
         execution_environment="trust",
     )
     accepted = executor.acceptance_research_tools()
@@ -188,11 +196,48 @@ def test_execution_rejects_tools_that_differ_from_the_accepted_agent_plan() -> N
     request = MagicMock(agent_run_plan=plan, context_policy_revision="policy-1")
 
     AnswerExecutor.validate_pinned_agent_run_plan(request, (accepted_tool,))
+    with pytest.raises(IncompatibleActiveRunError, match="missing"):
+        AnswerExecutor.validate_pinned_agent_run_plan(
+            MagicMock(agent_run_plan=None),
+            (accepted_tool,),
+        )
     with pytest.raises(IncompatibleActiveRunError, match="differs"):
         AnswerExecutor.validate_pinned_agent_run_plan(
             request,
             (AgentTool("lookup", "Changed description.", Args, execute),),
         )
+
+
+def test_execution_rejects_changed_context_or_model_pins() -> None:
+    from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION
+    from dlightrag.answer.executor import IncompatibleActiveRunError
+
+    pins = tuple(
+        PinnedModelProfile(
+            role=role,
+            fingerprint=_fingerprint(role),
+            profile=ModelProfile(context_window_tokens=10_000),
+        )
+        for role in ("extract", "keyword", "query", "vlm")
+    )
+    executor = _executor()
+    request = MagicMock(
+        pinned_models=pins,
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+    )
+    executor.validate_pinned_model_profiles(request)
+
+    request.context_policy_revision = "stale-policy"
+    with pytest.raises(IncompatibleActiveRunError, match="context policy"):
+        executor.validate_pinned_model_profiles(request)
+
+    request.context_policy_revision = CONTEXT_POLICY_REVISION
+    mismatched = _executor()
+    mismatched._model_fingerprint_for_role = lambda role: ModelFingerprint(
+        "other", f"test-{role}", None
+    )
+    with pytest.raises(IncompatibleActiveRunError, match="model endpoint"):
+        mismatched.validate_pinned_model_profiles(request)
 
 
 def _resource_resolver() -> AnswerResourceResolver:
@@ -443,10 +488,15 @@ async def test_research_run_seeds_facts_without_duplicating_pinned_history() -> 
             )
             for role in ("extract", "keyword", "query", "vlm")
         ),
-        context_policy_revision="m1-v1",
+        context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision="test",
         idempotency_fingerprint="request-hash",
         session_id=str(uuid.uuid7()),
+        agent_run_plan=AgentRunPlan.from_tools(
+            (),
+            model_role="query",
+            context_policy_revision=CONTEXT_POLICY_REVISION,
+        ),
     )
     prepared = MagicMock(tools=[], evidence=MagicMock(ledger_state_json=lambda: "{}"))
     orchestrator = MagicMock(resolved_mode="research")
@@ -525,10 +575,15 @@ async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -
             )
             for role in ("extract", "keyword", "query", "vlm")
         ),
-        context_policy_revision="m1-v1",
+        context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision="test",
         idempotency_fingerprint="request-hash",
         session_id=str(uuid.uuid7()),
+        agent_run_plan=AgentRunPlan.from_tools(
+            (),
+            model_role="query",
+            context_policy_revision=CONTEXT_POLICY_REVISION,
+        ),
     )
     from datetime import UTC, datetime
 
@@ -669,8 +724,10 @@ def test_fetched_resource_batches_are_atomic_and_session_scoped() -> None:
     buffer = FetchedResourceBuffer()
     parent = SessionId.new()
     child = SessionId.new()
+    intent_id = IntentId.new()
+    child_intent_id = IntentId.new()
 
-    def append(scope: SessionId, resource_id: str) -> None:
+    def append(scope: SessionId, intent_id: IntentId, resource_id: str) -> None:
         buffer.append(
             FetchedResourceBytes(
                 resource_id=resource_id,
@@ -680,14 +737,14 @@ def test_fetched_resource_batches_are_atomic_and_session_scoped() -> None:
                 url=f"https://example.com/{resource_id}",
                 content=resource_id.encode(),
             ),
-            ResourceEffectOwner(execution_scope=scope.value, call_id="call-1"),
+            ResourceEffectOwner(execution_scope=scope.value, intent_id=intent_id),
         )
 
-    append(parent, "parent-a")
-    append(parent, "parent-b")
-    append(child, "child-a")
+    append(parent, intent_id, "parent-a")
+    append(parent, intent_id, "parent-b")
+    append(child, child_intent_id, "child-a")
     intent = EffectIntent(
-        intent_id=IntentId.new(),
+        intent_id=intent_id,
         tool_name="read",
         replay_policy="replayable",
         contract_version=1,
@@ -713,9 +770,9 @@ def test_fetched_resource_batches_are_atomic_and_session_scoped() -> None:
         "parent-a",
         "parent-b",
     ]
-    assert [item.resource_id for item in buffer.drain(scope=child.value, call_id="call-1")] == [
-        "child-a"
-    ]
+    assert [
+        item.resource_id for item in buffer.drain(scope=child.value, intent_id=child_intent_id)
+    ] == ["child-a"]
 
 
 def test_memory_operation_details_become_a_typed_product_host_update() -> None:

@@ -7,6 +7,7 @@ identities use UUIDv5 derived from the run id and a declared namespace, so the
 same identity is reconstructed identically across processes and replays.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Self
 from uuid import NAMESPACE_URL, UUID, uuid5, uuid7
@@ -48,6 +49,33 @@ class SessionId:
     @classmethod
     def deterministic(cls, *, run_id: str, name: str) -> Self:
         return cls(deterministic_uuid(seed=run_id, name=name))
+
+    def __str__(self) -> str:
+        return self.value
+
+
+_LANE_ID_RE = re.compile(r"^main$|^[0-9a-f-]{36}$")
+
+
+@dataclass(frozen=True, slots=True)
+class LaneId:
+    """One stable, non-reusable cursor identity within a Session Tree."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if not _LANE_ID_RE.fullmatch(self.value):
+            raise ValueError("LaneId must be 'main' or a canonical UUID")
+        if len(self.value) == 36:
+            _require_canonical_uuid(self.value, "LaneId")
+
+    @classmethod
+    def main(cls) -> Self:
+        return cls("main")
+
+    @classmethod
+    def new(cls) -> Self:
+        return cls(new_uuid7())
 
     def __str__(self) -> str:
         return self.value
@@ -124,6 +152,7 @@ class StageIntentId:
 __all__ = [
     "EntryId",
     "IntentId",
+    "LaneId",
     "ProjectionId",
     "SessionId",
     "StageIntentId",

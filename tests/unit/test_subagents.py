@@ -49,6 +49,27 @@ async def _retrieve(_query: str) -> object:
     raise RuntimeError("unused")
 
 
+def test_child_identity_uses_durable_intent_not_provider_call_id() -> None:
+    run_id = SessionId.new().value
+    parent_id = SessionId.new()
+    first = child_session_id(
+        run_id=run_id,
+        parent_session_id=parent_id,
+        parent_intent_id=IntentId.new(),
+    )
+    second = child_session_id(
+        run_id=run_id,
+        parent_session_id=parent_id,
+        parent_intent_id=IntentId.new(),
+    )
+    assert first != second
+
+
+def test_subagent_cancel_is_never_replayed_without_durable_reconciliation() -> None:
+    tools = {tool.name: tool for tool in subagent_tools(host=SubagentHost())}
+    assert tools["cancel_subagent"].replay_policy == "never"
+
+
 def test_parent_tools_include_spawn_and_child_omits_it() -> None:
     host = SubagentHost()
     parent = compose_research_tools(
@@ -72,8 +93,8 @@ def test_parent_tools_include_spawn_and_child_omits_it() -> None:
     )
     controls = {"subagent_status", "wait_subagent", "cancel_subagent"}
     assert {"spawn_agent", *controls} <= {tool.name for tool in parent}
-    assert {"search_knowledge_base", *controls} == {tool.name for tool in child}
-    assert "spawn_agent" not in {tool.name for tool in child}
+    assert {"search_knowledge_base"} == {tool.name for tool in child}
+    assert not ({"spawn_agent"} | controls) & {tool.name for tool in child}
 
 
 async def test_spawn_many_runs_in_parallel_and_aggregates_usage() -> None:
@@ -686,5 +707,9 @@ async def test_parent_turn_binds_child_effect_intent() -> None:
     assert seen["context_mode"] == "isolated"
     assert (
         seen["child_session_id"]
-        == child_session_id(run_id=run_id, parent_session_id=parent_id, call_id="call-9").value
+        == child_session_id(
+            run_id=run_id,
+            parent_session_id=parent_id,
+            parent_intent_id=intent.intent_id,
+        ).value
     )

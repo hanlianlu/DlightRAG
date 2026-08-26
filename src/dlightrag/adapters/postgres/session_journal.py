@@ -8,8 +8,8 @@ under the live lease/epoch predicate, so a stale or lost lease changes zero
 rows (M3 transactional invariant 1).
 
 Settlements are one transaction each: host updates, ordered result entries,
-projection, settlement columns, session version, and durable run progress
-commit atomically (M3-D26/D27, transactional invariant 2).
+projection, settlement columns, exact Lane registers, Session commit sequence,
+and durable run progress commit atomically.
 """
 
 from __future__ import annotations
@@ -18,14 +18,35 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Any
 
 from dlightrag.adapters.postgres._operations import ConnectionPool
 from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.agent.session.effects import EffectSettlement, JsonValue
-from dlightrag.agent.session.entries import EffectIntentEntry, SessionEntry
-from dlightrag.agent.session.ids import IntentId, ProjectionId, SessionId, StageIntentId
+from dlightrag.agent.session.entries import (
+    EffectIntentEntry,
+    EffectResultEntry,
+    SessionEntry,
+)
+from dlightrag.agent.session.ids import (
+    EntryId,
+    IntentId,
+    LaneId,
+    ProjectionId,
+    SessionId,
+    StageIntentId,
+)
 from dlightrag.agent.session.projection import ContextProjection
+from dlightrag.agent.session.registers import (
+    DeleteRegister,
+    LaneHead,
+    LaneState,
+    RegisterRecord,
+    RegisterRef,
+    SetRegister,
+    decode_register,
+)
 from dlightrag.agent.session.store import (
     AgentSessionSnapshot,
     AppendCommit,
@@ -37,7 +58,14 @@ from dlightrag.agent.session.store import (
     SessionCommit,
     SessionProgressClass,
     SettleCommit,
-    VersionConflict,
+)
+from dlightrag.agent.session.transactions import (
+    RegisterConflict,
+    RegisterExpectation,
+    SessionTransaction,
+    TransactionCommit,
+    TransactionLeaseLost,
+    TransactionOutcome,
 )
 from dlightrag.agent.tool_content import encode_tool_content
 from dlightrag.runtime.progress import (
@@ -68,7 +96,7 @@ FOR UPDATE
 """
 
 _LOCK_SESSION = """
-SELECT version, active_projection_id
+SELECT commit_sequence, fencing_epoch, last_sequence, active_projection_id
 FROM dlightrag_agent_sessions
 WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
 FOR UPDATE
@@ -76,26 +104,27 @@ FOR UPDATE
 
 _CREATE_SESSION = """
 INSERT INTO dlightrag_agent_sessions (
-    owner_id, run_id, session_id, version, active_projection_id
+    owner_id, run_id, session_id, commit_sequence, fencing_epoch, active_projection_id
 )
-VALUES ($1, $2, $3, 0, NULL)
+VALUES ($1, $2, $3, 0, $4, NULL)
 ON CONFLICT (owner_id, run_id, session_id) DO NOTHING
 """
 
 _INSERT_ENTRY = """
 INSERT INTO dlightrag_agent_session_entries (
-    owner_id, run_id, session_id, sequence, entry_id, entry_type,
-    schema_version, timestamp, payload_json
+    owner_id, run_id, session_id, sequence, entry_id, parent_entry_id,
+    entry_type, schema_version, timestamp, payload_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
 """
 
 _INSERT_PROJECTION = """
 INSERT INTO dlightrag_agent_context_projections (
     owner_id, run_id, session_id, projection_id, first_retained_sequence,
-    covered_through_sequence, summary, token_anchors, schema_version
+    covered_through_sequence, covered_through_entry_id, first_retained_entry_id,
+    source_digest, summary, token_anchors, schema_version
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
 ON CONFLICT (owner_id, run_id, session_id, projection_id) DO NOTHING
 """
 
@@ -110,12 +139,12 @@ ON CONFLICT (owner_id, run_id, session_id, intent_id) DO NOTHING
 
 _ADVANCE_SESSION = """
 UPDATE dlightrag_agent_sessions
-SET version = version + 1,
+SET commit_sequence = commit_sequence + 1,
     last_sequence = last_sequence + $4,
     active_projection_id = COALESCE($5, active_projection_id),
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
-RETURNING version
+RETURNING commit_sequence
 """
 
 _ADVANCE_PROGRESS = """
@@ -143,21 +172,53 @@ FROM bumped
 """
 
 _SELECT_SESSION_SNAPSHOT = """
-SELECT version, active_projection_id
+SELECT commit_sequence, active_projection_id
 FROM dlightrag_agent_sessions
 WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
 """
 
 _SELECT_ENTRIES = """
-SELECT sequence, entry_id::text, entry_type, schema_version, timestamp, payload_json
+SELECT sequence, entry_id::text, parent_entry_id::text, entry_type,
+       schema_version, timestamp, payload_json
 FROM dlightrag_agent_session_entries
 WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
 ORDER BY sequence
 """
 
+_SELECT_REGISTERS = """
+SELECT register_kind, register_key, sequence, payload_json
+FROM dlightrag_agent_session_registers
+WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
+ORDER BY register_kind, register_key
+"""
+
+_SELECT_REGISTER_FOR_UPDATE = """
+SELECT sequence, payload_json
+FROM dlightrag_agent_session_registers
+WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
+  AND register_kind = $4 AND register_key = $5
+FOR UPDATE
+"""
+
+_SET_REGISTER = """
+INSERT INTO dlightrag_agent_session_registers (
+    owner_id, run_id, session_id, register_kind, register_key, sequence, payload_json
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+ON CONFLICT (owner_id, run_id, session_id, register_kind, register_key)
+DO UPDATE SET sequence = EXCLUDED.sequence, payload_json = EXCLUDED.payload_json
+"""
+
+_DELETE_REGISTER = """
+DELETE FROM dlightrag_agent_session_registers
+WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
+  AND register_kind = $4 AND register_key = $5
+"""
+
 _SELECT_PROJECTION = """
 SELECT projection_id::text, first_retained_sequence, covered_through_sequence,
-       summary, token_anchors, schema_version
+       covered_through_entry_id::text, first_retained_entry_id::text,
+       source_digest, summary, token_anchors, schema_version
 FROM dlightrag_agent_context_projections
 WHERE owner_id = $1 AND run_id = $2 AND session_id = $3 AND projection_id = $4
 """
@@ -269,17 +330,23 @@ class PGJournalStore:
             )
             if session_row is None:
                 return AgentSessionSnapshot(
-                    session_id=session_id, version=0, entries=(), active_projection=None
+                    session_id=session_id,
+                    commit_sequence=0,
+                    entries=(),
+                    active_projection=None,
+                    registers=(),
                 )
             entries = await self._load_entries(conn, session_id)
+            registers = await self._load_registers(conn, session_id)
             projection = await self._load_projection(
                 conn, session_id, session_row["active_projection_id"]
             )
             return AgentSessionSnapshot(
                 session_id=session_id,
-                version=int(session_row["version"]),
+                commit_sequence=int(session_row["commit_sequence"]),
                 entries=tuple(entries),
                 active_projection=projection,
+                registers=tuple(registers),
             )
 
     async def _load_entries(self, conn: Any, session_id: SessionId) -> list[SessionEntry]:
@@ -297,6 +364,28 @@ class PGJournalStore:
                 )
             )
         return entries
+
+    async def _load_registers(self, conn: Any, session_id: SessionId) -> list[RegisterRecord]:
+        rows = await conn.fetch(
+            _SELECT_REGISTERS,
+            self._owner_id,
+            self._run_id,
+            _uuid(session_id.value),
+        )
+        records: list[RegisterRecord] = []
+        for row in rows:
+            ref = RegisterRef(
+                kind=str(row["register_kind"]),  # type: ignore[arg-type]
+                key=str(row["register_key"]),
+            )
+            value = decode_register(
+                kind=ref.kind,
+                payload=_json_payload(row["payload_json"]),
+            )
+            if value.ref != ref:
+                raise ValueError("Agent Session register payload identity is corrupt")
+            records.append(RegisterRecord(value=value, sequence=int(row["sequence"])))
+        return records
 
     async def _load_projection(
         self, conn: Any, session_id: SessionId, projection_id: Any
@@ -316,12 +405,134 @@ class PGJournalStore:
             projection_id=ProjectionId(str(projection_id)),
             first_retained_sequence=int(row["first_retained_sequence"]),
             covered_through_sequence=int(row["covered_through_sequence"]),
+            covered_through_entry_id=(
+                EntryId(str(row["covered_through_entry_id"]))
+                if row["covered_through_entry_id"] is not None
+                else None
+            ),
+            first_retained_entry_id=(
+                EntryId(str(row["first_retained_entry_id"]))
+                if row["first_retained_entry_id"] is not None
+                else None
+            ),
+            source_digest=str(row["source_digest"] or ""),
             summary=row["summary"],
             token_anchors=tuple(
                 _token_anchor(anchor) for anchor in (_json_payload(row["token_anchors"]) or [])
             ),
             schema_version=int(row["schema_version"]),
         )
+
+    async def transact(
+        self,
+        *,
+        session_id: SessionId,
+        fencing_epoch: int,
+        transaction: SessionTransaction[EffectHostUpdate],
+    ) -> TransactionOutcome:
+        """Apply one exact-register-CAS Session transaction."""
+        if fencing_epoch != self._fencing_epoch:
+            return TransactionLeaseLost()
+        if transaction.host_delta is not None:
+            raise TypeError("HostDelta settlement requires an Effect intent in M2")
+        async with self._connection() as conn:
+            async with conn.transaction():
+                if await self._hold_lease(conn) is None:
+                    return TransactionLeaseLost()
+                await conn.execute(
+                    _CREATE_SESSION,
+                    self._owner_id,
+                    self._run_id,
+                    _uuid(session_id.value),
+                    fencing_epoch,
+                )
+                session_row = await conn.fetchrow(
+                    _LOCK_SESSION, self._owner_id, self._run_id, _uuid(session_id.value)
+                )
+                stored_epoch = int(session_row["fencing_epoch"])
+                if stored_epoch > fencing_epoch:
+                    return TransactionLeaseLost()
+                if stored_epoch < fencing_epoch:
+                    await conn.execute(
+                        "UPDATE dlightrag_agent_sessions SET fencing_epoch = $4"
+                        " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
+                        self._owner_id,
+                        self._run_id,
+                        _uuid(session_id.value),
+                        fencing_epoch,
+                    )
+                current_sequence = int(session_row["commit_sequence"])
+                for expectation in transaction.expectations:
+                    row = await conn.fetchrow(
+                        _SELECT_REGISTER_FOR_UPDATE,
+                        self._owner_id,
+                        self._run_id,
+                        _uuid(session_id.value),
+                        expectation.ref.kind,
+                        expectation.ref.key,
+                    )
+                    actual = int(row["sequence"]) if row is not None else None
+                    if actual != expectation.sequence:
+                        return RegisterConflict(
+                            ref=expectation.ref,
+                            expected_sequence=expectation.sequence,
+                            current_sequence=actual,
+                        )
+                await self._validate_transaction_entries(conn, session_id, transaction.entries)
+                await self._validate_transaction_registers(conn, session_id, transaction)
+                next_sequence = current_sequence + 1
+                last_entry_sequence = int(session_row["last_sequence"])
+                entry_sequences = tuple(
+                    range(
+                        last_entry_sequence + 1,
+                        last_entry_sequence + 1 + len(transaction.entries),
+                    )
+                )
+                for entry, sequence in zip(transaction.entries, entry_sequences, strict=True):
+                    await self._insert_entry(conn, session_id, entry, sequence)
+                register_sequences: list[tuple[RegisterRef, int]] = []
+                for write in transaction.register_writes:
+                    if isinstance(write, SetRegister):
+                        await conn.execute(
+                            _SET_REGISTER,
+                            self._owner_id,
+                            self._run_id,
+                            _uuid(session_id.value),
+                            write.ref.kind,
+                            write.ref.key,
+                            next_sequence,
+                            json.dumps(write.value.canonical_payload(), ensure_ascii=False),
+                        )
+                    elif isinstance(write, DeleteRegister):
+                        await conn.execute(
+                            _DELETE_REGISTER,
+                            self._owner_id,
+                            self._run_id,
+                            _uuid(session_id.value),
+                            write.ref.kind,
+                            write.ref.key,
+                        )
+                    register_sequences.append((write.ref, next_sequence))
+                if transaction.projection is not None:
+                    await self._insert_projection(conn, session_id, transaction.projection)
+                await conn.execute(
+                    _ADVANCE_SESSION,
+                    self._owner_id,
+                    self._run_id,
+                    _uuid(session_id.value),
+                    len(transaction.entries),
+                    (
+                        _uuid(transaction.projection.projection_id.value)
+                        if transaction.projection
+                        else None
+                    ),
+                )
+                await conn.execute(_ADVANCE_PROGRESS, self._owner_id, self._run_id)
+                return TransactionCommit(
+                    commit_sequence=next_sequence,
+                    appended_sequences=entry_sequences,
+                    register_sequences=tuple(register_sequences),
+                )
 
     async def append(
         self,
@@ -331,72 +542,259 @@ class PGJournalStore:
         entries: Sequence[SessionEntry],
         projection: ContextProjection | None = None,
     ) -> AppendCommit:
+        """Transitional main-Lane writer removed with JournalRunBoundaries in M3."""
         if not entries:
             raise ValueError("a session transaction requires at least one entry")
-        async with self._connection() as conn:
-            async with conn.transaction():
-                if await self._hold_lease(conn) is None:
-                    return LeaseLost()
-                await conn.execute(
-                    _CREATE_SESSION, self._owner_id, self._run_id, _uuid(session_id.value)
-                )
-                session_row = await conn.fetchrow(
-                    _LOCK_SESSION, self._owner_id, self._run_id, _uuid(session_id.value)
-                )
-                version = int(session_row["version"])
-                if version != expected_version:
-                    return VersionConflict(
-                        expected_version=expected_version, current_version=version
-                    )
-                last_sequence = await conn.fetchval(
-                    "SELECT last_sequence FROM dlightrag_agent_sessions"
-                    " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
-                    self._owner_id,
-                    self._run_id,
-                    _uuid(session_id.value),
-                )
-                sequences = tuple(
-                    range(int(last_sequence) + 1, int(last_sequence) + len(entries) + 1)
-                )
-                for entry, sequence in zip(entries, sequences, strict=True):
-                    await conn.execute(
-                        _INSERT_ENTRY,
-                        self._owner_id,
-                        self._run_id,
-                        _uuid(session_id.value),
-                        sequence,
-                        _uuid(entry.entry_id.value),
-                        entry.entry_type,
-                        entry.schema_version,
-                        entry.timestamp,
-                        json.dumps(entry.canonical_payload(), ensure_ascii=False),
-                    )
-                    if isinstance(entry, EffectIntentEntry):
-                        await conn.execute(
-                            _INSERT_INTENT_ROW,
-                            self._owner_id,
-                            self._run_id,
-                            _uuid(session_id.value),
-                            _uuid(entry.intent.intent_id.value),
-                            entry.intent.tool_name,
-                            entry.intent.replay_policy,
-                            entry.intent.contract_version,
-                            entry.intent.input_schema_digest,
-                            entry.intent.canonical_input,
-                            entry.intent.source_call_id,
-                        )
-                if projection is not None:
-                    await self._insert_projection(conn, session_id, projection)
-                await conn.execute(
-                    _ADVANCE_SESSION,
-                    self._owner_id,
-                    self._run_id,
-                    _uuid(session_id.value),
-                    len(entries),
-                    _uuid(projection.projection_id.value) if projection else None,
-                )
-                await conn.execute(_ADVANCE_PROGRESS, self._owner_id, self._run_id)
-                return SessionCommit(version=version + 1, appended_sequences=sequences)
+        del expected_version
+        snapshot = await self.load(session_id)
+        try:
+            lane = snapshot.tree.lane(LaneId.main())
+            head_record = lane.head
+            state_record = lane.state
+            bootstrap = False
+        except KeyError:
+            head_record = RegisterRecord(LaneHead(LaneId.main(), None), 1)
+            state_record = RegisterRecord(LaneState(LaneId.main()), 1)
+            bootstrap = True
+        head_value = head_record.value
+        if not isinstance(head_value, LaneHead):
+            raise TypeError("main Lane Head register has the wrong value type")
+        parent = head_value.entry_id
+        placed: list[SessionEntry] = []
+        for entry in entries:
+            placed_entry = replace(entry, parent_entry_id=parent)
+            placed.append(placed_entry)
+            parent = placed_entry.entry_id
+        head = LaneHead(LaneId.main(), parent)
+        writes: list[SetRegister] = [SetRegister(head)]
+        expectations = [RegisterExpectation(head.ref, None if bootstrap else head_record.sequence)]
+        if bootstrap:
+            writes.append(SetRegister(state_record.value))
+            expectations.append(RegisterExpectation(state_record.ref, None))
+        outcome = await self.transact(
+            session_id=session_id,
+            fencing_epoch=self._fencing_epoch,
+            transaction=SessionTransaction.from_parts(
+                entries=placed,
+                register_writes=writes,
+                expectations=expectations,
+                projection=projection,
+            ),
+        )
+        if isinstance(outcome, TransactionLeaseLost):
+            return LeaseLost()
+        if isinstance(outcome, RegisterConflict):
+            raise RuntimeError("single-owner main Lane changed during one append")
+        return SessionCommit(
+            version=outcome.commit_sequence,
+            appended_sequences=outcome.appended_sequences,
+        )
+
+    async def append_to_lane(
+        self,
+        *,
+        session_id: SessionId,
+        lane_id: LaneId,
+        expected_head: RegisterRecord,
+        entries: Sequence[SessionEntry],
+        projection: ContextProjection | None = None,
+    ) -> TransactionOutcome:
+        if not entries:
+            raise ValueError("a Lane append requires at least one Entry")
+        if not isinstance(expected_head.value, LaneHead):
+            raise TypeError("expected_head must be a LaneHead record")
+        if expected_head.value.lane_id != lane_id:
+            raise ValueError("expected Lane Head belongs to another Lane")
+        snapshot = await self.load(session_id)
+        lane = snapshot.tree.lane(lane_id)
+        if lane.archived:
+            raise ValueError("an archived Lane is not writable")
+        parent = expected_head.value.entry_id
+        placed: list[SessionEntry] = []
+        for entry in entries:
+            placed_entry = replace(entry, parent_entry_id=parent)
+            placed.append(placed_entry)
+            parent = placed_entry.entry_id
+        return await self.transact(
+            session_id=session_id,
+            fencing_epoch=self._fencing_epoch,
+            transaction=SessionTransaction.from_parts(
+                entries=placed,
+                register_writes=[SetRegister(LaneHead(lane_id, parent))],
+                expectations=[
+                    RegisterExpectation(expected_head.ref, expected_head.sequence),
+                    RegisterExpectation(lane.state.ref, lane.state.sequence),
+                ],
+                projection=projection,
+            ),
+        )
+
+    async def fork_lane(
+        self,
+        *,
+        session_id: SessionId,
+        source_lane_id: LaneId,
+        lane_id: LaneId,
+        at_entry_id: EntryId | None = None,
+    ) -> TransactionOutcome:
+        snapshot = await self.load(session_id)
+        source = snapshot.tree.lane(source_lane_id)
+        target = source.head_entry_id if at_entry_id is None else at_entry_id
+        if target is None:
+            raise ValueError("a Lane cannot fork from an empty Head")
+        ancestry_ids = {entry.entry_id for entry in snapshot.tree.ancestry(source_lane_id)}
+        if target is not None and target not in ancestry_ids:
+            raise ValueError("a fork target must belong to the source Lane ancestry")
+        if not snapshot.tree.is_stable_checkpoint(target):
+            raise ValueError("a Lane can fork only from a stable checkpoint")
+        head = LaneHead(lane_id=lane_id, entry_id=target)
+        state = LaneState(lane_id=lane_id)
+        return await self.transact(
+            session_id=session_id,
+            fencing_epoch=self._fencing_epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(head), SetRegister(state)],
+                expectations=[
+                    RegisterExpectation(head.ref, None),
+                    RegisterExpectation(state.ref, None),
+                ],
+            ),
+        )
+
+    async def archive_lane(
+        self,
+        *,
+        session_id: SessionId,
+        lane_id: LaneId,
+    ) -> TransactionOutcome:
+        if lane_id == LaneId.main():
+            raise ValueError("the main Lane cannot be archived")
+        snapshot = await self.load(session_id)
+        lane = snapshot.tree.lane(lane_id)
+        state = lane.state.value
+        if not isinstance(state, LaneState):
+            raise TypeError("Lane State register has the wrong value type")
+        if state.active_operation_id is not None:
+            raise ValueError("an active Lane cannot be archived")
+        return await self.transact(
+            session_id=session_id,
+            fencing_epoch=self._fencing_epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(replace(state, archived=True))],
+                expectations=[RegisterExpectation(lane.state.ref, lane.state.sequence)],
+            ),
+        )
+
+    async def _validate_transaction_registers(
+        self,
+        conn: Any,
+        session_id: SessionId,
+        transaction: SessionTransaction[EffectHostUpdate],
+    ) -> None:
+        rows = await conn.fetch(
+            "SELECT register_kind, register_key, payload_json"
+            " FROM dlightrag_agent_session_registers"
+            " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
+            self._owner_id,
+            self._run_id,
+            _uuid(session_id.value),
+        )
+        values = {}
+        for row in rows:
+            ref = RegisterRef(
+                kind=str(row["register_kind"]),  # type: ignore[arg-type]
+                key=str(row["register_key"]),
+            )
+            values[ref] = decode_register(
+                kind=ref.kind,
+                payload=_json_payload(row["payload_json"]),
+            )
+        for write in transaction.register_writes:
+            if isinstance(write, SetRegister):
+                values[write.ref] = write.value
+            elif isinstance(write, DeleteRegister):
+                values.pop(write.ref, None)
+        refs = set(values)
+        heads = {ref.key for ref in refs if ref.kind == "lane_head"}
+        states = {ref.key for ref in refs if ref.kind == "lane_state"}
+        if heads != states or LaneId.main().value not in heads:
+            raise ValueError("Session registers require complete main and Lane pairs")
+        if transaction.entries:
+            advanced_lanes = {
+                write.value.lane_id
+                for write in transaction.register_writes
+                if isinstance(write, SetRegister)
+                and isinstance(write.value, LaneHead)
+                and write.value.entry_id == transaction.entries[-1].entry_id
+            }
+            for advanced_lane_id in advanced_lanes:
+                state = values.get(LaneState(advanced_lane_id).ref)
+                if isinstance(state, LaneState) and state.archived:
+                    raise ValueError("an archived Lane is not writable")
+
+    async def _validate_transaction_entries(
+        self,
+        conn: Any,
+        session_id: SessionId,
+        entries: Sequence[SessionEntry],
+    ) -> None:
+        rows = await conn.fetch(
+            "SELECT entry_id::text, parent_entry_id::text"
+            " FROM dlightrag_agent_session_entries"
+            " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
+            self._owner_id,
+            self._run_id,
+            _uuid(session_id.value),
+        )
+        known = {EntryId(str(row["entry_id"])) for row in rows}
+        roots = sum(row["parent_entry_id"] is None for row in rows)
+        for entry in entries:
+            if entry.session_id != session_id:
+                raise ValueError("transaction Entry belongs to another Session")
+            if entry.entry_id in known:
+                raise ValueError("transaction Entry identity already exists")
+            if entry.parent_entry_id is None:
+                if known or roots:
+                    raise ValueError("only the first Session Entry can be a root")
+                roots += 1
+            elif entry.parent_entry_id not in known:
+                raise ValueError("transaction Entry parent is missing")
+            known.add(entry.entry_id)
+
+    async def _insert_entry(
+        self,
+        conn: Any,
+        session_id: SessionId,
+        entry: SessionEntry,
+        sequence: int,
+    ) -> None:
+        await conn.execute(
+            _INSERT_ENTRY,
+            self._owner_id,
+            self._run_id,
+            _uuid(session_id.value),
+            sequence,
+            _uuid(entry.entry_id.value),
+            (_uuid(entry.parent_entry_id.value) if entry.parent_entry_id is not None else None),
+            entry.entry_type,
+            entry.schema_version,
+            entry.timestamp,
+            json.dumps(entry.canonical_payload(), ensure_ascii=False),
+        )
+        if isinstance(entry, EffectIntentEntry):
+            await conn.execute(
+                _INSERT_INTENT_ROW,
+                self._owner_id,
+                self._run_id,
+                _uuid(session_id.value),
+                _uuid(entry.intent.intent_id.value),
+                entry.intent.tool_name,
+                entry.intent.replay_policy,
+                entry.intent.contract_version,
+                entry.intent.input_schema_digest,
+                entry.intent.canonical_input,
+                entry.intent.source_call_id,
+            )
 
     async def settle_effect(
         self,
@@ -408,6 +806,7 @@ class PGJournalStore:
         entries: Sequence[SessionEntry],
         projection: ContextProjection | None = None,
         progress: SessionProgressClass = "live",
+        lane_id: LaneId | None = None,
     ) -> SettleCommit:
         if not entries:
             raise ValueError("a settlement requires at least one result entry")
@@ -423,6 +822,7 @@ class PGJournalStore:
                         entries=entries,
                         projection=projection,
                         progress=progress,
+                        lane_id=lane_id or LaneId.main(),
                     )
                 except _EvidenceIdentityConflict:
                     return EvidenceConflict()
@@ -438,7 +838,9 @@ class PGJournalStore:
         entries: Sequence[SessionEntry],
         projection: ContextProjection | None,
         progress: SessionProgressClass,
+        lane_id: LaneId,
     ) -> SettleCommit:
+        del expected_version
         if await self._hold_lease(conn) is None:
             return LeaseLost()
         session_row = await conn.fetchrow(
@@ -446,9 +848,19 @@ class PGJournalStore:
         )
         if session_row is None:
             return EffectMissing(intent_id=intent_id)
-        version = int(session_row["version"])
-        if version != expected_version:
-            return VersionConflict(expected_version=expected_version, current_version=version)
+        stored_epoch = int(session_row["fencing_epoch"])
+        if stored_epoch > self._fencing_epoch:
+            return LeaseLost()
+        if stored_epoch < self._fencing_epoch:
+            await conn.execute(
+                "UPDATE dlightrag_agent_sessions SET fencing_epoch = $4"
+                " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
+                self._owner_id,
+                self._run_id,
+                _uuid(session_id.value),
+                self._fencing_epoch,
+            )
+        version = int(session_row["commit_sequence"])
         intent_row = await conn.fetchrow(
             _SELECT_INTENT_FOR_UPDATE,
             self._owner_id,
@@ -460,6 +872,55 @@ class PGJournalStore:
             return EffectMissing(intent_id=intent_id)
         if intent_row["outcome"] is not None:
             return EffectAlreadySettled(intent_id=intent_id)
+        if any(
+            not isinstance(entry, EffectResultEntry) or entry.intent_id != intent_id
+            for entry in entries
+        ):
+            raise ValueError("settlement entries must belong to the settled intent")
+        head_row = await conn.fetchrow(
+            _SELECT_REGISTER_FOR_UPDATE,
+            self._owner_id,
+            self._run_id,
+            _uuid(session_id.value),
+            "lane_head",
+            lane_id.value,
+        )
+        state_row = await conn.fetchrow(
+            _SELECT_REGISTER_FOR_UPDATE,
+            self._owner_id,
+            self._run_id,
+            _uuid(session_id.value),
+            "lane_state",
+            lane_id.value,
+        )
+        if head_row is None or state_row is None:
+            raise ValueError("settlement Lane registers are incomplete")
+        head = decode_register(kind="lane_head", payload=_json_payload(head_row["payload_json"]))
+        state = decode_register(kind="lane_state", payload=_json_payload(state_row["payload_json"]))
+        if not isinstance(head, LaneHead) or not isinstance(state, LaneState):
+            raise TypeError("settlement Lane registers have the wrong value type")
+        if state.archived:
+            raise ValueError("an archived Lane is not writable")
+        belongs = await conn.fetchval(
+            "WITH RECURSIVE ancestry AS ("
+            " SELECT entry_id, parent_entry_id, entry_type, payload_json"
+            " FROM dlightrag_agent_session_entries"
+            " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3 AND entry_id = $4"
+            " UNION ALL"
+            " SELECT parent.entry_id, parent.parent_entry_id, parent.entry_type, parent.payload_json"
+            " FROM dlightrag_agent_session_entries parent"
+            " JOIN ancestry child ON parent.entry_id = child.parent_entry_id"
+            " WHERE parent.owner_id = $1 AND parent.run_id = $2 AND parent.session_id = $3"
+            ") SELECT 1 FROM ancestry"
+            " WHERE entry_type = 'effect_intent' AND payload_json->>'intent_id' = $5",
+            self._owner_id,
+            self._run_id,
+            _uuid(session_id.value),
+            _uuid(head.entry_id.value) if head.entry_id is not None else None,
+            intent_id.value,
+        )
+        if belongs is None:
+            raise ValueError("settled intent does not belong to the selected Lane")
 
         host_update_digest = await self._write_host_update(
             conn, session_id, intent_id, settlement.host_update
@@ -480,41 +941,26 @@ class PGJournalStore:
                     ensure_ascii=False,
                 ),
             )
-        last_sequence = await conn.fetchval(
-            "SELECT last_sequence FROM dlightrag_agent_sessions"
-            " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
+        last_sequence = int(session_row["last_sequence"])
+        parent = head.entry_id
+        placed: list[SessionEntry] = []
+        for entry in entries:
+            placed_entry = replace(entry, parent_entry_id=parent)
+            placed.append(placed_entry)
+            parent = placed_entry.entry_id
+        sequences = tuple(range(last_sequence + 1, last_sequence + len(placed) + 1))
+        for entry, sequence in zip(placed, sequences, strict=True):
+            await self._insert_entry(conn, session_id, entry, sequence)
+        await conn.execute(
+            _SET_REGISTER,
             self._owner_id,
             self._run_id,
             _uuid(session_id.value),
+            "lane_head",
+            lane_id.value,
+            version + 1,
+            json.dumps(LaneHead(lane_id, parent).canonical_payload(), ensure_ascii=False),
         )
-        sequences = tuple(range(int(last_sequence) + 1, int(last_sequence) + len(entries) + 1))
-        for entry, sequence in zip(entries, sequences, strict=True):
-            await conn.execute(
-                _INSERT_ENTRY,
-                self._owner_id,
-                self._run_id,
-                _uuid(session_id.value),
-                sequence,
-                _uuid(entry.entry_id.value),
-                entry.entry_type,
-                entry.schema_version,
-                entry.timestamp,
-                json.dumps(entry.canonical_payload(), ensure_ascii=False),
-            )
-            if isinstance(entry, EffectIntentEntry):
-                await conn.execute(
-                    _INSERT_INTENT_ROW,
-                    self._owner_id,
-                    self._run_id,
-                    _uuid(session_id.value),
-                    _uuid(entry.intent.intent_id.value),
-                    entry.intent.tool_name,
-                    entry.intent.replay_policy,
-                    entry.intent.contract_version,
-                    entry.intent.input_schema_digest,
-                    entry.intent.canonical_input,
-                    entry.intent.source_call_id,
-                )
         if projection is not None:
             await self._insert_projection(conn, session_id, projection)
 
@@ -592,6 +1038,17 @@ class PGJournalStore:
             _uuid(projection.projection_id.value),
             projection.first_retained_sequence,
             projection.covered_through_sequence,
+            (
+                _uuid(projection.covered_through_entry_id.value)
+                if projection.covered_through_entry_id is not None
+                else None
+            ),
+            (
+                _uuid(projection.first_retained_entry_id.value)
+                if projection.first_retained_entry_id is not None
+                else None
+            ),
+            projection.source_digest or None,
             projection.summary,
             json.dumps(
                 [
@@ -1163,6 +1620,9 @@ def _decode_entry(row: Any, *, owner_id: str, run_id: str, session_id: SessionId
         sequence=int(row["sequence"]),
         timestamp=row["timestamp"],
         payload=payload,
+        parent_entry_id=(
+            EntryId(str(row["parent_entry_id"])) if row["parent_entry_id"] is not None else None
+        ),
     )
 
 

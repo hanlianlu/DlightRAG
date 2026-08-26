@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from dlightrag.agent import AgentEvent
 from dlightrag.agent.tools import (
     AgentTool,
+    DuplicateToolCallIdError,
     ToolResourceAttachmentPart,
     ToolResult,
     ToolResultCapacityError,
@@ -88,6 +89,30 @@ async def _run_turn(
         observation_budget=observation_budget,
         on_result=on_result,
     )
+
+
+async def test_duplicate_provider_call_ids_are_rejected_before_any_tool_dispatch() -> None:
+    calls = 0
+
+    async def execute(_args: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+        nonlocal calls
+        calls += 1
+        return ToolResult.text("must not run")
+
+    duplicate = _turn(
+        ToolCall(id="duplicate", name="search", arguments={"query": "a"}),
+        ToolCall(id="duplicate", name="search", arguments={"query": "b"}),
+    )
+    executor = ToolTurnExecutor(ScriptedModel(duplicate).complete_turn)  # type: ignore[arg-type]
+
+    with pytest.raises(DuplicateToolCallIdError, match="duplicate"):
+        await _run_turn(
+            executor,
+            [{"role": "user", "content": "go"}],
+            [AgentTool("search", "Search.", SearchArgs, execute)],
+        )
+
+    assert calls == 0
 
 
 async def test_tool_execution_receives_explicit_runtime_identity() -> None:

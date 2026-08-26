@@ -27,6 +27,7 @@ from dlightrag.agent.session.ids import ProjectionId
 from dlightrag.agent.session.projection import (
     CompactionSummary,
     ContextProjection,
+    projection_source_digest,
     render_compaction_summary,
     should_compact,
     validate_projection_commit,
@@ -299,16 +300,31 @@ class CompactionCoordinator:
         trace: dict[str, Any],
     ) -> CompactionOutcome:
         snapshot = await boundaries.load_snapshot()
-        entries = snapshot.entries
+        entries = snapshot.graph.ancestry()
         previous = snapshot.active_projection
         if previous is None:
             raise _CompactionAttemptFailed("no active projection to compact from")
-        summarizable = [
-            entry
-            for entry in entries
-            if entry.sequence >= previous.first_retained_sequence
-            and not isinstance(entry, CompactionEntry)
-        ]
+        branch_entries = [entry for entry in entries if not isinstance(entry, CompactionEntry)]
+        if previous.first_retained_entry_id is None:
+            summarizable = [
+                entry
+                for entry in branch_entries
+                if entry.sequence >= previous.first_retained_sequence
+            ]
+        else:
+            retained_index = next(
+                (
+                    index
+                    for index, entry in enumerate(branch_entries)
+                    if entry.entry_id == previous.first_retained_entry_id
+                ),
+                None,
+            )
+            if retained_index is None:
+                raise _CompactionAttemptFailed(
+                    "active projection retained Head is not on this branch"
+                )
+            summarizable = branch_entries[retained_index:]
         if not summarizable:
             raise _CompactionAttemptFailed("nothing left to compact")
         tail_index = select_compaction_boundary(
@@ -330,6 +346,19 @@ class CompactionCoordinator:
         else:
             first_retained = covered[-1].sequence + 1
         covered_through = covered[-1].sequence
+        covered_entry_id = covered[-1].entry_id
+        first_retained_entry_id = next(
+            (entry.entry_id for entry in branch_entries if entry.sequence == first_retained),
+            None,
+        )
+        covered_index = next(
+            index
+            for index, entry in enumerate(branch_entries)
+            if entry.entry_id == covered_entry_id
+        )
+        source_digest = projection_source_digest(
+            [entry.entry_id for entry in branch_entries[: covered_index + 1]]
+        )
 
         summary_text = await self._summarize(covered, previous_summary=previous.summary)
         try:
@@ -356,6 +385,9 @@ class CompactionCoordinator:
             covered_through_sequence=covered_through,
             summary=summary_json,
             token_anchors=anchors,
+            covered_through_entry_id=covered_entry_id,
+            first_retained_entry_id=first_retained_entry_id,
+            source_digest=source_digest,
         )
         violation = validate_projection_commit(
             previous,

@@ -120,7 +120,10 @@ def test_linear_session_graph_derives_parent_links_and_head() -> None:
     assert graph.head_entry_id == second.entry_id
     assert graph.nodes[0].parent_entry_id is None
     assert graph.nodes[1].parent_entry_id == first.entry_id
-    assert graph.ancestry() == (first, second)
+    ancestry = graph.ancestry()
+    assert [entry.entry_id for entry in ancestry] == [first.entry_id, second.entry_id]
+    assert ancestry[0].parent_entry_id is None
+    assert ancestry[1].parent_entry_id == first.entry_id
     assert graph.select_head(first.entry_id).ancestry() == (first,)
 
 

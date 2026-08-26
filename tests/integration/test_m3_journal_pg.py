@@ -17,8 +17,17 @@ from dlightrag.agent.session.entries import (
     EffectResultEntry,
     UserMessageEntry,
 )
-from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId, StageIntentId
+from dlightrag.agent.session.ids import (
+    EntryId,
+    IntentId,
+    LaneId,
+    ProjectionId,
+    SessionId,
+    StageIntentId,
+)
 from dlightrag.agent.session.projection import ContextProjection, TokenAnchor
+from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
+from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
 from dlightrag.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
 from dlightrag.runtime.settlements import (
     CommittedSpillUpdate,
@@ -129,6 +138,11 @@ def _user(session_id: SessionId, content: str = "hello") -> UserMessageEntry:
     return UserMessageEntry(
         entry_id=EntryId.new(), session_id=session_id, timestamp=_now(), content=content
     )
+
+
+def _user_contents(entries: tuple[object, ...]) -> list[object]:
+    assert all(isinstance(entry, UserMessageEntry) for entry in entries)
+    return [entry.content for entry in entries if isinstance(entry, UserMessageEntry)]
 
 
 def _intent_entry(session_id: SessionId, intent_id: IntentId) -> EffectIntentEntry:
@@ -249,7 +263,7 @@ async def test_effect_settlement_commits_everything_atomically(pool) -> None:
         await pool.release(conn)
 
 
-async def test_version_conflict_rolls_back_every_write(pool) -> None:
+async def test_unrelated_lane_commit_does_not_conflict_with_effect_settlement(pool) -> None:
     claimed = await _claim(pool)
     store = claimed.execution.session_store
     session_id = SessionId.new()
@@ -260,22 +274,27 @@ async def test_version_conflict_rolls_back_every_write(pool) -> None:
         expected_version=0,
         entries=[_intent_entry(session_id, intent_id)],
     )
-    conflict = await store.settle_effect(
+    await store.fork_lane(
         session_id=session_id,
-        expected_version=0,
+        source_lane_id=LaneId.main(),
+        lane_id=LaneId.new(),
+    )
+    settled = await store.settle_effect(
+        session_id=session_id,
+        expected_version=1,
         intent_id=intent_id,
         settlement=_settlement(intent_id, EffectHostUpdate(evidence=(_evidence_write(),))),
         entries=[_result_entry(session_id, intent_id)],
     )
-    assert conflict.__class__.__name__ == "VersionConflict"
+    assert settled.__class__.__name__ == "EffectCommit"
 
     snapshot = await store.load(session_id)
-    assert snapshot.version == 1
-    assert len(snapshot.entries) == 1
+    assert snapshot.commit_sequence == 3
+    assert len(snapshot.entries) == 2
     conn = await pool.acquire()
     try:
         count = await conn.fetchval("SELECT count(*) FROM dlightrag_answer_evidence")
-        assert count == 0
+        assert count == 1
         outcome = await conn.fetchval(
             "SELECT outcome FROM dlightrag_agent_effects"
             " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3 AND intent_id = $4",
@@ -284,9 +303,156 @@ async def test_version_conflict_rolls_back_every_write(pool) -> None:
             session_id.value,
             intent_id.value,
         )
-        assert outcome is None
+        assert outcome == "succeeded"
     finally:
         await pool.release(conn)
+
+
+async def test_lane_register_cas_does_not_conflict_across_branches(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_store
+    session_id = SessionId.new()
+    await store.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_user(session_id, "root")],
+    )
+    initial = await store.load(session_id)
+    main = initial.tree.lane()
+    branch_id = LaneId.new()
+    forked = await store.fork_lane(
+        session_id=session_id,
+        source_lane_id=LaneId.main(),
+        lane_id=branch_id,
+    )
+    assert forked.__class__.__name__ == "TransactionCommit"
+    branch = (await store.load(session_id)).tree.lane(branch_id)
+
+    main_commit = await store.append_to_lane(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        expected_head=main.head,
+        entries=[_user(session_id, "main future")],
+    )
+    assert main_commit.__class__.__name__ == "TransactionCommit"
+    branch_commit = await store.append_to_lane(
+        session_id=session_id,
+        lane_id=branch_id,
+        expected_head=branch.head,
+        entries=[_user(session_id, "branch future")],
+    )
+    assert branch_commit.__class__.__name__ == "TransactionCommit"
+
+    snapshot = await store.load(session_id)
+    assert _user_contents(snapshot.tree.ancestry(LaneId.main())) == [
+        "root",
+        "main future",
+    ]
+    assert _user_contents(snapshot.tree.ancestry(branch_id)) == [
+        "root",
+        "branch future",
+    ]
+
+
+async def test_pg_effect_settlement_advances_the_lane_that_owns_the_intent(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_store
+    session_id = SessionId.new()
+    await store.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_user(session_id, "root")],
+    )
+    branch_id = LaneId.new()
+    await store.fork_lane(
+        session_id=session_id,
+        source_lane_id=LaneId.main(),
+        lane_id=branch_id,
+    )
+    branch = (await store.load(session_id)).tree.lane(branch_id)
+    intent_id = IntentId.new()
+    await store.append_to_lane(
+        session_id=session_id,
+        lane_id=branch_id,
+        expected_head=branch.head,
+        entries=[_intent_entry(session_id, intent_id)],
+    )
+    settled = await store.settle_effect(
+        session_id=session_id,
+        expected_version=0,
+        intent_id=intent_id,
+        settlement=_settlement(intent_id, EffectHostUpdate()),
+        entries=[_result_entry(session_id, intent_id)],
+        lane_id=branch_id,
+    )
+    assert settled.__class__.__name__ == "EffectCommit"
+    snapshot = await store.load(session_id)
+    assert len(snapshot.tree.ancestry(LaneId.main())) == 1
+    assert [entry.entry_type for entry in snapshot.tree.ancestry(branch_id)] == [
+        "user_message",
+        "effect_intent",
+        "effect_result",
+    ]
+
+
+async def test_same_lane_stale_register_token_conflicts_without_writing(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_store
+    session_id = SessionId.new()
+    await store.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_user(session_id, "root")],
+    )
+    stale = (await store.load(session_id)).tree.lane().head
+    first = await store.append_to_lane(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        expected_head=stale,
+        entries=[_user(session_id, "first")],
+    )
+    assert first.__class__.__name__ == "TransactionCommit"
+    conflict = await store.append_to_lane(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        expected_head=stale,
+        entries=[_user(session_id, "lost")],
+    )
+    assert conflict.__class__.__name__ == "RegisterConflict"
+    snapshot = await store.load(session_id)
+    assert _user_contents(snapshot.tree.ancestry()) == ["root", "first"]
+
+
+async def test_pg_transaction_rejects_unconsumed_host_delta_before_mutation(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_store
+    session_id = SessionId.new()
+    head = LaneHead(LaneId.main(), None)
+    state = LaneState(LaneId.main())
+    with pytest.raises(TypeError, match="HostDelta"):
+        await store.transact(
+            session_id=session_id,
+            fencing_epoch=claimed.execution.fencing_epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(head), SetRegister(state)],
+                expectations=[
+                    RegisterExpectation(head.ref, None),
+                    RegisterExpectation(state.ref, None),
+                ],
+                host_delta=EffectHostUpdate(),
+            ),
+        )
+    async with pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_agent_sessions"
+                " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3",
+                _OWNER,
+                uuid.UUID(claimed.run.run_id),
+                session_id.value,
+            )
+            == 0
+        )
 
 
 async def test_stale_epoch_writes_zero_rows(pool) -> None:
@@ -316,6 +482,42 @@ async def test_stale_epoch_writes_zero_rows(pool) -> None:
         assert sessions == 0
     finally:
         await pool.release(conn)
+
+
+async def test_pg_settlement_rejects_result_for_another_intent_before_host_delta(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_store
+    session_id = SessionId.new()
+    intent_id = IntentId.new()
+    await store.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_intent_entry(session_id, intent_id)],
+    )
+    with pytest.raises(ValueError, match="settled intent"):
+        await store.settle_effect(
+            session_id=session_id,
+            expected_version=1,
+            intent_id=intent_id,
+            settlement=_settlement(
+                intent_id,
+                EffectHostUpdate(evidence=(_evidence_write(),)),
+            ),
+            entries=[_result_entry(session_id, IntentId.new())],
+        )
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM dlightrag_answer_evidence") == 0
+        assert (
+            await conn.fetchval(
+                "SELECT outcome FROM dlightrag_agent_effects"
+                " WHERE owner_id = $1 AND run_id = $2 AND session_id = $3 AND intent_id = $4",
+                _OWNER,
+                uuid.UUID(claimed.run.run_id),
+                session_id.value,
+                intent_id.value,
+            )
+            is None
+        )
 
 
 async def test_duplicate_evidence_identity_is_idempotent_only_with_equal_digests(pool) -> None:

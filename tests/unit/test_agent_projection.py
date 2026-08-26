@@ -3,7 +3,7 @@
 
 import pytest
 
-from dlightrag.agent.session.ids import ProjectionId
+from dlightrag.agent.session.ids import EntryId, ProjectionId
 from dlightrag.agent.session.projection import (
     AgentInputOverflowError,
     CompactionSummary,
@@ -49,6 +49,9 @@ def _compacted_projection(
                 through_sequence=covered, measured_input_tokens=10, measured_output_tokens=2
             ),
         ),
+        covered_through_entry_id=EntryId.new(),
+        first_retained_entry_id=EntryId.new(),
+        source_digest="a" * 64,
     )
 
 
@@ -121,6 +124,9 @@ class TestProjectionRecord:
                 "covered_through_sequence",
                 "summary",
                 "token_anchors",
+                "covered_through_entry_id",
+                "first_retained_entry_id",
+                "source_digest",
                 "schema_version",
             )
         }
@@ -284,6 +290,9 @@ class TestMeasuredAnchors:
                 TokenAnchor(through_sequence=5, measured_input_tokens=40, measured_output_tokens=2),
                 TokenAnchor(through_sequence=8, measured_input_tokens=70, measured_output_tokens=3),
             ),
+            covered_through_entry_id=EntryId.new(),
+            first_retained_entry_id=EntryId.new(),
+            source_digest="a" * 64,
         )
         assert live_anchor(projection, last_retained_sequence=6) == TokenAnchor(
             through_sequence=5, measured_input_tokens=40, measured_output_tokens=2

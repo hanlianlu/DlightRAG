@@ -8,12 +8,13 @@ classify candidate projections against ``ContextPolicy`` numbers without
 calling a provider or opening a store.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import Literal
 
 from dlightrag.agent.session.effects import JsonValue, canonical_json
-from dlightrag.agent.session.ids import ProjectionId
+from dlightrag.agent.session.ids import EntryId, ProjectionId
 from dlightrag.ai.capacity import ContextPolicy, ModelProfile
 
 PROJECTION_SCHEMA_VERSION = 1
@@ -124,6 +125,9 @@ class ContextProjection:
     covered_through_sequence: int
     summary: str | None
     token_anchors: tuple[TokenAnchor, ...] = field(default_factory=tuple)
+    covered_through_entry_id: EntryId | None = None
+    first_retained_entry_id: EntryId | None = None
+    source_digest: str = ""
     schema_version: int = PROJECTION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -139,6 +143,13 @@ class ContextProjection:
             raise ValueError("initial projection cannot carry a summary")
         if self.covered_through_sequence > 0 and not self.summary:
             raise ValueError("compacted projection requires a non-empty summary")
+        if self.covered_through_sequence > 0:
+            if self.covered_through_entry_id is None or not self.source_digest:
+                raise ValueError(
+                    "compacted projection requires branch Entry identity and source digest"
+                )
+            if len(self.source_digest) != 64:
+                raise ValueError("projection source digest must be SHA-256")
         anchors = list(self.token_anchors)
         if anchors != sorted(anchors, key=lambda anchor: anchor.through_sequence):
             raise ValueError("projection token anchors must be ordered by sequence")
@@ -208,6 +219,11 @@ def should_compact(
     """Return whether the active input crossed the proactive compaction trigger."""
     policy = context_policy or ContextPolicy()
     return input_tokens > policy.compaction_trigger(profile)
+
+
+def projection_source_digest(entry_ids: Sequence[EntryId]) -> str:
+    """Hash one exact branch prefix; Session-global sequence is not coverage."""
+    return sha256("\n".join(entry_id.value for entry_id in entry_ids).encode()).hexdigest()
 
 
 def projection_strictly_reduces(
@@ -325,6 +341,9 @@ def projection_with_anchor(
         covered_through_sequence=previous.covered_through_sequence,
         summary=previous.summary,
         token_anchors=anchors,
+        covered_through_entry_id=previous.covered_through_entry_id,
+        first_retained_entry_id=previous.first_retained_entry_id,
+        source_digest=previous.source_digest,
         schema_version=previous.schema_version,
     )
 
@@ -376,6 +395,7 @@ __all__ = [
     "TokenAnchor",
     "accounted_input_tokens",
     "live_anchor",
+    "projection_source_digest",
     "projection_strictly_reduces",
     "projection_with_anchor",
     "render_compaction_summary",

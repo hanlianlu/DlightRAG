@@ -4,9 +4,9 @@
 Each concrete entry is immutable and carries common identity fields plus a
 typed payload. The closed union grows only together with a real writer.
 
-``to_canonical_json`` returns the exact ``payload_json`` a durable store keeps;
-``canonical_entry_json`` wraps it with the common columns for tests and
-adapters. The fold consumes the typed records, never a raw payload mapping.
+``canonical_payload`` returns the exact ``payload_json`` a durable store keeps;
+``to_canonical_json`` adds identity, parent placement, sequence, and schema
+columns for tests. The fold consumes typed records, never raw mappings.
 """
 
 from collections.abc import Mapping
@@ -44,8 +44,9 @@ class SessionEntry:
 
     entry_id: EntryId
     session_id: SessionId
-    sequence: int = 0
     timestamp: datetime
+    parent_entry_id: EntryId | None = None
+    sequence: int = 0
     schema_version: int = SESSION_ENTRY_SCHEMA_VERSION
 
     entry_type: ClassVar[str] = "session_entry"
@@ -63,10 +64,13 @@ class SessionEntry:
         raise NotImplementedError
 
     def to_canonical_json(self) -> JsonValue:
-        """Return the durable payload_json for this entry."""
+        """Return one complete canonical Entry record for tests and hashes."""
         return {
             "entry_id": str(self.entry_id),
             "session_id": str(self.session_id),
+            "parent_entry_id": (
+                str(self.parent_entry_id) if self.parent_entry_id is not None else None
+            ),
             "sequence": self.sequence,
             "timestamp": self.timestamp.isoformat(),
             "schema_version": self.schema_version,
@@ -240,6 +244,9 @@ class CompactionEntry(SessionEntry):
     summary: str | None
     covered_through_sequence: int
     first_retained_sequence: int
+    covered_through_entry_id: EntryId | None = None
+    first_retained_entry_id: EntryId | None = None
+    source_digest: str = ""
 
     entry_type: ClassVar[str] = "compaction"
 
@@ -253,6 +260,10 @@ class CompactionEntry(SessionEntry):
             raise ValueError("compaction retained start must follow the covered prefix")
         if self.summary is not None and not self.summary.strip():
             raise ValueError("compaction summary cannot be empty when present")
+        if self.covered_through_sequence > 0 and (
+            self.covered_through_entry_id is None or len(self.source_digest) != 64
+        ):
+            raise ValueError("compaction requires branch Entry identity and source digest")
 
     def canonical_payload(self) -> JsonValue:
         return {
@@ -260,6 +271,17 @@ class CompactionEntry(SessionEntry):
             "summary": self.summary,
             "covered_through_sequence": self.covered_through_sequence,
             "first_retained_sequence": self.first_retained_sequence,
+            "covered_through_entry_id": (
+                self.covered_through_entry_id.value
+                if self.covered_through_entry_id is not None
+                else None
+            ),
+            "first_retained_entry_id": (
+                self.first_retained_entry_id.value
+                if self.first_retained_entry_id is not None
+                else None
+            ),
+            "source_digest": self.source_digest,
         }
 
 
@@ -363,6 +385,7 @@ def decode_entry_payload(
     sequence: int,
     timestamp: datetime,
     payload: Mapping[str, Any],
+    parent_entry_id: EntryId | None = None,
 ) -> SessionEntry:
     """Rebuild one typed entry from its canonical durable payload."""
     common = {
@@ -370,6 +393,7 @@ def decode_entry_payload(
         "session_id": session_id,
         "sequence": sequence,
         "timestamp": timestamp,
+        "parent_entry_id": parent_entry_id,
     }
     if entry_type == "run_segment":
         return RunSegmentEntry(
@@ -454,6 +478,17 @@ def decode_entry_payload(
             summary=payload.get("summary"),
             covered_through_sequence=int(payload["covered_through_sequence"]),
             first_retained_sequence=int(payload["first_retained_sequence"]),
+            covered_through_entry_id=(
+                EntryId(str(payload["covered_through_entry_id"]))
+                if payload.get("covered_through_entry_id")
+                else None
+            ),
+            first_retained_entry_id=(
+                EntryId(str(payload["first_retained_entry_id"]))
+                if payload.get("first_retained_entry_id")
+                else None
+            ),
+            source_digest=str(payload.get("source_digest") or ""),
         )
     if entry_type == "profile_fact":
         return ProfileFactEntry(**common, key=str(payload["key"]), value=payload["value"])

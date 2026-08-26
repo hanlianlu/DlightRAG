@@ -136,16 +136,50 @@ def project_session_messages(
     """Materialize one active summary before its retained non-compaction suffix."""
     if projection is None:
         return fold_entries(entries)
-    from dlightrag.agent.session.projection import ContextProjection
+    from dlightrag.agent.session.projection import (
+        ContextProjection,
+        projection_source_digest,
+    )
 
     if not isinstance(projection, ContextProjection):
         raise TypeError("active projection must be a ContextProjection")
-    retained = [
-        entry
-        for entry in entries
-        if entry.sequence >= projection.first_retained_sequence
-        and not isinstance(entry, CompactionEntry)
-    ]
+    branch_entries = [entry for entry in entries if not isinstance(entry, CompactionEntry)]
+    if projection.covered_through_entry_id is not None:
+        covered_index = next(
+            (
+                index
+                for index, entry in enumerate(branch_entries)
+                if entry.entry_id == projection.covered_through_entry_id
+            ),
+            None,
+        )
+        if covered_index is None:
+            raise ValueError("active projection does not belong to this branch")
+        digest = projection_source_digest(
+            [entry.entry_id for entry in branch_entries[: covered_index + 1]]
+        )
+        if digest != projection.source_digest:
+            raise ValueError("active projection source branch digest changed")
+        if projection.first_retained_entry_id is None:
+            retained = branch_entries[covered_index + 1 :]
+        else:
+            retained_index = next(
+                (
+                    index
+                    for index, entry in enumerate(branch_entries)
+                    if entry.entry_id == projection.first_retained_entry_id
+                ),
+                None,
+            )
+            if retained_index is None or retained_index <= covered_index:
+                raise ValueError("active projection retained Head is not on this branch")
+            retained = branch_entries[retained_index:]
+    else:
+        retained = [
+            entry
+            for entry in branch_entries
+            if entry.sequence >= projection.first_retained_sequence
+        ]
     messages: list[dict[str, Any]] = []
     if projection.summary is not None:
         messages.append(

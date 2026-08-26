@@ -14,6 +14,7 @@ from dlightrag.agent.tools.contracts import (
     ToolRuntime,
 )
 from dlightrag.agent.tools.executor import (
+    DuplicateToolCallIdError,
     PreparedToolTurn,
     ToolPreflight,
     ToolTurnExecutor,
@@ -35,6 +36,7 @@ from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
 
 __all__ = [
     "AgentTool",
+    "DuplicateToolCallIdError",
     "DuplicateToolError",
     "EvidenceSourceFact",
     "ExecutedTurn",

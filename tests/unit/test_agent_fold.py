@@ -145,13 +145,20 @@ def test_error_results_fold_with_is_error() -> None:
 
 
 def test_active_compaction_summary_projects_once_before_retained_tail() -> None:
-    from dlightrag.agent.session.projection import CompactionSummary, ContextProjection
+    from dlightrag.agent.session.projection import (
+        CompactionSummary,
+        ContextProjection,
+        projection_source_digest,
+    )
 
     session_id = SessionId.new()
+    first_id = EntryId.new()
+    retained_id = EntryId.new()
+    source_digest = projection_source_digest((first_id,))
     summary = CompactionSummary(goal="answer q", progress="found sources").canonical_json()
     entries = [
         UserMessageEntry(
-            entry_id=EntryId.new(),
+            entry_id=first_id,
             session_id=session_id,
             sequence=1,
             timestamp=_now(),
@@ -166,9 +173,12 @@ def test_active_compaction_summary_projects_once_before_retained_tail() -> None:
             summary=summary,
             covered_through_sequence=1,
             first_retained_sequence=2,
+            covered_through_entry_id=first_id,
+            first_retained_entry_id=retained_id,
+            source_digest=source_digest,
         ),
         UserMessageEntry(
-            entry_id=EntryId.new(),
+            entry_id=retained_id,
             session_id=session_id,
             sequence=3,
             timestamp=_now(),
@@ -180,6 +190,9 @@ def test_active_compaction_summary_projects_once_before_retained_tail() -> None:
         first_retained_sequence=2,
         covered_through_sequence=1,
         summary=summary,
+        covered_through_entry_id=first_id,
+        first_retained_entry_id=retained_id,
+        source_digest=source_digest,
     )
 
     assert [message["content"] for message in fold_entries(entries)] == ["q1", "q2"]
@@ -187,6 +200,55 @@ def test_active_compaction_summary_projects_once_before_retained_tail() -> None:
     assert "answer q" in messages[0]["content"]
     assert messages[1]["content"] == "q2"
     assert sum("answer q" in str(message["content"]) for message in messages) == 1
+
+
+def test_compaction_projection_cannot_cross_to_a_sibling_lane() -> None:
+    from dlightrag.agent.session.projection import (
+        CompactionSummary,
+        ContextProjection,
+        projection_source_digest,
+    )
+
+    session_id = SessionId.new()
+    root_id = EntryId.new()
+    branch_a_id = EntryId.new()
+    branch_b_id = EntryId.new()
+    root = UserMessageEntry(
+        entry_id=root_id,
+        session_id=session_id,
+        sequence=1,
+        timestamp=_now(),
+        content="shared",
+    )
+    branch_a = UserMessageEntry(
+        entry_id=branch_a_id,
+        parent_entry_id=root_id,
+        session_id=session_id,
+        sequence=2,
+        timestamp=_now(),
+        content="branch a",
+    )
+    branch_b = UserMessageEntry(
+        entry_id=branch_b_id,
+        parent_entry_id=root_id,
+        session_id=session_id,
+        sequence=3,
+        timestamp=_now(),
+        content="branch b",
+    )
+    projection = ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=2,
+        covered_through_sequence=1,
+        summary=CompactionSummary(goal="continue a").canonical_json(),
+        covered_through_entry_id=root_id,
+        first_retained_entry_id=branch_a_id,
+        source_digest=projection_source_digest((root_id,)),
+    )
+
+    assert project_session_messages((root, branch_a), projection)[1]["content"] == "branch a"
+    with pytest.raises(ValueError, match="retained Head"):
+        project_session_messages((root, branch_b), projection)
 
 
 def test_accounting_entries_produce_no_model_messages() -> None:

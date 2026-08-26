@@ -7,6 +7,7 @@ Research mode enters the agent loop: the model selects from the available peer
 tools and writes the answer when it stops calling tools.
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -117,6 +118,8 @@ class RunBoundaries(PhaseBoundaries, Protocol):
 
     async def apply_controls(self) -> bool: ...
 
+    async def close_committed_turn(self) -> None: ...
+
     async def publish_agent_event(self, event: AgentEvent) -> None: ...
 
     def accounted_input(self, estimated_input_tokens: int) -> int: ...
@@ -154,6 +157,9 @@ class _NoBoundaries:
         return None
 
     async def check_cancelled(self) -> None:
+        return None
+
+    async def close_committed_turn(self) -> None:
         return None
 
     async def publish_agent_event(self, event: AgentEvent) -> None:
@@ -726,7 +732,14 @@ class AnswerOrchestrator:
         return list(
             registry.resolve(
                 tool_names,
-                exclude={"spawn_agent"} if child else (),
+                exclude={
+                    "spawn_agent",
+                    "subagent_status",
+                    "wait_subagent",
+                    "cancel_subagent",
+                }
+                if child
+                else (),
             )
         )
 
@@ -919,7 +932,17 @@ class AnswerOrchestrator:
             on_event=on_event,
         )
         await boundaries.commit_intents(holder.prepared)
-        return await self._execute_prepared_turn(run, holder, boundaries, turn_number=turn_number)
+        try:
+            # Cancellation linearizes after durable intent commit and before
+            # dispatch. If it races with execution, join the tool tasks first,
+            # then close every still-unsettled source position.
+            await boundaries.check_cancelled()
+            return await self._execute_prepared_turn(
+                run, holder, boundaries, turn_number=turn_number
+            )
+        except RunCancelledError, AnswerRunCancelledError, asyncio.CancelledError:
+            await boundaries.close_committed_turn()
+            raise
 
     def _compaction_coordinator(self, run: PreparedRun) -> CompactionCoordinator:
         if run.model_role not in self._compaction:

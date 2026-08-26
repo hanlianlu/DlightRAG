@@ -16,7 +16,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from dlightrag.agent.session.ids import SessionId
+from dlightrag.agent.session.ids import IntentId, SessionId
 from dlightrag.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.answer.evidence import EvidenceDelta
 from dlightrag.runtime import AnswerRunCancelledError, RunCancelledError
@@ -170,7 +170,7 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             "Cancel one known foreground child session.",
             ChildControlInput,
             cancel,
-            replay_policy="replayable",
+            replay_policy="never",
         ),
     )
 
@@ -193,7 +193,7 @@ async def _spawn(
         child_session_id(
             run_id=host.run_id,
             parent_session_id=parent_session_id,
-            call_id=call_id,
+            parent_intent_id=runtime.intent_id,
             position=position,
         )
         for position in range(len(args.children))
@@ -328,14 +328,14 @@ def child_session_id(
     *,
     run_id: str,
     parent_session_id: SessionId,
-    call_id: str,
+    parent_intent_id: IntentId,
     position: int = 0,
 ) -> SessionId:
-    """Deterministic child SessionId for one parent call and child position."""
+    """Deterministic child identity owned by a durable parent Effect intent."""
     suffix = f":{position}" if position else ""
     return SessionId.deterministic(
         run_id=run_id,
-        name=f"child:{parent_session_id.value}:{call_id}{suffix}",
+        name=f"child:{parent_session_id.value}:{parent_intent_id.value}{suffix}",
     )
 
 

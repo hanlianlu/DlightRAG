@@ -108,7 +108,16 @@ def compose_research_tools(
         return list(
             registry.resolve(
                 tool_names,
-                exclude={"spawn_agent", "remember", "forget"} if child else (),
+                exclude={
+                    "spawn_agent",
+                    "subagent_status",
+                    "wait_subagent",
+                    "cancel_subagent",
+                    "remember",
+                    "forget",
+                }
+                if child
+                else (),
             )
         )
     except DuplicateToolError as exc:
