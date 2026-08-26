@@ -104,11 +104,13 @@ export class DlChatMessageList extends LightElement {
     view: {attribute: false},
     turns: {attribute: false},
     scrollRequest: {attribute: false},
+    interactionLocked: {attribute: false},
   };
 
   declare view: ChatView;
   declare turns: readonly ChatTurnView[];
   declare scrollRequest: number;
+  declare interactionLocked: boolean;
   #imageErrors = new Set<string>();
   #imageLoaded = new Set<string>();
   #imageRevision = 0;
@@ -121,6 +123,7 @@ export class DlChatMessageList extends LightElement {
     this.view = {kind: 'new'};
     this.turns = [];
     this.scrollRequest = 0;
+    this.interactionLocked = false;
   }
 
   override disconnectedCallback(): void {
@@ -185,7 +188,8 @@ export class DlChatMessageList extends LightElement {
     const turns = this.turns;
     return html`
       <main class="chat-area" id="chat-area" aria-label="Chat" @click=${this.#backgroundClick}>
-        <div class="chat-messages" id="chat-messages" role="log" aria-label="Conversation messages">
+        <div class="chat-messages" id="chat-messages" role="log" aria-label="Conversation messages"
+             ?inert=${this.interactionLocked}>
           ${this.#lineage()}
           ${this.#viewState()}
           ${repeat(

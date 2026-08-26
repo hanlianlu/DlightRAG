@@ -86,10 +86,8 @@ dl-inspector[aria-hidden='true'] {
 
 .inspector-backdrop {
     background: var(--color-scrim);
-    border: 0;
-    cursor: default;
     inset: 0;
-    padding: 0;
+    pointer-events: none;
     position: fixed;
     z-index: 90;
 }

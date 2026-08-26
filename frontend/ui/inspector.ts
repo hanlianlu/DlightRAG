@@ -212,13 +212,8 @@ export class DlInspector extends LightElement {
           <dl-inspector-files .active=${files} ?hidden=${!files}></dl-inspector-files>
         </div>
       </aside>
-      <button
-        class="inspector-backdrop"
-        type="button"
-        aria-label="Close panel"
-        ?hidden=${!open || !compact}
-        @click=${() => this.close()}
-      ></button>
+      <div class="inspector-backdrop" aria-hidden="true"
+           ?hidden=${!open || !compact}></div>
     `;
   }
 

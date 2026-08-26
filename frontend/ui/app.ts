@@ -3,7 +3,6 @@
 import {html, type TemplateResult} from 'lit';
 import {getWebBootstrap, type WebBootstrap} from '../api/bootstrap.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
-import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import type {AttachmentPolicy} from './attachment_policy.ts';
@@ -192,8 +191,9 @@ export class DlApp extends LightElement {
     const chatFeature = this.querySelector<DlChatFeature>('dl-chat-feature');
     const conversationModal = this.conversationExpanded && this.conversationCompact;
     const inspectorModal = this.inspectorOpen && this.inspectorCompact;
-    const shellModal = conversationModal || inspectorModal || this.canvasModal
-      || this.nativeModalOpen;
+    const panelInteractionLocked = inspectorModal || this.canvasModal;
+    const blockingShellModal = conversationModal || this.nativeModalOpen;
+    const shellModal = blockingShellModal || panelInteractionLocked;
     return html`
       <div class="app${this.hasMessages ? ' has-messages' : ''}" id="app"
         @artifact-open=${this.#openArtifact}
@@ -234,7 +234,9 @@ export class DlApp extends LightElement {
                 </header>
 
                 <dl-chat-feature .attachmentPolicy=${this.#attachmentPolicy()}
-                  .attachmentAccept=${attachments.accept} ?inert=${shellModal}
+                  .attachmentAccept=${attachments.accept}
+                  .interactionLocked=${panelInteractionLocked}
+                  ?inert=${blockingShellModal}
                   @dl-chat-content-change=${this.#chatContentChanged}
                   @dl-chat-background-click=${this.#chatBackgroundClick}
                   @dl-chat-run-action=${this.#chatRunAction}></dl-chat-feature>
@@ -388,7 +390,6 @@ export class DlApp extends LightElement {
   }
 
   #chatBackgroundClick = (): void => {
-    if (window.matchMedia(COMPACT_SHELL_MEDIA).matches) return;
     if (document.body.hasAttribute('data-resizing')) return;
     if (!this.inspectorOpen && !this.canvasOpen) return;
     this.#inspector()?.close();

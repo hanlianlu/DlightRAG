@@ -674,6 +674,38 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
 
 
 @pytest.mark.e2e
+def test_compact_files_panel_keeps_visible_conversation_scrollable(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 1000, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+    page.evaluate(
+        """async () => {
+            const app = document.querySelector('dl-app');
+            app.hasMessages = true;
+            await app.updateComplete;
+            const filler = document.createElement('div');
+            filler.style.height = '3000px';
+            filler.textContent = 'Scroll probe';
+            document.querySelector('#chat-messages')?.append(filler);
+            document.querySelector('#chat-area').scrollTop = 0;
+        }"""
+    )
+    chat = page.locator("#chat-area")
+    assert chat.evaluate("element => element.scrollHeight > element.clientHeight") is True
+
+    page.get_by_role("button", name="Files", exact=True).click()
+    page.locator("#panel.open").wait_for()
+    bounds = chat.bounding_box()
+    assert bounds is not None
+    page.mouse.move(bounds["x"] + 100, bounds["y"] + bounds["height"] / 2)
+    page.mouse.wheel(0, 600)
+    page.wait_for_function("document.querySelector('#chat-area').scrollTop > 0")
+    page.mouse.click(bounds["x"] + 100, bounds["y"] + bounds["height"] / 2)
+    page.wait_for_function("!document.querySelector('#panel').classList.contains('open')")
+
+
+@pytest.mark.e2e
 def test_escape_closes_files_workspace_popover_without_closing_panel(page: Page) -> None:
     _install_conversation_routes(page)
     page.set_viewport_size({"width": 1440, "height": 900})
@@ -765,7 +797,9 @@ def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     panel = page.locator("#panel")
     assert panel.get_attribute("role") == "dialog"
     assert panel.get_attribute("aria-modal") == "true"
-    assert page.locator("dl-chat-feature").evaluate("element => element.inert") is True
+    assert page.locator("dl-chat-feature").evaluate("element => element.inert") is False
+    assert page.locator("#chat-messages").evaluate("element => element.inert") is True
+    assert page.locator("dl-chat-composer").evaluate("element => element.inert") is True
     assert notification_offer.evaluate("element => element.inert") is True
     assert (
         notification_offer.evaluate("element => getComputedStyle(element).visibility") == "hidden"
@@ -782,7 +816,7 @@ def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
 
 
 @pytest.mark.e2e
-def test_resizing_open_files_panel_to_compact_keeps_background_inert(page: Page) -> None:
+def test_resizing_open_files_panel_to_compact_locks_controls_but_not_scroll(page: Page) -> None:
     _install_conversation_routes(page)
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto("/web/")
@@ -795,7 +829,9 @@ def test_resizing_open_files_panel_to_compact_keeps_background_inert(page: Page)
     )
 
     assert page.locator("#panel").get_attribute("aria-modal") == "true"
-    assert page.locator("dl-chat-feature").evaluate("element => element.inert") is True
+    assert page.locator("dl-chat-feature").evaluate("element => element.inert") is False
+    assert page.locator("#chat-messages").evaluate("element => element.inert") is True
+    assert page.locator("dl-chat-composer").evaluate("element => element.inert") is True
     outer_split = page.locator("#panel-split").bounding_box()
     primary_app = page.locator(".app-shell").bounding_box()
     panel = page.locator("#panel").bounding_box()

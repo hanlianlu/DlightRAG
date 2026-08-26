@@ -122,6 +122,7 @@ export class DlChatFeature extends LightElement {
     view: {attribute: false},
     attachmentPolicy: {attribute: false},
     attachmentAccept: {type: String},
+    interactionLocked: {attribute: false},
     turns: {state: true},
     runRevision: {state: true},
   };
@@ -129,6 +130,7 @@ export class DlChatFeature extends LightElement {
   declare view: ChatView;
   declare attachmentPolicy: AttachmentPolicy | null;
   declare attachmentAccept: string;
+  declare interactionLocked: boolean;
   declare turns: readonly ChatTurnView[];
   declare runRevision: number;
 
@@ -144,6 +146,7 @@ export class DlChatFeature extends LightElement {
     this.view = {kind: 'new'};
     this.attachmentPolicy = null;
     this.attachmentAccept = '';
+    this.interactionLocked = false;
     this.turns = [];
     this.runRevision = 0;
     this.#runController = new RunController({
@@ -268,8 +271,10 @@ export class DlChatFeature extends LightElement {
     return html`
       <dl-chat-message-list .view=${this.view} .turns=${this.turns}
         .scrollRequest=${this.#scrollRequest}
+        .interactionLocked=${this.interactionLocked}
         @dl-chat-reconnect=${this.#reconnect}></dl-chat-message-list>
       <dl-chat-composer
+        ?inert=${this.interactionLocked}
         .running=${this.#runController.active}
         .stopping=${this.#runController.stopping}
         .attachmentPolicy=${this.attachmentPolicy}
