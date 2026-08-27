@@ -6,7 +6,7 @@
 
 DlightRAG is a production-ready multimodal RAG service built on LightRAG. It offers superior context intelligence, great accuracy with citation / highlight grounding, and unified interfaces for REST, Web, MCP, and in-process Application. It is designed for developers, seasoned users and teams who need a reliable RAG core service with cutting edge features integrated into their workflows and products.
 
-Status: Python 3.14. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
+Status: Python 3.14.7+. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
 
 ## Architecture At A Glance
 
@@ -57,8 +57,8 @@ CPU Docling profile and MinerU infrastructure remain available as alternatives.
 **Prerequisites.** Install [Docker + Compose](https://docs.docker.com/get-docker/)
 (runs the API and PostgreSQL), [`uv`](https://docs.astral.sh/uv/) (runs setup and
 native development commands), plus `git` and `make`. Start a reachable Docling
-service before ingesting documents. DlightRAG targets **Python 3.14**; `uv`
-installs it for you (`uv python install 3.14`), so a system Python is not
+service before ingesting documents. DlightRAG targets **Python 3.14.7+**; `uv`
+installs it for you (`uv python install 3.14.7`), so a system Python is not
 required for the Docker path.
 
 ```bash
@@ -71,7 +71,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 #   Fedora/RHEL    sudo dnf install -y make
 #   Windows        no POSIX make on Windows — use WSL2 (Ubuntu): install Docker
 #                  Desktop with the WSL2 backend, then inside WSL2 follow the
-#                  Debian/Ubuntu line above. uv, make, and Python 3.14 all live
+#                  Debian/Ubuntu line above. uv, make, and Python 3.14.7+ all live
 #                  inside WSL2 (a Linux environment), not on Windows.
 ```
 

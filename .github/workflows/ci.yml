@@ -24,7 +24,7 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
-          python-version: "3.14"
+          python-version: "3.14.7"
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
@@ -74,7 +74,7 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
-          python-version: "3.14"
+          python-version: "3.14.7"
       - run: uv sync --group dev
       - run: uv run pytest tests/integration -q --tb=short
         env:

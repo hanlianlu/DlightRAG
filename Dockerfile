@@ -3,7 +3,7 @@
 
 ARG UV_VERSION=0.11.21
 
-FROM python:3.14-slim-bookworm AS uv-bin
+FROM python:3.14.7-slim-bookworm AS uv-bin
 ARG UV_VERSION
 RUN python -m pip install --no-cache-dir "uv==${UV_VERSION}"
 
@@ -16,7 +16,7 @@ COPY frontend/ frontend/
 # Vite writes HTML and hashed assets into ../src/dlightrag/adapters/http/browser/static/app, which the wheel picks up.
 RUN npm --prefix frontend run build
 
-FROM python:3.14-slim-bookworm AS builder
+FROM python:3.14.7-slim-bookworm AS builder
 
 WORKDIR /app
 ENV UV_LINK_MODE=copy
@@ -36,7 +36,7 @@ COPY --from=frontend /app/src/dlightrag/adapters/http/browser/static/app/ src/dl
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev --no-editable
 
-FROM python:3.14-slim-bookworm
+FROM python:3.14.7-slim-bookworm
 LABEL maintainer="HanlianLyu"
 
 WORKDIR /app

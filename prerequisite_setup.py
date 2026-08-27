@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.14,<3.15"
+# requires-python = ">=3.14.7,<3.15"
 # dependencies = ["dlightrag", "dlightrag-memory", "questionary>=2", "rich>=13", "ruamel.yaml>=0.18"]
 # [tool.uv.sources]
 # dlightrag = { path = ".", editable = true }
