@@ -7,9 +7,12 @@ Do not start source movement from this file until the user authorizes a mileston
 ## Target call path
 
 ```text
-HTTP / MCP / Maintenance
+HTTP / MCP
   -> Application (use cases, access, config, lifecycle, caller contracts)
      -> Engine (AI, Agent, Runtime, RAG, Answer)
+
+Offline rebuild commands (installed, writers stopped)
+  -> Engine RAG + PostgreSQL rebuild functions
 
 PostgreSQL, Observability, outbound MCP
   implement Application and/or Engine ports; they are not inbound callers.
@@ -51,7 +54,6 @@ src/dlightrag/
     mcp/                           # inbound server + outbound tool client
     postgres/                      # core, corpus, answer, web
     observability/                 # Langfuse adapter
-    maintenance/                   # rebuild BM25 / VDB commands
 
 packages/memory/                   # unchanged independent distribution
 frontend/                          # unchanged TypeScript source
@@ -68,7 +70,7 @@ Root facade exports only `Application`, `DlightragConfig`, `create_application`,
 - Same-milestone deletion of old paths. No shims, empty tombstone packages, or dual trees.
 - REST paths, config keys, environment variables, PostgreSQL names, and product behavior stay unchanged.
 - Tests stay in unit / integration / e2e. Rearrange a test file only when ownership or discovery actually improves.
-- AI, Access-as-policy, Runtime, Observability, and Maintenance have no ownership inversion to fix beyond the zone move.
+- AI, Access-as-policy, Runtime, and Observability have no ownership inversion to fix beyond the zone move.
 
 ## File mapping
 
@@ -90,7 +92,7 @@ Owners: **move**, **split**, **merge**, **delete**, **keep**, **internalize**.
 |---|---|---|
 | `access/*` | `application/access/` | Move |
 | `services/answers.py` | `application/answer_runs/` | Split facade from private protocols. Own request, result, artifact, steer/follow-up/fork, and error contracts that HTTP/MCP call |
-| `services/corpora.py` | `application/corpus_admin/` | Split facade from ingest contracts. Own rebuild BM25 / rebuild VDB use cases that Maintenance will call |
+| `services/corpora.py` | `application/corpus_admin/` | Split facade from ingest contracts. Do not add rebuild use cases; rebuild is offline and exclusive |
 | `services/retrieval.py` | `application/retrieval/` | Move the caller-awaited use case and its request/result/error contracts |
 | `services/retrieval.py` `RetrievalPlannerRuntime` | `rag/retrieval/` in M1, then `engine/rag/retrieval/` in M3 | Park beside today's RAG retrieval before the Engine RAG move. Application retrieval must not keep this AI/RAG lifecycle object |
 | `services/memory.py` | `application/memory/` | Move product gate and Memory errors transports handle |
@@ -126,7 +128,7 @@ Do not move Agent local filesystem tools, local execution, or in-memory session 
 
 ### Answer — Application-owned caller contracts
 
-HTTP, MCP, and Maintenance import these only through Application. Do not send them to Engine with the remaining-answer catch-all.
+HTTP and MCP import these only through Application. Do not send them to Engine with the remaining-answer catch-all.
 
 | Current | Target | Action |
 |---|---|---|
@@ -175,7 +177,7 @@ HTTP, MCP, and Maintenance import these only through Application. Do not send th
 | `sdk/client.py` `SyncAnswerRunClient` | — | Delete |
 | `sdk/__init__.py`, `api/__init__.py`, `web/__init__.py` | — | Delete after moves |
 
-### MCP, observability, maintenance, PostgreSQL
+### MCP, observability, rebuild commands, PostgreSQL
 
 | Current | Target | Action |
 |---|---|---|
@@ -183,7 +185,9 @@ HTTP, MCP, and Maintenance import these only through Application. Do not send th
 | `mcp/auth.py`, `cli.py`, `contracts.py` | `adapters/mcp/` | Move |
 | `adapters/mcp_tools.py` | `adapters/mcp/outbound.py` | Move outbound client beside inbound server |
 | `observability/*` | `adapters/observability/` | Move |
-| `maintenance/*` | `adapters/maintenance/` | Thin CLI wrappers that call Application corpus_admin rebuild use cases; keep console script names |
+| `maintenance/rebuild_bm25.py` | `engine/rag/corpus/` rebuild CLI plus existing PostgreSQL BM25 rebuild | Delete the Maintenance package. Keep the `dlightrag-rebuild-bm25` console script name. Implementation calls PostgreSQL rebuild, not Application |
+| `maintenance/rebuild_vdb.py` | `engine/rag/corpus/` rebuild CLI | Keep the `dlightrag-rebuild-vdb` console script name. Implementation wraps LightRAG vector rebuild plus DlightRAG BM25/sidecar post-steps. Writers must be stopped. Not a Compose service or Makefile target |
+| `maintenance/__init__.py` | — | Delete |
 | `adapters/postgres/_pool.py`, `_operations.py`, `_migrations.py`, `_locks.py`, `_errors.py`, `_version.py`, `identifiers.py` | `adapters/postgres/core/` | Move shared SQL mechanism |
 | `adapters/postgres/corpus.py`, `corpus_*.py`, `_corpus_schema.py`, `ingest_jobs.py`, `file_panel.py`, `pg_metadata_index.py`, `lightrag_*.py`, `workspaces.py` | `adapters/postgres/corpus/` | Group |
 | `adapters/postgres/answer_runs.py` | `adapters/postgres/answer/` | Keep one public store; split private schema/codec/run/event/artifact/control/lease/retention modules |
@@ -211,7 +215,6 @@ Move Config, Access, Application, health, settings projections, and services use
 Also in this milestone, because `dlightrag.services` dies here:
 
 - Move caller-facing Answer request/result/error/client contracts into `application/answer_runs/` even though Engine Answer files stay put until M4.
-- Add corpus_admin rebuild BM25 / rebuild VDB use cases.
 - Extract Web Conversation durable records and persistence lifecycle into `application/web_conversations/`. Leave browser presentation and URL helpers in `web/` until M6.
 - Move `RetrievalPlannerRuntime` into today's `rag/retrieval/` (not Application). M3 relocates it with RAG.
 
@@ -227,9 +230,9 @@ Exit: no top-level `ai`, `agent`, or `runtime` packages.
 
 ### M3 — Engine RAG
 
-Move RAG under `engine/rag/` with workspace, lightrag, corpus, retrieval internals, including the planner runtime parked in M1. Split ports to owners. Keep one Workspace runtime.
+Move RAG under `engine/rag/` with workspace, lightrag, corpus, retrieval internals, including the planner runtime parked in M1. Split ports to owners. Keep one Workspace runtime. Relocate rebuild CLIs beside corpus rebuild functions and retarget the two existing console scripts.
 
-Exit: no top-level `rag` package. Corpus and Retrieval views are narrow; LightRAG remains internal.
+Exit: no top-level `rag` package. Corpus and Retrieval views are narrow; LightRAG remains internal. `dlightrag-rebuild-bm25` and `dlightrag-rebuild-vdb` still work and no longer live under `maintenance/`.
 
 ### M4 — Engine Answer
 
@@ -239,15 +242,15 @@ Exit: no top-level `answer` package and no second Agent folder. Transports still
 
 ### M5 — Backend adapters
 
-Rehome PostgreSQL, Observability, Maintenance, and outbound MCP client under `adapters/`. Group PostgreSQL by core/corpus/answer/web. Split `answer_runs.py` privately. Keep public store and session repository depths.
+Rehome PostgreSQL, Observability, and outbound MCP client under `adapters/`. Group PostgreSQL by core/corpus/answer/web. Split `answer_runs.py` privately. Keep public store and session repository depths. Rebuild CLIs already moved in M3; this milestone only fails if `maintenance/` still exists.
 
-Exit: no top-level `observability` or `maintenance`. PostgreSQL internals are grouped. Adapter barrels do not export implementations.
+Exit: no top-level `observability` or `maintenance`. PostgreSQL internals are grouped. Adapter barrels do not export implementations. Rebuild remains installed commands, not an adapter zone.
 
 ### M6 — Inbound adapters and internal HTTP client
 
-Merge API and Web into `adapters/http/`. Move MCP server and split tools into answer_runs, retrieval, memory, and corpus_admin handlers. Move Vite output and vendored static files. Internalize async HTTP client. Delete public SDK and sync client. Point Maintenance CLIs at Application corpus_admin rebuild use cases. Update console scripts to new module paths without renaming the commands.
+Merge API and Web into `adapters/http/`. Move MCP server and split tools into answer_runs, retrieval, memory, and corpus_admin handlers. Move Vite output and vendored static files. Internalize async HTTP client. Delete public SDK and sync client. Update remaining console scripts to new module paths without renaming the commands.
 
-Exit: no top-level `api`, `web`, `mcp`, or `sdk`. HTTP, MCP, and Maintenance import Application, not Engine.
+Exit: no top-level `api`, `web`, `mcp`, or `sdk`. HTTP and MCP import Application, not Engine.
 
 ### M7 — Final architecture closure
 
@@ -313,9 +316,10 @@ The reorganization is done only when all of the following hold:
 
 - Application, Engine, and Adapters are the only visible product code zones besides the independent Memory distribution.
 - The root facade exports only Application, DlightragConfig, `create_application`, and `__version__`.
-- HTTP, MCP, and Maintenance call Application and do not deep-import Engine.
+- HTTP and MCP call Application and do not deep-import Engine.
 - Engine does not import Application or Adapters.
-- PostgreSQL, HTTP, MCP, Observability, and Maintenance are not first-class root packages.
+- PostgreSQL, HTTP, MCP, and Observability are not first-class root packages.
+- There is no Maintenance zone. Rebuild stays two installed commands.
 - `services`, `api`, `web`, and `sdk` packages are gone.
 - No compatibility shims, old-path docs, or wheel assertions for deleted modules.
 - Product behavior, REST paths, config keys, and persistence semantics are unchanged.

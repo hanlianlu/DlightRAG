@@ -20,21 +20,23 @@ Organize the installable product as three visible zones:
 
 1. **Application** — what the product does: configuration, access, lifecycle, health, Answer Runs, Corpus Administration, Retrieval, Memory integration, and Web Conversations.
 2. **Engine** — how the product executes: AI, Agent, Runtime, RAG, and Answer as sibling owners under Engine. Ownership is parallel; the dependency DAG is documented and enforced, not nested as fake parent directories.
-3. **Adapters** — concrete edge mechanisms: HTTP, MCP, PostgreSQL, Observability, and Maintenance.
+3. **Adapters** — concrete edge mechanisms: HTTP, MCP, PostgreSQL, and Observability.
 
 The request path is:
 
 ```text
-HTTP / MCP / Maintenance  ->  Application  ->  Engine
+HTTP / MCP  ->  Application  ->  Engine
 ```
 
-HTTP and MCP are protocol adapters: they translate external calls into Application use cases. Maintenance is a command-line adapter: rebuild BM25 and rebuild VDB are Corpus Administration operations, so those commands call Application rather than Engine or PostgreSQL directly.
+HTTP and MCP are the only inbound protocol adapters. They translate external calls into Application use cases.
+
+Offline BM25 and vector rebuilds are not a product zone and not Application use cases. They require writers to be stopped, so they must not start Application. They remain installed package commands: thin argument parsers that call Engine RAG and PostgreSQL rebuild functions already used after ingest. They are not repository scripts, Makefile targets, or Compose services. Repository scripts stay host-only. Workspace reset stays Corpus Administration because it deletes product data through the running application.
 
 Outbound adapters implement interfaces owned by Application or Engine. They do not sit on the inbound call path. PostgreSQL may implement Application conversation and corpus ports as well as Engine session and run ports.
 
 Composition exists, but it is not a public zone. A private root composition module wires adapters into Application. The root facade exports `Application`, `DlightragConfig`, `create_application`, and `__version__`. `create_application` asynchronously returns a started Application. Callers close it. Tests may inject in-memory implementations through Application's constructor.
 
-Inbound adapters may import only Application facades and Application-owned request, result, and error contracts. They must not deep-import Engine. Application owns the caller-facing Answer, Retrieval, Corpus Administration, Memory, and Web Conversation contracts, including errors transports must handle. Engine identities that leak today are wrapped or re-homed at the Application facade; they are not imported by HTTP, MCP, or Maintenance. Engine must not import Application or Adapters. Engine children keep today's allowed direction:
+Inbound adapters may import only Application facades and Application-owned request, result, and error contracts. They must not deep-import Engine. Application owns the caller-facing Answer, Retrieval, Corpus Administration, Memory, and Web Conversation contracts, including errors transports must handle. Engine identities that leak today are wrapped or re-homed at the Application facade; they are not imported by HTTP or MCP. Engine must not import Application or Adapters. Offline rebuild commands may compose Engine RAG and PostgreSQL directly because they run with the application process stopped. Engine children keep today's allowed direction:
 
 - AI depends on no other product modules.
 - Agent may depend on AI.
@@ -72,6 +74,9 @@ HTTP and the browser share one server lifetime and one SSE/cursor implementation
 - **Compatibility shims for old Python paths.** Clean break is accepted; dual trees are the failure mode this work exists to remove.
 - **Rename operator config keys, REST paths, or PostgreSQL tables to match Python directories.** Those are different interfaces from source layout.
 - **Line-count gates.** Large files can be deep implementations; small files can be pass-throughs.
+- **A Maintenance inbound zone or Application rebuild use case.** Rebuild is exclusive offline repair of derived indexes. Routing it through Application fights the stop-writers invariant.
+- **Move shipped rebuild commands into repository scripts.** Those scripts are not installed. Wheel and image operators would lose the non-destructive repair entry.
+- **Treat rebuild as workspace reset.** Reset deletes corpus data. Rebuild keeps documents and rewrites derived indexes.
 
 ## Consequences
 
@@ -81,4 +86,4 @@ The first-look story becomes one sentence: adapters call Application, Applicatio
 
 ## Invariants this decision does not change
 
-Product behavior, REST paths, configuration keys, environment variables, PostgreSQL object names, and persistence semantics stay the same. Fast and Research remain one Answer product with one Agent Session tree. The generic Agent kernel stays product-neutral. RAG remains one workspace runtime with internal corpus and retrieval owners. Local filesystem tools and in-memory session repositories stay inside Agent as internal adapters, not top-level product adapters.
+Product behavior, REST paths, configuration keys, environment variables, PostgreSQL object names, and persistence semantics stay the same. Fast and Research remain one Answer product with one Agent Session tree. The generic Agent kernel stays product-neutral. RAG remains one workspace runtime with internal corpus and retrieval owners. Local filesystem tools and in-memory session repositories stay inside Agent as internal adapters, not top-level product adapters. Installed rebuild command names stay `dlightrag-rebuild-bm25` and `dlightrag-rebuild-vdb`.
