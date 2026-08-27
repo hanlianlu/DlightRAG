@@ -420,6 +420,41 @@ class TestAnthropicProvider:
 
 class TestOpenAICompatibleProvider:
     @pytest.mark.asyncio
+    async def test_json_object_adds_json_word_when_prompt_omits_it(self):
+        p = get_provider("openai", api_key="test-key")
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content='{"mode":"fast"}'))]
+        with patch.object(p, "_get_client") as mock_client:
+            create = AsyncMock(return_value=mock_response)
+            mock_client.return_value.chat.completions.create = create
+            await p.complete(
+                [{"role": "user", "content": "Pick a mode."}],
+                "gpt-5.4-mini",
+                response_format={"type": "json_object"},
+            )
+        await_args = create.await_args
+        assert await_args is not None
+        sent = await_args.kwargs["messages"]
+        assert sent[-1]["content"] == "Respond with JSON."
+        assert sent[0]["content"] == "Pick a mode."
+
+    async def test_json_object_does_not_duplicate_json_instruction(self):
+        p = get_provider("openai", api_key="test-key")
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="{}"))]
+        messages = [{"role": "system", "content": "Return JSON only."}]
+        with patch.object(p, "_get_client") as mock_client:
+            create = AsyncMock(return_value=mock_response)
+            mock_client.return_value.chat.completions.create = create
+            await p.complete(
+                messages,
+                "gpt-5.4-mini",
+                response_format={"type": "json_object"},
+            )
+        await_args = create.await_args
+        assert await_args is not None
+        assert await_args.kwargs["messages"] == messages
+
     async def test_complete_returns_content(self):
         p = get_provider("openai", api_key="test-key")
         mock_response = MagicMock()

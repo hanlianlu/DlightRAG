@@ -113,6 +113,33 @@ def _openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]
     return converted
 
 
+_JSON_OBJECT_INSTRUCTION = "Respond with JSON."
+
+
+def _content_mentions_json(content: Any) -> bool:
+    if isinstance(content, str):
+        return "json" in content.casefold()
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, str) and "json" in part.casefold():
+                return True
+            if isinstance(part, dict) and "json" in str(part.get("text") or "").casefold():
+                return True
+    return False
+
+
+def _messages_for_json_object(
+    messages: list[dict[str, Any]],
+    response_format: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Satisfy OpenAI json_object: some message must contain the word json."""
+    if response_format is None or response_format.get("type") != "json_object":
+        return messages
+    if any(_content_mentions_json(message.get("content")) for message in messages):
+        return messages
+    return [*messages, {"role": "user", "content": _JSON_OBJECT_INSTRUCTION}]
+
+
 def _openai_provider_state(message: Any) -> dict[str, Any] | None:
     extras = getattr(message, "model_extra", None) or {}
     state = {
@@ -176,7 +203,8 @@ class OpenAICompatibleProvider(CompletionProvider):
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
     ) -> CompletionOutput:
-        call_kwargs: dict[str, Any] = {"model": model, "messages": messages}
+        outbound = _messages_for_json_object(messages, response_format)
+        call_kwargs: dict[str, Any] = {"model": model, "messages": outbound}
         if temperature is not None:
             call_kwargs["temperature"] = temperature
         if max_tokens is not None:
@@ -303,7 +331,7 @@ class OpenAICompatibleProvider(CompletionProvider):
     ) -> AsyncGenerator[str]:  # type: ignore
         call_kwargs: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": _messages_for_json_object(messages, response_format),
             "stream": True,
         }
         if temperature is not None:
