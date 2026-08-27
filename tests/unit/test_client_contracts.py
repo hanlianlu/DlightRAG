@@ -4,22 +4,22 @@
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.answer.citations.schemas import SourceReference, SourceReferencePayload
-from dlightrag.answer.client_contracts import (
+from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
+from dlightrag.application.answer_runs.citations import SourceReference, SourceReferencePayload
+from dlightrag.application.answer_runs.client_contracts import (
     MAX_HISTORY_CONTENT_CHARS,
     MAX_HISTORY_MESSAGES,
     AnswerAttachmentLink,
     ConversationMessage,
     conversation_history_as_dicts,
 )
-from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
-from dlightrag.mcp.contracts import AnswerInput, RetrieveInput
-from dlightrag.rag.contracts import IngestDocument
-from dlightrag.services.corpora import (
+from dlightrag.application.corpus_admin import (
     IngestSpec,
     ingest_kwargs_from_spec,
     ingest_spec_from_payload,
 )
+from dlightrag.mcp.contracts import AnswerInput, RetrieveInput
+from dlightrag.rag.contracts import IngestDocument
 
 
 def test_per_interface_current_image_admission() -> None:

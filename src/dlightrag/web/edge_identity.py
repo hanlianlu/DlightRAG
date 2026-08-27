@@ -21,12 +21,12 @@ from typing import Any, Literal, Protocol
 import jwt
 from starlette.requests import Request
 
-from dlightrag.access.authentication import (
+from dlightrag.application.access.authentication import (
     AuthenticationError,
     AuthenticationSettings,
     authenticate_bearer_token,
 )
-from dlightrag.config import WebIdentitySettings
+from dlightrag.application.config import WebIdentitySettings
 
 EdgeIdentityErrorKind = Literal[
     "missing_credential",

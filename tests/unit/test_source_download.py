@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from dlightrag.config import DlightragConfig
-from dlightrag.model_settings import rag_settings
+from dlightrag.application.config import DlightragConfig
+from dlightrag.application.settings import rag_settings
 from dlightrag.rag.source_download import (
     LocalDownloadTarget,
     RedirectDownloadTarget,

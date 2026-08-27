@@ -4,7 +4,7 @@
 import pytest
 
 from dlightrag.agent.session.effects import canonical_json
-from dlightrag.answer.prepared_input import (
+from dlightrag.application.answer_runs.prepared_input import (
     MAX_PREPARED_INPUT_BYTES,
     PreparedInputTooLargeError,
     require_prepared_input_bounds,

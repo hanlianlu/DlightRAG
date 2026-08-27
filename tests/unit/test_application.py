@@ -6,33 +6,32 @@ from typing import Any, cast
 
 import pytest
 
+from dlightrag._compose import _memory_embedder
 from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
 from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION
 from dlightrag.ai.fingerprints import ModelFingerprint, model_fingerprint
 from dlightrag.ai.settings import MODEL_ROLE_NAMES
-from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
 from dlightrag.answer.executor import IncompatibleActiveRunError
 from dlightrag.answer.model_runtime import AnswerModelRuntime
-from dlightrag.application import (
-    Application,
-    ApplicationClosedError,
-    _ApplicationComponents,
-    _memory_embedder,
+from dlightrag.application import Application, ApplicationClosedError
+from dlightrag.application.answer_runs import AnswerService
+from dlightrag.application.answer_runs.capabilities import AnswerCapabilityCoordinator
+from dlightrag.application.application import _ApplicationComponents
+from dlightrag.application.config import DlightragConfig
+from dlightrag.application.corpus_admin import CorpusAdmin
+from dlightrag.application.errors import StorageSchemaError
+from dlightrag.application.health import ApplicationHealth
+from dlightrag.application.retrieval import RetrievalService
+from dlightrag.application.settings import model_settings_for_role
+from dlightrag.application.web_conversations import (
+    WebConversationSchemaError,
+    WebConversationService,
 )
-from dlightrag.config import DlightragConfig
-from dlightrag.health import ApplicationHealth
-from dlightrag.model_settings import model_settings_for_role
 from dlightrag.rag.ports import CorpusSchemaError
 from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.runtime import RunCoordinator, RunSchemaError
-from dlightrag.services.answers import AnswerService
-from dlightrag.services.corpora import CorpusAdmin
-from dlightrag.services.errors import StorageSchemaError
-from dlightrag.services.retrieval import RetrievalService
-from dlightrag.web.conversation_models import WebConversationSchemaError
-from dlightrag.web.conversations import WebConversationService
 from tests.config_helpers import mutate_config
 
 _CLOSE_ORDER = [

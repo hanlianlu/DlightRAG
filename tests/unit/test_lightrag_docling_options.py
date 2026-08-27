@@ -92,7 +92,7 @@ def test_do_formula_enrichment_defaults_on_like_mineru() -> None:
 
 
 def test_do_formula_enrichment_reaches_lightrag_env() -> None:
-    from dlightrag.config import DlightragConfig
+    from dlightrag.application.config import DlightragConfig
     from dlightrag.rag.settings import DoclingSidecarSettings, ParserSidecarsSettings
 
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
@@ -106,7 +106,7 @@ def test_do_formula_enrichment_reaches_lightrag_env() -> None:
 
 
 def test_force_ocr_reaches_lightrag_env() -> None:
-    from dlightrag.config import DlightragConfig
+    from dlightrag.application.config import DlightragConfig
     from dlightrag.rag.settings import DoclingSidecarSettings, ParserSidecarsSettings
 
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]

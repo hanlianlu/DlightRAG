@@ -18,9 +18,6 @@ from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.ai.scheduler import ModelScheduler
 from dlightrag.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.answer.capabilities import AnswerCapabilities
-from dlightrag.answer.capability import AnswerImageCapability
-from dlightrag.answer.errors import CurrentDocumentParseError
 from dlightrag.answer.executor import (
     AnswerExecutor,
     AnswerExecutorSettings,
@@ -30,7 +27,11 @@ from dlightrag.answer.executor import (
     _memory_recall_allowed,
 )
 from dlightrag.answer.highlights import SemanticHighlightSettings
-from dlightrag.answer.runs.execution import (
+from dlightrag.answer.session_host import ensure_session_lane
+from dlightrag.application.answer_runs.capabilities import AnswerCapabilities
+from dlightrag.application.answer_runs.capability import AnswerImageCapability
+from dlightrag.application.answer_runs.errors import CurrentDocumentParseError
+from dlightrag.application.answer_runs.execution import (
     AnswerRunRequest,
     AttachmentReference,
     LinkReference,
@@ -38,7 +39,6 @@ from dlightrag.answer.runs.execution import (
     build_current_answer_resources,
     in_memory_attachment_loader,
 )
-from dlightrag.answer.session_host import ensure_session_lane
 from dlightrag.runtime import RunExecutionError, RunSession, artifact_digest
 
 

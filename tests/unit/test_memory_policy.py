@@ -3,7 +3,6 @@
 
 import pytest
 
-from dlightrag.answer.errors import MemoryWriteRejectedError
 from dlightrag.answer.memory import (
     MEMORY_BODY_LIMIT,
     RECALL_CHAR_BUDGET,
@@ -15,6 +14,7 @@ from dlightrag.answer.memory import (
     reserved_auto_recall_text,
     standing_memory_for_acceptance,
 )
+from dlightrag.application.answer_runs.errors import MemoryWriteRejectedError
 
 
 def _provenance() -> MemoryProvenance:

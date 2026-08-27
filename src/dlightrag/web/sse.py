@@ -4,7 +4,7 @@
 import json
 from typing import Any
 
-from dlightrag.answer.client_contracts import model_dump_json_safe
+from dlightrag.application.answer_runs.client_contracts import model_dump_json_safe
 
 
 def sse_event(event: str, payload: Any) -> str:

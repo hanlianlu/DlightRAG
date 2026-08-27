@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.config import set_config
+from dlightrag.application.config import set_config
 from dlightrag.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.rag.retrieval.filtering import metadata_filter_scope
 from dlightrag.rag.retrieval.metadata_path import metadata_retrieve
@@ -62,7 +62,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
 ) -> None:
     from dlightrag.adapters.postgres._pool import pg_pool
     from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
-    from dlightrag.model_settings import rag_settings
+    from dlightrag.application.settings import rag_settings
     from dlightrag.observability import LangfuseTelemetry
     from dlightrag.rag.workspace_rag import WorkspaceRag
 
@@ -181,8 +181,8 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     from dlightrag.adapters.postgres._pool import pg_pool
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
     from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
-    from dlightrag.config import reset_config, set_config
-    from dlightrag.model_settings import rag_settings
+    from dlightrag.application.config import reset_config, set_config
+    from dlightrag.application.settings import rag_settings
     from dlightrag.observability import LangfuseTelemetry
     from dlightrag.rag.workspace_rag import WorkspaceRag
     from dlightrag.runtime import answer_run_request_fingerprint

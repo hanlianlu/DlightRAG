@@ -45,7 +45,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
-            patch("dlightrag.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.get_config", return_value=mock_config),
         ):
             result = await pool.get()
 
@@ -89,7 +89,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
-            patch("dlightrag.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.get_config", return_value=mock_config),
         ):
             result1 = await pool.get()
             result2 = await pool.get()
@@ -151,7 +151,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(side_effect=[mock_pool1, mock_pool2]),
             ) as mock_create,
-            patch("dlightrag.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.get_config", return_value=mock_config),
         ):
             r1 = await pool.get()
             await pool.close()
@@ -191,7 +191,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
-            patch("dlightrag.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.get_config", return_value=mock_config),
         ):
             result = await pool.get()
 
@@ -239,7 +239,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
-            patch("dlightrag.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.get_config", return_value=mock_config),
         ):
             result = await pool.get()
 
@@ -301,7 +301,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=the_pool),
             ) as mock_create,
-            patch("dlightrag.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.get_config", return_value=mock_config),
         ):
             result = await pool.run(operation)
 
@@ -341,7 +341,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=the_pool),
             ),
-            patch("dlightrag.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.get_config", return_value=mock_config),
             pytest.raises(
                 asyncpg.exceptions.ConnectionDoesNotExistError,
                 match="commit outcome unknown",
@@ -379,7 +379,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
-            patch("dlightrag.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.get_config", return_value=mock_config),
         ):
             await pool.get()
 
@@ -410,7 +410,7 @@ class TestPGPoolGet:
                 "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=the_pool),
             ),
-            patch("dlightrag.config.get_config", return_value=mock_config),
+            patch("dlightrag.application.config.get_config", return_value=mock_config),
         ):
             result = await pool.run(operation)
 

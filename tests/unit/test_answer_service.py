@@ -14,10 +14,16 @@ from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
-from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
-from dlightrag.answer.errors import UnsupportedAnswerModeError
 from dlightrag.answer.resources.models import ResourceInput
-from dlightrag.answer.runs.execution import AnswerRunInput, AnswerRunRequest
+from dlightrag.application.answer_runs import (
+    AnswerHistoryResource,
+    AnswerRequest,
+    AnswerRuntimeUnavailableError,
+    AnswerService,
+)
+from dlightrag.application.answer_runs.capabilities import AnswerCapabilities, RequestModelContext
+from dlightrag.application.answer_runs.errors import UnsupportedAnswerModeError
+from dlightrag.application.answer_runs.execution import AnswerRunInput, AnswerRunRequest
 from dlightrag.runtime import (
     AnswerRunCancelledError,
     AnswerRunEvent,
@@ -28,12 +34,6 @@ from dlightrag.runtime import (
     PendingArtifactReference,
     RunArtifactReference,
     RunCreation,
-)
-from dlightrag.services.answers import (
-    AnswerHistoryResource,
-    AnswerRequest,
-    AnswerRuntimeUnavailableError,
-    AnswerService,
 )
 
 _OWNER = "owner-1"

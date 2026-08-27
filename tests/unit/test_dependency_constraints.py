@@ -184,7 +184,7 @@ def test_compose_binds_api_port_to_loopback_on_host() -> None:
 
 
 def test_compose_mcp_local_listener_passes_security_validation() -> None:
-    from dlightrag.config import DlightragConfig
+    from dlightrag.application.config import DlightragConfig
 
     compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
     environment = compose["services"]["dlightrag-mcp"]["environment"]
@@ -243,7 +243,7 @@ def test_docx_native_parser_runtime_dependency_is_direct() -> None:
 def test_default_parser_routing_has_no_unrouted_fallback() -> None:
     """Default ingestion must not silently degrade into an unrouted parser path."""
     from dlightrag.ai.settings import EmbeddingSettings
-    from dlightrag.config import DlightragConfig
+    from dlightrag.application.config import DlightragConfig
 
     cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         models={

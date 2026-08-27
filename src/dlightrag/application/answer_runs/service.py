@@ -18,14 +18,7 @@ from dlightrag.ai.capacity import (
 from dlightrag.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
-from dlightrag.answer.agent.orchestrator import research_history_input_measure
-from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
-from dlightrag.answer.capability import AnswerImageCapability
-from dlightrag.answer.errors import (
-    AnswerInputOverflowError,
-    InvalidToolConfigurationError,
-    UnsupportedAnswerModeError,
-)
+from dlightrag.answer.acceptance import research_history_input_measure
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.executor import ResolvedAnswerResources
 from dlightrag.answer.history import (
@@ -35,19 +28,18 @@ from dlightrag.answer.history import (
 )
 from dlightrag.answer.images import AnswerImagePolicy
 from dlightrag.answer.memory import memory_owner_allowed, standing_memory_for_acceptance
-from dlightrag.answer.mode import (
-    ModeCapability,
-    ModeResource,
-    ResolvedMode,
-    require_supported_mode,
-    resource_role,
-    valid_modes,
-)
-from dlightrag.answer.prepared_input import require_prepared_input_bounds
 from dlightrag.answer.resources.images import QueryImageDescriber, prepare_query_images
 from dlightrag.answer.resources.models import ResourceInput, TextWindowBudget
-from dlightrag.answer.routing import RoutingAcceptance
-from dlightrag.answer.runs.execution import (
+from dlightrag.answer.synthesizer import AnswerSynthesizer
+from dlightrag.answer.tools import compose_research_tools
+from dlightrag.application.answer_runs.capabilities import AnswerCapabilities, RequestModelContext
+from dlightrag.application.answer_runs.capability import AnswerImageCapability
+from dlightrag.application.answer_runs.errors import (
+    AnswerInputOverflowError,
+    InvalidToolConfigurationError,
+    UnsupportedAnswerModeError,
+)
+from dlightrag.application.answer_runs.execution import (
     AnswerRunInput,
     AnswerRunRequest,
     AttachmentReference,
@@ -56,9 +48,17 @@ from dlightrag.answer.runs.execution import (
     build_current_answer_resources,
     in_memory_attachment_loader,
 )
-from dlightrag.answer.runs.results import AnswerResult, restore_answer_result
-from dlightrag.answer.synthesizer import AnswerSynthesizer
-from dlightrag.answer.tools import compose_research_tools
+from dlightrag.application.answer_runs.mode import (
+    ModeCapability,
+    ModeResource,
+    ResolvedMode,
+    require_supported_mode,
+    resource_role,
+    valid_modes,
+)
+from dlightrag.application.answer_runs.prepared_input import require_prepared_input_bounds
+from dlightrag.application.answer_runs.results import AnswerResult, restore_answer_result
+from dlightrag.application.answer_runs.routing import RoutingAcceptance
 from dlightrag.rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag.rag.retrieval.planner import RetrievalPlanner
 from dlightrag.rag.sourcing.source_contract import safe_source_filename

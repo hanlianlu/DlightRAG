@@ -40,7 +40,7 @@
 
   <rect class="product" x="80" y="110" width="1120" height="120" rx="18"/>
   <text class="node-title" x="640" y="153" text-anchor="middle">Root product modules</text>
-  <text class="node-copy" x="640" y="185" text-anchor="middle">application · services · answer · access · transports · PostgreSQL adapters</text>
+  <text class="node-copy" x="640" y="185" text-anchor="middle">application use cases · answer execution · transports · PostgreSQL adapters</text>
   <text class="node-copy" x="640" y="208" text-anchor="middle">Composition and product policy depend on owner interfaces, never the reverse.</text>
 
   <rect class="module" x="80" y="330" width="180" height="110" rx="14"/>

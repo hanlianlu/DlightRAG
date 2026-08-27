@@ -18,9 +18,9 @@ from dlightrag.answer.prompts import (
     HIGHLIGHT_BATCH_USER_PROMPT,
     HIGHLIGHT_SYSTEM_PROMPT,
 )
+from dlightrag.application.answer_runs.citations import HighlightSource
 
 from .parser import CITATION_PATTERN, DOC_CITATION_PATTERN, strip_generated_references_section
-from .schemas import HighlightSource
 
 logger = logging.getLogger(__name__)
 

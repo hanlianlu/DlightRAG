@@ -6,7 +6,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from dlightrag.answer.errors import UnsupportedAnswerModeError, UnsupportedResourceCapabilityError
+from dlightrag.application.answer_runs.errors import (
+    UnsupportedAnswerModeError,
+    UnsupportedResourceCapabilityError,
+)
 
 AnswerMode = Literal["auto", "fast", "research"]
 ResolvedMode = Literal["fast", "research"]

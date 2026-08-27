@@ -15,8 +15,8 @@ from typing import Any
 from dlightrag.agent.session.plan import AgentRunPlan
 from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
-from dlightrag.answer.mode import canonical_answer_mode
 from dlightrag.answer.resources.models import ResourceInput
+from dlightrag.application.answer_runs.mode import canonical_answer_mode
 from dlightrag.runtime.errors import RunExecutionError
 
 

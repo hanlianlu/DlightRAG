@@ -35,11 +35,11 @@ architecture overview.
 ## Runtime Ownership
 
 <p align="center">
-  <img src="architecture-runtime.svg" alt="DlightRAG runtime ownership from inbound adapters through application services to Runtime, Answer, RAG, Memory, Agent, and AI modules" width="1180" />
+  <img src="architecture-runtime.svg" alt="DlightRAG runtime ownership from inbound adapters through Application use cases to Runtime, Answer, RAG, Memory, Agent, and AI modules" width="1180" />
 </p>
 
-`Application` is the eager composition and lifecycle root, not a request stage.
-Inbound adapters call typed application services. Those services invoke the
+`create_application` is the private-composition entry point; `Application` owns lifecycle and use-case accessors.
+Inbound adapters call the typed use cases under the Application zone. Those use cases invoke the
 small owner interfaces of Runtime, Answer, RAG, and Memory. Agent and RAG both
 use the provider-neutral AI module without depending on each other. Persistence
 is omitted from this view and shown under
@@ -237,9 +237,10 @@ extension checks, advisory-lock lifetimes, reader attachment, catalog scans,
 workspace maintenance, schema DDL, and SQL identifiers. Startup availability
 failures are translated to corpus errors; operation-specific failures retain
 their adapter context for the current product error policy.
-The current `Application` composes the adapter; the internal RAG module,
-Runtime, status routes, API, Web, and MCP never import it. Corpus and operational
-pools remain separate even when they use the same endpoint.
+Private `create_application` / `_compose` wires the PostgreSQL adapter into the
+process. Application itself does not import adapters. The internal RAG module,
+Runtime, status routes, API, Web, and MCP never import PostgreSQL. Corpus and
+operational pools remain separate even when they use the same endpoint.
 
 ## Web Frontend Ownership
 
@@ -434,18 +435,12 @@ module at a higher layer may import from lower layers, but lower layers must not
 import higher ones.
 
 ```text
-L9  api, mcp, web                                  interface adapters
-L8  application; services                         composition and use cases
-L7  dlightrag.rag.WorkspacePool, WorkspaceRag      corpus runtime ownership
-L6  answer                                         execution, lifecycle, source/media projection
-L5  host and storage adapters                      PostgreSQL; LightRAG contract and lifecycle
-L4  workspace cores and model adapters             AI; Agent; RAG retrieval, ingestion, sourcing
-L3  product domain                                 access, requests, citations, conversations
-L2c application, runtime                           health and durable lifecycle contracts
-L2b model settings, schemas                        resolved foundation values
-L2a config, scope, protocols                       shared configuration and contracts
-L1  observability                                  Langfuse telemetry adapter
-L0  prompts, utils                                 pure helpers
+L6  api, mcp, web                                  inbound transports
+L5  application                                    config, access, health, use cases
+L4  answer                                         execution policy still outside Application
+L3  rag WorkspacePool / WorkspaceRag               corpus runtime ownership
+L2  AI, Agent, RAG retrieval/ingestion, Runtime    workspace cores and durable contracts
+L1  PostgreSQL adapters, observability             storage and telemetry implementations
 ```
 
 The layering checks are part of local and CI verification:

@@ -6,17 +6,17 @@ from typing import Any, Literal, Self
 
 from pydantic import ConfigDict, Field, model_validator
 
-from dlightrag.access import validate_query_workspace_selection
-from dlightrag.answer.citations.schemas import SourceReferencePayload
-from dlightrag.answer.client_contracts import (
+from dlightrag.application.access import validate_query_workspace_selection
+from dlightrag.application.answer_runs.citations import SourceReferencePayload
+from dlightrag.application.answer_runs.client_contracts import (
     MAX_HISTORY_CONTENT_CHARS,
     MAX_HISTORY_MESSAGES,
     AnswerRequestContract,
     ClientContractModel,
     RetrieveRequestContract,
 )
+from dlightrag.application.corpus_admin import IngestSpec
 from dlightrag.runtime import AnswerRunPhase, AnswerRunStatus
-from dlightrag.services.corpora import IngestSpec
 
 # Maximum UTF-8 history payload plus query/workspace/JSON framing. Shared by the
 # REST multipart parser and its receive-layer body cap.

@@ -11,9 +11,9 @@ import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.answer.capability import AnswerImageCapability
 from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig
+from dlightrag.application.answer_runs.capability import AnswerImageCapability
+from dlightrag.application.config import DlightragConfig
 from dlightrag.web.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
@@ -115,14 +115,18 @@ async def client(web_app):
 async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.application import Application
+    from dlightrag.api import server as api_server
 
     application_double = AsyncMock()
     conversation_service = AsyncMock()
     application = create_app(include_web_app=True)
     application_double.health = MagicMock()
     application_double.web_conversations = conversation_service
-    monkeypatch.setattr(Application, "acreate", AsyncMock(return_value=application_double))
+    monkeypatch.setattr(
+        api_server,
+        "create_application",
+        AsyncMock(return_value=application_double),
+    )
 
     async with application.router.lifespan_context(application):
         assert application.state.application.web_conversations is conversation_service
@@ -295,7 +299,7 @@ class TestWebAuth:
     async def test_simple_login_cookie_downloads_source_without_bearer(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        from dlightrag.services.errors import LocalDownloadTarget
+        from dlightrag.application.corpus_admin import LocalDownloadTarget
 
         mutate_config(test_config, "access.auth_mode", "simple")
         mutate_config(test_config, "access.api_token", "secret-token")
@@ -983,7 +987,7 @@ class TestSourcePresentation:
     """Tests for structured source presentation contracts."""
 
     def test_page_number_and_download_are_projected(self) -> None:
-        from dlightrag.answer.citations.schemas import ChunkSnippet, SourceReferencePayload
+        from dlightrag.application.answer_runs.citations import ChunkSnippet, SourceReferencePayload
         from dlightrag.web.presentation import build_answer_presentation
 
         presentation = build_answer_presentation(

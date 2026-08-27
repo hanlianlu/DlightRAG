@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from dlightrag.answer.mode import ResolvedMode, canonical_answer_mode
+from dlightrag.application.answer_runs.mode import ResolvedMode, canonical_answer_mode
 
 
 @dataclass(frozen=True, slots=True)

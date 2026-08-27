@@ -291,17 +291,17 @@ uv add dlightrag
 import asyncio
 import os
 
-from dlightrag import Application
-from dlightrag.access import DEPLOYMENT_OWNER_ID
+from dlightrag import create_application
+from dlightrag.application.access import DEPLOYMENT_OWNER_ID
 from dlightrag.ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
     ModelSettings,
     ModelsSettings,
 )
-from dlightrag.config import DeploymentSettings, DlightragConfig
-from dlightrag.services.answers import AnswerRequest
-from dlightrag.services.corpora import IngestSpec
+from dlightrag.application.config import DeploymentSettings, DlightragConfig
+from dlightrag.application.answer_runs import AnswerRequest
+from dlightrag.application.corpus_admin import IngestSpec
 
 
 async def main() -> None:
@@ -329,7 +329,7 @@ async def main() -> None:
             ),
         ),
     )
-    application = await Application.acreate(config)
+    application = await create_application(config)
     try:
         await application.corpora.ingest(
             workspace,

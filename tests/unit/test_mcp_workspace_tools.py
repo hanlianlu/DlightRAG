@@ -12,12 +12,20 @@ import pytest
 from mcp import Client, MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, InputRequiredResult, TextContent
 
-from dlightrag.access import RequestScope, owner_id_from_principal, request_scope_context
-from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
+from dlightrag.application.access import (
+    RequestScope,
+    owner_id_from_principal,
+    request_scope_context,
+)
+from dlightrag.application.config import (
+    AccessControlConfig,
+    AccessControlRuleConfig,
+    DlightragConfig,
+)
+from dlightrag.application.corpus_admin import IngestSpec
+from dlightrag.application.retrieval import RetrieveResponse as ServiceResponse
 from dlightrag.mcp import server as mcp_server
 from dlightrag.runtime import AnswerRunRecord
-from dlightrag.services.corpora import IngestSpec
-from dlightrag.services.retrieval import RetrieveResponse as ServiceResponse
 from tests.config_helpers import mutate_config, replace_config
 from tests.unit.conftest import answer_capability_view
 
@@ -159,7 +167,7 @@ def _stored_result() -> dict[str, Any]:
 async def test_get_capabilities_reports_answer_image_capability(
     mock_mcp_application: AsyncMock,
 ) -> None:
-    from dlightrag.answer.capability import AnswerImageCapability
+    from dlightrag.application.answer_runs.capability import AnswerImageCapability
 
     mock_mcp_application.answers.capabilities = answer_capability_view(
         AnswerImageCapability(
@@ -711,7 +719,7 @@ async def test_mcp_requests_stay_bound_to_running_application_config(
     test_config: DlightragConfig,
     tmp_path,
 ) -> None:
-    from dlightrag.config import set_config
+    from dlightrag.application.config import set_config
 
     application_config = test_config.model_copy(
         update={
@@ -956,7 +964,10 @@ async def test_mcp_cancel_reports_the_pending_request(mock_mcp_application: Asyn
 async def test_mcp_answer_preserves_answer_input_error_kind(
     mock_mcp_application: AsyncMock,
 ) -> None:
-    from dlightrag.answer.errors import ANSWER_INPUT_OVERFLOW, AnswerInputOverflowError
+    from dlightrag.application.answer_runs.errors import (
+        ANSWER_INPUT_OVERFLOW,
+        AnswerInputOverflowError,
+    )
 
     mock_mcp_application.answers.create.side_effect = AnswerInputOverflowError(
         "The answer input is too large."
@@ -973,7 +984,7 @@ async def test_mcp_answer_reports_tool_misconfiguration_as_a_server_failure(
     mock_mcp_application: AsyncMock,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from dlightrag.answer.errors import (
+    from dlightrag.application.answer_runs.errors import (
         INVALID_TOOL_CONFIGURATION,
         InvalidToolConfigurationError,
     )

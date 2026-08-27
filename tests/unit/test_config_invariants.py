@@ -17,7 +17,7 @@ from dlightrag.ai.settings import (
     ModelsSettings,
     RerankSettings,
 )
-from dlightrag.config import (
+from dlightrag.application.config import (
     AccessSectionSettings,
     AnswerConfig,
     AnswerSectionSettings,
@@ -429,7 +429,7 @@ def test_legacy_dotenv_key_is_rejected(tmp_path: Any, monkeypatch: pytest.Monkey
 
 
 def test_config_composes_canonical_models_without_snapshot_copy() -> None:
-    from dlightrag.model_settings import rag_settings
+    from dlightrag.application.settings import rag_settings
 
     models = ModelsSettings(embedding=EmbeddingSettings(startup_probe=False))
     answer = AnswerSectionSettings()

@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 import jwt
 
-from dlightrag.access.principal import UserContext
+from dlightrag.application.access.principal import UserContext
 
 type AuthenticationErrorKind = Literal[
     "invalid_token",

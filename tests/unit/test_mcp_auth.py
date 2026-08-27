@@ -9,9 +9,10 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 
-from dlightrag.access import UserContext, current_request_scope
-from dlightrag.config import DlightragConfig, set_config
+from dlightrag.application.access import UserContext, current_request_scope
+from dlightrag.application.config import DlightragConfig, set_config
 from dlightrag.mcp import auth as mcp_auth
+from dlightrag.mcp import server as mcp_server
 from dlightrag.mcp.server import DlightRAGRequestScopeMiddleware
 
 
@@ -73,8 +74,6 @@ async def test_mcp_request_scope_does_not_boot_application(
     monkeypatch: pytest.MonkeyPatch,
     test_config: DlightragConfig,
 ) -> None:
-    from dlightrag.application import Application
-
     set_config(
         test_config.model_copy(
             update={
@@ -88,7 +87,7 @@ async def test_mcp_request_scope_does_not_boot_application(
     async def _boom(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("request scope must not start Application")
 
-    monkeypatch.setattr(Application, "acreate", _boom)
+    monkeypatch.setattr(mcp_server, "create_application", _boom)
     token = AccessToken(
         token="signed-token",
         client_id="client",

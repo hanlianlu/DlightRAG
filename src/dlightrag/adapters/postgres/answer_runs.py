@@ -36,7 +36,7 @@ from dlightrag.adapters.postgres.session_repository import PGAgentSessionReposit
 from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
 from dlightrag.agent.session.ids import SessionId
 from dlightrag.agent.tool_content import decode_tool_content, tool_content_message_fields
-from dlightrag.answer.routing import RoutingAcceptance, RoutingRecord
+from dlightrag.application.answer_runs.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.runtime.cancellation import RunCancellationListener, cancellation_notify_key
 from dlightrag.runtime.contracts import AnswerRunPhase
 from dlightrag.runtime.errors import RunSchemaError

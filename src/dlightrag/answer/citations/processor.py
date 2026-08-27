@@ -4,6 +4,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from dlightrag.application.answer_runs.citations import SourceReference
+
 from .indexer import CitationIndexer
 from .parser import (
     claimless_chunk_ids,
@@ -11,7 +13,6 @@ from .parser import (
     extract_cited_chunks,
     strip_generated_references_section,
 )
-from .schemas import SourceReference
 from .source_builder import build_sources_from_chunks
 
 logger = logging.getLogger(__name__)

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from dlightrag.ai.completion import CompletionModel
 from dlightrag.ai.telemetry import Telemetry
 from dlightrag.answer.citations.highlight import extract_highlights_for_sources
-from dlightrag.answer.citations.schemas import HighlightSource
+from dlightrag.application.answer_runs.citations import HighlightSource
 
 logger = logging.getLogger(__name__)
 

@@ -4,8 +4,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
-from dlightrag.access import AccessAction, UserContext
 from dlightrag.api.auth import get_current_user
+from dlightrag.application.access import AccessAction, UserContext
 from dlightrag.rag.contracts import VisualAssetSize
 
 from .deps import enforce_access, get_application, resolve_workspace

@@ -14,29 +14,28 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, Response
 
-from dlightrag.access import AuthenticationError, UserContext, authenticate_bearer_token
-from dlightrag.access import authentication as authentication_module
-from dlightrag.answer.citations.schemas import SourceReference
-from dlightrag.answer.errors import AnswerInputOverflowError
-from dlightrag.answer.runs.results import AnswerResult
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
 from dlightrag.application import ApplicationClosedError
-from dlightrag.config import (
+from dlightrag.application.access import AuthenticationError, UserContext, authenticate_bearer_token
+from dlightrag.application.access import authentication as authentication_module
+from dlightrag.application.answer_runs import AnswerRuntimeUnavailableError
+from dlightrag.application.answer_runs.citations import SourceReference
+from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
+from dlightrag.application.answer_runs.results import AnswerResult
+from dlightrag.application.config import (
     AccessControlConfig,
     AccessControlRuleConfig,
     DlightragConfig,
     set_config,
 )
-from dlightrag.health import ApplicationHealth
-from dlightrag.model_settings import authentication_settings
+from dlightrag.application.corpus_admin import IngestSpec, MetadataValidationError
+from dlightrag.application.health import ApplicationHealth
+from dlightrag.application.retrieval import CorpusUnavailableError, RetrievalTimeoutError
+from dlightrag.application.retrieval import RetrieveResponse as ServiceResponse
+from dlightrag.application.settings import authentication_settings
 from dlightrag.rag.retrieval import RetrievalResult
 from dlightrag.runtime import AnswerRunRecord, RunCreation
-from dlightrag.services.answers import AnswerRuntimeUnavailableError
-from dlightrag.services.corpora import IngestSpec
-from dlightrag.services.errors import CorpusUnavailableError, MetadataValidationError
-from dlightrag.services.retrieval import RetrievalTimeoutError
-from dlightrag.services.retrieval import RetrieveResponse as ServiceResponse
 from tests.config_helpers import clone_config, mutate_config, replace_config
 
 # ---------------------------------------------------------------------------
@@ -221,7 +220,7 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
         "timestamp": None,
         "retry_after": 30.0,
     }
-    from dlightrag.answer.capability import AnswerImageCapability
+    from dlightrag.application.answer_runs.capability import AnswerImageCapability
 
     answer_image_capability = AnswerImageCapability(
         status="supported",
@@ -233,7 +232,7 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
         failure_kind=None,
     )
     from dlightrag.adapters.postgres.corpus import PGReadinessProbe
-    from dlightrag.answer.capability import answer_image_capability_summary
+    from dlightrag.application.answer_runs.capability import answer_image_capability_summary
 
     application.health = ApplicationHealth(
         readiness_probe=PGReadinessProbe(test_config),
@@ -1874,7 +1873,7 @@ class TestAnswerMultipart:
     ) -> None:
         import json as json_mod
 
-        from dlightrag.answer.client_contracts import (
+        from dlightrag.application.answer_runs.client_contracts import (
             MAX_HISTORY_CONTENT_CHARS,
             MAX_HISTORY_MESSAGES,
         )
@@ -2417,8 +2416,11 @@ async def test_the_app_admits_answer_history_with_the_shared_body_cap(
 async def test_the_app_still_refuses_a_body_over_the_shared_json_budget(
     mock_config: DlightragConfig,
 ) -> None:
-    from dlightrag.answer.client_contracts import MAX_HISTORY_CONTENT_CHARS, MAX_HISTORY_MESSAGES
     from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
+    from dlightrag.application.answer_runs.client_contracts import (
+        MAX_HISTORY_CONTENT_CHARS,
+        MAX_HISTORY_MESSAGES,
+    )
 
     set_config(mock_config)
     history_bytes = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS * 4

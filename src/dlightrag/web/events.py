@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from dlightrag.answer.client_contracts import ClientContractModel
+from dlightrag.application.answer_runs.client_contracts import ClientContractModel
 from dlightrag.runtime import AnswerRunPhase
 from dlightrag.web.presentation import AnswerPresentation
 

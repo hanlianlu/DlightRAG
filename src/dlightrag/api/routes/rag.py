@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from dlightrag.access import AccessAction, UserContext
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     IngestJobStatusResponse,
@@ -20,17 +19,19 @@ from dlightrag.api.models import (
     UploadIngestJobResponse,
 )
 from dlightrag.api.payloads import metadata_filter_from_payload
-from dlightrag.rag.workspaces import normalize_workspace
-from dlightrag.services.corpora import (
+from dlightrag.application.access import AccessAction, UserContext
+from dlightrag.application.corpus_admin import (
     CorpusResetResult,
     IngestSpec,
+    UnsafeUploadNameError,
+    UploadTooLargeError,
     ingest_spec_from_payload,
     managed_local_ingest_documents,
     managed_local_ingest_path,
 )
-from dlightrag.services.errors import UnsafeUploadNameError, UploadTooLargeError
-from dlightrag.services.retrieval import RetrieveProjection
-from dlightrag.services.retrieval import RetrieveRequest as ServiceRequest
+from dlightrag.application.retrieval import RetrieveProjection
+from dlightrag.application.retrieval import RetrieveRequest as ServiceRequest
+from dlightrag.rag.workspaces import normalize_workspace
 
 from .deps import (
     authorized_workspaces,

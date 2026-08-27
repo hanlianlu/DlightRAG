@@ -139,7 +139,7 @@ def test_chat_message_bubbles_wrap_unbroken_queries() -> None:
 
 
 def _presentation_source(*, source_uri: str, download_url: str | None = None):
-    from dlightrag.answer.citations.schemas import SourceReferencePayload
+    from dlightrag.application.answer_runs.citations import SourceReferencePayload
     from dlightrag.web.presentation import build_answer_presentation
 
     source = SourceReferencePayload(

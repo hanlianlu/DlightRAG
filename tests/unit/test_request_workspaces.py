@@ -4,12 +4,12 @@
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.access import (
+from dlightrag.api.models import QueryWorkspaceSelection
+from dlightrag.application.access import (
     NoQueryableWorkspacesError,
     WorkspaceSelectionConflictError,
     resolve_query_workspaces,
 )
-from dlightrag.api.models import QueryWorkspaceSelection
 
 
 def test_query_workspace_selection_defaults_to_default_scope() -> None:

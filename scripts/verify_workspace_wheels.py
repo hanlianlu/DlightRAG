@@ -836,25 +836,25 @@ def _smoke_root_interfaces() -> None:
     from typing import Any, cast
 
     import dlightrag
-    from dlightrag import Application
-    from dlightrag.access import DEPLOYMENT_OWNER_ID
+    from dlightrag import Application, create_application
     from dlightrag.agent import AgentSessionRuntime, ContextContribution, ToolRegistry
     from dlightrag.ai.settings import ModelsSettings
     from dlightrag.ai.telemetry import NoopTelemetry
-    from dlightrag.config import AnswerSectionSettings, DlightragConfig, RuntimeConfig
-    from dlightrag.model_settings import rag_settings
-    from dlightrag.rag.retrieval import RetrievalResult
-    from dlightrag.rag.settings import CorpusSettings, IngestionSettings, PipelineSettings
-    from dlightrag.runtime import answer_run_request_fingerprint
-    from dlightrag.sdk import AnswerRunClient
-    from dlightrag.services.corpora import CorpusAdmin, CorpusAdminSettings, IngestSpec
-    from dlightrag.services.retrieval import (
+    from dlightrag.application.access import DEPLOYMENT_OWNER_ID
+    from dlightrag.application.config import AnswerSectionSettings, DlightragConfig, RuntimeConfig
+    from dlightrag.application.corpus_admin import CorpusAdmin, CorpusAdminSettings, IngestSpec
+    from dlightrag.application.retrieval import (
         ProjectedRetrieval,
         RetrievalService,
         RetrievalSettings,
         RetrieveProjection,
         RetrieveRequest,
     )
+    from dlightrag.application.settings import rag_settings
+    from dlightrag.rag.retrieval import RetrievalResult
+    from dlightrag.rag.settings import CorpusSettings, IngestionSettings, PipelineSettings
+    from dlightrag.runtime import answer_run_request_fingerprint
+    from dlightrag.sdk import AnswerRunClient
 
     class Planner:
         async def plan(self, query, **_kwargs):
@@ -1022,8 +1022,22 @@ def _smoke_root_interfaces() -> None:
     if dlightrag.DlightragConfig is not DlightragConfig:
         raise ValueError("installed root package did not expose its config owner")
     if dlightrag.Application is not Application:
-        raise ValueError("installed root package did not expose Application eagerly")
+        raise ValueError("installed root package did not expose Application")
+    if dlightrag.create_application is not create_application:
+        raise ValueError("installed root package did not expose create_application")
+    if set(dlightrag.__all__) != {
+        "Application",
+        "DlightragConfig",
+        "create_application",
+        "__version__",
+    }:
+        raise ValueError("installed root facade exports unexpected names")
     for retired_module in (
+        "dlightrag.access",
+        "dlightrag.config",
+        "dlightrag.health",
+        "dlightrag.model_settings",
+        "dlightrag.services",
         "dlightrag.app_state",
         "dlightrag.contracts",
         "dlightrag.core.client_attachments",

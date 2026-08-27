@@ -17,8 +17,8 @@ from dlightrag.adapters.postgres.memory_settings import (
     MEMORY_SETTINGS_DDL,
     PGMemorySettingsStore,
 )
-from dlightrag.answer.errors import MemoryDisabledError, MemoryWriteRejectedError
-from dlightrag.services.memory import MemoryService
+from dlightrag.application.answer_runs.errors import MemoryDisabledError, MemoryWriteRejectedError
+from dlightrag.application.memory import MemoryService
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 

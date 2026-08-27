@@ -1,6 +1,6 @@
 # tests/unit/citations/test_processor.py
 from dlightrag.answer.citations.processor import CitationProcessor, CitationResult
-from dlightrag.answer.citations.schemas import SourceReference
+from dlightrag.application.answer_runs.citations import SourceReference
 
 
 def _metadata(file_name: str, file_path: str, **extra):

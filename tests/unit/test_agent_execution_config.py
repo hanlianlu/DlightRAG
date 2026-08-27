@@ -11,7 +11,7 @@ from dlightrag.answer.execution_settings import (
     default_local_workspace_root,
     validate_agent_execution,
 )
-from dlightrag.config import AgentExecutionConfig, DlightragConfig
+from dlightrag.application.config import AgentExecutionConfig, DlightragConfig
 
 
 def test_disabled_ignores_workspace_root(tmp_path: Path) -> None:

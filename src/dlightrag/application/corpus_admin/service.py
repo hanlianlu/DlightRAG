@@ -11,10 +11,14 @@ from typing import Annotated, Any, Literal, Protocol, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from dlightrag.access import WorkspaceRecord
 from dlightrag.ai.telemetry import safe_log_text
+from dlightrag.application.access import WorkspaceRecord
+from dlightrag.application.errors import CorpusUnavailableError, StorageSchemaError
 from dlightrag.rag.contracts import IngestDocument, SourceType, VisualAssetSize
 from dlightrag.rag.ingestion.paths import is_explicit_upload_batch_dir
+from dlightrag.rag.ingestion.uploads import (
+    UploadTooLargeError as _EngineUploadTooLargeError,
+)
 from dlightrag.rag.ingestion.uploads import (
     ignored_upload,
     safe_upload_basename,
@@ -29,13 +33,40 @@ from dlightrag.rag.ports import (
     CorpusSchemaError,
     IngestJobSchemaError,
 )
+from dlightrag.rag.ports import (
+    CorpusUnavailableError as _EngineCorpusUnavailableError,
+)
 from dlightrag.rag.reset import areset_orphaned_workspace
 from dlightrag.rag.retrieval import MetadataFilter
+from dlightrag.rag.retrieval.metadata_fields import (
+    MetadataValidationError as _EngineMetadataValidationError,
+)
+from dlightrag.rag.source_download import (
+    LocalDownloadTarget as _EngineLocalDownloadTarget,
+)
+from dlightrag.rag.source_download import (
+    RedirectDownloadTarget as _EngineRedirectDownloadTarget,
+)
+from dlightrag.rag.source_download import (
+    SourceDownloadInvalidError as _EngineSourceDownloadInvalidError,
+)
+from dlightrag.rag.source_download import (
+    SourceDownloadNotFoundError as _EngineSourceDownloadNotFoundError,
+)
+from dlightrag.rag.source_download import (
+    SourceDownloadUnavailableError as _EngineSourceDownloadUnavailableError,
+)
 from dlightrag.rag.workspace_rag import WorkspaceRag
 from dlightrag.rag.workspaces import normalize_workspace, require_canonical_workspace_id
-from dlightrag.services.errors import (
+
+from .errors import (
+    LocalDownloadTarget,
+    MetadataValidationError,
+    RedirectDownloadTarget,
+    SourceDownloadInvalidError,
+    SourceDownloadNotFoundError,
     SourceDownloadTarget,
-    StorageSchemaError,
+    SourceDownloadUnavailableError,
     UnsafeUploadNameError,
     UploadTooLargeError,
 )
@@ -51,6 +82,8 @@ async def _acquire_workspace(pool: WorkspacePool, workspace: str) -> WorkspaceRa
         return await pool.acquire(workspace)
     except CorpusSchemaError as exc:
         raise StorageSchemaError(str(exc)) from exc
+    except _EngineCorpusUnavailableError as exc:
+        raise CorpusUnavailableError(str(exc)) from exc
 
 
 def validate_workspace_name(name: str, *, max_length: int = 64) -> str:
@@ -363,7 +396,7 @@ class UploadReader(Protocol):
 
 
 class SourceDownloadPreparer(Protocol):
-    async def prepare(self, document_id: str) -> SourceDownloadTarget: ...
+    async def prepare(self, document_id: str) -> object: ...
 
 
 type SourceDownloadFactory = Callable[[str], SourceDownloadPreparer]
@@ -524,9 +557,25 @@ class CorpusAdmin:
         workspace_id: str,
         document_id: str,
     ) -> SourceDownloadTarget:
-        """Resolve one source download into its canonical target type."""
+        """Resolve one source download into an Application-owned target."""
         workspace = require_canonical_workspace_id(workspace_id)
-        return await self._source_download_for(workspace).prepare(document_id)
+        try:
+            target = await self._source_download_for(workspace).prepare(document_id)
+        except _EngineSourceDownloadInvalidError as exc:
+            raise SourceDownloadInvalidError(str(exc)) from exc
+        except _EngineSourceDownloadNotFoundError as exc:
+            raise SourceDownloadNotFoundError(str(exc)) from exc
+        except _EngineSourceDownloadUnavailableError as exc:
+            raise SourceDownloadUnavailableError(str(exc)) from exc
+        if isinstance(target, _EngineLocalDownloadTarget):
+            return LocalDownloadTarget(
+                path=target.path,
+                media_type=target.media_type,
+                filename=target.filename,
+            )
+        if isinstance(target, _EngineRedirectDownloadTarget):
+            return RedirectDownloadTarget(url=target.url)
+        raise SourceDownloadInvalidError("Source download target is invalid")
 
     async def stage_upload_stream(
         self,
@@ -549,7 +598,10 @@ class CorpusAdmin:
         target_dir = Path(self._settings.input_root) / workspace
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / safe_name
-        await write_upload_stream(reader, target_path, max_bytes=max_bytes)
+        try:
+            await write_upload_stream(reader, target_path, max_bytes=max_bytes)
+        except _EngineUploadTooLargeError as exc:
+            raise UploadTooLargeError(str(exc)) from exc
         return target_path, safe_name
 
     async def stage_upload_batch(
@@ -584,9 +636,9 @@ class CorpusAdmin:
                     bytes_written=bytes_written,
                 )
                 saved_paths.append(dest)
-        except UploadTooLargeError:
+        except _EngineUploadTooLargeError as exc:
             shutil.rmtree(upload_dir, ignore_errors=True)
-            raise
+            raise UploadTooLargeError(str(exc)) from exc
         except BaseException:
             shutil.rmtree(upload_dir, ignore_errors=True)
             raise
@@ -647,7 +699,10 @@ class CorpusAdmin:
     ) -> None:
         self._require_writer("metadata update")
         runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
-        await runtime.aupdate_metadata(document_id, data)
+        try:
+            await runtime.aupdate_metadata(document_id, data)
+        except _EngineMetadataValidationError as exc:
+            raise MetadataValidationError(str(exc)) from exc
 
     async def search_metadata(
         self,

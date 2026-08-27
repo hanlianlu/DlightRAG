@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.answer.citations.schemas import ChunkSnippet, SourceReference
+from dlightrag.application.answer_runs.citations import ChunkSnippet, SourceReference
 
 
 class _StoredChunk(BaseModel):

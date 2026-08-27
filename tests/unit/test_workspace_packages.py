@@ -257,13 +257,16 @@ def test_workspace_wheel_verifier_enforces_root_source_contract(
 ) -> None:
     _write_workspace_artifacts(
         tmp_path,
-        root_additional_sources={"config.py": config_source},
+        root_additional_sources={"application/config/probe.py": config_source},
     )
 
     completed = _verify_wheels(tmp_path)
 
     assert completed.returncode == 1
-    assert "forbidden import dlightrag.answer in dlightrag/config.py" in completed.stderr
+    assert (
+        "forbidden import dlightrag.answer in dlightrag/application/config/probe.py"
+        in completed.stderr
+    )
 
 
 def test_workspace_wheel_verifier_rejects_mismatched_sdist_set(tmp_path: Path) -> None:

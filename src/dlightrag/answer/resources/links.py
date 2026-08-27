@@ -3,8 +3,8 @@
 
 from collections.abc import Sequence
 
-from dlightrag.answer.client_contracts import AnswerAttachmentLink
 from dlightrag.answer.resources.models import ResourceInput
+from dlightrag.application.answer_runs.client_contracts import AnswerAttachmentLink
 
 
 def answer_link_resources(

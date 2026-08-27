@@ -12,13 +12,13 @@ from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse,
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from dlightrag.access import (
+from dlightrag.application.access import (
     AuthenticationError,
     UserContext,
     authenticate_bearer_token,
 )
-from dlightrag.config import DlightragConfig, get_config
-from dlightrag.model_settings import authentication_settings
+from dlightrag.application.config import DlightragConfig, get_config
+from dlightrag.application.settings import authentication_settings
 from dlightrag.web.app_shell import app_html_response
 from dlightrag.web.edge_identity import (
     EdgeIdentityError,

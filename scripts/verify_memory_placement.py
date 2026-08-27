@@ -37,7 +37,7 @@ MESSAGES = [
 async def _run() -> int:
     from dlightrag.ai.completion import CompletionModel
     from dlightrag.ai.scheduler import ModelScheduler
-    from dlightrag.config import get_config
+    from dlightrag.application.config import get_config
 
     config = get_config()
     settings = config.models.chat.resolve("query")

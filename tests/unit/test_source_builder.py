@@ -4,12 +4,12 @@ from typing import Any
 
 import pytest
 
-from dlightrag.answer.citations.schemas import SourceReference
 from dlightrag.answer.citations.source_builder import (
     SourceBuildInvariantError,
     build_sources,
     build_sources_from_chunks,
 )
+from dlightrag.application.answer_runs.citations import SourceReference
 
 
 def _chunk(

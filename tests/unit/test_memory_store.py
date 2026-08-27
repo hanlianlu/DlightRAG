@@ -7,7 +7,7 @@ import pytest
 from dlightrag_memory import Memory, MemoryProvenance, MemoryRecord
 from dlightrag_memory.store import InMemoryMemoryStore
 
-from dlightrag.answer.errors import MemoryWriteRejectedError
+from dlightrag.application.answer_runs.errors import MemoryWriteRejectedError
 
 
 def _provenance(run_id: str = "run-1") -> MemoryProvenance:

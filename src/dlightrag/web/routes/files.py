@@ -9,10 +9,10 @@ from typing import Any, NoReturn
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
-from dlightrag.access import AccessAction
 from dlightrag.ai.telemetry import safe_log_text
-from dlightrag.services.corpora import IngestSpec
-from dlightrag.services.errors import (
+from dlightrag.application.access import AccessAction
+from dlightrag.application.corpus_admin import (
+    IngestSpec,
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,

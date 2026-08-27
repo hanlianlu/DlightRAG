@@ -44,6 +44,7 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
+from dlightrag.application.corpus_admin import ingest_kwargs_from_spec, ingest_spec_from_payload
 from dlightrag.sdk import (
     AnswerAttachmentUpload,
     AnswerResult,
@@ -53,7 +54,6 @@ from dlightrag.sdk import (
 )
 from dlightrag.sdk import http as sdk_http
 from dlightrag.sdk.requests import query_image_blocks_from_urls
-from dlightrag.services.corpora import ingest_kwargs_from_spec, ingest_spec_from_payload
 
 
 def _print_json(data: Any) -> None:
@@ -191,8 +191,8 @@ def _render_answer_for_terminal(data: AnswerResult) -> str:
 
 async def _run_ingest(args: argparse.Namespace) -> None:
     from dlightrag.ai.scheduler import ModelScheduler
-    from dlightrag.config import get_config
-    from dlightrag.model_settings import rag_settings
+    from dlightrag.application.config import get_config
+    from dlightrag.application.settings import rag_settings
     from dlightrag.observability import LangfuseTelemetry
     from dlightrag.rag.workspace_rag import WorkspaceRag
     from dlightrag.rag.workspaces import normalize_workspace

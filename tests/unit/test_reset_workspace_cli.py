@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.access import AccessDeniedError, AccessGate, AllowAllAccessControl
+from dlightrag.application.access import AccessDeniedError, AccessGate, AllowAllAccessControl
 
 _reset_path = Path(__file__).resolve().parents[2] / "scripts" / "reset_workspace.py"
 _spec = importlib.util.spec_from_file_location("reset_workspace_cli", _reset_path)

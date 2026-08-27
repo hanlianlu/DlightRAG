@@ -1,67 +1,14 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Browser-safe contracts for durable Web conversations."""
+"""Browser Pydantic presentation models for Web Conversations."""
 
 import datetime
-from dataclasses import dataclass
 from typing import Any
 
 from pydantic import Field, field_validator
 
-from dlightrag.answer.client_contracts import ClientContractModel
-from dlightrag.runtime import AnswerRunRecord, AnswerRunStatus
+from dlightrag.application.answer_runs.client_contracts import ClientContractModel
+from dlightrag.runtime import AnswerRunStatus
 from dlightrag.web.presentation import AnswerPresentation
-
-
-@dataclass(frozen=True, slots=True)
-class LinkedTurn:
-    """One conversation entry and the authoritative run state behind it."""
-
-    turn_id: str
-    turn_number: int
-    submission_id: str
-    created_at: datetime.datetime
-    run: AnswerRunRecord
-    conversation_id: str = ""
-
-    @property
-    def answer_run_id(self) -> str:
-        return self.run.run_id
-
-
-@dataclass(frozen=True, slots=True)
-class ConversationSnapshot:
-    principal_id: str
-    conversation_id: str
-    content_revision: int
-    title: str | None
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
-    agent_session_id: str
-    agent_lane_id: str
-    turns: tuple[LinkedTurn, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class AnswerTurnCreation:
-    """The run and the conversation entry one submission durably created."""
-
-    turn: LinkedTurn
-    summary: dict[str, Any]
-    replayed: bool
-
-
-class ConversationSubmissionConflict(RuntimeError):
-    """One principal reused a submission id with a different conversation or input."""
-
-
-class WebConversationUnavailableError(RuntimeError):
-    """Durable Web conversation storage cannot currently be reached."""
-
-    detail = "Web conversation storage is unavailable"
-
-
-class WebConversationSchemaError(RuntimeError):
-    """The durable Web conversation schema is incompatible with this revision."""
 
 
 class ConversationSummary(ClientContractModel):
@@ -139,15 +86,9 @@ class RenameConversationRequest(ClientContractModel):
 
 __all__ = [
     "AnswerRunDescriptor",
-    "AnswerTurnCreation",
     "ConversationAttachmentReference",
     "ConversationHistory",
-    "ConversationSnapshot",
-    "ConversationSubmissionConflict",
     "ConversationSummary",
     "ConversationTurn",
-    "LinkedTurn",
     "RenameConversationRequest",
-    "WebConversationUnavailableError",
-    "WebConversationSchemaError",
 ]

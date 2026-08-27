@@ -4,7 +4,7 @@
 from typing import Literal
 from uuid import UUID
 
-from dlightrag.answer.client_contracts import ClientContractModel
+from dlightrag.application.answer_runs.client_contracts import ClientContractModel
 
 
 class WebAnswerRequest(ClientContractModel):

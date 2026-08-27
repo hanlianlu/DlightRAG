@@ -38,19 +38,30 @@ from dlightrag.ai.settings import (
     ModelRoleSettings,
     ModelSettings,
 )
-from dlightrag.answer.capabilities import AnswerCapabilities
-from dlightrag.answer.capability import AnswerImageCapability
-from dlightrag.answer.runs.execution import (
+from dlightrag.api.server import create_app
+from dlightrag.application.answer_runs import AnswerInputArtifact
+from dlightrag.application.answer_runs.capabilities import AnswerCapabilities
+from dlightrag.application.answer_runs.capability import AnswerImageCapability
+from dlightrag.application.answer_runs.execution import (
     AnswerRunInput,
     AttachmentReference,
     PinnedModelProfile,
 )
-from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig, set_config
+from dlightrag.application.config import DlightragConfig, set_config
+from dlightrag.application.web_conversations import (
+    ConversationSnapshot,
+    LinkedTurn,
+    WebAnswerSubmission,
+)
+from dlightrag.application.web_conversations import (
+    ConversationSummary as ApplicationConversationSummary,
+)
 from dlightrag.runtime import AnswerRunEvent, AnswerRunRecord
-from dlightrag.services.answers import AnswerInputArtifact
-from dlightrag.web.conversation_models import ConversationHistory, ConversationSummary, LinkedTurn
-from dlightrag.web.conversations import WebAnswerSubmission, project_conversation_turn
+from dlightrag.web.conversation_models import ConversationHistory
+from dlightrag.web.conversations import (
+    project_conversation_summary,
+    project_conversation_turn,
+)
 from tests.config_helpers import mutate_config
 
 MOCK_WORKSPACES = [
@@ -166,15 +177,15 @@ class E2EConversationService:
         return None
 
     @staticmethod
-    def _summary(value: dict[str, Any]) -> ConversationSummary:
-        return ConversationSummary(
+    def _summary(value: dict[str, Any]) -> ApplicationConversationSummary:
+        return ApplicationConversationSummary(
             conversation_id=value["conversation_id"],
             title=value["title"],
             created_at=value["created_at"],
             updated_at=value["updated_at"],
         )
 
-    async def create(self, _user: Any) -> ConversationSummary:
+    async def create(self, _user: Any) -> ApplicationConversationSummary:
         now = datetime.now(UTC)
         value = {
             "conversation_id": str(uuid4()),
@@ -187,7 +198,7 @@ class E2EConversationService:
             self._conversations[value["conversation_id"]] = value
         return self._summary(value)
 
-    async def list(self, _user: Any) -> list[ConversationSummary]:
+    async def list(self, _user: Any) -> list[ApplicationConversationSummary]:
         with self._lock:
             values = sorted(
                 self._conversations.values(),
@@ -204,13 +215,32 @@ class E2EConversationService:
             if value is None:
                 return None
             return ConversationHistory(
-                conversation=self._summary(value),
+                conversation=project_conversation_summary(self._summary(value)),
                 turns=[project_conversation_turn(turn) for turn in value["turns"]],
+            )
+
+    async def snapshot(
+        self, _principal_id: str, conversation_id: str
+    ) -> ConversationSnapshot | None:
+        with self._lock:
+            value = self._conversations.get(conversation_id)
+            if value is None:
+                return None
+            return ConversationSnapshot(
+                principal_id=_principal_id,
+                conversation_id=conversation_id,
+                content_revision=len(value["turns"]),
+                title=value["title"],
+                created_at=value["created_at"],
+                updated_at=value["updated_at"],
+                agent_session_id=conversation_id,
+                agent_lane_id="main",
+                turns=tuple(value["turns"]),
             )
 
     async def rename(
         self, _user: Any, conversation_id: str, title: str
-    ) -> ConversationSummary | None:
+    ) -> ApplicationConversationSummary | None:
         with self._lock:
             value = self._conversations.get(conversation_id)
             if value is None:
@@ -603,7 +633,7 @@ def e2e_base_url(
     import uvicorn
 
     with patch(
-        "dlightrag.api.server.Application.acreate",
+        "dlightrag.api.server.create_application",
         AsyncMock(return_value=application_double),
     ):
         app = create_app(include_web_app=True)

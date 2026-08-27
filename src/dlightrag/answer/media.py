@@ -5,9 +5,9 @@ from collections import Counter
 from typing import Any
 from urllib.parse import urlparse
 
-from dlightrag.answer.citations.schemas import SourceReference
 from dlightrag.answer.citations.utils import context_chunk_key
-from dlightrag.answer.sources import can_project_workspace_visual
+from dlightrag.application.answer_runs.citations import SourceReference
+from dlightrag.application.answer_runs.sources import can_project_workspace_visual
 from dlightrag.rag.retrieval import RetrievalContexts
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dlightrag.config import DlightragConfig
+from dlightrag.application.config import DlightragConfig
 
 
 def clone_config(config: DlightragConfig) -> DlightragConfig:

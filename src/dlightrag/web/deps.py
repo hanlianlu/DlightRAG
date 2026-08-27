@@ -5,18 +5,18 @@ from typing import TYPE_CHECKING
 
 from fastapi import Cookie, HTTPException, Request
 
-from dlightrag.access import (
+from dlightrag.application.access import (
     AccessControl,
     AccessDeniedError,
     AccessGate,
     WorkspaceRecord,
     access_control_from_settings,
 )
-from dlightrag.model_settings import access_settings
+from dlightrag.application.settings import access_settings
 
 if TYPE_CHECKING:
     from dlightrag.application import Application
-    from dlightrag.web.conversations import WebConversationService
+    from dlightrag.application.web_conversations import WebConversationService
 
 DEFAULT_WORKSPACE = "default"
 

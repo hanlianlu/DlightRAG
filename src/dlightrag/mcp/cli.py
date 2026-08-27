@@ -3,7 +3,7 @@
 
 import argparse
 
-from dlightrag.config import load_config, set_config
+from dlightrag.application.config import load_config, set_config
 
 
 def main() -> None:

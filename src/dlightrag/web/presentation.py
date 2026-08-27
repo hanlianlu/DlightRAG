@@ -8,9 +8,9 @@ import nh3
 from pydantic import Field
 
 from dlightrag.answer.citations.parser import CITATION_PATTERN, DOC_CITATION_PATTERN
-from dlightrag.answer.citations.schemas import SourceReferencePayload
-from dlightrag.answer.client_contracts import ClientContractModel
-from dlightrag.answer.runs.results import answer_parts_from_markdown
+from dlightrag.application.answer_runs.citations import SourceReferencePayload
+from dlightrag.application.answer_runs.client_contracts import ClientContractModel
+from dlightrag.application.answer_runs.results import answer_parts_from_markdown
 from dlightrag.rag.sourcing.url import validate_public_web_url
 from dlightrag.web.markdown import (
     inject_highlights,

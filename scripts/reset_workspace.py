@@ -17,9 +17,9 @@ import logging
 import sys
 from typing import Any
 
-from dlightrag.access import AccessAction, AccessGate, AllowAllAccessControl
+from dlightrag.application.access import AccessAction, AccessGate, AllowAllAccessControl
+from dlightrag.application.corpus_admin import CorpusAdmin, CorpusResetResult
 from dlightrag.rag.workspaces import normalize_workspace
-from dlightrag.services.corpora import CorpusAdmin, CorpusResetResult
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +134,8 @@ async def _run(
     keep_files: bool,
     dry_run: bool,
 ) -> CorpusResetResult:
-    from dlightrag.application import Application
-    from dlightrag.config import get_config
+    from dlightrag import create_application
+    from dlightrag.application.config import get_config
 
     config = get_config()
     print("\nCorpus storage backends (from config):")
@@ -144,7 +144,7 @@ async def _run(
     print(f"  Graph:      {config.storage.lightrag.graph_storage}")
     print(f"  Default:    {config.deployment.workspace}")
 
-    application = await Application.acreate(config)
+    application = await create_application(config)
     try:
         return await _reset_with_corpora(
             application.corpora,

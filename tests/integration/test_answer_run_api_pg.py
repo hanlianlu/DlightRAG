@@ -26,7 +26,6 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.access import UserContext, owner_id_from_user
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.fingerprints import ModelFingerprint
@@ -37,11 +36,12 @@ from dlightrag.ai.settings import (
     ModelRoleSettings,
     ModelSettings,
 )
-from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig, set_config
-from dlightrag.services.answers import AnswerService
+from dlightrag.application.access import UserContext, owner_id_from_user
+from dlightrag.application.answer_runs import AnswerService
+from dlightrag.application.answer_runs.capabilities import AnswerCapabilities, RequestModelContext
+from dlightrag.application.config import DlightragConfig, set_config
 
 pytestmark = [
     pytest.mark.integration,

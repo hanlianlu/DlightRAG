@@ -25,18 +25,18 @@ from dlightrag.ai.vision import (
     ImageProbeOutcome,
     ModelImageCapabilities,
 )
-from dlightrag.answer.capabilities import (
+from dlightrag.answer.executor import AnswerResourceResolver
+from dlightrag.application.answer_runs.capabilities import (
     AnswerCapabilities,
     AnswerCapabilityCoordinator,
     AnswerCapabilityView,
 )
-from dlightrag.answer.capability import (
+from dlightrag.application.answer_runs.capability import (
     AnswerImageCapability,
     derive_effective_max_images,
 )
-from dlightrag.answer.executor import AnswerResourceResolver
-from dlightrag.config import DlightragConfig
-from dlightrag.model_settings import (
+from dlightrag.application.config import DlightragConfig
+from dlightrag.application.settings import (
     answer_capability_settings,
     answer_resource_settings,
     model_profile_for_role,

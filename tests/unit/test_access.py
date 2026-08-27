@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.access import (
+from dlightrag.application.access import (
     DEPLOYMENT_OWNER_ID,
     AccessAction,
     AccessDeniedError,
@@ -16,8 +16,12 @@ from dlightrag.access import (
     access_control_from_settings,
     owner_id_from_user,
 )
-from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
-from dlightrag.model_settings import access_settings
+from dlightrag.application.config import (
+    AccessControlConfig,
+    AccessControlRuleConfig,
+    DlightragConfig,
+)
+from dlightrag.application.settings import access_settings
 from tests.config_helpers import mutate_config, replace_config
 
 

@@ -56,6 +56,7 @@ from dlightrag.agent.tool_content import ToolResourceAttachmentPart, ToolTextPar
 from dlightrag.agent.tools import AgentTool, ToolResult
 from dlightrag.ai.messages import AssistantTurn, ToolCall
 from dlightrag.answer.session_host import FastSessionHost, ensure_session_lane
+from dlightrag.application.answer_runs import AnswerService
 from dlightrag.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
 from dlightrag.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
 from dlightrag.runtime.settlements import (
@@ -69,7 +70,6 @@ from dlightrag.runtime.settlements import (
     OpaqueFetchedResourceWrite,
     WorkspaceInventoryUpdate,
 )
-from dlightrag.services.answers import AnswerService
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 

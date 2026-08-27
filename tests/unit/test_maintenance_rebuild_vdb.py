@@ -348,7 +348,7 @@ async def test_chunks_rebuild_delegates_bm25_before_embedder_close_fails(
 
 
 def _fake_config():
-    from dlightrag.config import DlightragConfig
+    from dlightrag.application.config import DlightragConfig
 
     return DlightragConfig.model_validate(
         {

@@ -6,13 +6,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
-from dlightrag.access import AccessAction
+from dlightrag.application.access import AccessAction, owner_id_from_user
+from dlightrag.application.web_conversations import WebConversationService
 from dlightrag.web.conversation_models import (
     ConversationHistory,
     ConversationSummary,
     RenameConversationRequest,
 )
-from dlightrag.web.conversations import WebConversationService
+from dlightrag.web.conversations import (
+    project_conversation_history,
+    project_conversation_summary,
+)
 from dlightrag.web.deps import (
     get_application,
     get_web_access_gate,
@@ -47,7 +51,7 @@ async def list_conversations(
     request: Request,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> list[ConversationSummary]:
-    return await service.list(_user(request))
+    return [project_conversation_summary(summary) for summary in await service.list(_user(request))]
 
 
 @router.post(
@@ -59,7 +63,7 @@ async def create_conversation(
     request: Request,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> ConversationSummary:
-    return await service.create(_user(request))
+    return project_conversation_summary(await service.create(_user(request)))
 
 
 @router.delete(
@@ -93,15 +97,17 @@ async def conversation_history(
         AccessAction.WORKSPACE_READ_VISUAL_ASSET,
         records,
     )
-    history = await service.history(
-        _user(request),
+    snapshot = await service.snapshot(
+        owner_id_from_user(_user(request)),
         str(conversation_id),
+    )
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return project_conversation_history(
+        snapshot,
         downloadable_workspaces={record["workspace"] for record in downloadable},
         visual_workspaces={record["workspace"] for record in visual},
     )
-    if history is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return history
 
 
 @router.patch(
@@ -117,7 +123,7 @@ async def rename_conversation(
     summary = await service.rename(_user(request), str(conversation_id), body.title)
     if summary is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return summary
+    return project_conversation_summary(summary)
 
 
 @router.delete(

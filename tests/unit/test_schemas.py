@@ -3,7 +3,7 @@
 
 from typing import Any, cast
 
-from dlightrag.answer.runs.results import Reference
+from dlightrag.application.answer_runs.results import Reference
 
 # ---------------------------------------------------------------------------
 # Reference

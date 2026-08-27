@@ -12,7 +12,7 @@ import pytest
 from lightrag.kg.pgtable_impl import PGTableGraphStorage
 
 from dlightrag.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelsSettings
-from dlightrag.config import (
+from dlightrag.application.config import (
     DeploymentSettings,
     DlightragConfig,
     PostgresSettings,
@@ -141,7 +141,7 @@ _SERVICE_WRITE_CALLS = [
 
 @pytest.mark.parametrize(("method", "args", "kwargs"), _SERVICE_WRITE_CALLS)
 async def test_service_write_guards_reject_reader(method, args, kwargs) -> None:
-    from dlightrag.model_settings import rag_settings
+    from dlightrag.application.settings import rag_settings
     from dlightrag.rag.workspace_rag import WorkspaceRag
 
     service = object.__new__(WorkspaceRag)
@@ -233,9 +233,9 @@ def _required_domain_scopes() -> list[
         web_conversations,
         workspaces,
     )
+    from dlightrag.application.web_conversations import WebConversationSchemaError
     from dlightrag.rag.ports import CorpusSchemaError
     from dlightrag.runtime import RunSchemaError
-    from dlightrag.web.conversation_models import WebConversationSchemaError
 
     return [
         (
@@ -367,8 +367,8 @@ async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_in
 
 
 async def test_reader_serves_web_routes() -> None:
-    import dlightrag.config as config_module
     from dlightrag.api.server import create_app
+    from dlightrag.application.config import loading as config_module
 
     original = config_module._config
     config_module._config = _config(service_role="reader")

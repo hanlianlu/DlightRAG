@@ -2,21 +2,26 @@
 """Shared builders for durable Answer run state in Web tests."""
 
 import datetime
+from dataclasses import asdict
 from typing import Any
 
-from dlightrag.runtime import (
-    AnswerRunRecord,
-    AnswerRunStatus,
-    PendingArtifact,
-)
-from dlightrag.services.answers import (
+from dlightrag.application.answer_runs import (
     AnswerInputArtifact,
     AnswerRequest,
     AnswerRunAcceptor,
     AnswerService,
 )
-from dlightrag.web.conversation_models import AnswerTurnCreation, ConversationSummary, LinkedTurn
-from dlightrag.web.conversations import WebAnswerSubmission
+from dlightrag.application.web_conversations import (
+    AnswerTurnCreation,
+    ConversationSummary,
+    LinkedTurn,
+    WebAnswerSubmission,
+)
+from dlightrag.runtime import (
+    AnswerRunRecord,
+    AnswerRunStatus,
+    PendingArtifact,
+)
 
 NOW = datetime.datetime(2026, 8, 12, tzinfo=datetime.UTC)
 RUN_ID = "019893f4-0000-7000-8000-000000000001"
@@ -205,7 +210,7 @@ def answer_turn_creation(
 ) -> AnswerTurnCreation:
     return AnswerTurnCreation(
         turn=linked_turn(run, conversation_id=conversation_id),
-        summary=conversation_summary(conversation_id).model_dump(),
+        summary=asdict(conversation_summary(conversation_id)),
         replayed=replayed,
     )
 

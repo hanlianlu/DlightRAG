@@ -86,8 +86,8 @@ async def _delete_test_workspaces(registry: Any, *extra_workspaces: str) -> None
 
 def _corpus_admin(config: Any) -> Any:
     from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
-    from dlightrag.model_settings import corpus_admin_settings
-    from dlightrag.services.corpora import CorpusAdmin
+    from dlightrag.application.corpus_admin import CorpusAdmin
+    from dlightrag.application.settings import corpus_admin_settings
 
     backend = build_pg_corpus_backend(config)
     return CorpusAdmin(
@@ -113,7 +113,7 @@ class TestPGWorkspaceDiscovery:
         """list_workspaces() returns workspaces found in dlightrag_workspace_meta."""
         from dlightrag.adapters.postgres._pool import pg_pool
         from dlightrag.ai.settings import EmbeddingSettings
-        from dlightrag.config import DlightragConfig, set_config
+        from dlightrag.application.config import DlightragConfig, set_config
 
         pool, registry = await _open_workspace_registry()
         try:
@@ -158,7 +158,7 @@ class TestPGWorkspaceDiscovery:
         """Empty workspace metadata falls back to config.deployment.workspace."""
         from dlightrag.adapters.postgres._pool import pg_pool
         from dlightrag.ai.settings import EmbeddingSettings
-        from dlightrag.config import DlightragConfig, set_config
+        from dlightrag.application.config import DlightragConfig, set_config
 
         pool, registry = await _open_workspace_registry()
         try:

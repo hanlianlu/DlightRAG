@@ -17,16 +17,17 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.access import owner_id_from_user
 from dlightrag.api.answer_stream import follow_run_frames
 from dlightrag.api.server import create_app
-from dlightrag.runtime import AnswerRunEvent, IdempotencyKeyConflict
-from dlightrag.web.answer_events import browser_frame, render_done_event
-from dlightrag.web.conversation_models import (
+from dlightrag.application.access import owner_id_from_user
+from dlightrag.application.web_conversations import (
     ConversationSnapshot,
     ConversationSubmissionConflict,
+    WebConversationService,
 )
-from dlightrag.web.conversations import WebConversationService, project_conversation_turn
+from dlightrag.runtime import AnswerRunEvent, IdempotencyKeyConflict
+from dlightrag.web.answer_events import browser_frame, render_done_event
+from dlightrag.web.conversations import project_conversation_turn
 from dlightrag.web.routes import chat as chat_routes
 from tests.unit.conftest import answer_capability_view
 from tests.unit.web.answer_run_fixtures import (

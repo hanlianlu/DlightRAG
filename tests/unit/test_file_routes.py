@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.access import AccessDeniedError
 from dlightrag.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
 from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig, set_config
-from dlightrag.services.errors import (
+from dlightrag.application.access import AccessDeniedError
+from dlightrag.application.config import DlightragConfig, set_config
+from dlightrag.application.corpus_admin import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,

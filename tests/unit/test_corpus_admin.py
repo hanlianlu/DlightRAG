@@ -10,13 +10,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.services.corpora import (
+from dlightrag.application.corpus_admin import (
     CorpusAdmin,
     CorpusAdminSettings,
     CorpusIngestError,
     IngestSpec,
+    RedirectDownloadTarget,
 )
-from dlightrag.services.errors import RedirectDownloadTarget
 
 
 def _settings(
@@ -191,7 +191,7 @@ async def test_explicit_authorized_id_absent_from_catalog_uses_orphan_cleanup(
     orphan_result = {"workspace": "archived", "errors": []}
 
     with patch(
-        "dlightrag.services.corpora.areset_orphaned_workspace",
+        "dlightrag.application.corpus_admin.service.areset_orphaned_workspace",
         new_callable=AsyncMock,
         return_value=orphan_result,
     ) as reset_orphan:

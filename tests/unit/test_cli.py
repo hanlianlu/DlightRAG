@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.services.corpora import ingest_kwargs_from_spec, ingest_spec_from_payload
+from dlightrag.application.corpus_admin import ingest_kwargs_from_spec, ingest_spec_from_payload
 
 # Load scripts/cli.py as a module (it's a script, not a package)
 _cli_path = Path(__file__).resolve().parents[2] / "scripts" / "cli.py"
@@ -201,8 +201,8 @@ def test_answer_cli_renders_typed_evidence_images(
 async def test_ingest_workspace_override_reaches_the_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag import config as config_module
-    from dlightrag.config import DeploymentSettings, DlightragConfig
+    from dlightrag.application import config as config_module
+    from dlightrag.application.config import DeploymentSettings, DlightragConfig
     from dlightrag.rag.workspace_rag import WorkspaceRag
 
     captured: dict[str, Any] = {}

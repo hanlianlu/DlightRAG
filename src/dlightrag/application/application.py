@@ -1,0 +1,414 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Application lifecycle, capability accessors, and startup ordering."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+from dlightrag.application.config import DlightragConfig
+from dlightrag.application.errors import ApplicationClosedError
+
+if TYPE_CHECKING:
+    from dlightrag.ai.fingerprints import ModelFingerprint
+    from dlightrag.ai.settings import ModelRole
+    from dlightrag.application.answer_runs import AnswerService
+    from dlightrag.application.corpus_admin import CorpusAdmin
+    from dlightrag.application.health import ApplicationHealth
+    from dlightrag.application.memory import MemoryService
+    from dlightrag.application.retrieval import RetrievalService
+    from dlightrag.application.web_conversations import WebConversationService
+
+logger = logging.getLogger(__name__)
+
+
+def _noop_initialize_process(_config: DlightragConfig) -> None:
+    return None
+
+
+async def _noop_close_process() -> None:
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class _ApplicationComponents:
+    """Every injected collaborator one Application owns before startup."""
+
+    health: ApplicationHealth
+    capabilities: Any
+    pool: Any
+    models: Any
+    run_store: Any
+    web_store: Any
+    coordinator: Any
+    cancellation_listener: Any
+    corpora: CorpusAdmin
+    retrieval: RetrievalService
+    answers: AnswerService
+    memory: MemoryService
+    memory_store: Any
+    memory_embedder: Any
+    web_conversations: WebConversationService
+    initialize_process: Callable[[DlightragConfig], None] = _noop_initialize_process
+    close_process: Callable[[], Awaitable[None]] = _noop_close_process
+
+
+class Application:
+    """This process's services, their startup order, and their shutdown order."""
+
+    def __init__(
+        self,
+        config: DlightragConfig,
+        components: _ApplicationComponents,
+        *,
+        web_enabled: bool = False,
+    ) -> None:
+        self._config = config
+        self._components = components
+        self._web_enabled = web_enabled
+        self._runs_ready = True
+        self._closed = False
+        self._close_task: asyncio.Task[None] | None = None
+        self._memory_janitor: asyncio.Task[None] | None = None
+
+    @property
+    def config(self) -> DlightragConfig:
+        """The one configuration this process was composed from."""
+        return self._config
+
+    @property
+    def health(self) -> ApplicationHealth:
+        """Process health, readable after close so shutdown stays diagnosable."""
+        return self._components.health
+
+    @property
+    def answers(self) -> AnswerService:
+        return self._open().answers
+
+    @property
+    def memory(self) -> MemoryService:
+        return self._open().memory
+
+    @property
+    def retrieval(self) -> RetrievalService:
+        return self._open().retrieval
+
+    @property
+    def corpora(self) -> CorpusAdmin:
+        return self._open().corpora
+
+    @property
+    def web_conversations(self) -> WebConversationService:
+        """The browser conversation service, guarded by Application lifetime."""
+        return self._open().web_conversations
+
+    def _open(self) -> _ApplicationComponents:
+        if self._closed:
+            raise ApplicationClosedError()
+        return self._components
+
+    # ------------------------------------------------------------------
+    # Startup
+    # ------------------------------------------------------------------
+
+    async def astart(self) -> None:
+        """Run the startup sequence in dependency order.
+
+        A schema or accepted-run incompatibility needs operator action, so it
+        closes what startup already began and propagates. A transient registry,
+        store, recovery, or default-workspace fault only degrades the process.
+        """
+        components = self._components
+        components.capabilities.resolve_profiles()
+        components.capabilities.validate_startup()
+        from dlightrag.answer.execution_settings import validate_agent_execution
+
+        self._workspace_root = validate_agent_execution(
+            execution_environment=self._config.answer.agent.execution_environment,
+            workspace_root=self._config.answer.agent.workspace_root,
+            working_dir=self._config.deployment.working_dir,
+        )
+        components.initialize_process(self._config)
+        try:
+            await self._initialize_run_stores()
+            await self._validate_active_runs()
+            corpora_ready = await self._initialize_corpora()
+            # Bind the retrieval-planner LLM; this does not make a model call.
+            components.retrieval.planner_for()
+            # Vision probes run once at startup, not per workspace.
+            await components.capabilities.probe_all()
+            degraded = await self._warm_default_workspace()
+            recovery_ready = await self._start_ingest_recovery()
+            await self._start_run_coordinator()
+            await self._initialize_web_conversations()
+            await self._start_memory_janitor()
+        except BaseException:
+            try:
+                await self.aclose()
+            except BaseException:
+                logger.warning("Application cleanup failed during startup", exc_info=True)
+            raise
+        if degraded is not None:
+            warning = f"Default workspace init failed: {degraded}"
+            components.health.add_warning(warning)
+            logger.error("DlightRAG started in degraded mode: %s", degraded)
+        if not self._runs_ready:
+            components.health.add_warning("Answer runtime unavailable")
+        if self._runs_ready and corpora_ready and recovery_ready and degraded is None:
+            components.health.mark_ready()
+        else:
+            components.health.mark_degraded()
+
+    async def _initialize_run_stores(self) -> None:
+        """Migrate the durable operational schema, or validate it on a reader.
+
+        Answer runs are startup state, not first-request state: a process whose
+        run schema is absent must fail before readiness rather than accept runs
+        it cannot durably record. The Web conversation link table is part of the
+        same schema because run retention cascades turns through it, so every
+        process that owns runs also establishes that table.
+        """
+        from dlightrag.runtime import RunSchemaError
+
+        from .web_conversations import WebConversationSchemaError
+
+        components = self._components
+        validate_only = self._config.is_reader
+        try:
+            await components.run_store.initialize(validate_only=validate_only)
+            await components.web_store.initialize(validate_only=validate_only)
+            if validate_only:
+                await components.memory_store.verify()
+            else:
+                await components.memory_store.initialize()
+        except RunSchemaError, WebConversationSchemaError:
+            raise
+        except Exception as exc:
+            self._runs_ready = False
+            components.health.add_warning("Answer run store unavailable")
+            logger.warning("Answer run store initialization failed: %s", exc)
+
+    async def _validate_active_runs(self) -> None:
+        """Reject a rolling deployment that cannot execute already accepted inputs."""
+        from dlightrag.ai.fingerprints import model_fingerprint
+        from dlightrag.ai.settings import MODEL_ROLE_NAMES
+        from dlightrag.application.settings import model_settings_for_role
+
+        if not self._runs_ready:
+            return
+        current_fingerprints: dict[ModelRole, ModelFingerprint] = {
+            role: model_fingerprint(model_settings_for_role(self._config, role))
+            for role in MODEL_ROLE_NAMES
+        }
+        for requirement in await self._components.run_store.list_active_run_requirements():
+            _require_compatible_run(requirement, current_fingerprints)
+
+    async def _initialize_corpora(self) -> bool:
+        from .errors import StorageSchemaError
+
+        try:
+            await self._components.corpora.initialize()
+        except StorageSchemaError:
+            raise
+        except Exception as exc:
+            self._components.health.add_warning("Workspace registry unavailable")
+            logger.warning("Workspace registry initialization failed: %s", exc)
+            return False
+        return True
+
+    async def _warm_default_workspace(self) -> str | None:
+        """Warm the default workspace; return the detail that degrades startup."""
+        from dlightrag.rag.ports import CorpusSchemaError
+        from dlightrag.rag.ports import CorpusUnavailableError as EngineCorpusUnavailableError
+        from dlightrag.rag.workspaces import normalize_workspace
+
+        from .errors import StorageSchemaError
+        from .retrieval import CorpusUnavailableError
+
+        workspace = normalize_workspace(self._config.deployment.workspace)
+        try:
+            await self._components.pool.acquire(workspace)
+        except CorpusSchemaError as exc:
+            raise StorageSchemaError(str(exc)) from exc
+        except CorpusUnavailableError:
+            raise
+        except EngineCorpusUnavailableError as exc:
+            raise CorpusUnavailableError(str(exc)) from exc
+        except Exception as exc:
+            logger.warning("Failed to warm up default workspace '%s'", workspace, exc_info=True)
+            return str(getattr(exc, "detail", None) or exc) or "unknown"
+        logger.info("Warmed up default workspace service '%s'", workspace)
+        return None
+
+    async def _start_ingest_recovery(self) -> bool:
+        try:
+            await self._components.corpora.start_recovery()
+        except Exception:
+            self._components.health.add_warning("Ingest job recovery unavailable")
+            logger.warning("Ingest job recovery initialization failed", exc_info=True)
+            return False
+        return True
+
+    async def _start_run_coordinator(self) -> None:
+        """Begin executing accepted runs once startup validated their schema.
+
+        The cancellation listener's initial LISTEN and locally leased rescan
+        must succeed before the coordinator claims work; connection failure
+        keeps readiness false while the listener retries and never permits
+        heartbeat-only claiming.
+        """
+        if not self._runs_ready:
+            return
+        try:
+            await self._components.cancellation_listener.start()
+            await asyncio.wait_for(
+                self._components.cancellation_listener.ready.wait(), timeout=30.0
+            )
+        except Exception as exc:
+            self._runs_ready = False
+            self._components.health.add_warning("Answer runtime unavailable")
+            logger.warning("Answer cancellation listener failed to start: %s", exc)
+            return
+        try:
+            await self._components.coordinator.start()
+        except Exception as exc:
+            self._runs_ready = False
+            self._components.health.add_warning("Answer runtime unavailable")
+            logger.warning("Answer runtime failed to start: %s", exc)
+
+    async def _initialize_web_conversations(self) -> None:
+        if not self._web_enabled:
+            return
+        if not self._runs_ready:
+            self._components.health.add_warning("Web conversations unavailable")
+            return
+        await self._components.web_conversations.start_retention()
+
+    async def _start_memory_janitor(self) -> None:
+        purge = getattr(self._components.memory, "purge_expired", None)
+        if purge is None:
+            return
+        try:
+            await purge()
+        except Exception:
+            logger.warning("Memory retention failed", exc_info=True)
+        if self._memory_janitor is None:
+            self._memory_janitor = asyncio.create_task(self._purge_memory_forever())
+
+    async def _purge_memory_forever(self) -> None:
+        from dlightrag.runtime.coordinator import MAINTENANCE_SECONDS
+
+        while True:
+            await asyncio.sleep(MAINTENANCE_SECONDS)
+            try:
+                await self._components.memory.purge_expired()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Memory retention failed", exc_info=True)
+
+    async def _stop_memory_janitor(self) -> None:
+        task = self._memory_janitor
+        self._memory_janitor = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+
+    # ------------------------------------------------------------------
+    # Shutdown
+    # ------------------------------------------------------------------
+
+    async def aclose(self) -> None:
+        """Close every owned collaborator in dependency order. Idempotent.
+
+        An ordinary close failure is logged so later cleanup still runs, while
+        cancellation is deferred and re-raised once nothing is left to close.
+        """
+        from dlightrag.rag.lifecycle import await_shared_cleanup
+
+        close_task = self._close_task
+        if close_task is None:
+            self._closed = True
+            self._components.health.mark_closed()
+            close_task = asyncio.create_task(self._close_components())
+            self._close_task = close_task
+        await await_shared_cleanup(close_task)
+
+    async def _close_components(self) -> None:
+        """Run the one shared shutdown sequence every close caller joins."""
+        from dlightrag.rag.lifecycle import defer_cancellation
+
+        components = self._components
+        cancellation: asyncio.CancelledError | None = None
+        for label, close in (
+            ("memory janitor", self._stop_memory_janitor),
+            ("ingest jobs", components.corpora.aclose),
+            ("the durable answer coordinator", components.coordinator.aclose),
+            ("the cancellation listener", components.cancellation_listener.aclose),
+            ("Web conversation retention", components.web_conversations.aclose),
+            ("the Retrieval service", components.retrieval.aclose),
+            ("the Answer model runtime", components.models.aclose),
+            ("the workspace pool", components.pool.aclose),
+            ("the memory embedder", components.memory_embedder.aclose),
+            ("process resources", components.close_process),
+        ):
+            try:
+                await close()
+            except asyncio.CancelledError as exc:
+                cancellation = defer_cancellation(cancellation, exc)
+            except Exception:
+                logger.warning("Failed to close %s", label, exc_info=True)
+        if cancellation is not None:
+            raise cancellation
+
+
+def _require_compatible_run(
+    requirement: Mapping[str, Any],
+    current_fingerprints: Mapping[ModelRole, ModelFingerprint],
+) -> None:
+    """Fail startup when one accepted run cannot execute under this binary."""
+    from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION
+    from dlightrag.ai.settings import MODEL_ROLE_NAMES
+    from dlightrag.answer.executor import IncompatibleActiveRunError
+    from dlightrag.application.answer_runs.execution import PinnedModelProfile
+
+    try:
+        policy_revision = str(requirement.get("context_policy_revision") or "")
+        raw_pins = requirement.get("pinned_models")
+        if not isinstance(raw_pins, list):
+            raise ValueError("pinned_models must be an array")
+        pinned_models = tuple(PinnedModelProfile.from_json(item) for item in raw_pins)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise IncompatibleActiveRunError(
+            "active answer runs use an incompatible durable input schema; "
+            "drain or owner-cancel them before deployment"
+        ) from exc
+    if policy_revision != CONTEXT_POLICY_REVISION:
+        raise IncompatibleActiveRunError(
+            "active answer runs use another context policy revision; "
+            "drain or owner-cancel them before deployment"
+        )
+    pinned = {item.role: item for item in pinned_models}
+    if len(pinned_models) != len(MODEL_ROLE_NAMES) or set(pinned) != set(MODEL_ROLE_NAMES):
+        raise IncompatibleActiveRunError(
+            "active answer runs do not contain the complete model role set; "
+            "drain or owner-cancel them before deployment"
+        )
+    if any(pinned[role].fingerprint != current_fingerprints[role] for role in MODEL_ROLE_NAMES):
+        raise IncompatibleActiveRunError(
+            "active answer runs target another model endpoint configuration; "
+            "drain or owner-cancel them before deployment"
+        )
+
+
+__all__ = [
+    "Application",
+    "ApplicationClosedError",
+]

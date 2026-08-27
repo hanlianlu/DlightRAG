@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.config import DlightragConfig, _find_yaml_config
+from dlightrag.application.config import DlightragConfig, _find_yaml_config
 
 
 def test_nested_yaml_loads_and_environment_wins(

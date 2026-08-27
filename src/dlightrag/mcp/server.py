@@ -25,7 +25,10 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp
 
 import dlightrag
-from dlightrag.access import (
+from dlightrag import create_application
+from dlightrag.answer.resources.links import answer_link_resources
+from dlightrag.application import Application
+from dlightrag.application.access import (
     AccessAction,
     AccessDeniedError,
     AccessGate,
@@ -37,24 +40,38 @@ from dlightrag.access import (
     owner_id_from_principal,
     request_scope_context,
 )
-from dlightrag.answer.capability import answer_image_capability_summary
-from dlightrag.answer.client_contracts import (
+from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
+from dlightrag.application.answer_runs import AnswerRuntimeUnavailableError
+from dlightrag.application.answer_runs.capability import answer_image_capability_summary
+from dlightrag.application.answer_runs.client_contracts import (
     MAX_HISTORY_MESSAGES,
     AnswerAttachmentLink,
     QueryImage,
     conversation_history_as_dicts,
 )
-from dlightrag.answer.errors import (
+from dlightrag.application.answer_runs.errors import (
     AnswerInputError,
     InvalidToolConfigurationError,
     MemoryDisabledError,
     MemoryUnavailableError,
     MemoryWriteRejectedError,
 )
-from dlightrag.answer.resources.links import answer_link_resources
-from dlightrag.answer.runs.results import project_answer_result
-from dlightrag.application import Application
-from dlightrag.config import DlightragConfig, get_config
+from dlightrag.application.answer_runs.results import project_answer_result
+from dlightrag.application.config import DlightragConfig, get_config
+from dlightrag.application.corpus_admin import (
+    ingest_spec_from_payload,
+    managed_local_ingest_documents,
+    managed_local_ingest_path,
+)
+from dlightrag.application.retrieval import (
+    CorpusUnavailableError,
+    RetrievalTimeoutError,
+    RetrieveProjection,
+)
+from dlightrag.application.retrieval import (
+    RetrieveRequest as ServiceRequest,
+)
+from dlightrag.application.settings import access_settings
 from dlightrag.mcp.auth import DlightRAGTokenVerifier
 from dlightrag.mcp.contracts import (
     AnswerInput,
@@ -68,26 +85,10 @@ from dlightrag.mcp.contracts import (
     ListFilesInput,
     RetrieveInput,
 )
-from dlightrag.model_settings import access_settings
 from dlightrag.rag.contracts import SourceType
 from dlightrag.rag.retrieval import MetadataFilter
 from dlightrag.rag.workspaces import normalize_workspace, normalize_workspace_ids
 from dlightrag.runtime import AnswerRunRecord, IdempotencyKeyConflict
-from dlightrag.services.answers import AnswerRequest as ServiceAnswerRequest
-from dlightrag.services.answers import AnswerRuntimeUnavailableError
-from dlightrag.services.corpora import (
-    ingest_spec_from_payload,
-    managed_local_ingest_documents,
-    managed_local_ingest_path,
-)
-from dlightrag.services.errors import CorpusUnavailableError
-from dlightrag.services.retrieval import (
-    RetrievalTimeoutError,
-    RetrieveProjection,
-)
-from dlightrag.services.retrieval import (
-    RetrieveRequest as ServiceRequest,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +265,7 @@ _application: Application | None = None
 async def _ensure_application() -> Application:
     global _application
     if _application is None:
-        _application = await Application.acreate()
+        _application = await create_application()
     return _application
 
 
@@ -313,7 +314,7 @@ mcp_app = DlightRAGMCPServer(
 
 
 def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]:
-    from dlightrag.services.corpora import validate_workspace_name
+    from dlightrag.application.corpus_admin import validate_workspace_name
 
     label = validate_workspace_name(args.workspace)
     display_name = validate_workspace_name(args.display_name or label)
@@ -1049,7 +1050,7 @@ async def delete_workspace_tool(
 ) -> dict[str, Any]:
     args = DeleteWorkspaceInput.model_validate(locals())
     application = await _ensure_application()
-    from dlightrag.services.corpora import validate_workspace_name
+    from dlightrag.application.corpus_admin import validate_workspace_name
 
     label = validate_workspace_name(args.workspace)
     normalized_workspace = normalize_workspace(label)

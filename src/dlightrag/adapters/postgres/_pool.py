@@ -76,7 +76,7 @@ class PGPool:
     def _active_config(self) -> Any:
         if self._config is not None:
             return self._config
-        from dlightrag.config import get_config
+        from dlightrag.application.config import get_config
 
         return get_config()
 

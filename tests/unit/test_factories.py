@@ -23,8 +23,8 @@ from dlightrag.ai.settings import (
     RerankSettings,
 )
 from dlightrag.ai.structured import StructuredOutput
-from dlightrag.config import DlightragConfig
-from dlightrag.model_settings import (
+from dlightrag.application.config import DlightragConfig
+from dlightrag.application.settings import (
     model_profile_for_role,
     model_settings_for_role,
     rerank_scoring_model_settings,
@@ -163,7 +163,9 @@ def test_root_consults_adapter_profile_before_catalog(
         supports_reasoning=True,
     )
     metadata = MagicMock(return_value=adapter_profile)
-    monkeypatch.setattr("dlightrag.model_settings.get_adapter_model_profile", metadata)
+    monkeypatch.setattr(
+        "dlightrag.application.settings.projections.get_adapter_model_profile", metadata
+    )
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         models={
             "chat": ModelRoleSettings(
@@ -190,7 +192,9 @@ def test_root_override_short_circuits_adapter_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     metadata = MagicMock(side_effect=AssertionError("override must win before adapter loading"))
-    monkeypatch.setattr("dlightrag.model_settings.get_adapter_model_profile", metadata)
+    monkeypatch.setattr(
+        "dlightrag.application.settings.projections.get_adapter_model_profile", metadata
+    )
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         models={
             "chat": ModelRoleSettings(default=ModelSettings(model="private-model")),

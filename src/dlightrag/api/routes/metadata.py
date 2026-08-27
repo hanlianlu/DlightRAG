@@ -5,7 +5,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from dlightrag.access import AccessAction, UserContext
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     MetadataResponse,
@@ -13,6 +12,7 @@ from dlightrag.api.models import (
     MetadataUpdateResponse,
     SearchMetadataResponse,
 )
+from dlightrag.application.access import AccessAction, UserContext
 
 from .deps import enforce_access, get_application, resolve_workspace
 

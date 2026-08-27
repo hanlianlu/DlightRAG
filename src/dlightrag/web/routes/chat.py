@@ -12,10 +12,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.access import AccessAction, owner_id_from_user
-from dlightrag.answer.runs.results import project_answer_result, project_report_sources
-from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor
+from dlightrag.application.access import AccessAction, owner_id_from_user
+from dlightrag.application.answer_runs.results import project_answer_result, project_report_sources
+from dlightrag.application.answer_runs.sources import SourceDownloadLinkBuilder
+from dlightrag.application.web_conversations import (
+    ConversationSubmissionConflict,
+    WebAnswerSubmission,
+    WebConversationService,
+)
 from dlightrag.rag.workspaces import normalize_workspace_ids
 from dlightrag.runtime import IdempotencyKeyConflict
 from dlightrag.web.answer_events import browser_frame
@@ -25,9 +30,7 @@ from dlightrag.web.conversation_models import AnswerRunDescriptor, ConversationT
 from dlightrag.web.conversations import (
     WEB_IMAGE_URL_BASE,
     WEB_SOURCE_DOWNLOAD_BASE,
-    ConversationSubmissionConflict,
-    WebAnswerSubmission,
-    WebConversationService,
+    project_conversation_summary,
     project_conversation_turn,
 )
 from dlightrag.web.deps import (
@@ -497,7 +500,7 @@ def answer_run_descriptor(submission: WebAnswerSubmission) -> AnswerRunDescripto
         events_url=f"/web/api/answer/{run_id}/events",
         status_url=f"/web/api/answer/{run_id}",
         cancel_url=f"/web/api/answer/{run_id}",
-        conversation=submission.conversation,
+        conversation=project_conversation_summary(submission.conversation),
         parent_run_id=accepted.get("parent_run_id"),
         continuation_kind=accepted.get("continuation_kind"),
     )

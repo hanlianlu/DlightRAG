@@ -12,7 +12,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig
+from dlightrag.application.config import DlightragConfig
+from dlightrag.application.web_conversations import ConversationSnapshot
 from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
 from tests.unit.web.answer_run_fixtures import FakeAnswers, web_answer_submission
@@ -37,7 +38,17 @@ def conversation_service() -> AsyncMock:
     }
     service.create.return_value = summary
     service.list.return_value = [summary]
-    service.history.return_value = {"conversation": summary, "turns": []}
+    service.snapshot.return_value = ConversationSnapshot(
+        principal_id="anonymous",
+        conversation_id=_CID,
+        content_revision=0,
+        title=None,
+        created_at=now,
+        updated_at=now,
+        agent_session_id=_CID,
+        agent_lane_id="main",
+        turns=(),
+    )
     service.rename.return_value = {**summary, "title": "Renamed chat"}
     service.delete.return_value = True
     service.delete_all.return_value = 2
@@ -119,7 +130,7 @@ async def test_history_of_other_principal_is_404(
     conversation_client: AsyncClient,
     conversation_service: AsyncMock,
 ) -> None:
-    conversation_service.history.return_value = None
+    conversation_service.snapshot.return_value = None
 
     response = await conversation_client.get(f"/web/api/conversations/{_CID}/history")
 
@@ -382,7 +393,7 @@ async def test_store_unavailability_returns_retryable_503(
     path: str,
     store_method: str,
 ) -> None:
-    from dlightrag.web.conversations import (
+    from dlightrag.application.web_conversations import (
         WebConversationService,
         WebConversationUnavailableError,
     )
@@ -422,7 +433,7 @@ async def test_store_unavailability_returns_retryable_503(
 )
 async def test_postgres_adapter_translates_shutdown_errors(shutdown_error: Exception) -> None:
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
-    from dlightrag.web.conversations import WebConversationUnavailableError
+    from dlightrag.application.web_conversations import WebConversationUnavailableError
 
     class Acquire:
         async def __aenter__(self):
@@ -457,7 +468,7 @@ async def test_postgres_adapter_translates_shutdown_errors(shutdown_error: Excep
 async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailability(
     store_error: Exception,
 ) -> None:
-    from dlightrag.web.conversations import WebConversationService
+    from dlightrag.application.web_conversations import WebConversationService
 
     store = AsyncMock()
     store.list_conversations.side_effect = store_error

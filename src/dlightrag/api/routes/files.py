@@ -7,7 +7,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.responses import FileResponse, RedirectResponse
 
-from dlightrag.access import AccessAction, UserContext
 from dlightrag.ai.telemetry import safe_log_text
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
@@ -16,7 +15,8 @@ from dlightrag.api.models import (
     FailedFilesResponse,
     FileListResponse,
 )
-from dlightrag.services.errors import (
+from dlightrag.application.access import AccessAction, UserContext
+from dlightrag.application.corpus_admin import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,

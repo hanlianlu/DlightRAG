@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from dlightrag.config import DlightragConfig, WebIdentitySettings
+from dlightrag.application.config import DlightragConfig, WebIdentitySettings
 from dlightrag.web.auth import WebAuthMiddleware
 from dlightrag.web.edge_identity import (
     AwsEdgeProvider,
@@ -392,7 +392,7 @@ class TestAwsEdgeProvider:
                 return SimpleNamespace(key=public_key)
 
         monkeypatch.setattr(
-            "dlightrag.access.authentication._jwks_client",
+            "dlightrag.application.access.authentication._jwks_client",
             lambda _url: FakeJWKSClient(),
         )
 

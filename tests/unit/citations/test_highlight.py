@@ -10,7 +10,7 @@ from dlightrag.answer.citations.highlight import (
     extract_all_citing_sentences,
     extract_highlights_for_sources,
 )
-from dlightrag.answer.citations.schemas import ChunkSnippet, SourceReference
+from dlightrag.application.answer_runs.citations import ChunkSnippet, SourceReference
 
 
 def _report_source(chunks: list[ChunkSnippet]) -> SourceReference:
@@ -132,7 +132,7 @@ class TestHighlightExtractor:
     async def test_doc_level_citation_triggers_highlights(self, mock_llm):
         """Doc-level [n] citations should trigger highlights for all chunks of that source."""
         from dlightrag.answer.citations.highlight import extract_highlights_for_sources
-        from dlightrag.answer.citations.schemas import ChunkSnippet
+        from dlightrag.application.answer_runs.citations import ChunkSnippet
 
         sources = [
             _report_source(
@@ -159,7 +159,7 @@ class TestHighlightExtractor:
         caplog: pytest.LogCaptureFixture,
     ):
         from dlightrag.answer.citations.highlight import extract_highlights_for_sources
-        from dlightrag.answer.citations.schemas import ChunkSnippet
+        from dlightrag.application.answer_runs.citations import ChunkSnippet
 
         sources = [
             _report_source(

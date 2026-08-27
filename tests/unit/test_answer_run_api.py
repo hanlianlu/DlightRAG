@@ -12,10 +12,10 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.access import UserContext
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig
+from dlightrag.application.access import UserContext
+from dlightrag.application.config import DlightragConfig
 from dlightrag.runtime import (
     AnswerRunEvent,
     AnswerRunRecord,

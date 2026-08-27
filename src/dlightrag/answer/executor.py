@@ -69,22 +69,12 @@ from dlightrag.ai.scheduler import model_call_scope
 from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.ai.telemetry import Telemetry, safe_log_text
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
-from dlightrag.answer.capabilities import AnswerCapabilityCoordinator, RequestModelContext
-from dlightrag.answer.capability import AnswerImageCapability, check_answer_image_capability
 from dlightrag.answer.citations.finalization import finalize_answer
 from dlightrag.answer.citations.streaming import aclose_answer_stream
-from dlightrag.answer.errors import (
-    AnswerInputError,
-    AnswerResourceAdmissionError,
-    CurrentImagePayloadError,
-    InvalidToolConfigurationError,
-    classify_answer_error,
-)
 from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import evidence_images_from_sources
 from dlightrag.answer.memory import memory_owner_allowed, render_auto_recall
-from dlightrag.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.answer.model_runtime import AnswerModelRuntime
 from dlightrag.answer.publication import (
     PublicationLimits,
@@ -105,17 +95,7 @@ from dlightrag.answer.resources.registry import (
 )
 from dlightrag.answer.resources.visual import ResourceInspector
 from dlightrag.answer.router import AnswerModeRouter, RoutingFailedError
-from dlightrag.answer.routing import AnswerRoutingStore, decide_resolved_mode
-from dlightrag.answer.runs.execution import (
-    AnswerRunInput,
-    AnswerRunRequest,
-    AttachmentReference,
-    LinkReference,
-    build_current_answer_resources,
-)
-from dlightrag.answer.runs.results import store_answer_result
 from dlightrag.answer.session_host import FastSessionHost, ensure_session_lane
-from dlightrag.answer.sources import project_contexts_for_client
 from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.tools.resources import build_resource_tools, make_resource_reader
 from dlightrag.answer.tools.subagents import (
@@ -131,6 +111,32 @@ from dlightrag.answer.workspace import (
     WorkspaceRecoveryFailed,
     bind_run_workspace,
 )
+from dlightrag.application.answer_runs.capabilities import (
+    AnswerCapabilityCoordinator,
+    RequestModelContext,
+)
+from dlightrag.application.answer_runs.capability import (
+    AnswerImageCapability,
+    check_answer_image_capability,
+)
+from dlightrag.application.answer_runs.errors import (
+    AnswerInputError,
+    AnswerResourceAdmissionError,
+    CurrentImagePayloadError,
+    InvalidToolConfigurationError,
+    classify_answer_error,
+)
+from dlightrag.application.answer_runs.execution import (
+    AnswerRunInput,
+    AnswerRunRequest,
+    AttachmentReference,
+    LinkReference,
+    build_current_answer_resources,
+)
+from dlightrag.application.answer_runs.mode import ModeResource, ResolvedMode, resource_role
+from dlightrag.application.answer_runs.results import store_answer_result
+from dlightrag.application.answer_runs.routing import AnswerRoutingStore, decide_resolved_mode
+from dlightrag.application.answer_runs.sources import project_contexts_for_client
 from dlightrag.rag.lifecycle import defer_cancellation
 from dlightrag.rag.pool import WorkspacePool
 from dlightrag.rag.retrieval import (

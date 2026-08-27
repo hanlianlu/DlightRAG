@@ -1,13 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Transport-neutral principals, authorization, and workspace scope."""
 
-from dlightrag.access.authentication import (
+from dlightrag.application.access.authentication import (
     AuthenticationError,
     AuthenticationErrorKind,
     AuthenticationSettings,
     authenticate_bearer_token,
 )
-from dlightrag.access.control import (
+from dlightrag.application.access.control import (
     ACTION_PRESETS,
     AccessAction,
     AccessControl,
@@ -20,7 +20,7 @@ from dlightrag.access.control import (
     Principal,
     access_control_from_settings,
 )
-from dlightrag.access.principal import (
+from dlightrag.application.access.principal import (
     DEPLOYMENT_OWNER_ID,
     SIMPLE_OWNER_ID,
     UserContext,
@@ -28,8 +28,12 @@ from dlightrag.access.principal import (
     owner_id_from_principal,
     owner_id_from_user,
 )
-from dlightrag.access.scope import RequestScope, current_request_scope, request_scope_context
-from dlightrag.access.workspaces import (
+from dlightrag.application.access.scope import (
+    RequestScope,
+    current_request_scope,
+    request_scope_context,
+)
+from dlightrag.application.access.workspaces import (
     AccessGate,
     NoQueryableWorkspacesError,
     WorkspaceCatalog,

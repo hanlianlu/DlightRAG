@@ -9,7 +9,7 @@ from typing import Literal
 from uuid import uuid4
 
 from dlightrag.ai.media import MODEL_IMAGE_MAX_PIXELS, verify_web_image_bytes
-from dlightrag.services.corpora import safe_upload_basename
+from dlightrag.application.corpus_admin import safe_upload_basename
 
 # One ordered attachment collection per message. Images and documents mix; the
 # Answer preparation extracts verified images into current-image blocks and registers the

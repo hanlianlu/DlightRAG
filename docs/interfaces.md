@@ -54,7 +54,7 @@ variables › `.env` › `config.yaml` › defaults (see
 Once configured, the SDK runtime is a small create-once / call / close lifecycle:
 
 ```python
-application = await Application.acreate(config)  # start: warms the default workspace
+application = await create_application(config)  # start: warms the default workspace
 # per request:
 await application.corpora.ingest(...)
 await application.retrieval.retrieve(RetrieveRequest(...))
@@ -71,10 +71,10 @@ provider overrides from any configuration source above.
 ### Python SDK
 
 ```python
-from dlightrag import DlightragConfig, Application
-from dlightrag.services.corpora import IngestSpec
+from dlightrag import DlightragConfig, create_application
+from dlightrag.application.corpus_admin import IngestSpec
 
-application = await Application.acreate(DlightragConfig())
+application = await create_application(DlightragConfig())
 try:
     # Local files or directory
     result = await application.corpora.ingest(
@@ -620,9 +620,9 @@ ingestion.
 
 ```python
 # Retrieve: contexts only, no LLM answer
-from dlightrag.access import DEPLOYMENT_OWNER_ID
-from dlightrag.services.answers import AnswerRequest
-from dlightrag.services.retrieval import RetrieveRequest
+from dlightrag.application.access import DEPLOYMENT_OWNER_ID
+from dlightrag.application.answer_runs import AnswerRequest
+from dlightrag.application.retrieval import RetrieveRequest
 
 result = await application.retrieval.retrieve(
     RetrieveRequest(

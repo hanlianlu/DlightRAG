@@ -34,7 +34,7 @@ from dlightrag.adapters.postgres.lightrag_readonly import (
 )
 from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
 from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
-from dlightrag.config import DlightragConfig
+from dlightrag.application.config import DlightragConfig
 from dlightrag.rag.ports import (
     CorpusRuntimeModels,
     CorpusUnavailableError,

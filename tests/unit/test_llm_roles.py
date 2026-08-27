@@ -15,7 +15,7 @@ from dlightrag.ai.settings import (
     ModelSettings,
     ModelsSettings,
 )
-from dlightrag.config import DlightragConfig
+from dlightrag.application.config import DlightragConfig
 
 
 def _cfg() -> DlightragConfig:

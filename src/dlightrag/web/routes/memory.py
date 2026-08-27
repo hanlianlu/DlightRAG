@@ -7,13 +7,13 @@ from dlightrag_memory import MemoryOperationReceipt, MemoryProvenance
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.access import owner_id_from_user
-from dlightrag.answer.errors import (
+from dlightrag.application.access import owner_id_from_user
+from dlightrag.application.answer_runs.errors import (
     MemoryDisabledError,
     MemoryUnavailableError,
     MemoryWriteRejectedError,
 )
-from dlightrag.services.memory import MemorySettings
+from dlightrag.application.memory import MemorySettings
 from dlightrag.web.deps import get_application
 
 router = APIRouter()

@@ -11,10 +11,10 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, Field, field_validator
 
-from dlightrag.answer.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.answer.citations.utils import context_chunk_key
 from dlightrag.answer.runs.snapshots import dump_answer_snapshot, load_answer_snapshot
-from dlightrag.answer.sources import (
+from dlightrag.application.answer_runs.citations import SourceReference, SourceReferencePayload
+from dlightrag.application.answer_runs.sources import (
     SourceDownloadLinkBuilder,
     can_project_workspace_visual,
     project_contexts_for_client,

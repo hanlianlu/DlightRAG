@@ -13,8 +13,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from dlightrag.config import ServiceRole
-from dlightrag.health import ApplicationHealth
+from dlightrag.application.config import ServiceRole
+from dlightrag.application.health import ApplicationHealth
 
 router = APIRouter()
 

@@ -3,16 +3,19 @@
 
 import pytest
 
-from dlightrag.answer.client_contracts import AnswerRequestContract
-from dlightrag.answer.errors import UnsupportedAnswerModeError, UnsupportedResourceCapabilityError
-from dlightrag.answer.mode import (
+from dlightrag.application.answer_runs.client_contracts import AnswerRequestContract
+from dlightrag.application.answer_runs.errors import (
+    UnsupportedAnswerModeError,
+    UnsupportedResourceCapabilityError,
+)
+from dlightrag.application.answer_runs.execution import AnswerRunRequest
+from dlightrag.application.answer_runs.mode import (
     ModeCapability,
     ModeResource,
     canonical_answer_mode,
     require_supported_mode,
     valid_modes,
 )
-from dlightrag.answer.runs.execution import AnswerRunRequest
 from dlightrag.runtime import answer_run_request_fingerprint
 
 

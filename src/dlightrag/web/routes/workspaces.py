@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import JSONResponse
 
-from dlightrag.access import AccessAction, WorkspaceRecord
+from dlightrag.application.access import AccessAction, WorkspaceRecord
 from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.web.deps import (
     enforce_web_access,
@@ -125,7 +125,7 @@ async def create_workspace(
     workspace_name: str = Form(default=""),
 ):
     """Create a new workspace and return updated workspace list."""
-    from dlightrag.services.corpora import validate_workspace_name
+    from dlightrag.application.corpus_admin import validate_workspace_name
 
     application = get_application(request)
 

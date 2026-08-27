@@ -87,7 +87,7 @@ def _resolve_eval_env() -> None:
         return
 
     try:
-        from dlightrag.config import DlightragConfig
+        from dlightrag.application.config import DlightragConfig
     except ImportError:
         logger.warning("DlightRAG not importable — skipping eval/API auto-resolution")
         return

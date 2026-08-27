@@ -146,7 +146,7 @@ def test_workspace_rag_rejects_backend_role_drift() -> None:
 
 
 def test_root_config_maps_independent_rag_pipeline_settings(test_config) -> None:
-    from dlightrag.model_settings import rag_settings
+    from dlightrag.application.settings import rag_settings
 
     mutate_config(test_config, "models.max_concurrency", 3)
     mutate_config(test_config, "corpus.ingestion.pipeline.max_concurrency", 13)
@@ -164,7 +164,7 @@ def test_root_config_maps_independent_rag_pipeline_settings(test_config) -> None
 
 
 def test_ai_runtime_and_rag_concurrency_owners_vary_independently(test_config) -> None:
-    from dlightrag.model_settings import rag_settings
+    from dlightrag.application.settings import rag_settings
 
     mutate_config(test_config, "models.max_concurrency", 3)
     mutate_config(test_config, "answer.runtime.answer_worker_concurrency", 5)

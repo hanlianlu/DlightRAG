@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Canonical Answer results expose shared usage and Evidence summaries."""
 
-from dlightrag.answer.runs.results import (
+from dlightrag.application.answer_runs.results import (
     project_answer_result,
     restore_answer_result,
     store_answer_result,

@@ -64,13 +64,12 @@ from dlightrag.ai.capacity import (
 from dlightrag.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.ai.telemetry import Telemetry
 from dlightrag.ai.tokens import estimate_tokens
+from dlightrag.answer.acceptance import research_history_input_measure
 from dlightrag.answer.agent.compaction import CompactionCoordinator
 from dlightrag.answer.agent.context import ContextAssembler
 from dlightrag.answer.citations.streaming import AnswerStream
-from dlightrag.answer.errors import AnswerInputOverflowError, InvalidToolConfigurationError
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.images import AnswerImageBudget
-from dlightrag.answer.mode import ResolvedMode
 from dlightrag.answer.publication import StagedArtifact, scan_artifact_directory
 from dlightrag.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.answer.resources.registry import ResourceRegistry
@@ -79,6 +78,11 @@ from dlightrag.answer.tools import KnowledgeRetrieval, WebSearch, compose_resear
 from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.tools.subagents import ChildContextSnapshot, ChildRequest, SubagentHost
 from dlightrag.answer.workspace import RunWorkspace
+from dlightrag.application.answer_runs.errors import (
+    AnswerInputOverflowError,
+    InvalidToolConfigurationError,
+)
+from dlightrag.application.answer_runs.mode import ResolvedMode
 from dlightrag.rag.retrieval import RetrievalContexts
 
 logger = logging.getLogger(__name__)
@@ -875,45 +879,6 @@ def _tool_schema_tokens(tools: list[AgentTool]) -> int:
             separators=(",", ":"),
         )
     )
-
-
-def research_history_input_measure(
-    *,
-    model_profile: ModelProfile,
-    context_policy: ContextPolicy,
-    query: str,
-    query_images: list[dict[str, Any]] | None,
-    resource_manifest: tuple[ResourceManifestEntry, ...],
-    image_budget: AnswerImageBudget | None,
-    tools: list[AgentTool],
-    retained_tail_tokens: int,
-    memory_text: str = "",
-    episodic_summary: str = "",
-) -> Callable[[list[dict[str, Any]]], int]:
-    """Return the exact zero-evidence Research seed serializer used at acceptance."""
-    tool_schema_tokens = _tool_schema_tokens(tools)
-
-    def measure(history: list[dict[str, Any]]) -> int:
-        context = ContextAssembler(
-            model_profile=model_profile,
-            context_policy=context_policy,
-            query=query,
-            history=PriorTurns(history, episodic_summary=episodic_summary),
-            query_images=query_images,
-            resource_manifest=resource_manifest,
-            memory_text=memory_text,
-            tool_guidance=_tool_guidance(tools),
-            profile_memory_write=any(tool.name == "remember" for tool in tools),
-        )
-        return (
-            context.measure_control_input(
-                evidence=EvidenceLedger(image_budget=image_budget),
-                working=WorkingContextProjection(retained_tail_tokens=retained_tail_tokens),
-            )
-            + tool_schema_tokens
-        )
-
-    return measure
 
 
 async def _single_chunk(text: str) -> AsyncIterator[str]:

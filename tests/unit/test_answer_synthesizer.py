@@ -13,9 +13,9 @@ from dlightrag.agent.session.fold import PriorTurns
 from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.scheduler import ModelScheduler
 from dlightrag.answer.citations.streaming import AnswerStream
-from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.memory import reserved_auto_recall_text
 from dlightrag.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
+from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
 from dlightrag.rag.retrieval import RetrievalContexts
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 

@@ -7,7 +7,7 @@ import jwt
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from dlightrag.config import DlightragConfig
+from dlightrag.application.config import DlightragConfig
 from dlightrag.web.auth import WEB_CSRF_COOKIE, WebAuthMiddleware
 
 

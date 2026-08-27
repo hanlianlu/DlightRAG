@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from dlightrag.ai.structured import StructuredOutput
 from dlightrag.ai.tokens import estimate_messages_tokens
-from dlightrag.answer.mode import ModeResource, ResolvedMode
+from dlightrag.application.answer_runs.mode import ModeResource, ResolvedMode
 
 _ROUTER_SYSTEM = (
     "Choose exactly one answer mode. "

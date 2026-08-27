@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from dlightrag.ai.settings import EmbeddingSettings, ModelSettings, ModelsSettings
-from dlightrag.config import (
+from dlightrag.application.config import (
     AccessSectionSettings,
     DeploymentSettings,
     DlightragConfig,

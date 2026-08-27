@@ -5,8 +5,9 @@ from typing import Any, Self
 
 from pydantic import Field, model_validator
 
-from dlightrag.access import validate_query_workspace_selection
-from dlightrag.answer.client_contracts import (
+from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
+from dlightrag.application.access import validate_query_workspace_selection
+from dlightrag.application.answer_runs.client_contracts import (
     AnswerAttachmentLink,
     AnswerRequestContract,
     ClientContractModel,
@@ -14,8 +15,7 @@ from dlightrag.answer.client_contracts import (
     QueryImage,
     RetrieveRequestContract,
 )
-from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
-from dlightrag.services.corpora import IngestSpec
+from dlightrag.application.corpus_admin import IngestSpec
 
 
 class MCPInput(ClientContractModel):

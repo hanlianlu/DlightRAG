@@ -28,6 +28,7 @@ from dlightrag.adapters.postgres.answer_runs import (
 from dlightrag.adapters.postgres.web_conversations import (
     PGWebConversationStore,
 )
+from dlightrag.application.web_conversations import ConversationSubmissionConflict
 from dlightrag.runtime import (
     IdempotencyKeyConflict,
     PendingArtifact,
@@ -35,7 +36,6 @@ from dlightrag.runtime import (
     answer_run_request_fingerprint,
     artifact_digest,
 )
-from dlightrag.web.conversation_models import ConversationSubmissionConflict
 from tests.conftest import FingerprintingAnswerRunStore
 
 pytestmark = [

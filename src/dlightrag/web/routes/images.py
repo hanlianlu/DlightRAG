@@ -4,7 +4,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
-from dlightrag.access import AccessAction
+from dlightrag.application.access import AccessAction
 from dlightrag.rag.contracts import VisualAssetSize
 from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.web.deps import enforce_web_access, get_application

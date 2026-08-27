@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Typed browser contracts for the Files panel and ingest polling."""
 
-from dlightrag.answer.client_contracts import ClientContractModel
+from dlightrag.application.answer_runs.client_contracts import ClientContractModel
 
 
 class WebFileItem(ClientContractModel):

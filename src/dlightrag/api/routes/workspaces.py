@@ -5,7 +5,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from dlightrag.access import AccessAction, UserContext
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     WorkspaceCreateRequest,
@@ -13,8 +12,9 @@ from dlightrag.api.models import (
     WorkspaceDeleteResponse,
     WorkspacesResponse,
 )
+from dlightrag.application.access import AccessAction, UserContext
+from dlightrag.application.corpus_admin import validate_workspace_name
 from dlightrag.rag.workspaces import normalize_workspace
-from dlightrag.services.corpora import validate_workspace_name
 
 from .deps import enforce_access, filter_workspace_records, get_application
 

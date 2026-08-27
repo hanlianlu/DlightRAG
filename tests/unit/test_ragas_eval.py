@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 import pytest
 
-from dlightrag import config as config_module
+from dlightrag.application import config as config_module
 
 _ragas_eval_path = Path(__file__).resolve().parents[2] / "scripts" / "ragas_eval.py"
 _spec = importlib.util.spec_from_file_location("ragas_eval", _ragas_eval_path)
@@ -142,7 +142,7 @@ def test_resolve_eval_env_uses_canonical_query_role_fallback(
         ModelSettings,
         ModelsSettings,
     )
-    from dlightrag.config import DlightragConfig
+    from dlightrag.application.config import DlightragConfig
 
     chat = ModelRoleSettings(
         default=ModelSettings(

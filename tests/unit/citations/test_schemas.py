@@ -1,5 +1,5 @@
-import dlightrag.answer.citations.schemas as schemas
-from dlightrag.answer.citations.schemas import ChunkSnippet, SourceReference
+import dlightrag.application.answer_runs.citations as schemas
+from dlightrag.application.answer_runs.citations import ChunkSnippet, SourceReference
 
 
 def test_source_reference_and_public_payload_have_distinct_contracts() -> None:

@@ -5,7 +5,8 @@ from collections.abc import Sequence
 
 from fastapi import HTTPException, Request
 
-from dlightrag.access import (
+from dlightrag.application import Application
+from dlightrag.application.access import (
     AccessControl,
     AccessDeniedError,
     AccessGate,
@@ -15,9 +16,8 @@ from dlightrag.access import (
     WorkspaceSelectionConflictError,
     access_control_from_settings,
 )
-from dlightrag.application import Application
-from dlightrag.config import get_config
-from dlightrag.model_settings import access_settings
+from dlightrag.application.config import get_config
+from dlightrag.application.settings import access_settings
 from dlightrag.rag.workspaces import normalize_workspace, normalize_workspace_ids
 
 

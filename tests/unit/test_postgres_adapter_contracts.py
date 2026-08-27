@@ -51,16 +51,12 @@ def test_asyncpg_is_private_to_the_postgres_adapter() -> None:
 
 def test_owner_modules_do_not_import_the_postgres_adapter() -> None:
     owner_roots = (
+        _ROOT / "src/dlightrag/application",
         _ROOT / "src/dlightrag/rag",
         _ROOT / "src/dlightrag/runtime",
     )
     owner_files = [path for root in owner_roots for path in root.rglob("*.py")]
-    owner_files.extend(
-        (
-            _ROOT / "src/dlightrag/health.py",
-            _ROOT / "src/dlightrag/api/routes/status.py",
-        )
-    )
+    owner_files.append(_ROOT / "src/dlightrag/api/routes/status.py")
 
     offenders: list[Path] = []
     for path in owner_files:
@@ -117,14 +113,14 @@ def test_rag_core_contains_no_postgres_schema_or_raw_sql() -> None:
     assert offenders == []
 
 
-def test_callers_take_web_records_from_the_web_owner() -> None:
+def test_callers_take_web_records_from_the_application_owner() -> None:
     offenders: list[tuple[Path, str]] = []
     for path in _python_files() + list((_ROOT / "tests").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not (
                 isinstance(node, ast.ImportFrom)
-                and node.module == "dlightrag.adapters.postgres.web_conversations"
+                and node.module == "dlightrag.web.conversation_models"
             ):
                 continue
             offenders.extend(

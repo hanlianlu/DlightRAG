@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from dlightrag.answer.errors import AnswerInputError, InvalidToolConfigurationError
+from dlightrag import create_application
 from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
 from dlightrag.api.middleware import (
     RequestBodyLimitMiddleware,
@@ -24,19 +24,17 @@ from dlightrag.api.middleware import (
 )
 from dlightrag.api.models import ANSWER_REQUEST_PART_MAX_BYTES, ErrorDetail
 from dlightrag.api.routes import router
-from dlightrag.application import Application, ApplicationClosedError
+from dlightrag.application import ApplicationClosedError
+from dlightrag.application.answer_runs import AnswerRuntimeUnavailableError
+from dlightrag.application.answer_runs.errors import AnswerInputError, InvalidToolConfigurationError
+from dlightrag.application.corpus_admin import MetadataValidationError
+from dlightrag.application.errors import StorageSchemaError
+from dlightrag.application.retrieval import CorpusUnavailableError, RetrievalTimeoutError
+from dlightrag.application.web_conversations import WebConversationSchemaError
 from dlightrag.runtime import RunSchemaError
-from dlightrag.services.answers import AnswerRuntimeUnavailableError
-from dlightrag.services.errors import (
-    CorpusUnavailableError,
-    MetadataValidationError,
-    StorageSchemaError,
-)
-from dlightrag.services.retrieval import RetrievalTimeoutError
-from dlightrag.web.conversation_models import WebConversationSchemaError
 
 if TYPE_CHECKING:
-    from dlightrag.config import DlightragConfig
+    from dlightrag.application.config import DlightragConfig
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +84,7 @@ def _request_body_limits(cfg: DlightragConfig) -> tuple[int, dict[str, int]]:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         web_enabled = bool(getattr(_app.state, "web_enabled", False))
-        application = await Application.acreate(
+        application = await create_application(
             config=_app.state.config,
             web_enabled=web_enabled,
         )
@@ -108,7 +106,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(*, include_web_app: bool = True) -> FastAPI:
     """Create the REST API and optionally mount the bundled browser app."""
-    from dlightrag.config import get_config
+    from dlightrag.application.config import get_config
 
     cfg = get_config()
 
@@ -248,8 +246,8 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
 
     # -- Web frontend --
     if include_web_app:
+        from dlightrag.application.web_conversations import WebConversationUnavailableError
         from dlightrag.web.auth import WebAuthMiddleware
-        from dlightrag.web.conversations import WebConversationUnavailableError
         from dlightrag.web.routes import router as web_router
         from dlightrag.web.static_files import STATIC_DIR, WebStaticFiles
 
@@ -286,7 +284,7 @@ def main() -> None:
 
     import uvicorn
 
-    from dlightrag.config import get_config, load_config, set_config
+    from dlightrag.application.config import get_config, load_config, set_config
 
     parser = argparse.ArgumentParser(
         description="dlightrag REST API server",

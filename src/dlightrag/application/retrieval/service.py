@@ -9,17 +9,15 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
-from dlightrag.ai.completion import CompletionModel
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import ModelSettings
+from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.telemetry import Telemetry
+from dlightrag.application.errors import CorpusUnavailableError
 from dlightrag.rag.federation import federated_retrieve
 from dlightrag.rag.lifecycle import await_shared_cleanup
 from dlightrag.rag.pool import WorkspacePool
+from dlightrag.rag.ports import CorpusUnavailableError as _EngineCorpusUnavailableError
 from dlightrag.rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
 from dlightrag.rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
-from dlightrag.services.errors import CorpusUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -85,62 +83,6 @@ class PlannerProvider(Protocol):
     async def aclose(self) -> None: ...
 
 
-class RetrievalPlannerRuntime:
-    """Own the lazy planner model and profile-keyed planner cache."""
-
-    def __init__(
-        self,
-        *,
-        model_settings: ModelSettings,
-        default_profile: Callable[[], ModelProfile],
-        scheduler: ModelScheduler,
-        telemetry: Telemetry,
-    ) -> None:
-        self._model_settings = model_settings
-        self._default_profile = default_profile
-        self._scheduler = scheduler
-        self._telemetry = telemetry
-        self._model: CompletionModel | None = None
-        self._planners: dict[ModelProfile, RetrievalPlanner] = {}
-        self._close_task: asyncio.Task[None] | None = None
-        self._closed = False
-
-    def planner_for(self, model_profile: ModelProfile | None = None) -> RetrievalPlanner:
-        if self._closed:
-            raise RuntimeError("Retrieval planner runtime is closed")
-        profile = model_profile or self._default_profile()
-        planner = self._planners.get(profile)
-        if planner is not None:
-            return planner
-        if self._model is None:
-            self._model = CompletionModel(
-                self._model_settings,
-                scheduler=self._scheduler,
-                telemetry=self._telemetry,
-            )
-        planner = RetrievalPlanner(
-            llm_func=self._model,
-            model_profile=profile,
-            context_policy=CONTEXT_POLICY,
-        )
-        self._planners[profile] = planner
-        return planner
-
-    async def aclose(self) -> None:
-        close_task = self._close_task
-        if close_task is None:
-            self._closed = True
-            close_task = asyncio.create_task(self._close_resources())
-            self._close_task = close_task
-        await await_shared_cleanup(close_task)
-
-    async def _close_resources(self) -> None:
-        model, self._model = self._model, None
-        self._planners.clear()
-        if model is not None:
-            await model.aclose()
-
-
 class RetrievalService:
     """Plan, retrieve, and project one caller-awaited result."""
 
@@ -175,8 +117,11 @@ class RetrievalService:
         return self._closed
 
     async def _acquire(self, workspace: str) -> Any:
-        """Acquire one already-authorized workspace runtime."""
-        return await self._pool.acquire(workspace)
+        """Acquire one workspace and translate Engine availability errors."""
+        try:
+            return await self._pool.acquire(workspace)
+        except _EngineCorpusUnavailableError as exc:
+            raise CorpusUnavailableError(str(exc)) from exc
 
     def planner_for(self, model_profile: ModelProfile | None = None) -> RetrievalPlanner:
         if self._closed:
@@ -348,7 +293,7 @@ class RetrievalService:
             },
         ) as observation:
             if len(workspaces) == 1:
-                runtime = await self._pool.acquire(workspaces[0])
+                runtime = await self._acquire(workspaces[0])
                 result = await runtime.aretrieve(plan.standalone_query, **kwargs)
             else:
                 result = await federated_retrieve(
@@ -411,12 +356,12 @@ def _context_output(contexts: RetrievalContexts) -> dict[str, int]:
 
 
 __all__ = [
+    "CorpusUnavailableError",
     "ProjectedRetrieval",
     "QueryImagePreparer",
     "RetrieveProjection",
     "RetrieveRequest",
     "RetrieveResponse",
-    "RetrievalPlannerRuntime",
     "RetrievalService",
     "RetrievalSettings",
     "RetrievalTimeoutError",

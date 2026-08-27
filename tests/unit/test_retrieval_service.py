@@ -10,17 +10,17 @@ import pytest
 
 from dlightrag.ai.capacity import ModelProfile
 from dlightrag.ai.telemetry import NoopTelemetry
-from dlightrag.rag.retrieval import MetadataFilter, RetrievalResult
-from dlightrag.services.errors import CorpusUnavailableError
-from dlightrag.services.retrieval import (
+from dlightrag.application.retrieval import (
+    CorpusUnavailableError,
     ProjectedRetrieval,
-    RetrievalPlannerRuntime,
     RetrievalService,
     RetrievalSettings,
     RetrievalTimeoutError,
     RetrieveProjection,
     RetrieveRequest,
 )
+from dlightrag.rag.retrieval import MetadataFilter, RetrievalResult
+from dlightrag.rag.retrieval.runtime import RetrievalPlannerRuntime
 
 _PROJECTION = RetrieveProjection(
     downloadable_workspaces=frozenset(),
@@ -579,7 +579,7 @@ async def test_multiple_workspaces_use_federated_retrieval() -> None:
     )
 
     with patch(
-        "dlightrag.services.retrieval.federated_retrieve",
+        "dlightrag.application.retrieval.service.federated_retrieve",
         new=AsyncMock(return_value=RetrievalResult()),
     ) as federated:
         await service.retrieve(
@@ -607,7 +607,7 @@ async def test_planner_runtime_caches_by_profile_and_closes_its_model_once() -> 
     model = AsyncMock()
 
     with patch(
-        "dlightrag.services.retrieval.CompletionModel",
+        "dlightrag.rag.retrieval.runtime.CompletionModel",
         return_value=model,
     ) as create_model:
         runtime = RetrievalPlannerRuntime(
@@ -647,7 +647,7 @@ async def test_concurrent_planner_runtime_close_callers_join_model_cleanup() -> 
         await release_close.wait()
 
     model.aclose.side_effect = close_model
-    with patch("dlightrag.services.retrieval.CompletionModel", return_value=model):
+    with patch("dlightrag.rag.retrieval.runtime.CompletionModel", return_value=model):
         runtime = RetrievalPlannerRuntime(
             model_settings=Mock(),
             default_profile=lambda: default_profile,
