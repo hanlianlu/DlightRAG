@@ -46,7 +46,7 @@ _DELETE = "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1"
 
 _SCHEMA_MIGRATIONS = (
     Migration(
-        "0001_workspace_meta",
+        "workspace_meta",
         "Create and migrate workspace registry",
         (_CREATE,),
     ),

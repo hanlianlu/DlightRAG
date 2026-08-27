@@ -115,7 +115,7 @@ _CREATE_TURN_INDEXES = (
 # One baseline. Fresh installs get the final table; there is no ALTER history.
 WEB_CONVERSATION_MIGRATIONS = (
     Migration(
-        "0001_web_conversations",
+        "web_conversations",
         "Create Web conversations linked to durable Answer runs",
         (
             _CREATE_CONVERSATIONS,

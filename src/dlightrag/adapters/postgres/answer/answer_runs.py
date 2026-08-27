@@ -2,7 +2,7 @@
 """PostgreSQL adapters for durable Answer runs, Agent Sessions, and blobs.
 
 This module owns every concrete PostgreSQL implementation for the Answer Run
-lifecycle: the rewritten baseline schema (``answer_runs:0001_answer_runs``),
+lifecycle: the rewritten baseline schema (``answer_runs``),
 claim-bound Session/progress repository construction, acceptance, events, terminal
 transitions, sweeping, retention, and blob-backed artifacts.
 
@@ -493,7 +493,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
 
 ANSWER_RUN_MIGRATIONS = (
     Migration(
-        "0001_answer_runs",
+        "answer_runs",
         "Create the final Answer run, Agent Session, evidence, and blob state",
         (
             _CREATE_RUNS,

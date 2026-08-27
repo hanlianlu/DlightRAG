@@ -241,7 +241,7 @@ SELECT COUNT(*)::int FROM deleted
 
 _SCHEMA_MIGRATIONS = (
     Migration(
-        "0001_ingest_jobs",
+        "ingest_jobs",
         "Create ingest job state table",
         (_CREATE, *_CREATE_INDEXES),
     ),

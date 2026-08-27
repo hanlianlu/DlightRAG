@@ -305,8 +305,8 @@ class TestSchema:
         async with pool.acquire() as conn:
             rows = await conn.fetch("SELECT scope, version FROM dlightrag_schema_migrations")
         recorded = {(str(row["scope"]), str(row["version"])) for row in rows}
-        assert ("answer_runs", "0001_answer_runs") in recorded
-        assert ("ingest_jobs", "0001_ingest_jobs") in recorded
+        assert ("answer_runs", "answer_runs") in recorded
+        assert ("ingest_jobs", "ingest_jobs") in recorded
 
 
 # ---------------------------------------------------------------------------

@@ -204,7 +204,7 @@ class TestMetadataSQL:
         versions = {migration.version for migration in _SCHEMA_MIGRATIONS}
         sql = "\n".join(stmt for migration in _SCHEMA_MIGRATIONS for stmt in migration.statements)
 
-        assert "0001_base" in versions
+        assert "document_metadata" in versions
         for field_id in METADATA_FIELD_IDS:
             assert f"column_{field_id}" in versions
             assert f"ADD COLUMN IF NOT EXISTS {field_id}" in sql
@@ -215,7 +215,7 @@ class TestMetadataSQL:
         """Every version maps to a metadata field declared today."""
         declared = set(METADATA_FIELD_IDS)
         allowed = (
-            {"0001_base", "index_workspace_download_locator"}
+            {"document_metadata", "index_workspace_download_locator"}
             | {f"column_{field_id}" for field_id in declared}
             | {f"index_{field_id}_canonical" for field_id in declared}
         )

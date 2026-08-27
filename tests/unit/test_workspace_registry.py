@@ -96,7 +96,7 @@ async def test_workspace_registry_initializes_and_migrates_schema() -> None:
     assert "display_name" in executed_sql
     assert any(
         query.startswith("INSERT INTO dlightrag_schema_migrations")
-        and args[:2] == ("workspace_registry", "0001_workspace_meta")
+        and args[:2] == ("workspace_registry", "workspace_meta")
         for query, args in conn.executed
     )
 

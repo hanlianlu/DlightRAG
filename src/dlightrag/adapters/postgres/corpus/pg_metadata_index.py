@@ -103,7 +103,7 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
     """
     migrations = [
         Migration(
-            "0001_base",
+            "document_metadata",
             "Create document metadata table",
             (_CREATE_TABLE,),
         ),
