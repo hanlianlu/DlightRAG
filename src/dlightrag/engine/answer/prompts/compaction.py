@@ -7,16 +7,13 @@ The framework parses the headings back into the typed summary; the model is
 never asked to invent paths or durable handles — those are extracted from the
 covered branch-ancestry prefix by the framework. Prompts modules stay import-free:
 the caller passes the pre-rendered previous summary text.
+
+The heading schema is the durable contract. First-pass and merge user turns
+share it; merge rules live only on the update path so a later summarizer can
+change fold behaviour without forking the parsed shape.
 """
 
-COMPACTION_SYSTEM_PROMPT = """\
-You are a context summarization assistant. You read one research transcript \
-and write a structured continuation summary that another instance of the same \
-agent will use to keep working after the transcript is removed.
-
-Do NOT continue the conversation. Do NOT answer any question that appears in \
-the transcript. Output ONLY the structured summary in this exact format:
-
+_SUMMARY_FORMAT = """\
 ## Goal
 [What the research is trying to accomplish.]
 
@@ -41,12 +38,45 @@ the transcript. Output ONLY the structured summary in this exact format:
 ## Critical Context
 - [Exact file paths, resource handles, numeric findings, and error messages \
 the next turn needs and cannot recover by re-running a tool]
+- [(none) if there are none]
+"""
 
+COMPACTION_SYSTEM_PROMPT = f"""\
+You are a context summarization assistant. You read one research transcript \
+and write a structured continuation summary that another instance of the same \
+agent will use to keep working after the transcript is removed.
+
+Do NOT continue the conversation. Do NOT answer any question that appears in \
+the transcript. Output ONLY the structured summary in this exact format:
+
+{_SUMMARY_FORMAT}
 Rules:
 - Write in the same language the research has been using.
 - Preserve exact paths, URLs, resource ids, and error messages.
 - Be concise but complete: the summary replaces the transcript, so include \
 every fact the next turn cannot cheaply re-derive.
+"""
+
+_FIRST_USER_INSTRUCTION = (
+    "The transcript below is the research so far. It will be removed "
+    "from context. Write the continuation summary using the heading schema "
+    "from the system prompt."
+)
+
+_MERGE_USER_INSTRUCTION = """\
+The transcript below is NEW research since the last compaction. It will be \
+removed from context. Fold it into the existing summary in <previous-summary>. \
+Use the same heading schema as the system prompt.
+
+Merge rules:
+- PRESERVE every still-relevant fact, decision, constraint, and handle from \
+the previous summary.
+- ADD progress, decisions, and context the new transcript introduces.
+- UPDATE Progress: move finished In Progress items into Done.
+- UPDATE Next Steps to match the current state.
+- Drop blockers that the new transcript resolved.
+- You may drop items that are no longer needed to continue.
+- Preserve exact paths, URLs, resource ids, and error messages.
 """
 
 
@@ -55,18 +85,9 @@ def compaction_user_prompt(*, previous_summary: str | None, transcript: str) -> 
 
     ``previous_summary`` is the caller-rendered earlier summary text.
     """
-    blocks = [
-        "The transcript below is the research so far. It will be removed "
-        "from context. Write the continuation summary.",
-    ]
+    blocks = [_FIRST_USER_INSTRUCTION if previous_summary is None else _MERGE_USER_INSTRUCTION]
     if previous_summary is not None:
-        blocks.append(
-            "An earlier compaction already summarized older work. Preserve its "
-            "information while adding what the new transcript adds:\n\n"
-            "<previous-summary>\n"
-            f"{previous_summary}\n"
-            "</previous-summary>"
-        )
+        blocks.append(f"<previous-summary>\n{previous_summary}\n</previous-summary>")
     blocks.append(f"<transcript>\n{transcript}\n</transcript>")
     return "\n\n".join(blocks)
 
