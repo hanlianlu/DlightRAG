@@ -52,8 +52,8 @@
 
   <rect class="actor" x="30" y="350" width="250" height="120" rx="12"/>
   <text class="node-title" x="155" y="391" text-anchor="middle">Client systems</text>
-  <text class="node-copy" x="155" y="421" text-anchor="middle">Apps and agents via REST/MCP</text>
-  <text class="node-copy" x="155" y="444" text-anchor="middle">Embedded Python hosts</text>
+  <text class="node-copy" x="155" y="421" text-anchor="middle">Apps and agents via REST</text>
+  <text class="node-copy" x="155" y="444" text-anchor="middle">and inbound MCP</text>
 
   <rect class="system" x="350" y="130" width="570" height="430" rx="18"/>
   <text class="system-title" x="635" y="190" text-anchor="middle">DlightRAG</text>
@@ -88,6 +88,7 @@
   <path class="edge" d="M 280 230 H 350"/>
   <text class="edge-label" x="315" y="216" text-anchor="middle">Web</text>
   <path class="edge" d="M 280 410 H 350"/>
+  <text class="edge-label" x="315" y="396" text-anchor="middle">REST · MCP</text>
 
   <path class="edge" d="M 920 185 H 1000"/>
   <text class="edge-label" x="960" y="171" text-anchor="middle">model calls</text>

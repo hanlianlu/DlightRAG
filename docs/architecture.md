@@ -38,10 +38,12 @@ architecture overview.
 </p>
 
 `create_application` is the private-composition entry point; `Application` owns lifecycle and use-case accessors.
-Inbound adapters call the typed use cases under the Application zone. Those use cases invoke the
-small owner interfaces of Runtime, Answer, RAG, and Memory. Agent and RAG both
-use the provider-neutral AI module without depending on each other. Persistence
-is omitted from this view and shown under
+Inbound adapters and the embedded Application interface call those use cases.
+Answer Runs accept through Runtime then execute Engine Answer. Retrieval and
+Corpus Administration use Engine RAG. Memory is an Application capability over
+the independent Memory package. Web Conversations stay in Application.
+Agent and RAG both use the provider-neutral AI module without depending on each
+other. Persistence is omitted from this view and shown under
 [PostgreSQL Topology](#postgresql-topology).
 
 LightRAG remains the core RAG engine. It owns parser routing, staged ingest,
