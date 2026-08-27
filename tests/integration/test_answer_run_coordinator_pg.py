@@ -53,12 +53,12 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime import (
     RunCoordinator,
     RunSession,
     answer_run_request_fingerprint,
 )
-from dlightrag.rag.retrieval import RetrievalResult
 from tests.conftest import FingerprintingAnswerRunStore
 
 pytestmark = [

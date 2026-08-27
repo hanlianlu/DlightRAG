@@ -49,9 +49,9 @@
   <text class="node-copy" x="170" y="423" text-anchor="middle">and tool contracts</text>
 
   <rect class="module" x="360" y="330" width="180" height="110" rx="14"/>
-  <text class="node-title" x="450" y="370" text-anchor="middle">dlightrag.rag</text>
-  <text class="node-copy" x="450" y="400" text-anchor="middle">LightRAG integration</text>
-  <text class="node-copy" x="450" y="423" text-anchor="middle">and corpus ports</text>
+  <text class="node-title" x="450" y="370" text-anchor="middle">dlightrag.engine.rag</text>
+  <text class="node-copy" x="450" y="400" text-anchor="middle">workspace + internal LightRAG</text>
+  <text class="node-copy" x="450" y="423" text-anchor="middle">corpus + retrieval owners</text>
 
   <rect class="module" x="720" y="330" width="180" height="110" rx="14"/>
   <text class="node-title" x="810" y="370" text-anchor="middle">dlightrag.engine.runtime</text>

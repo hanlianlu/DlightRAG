@@ -15,9 +15,14 @@ from dlightrag.engine.ai.settings import (
     RerankSettings,
 )
 from dlightrag.engine.ai.telemetry import NoopTelemetry
-from dlightrag.rag.ports import WorkspaceCorpusBackend
-from dlightrag.rag.settings import CorpusSettings, IngestionSettings, PipelineSettings, RagSettings
-from dlightrag.rag.workspace_rag import WorkspaceRag
+from dlightrag.engine.rag.workspace.ports import WorkspaceCorpusBackend
+from dlightrag.engine.rag.workspace.settings import (
+    CorpusSettings,
+    IngestionSettings,
+    PipelineSettings,
+    RagSettings,
+)
+from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
 _FAKE_STORAGE_ATTRS = ("full_docs", "chunks_vdb", "doc_status")
 
@@ -107,7 +112,7 @@ class TestAresetPhase0:
     async def test_cancels_worker_pools(self) -> None:
         service = _make_service()
         with patch(
-            "dlightrag.rag.reset.shutdown_lightrag_worker_pools",
+            "dlightrag.engine.rag.corpus.reset.shutdown_lightrag_worker_pools",
             new_callable=AsyncMock,
             return_value=2,
         ) as shutdown:

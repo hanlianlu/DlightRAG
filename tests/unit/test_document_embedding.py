@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock
 import pytest
 from PIL import Image
 
-import dlightrag.rag.ingestion.document_embedding as document_embedding
-from dlightrag.rag.ingestion.document_embedding import (
+import dlightrag.engine.rag.corpus.ingestion.document_embedding as document_embedding
+from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     DocumentEmbeddingInput,
     DocumentEmbeddingTrace,
     DocumentEmbeddingVector,

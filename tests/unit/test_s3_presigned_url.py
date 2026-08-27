@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from dlightrag.rag.sourcing.aws_s3 import S3DataSource, generate_s3_presigned_url
-from dlightrag.rag.sourcing.base import SourceDocument
+from dlightrag.engine.rag.corpus.sources.aws_s3 import S3DataSource, generate_s3_presigned_url
+from dlightrag.engine.rag.corpus.sources.base import SourceDocument
 
 
 class _FakeS3Client:

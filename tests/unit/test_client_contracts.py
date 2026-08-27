@@ -18,8 +18,8 @@ from dlightrag.application.corpus_admin import (
     ingest_kwargs_from_spec,
     ingest_spec_from_payload,
 )
+from dlightrag.engine.rag.corpus.contracts import IngestDocument
 from dlightrag.mcp.contracts import AnswerInput, RetrieveInput
-from dlightrag.rag.contracts import IngestDocument
 
 
 def test_per_interface_current_image_admission() -> None:

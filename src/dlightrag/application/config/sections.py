@@ -39,7 +39,7 @@ from dlightrag.engine.ai.settings import (
     freeze_settings_value,
     thaw_settings_value,
 )
-from dlightrag.rag.settings import (
+from dlightrag.engine.rag.workspace.settings import (
     CorpusSettings,
     DoclingSidecarSettings,
     MinerUSidecarSettings,

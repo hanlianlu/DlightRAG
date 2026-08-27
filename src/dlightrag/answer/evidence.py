@@ -12,7 +12,7 @@ from dlightrag.answer.citations.indexer import CitationIndexer
 from dlightrag.answer.citations.utils import context_chunk_key
 from dlightrag.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.answer.images import AnswerImageBudget
-from dlightrag.rag.retrieval import ContextRow, RetrievalContexts
+from dlightrag.engine.rag.retrieval import ContextRow, RetrievalContexts
 
 _NO_KG = "No knowledge graph context available."
 

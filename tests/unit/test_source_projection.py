@@ -6,7 +6,7 @@ import logging
 import pytest
 
 from dlightrag.application.answer_runs.citations import ChunkSnippet, SourceReference
-from dlightrag.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval import RetrievalResult
 
 
 def _internal_source(*, chunks: list[ChunkSnippet] | None = None) -> SourceReference:

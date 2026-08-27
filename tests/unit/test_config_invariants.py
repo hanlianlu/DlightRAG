@@ -32,7 +32,7 @@ from dlightrag.engine.ai.settings import (
     ModelsSettings,
     RerankSettings,
 )
-from dlightrag.rag.settings import (
+from dlightrag.engine.rag.workspace.settings import (
     BM25ProfileSettings,
     CorpusSettings,
     DoclingSidecarSettings,

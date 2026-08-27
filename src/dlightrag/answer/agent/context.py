@@ -14,7 +14,7 @@ from dlightrag.engine.agent.context import ContextContribution, ContextProjector
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
-from dlightrag.rag.sourcing.source_contract import safe_source_filename
+from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 
 
 class ContextAssembler:

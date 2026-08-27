@@ -19,7 +19,7 @@ from typing import Any
 
 from dlightrag.application.access import AccessAction, AccessGate, AllowAllAccessControl
 from dlightrag.application.corpus_admin import CorpusAdmin, CorpusResetResult
-from dlightrag.rag.workspaces import normalize_workspace
+from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
 logger = logging.getLogger(__name__)
 

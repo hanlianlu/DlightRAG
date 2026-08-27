@@ -11,8 +11,8 @@ import pytest
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.structured import StructuredOutput
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
-from dlightrag.rag.retrieval import MetadataFilter, RetrievalPlan, RetrievalPlanner
-from dlightrag.rag.retrieval.planner import (
+from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalPlan, RetrievalPlanner
+from dlightrag.engine.rag.retrieval.planner import (
     _build_custom_keys_hint,
     _build_schema_section,
 )
@@ -28,7 +28,7 @@ _SMALL_PROFILE = ModelProfile(
 
 
 async def test_planner_fits_a_complete_request_without_root_imports() -> None:
-    from dlightrag.rag.retrieval import RetrievalPlanner as RagRetrievalPlanner
+    from dlightrag.engine.rag.retrieval import RetrievalPlanner as RagRetrievalPlanner
 
     llm = AsyncMock(
         return_value=json.dumps(
@@ -267,7 +267,7 @@ class TestPlanWithLLM:
 
         planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
 
-        with patch("dlightrag.rag.retrieval.planner.asyncio.sleep", new=AsyncMock()):
+        with patch("dlightrag.engine.rag.retrieval.planner.asyncio.sleep", new=AsyncMock()):
             plan = await planner.plan("what is X")
 
         assert plan.standalone_query == "what is X"
@@ -365,7 +365,7 @@ class TestPlanWithLLM:
         )
         planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
 
-        with caplog.at_level(logging.INFO, logger="dlightrag.rag.retrieval.planner"):
+        with caplog.at_level(logging.INFO, logger="dlightrag.engine.rag.retrieval.planner"):
             await planner.plan("find report.pdf")
 
         assert "[Planner] result" in caplog.text
@@ -517,7 +517,7 @@ class TestPlanFallback:
     async def test_llm_exception_returns_fallback(self):
         llm = AsyncMock(side_effect=RuntimeError("LLM error"))
         planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
-        with patch("dlightrag.rag.retrieval.planner.asyncio.sleep", new=AsyncMock()):
+        with patch("dlightrag.engine.rag.retrieval.planner.asyncio.sleep", new=AsyncMock()):
             plan = await planner.plan("query")
         assert llm.await_count == 3
         assert plan.outcome == "fallback_provider_error"

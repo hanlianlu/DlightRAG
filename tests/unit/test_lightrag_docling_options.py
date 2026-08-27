@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.rag.ingestion.docling_options import apply_docling_request_options
+from dlightrag.engine.rag.corpus.ingestion.docling_options import apply_docling_request_options
 
 
 def _client(
@@ -86,14 +86,17 @@ def test_active_docling_fails_closed_when_upstream_contract_changes(
 def test_do_formula_enrichment_defaults_on_like_mineru() -> None:
     from lightrag.parser.external.mineru.cache import DEFAULT_MINERU_ENABLE_FORMULA
 
-    from dlightrag.rag.settings import DoclingSidecarSettings
+    from dlightrag.engine.rag.workspace.settings import DoclingSidecarSettings
 
     assert DoclingSidecarSettings().do_formula_enrichment is DEFAULT_MINERU_ENABLE_FORMULA
 
 
 def test_do_formula_enrichment_reaches_lightrag_env() -> None:
     from dlightrag.application.config import DlightragConfig
-    from dlightrag.rag.settings import DoclingSidecarSettings, ParserSidecarsSettings
+    from dlightrag.engine.rag.workspace.settings import (
+        DoclingSidecarSettings,
+        ParserSidecarsSettings,
+    )
 
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         corpus={
@@ -107,7 +110,10 @@ def test_do_formula_enrichment_reaches_lightrag_env() -> None:
 
 def test_force_ocr_reaches_lightrag_env() -> None:
     from dlightrag.application.config import DlightragConfig
-    from dlightrag.rag.settings import DoclingSidecarSettings, ParserSidecarsSettings
+    from dlightrag.engine.rag.workspace.settings import (
+        DoclingSidecarSettings,
+        ParserSidecarsSettings,
+    )
 
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         corpus={

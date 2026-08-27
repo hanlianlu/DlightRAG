@@ -31,7 +31,7 @@ from dlightrag.application.corpus_admin import (
 )
 from dlightrag.application.retrieval import RetrieveProjection
 from dlightrag.application.retrieval import RetrieveRequest as ServiceRequest
-from dlightrag.rag.workspaces import normalize_workspace
+from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
 from .deps import (
     authorized_workspaces,

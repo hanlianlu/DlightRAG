@@ -223,13 +223,28 @@ def test_workspace_wheel_verifier_rejects_concrete_rag_backend_imports(
 ) -> None:
     _write_workspace_artifacts(
         tmp_path,
-        root_additional_sources={"rag/example.py": rag_source},
+        root_additional_sources={"engine/rag/example.py": rag_source},
     )
 
     completed = _verify_wheels(tmp_path)
 
     assert completed.returncode == 1
     assert "forbidden import lightrag.kg.postgres_impl" in completed.stderr
+
+
+def test_workspace_wheel_verifier_allows_offline_rebuild_composition(tmp_path: Path) -> None:
+    _write_workspace_artifacts(
+        tmp_path,
+        root_additional_sources={
+            "engine/rag/corpus/rebuild_bm25.py": (
+                "from dlightrag.adapters.postgres._pool import pg_pool\n"
+            )
+        },
+    )
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_workspace_wheel_verifier_rejects_answer_import_of_postgres_adapter(

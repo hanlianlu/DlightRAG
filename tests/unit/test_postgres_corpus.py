@@ -14,7 +14,7 @@ from dlightrag.adapters.postgres.corpus import (
     build_pg_corpus_backend,
 )
 from dlightrag.application.config import DlightragConfig
-from dlightrag.rag.retrieval.bm25 import BM25Profile
+from dlightrag.engine.rag.retrieval.bm25 import BM25Profile
 from tests.config_helpers import clone_config, mutate_config
 
 

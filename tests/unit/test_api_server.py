@@ -34,8 +34,8 @@ from dlightrag.application.health import ApplicationHealth
 from dlightrag.application.retrieval import CorpusUnavailableError, RetrievalTimeoutError
 from dlightrag.application.retrieval import RetrieveResponse as ServiceResponse
 from dlightrag.application.settings import authentication_settings
+from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime import AnswerRunRecord, RunCreation
-from dlightrag.rag.retrieval import RetrievalResult
 from tests.config_helpers import clone_config, mutate_config, replace_config
 
 # ---------------------------------------------------------------------------

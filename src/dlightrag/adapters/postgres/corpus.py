@@ -35,14 +35,14 @@ from dlightrag.adapters.postgres.lightrag_readonly import (
 from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
 from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
 from dlightrag.application.config import DlightragConfig
-from dlightrag.rag.ports import (
+from dlightrag.engine.rag.retrieval.bm25 import profile_languages, profiles_from_config
+from dlightrag.engine.rag.workspace.ports import (
     CorpusRuntimeModels,
     CorpusUnavailableError,
     WorkspaceCorpusBackend,
     WorkspaceCorpusStores,
 )
-from dlightrag.rag.retrieval.bm25 import profile_languages, profiles_from_config
-from dlightrag.rag.settings import RagSettings
+from dlightrag.engine.rag.workspace.settings import RagSettings
 
 logger = logging.getLogger(__name__)
 

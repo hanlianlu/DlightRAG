@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.rag.ingestion.sidecar_provenance import (
+from dlightrag.engine.rag.corpus.ingestion.sidecar_provenance import (
     block_ids_from_multimodal_item,
     is_multimodal_sidecar,
 )

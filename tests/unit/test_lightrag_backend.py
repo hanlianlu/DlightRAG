@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image
 
-from dlightrag.rag.retrieval.lightrag_backend import LightRAGMixBackend
-from dlightrag.rag.retrieval.provenance import hydrate_lightrag_chunk_provenance
+from dlightrag.engine.rag.retrieval.lightrag_backend import LightRAGMixBackend
+from dlightrag.engine.rag.retrieval.provenance import hydrate_lightrag_chunk_provenance
 
 
 def _write_image(path: Path) -> None:

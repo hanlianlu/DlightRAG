@@ -20,7 +20,7 @@ from dlightrag.application.answer_runs.sources import (
     project_contexts_for_client,
     project_source_payloads,
 )
-from dlightrag.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 IMAGE_URL_PREFIX = "/images"
 _ARTIFACT_PART = re.compile(

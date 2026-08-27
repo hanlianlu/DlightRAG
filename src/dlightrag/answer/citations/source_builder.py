@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 from dlightrag.application.answer_runs.citations import ChunkSnippet, SourceReference
 from dlightrag.engine.ai.telemetry import safe_log_text
-from dlightrag.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 from .indexer import CitationIndexer
 from .utils import filter_content_for_display

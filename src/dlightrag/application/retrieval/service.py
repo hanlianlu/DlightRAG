@@ -12,12 +12,14 @@ from typing import Any, Protocol
 from dlightrag.application.errors import CorpusUnavailableError
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.telemetry import Telemetry
-from dlightrag.rag.federation import federated_retrieve
-from dlightrag.rag.lifecycle import await_shared_cleanup
-from dlightrag.rag.pool import WorkspacePool
-from dlightrag.rag.ports import CorpusUnavailableError as _EngineCorpusUnavailableError
-from dlightrag.rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
-from dlightrag.rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
+from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
+from dlightrag.engine.rag.retrieval.federation import federated_retrieve
+from dlightrag.engine.rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
+from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup
+from dlightrag.engine.rag.workspace.pool import WorkspacePool
+from dlightrag.engine.rag.workspace.ports import (
+    CorpusUnavailableError as _EngineCorpusUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 

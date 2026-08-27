@@ -17,7 +17,7 @@ from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelRole, ModelRoleSettings
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.ai.tool_model import ToolModel
-from dlightrag.rag.lifecycle import await_shared_cleanup
+from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup
 
 logger = logging.getLogger(__name__)
 

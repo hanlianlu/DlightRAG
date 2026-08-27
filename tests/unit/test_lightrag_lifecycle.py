@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.rag.lifecycle import await_shared_cleanup, shutdown_lightrag_worker_pools
+from dlightrag.engine.rag.workspace.lifecycle import (
+    await_shared_cleanup,
+    shutdown_lightrag_worker_pools,
+)
 
 
 def _shutdown_target() -> SimpleNamespace:

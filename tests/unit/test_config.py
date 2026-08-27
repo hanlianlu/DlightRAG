@@ -16,7 +16,7 @@ from dlightrag.application.config import (
     load_config,
 )
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelSettings, ModelsSettings
-from dlightrag.rag.settings import (
+from dlightrag.engine.rag.workspace.settings import (
     CorpusSettings,
     MinerUSidecarSettings,
     ParserSidecarsSettings,

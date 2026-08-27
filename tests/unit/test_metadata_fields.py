@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from dlightrag.rag.retrieval import MetadataFilter
-from dlightrag.rag.retrieval.metadata_fields import (
+from dlightrag.engine.rag.retrieval import MetadataFilter
+from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     METADATA_FIELD_IDS,
     NormalizedUserMetadata,
@@ -53,7 +53,7 @@ class TestDerivedFunctions:
     """Derived helper functions built from neutral metadata ids."""
 
     def test_filter_fields_map_to_real_columns(self) -> None:
-        from dlightrag.rag.retrieval.metadata_fields import FILTER_FIELD_COLUMNS
+        from dlightrag.engine.rag.retrieval.metadata_fields import FILTER_FIELD_COLUMNS
 
         columns = set(METADATA_FIELD_IDS)
         backing = {column for cols in FILTER_FIELD_COLUMNS.values() for column in cols}
@@ -90,7 +90,7 @@ def test_non_string_values_survive_untouched() -> None:
 async def test_metadata_update_stores_without_reindexing() -> None:
     from unittest.mock import AsyncMock
 
-    from dlightrag.rag.workspace_rag import WorkspaceRag
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
     service = object.__new__(WorkspaceRag)
     service.settings = _writer_settings()
@@ -107,7 +107,7 @@ async def test_metadata_update_stores_without_reindexing() -> None:
 async def test_metadata_update_reports_an_unknown_document() -> None:
     from unittest.mock import AsyncMock
 
-    from dlightrag.rag.workspace_rag import WorkspaceRag
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
     service = object.__new__(WorkspaceRag)
     service.settings = _writer_settings()

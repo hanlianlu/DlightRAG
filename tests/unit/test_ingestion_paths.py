@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from lightrag.constants import PARSED_DIR_NAME
 
-from dlightrag.rag.ingestion.paths import (
+from dlightrag.engine.rag.corpus.ingestion.paths import (
     REMOTE_INGEST_DIR_NAME,
     REMOTE_SOURCES_DIR_NAME,
     UPLOADS_DIR_NAME,

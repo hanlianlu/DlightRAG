@@ -11,9 +11,9 @@ import pytest
 
 from dlightrag.application.config import set_config
 from dlightrag.engine.ai.scheduler import ModelScheduler
-from dlightrag.rag.retrieval import MetadataFilter, MetadataScope
-from dlightrag.rag.retrieval.filtering import metadata_filter_scope
-from dlightrag.rag.retrieval.metadata_path import metadata_retrieve
+from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
+from dlightrag.engine.rag.retrieval.filtering import metadata_filter_scope
+from dlightrag.engine.rag.retrieval.metadata_path import metadata_retrieve
 from tests.config_helpers import clone_config, mutate_config
 from tests.e2e.pg18_harness import (
     RUN_E2E_ENV,
@@ -63,8 +63,8 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     from dlightrag.adapters.postgres._pool import pg_pool
     from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
     from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.observability import LangfuseTelemetry
-    from dlightrag.rag.workspace_rag import WorkspaceRag
 
     conn_kwargs = pg_conn_kwargs_from_env()
     workspace = make_workspace_name()
@@ -183,9 +183,9 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
     from dlightrag.application.config import reset_config, set_config
     from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.engine.runtime import answer_run_request_fingerprint
     from dlightrag.observability import LangfuseTelemetry
-    from dlightrag.rag.workspace_rag import WorkspaceRag
 
     conn_kwargs = pg_conn_kwargs_from_env()
     workspace = make_workspace_name("reader")

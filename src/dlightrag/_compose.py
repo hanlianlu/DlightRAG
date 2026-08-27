@@ -111,15 +111,15 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.ai.scheduler import ModelScheduler
     from dlightrag.engine.ai.telemetry import safe_log_text
     from dlightrag.engine.ai.vision import ModelImageCapabilities
+    from dlightrag.engine.rag.corpus.downloads import SourceDownloadService
+    from dlightrag.engine.rag.corpus.ingestion.jobs import IngestJobCoordinator
+    from dlightrag.engine.rag.retrieval.runtime import RetrievalPlannerRuntime
+    from dlightrag.engine.rag.workspace.pool import WorkspacePool
+    from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+    from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
     from dlightrag.engine.runtime import RunCoordinator
     from dlightrag.observability import LangfuseTelemetry
-    from dlightrag.rag.ingestion.jobs import IngestJobCoordinator
-    from dlightrag.rag.pool import WorkspacePool
-    from dlightrag.rag.ports import CorpusSchemaError
-    from dlightrag.rag.retrieval.runtime import RetrievalPlannerRuntime
-    from dlightrag.rag.source_download import SourceDownloadService
-    from dlightrag.rag.workspace_rag import WorkspaceRag
-    from dlightrag.rag.workspaces import normalize_workspace
 
     # Large document scans are DlightRAG product policy, not an AI package import side effect.
     Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS

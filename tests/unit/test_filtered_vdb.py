@@ -4,8 +4,8 @@
 from unittest.mock import AsyncMock
 
 from dlightrag.adapters.postgres.corpus_vectors import PGFilteredVectorSearch
-from dlightrag.rag.retrieval import MetadataScope
-from dlightrag.rag.retrieval.filtering import (
+from dlightrag.engine.rag.retrieval import MetadataScope
+from dlightrag.engine.rag.retrieval.filtering import (
     FilteredChunkStore,
     FilteredVectorStorage,
     _active_filter,

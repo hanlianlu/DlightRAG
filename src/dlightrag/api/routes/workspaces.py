@@ -14,7 +14,7 @@ from dlightrag.api.models import (
 )
 from dlightrag.application.access import AccessAction, UserContext
 from dlightrag.application.corpus_admin import validate_workspace_name
-from dlightrag.rag.workspaces import normalize_workspace
+from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
 from .deps import enforce_access, filter_workspace_records, get_application
 

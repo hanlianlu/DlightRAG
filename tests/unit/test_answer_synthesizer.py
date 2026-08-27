@@ -16,7 +16,7 @@ from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.scheduler import ModelScheduler
-from dlightrag.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval import RetrievalContexts
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 _PNG_B64 = (

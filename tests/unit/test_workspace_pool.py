@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.rag.pool import WorkspacePool, WorkspaceUnavailableError
-from dlightrag.rag.ports import CorpusSchemaError
-from dlightrag.rag.workspace_rag import WorkspaceRag
+from dlightrag.engine.rag.workspace.pool import WorkspacePool, WorkspaceUnavailableError
+from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
+from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
 
 def _pool(build, *, clock=lambda: 0.0) -> WorkspacePool:

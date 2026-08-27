@@ -17,7 +17,7 @@ from dlightrag.application.retrieval import (
     ProjectedRetrieval,
     RetrieveProjection,
 )
-from dlightrag.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval import RetrievalResult
 
 
 class AnswerQueryImagePreparer:

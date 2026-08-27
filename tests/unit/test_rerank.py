@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import dlightrag.rag.rerank as rerank_module
+import dlightrag.engine.rag.retrieval.rerank as rerank_module
 from dlightrag.engine.ai.media import ImagePayloadBudget
 from dlightrag.engine.ai.providers.rerank_base import resolve_rerank_input_modality
 from dlightrag.engine.ai.providers.rerank_providers import (
@@ -26,14 +26,14 @@ from dlightrag.engine.ai.providers.rerank_providers import (
 from dlightrag.engine.ai.rerank import RerankModel
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings, RerankSettings
-from dlightrag.rag.rerank import (
+from dlightrag.engine.rag.retrieval.rerank import (
     _build_scored_chunks,
     _chat_llm_rerank,
     _parse_listwise_scores,
     _run_http_rerank,
     build_rerank_func,
 )
-from dlightrag.rag.retrieval.rerank_fallback import rerank_with_fallback
+from dlightrag.engine.rag.retrieval.rerank_fallback import rerank_with_fallback
 
 
 def _chunks() -> list[dict[str, Any]]:
@@ -200,7 +200,7 @@ async def test_rerank_with_fallback_returns_rrf_top_k_and_logs_failure_once(
     async def _fail(**_kwargs: Any) -> Any:
         raise failure
 
-    with caplog.at_level(logging.WARNING, logger="dlightrag.rag.retrieval.rerank_fallback"):
+    with caplog.at_level(logging.WARNING, logger="dlightrag.engine.rag.retrieval.rerank_fallback"):
         outcome = await rerank_with_fallback(
             query="query",
             chunks=_chunks(),
@@ -214,7 +214,7 @@ async def test_rerank_with_fallback_returns_rrf_top_k_and_logs_failure_once(
     records = [
         record
         for record in caplog.records
-        if record.name == "dlightrag.rag.retrieval.rerank_fallback"
+        if record.name == "dlightrag.engine.rag.retrieval.rerank_fallback"
     ]
     assert len(records) == 1
     assert records[0].exc_info is not None
@@ -450,7 +450,7 @@ class TestChatLlmRerank:
         assert result[1]["rerank_score"] == pytest.approx(0.5)
 
     async def test_listwise_prompt_separates_rules_from_json_data(self, monkeypatch):
-        import dlightrag.rag.rerank as rerank_module
+        import dlightrag.engine.rag.retrieval.rerank as rerank_module
 
         prompt_template = "Central listwise prompt for {n} items"
         monkeypatch.setattr(rerank_module, "LISTWISE_RERANK_SYSTEM_PROMPT", prompt_template)
@@ -650,7 +650,7 @@ class TestChatLlmRerank:
         assert len(result) == 5
 
     async def test_logs_listwise_schedule_summary(self, caplog):
-        caplog.set_level(logging.INFO, logger="dlightrag.rag.rerank")
+        caplog.set_level(logging.INFO, logger="dlightrag.engine.rag.retrieval.rerank")
 
         async def mock_scoring(messages, **kwargs):
             n = sum("candidate" in payload for payload in _rerank_user_payloads(messages))

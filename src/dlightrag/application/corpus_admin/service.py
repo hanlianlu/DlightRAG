@@ -14,50 +14,52 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from dlightrag.application.access import WorkspaceRecord
 from dlightrag.application.errors import CorpusUnavailableError, StorageSchemaError
 from dlightrag.engine.ai.telemetry import safe_log_text
-from dlightrag.rag.contracts import IngestDocument, SourceType, VisualAssetSize
-from dlightrag.rag.ingestion.paths import is_explicit_upload_batch_dir
-from dlightrag.rag.ingestion.uploads import (
+from dlightrag.engine.rag.corpus.contracts import IngestDocument, SourceType, VisualAssetSize
+from dlightrag.engine.rag.corpus.downloads import (
+    LocalDownloadTarget as _EngineLocalDownloadTarget,
+)
+from dlightrag.engine.rag.corpus.downloads import (
+    RedirectDownloadTarget as _EngineRedirectDownloadTarget,
+)
+from dlightrag.engine.rag.corpus.downloads import (
+    SourceDownloadInvalidError as _EngineSourceDownloadInvalidError,
+)
+from dlightrag.engine.rag.corpus.downloads import (
+    SourceDownloadNotFoundError as _EngineSourceDownloadNotFoundError,
+)
+from dlightrag.engine.rag.corpus.downloads import (
+    SourceDownloadUnavailableError as _EngineSourceDownloadUnavailableError,
+)
+from dlightrag.engine.rag.corpus.ingest_jobs import JOB_STATES_WITH_RESULT, IngestJobSchemaError
+from dlightrag.engine.rag.corpus.ingestion.paths import is_explicit_upload_batch_dir
+from dlightrag.engine.rag.corpus.ingestion.uploads import (
     UploadTooLargeError as _EngineUploadTooLargeError,
 )
-from dlightrag.rag.ingestion.uploads import (
+from dlightrag.engine.rag.corpus.ingestion.uploads import (
     ignored_upload,
     safe_upload_basename,
     safe_upload_destination,
     upload_batch_dir,
     write_upload_stream,
 )
-from dlightrag.rag.pool import WorkspacePool
-from dlightrag.rag.ports import (
-    JOB_STATES_WITH_RESULT,
-    CorpusMaintenanceStore,
-    CorpusSchemaError,
-    IngestJobSchemaError,
-)
-from dlightrag.rag.ports import (
-    CorpusUnavailableError as _EngineCorpusUnavailableError,
-)
-from dlightrag.rag.reset import areset_orphaned_workspace
-from dlightrag.rag.retrieval import MetadataFilter
-from dlightrag.rag.retrieval.metadata_fields import (
+from dlightrag.engine.rag.corpus.reset import areset_orphaned_workspace
+from dlightrag.engine.rag.retrieval import MetadataFilter
+from dlightrag.engine.rag.retrieval.metadata_fields import (
     MetadataValidationError as _EngineMetadataValidationError,
 )
-from dlightrag.rag.source_download import (
-    LocalDownloadTarget as _EngineLocalDownloadTarget,
+from dlightrag.engine.rag.workspace.pool import WorkspacePool
+from dlightrag.engine.rag.workspace.ports import (
+    CorpusMaintenanceStore,
+    CorpusSchemaError,
 )
-from dlightrag.rag.source_download import (
-    RedirectDownloadTarget as _EngineRedirectDownloadTarget,
+from dlightrag.engine.rag.workspace.ports import (
+    CorpusUnavailableError as _EngineCorpusUnavailableError,
 )
-from dlightrag.rag.source_download import (
-    SourceDownloadInvalidError as _EngineSourceDownloadInvalidError,
+from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+from dlightrag.engine.rag.workspace.workspaces import (
+    normalize_workspace,
+    require_canonical_workspace_id,
 )
-from dlightrag.rag.source_download import (
-    SourceDownloadNotFoundError as _EngineSourceDownloadNotFoundError,
-)
-from dlightrag.rag.source_download import (
-    SourceDownloadUnavailableError as _EngineSourceDownloadUnavailableError,
-)
-from dlightrag.rag.workspace_rag import WorkspaceRag
-from dlightrag.rag.workspaces import normalize_workspace, require_canonical_workspace_id
 
 from .errors import (
     LocalDownloadTarget,

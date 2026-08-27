@@ -40,12 +40,12 @@ from dlightrag.application.answer_runs.results import (
 )
 from dlightrag.application.answer_runs.sources import SourceDownloadLinkBuilder
 from dlightrag.application.config import AnswerConfig
+from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 from dlightrag.engine.runtime import (
     AnswerRunEvent,
     AnswerRunRecord,
     IdempotencyKeyConflict,
 )
-from dlightrag.rag.sourcing.source_contract import safe_source_filename
 
 from .deps import authorized_workspaces, get_application, resolve_authorized_query_workspaces
 
@@ -203,7 +203,7 @@ def _service_request(
     workspaces: list[str],
 ) -> ServiceAnswerRequest:
     """Project one validated wire request into the Answer application contract."""
-    from dlightrag.rag.retrieval import MetadataFilter
+    from dlightrag.engine.rag.retrieval import MetadataFilter
 
     resources = answer_link_resources(body.attachments)
     resources.extend(

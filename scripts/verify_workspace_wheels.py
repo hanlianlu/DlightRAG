@@ -72,7 +72,7 @@ _CONCRETE_LIGHTRAG_BACKEND = "lightrag.kg.postgres_impl"
 # import-linter rejects external submodules as contract targets, so the built
 # artifact gate owns this one exact LightRAG implementation prohibition.
 _SPECIFIC_SOURCE_PROHIBITIONS = {
-    "dlightrag": {"dlightrag.rag": (_CONCRETE_LIGHTRAG_BACKEND,)},
+    "dlightrag": {"dlightrag.engine.rag": (_CONCRETE_LIGHTRAG_BACKEND,)},
 }
 _REQUIRED_EXTERNAL_PROHIBITIONS = {
     "dlightrag": set(),
@@ -147,7 +147,7 @@ asyncio.run(main())
     + _ABSENT_HELPER
     + """
 assert all(absent(name) for name in (
-    'dlightrag', 'dlightrag.engine.agent', 'dlightrag.engine.ai', 'dlightrag.rag',
+    'dlightrag', 'dlightrag.engine.agent', 'dlightrag.engine.ai', 'dlightrag.engine.rag',
     'lightrag', 'fastapi', 'openai', 'anthropic', 'google.genai'
 ))
 """
@@ -188,6 +188,7 @@ class SdistFacts:
 class ImportRule:
     source: str
     forbidden: tuple[str, ...]
+    ignored: tuple[tuple[str, str], ...] = ()
 
 
 def _normalize_distribution(value: str) -> str:
@@ -390,9 +391,19 @@ def _dynamic_import_candidates(
     return tuple(sorted(candidates))
 
 
-def _forbidden_import(imported: str, rules: tuple[ImportRule, ...]) -> bool:
+def _forbidden_import(
+    imported: str,
+    rules: tuple[ImportRule, ...],
+    *,
+    source_module: str,
+) -> bool:
     return any(
-        imported == prefix or imported.startswith(f"{prefix}.")
+        (imported == prefix or imported.startswith(f"{prefix}."))
+        and not any(
+            source_module == ignored_source
+            and (imported == ignored_target or imported.startswith(f"{ignored_target}."))
+            for ignored_source, ignored_target in rule.ignored
+        )
         for rule in rules
         for prefix in rule.forbidden
     )
@@ -423,10 +434,10 @@ def _validate_source_imports(
                 else ()
             )
             for imported in imports:
-                if _forbidden_import(imported, applicable_rules):
+                if _forbidden_import(imported, applicable_rules, source_module=module):
                     raise ValueError(f"{distribution}: forbidden import {imported} in {name}")
             for imported in _dynamic_import_candidates(node, static_strings=static_strings):
-                if _forbidden_import(imported, applicable_rules):
+                if _forbidden_import(imported, applicable_rules, source_module=module):
                     raise ValueError(f"{distribution}: forbidden import {imported} in {name}")
 
 
@@ -438,11 +449,15 @@ def _import_rules(config_path: Path) -> dict[str, tuple[ImportRule, ...]]:
         if contract.get("type") != "forbidden":
             continue
         forbidden = tuple(contract.get("forbidden_modules") or ())
+        ignored = tuple(
+            tuple(part.strip() for part in value.split("->", maxsplit=1))
+            for value in contract.get("ignore_imports") or ()
+        )
         sources = contract.get("source_modules") or ()
         for source in sources:
             for root in rules_by_root:
                 if source == root or source.startswith(f"{root}."):
-                    rules_by_root[root].append(ImportRule(source, forbidden))
+                    rules_by_root[root].append(ImportRule(source, forbidden, ignored))
                     break
 
     for distribution, source_rules in _SPECIFIC_SOURCE_PROHIBITIONS.items():
@@ -851,9 +866,13 @@ def _smoke_root_interfaces() -> None:
     from dlightrag.engine.agent import AgentSessionRuntime, ContextContribution, ToolRegistry
     from dlightrag.engine.ai.settings import ModelsSettings
     from dlightrag.engine.ai.telemetry import NoopTelemetry
+    from dlightrag.engine.rag.retrieval import RetrievalResult
+    from dlightrag.engine.rag.workspace.settings import (
+        CorpusSettings,
+        IngestionSettings,
+        PipelineSettings,
+    )
     from dlightrag.engine.runtime import answer_run_request_fingerprint
-    from dlightrag.rag.retrieval import RetrievalResult
-    from dlightrag.rag.settings import CorpusSettings, IngestionSettings, PipelineSettings
     from dlightrag.sdk import AnswerRunClient
 
     class Planner:
@@ -1040,6 +1059,8 @@ def _smoke_root_interfaces() -> None:
         "dlightrag.health",
         "dlightrag.model_settings",
         "dlightrag.runtime",
+        "dlightrag.rag",
+        "dlightrag.maintenance",
         "dlightrag.services",
         "dlightrag.app_state",
         "dlightrag.contracts",

@@ -45,7 +45,7 @@ from dlightrag.application.config import (
     StorageSettings,
 )
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelsSettings
-from dlightrag.rag.ports import CorpusSchemaError
+from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 
 pytestmark = [
     pytest.mark.integration,

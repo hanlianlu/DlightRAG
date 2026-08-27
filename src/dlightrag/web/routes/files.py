@@ -42,7 +42,7 @@ async def download_source(
     workspace: str | None = Query(default=None),
 ) -> FileResponse | RedirectResponse:
     """Download one source document through the Web session boundary."""
-    from dlightrag.rag.workspaces import normalize_workspace
+    from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
     safe_workspace = normalize_workspace(
         workspace or get_application(request).config.deployment.workspace
@@ -90,7 +90,7 @@ def _source_download_response(
 
 
 def _resolve_workspace(requested: str | None, cookie_workspace: str) -> str:
-    from dlightrag.rag.workspaces import normalize_workspace
+    from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
     if not requested:
         return cookie_workspace
@@ -103,7 +103,7 @@ async def _resolve_registered_workspace(
     workspace: str,
 ) -> str | None:
     """Return the requested workspace when it is registered."""
-    from dlightrag.rag.workspaces import normalize_workspace
+    from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
     application = get_application(request)
     try:
@@ -121,7 +121,7 @@ async def _resolve_registered_workspace(
 
 async def _workspace_is_registered(request: Request, workspace: str) -> bool:
     """Return whether a workspace is registered; fail open on registry outages."""
-    from dlightrag.rag.workspaces import normalize_workspace
+    from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
     application = get_application(request)
     try:

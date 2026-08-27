@@ -6,7 +6,7 @@ from typing import Any
 
 from dlightrag.answer.citations.utils import context_chunk_key, split_source_ids
 from dlightrag.answer.images import AnswerImageBudget
-from dlightrag.rag.retrieval import ContextRow, RetrievalContexts
+from dlightrag.engine.rag.retrieval import ContextRow, RetrievalContexts
 
 
 @dataclass

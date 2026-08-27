@@ -193,9 +193,9 @@ async def _run_ingest(args: argparse.Namespace) -> None:
     from dlightrag.application.config import get_config
     from dlightrag.application.settings import rag_settings
     from dlightrag.engine.ai.scheduler import ModelScheduler
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+    from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
     from dlightrag.observability import LangfuseTelemetry
-    from dlightrag.rag.workspace_rag import WorkspaceRag
-    from dlightrag.rag.workspaces import normalize_workspace
 
     source = args.source_type
     kwargs = ingest_kwargs_from_spec(ingest_spec_from_payload(args))

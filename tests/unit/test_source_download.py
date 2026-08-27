@@ -5,7 +5,7 @@ import pytest
 
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.settings import rag_settings
-from dlightrag.rag.source_download import (
+from dlightrag.engine.rag.corpus.downloads import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,
@@ -13,7 +13,7 @@ from dlightrag.rag.source_download import (
     SourceDownloadService,
     SourceDownloadUnavailableError,
 )
-from dlightrag.rag.sourcing.aws_s3 import S3CredentialsUnavailable
+from dlightrag.engine.rag.corpus.sources.aws_s3 import S3CredentialsUnavailable
 from tests.config_helpers import mutate_config
 
 
@@ -128,7 +128,7 @@ async def test_azure_locator_returns_signed_redirect(test_config) -> None:
     metadata_index.get.return_value = {"download_locator": "azure://container/report.pdf"}
 
     with patch(
-        "dlightrag.rag.source_download.generate_azure_sas_url",
+        "dlightrag.engine.rag.corpus.downloads.generate_azure_sas_url",
         return_value="https://acct.blob.core.windows.net/container/report.pdf?sig=x",
     ) as signer:
         target = await _service(test_config, metadata_index).prepare("doc-report")
@@ -148,7 +148,7 @@ async def test_s3_locator_returns_signed_redirect(test_config) -> None:
     metadata_index.get.return_value = {"download_locator": "s3://bucket/report.pdf"}
 
     with patch(
-        "dlightrag.rag.source_download.generate_s3_presigned_url",
+        "dlightrag.engine.rag.corpus.downloads.generate_s3_presigned_url",
         new_callable=AsyncMock,
         return_value="https://bucket.s3.example/report.pdf?sig=x",
     ) as signer:
@@ -168,7 +168,7 @@ async def test_s3_credentials_failure_is_unavailable(test_config) -> None:
 
     with (
         patch(
-            "dlightrag.rag.source_download.generate_s3_presigned_url",
+            "dlightrag.engine.rag.corpus.downloads.generate_s3_presigned_url",
             new_callable=AsyncMock,
             side_effect=S3CredentialsUnavailable("secret provider detail"),
         ),

@@ -15,7 +15,7 @@ from dlightrag.adapters.postgres._migrations import (
     verify_migrations,
 )
 from dlightrag.adapters.postgres._operations import PostgresOperationRunner
-from dlightrag.rag.ports import CorpusSchemaError
+from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 
 _CREATE = """
 CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (

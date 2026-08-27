@@ -14,13 +14,13 @@ from dlightrag.adapters.postgres._migrations import (
 )
 from dlightrag.adapters.postgres._operations import PostgresOperationRunner
 from dlightrag.adapters.postgres.identifiers import pg_identifier
-from dlightrag.rag.ports import CorpusSchemaError
-from dlightrag.rag.retrieval import MetadataFilter
-from dlightrag.rag.retrieval.metadata_fields import (
+from dlightrag.engine.rag.retrieval import MetadataFilter
+from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     METADATA_FIELD_IDS,
     canonical_metadata_key,
 )
+from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 
 logger = logging.getLogger(__name__)
 

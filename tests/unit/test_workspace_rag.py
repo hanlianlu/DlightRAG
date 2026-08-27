@@ -17,16 +17,16 @@ from dlightrag.engine.ai.settings import (
     RerankSettings,
 )
 from dlightrag.engine.ai.telemetry import NoopTelemetry
-from dlightrag.engine.runtime import RunCoordinator
-from dlightrag.rag.ports import WorkspaceCorpusBackend
-from dlightrag.rag.settings import (
+from dlightrag.engine.rag.workspace.ports import WorkspaceCorpusBackend
+from dlightrag.engine.rag.workspace.settings import (
     CorpusSettings,
     IngestionSettings,
     ParserSettings,
     PipelineSettings,
     RagSettings,
 )
-from dlightrag.rag.workspace_rag import WorkspaceRag
+from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
+from dlightrag.engine.runtime import RunCoordinator
 from tests.config_helpers import mutate_config
 
 

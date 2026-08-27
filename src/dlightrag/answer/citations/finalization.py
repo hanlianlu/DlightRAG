@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 
 from dlightrag.application.answer_runs.citations import SourceReference
-from dlightrag.rag.retrieval import ContextRow, RetrievalContexts
+from dlightrag.engine.rag.retrieval import ContextRow, RetrievalContexts
 
 from .indexer import CitationIndexer, build_citation_index
 from .processor import CitationProcessor

@@ -142,7 +142,7 @@ _SERVICE_WRITE_CALLS = [
 @pytest.mark.parametrize(("method", "args", "kwargs"), _SERVICE_WRITE_CALLS)
 async def test_service_write_guards_reject_reader(method, args, kwargs) -> None:
     from dlightrag.application.settings import rag_settings
-    from dlightrag.rag.workspace_rag import WorkspaceRag
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
     service = object.__new__(WorkspaceRag)
     service.settings = rag_settings(_config(service_role="reader"))
@@ -234,8 +234,8 @@ def _required_domain_scopes() -> list[
         workspaces,
     )
     from dlightrag.application.web_conversations import WebConversationSchemaError
+    from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
     from dlightrag.engine.runtime import RunSchemaError
-    from dlightrag.rag.ports import CorpusSchemaError
 
     return [
         (

@@ -10,7 +10,7 @@ from dlightrag.answer.prompts import (
     answer_core,
 )
 from dlightrag.answer.prompts.identity import core_identity
-from dlightrag.rag.retrieval.planner_prompt import RETRIEVAL_PLANNER_SYSTEM_PROMPT
+from dlightrag.engine.rag.retrieval.planner_prompt import RETRIEVAL_PLANNER_SYSTEM_PROMPT
 
 
 def test_answer_prompt_is_assembled_from_core_identity_and_guidance() -> None:

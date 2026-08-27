@@ -29,9 +29,9 @@ from dlightrag.application.web_conversations import (
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint, model_fingerprint
 from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES
+from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
+from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 from dlightrag.engine.runtime import RunCoordinator, RunSchemaError
-from dlightrag.rag.ports import CorpusSchemaError
-from dlightrag.rag.workspaces import normalize_workspace
 from tests.config_helpers import mutate_config
 
 _CLOSE_ORDER = [

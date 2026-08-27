@@ -9,12 +9,12 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
-from dlightrag.rag.ingestion.jobs import IngestJobCoordinator
-from dlightrag.rag.ports import (
+from dlightrag.engine.rag.corpus.ingest_jobs import (
     JOB_LEASE_SECONDS,
     JOB_ORPHAN_AFTER_SECONDS,
     JOB_RETENTION_SECONDS,
 )
+from dlightrag.engine.rag.corpus.ingestion.jobs import IngestJobCoordinator
 
 
 def _finished_status(row: dict[str, Any]) -> str:

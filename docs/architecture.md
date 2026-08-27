@@ -229,17 +229,21 @@ errors into `RunExecutionError` before they cross that boundary;
 `dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore` implements the runtime
 store port.
 
-`dlightrag.rag` owns the coherent `WorkspaceCorpusBackend` bundle:
-coordination and maintenance, durable ingest jobs, plus a runtime binder for
-metadata, chunk, filtered-vector, and BM25 stores. The root PostgreSQL adapter
-implements those ports and hides environment translation, server/version/
-extension checks, advisory-lock lifetimes, reader attachment, catalog scans,
-workspace maintenance, schema DDL, and SQL identifiers. Startup availability
-failures are translated to corpus errors; operation-specific failures retain
-their adapter context for the current product error policy.
+`dlightrag.engine.rag` groups one workspace runtime into `workspace`, internal
+`lightrag`, `corpus`, and `retrieval` owners. Workspace owns the coherent
+`WorkspaceCorpusBackend` bundle: coordination and maintenance, durable ingest
+jobs, plus a runtime binder for metadata, chunk, filtered-vector, and BM25
+stores. The root PostgreSQL adapter implements those ports and hides environment
+translation, server/version/extension checks, advisory-lock lifetimes, reader
+attachment, catalog scans, workspace maintenance, schema DDL, and SQL
+identifiers. Startup availability failures are translated to corpus errors;
+operation-specific failures retain their adapter context for the current product
+error policy.
 Private `create_application` / `_compose` wires the PostgreSQL adapter into the
-process. Application itself does not import adapters. The internal RAG module,
-Runtime, status routes, API, Web, and MCP never import PostgreSQL. Corpus and
+process. Application itself does not import adapters. The online RAG runtime,
+Runtime, status routes, API, Web, and MCP never import PostgreSQL. The two
+exclusive offline rebuild modules under `engine.rag.corpus` compose Engine RAG
+with PostgreSQL directly and require writers to be stopped. Corpus and
 operational pools remain separate even when they use the same endpoint.
 
 ## Web Frontend Ownership

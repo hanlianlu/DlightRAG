@@ -19,8 +19,8 @@ from dlightrag.application.retrieval import (
 )
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.telemetry import NoopTelemetry
-from dlightrag.rag.retrieval import MetadataFilter, RetrievalResult
-from dlightrag.rag.retrieval.runtime import RetrievalPlannerRuntime
+from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalResult
+from dlightrag.engine.rag.retrieval.runtime import RetrievalPlannerRuntime
 
 _PROJECTION = RetrieveProjection(
     downloadable_workspaces=frozenset(),
@@ -607,7 +607,7 @@ async def test_planner_runtime_caches_by_profile_and_closes_its_model_once() -> 
     model = AsyncMock()
 
     with patch(
-        "dlightrag.rag.retrieval.runtime.CompletionModel",
+        "dlightrag.engine.rag.retrieval.runtime.CompletionModel",
         return_value=model,
     ) as create_model:
         runtime = RetrievalPlannerRuntime(
@@ -647,7 +647,7 @@ async def test_concurrent_planner_runtime_close_callers_join_model_cleanup() -> 
         await release_close.wait()
 
     model.aclose.side_effect = close_model
-    with patch("dlightrag.rag.retrieval.runtime.CompletionModel", return_value=model):
+    with patch("dlightrag.engine.rag.retrieval.runtime.CompletionModel", return_value=model):
         runtime = RetrievalPlannerRuntime(
             model_settings=Mock(),
             default_profile=lambda: default_profile,

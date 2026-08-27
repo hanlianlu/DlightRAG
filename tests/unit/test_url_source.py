@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.rag.sourcing.base import SourceDocument
-from dlightrag.rag.sourcing.source_contract import safe_source_filename
-from dlightrag.rag.sourcing.uri import parse_remote_uri
-from dlightrag.rag.sourcing.url import URLDataSource, afetch_public_https_bytes
+from dlightrag.engine.rag.corpus.sources.base import SourceDocument
+from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
+from dlightrag.engine.rag.corpus.sources.uri import parse_remote_uri
+from dlightrag.engine.rag.corpus.sources.url import URLDataSource, afetch_public_https_bytes
 
 
 class _Response:
@@ -162,7 +162,7 @@ async def test_url_data_source_does_not_derive_download_uri_from_signed_fetch_ur
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     hostile_filename = "https://files.example.com/report.pdf?display_token=secret"
-    with caplog.at_level(logging.INFO, logger="dlightrag.rag.sourcing.url"):
+    with caplog.at_level(logging.INFO, logger="dlightrag.engine.rag.corpus.sources.url"):
         source = URLDataSource(
             urls=["https://fetch.example.com/download?sig=secret"],
             filename=hostile_filename,
@@ -460,7 +460,7 @@ async def test_public_url_dns_validation_runs_off_the_event_loop(
 ) -> None:
     import threading
 
-    from dlightrag.rag.sourcing.url import avalidate_public_https_url
+    from dlightrag.engine.rag.corpus.sources.url import avalidate_public_https_url
 
     loop_thread = threading.get_ident()
     resolver_threads: list[int] = []
@@ -480,7 +480,7 @@ async def test_public_url_dns_validation_runs_off_the_event_loop(
 async def test_async_public_url_validation_still_rejects_private_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.rag.sourcing.url import avalidate_public_https_url
+    from dlightrag.engine.rag.corpus.sources.url import avalidate_public_https_url
 
     def resolver(host: str, port: int, *args: object, **kwargs: object):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", port))]

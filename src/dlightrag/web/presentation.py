@@ -11,7 +11,7 @@ from dlightrag.answer.citations.parser import CITATION_PATTERN, DOC_CITATION_PAT
 from dlightrag.application.answer_runs.citations import SourceReferencePayload
 from dlightrag.application.answer_runs.client_contracts import ClientContractModel
 from dlightrag.application.answer_runs.results import answer_parts_from_markdown
-from dlightrag.rag.sourcing.url import validate_public_web_url
+from dlightrag.engine.rag.corpus.sources.url import validate_public_web_url
 from dlightrag.web.markdown import (
     inject_highlights,
     normalize_chunk_source,

@@ -47,8 +47,8 @@ from dlightrag.answer.resources.text import build_text_windows, decode_text
 from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.ai.media import verify_web_image_bytes
 from dlightrag.engine.ai.tokens import estimate_tokens
-from dlightrag.rag.sourcing.source_contract import safe_source_filename
-from dlightrag.rag.sourcing.url import (
+from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
+from dlightrag.engine.rag.corpus.sources.url import (
     afetch_public_https_bytes,
     avalidate_public_https_url,
     normalize_https_url_identity,

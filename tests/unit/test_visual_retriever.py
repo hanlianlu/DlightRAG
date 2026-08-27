@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from PIL import Image
 
-from dlightrag.rag.retrieval.visual import DirectVisualRetriever
+from dlightrag.engine.rag.retrieval.visual import DirectVisualRetriever
 
 
 def _image_block(*, size: tuple[int, int] = (2, 2), mode: str = "RGB") -> dict[str, Any]:

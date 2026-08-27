@@ -56,7 +56,7 @@ def test_root_exposes_only_complete_role_overrides() -> None:
 
 async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypatch) -> None:
     from dlightrag.engine.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
-    from dlightrag.rag import lightrag_models
+    from dlightrag.engine.rag.lightrag import models as lightrag_models
 
     class FakeCompletionModel:
         instances: list[FakeCompletionModel] = []
@@ -116,7 +116,7 @@ async def test_rag_chat_bundle_closes_created_models_when_role_construction_fail
     monkeypatch,
 ) -> None:
     from dlightrag.engine.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
-    from dlightrag.rag import lightrag_models
+    from dlightrag.engine.rag.lightrag import models as lightrag_models
 
     class FakeCompletionModel:
         instances: list[FakeCompletionModel] = []
@@ -154,7 +154,7 @@ async def test_rag_chat_bundle_preserves_construction_error_when_cleanup_fails(
     monkeypatch,
 ) -> None:
     from dlightrag.engine.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
-    from dlightrag.rag import lightrag_models
+    from dlightrag.engine.rag.lightrag import models as lightrag_models
 
     class FakeCompletionModel:
         def __init__(self, settings: ModelSettings, **_kwargs: Any) -> None:
@@ -183,7 +183,7 @@ async def test_rag_chat_bundle_preserves_construction_error_when_cleanup_fails(
 
 async def test_rag_embedding_adapter_injects_context_and_numpy_shape() -> None:
     from dlightrag.engine.ai.settings import EmbeddingSettings
-    from dlightrag.rag.lightrag_models import build_lightrag_embedding
+    from dlightrag.engine.rag.lightrag.models import build_lightrag_embedding
 
     embedder = MagicMock()
     embedder.supports_asymmetric = True

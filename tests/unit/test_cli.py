@@ -203,7 +203,7 @@ async def test_ingest_workspace_override_reaches_the_backend(
 ) -> None:
     from dlightrag.application import config as config_module
     from dlightrag.application.config import DeploymentSettings, DlightragConfig
-    from dlightrag.rag.workspace_rag import WorkspaceRag
+    from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
     captured: dict[str, Any] = {}
 

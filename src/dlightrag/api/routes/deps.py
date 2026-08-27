@@ -18,7 +18,7 @@ from dlightrag.application.access import (
 )
 from dlightrag.application.config import get_config
 from dlightrag.application.settings import access_settings
-from dlightrag.rag.workspaces import normalize_workspace, normalize_workspace_ids
+from dlightrag.engine.rag.workspace.workspaces import normalize_workspace, normalize_workspace_ids
 
 
 def get_application(request: Request) -> Application:

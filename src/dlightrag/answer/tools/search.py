@@ -18,7 +18,7 @@ from dlightrag.answer.tools.web import (
     web_context_rows,
 )
 from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
-from dlightrag.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval import RetrievalResult
 
 KnowledgeRetrieval = Callable[[str], Awaitable[RetrievalResult]]
 WebSearch = Callable[[str], Awaitable[WebSearchResult]]

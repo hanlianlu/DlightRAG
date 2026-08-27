@@ -18,14 +18,14 @@ from dlightrag.adapters.postgres.corpus_bm25 import (
     rebuild_postgres_bm25,
     required_postgres_extensions,
 )
-from dlightrag.rag.retrieval import MetadataScope
-from dlightrag.rag.retrieval.bm25 import (
+from dlightrag.engine.rag.retrieval import MetadataScope
+from dlightrag.engine.rag.retrieval.bm25 import (
     BM25_PROFILE_FALLBACK,
     BM25Profile,
     ProfiledBM25Search,
     profiles_from_config,
 )
-from dlightrag.rag.retrieval.language import BM25LanguageClassifier
+from dlightrag.engine.rag.retrieval.language import BM25LanguageClassifier
 
 
 def _scope(*doc_ids: str, chunk_count: int = 12) -> MetadataScope:
@@ -441,7 +441,7 @@ async def test_bm25_search_logs_profile_routing_and_results(
         profiles=(BM25Profile(name="en", text_config="english", fallback=True),),
     )
 
-    with caplog.at_level(logging.INFO, logger="dlightrag.rag.retrieval.bm25"):
+    with caplog.at_level(logging.INFO, logger="dlightrag.engine.rag.retrieval.bm25"):
         await bm25.search("hello", scope=_scope("doc-a"))
 
     assert "[BM25] search" in caplog.text

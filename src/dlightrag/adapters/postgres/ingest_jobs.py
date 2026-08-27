@@ -6,7 +6,7 @@ from typing import Any
 
 from dlightrag.adapters.postgres._migrations import Migration, apply_migrations
 from dlightrag.adapters.postgres._operations import PostgresOperationRunner
-from dlightrag.rag.ports import (
+from dlightrag.engine.rag.corpus.ingest_jobs import (
     JOB_ABANDONED_ERROR,
     JOB_ORPHAN_AFTER_SECONDS,
     JOB_RETENTION_SECONDS,

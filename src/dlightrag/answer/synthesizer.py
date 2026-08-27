@@ -35,7 +35,7 @@ from dlightrag.engine.agent.context import ContextContribution, ContextProjector
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag.engine.ai.tokens import estimate_content_tokens, estimate_messages_tokens
-from dlightrag.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from dlightrag.adapters.postgres.corpus_chunks import PGCorpusChunkStore
-from dlightrag.rag.lightrag_stores import LightRAGStores
+from dlightrag.engine.rag.lightrag.stores import LightRAGStores
 
 
 class FakeLightRAG:

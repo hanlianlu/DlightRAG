@@ -418,7 +418,9 @@ async def test_cancel_ingest_job_uses_stored_canonical_workspace_and_returns_lat
 
 
 async def test_file_panel_and_source_download_do_not_warm_cold_runtime() -> None:
-    from dlightrag.rag.source_download import RedirectDownloadTarget as RagRedirectDownloadTarget
+    from dlightrag.engine.rag.corpus.downloads import (
+        RedirectDownloadTarget as RagRedirectDownloadTarget,
+    )
 
     admin, pool, _, jobs, file_panel, download = _admin()
     file_panel.list_processed_files.return_value = [{"doc_id": "doc-1"}]

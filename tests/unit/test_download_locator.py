@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.rag.sourcing.source_contract import (
+from dlightrag.engine.rag.corpus.sources.source_contract import (
     implicit_https_download_uri,
     local_source_uri,
     validate_download_uri,

@@ -137,6 +137,18 @@ from dlightrag.engine.ai.providers.base import is_provider_context_overflow
 from dlightrag.engine.ai.scheduler import model_call_scope
 from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.engine.ai.telemetry import Telemetry, safe_log_text
+from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
+from dlightrag.engine.rag.corpus.sources.url import (
+    afetch_public_https_bytes,
+    avalidate_public_https_url,
+)
+from dlightrag.engine.rag.retrieval import (
+    MetadataFilter,
+    RetrievalContexts,
+    RetrievalResult,
+)
+from dlightrag.engine.rag.workspace.lifecycle import defer_cancellation
+from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.runtime import (
     ANSWER_RUN_LEASE_SECONDS,
     LeaseLostError,
@@ -158,15 +170,6 @@ from dlightrag.engine.runtime.settlements import (
     OpaqueFetchedResourceWrite,
     WorkspaceInventoryUpdate,
 )
-from dlightrag.rag.lifecycle import defer_cancellation
-from dlightrag.rag.pool import WorkspacePool
-from dlightrag.rag.retrieval import (
-    MetadataFilter,
-    RetrievalContexts,
-    RetrievalResult,
-)
-from dlightrag.rag.sourcing.source_contract import safe_source_filename
-from dlightrag.rag.sourcing.url import afetch_public_https_bytes, avalidate_public_https_url
 
 logger = logging.getLogger(__name__)
 

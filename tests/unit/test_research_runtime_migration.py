@@ -25,8 +25,8 @@ from dlightrag.engine.agent.tools import (
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
-from dlightrag.rag.retrieval import RetrievalResult
 from tests.unit.conftest import answer_model_profile
 
 

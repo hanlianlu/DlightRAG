@@ -12,12 +12,12 @@ from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 from PIL import Image
 
-from dlightrag.rag.ingestion.document_embedding import (
+from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     DocumentEmbeddingInput,
     DocumentEmbeddingTrace,
     DocumentEmbeddingVector,
 )
-from dlightrag.rag.ingestion.engine import (
+from dlightrag.engine.rag.corpus.ingestion.engine import (
     PreparedIngestFile,
     UnifiedIngestionEngine,
     _prepare_ingest_item,
@@ -1338,7 +1338,7 @@ async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:
 async def test_reingest_hash_check_runs_off_event_loop(tmp_path: Path, monkeypatch) -> None:
     import asyncio
 
-    import dlightrag.rag.ingestion.engine as engine_module
+    import dlightrag.engine.rag.corpus.ingestion.engine as engine_module
 
     source = tmp_path / "sample[mineru-iteP].pdf"
     source.write_bytes(b"%PDF-1.4")

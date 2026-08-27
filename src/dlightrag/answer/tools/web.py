@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from dlightrag.rag.sourcing.url import normalize_https_url_identity
+from dlightrag.engine.rag.corpus.sources.url import normalize_https_url_identity
 
 logger = logging.getLogger(__name__)
 

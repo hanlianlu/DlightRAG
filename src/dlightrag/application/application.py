@@ -221,9 +221,11 @@ class Application:
 
     async def _warm_default_workspace(self) -> str | None:
         """Warm the default workspace; return the detail that degrades startup."""
-        from dlightrag.rag.ports import CorpusSchemaError
-        from dlightrag.rag.ports import CorpusUnavailableError as EngineCorpusUnavailableError
-        from dlightrag.rag.workspaces import normalize_workspace
+        from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
+        from dlightrag.engine.rag.workspace.ports import (
+            CorpusUnavailableError as EngineCorpusUnavailableError,
+        )
+        from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
         from .errors import StorageSchemaError
         from .retrieval import CorpusUnavailableError
@@ -331,7 +333,7 @@ class Application:
         An ordinary close failure is logged so later cleanup still runs, while
         cancellation is deferred and re-raised once nothing is left to close.
         """
-        from dlightrag.rag.lifecycle import await_shared_cleanup
+        from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup
 
         close_task = self._close_task
         if close_task is None:
@@ -343,7 +345,7 @@ class Application:
 
     async def _close_components(self) -> None:
         """Run the one shared shutdown sequence every close caller joins."""
-        from dlightrag.rag.lifecycle import defer_cancellation
+        from dlightrag.engine.rag.workspace.lifecycle import defer_cancellation
 
         components = self._components
         cancellation: asyncio.CancelledError | None = None

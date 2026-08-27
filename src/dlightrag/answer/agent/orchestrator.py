@@ -83,7 +83,7 @@ from dlightrag.engine.ai.capacity import (
 from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.ai.tokens import estimate_tokens
-from dlightrag.rag.retrieval import RetrievalContexts
+from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 logger = logging.getLogger(__name__)
 

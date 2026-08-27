@@ -59,6 +59,10 @@ from dlightrag.engine.ai.capacity import (
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
+from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalResult
+from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
+from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 from dlightrag.engine.runtime import (
     AnswerRunCancelledError,
     AnswerRunEvent,
@@ -73,10 +77,6 @@ from dlightrag.engine.runtime import (
     answer_run_request_fingerprint,
     artifact_digest,
 )
-from dlightrag.rag.retrieval import MetadataFilter, RetrievalResult
-from dlightrag.rag.retrieval.planner import RetrievalPlanner
-from dlightrag.rag.sourcing.source_contract import safe_source_filename
-from dlightrag.rag.workspaces import require_canonical_workspace_id
 
 #: Accepted input uploads, in the precedence one ordinal resolves against.
 _INPUT_REFERENCE_KINDS: tuple[ArtifactReferenceKind, ...] = (

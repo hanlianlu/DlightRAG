@@ -29,8 +29,8 @@ from dlightrag.engine.ai.settings import (
     ModelRole,
     ModelSettings,
 )
-from dlightrag.rag.settings import RagSettings
-from dlightrag.rag.workspaces import normalize_workspace
+from dlightrag.engine.rag.workspace.settings import RagSettings
+from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
 
 def access_settings(config: DlightragConfig) -> AccessSettings:

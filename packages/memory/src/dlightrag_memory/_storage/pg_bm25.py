@@ -3,7 +3,7 @@
 
 A faithful, narrow port of the corpus BM25 quality knobs (same extension,
 same k1/b, same textsearch configs) kept private to this package so the
-memory adapter never depends on dlightrag.rag. Two unconditional indexes —
+memory adapter never depends on dlightrag.engine.rag. Two unconditional indexes —
 ``simple`` and ``public.jiebacfg`` — serve one table; queries hit both and
 merge by best score, so Chinese and Latin bodies keep their tuned configs
 without a per-row language column.
