@@ -477,5 +477,4 @@ async def test_web_conversation_migration_creates_only_final_run_links() -> None
     assert {scope for scope, _ in conn.applied} == {"web_conversations"}
     assert conn.applied == {
         ("web_conversations", "0001_web_conversations"),
-        ("web_conversations", "0002_web_conversation_lineage"),
     }

@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS web_conversations (
     content_revision BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    forked_from_conversation_id UUID,
     PRIMARY KEY (principal_id, conversation_id),
     CHECK (title IS NULL OR char_length(title) BETWEEN 1 AND 120)
 )
@@ -111,6 +112,7 @@ _CREATE_TURN_INDEXES = (
     "ON web_conversation_turns (principal_id, answer_run_id)",
 )
 
+# One baseline. Fresh installs get the final table; there is no ALTER history.
 WEB_CONVERSATION_MIGRATIONS = (
     Migration(
         "0001_web_conversations",
@@ -120,14 +122,6 @@ WEB_CONVERSATION_MIGRATIONS = (
             _CREATE_TURNS,
             *_CREATE_CONVERSATION_INDEXES,
             *_CREATE_TURN_INDEXES,
-        ),
-    ),
-    Migration(
-        "0002_web_conversation_lineage",
-        "Record the conversation a fork branched from",
-        (
-            "ALTER TABLE web_conversations "
-            "ADD COLUMN IF NOT EXISTS forked_from_conversation_id UUID",
         ),
     ),
 )
@@ -144,6 +138,7 @@ WEB_CONVERSATION_SCHEMA_TABLES = (
             "content_revision",
             "created_at",
             "updated_at",
+            "forked_from_conversation_id",
         ),
         primary_key=("principal_id", "conversation_id"),
         indexes=(
