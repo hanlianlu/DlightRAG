@@ -138,6 +138,8 @@ def test_inspect_tool_schema_is_exact() -> None:
     assert not fields["locator"].is_required()
     assert not fields["cursor"].is_required()
     assert tools["inspect"].input_model.model_json_schema()["additionalProperties"] is False
+    assert "res-" in tools["inspect"].description
+    assert "local://" in tools["inspect"].description
 
 
 async def test_read_tool_returns_text_and_handles() -> None:

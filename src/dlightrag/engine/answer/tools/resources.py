@@ -40,21 +40,22 @@ from dlightrag.engine.answer.resources.visual import (
 )
 
 _INSPECT_DESCRIPTION = (
-    "Visually inspect a registered resource for evidence that text extraction cannot give "
-    "you: a source image, a PDF page, or an embedded figure by its visual handle. "
-    "Provide a focus describing exactly what to look for. Set locator to a PDF page "
-    "number or a visual handle id; omit it for a low-resolution PDF overview. Locator "
-    "and cursor are mutually exclusive. Use "
-    "cursor to page through an overview. The result is VLM-derived evidence tagged "
-    "derived_by_vlm with the exact page/sheet/cell/visual locator — treat it as "
-    "evidence to cite, never as the final answer."
+    "Visually inspect one request-local resource whose id starts with res-. "
+    "Never pass a filename, source_uri, or local:// corpus locator. "
+    "focus says what to look for. locator is a PDF page or visual handle; omit it "
+    "for a PDF overview. locator and cursor are mutually exclusive. "
+    "The result is VLM evidence tagged derived_by_vlm — cite it, do not treat it as "
+    "the final answer."
 )
 
 
 class _InspectResourceArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    resource_id: str = Field(min_length=1, description="Identifier of a registered resource.")
+    resource_id: str = Field(
+        min_length=1,
+        description="This turn's res- id from the registered list. Not a path or local:// URI.",
+    )
     focus: str = Field(min_length=1, description="What to look for in the visual content.")
     locator: str | None = Field(
         default=None,
