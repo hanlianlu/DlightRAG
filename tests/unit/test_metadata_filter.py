@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.api.models import MetadataFilterRequest
-from dlightrag.api.payloads import metadata_filter_from_payload
+from dlightrag.adapters.http.rest.models import MetadataFilterRequest
+from dlightrag.adapters.http.rest.payloads import metadata_filter_from_payload
 from dlightrag.engine.rag.retrieval import MetadataFilter
 
 

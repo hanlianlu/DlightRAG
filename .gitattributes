@@ -1,5 +1,5 @@
 # Committed build output and vendored third-party assets are large and minified.
 # Mark them so GitHub collapses their diffs and Linguist ignores them, and git
 # does not attempt line-level diffs/merges on them.
-src/dlightrag/web/static/generated/** linguist-generated -diff
-src/dlightrag/web/static/vendor/**    linguist-vendored  -diff
+src/dlightrag/adapters/http/browser/static/generated/** linguist-generated -diff
+src/dlightrag/adapters/http/browser/static/vendor/**    linguist-vendored  -diff

@@ -11,15 +11,15 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from dlightrag.application.config import DlightragConfig, WebIdentitySettings
-from dlightrag.web.auth import WebAuthMiddleware
-from dlightrag.web.edge_identity import (
+from dlightrag.adapters.http.browser.auth import WebAuthMiddleware
+from dlightrag.adapters.http.browser.edge_identity import (
     AwsEdgeProvider,
     AzureEasyAuthProvider,
     CloudflareAccessProvider,
     EdgeIdentityError,
     edge_identity_provider,
 )
+from dlightrag.application.config import DlightragConfig, WebIdentitySettings
 
 TEAM_ISSUER = "https://dlightrag-team.cloudflareaccess.com"
 AUD_TAG = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0"
@@ -74,7 +74,9 @@ def jwks(monkeypatch: pytest.MonkeyPatch, signing_key: rsa.RSAPrivateKey) -> Non
         def get_signing_key_from_jwt(self, raw_token: str):
             return SimpleNamespace(key=public_key)
 
-    monkeypatch.setattr("dlightrag.web.edge_identity._jwks_client", lambda _url: FakeJWKSClient())
+    monkeypatch.setattr(
+        "dlightrag.adapters.http.browser.edge_identity._jwks_client", lambda _url: FakeJWKSClient()
+    )
 
 
 def _settings(**overrides: object) -> WebIdentitySettings:

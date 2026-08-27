@@ -279,7 +279,7 @@ def _wheel_facts(
         has_py_typed = f"{expected_package}/py.typed" in wheel.namelist()
         has_frontend = _has_vite_frontend(
             set(wheel.namelist()),
-            prefix="dlightrag/web/static/app",
+            prefix="dlightrag/adapters/http/browser/static/app",
         )
         has_model_catalog = "dlightrag/engine/ai/model_catalog.json" in wheel.namelist()
         sources = (
@@ -561,7 +561,7 @@ def _sdist_facts(
         has_py_typed,
         _has_vite_frontend(
             frontend_members,
-            prefix="src/dlightrag/web/static/app",
+            prefix="src/dlightrag/adapters/http/browser/static/app",
         ),
         has_model_catalog,
     )
@@ -852,6 +852,7 @@ def _smoke_root_interfaces() -> None:
 
     import dlightrag
     from dlightrag import Application, create_application
+    from dlightrag.adapters.http.client import AnswerRunClient
     from dlightrag.application.access import DEPLOYMENT_OWNER_ID
     from dlightrag.application.config import AnswerSectionSettings, DlightragConfig, RuntimeConfig
     from dlightrag.application.corpus_admin import CorpusAdmin, CorpusAdminSettings, IngestSpec
@@ -877,7 +878,6 @@ def _smoke_root_interfaces() -> None:
         PipelineSettings,
     )
     from dlightrag.engine.runtime import answer_run_request_fingerprint
-    from dlightrag.sdk import AnswerRunClient
 
     class Planner:
         async def plan(self, query, **_kwargs):
@@ -1018,8 +1018,8 @@ def _smoke_root_interfaces() -> None:
     settings = rag_settings(config)
     if len(DEPLOYMENT_OWNER_ID) != 64:
         raise ValueError("installed Access package did not expose a SHA-256 owner id")
-    if AnswerRunClient.__module__ != "dlightrag.sdk.client":
-        raise ValueError("installed SDK did not expose the durable Answer client")
+    if AnswerRunClient.__module__ != "dlightrag.adapters.http.client.client":
+        raise ValueError("installed HTTP client did not expose the durable Answer client")
     if not all(
         hasattr(AnswerRunClient, name)
         for name in (
@@ -1033,7 +1033,7 @@ def _smoke_root_interfaces() -> None:
             "children",
         )
     ):
-        raise ValueError("installed SDK is missing the Agent 3.0 Answer controls")
+        raise ValueError("installed HTTP client is missing the Agent 3.0 Answer controls")
     if AgentSessionRuntime.__module__ != "dlightrag.engine.agent.session.runtime":
         raise ValueError("installed Agent kernel did not expose AgentSessionRuntime")
     answer_identities = {
@@ -1079,6 +1079,10 @@ def _smoke_root_interfaces() -> None:
         "dlightrag.maintenance",
         "dlightrag.observability",
         "dlightrag.adapters.mcp_tools",
+        "dlightrag.api",
+        "dlightrag.mcp",
+        "dlightrag.sdk",
+        "dlightrag.web",
         "dlightrag.services",
         "dlightrag.app_state",
         "dlightrag.contracts",

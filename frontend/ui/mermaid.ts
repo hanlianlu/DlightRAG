@@ -3,7 +3,7 @@
 import {sanitizeSvg} from '../lib/safe_html.ts';
 
 // Mermaid fences arrive as <pre class="mermaid-source">…escaped source…</pre>
-// (see src/dlightrag/web/markdown.py). Mermaid itself is imported lazily on the
+// (see src/dlightrag/adapters/http/browser/markdown.py). Mermaid itself is imported lazily on the
 // first diagram, so answers without diagrams never pay for the chunk. Each
 // completed source block is upgraded to an isolated <img> diagram; any failure
 // leaves the readable source in place.

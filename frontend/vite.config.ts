@@ -4,7 +4,7 @@ import {fileURLToPath} from 'url';
 import {readFileSync, writeFileSync} from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const outputDirectory = resolve(__dirname, '../src/dlightrag/web/static/app');
+const outputDirectory = resolve(__dirname, '../src/dlightrag/adapters/http/browser/static/app');
 
 function devWebPageFallback(): Plugin {
   return {

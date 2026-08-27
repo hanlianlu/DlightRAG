@@ -12,8 +12,8 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.api.auth import get_current_user
-from dlightrag.api.server import create_app
+from dlightrag.adapters.http.rest.auth import get_current_user
+from dlightrag.adapters.http.server import create_app
 from dlightrag.application.access import UserContext
 from dlightrag.application.config import DlightragConfig
 from dlightrag.engine.runtime import (
@@ -246,7 +246,7 @@ def _sse_frames(text: str) -> list[dict[str, str]]:
 
 
 def test_answer_request_has_no_stream_field() -> None:
-    from dlightrag.api.models import AnswerRequest
+    from dlightrag.adapters.http.rest.models import AnswerRequest
 
     assert "stream" not in AnswerRequest.model_fields
 
@@ -976,7 +976,7 @@ class TestAgentControls:
         run_application: _RunApplication,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.api.routes import answer_runs
+        from dlightrag.adapters.http.rest.routes import answer_runs
 
         run_application.record = _record(
             status="succeeded",

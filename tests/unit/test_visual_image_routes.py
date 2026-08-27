@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.api.auth import get_current_user
-from dlightrag.api.routes.images import router as api_images_router
+from dlightrag.adapters.http.browser.routes.images import router as web_images_router
+from dlightrag.adapters.http.rest.auth import get_current_user
+from dlightrag.adapters.http.rest.routes.images import router as api_images_router
 from dlightrag.application.access import AccessAction, UserContext
-from dlightrag.web.routes.images import router as web_images_router
 
 
 @dataclass(frozen=True)

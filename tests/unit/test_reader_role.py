@@ -364,7 +364,7 @@ async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_in
 
 
 async def test_reader_serves_web_routes() -> None:
-    from dlightrag.api.server import create_app
+    from dlightrag.adapters.http.server import create_app
     from dlightrag.application.config import loading as config_module
 
     original = config_module._config

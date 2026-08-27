@@ -26,9 +26,9 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from dlightrag.adapters.http.rest.auth import get_current_user
+from dlightrag.adapters.http.server import create_app
 from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
-from dlightrag.api.auth import get_current_user
-from dlightrag.api.server import create_app
 from dlightrag.application.access import UserContext, owner_id_from_user
 from dlightrag.application.answer_runs import AnswerService
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities, RequestModelContext

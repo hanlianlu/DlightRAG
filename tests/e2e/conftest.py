@@ -27,7 +27,12 @@ from uuid import uuid4
 import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
 
-from dlightrag.api.server import create_app
+from dlightrag.adapters.http.browser.conversation_models import ConversationHistory
+from dlightrag.adapters.http.browser.conversations import (
+    project_conversation_summary,
+    project_conversation_turn,
+)
+from dlightrag.adapters.http.server import create_app
 from dlightrag.application.answer_runs import AnswerInputArtifact
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
@@ -57,11 +62,6 @@ from dlightrag.engine.ai.settings import (
     ModelSettings,
 )
 from dlightrag.engine.runtime import AnswerRunEvent, AnswerRunRecord
-from dlightrag.web.conversation_models import ConversationHistory
-from dlightrag.web.conversations import (
-    project_conversation_summary,
-    project_conversation_turn,
-)
 from tests.config_helpers import mutate_config
 
 MOCK_WORKSPACES = [
@@ -633,7 +633,7 @@ def e2e_base_url(
     import uvicorn
 
     with patch(
-        "dlightrag.api.server.create_application",
+        "dlightrag.adapters.http.server.create_application",
         AsyncMock(return_value=application_double),
     ):
         app = create_app(include_web_app=True)

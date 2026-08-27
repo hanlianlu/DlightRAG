@@ -11,8 +11,8 @@ from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
 from PIL import Image
 
+from dlightrag.adapters.http.browser.attachment_requests import parse_web_answer_request
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
-from dlightrag.web.attachment_requests import parse_web_answer_request
 
 _IMAGE_MAX_BYTES = 15 * 1024 * 1024
 
@@ -222,7 +222,7 @@ async def test_parse_multipart_first_submission_allows_no_conversation() -> None
 async def test_parse_multipart_validates_attachments_off_event_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.web import attachment_requests
+    from dlightrag.adapters.http.browser import attachment_requests
 
     app = FastAPI()
     loop_thread = threading.get_ident()

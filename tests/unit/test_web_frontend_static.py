@@ -25,7 +25,9 @@ def _css_rule(path: Path, selector: str) -> str:
 
 
 def test_bootstrap_advertises_exact_backend_attachment_limits() -> None:
-    bootstrap_source = (ROOT / "src/dlightrag/web/routes/bootstrap.py").read_text(encoding="utf-8")
+    bootstrap_source = (ROOT / "src/dlightrag/adapters/http/browser/routes/bootstrap.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "count_limit=application.config.answer.generation.max_attachments" in bootstrap_source
     assert (
@@ -47,7 +49,9 @@ def test_frontend_submits_only_the_unified_attachments_part() -> None:
 def test_vite_html_has_no_external_script_or_unresolved_theme_placeholder() -> None:
     for name in ("index.html", "login.html"):
         source = (FRONTEND / name).read_text(encoding="utf-8")
-        built = (ROOT / "src/dlightrag/web/static/app" / name).read_text(encoding="utf-8")
+        built = (ROOT / "src/dlightrag/adapters/http/browser/static/app" / name).read_text(
+            encoding="utf-8"
+        )
         assert 'src="https://' not in source
         assert "__THEME_INIT__" not in built
         assert re.search(r'/static/app/assets/theme-init-[^"/]+\.js', built)
@@ -56,7 +60,9 @@ def test_vite_html_has_no_external_script_or_unresolved_theme_placeholder() -> N
 def test_web_shell_bootstraps_theme_preference_before_app_assets() -> None:
     index = (FRONTEND / "index.html").read_text(encoding="utf-8")
     theme = (FRONTEND / "theme-init.ts").read_text(encoding="utf-8")
-    built = (ROOT / "src/dlightrag/web/static/app/index.html").read_text(encoding="utf-8")
+    built = (ROOT / "src/dlightrag/adapters/http/browser/static/app/index.html").read_text(
+        encoding="utf-8"
+    )
 
     html_open = re.search(r"<html\b[^>]*>", index)
     assert html_open is not None
@@ -76,7 +82,7 @@ def test_web_shell_bootstraps_theme_preference_before_app_assets() -> None:
 
 
 def test_web_static_css_build_keeps_only_served_bundles() -> None:
-    static_root = ROOT / "src/dlightrag/web/static"
+    static_root = ROOT / "src/dlightrag/adapters/http/browser/static"
     assets = static_root / "app" / "assets"
 
     assert {path.name for path in static_root.glob("*.css")} == {"pygments.css"}
@@ -91,12 +97,14 @@ def test_pygments_css_matches_generator() -> None:
     generator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generator)
 
-    css = (ROOT / "src/dlightrag/web/static/pygments.css").read_text(encoding="utf-8")
+    css = (ROOT / "src/dlightrag/adapters/http/browser/static/pygments.css").read_text(
+        encoding="utf-8"
+    )
     assert generator.generate_css() == css
 
 
 def test_web_static_js_build_has_no_orphan_chunks() -> None:
-    app_root = ROOT / "src/dlightrag/web/static/app"
+    app_root = ROOT / "src/dlightrag/adapters/http/browser/static/app"
     assets = app_root / "assets"
     import_pattern = re.compile(
         r"""(?:import\(`\./([^`]+\.js)`\)|import\(["']\./([^"']+\.js)["']\)|from["']\./([^"']+\.js)["'])"""
@@ -139,8 +147,8 @@ def test_chat_message_bubbles_wrap_unbroken_queries() -> None:
 
 
 def _presentation_source(*, source_uri: str, download_url: str | None = None):
+    from dlightrag.adapters.http.browser.presentation import build_answer_presentation
     from dlightrag.application.answer_runs.citations import SourceReferencePayload
-    from dlightrag.web.presentation import build_answer_presentation
 
     source = SourceReferencePayload(
         id="1",
@@ -199,7 +207,7 @@ def test_presentation_rejects_non_public_provenance() -> None:
 
 
 def test_answer_presentation_uses_semantic_citations_and_no_legacy_paths() -> None:
-    from dlightrag.web.presentation import build_answer_presentation
+    from dlightrag.adapters.http.browser.presentation import build_answer_presentation
 
     presentation = build_answer_presentation(
         answer="Answer [1].",
@@ -218,7 +226,7 @@ def test_answer_presentation_uses_semantic_citations_and_no_legacy_paths() -> No
 
 
 def test_source_anchor_allowlist_rejects_unsafe_attributes_and_targets() -> None:
-    from dlightrag.web.safe_html import sanitize_html_fragment
+    from dlightrag.adapters.http.browser.safe_html import sanitize_html_fragment
 
     html = sanitize_html_fragment(
         '<a href="/web/api/files/raw/doc-notes" aria-label="Download source" '
@@ -294,14 +302,14 @@ def _declarations(body: str) -> dict[str, str]:
 
 
 def test_jinja_template_tree_is_deleted() -> None:
-    assert not (ROOT / "src/dlightrag/web/templates").exists()
+    assert not (ROOT / "src/dlightrag/adapters/http/browser/templates").exists()
 
 
 def test_production_web_sources_have_no_htmx_contract() -> None:
     sources = [
         *FRONTEND.rglob("*.ts"),
         *FRONTEND.rglob("*.html"),
-        *(ROOT / "src/dlightrag/web").rglob("*.py"),
+        *(ROOT / "src/dlightrag/adapters/http/browser").rglob("*.py"),
     ]
     for path in sources:
         if "node_modules" in path.parts:

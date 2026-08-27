@@ -4,7 +4,10 @@
 import logging
 from typing import Any, cast
 
-from dlightrag.api.middleware import install_request_id_log_record_factory, request_id_var
+from dlightrag.adapters.http.rest.middleware import (
+    install_request_id_log_record_factory,
+    request_id_var,
+)
 
 
 def test_request_id_log_record_factory_adds_default_request_id() -> None:

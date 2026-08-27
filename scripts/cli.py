@@ -44,16 +44,16 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from dlightrag.application.corpus_admin import ingest_kwargs_from_spec, ingest_spec_from_payload
-from dlightrag.sdk import (
+from dlightrag.adapters.http.client import (
     AnswerAttachmentUpload,
     AnswerResult,
     AnswerRunCancelledError,
     AnswerRunClient,
     AnswerRunFailedError,
 )
-from dlightrag.sdk import http as sdk_http
-from dlightrag.sdk.requests import query_image_blocks_from_urls
+from dlightrag.adapters.http.client import http as sdk_http
+from dlightrag.adapters.http.client.requests import query_image_blocks_from_urls
+from dlightrag.application.corpus_admin import ingest_kwargs_from_spec, ingest_spec_from_payload
 
 
 def _print_json(data: Any) -> None:

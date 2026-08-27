@@ -8,7 +8,7 @@ from collections.abc import Sequence
 import pytest
 from PIL import Image
 
-from dlightrag.web.attachment_models import (
+from dlightrag.adapters.http.browser.attachment_models import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
     ValidatedWebAttachment,
     classify_web_attachment,

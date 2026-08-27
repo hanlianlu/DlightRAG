@@ -43,7 +43,7 @@ _RUNTIME_RECORD_NAMES = frozenset(
 def test_sdk_and_runtime_import_without_composition_or_transports() -> None:
     script = """
 import sys
-import dlightrag.sdk.client
+import dlightrag.adapters.http.client.client
 import dlightrag.engine.runtime
 
 forbidden = (
@@ -53,9 +53,10 @@ forbidden = (
     "PIL",
     "dlightrag.adapters.postgres",
     "dlightrag.engine.answer",
-    "dlightrag.api",
-    "dlightrag.mcp",
-    "dlightrag.web",
+    "dlightrag.adapters.http.rest",
+    "dlightrag.adapters.http.server",
+    "dlightrag.adapters.mcp",
+    "dlightrag.adapters.http.browser",
 )
 loaded = sorted(
     name

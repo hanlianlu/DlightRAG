@@ -13,7 +13,7 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json frontend/
 RUN --mount=type=cache,target=/root/.npm npm --prefix frontend ci
 COPY frontend/ frontend/
-# Vite writes HTML and hashed assets into ../src/dlightrag/web/static/app, which the wheel picks up.
+# Vite writes HTML and hashed assets into ../src/dlightrag/adapters/http/browser/static/app, which the wheel picks up.
 RUN npm --prefix frontend run build
 
 FROM python:3.14-slim-bookworm AS builder
@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY LICENSE NOTICE README.md ./
 COPY packages/ packages/
 COPY src/ src/
-COPY --from=frontend /app/src/dlightrag/web/static/app/ src/dlightrag/web/static/app/
+COPY --from=frontend /app/src/dlightrag/adapters/http/browser/static/app/ src/dlightrag/adapters/http/browser/static/app/
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev --no-editable
 

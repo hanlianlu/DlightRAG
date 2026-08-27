@@ -1,6 +1,6 @@
 # Interfaces
 
-This page is for SDK, REST, MCP, and Web consumers. It owns request and response
+This page is for REST, MCP, Web, and in-process Application consumers. It owns request and response
 contracts for ingestion, jobs, retrieval, answers, contexts, sources, citations,
 and multimodal payloads. Security posture lives in [security.md](security.md);
 runtime retrieval behavior lives in [retrieval-answer.md](retrieval-answer.md);
@@ -10,7 +10,7 @@ configuration fields live in [configuration.md](configuration.md).
 
 | Interface | Primary use | Ingestion behavior |
 |---|---|---|
-| Python SDK | In-process applications | Foreground via `corpora.ingest`; background via `corpora.start_ingest_job` |
+| In-process Application | Embed DlightRAG in your own process | Foreground via `corpora.ingest`; background via `corpora.start_ingest_job` |
 | REST API | Web clients, services, and remote callers | Durable ingest jobs |
 | MCP Server | Agent tools over stdio or streamable HTTP | Durable ingest jobs |
 | Web UI | Browser upload and chat | Durable ingest jobs behind the Files panel |
@@ -19,8 +19,8 @@ Answer requests take one input contract on every channel: a query plus optional
 **attachments**. Attachments are files (images, PDFs, DOCX, PPTX, XLSX, HTML, CSV)
 or HTTPS references that become request-local resources read on demand for the
 lifetime of one answer. REST and MCP JSON bodies carry HTTPS link descriptors;
-REST multipart bodies additionally carry uploaded files; the Python SDK adds
-path/bytes/url conveniences; and the Web UI uploads the same files. Attachments
+REST multipart bodies additionally carry uploaded files; in-process Application
+adds path/bytes/url conveniences; and the Web UI uploads the same files. Attachments
 never become workspace documents, never enter LightRAG storage, BM25, vectors,
 or KG, and never appear on `/retrieve`. The separate `/retrieve` path keeps its
 own `query_images` current-image inputs for knowledge-base visual search.
@@ -35,7 +35,7 @@ Pick by **where the engine runs**, not by language preference:
   This is the common case.
 - **Engine runs inside your own process** (your application *is* the RAG service
   and owns its PostgreSQL, parser endpoint, and model providers): use the
-  **Python SDK** (`Application`). This is a power-user surface — the REST
+  **in-process Application**. This is a power-user surface — the REST
   and MCP servers are themselves built on it.
 
 ### Configuration is one-time; the runtime surface is small
@@ -348,8 +348,8 @@ LightRAG's document status and DlightRAG's content-hash guard.
 | Interface | `retrieve` | `answer` | Following a run |
 |---|---|---|---|
 | In-process Application | `application.retrieval.retrieve()` | `application.answers.answer()` | `application.answers.subscribe()` yields durable events |
-| Python SDK | — | `AnswerRunClient.answer()` waits for the result | `AnswerRunClient.events()` yields reconnectable durable events |
 | REST API | JSON object | HTTP 202 run descriptor | reconnectable SSE at `/answer/{run_id}/events` |
+| CLI / eval HTTP helper | — | waits for the REST result | reconnectable SSE via the internal HTTP client |
 | MCP Server | JSON text | descriptor-only, returns immediately | status, steer, follow-up, cancel, resume, fork, transcript, and child-roster tools |
 | Web UI | — | HTTP 202 run descriptor | rendered events plus applicable run/control/branch routes under `/web/api/answer/{run_id}` |
 | CLI (`scripts/cli.py`) | JSON object printed to stdout | Typed `parts` plus default `evidence_images` render as terminal text and image URL lines | follows the run, then falls back to status |
@@ -697,9 +697,8 @@ continuation = await application.answers.follow_up(
 )
 ```
 
-Remote Python callers use `AnswerRunClient`; its matching methods are `create`,
-`status`, `events`, `steer`, `follow_up`, `cancel`, `resume`, `fork`,
-`transcript`, and `children`.
+Remote callers use REST. The CLI and evaluation scripts reuse an internal HTTP
+client against those same routes; there is no public Python SDK package.
 
 **Parameters**:
 

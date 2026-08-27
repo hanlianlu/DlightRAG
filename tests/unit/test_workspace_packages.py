@@ -70,11 +70,21 @@ def _write_wheel(
             wheel.write(_REPO / "LICENSE", f"{dist_info}/licenses/LICENSE")
             wheel.write(_REPO / "NOTICE", f"{dist_info}/licenses/NOTICE")
         if include_frontend:
-            wheel.writestr(f"{package}/web/static/app/index.html", "<dl-app></dl-app>")
-            wheel.writestr(f"{package}/web/static/app/login.html", "<form></form>")
-            wheel.writestr(f"{package}/web/static/app/assets/style-test.css", "body {}")
-            wheel.writestr(f"{package}/web/static/app/assets/app-test.js", "export {}")
-            wheel.writestr(f"{package}/web/static/app/assets/theme-init-test.js", "")
+            wheel.writestr(
+                f"{package}/adapters/http/browser/static/app/index.html", "<dl-app></dl-app>"
+            )
+            wheel.writestr(
+                f"{package}/adapters/http/browser/static/app/login.html", "<form></form>"
+            )
+            wheel.writestr(
+                f"{package}/adapters/http/browser/static/app/assets/style-test.css", "body {}"
+            )
+            wheel.writestr(
+                f"{package}/adapters/http/browser/static/app/assets/app-test.js", "export {}"
+            )
+            wheel.writestr(
+                f"{package}/adapters/http/browser/static/app/assets/theme-init-test.js", ""
+            )
 
     sdist_root = f"{wheel_name}-{version}"
     packaged_source = source if sdist_source is None else sdist_source
@@ -97,11 +107,11 @@ def _write_wheel(
     if include_frontend:
         members.update(
             {
-                f"{sdist_root}/src/{package}/web/static/app/index.html": "<dl-app></dl-app>",
-                f"{sdist_root}/src/{package}/web/static/app/login.html": "<form></form>",
-                f"{sdist_root}/src/{package}/web/static/app/assets/style-test.css": "body {}",
-                f"{sdist_root}/src/{package}/web/static/app/assets/app-test.js": "export {}",
-                f"{sdist_root}/src/{package}/web/static/app/assets/theme-init-test.js": "",
+                f"{sdist_root}/src/{package}/adapters/http/browser/static/app/index.html": "<dl-app></dl-app>",
+                f"{sdist_root}/src/{package}/adapters/http/browser/static/app/login.html": "<form></form>",
+                f"{sdist_root}/src/{package}/adapters/http/browser/static/app/assets/style-test.css": "body {}",
+                f"{sdist_root}/src/{package}/adapters/http/browser/static/app/assets/app-test.js": "export {}",
+                f"{sdist_root}/src/{package}/adapters/http/browser/static/app/assets/theme-init-test.js": "",
             }
         )
     with tarfile.open(dist_dir / f"{wheel_name}-{version}.tar.gz", "w:gz") as sdist:

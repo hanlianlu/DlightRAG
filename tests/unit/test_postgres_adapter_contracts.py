@@ -65,7 +65,7 @@ def test_owner_modules_do_not_import_the_postgres_adapter() -> None:
         for path in root.rglob("*.py")
         if path not in _RAG_OFFLINE_REBUILD
     ]
-    owner_files.append(_ROOT / "src/dlightrag/api/routes/status.py")
+    owner_files.append(_ROOT / "src/dlightrag/adapters/http/rest/routes/status.py")
 
     offenders: list[Path] = []
     for path in owner_files:
@@ -132,7 +132,7 @@ def test_callers_take_web_records_from_the_application_owner() -> None:
         for node in ast.walk(tree):
             if not (
                 isinstance(node, ast.ImportFrom)
-                and node.module == "dlightrag.web.conversation_models"
+                and node.module == "dlightrag.adapters.http.browser.conversation_models"
             ):
                 continue
             offenders.extend(

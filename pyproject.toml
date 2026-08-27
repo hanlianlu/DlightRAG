@@ -94,8 +94,8 @@ Repository = "https://github.com/hanlianlu/dlightrag"
 Issues = "https://github.com/hanlianlu/dlightrag/issues"
 
 [project.scripts]
-dlightrag-mcp = "dlightrag.mcp.cli:main"
-dlightrag-api = "dlightrag.api.server:main"
+dlightrag-mcp = "dlightrag.adapters.mcp.cli:main"
+dlightrag-api = "dlightrag.adapters.http.server:main"
 dlightrag-rebuild-bm25 = "dlightrag.engine.rag.corpus.rebuild_bm25:main"
 dlightrag-rebuild-vdb = "dlightrag.engine.rag.corpus.rebuild_vdb:main"
 
@@ -112,11 +112,11 @@ dlightrag-memory = { workspace = true }
 [tool.hatch.build.targets.wheel]
 packages = ["src/dlightrag"]
 # Built by Vite and gitignored, so hatchling would otherwise leave the UI out.
-artifacts = ["src/dlightrag/web/static/app/**"]
+artifacts = ["src/dlightrag/adapters/http/browser/static/app/**"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/dlightrag", "README.md", "LICENSE", "NOTICE"]
-artifacts = ["src/dlightrag/web/static/app/**"]
+artifacts = ["src/dlightrag/adapters/http/browser/static/app/**"]
 
 [tool.ruff]
 target-version = "py314"
@@ -151,21 +151,21 @@ id = "ai-module-independence"
 name = "AI remains provider-neutral and independent of product modules"
 type = "forbidden"
 source_modules = ["dlightrag.engine.ai"]
-forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.adapters.observability", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag.sdk", "dlightrag.web", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.adapters.observability", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "agent-module-independence"
 name = "Agent may depend on AI but not product or RAG modules"
 type = "forbidden"
 source_modules = ["dlightrag.engine.agent"]
-forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.adapters.observability", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag.sdk", "dlightrag.web", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.answer", "dlightrag.adapters.observability", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "rag-module-independence"
 name = "RAG runtime remains storage-neutral and independent of product modules"
 type = "forbidden"
 source_modules = ["dlightrag.engine.rag"]
-forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.adapters.observability", "dlightrag.engine.runtime", "dlightrag.sdk", "dlightrag.web", "dlightrag_memory", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.adapters.observability", "dlightrag.engine.runtime", "dlightrag_memory", "asyncpg", "fastapi", "mcp"]
 ignore_imports = [
     "dlightrag.engine.rag.corpus.rebuild_bm25 -> dlightrag.adapters.postgres.core._pool",
     "dlightrag.engine.rag.corpus.rebuild_bm25 -> dlightrag.adapters.postgres.corpus.corpus",
@@ -184,14 +184,14 @@ id = "no-transport-internals"
 name = "Internal packages must not import transport layers"
 type = "forbidden"
 source_modules = ["dlightrag.engine.answer", "dlightrag.application", "dlightrag.adapters.observability"]
-forbidden_modules = ["dlightrag.web", "dlightrag.api", "dlightrag.mcp"]
+forbidden_modules = ["dlightrag.adapters.http", "dlightrag.adapters.mcp"]
 
 [[tool.importlinter.contracts]]
 id = "transport-corpus-implementation-direction"
 name = "Transports depend on Application Corpus Administration"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = ["dlightrag.api", "dlightrag.mcp", "dlightrag.web"]
+source_modules = ["dlightrag.adapters.http", "dlightrag.adapters.mcp"]
 forbidden_modules = ["dlightrag.engine.rag.workspace.pool", "dlightrag.engine.rag.workspace.ports", "dlightrag.engine.rag.corpus.ingest_jobs", "dlightrag.engine.rag.corpus.metadata_index", "dlightrag.engine.rag.retrieval.ports", "dlightrag.engine.rag.corpus.ingestion", "dlightrag.engine.rag.corpus.downloads", "dlightrag.engine.rag.retrieval.federation", "dlightrag.engine.rag.lightrag", "dlightrag.engine.rag.retrieval.rerank", "dlightrag.engine.rag.corpus.reset", "dlightrag.engine.rag.workspace.settings", "dlightrag.engine.rag.corpus.visual_assets", "dlightrag.engine.rag.workspace.workspace_rag"]
 
 [[tool.importlinter.contracts]]
@@ -199,50 +199,62 @@ id = "transports-not-engine-answer"
 name = "Inbound transports do not import Answer execution"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = ["dlightrag.api", "dlightrag.mcp", "dlightrag.web", "dlightrag.sdk"]
+source_modules = ["dlightrag.adapters.http", "dlightrag.adapters.mcp"]
 forbidden_modules = ["dlightrag.engine.answer"]
+
+[[tool.importlinter.contracts]]
+id = "inbound-transports-not-engine"
+name = "HTTP and MCP import Application, not Engine"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["dlightrag.adapters.http", "dlightrag.adapters.mcp"]
+forbidden_modules = ["dlightrag.engine"]
+ignore_imports = [
+    "dlightrag.adapters.mcp.outbound -> dlightrag.engine.agent.tools",
+]
 
 [[tool.importlinter.contracts]]
 id = "answer-independence"
 name = "Answer execution has no access, adapter, or transport dependencies"
 type = "forbidden"
 source_modules = ["dlightrag.engine.answer"]
-forbidden_modules = ["dlightrag.application.access", "dlightrag.adapters.postgres", "dlightrag.api", "dlightrag.mcp", "dlightrag.web", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application.access", "dlightrag.adapters.postgres", "dlightrag.adapters.http", "dlightrag.adapters.mcp", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "access-independence"
 name = "Access owns identity and authorization only"
 type = "forbidden"
 source_modules = ["dlightrag.application.access"]
-forbidden_modules = ["dlightrag.application.answer_runs", "dlightrag.application.config", "dlightrag.application.corpus_admin", "dlightrag.application.memory", "dlightrag.application.retrieval", "dlightrag.application.settings", "dlightrag.application.web_conversations", "dlightrag.adapters", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.engine.rag", "dlightrag.web", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application.answer_runs", "dlightrag.application.config", "dlightrag.application.corpus_admin", "dlightrag.application.memory", "dlightrag.application.retrieval", "dlightrag.application.settings", "dlightrag.application.web_conversations", "dlightrag.adapters", "dlightrag.engine.answer", "dlightrag.engine.rag", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
-id = "sdk-independence"
-name = "SDK owns HTTP client behavior"
+id = "http-client-independence"
+name = "Internal HTTP client stays a REST helper"
 type = "forbidden"
-source_modules = ["dlightrag.sdk"]
-forbidden_modules = ["dlightrag.adapters.postgres", "dlightrag.api", "dlightrag.mcp", "dlightrag.web", "dlightrag.engine.rag", "asyncpg", "fastapi", "mcp"]
+allow_indirect_imports = true
+source_modules = ["dlightrag.adapters.http.client"]
+forbidden_modules = ["dlightrag.adapters.postgres", "dlightrag.adapters.http.rest", "dlightrag.adapters.http.server", "dlightrag.adapters.http.browser", "dlightrag.adapters.mcp", "dlightrag.engine.rag", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "retrieval-service-independence"
 name = "Application Retrieval owns inline retrieval"
 type = "forbidden"
 source_modules = ["dlightrag.application.retrieval"]
-forbidden_modules = ["dlightrag.application.access", "dlightrag.application.config", "dlightrag.application.settings", "dlightrag.adapters", "dlightrag.api", "dlightrag.mcp", "dlightrag.web", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application.access", "dlightrag.application.config", "dlightrag.application.settings", "dlightrag.adapters", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "answer-service-independence"
 name = "Application Answer Runs owns durable run acceptance"
 type = "forbidden"
 source_modules = ["dlightrag.application.answer_runs"]
-forbidden_modules = ["dlightrag.application.access", "dlightrag.application.config", "dlightrag.application.settings", "dlightrag.adapters", "dlightrag.api", "dlightrag.mcp", "dlightrag.web", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application.access", "dlightrag.application.config", "dlightrag.application.settings", "dlightrag.adapters", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "postgres-adapter-owner-direction"
 name = "PostgreSQL adapters never import API or MCP"
 type = "forbidden"
 source_modules = ["dlightrag.adapters.postgres"]
-forbidden_modules = ["dlightrag.api", "dlightrag.mcp"]
+forbidden_modules = ["dlightrag.adapters.http", "dlightrag.adapters.mcp"]
 
 [[tool.importlinter.contracts]]
 id = "postgres-answer-not-web"
@@ -267,34 +279,34 @@ id = "runtime-independence"
 name = "Durable runtime remains storage and product-policy neutral"
 type = "forbidden"
 source_modules = ["dlightrag.engine.runtime"]
-forbidden_modules = ["dlightrag.application", "dlightrag.adapters.postgres", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.web", "dlightrag.engine.rag", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application", "dlightrag.adapters.postgres", "dlightrag.engine.answer", "dlightrag.adapters.http", "dlightrag.adapters.mcp", "dlightrag.engine.rag", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "corpus-admin-independence"
 name = "Corpus Administration remains composition and adapter neutral"
 type = "forbidden"
 source_modules = ["dlightrag.application.corpus_admin"]
-forbidden_modules = ["dlightrag.application.answer_runs", "dlightrag.application.config", "dlightrag.application.settings", "dlightrag.adapters", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.web", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application.answer_runs", "dlightrag.application.config", "dlightrag.application.settings", "dlightrag.adapters", "dlightrag.engine.answer", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "application-no-adapters-or-inbound-transports"
 name = "Application does not compose or import adapters and transports"
 type = "forbidden"
 source_modules = ["dlightrag.application"]
-forbidden_modules = ["dlightrag._compose", "dlightrag.adapters", "dlightrag.api", "dlightrag.mcp", "dlightrag.web"]
+forbidden_modules = ["dlightrag._compose", "dlightrag.adapters"]
 
 [[tool.importlinter.contracts]]
 id = "application-health-independence"
 name = "Application health remains composition and adapter neutral"
 type = "forbidden"
 source_modules = ["dlightrag.application.health"]
-forbidden_modules = ["dlightrag.application.answer_runs", "dlightrag.application.corpus_admin", "dlightrag.application.retrieval", "dlightrag.adapters", "dlightrag.api", "dlightrag.mcp", "dlightrag.web", "dlightrag.engine.rag", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application.answer_runs", "dlightrag.application.corpus_admin", "dlightrag.application.retrieval", "dlightrag.adapters", "dlightrag.engine.rag", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "status-route-health-only"
 name = "Status routes consume Application health"
 type = "forbidden"
-source_modules = ["dlightrag.api.routes.status"]
+source_modules = ["dlightrag.adapters.http.rest.routes.status"]
 forbidden_modules = ["dlightrag.engine.answer", "dlightrag.adapters.postgres"]
 
 [[tool.importlinter.contracts]]
@@ -308,7 +320,7 @@ forbidden_modules = ["dlightrag.application.settings", "dlightrag.application.an
 id = "transport-postgres-adapter-direction"
 name = "Transport owners do not import PostgreSQL implementations"
 type = "forbidden"
-source_modules = ["dlightrag.api", "dlightrag.web", "dlightrag.mcp"]
+source_modules = ["dlightrag.adapters.http", "dlightrag.adapters.mcp"]
 forbidden_modules = ["dlightrag.adapters.postgres"]
 allow_indirect_imports = true
 

@@ -17,11 +17,11 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-import dlightrag.api.routes.answer_runs as rest_routes
-import dlightrag.web.answer_events as web_events
-import dlightrag.web.routes.chat as web_routes
-from dlightrag.api import answer_stream
-from dlightrag.api.answer_stream import follow_run_frames, resume_cursor
+import dlightrag.adapters.http.browser.answer_events as web_events
+import dlightrag.adapters.http.browser.routes.chat as web_routes
+import dlightrag.adapters.http.rest.routes.answer_runs as rest_routes
+from dlightrag.adapters.http.streaming import answer_stream
+from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames, resume_cursor
 from dlightrag.engine.runtime import AnswerRunEvent
 from tests.unit.web.answer_run_fixtures import stored_result
 

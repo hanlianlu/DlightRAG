@@ -14,8 +14,8 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, Response
 
-from dlightrag.api.auth import get_current_user
-from dlightrag.api.server import create_app
+from dlightrag.adapters.http.rest.auth import get_current_user
+from dlightrag.adapters.http.server import create_app
 from dlightrag.application import ApplicationClosedError
 from dlightrag.application.access import AuthenticationError, UserContext, authenticate_bearer_token
 from dlightrag.application.access import authentication as authentication_module
@@ -1005,7 +1005,7 @@ class TestIngestEndpoint:
         mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.api.routes import rag as rag_routes
+        from dlightrag.adapters.http.rest.routes import rag as rag_routes
 
         app.state.application = mock_application
         job = {
@@ -2162,7 +2162,7 @@ class TestMetadataAPI:
 def _echo_length_app(max_bytes: int) -> FastAPI:
     from starlette.requests import Request
 
-    from dlightrag.api.middleware import RequestBodyLimitMiddleware
+    from dlightrag.adapters.http.rest.middleware import RequestBodyLimitMiddleware
 
     application = FastAPI()
 
@@ -2476,7 +2476,7 @@ async def test_a_route_that_rejects_an_oversized_upload_is_not_reported_as_an_au
 
 
 def test_body_limit_split_preserves_non_limit_exception_group_members() -> None:
-    from dlightrag.api.middleware import _RequestBodyTooLarge, _split_body_too_large
+    from dlightrag.adapters.http.rest.middleware import _RequestBodyTooLarge, _split_body_too_large
 
     matched, remainder = _split_body_too_large(
         ExceptionGroup(
@@ -2494,7 +2494,7 @@ def test_body_limit_split_preserves_non_limit_exception_group_members() -> None:
 
 
 def test_body_limit_strips_root_path_only_at_segment_boundary() -> None:
-    from dlightrag.api.middleware import _request_path
+    from dlightrag.adapters.http.rest.middleware import _request_path
 
     assert _request_path({"path": "/answer", "root_path": "/a"}) == "/answer"
     assert _request_path({"path": "/api/answer", "root_path": "/api"}) == "/answer"

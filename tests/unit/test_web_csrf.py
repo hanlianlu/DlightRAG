@@ -7,8 +7,8 @@ import jwt
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from dlightrag.adapters.http.browser.auth import WEB_CSRF_COOKIE, WebAuthMiddleware
 from dlightrag.application.config import DlightragConfig
-from dlightrag.web.auth import WEB_CSRF_COOKIE, WebAuthMiddleware
 
 
 def _bearer(cfg: DlightragConfig) -> str:

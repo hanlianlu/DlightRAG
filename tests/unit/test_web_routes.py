@@ -11,10 +11,10 @@ import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.api.server import create_app
+from dlightrag.adapters.http.browser.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
+from dlightrag.adapters.http.server import create_app
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
 from dlightrag.application.config import DlightragConfig
-from dlightrag.web.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
 
@@ -115,7 +115,7 @@ async def client(web_app):
 async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.api import server as api_server
+    from dlightrag.adapters.http import server as api_server
 
     application_double = AsyncMock()
     conversation_service = AsyncMock()
@@ -136,7 +136,7 @@ async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
 
 
 async def test_vite_hashed_assets_are_immutable(client):
-    from dlightrag.web.static_files import APP_DIR
+    from dlightrag.adapters.http.browser.static_files import APP_DIR
 
     asset = next((APP_DIR / "assets").glob("app-*.js"))
     response = await client.get(f"/static/app/assets/{asset.name}")
@@ -987,8 +987,8 @@ class TestSourcePresentation:
     """Tests for structured source presentation contracts."""
 
     def test_page_number_and_download_are_projected(self) -> None:
+        from dlightrag.adapters.http.browser.presentation import build_answer_presentation
         from dlightrag.application.answer_runs.citations import ChunkSnippet, SourceReferencePayload
-        from dlightrag.web.presentation import build_answer_presentation
 
         presentation = build_answer_presentation(
             answer="Answer [1].",

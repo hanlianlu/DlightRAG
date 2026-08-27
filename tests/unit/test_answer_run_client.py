@@ -9,8 +9,8 @@ from typing import Any
 import httpx
 import pytest
 
-import dlightrag.sdk.client as client_module
-from dlightrag.sdk import (
+import dlightrag.adapters.http.client.client as client_module
+from dlightrag.adapters.http.client import (
     EVENT_READ_IDLE_SECONDS,
     MAX_RECONNECT_ATTEMPTS,
     AnswerArtifact,
@@ -18,7 +18,6 @@ from dlightrag.sdk import (
     AnswerRunCancelledError,
     AnswerRunClient,
     AnswerRunFailedError,
-    SyncAnswerRunClient,
     parse_sse_frames,
 )
 
@@ -473,18 +472,3 @@ async def test_async_sdk_lists_typed_artifacts_and_reads_bounded_bytes() -> None
     assert artifact.uri.startswith("dlightrag://answer/")
     assert data == b"notes"
     assert seen_range == "bytes=2-6"
-
-
-def test_sync_sdk_has_symmetric_artifact_helpers() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/artifacts"):
-            return httpx.Response(200, json={"artifacts": [_ARTIFACT_PAYLOAD]})
-        return httpx.Response(206, content=b"notes")
-
-    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://rag.test") as http:
-        runs = SyncAnswerRunClient(http)
-        (artifact,) = runs.list_artifacts("run-1")
-        data = runs.read_artifact("run-1", artifact.resource_id, length=5)
-
-    assert isinstance(artifact, AnswerArtifact)
-    assert data == b"notes"

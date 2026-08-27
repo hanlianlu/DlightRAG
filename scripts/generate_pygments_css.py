@@ -2,7 +2,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Generate deterministic Pygments CSS for the web frontend.
 
-Prints the full contents of src/dlightrag/web/static/pygments.css to stdout.
+Prints the full contents of src/dlightrag/adapters/http/browser/static/pygments.css to stdout.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import re
 
 from pygments.formatters import HtmlFormatter
 
-TARGET_PATH = "src/dlightrag/web/static/pygments.css"
+TARGET_PATH = "src/dlightrag/adapters/http/browser/static/pygments.css"
 REGEN_COMMAND = f"uv run scripts/generate_pygments_css.py > {TARGET_PATH}"
 
 STYLE_VARIANTS: tuple[tuple[str, str, str], ...] = (

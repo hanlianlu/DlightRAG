@@ -12,6 +12,7 @@ import pytest
 from mcp import Client, MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, InputRequiredResult, TextContent
 
+from dlightrag.adapters.mcp import server as mcp_server
 from dlightrag.application.access import (
     RequestScope,
     owner_id_from_principal,
@@ -25,7 +26,6 @@ from dlightrag.application.config import (
 from dlightrag.application.corpus_admin import IngestSpec
 from dlightrag.application.retrieval import RetrieveResponse as ServiceResponse
 from dlightrag.engine.runtime import AnswerRunRecord
-from dlightrag.mcp import server as mcp_server
 from tests.config_helpers import mutate_config, replace_config
 from tests.unit.conftest import answer_capability_view
 

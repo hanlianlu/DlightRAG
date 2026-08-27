@@ -4,7 +4,7 @@
 [![CI](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml/badge.svg)](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
 
-DlightRAG is a production-ready multimodal RAG service built on LightRAG. It offers superior context intelligence, great accuracy with citation / highlight grounding, and unified interfaces for REST, Web, MCP, and Python SDK clients. It is designed for developers, seasoned users and teams who need a reliable RAG core service with cutting edge features integrated into their workflows and products.
+DlightRAG is a production-ready multimodal RAG service built on LightRAG. It offers superior context intelligence, great accuracy with citation / highlight grounding, and unified interfaces for REST, Web, MCP, and in-process Application. It is designed for developers, seasoned users and teams who need a reliable RAG core service with cutting edge features integrated into their workflows and products.
 
 Status: Python 3.14. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
 
@@ -282,7 +282,7 @@ curl "http://localhost:8100/answer/$RUN"             # status + canonical result
 All SDK, REST, MCP, Web contracts and response shapes are in
 [docs/interfaces.md](docs/interfaces.md).
 
-### Python SDK
+### In-process Application
 
 ```bash
 uv add dlightrag
@@ -477,7 +477,7 @@ make frontend-ci  # install, typecheck, CSS lint, Node + browser tests, build, a
 
 For an individual check, run its script under `frontend/` (`typecheck`, `test`,
 `test:browser`, `build`, or `lint:css`). `npm run build` writes Vite-owned HTML
-and hashed browser assets to `src/dlightrag/web/static/app/`. For HMR, run
+and hashed browser assets to `src/dlightrag/adapters/http/browser/static/app/`. For HMR, run
 `npm run dev`; the Vite server proxies authenticated browser APIs and support
 assets to FastAPI on `127.0.0.1:8100`.
 That directory is gitignored and rebuilt by `make ci`; the wheel and source

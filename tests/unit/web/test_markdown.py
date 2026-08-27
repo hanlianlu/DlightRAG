@@ -2,14 +2,14 @@
 
 
 def test_render_markdown_bold():
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     result = render_markdown("**bold text**")
     assert "<strong>bold text</strong>" in result
 
 
 def test_render_markdown_gfm_table():
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     md = "| A | B |\n|---|---|\n| 1 | 2 |"
     result = render_markdown(md)
@@ -19,7 +19,7 @@ def test_render_markdown_gfm_table():
 
 
 def test_render_markdown_fenced_code_highlighted():
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     md = "```python\nprint('hello')\n```"
     result = render_markdown(md)
@@ -29,7 +29,7 @@ def test_render_markdown_fenced_code_highlighted():
 
 
 def test_render_markdown_no_double_pre_wrapping():
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     result = render_markdown("```python\nx = 1\n```")
     # Should not have double <pre> wrapping
@@ -37,7 +37,7 @@ def test_render_markdown_no_double_pre_wrapping():
 
 
 def test_render_markdown_fenced_code_unknown_lang():
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     md = "```unknownlang\nfoo bar\n```"
     result = render_markdown(md)
@@ -47,7 +47,7 @@ def test_render_markdown_fenced_code_unknown_lang():
 
 
 def test_render_markdown_fenced_code_no_lang():
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     md = "```\nplain code\n```"
     result = render_markdown(md)
@@ -57,7 +57,7 @@ def test_render_markdown_fenced_code_no_lang():
 
 def test_render_markdown_mermaid_fence_marked():
     """A mermaid fence is emitted as a marked source block for client upgrade."""
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     result = render_markdown("```mermaid\ngraph TD\n  A-->B\n```")
     assert 'class="mermaid-source"' in result
@@ -67,7 +67,7 @@ def test_render_markdown_mermaid_fence_marked():
 
 def test_render_markdown_mermaid_source_escaped():
     """Markup inside a mermaid fence stays escaped (no HTML smuggling)."""
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     result = render_markdown('```mermaid\ngraph TD\n  A["<script>alert(1)</script>"]\n```')
     assert "<script>" not in result
@@ -77,7 +77,7 @@ def test_render_markdown_mermaid_source_escaped():
 
 def test_mermaid_marker_survives_nh3():
     """The mermaid marker must survive server-side nh3 sanitization."""
-    from dlightrag.web.presentation import build_answer_presentation
+    from dlightrag.adapters.http.browser.presentation import build_answer_presentation
 
     result = (
         build_answer_presentation(
@@ -92,7 +92,7 @@ def test_mermaid_marker_survives_nh3():
 
 
 def test_render_markdown_inline_code():
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     result = render_markdown("use `foo()` here")
     assert "<code>foo()</code>" in result
@@ -100,14 +100,14 @@ def test_render_markdown_inline_code():
 
 def test_render_markdown_latex_passthrough():
     """Dollar-sign math should pass through as literal text (MathJax handles client-side)."""
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     result = render_markdown("The formula $E=mc^2$ is famous.")
     assert "$E=mc^2$" in result
 
 
 def test_render_markdown_display_latex_passthrough():
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     result = render_markdown("$$\\sum_{i=1}^n x_i$$")
     assert "$$" in result
@@ -115,7 +115,7 @@ def test_render_markdown_display_latex_passthrough():
 
 def test_render_markdown_xss_script_escaped():
     """Raw HTML <script> must be escaped, not passed through."""
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     result = render_markdown("<script>alert('xss')</script>")
     assert "<script>" not in result
@@ -123,7 +123,7 @@ def test_render_markdown_xss_script_escaped():
 
 
 def test_render_markdown_lists():
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     md = "- item 1\n- item 2\n"
     result = render_markdown(md)
@@ -132,7 +132,7 @@ def test_render_markdown_lists():
 
 
 def test_reference_label_helpers_are_shared_across_citation_surfaces():
-    from dlightrag.web.presentation import _reference_aria_label, _reference_label
+    from dlightrag.adapters.http.browser.presentation import _reference_aria_label, _reference_label
 
     assert _reference_label("1") == "1"
     assert _reference_label("1", "2") == "1-2"
@@ -142,7 +142,7 @@ def test_reference_label_helpers_are_shared_across_citation_surfaces():
 
 def test_citation_badges_basic():
     """[1-2] in plain text becomes a citation badge."""
-    from dlightrag.web.presentation import render_answer_html
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     result = render_answer_html("See [1-2] for details.")
     assert 'class="citation-badge"' in result
@@ -155,7 +155,7 @@ def test_citation_badges_basic():
 
 def test_citation_badges_doc_level():
     """[3] doc-level citation becomes a badge."""
-    from dlightrag.web.presentation import render_answer_html
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     result = render_answer_html("See [3] for details.")
     assert 'class="citation-badge"' in result
@@ -167,7 +167,7 @@ def test_citation_badges_doc_level():
 
 def test_citation_badges_in_inline_code_skipped():
     """[1-2] inside inline code must NOT become a badge."""
-    from dlightrag.web.presentation import render_answer_html
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     result = render_answer_html("Use `array[1-2]` in code.")
     # The [1-2] is inside <code>, should not be a badge
@@ -177,7 +177,7 @@ def test_citation_badges_in_inline_code_skipped():
 
 def test_citation_badges_in_fenced_code_skipped():
     """[1-2] inside fenced code must NOT become a badge."""
-    from dlightrag.web.presentation import render_answer_html
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     md = "```\narray[1-2] = value\n```\n\nSee [1-2] for info."
     result = render_answer_html(md)
@@ -187,7 +187,7 @@ def test_citation_badges_in_fenced_code_skipped():
 
 def test_citation_badges_in_table():
     """[1-2] in a table cell should become a badge."""
-    from dlightrag.web.presentation import render_answer_html
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     md = "| Source | Note |\n|---|---|\n| [1-2] | data |"
     result = render_answer_html(md)
@@ -196,7 +196,7 @@ def test_citation_badges_in_table():
 
 def test_citation_badges_markdown_rendering():
     """Verify markdown is actually rendered (not just escaped)."""
-    from dlightrag.web.presentation import render_answer_html
+    from dlightrag.adapters.http.browser.presentation import render_answer_html
 
     result = render_answer_html("**bold** text [1-1]")
     assert "<strong>bold</strong>" in result
@@ -205,7 +205,7 @@ def test_citation_badges_markdown_rendering():
 
 def test_render_chunk_content_html_table_passthrough():
     """HTML tables in chunk content should pass through (not be escaped)."""
-    from dlightrag.web.markdown import render_chunk_content
+    from dlightrag.adapters.http.browser.markdown import render_chunk_content
 
     html = "<table><tr><th>Name</th></tr><tr><td>Alice</td></tr></table>"
     result = render_chunk_content(html)
@@ -215,7 +215,7 @@ def test_render_chunk_content_html_table_passthrough():
 
 def test_render_chunk_content_markdown_formatting():
     """Markdown formatting in chunk content should be rendered."""
-    from dlightrag.web.markdown import render_chunk_content
+    from dlightrag.adapters.http.browser.markdown import render_chunk_content
 
     result = render_chunk_content("**bold** and *italic*")
     assert "<strong>bold</strong>" in result
@@ -224,7 +224,7 @@ def test_render_chunk_content_markdown_formatting():
 
 def test_render_chunk_content_mixed_html_and_markdown():
     """Chunk with both markdown text and HTML table."""
-    from dlightrag.web.markdown import render_chunk_content
+    from dlightrag.adapters.http.browser.markdown import render_chunk_content
 
     content = "## Summary\n\nKey findings:\n\n<table><tr><td>Revenue</td><td>$1M</td></tr></table>"
     result = render_chunk_content(content)
@@ -235,7 +235,7 @@ def test_render_chunk_content_mixed_html_and_markdown():
 
 def test_render_markdown_still_escapes_html():
     """Existing render_markdown must still escape HTML (answer safety)."""
-    from dlightrag.web.markdown import render_markdown
+    from dlightrag.adapters.http.browser.markdown import render_markdown
 
     result = render_markdown("<table><tr><td>test</td></tr></table>")
     assert "<table>" not in result
@@ -244,7 +244,7 @@ def test_render_markdown_still_escapes_html():
 
 def test_highlight_content_renders_html_table():
     """HTML table in chunk content should render, not show raw tags."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     html = "<table><tr><td>Support</td><td>Zoe</td></tr></table>"
     result = render_source_chunk_html(html)
@@ -255,7 +255,7 @@ def test_highlight_content_renders_html_table():
 
 def test_highlight_content_xss_stripped():
     """Script tags must be stripped by nh3 sanitization."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     result = render_source_chunk_html('<script>alert("xss")</script>Normal text')
     assert "<script>" not in result
@@ -264,7 +264,7 @@ def test_highlight_content_xss_stripped():
 
 def test_highlight_content_phrase_in_table():
     """Highlight phrase inside a table cell should work."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     html = "<table><tr><td>Revenue grew 15%</td></tr></table>"
     result = render_source_chunk_html(html, ["Revenue grew 15%"])
@@ -274,7 +274,7 @@ def test_highlight_content_phrase_in_table():
 
 def test_highlight_content_phrase_skips_tag_attrs():
     """Highlight should not match text inside HTML tag attributes."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     html = '<a href="class-info">class info link</a>'
     result = render_source_chunk_html(html, ["class info"])
@@ -284,7 +284,7 @@ def test_highlight_content_phrase_skips_tag_attrs():
 
 def test_highlight_content_plain_text():
     """Plain text (no HTML, no markdown) still renders correctly."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     result = render_source_chunk_html("Just a simple text chunk.")
     assert "Just a simple text chunk." in result
@@ -292,7 +292,7 @@ def test_highlight_content_plain_text():
 
 def test_highlight_content_markdown_formatting():
     """Markdown in chunk content should be rendered."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     result = render_source_chunk_html("**bold** text")
     assert "<strong>bold</strong>" in result
@@ -300,7 +300,7 @@ def test_highlight_content_markdown_formatting():
 
 def test_highlight_content_phrase_with_quotes():
     """Apostrophes and double quotes must not defeat phrase matching."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     result = render_source_chunk_html("The company's revenue rose.", ["company's revenue"])
     assert '<span class="highlight">company\'s revenue</span>' in result
@@ -308,7 +308,7 @@ def test_highlight_content_phrase_with_quotes():
 
 def test_highlight_content_phrase_with_escaped_entity():
     """Phrases containing characters that render as entities still match."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     result = render_source_chunk_html("Total was 5 < 10 always", ["5 < 10"])
     assert '<span class="highlight">5 &lt; 10</span>' in result
@@ -316,7 +316,7 @@ def test_highlight_content_phrase_with_escaped_entity():
 
 def test_highlight_content_overlapping_phrases_not_nested():
     """Overlapping phrases must not produce nested highlight spans."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     result = render_source_chunk_html("Revenue grew 15% last year", ["Revenue grew", "grew 15%"])
     assert result.count('<span class="highlight">') == 1
@@ -324,7 +324,7 @@ def test_highlight_content_overlapping_phrases_not_nested():
 
 def test_highlight_content_phrase_carrying_markdown_syntax():
     """Phrases quoted verbatim from raw Markdown still match the rendered text."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     emphasis = render_source_chunk_html("**Revenue** grew 15% in 2024", ["**Revenue** grew 15%"])
     assert '<strong><span class="highlight">Revenue</span></strong>' in emphasis
@@ -345,7 +345,7 @@ def test_highlight_content_phrase_carrying_markdown_syntax():
 
 def test_highlight_content_phrase_inside_code_span():
     """A phrase crossing a code span keeps the identifier intact."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     result = render_source_chunk_html("Use the `render_chunk` helper", ["`render_chunk` helper"])
     assert '<code><span class="highlight">render_chunk</span></code>' in result
@@ -353,7 +353,7 @@ def test_highlight_content_phrase_inside_code_span():
 
 def test_highlight_content_anchors_the_cited_occurrence():
     """Positional anchoring highlights the occurrence the phrase came from."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     result = render_source_chunk_html("cost 5%. Later the cost 5% again.", ["cost 5%"])
     assert result.startswith('<p><span class="highlight">cost 5%</span>. Later')
@@ -361,7 +361,7 @@ def test_highlight_content_anchors_the_cited_occurrence():
 
 def test_highlight_content_ignores_phrase_only_present_in_markup():
     """A phrase that resolves to non-visible source text must not be highlighted."""
-    from dlightrag.web.presentation import render_source_chunk_html
+    from dlightrag.adapters.http.browser.presentation import render_source_chunk_html
 
     result = render_source_chunk_html("See [report](https://example.com/q3) now", ["example.com"])
     assert 'class="highlight"' not in result
@@ -369,7 +369,7 @@ def test_highlight_content_ignores_phrase_only_present_in_markup():
 
 def test_markdown_after_a_one_line_table_still_renders():
     """CommonMark ends an HTML block at a blank line, and parsers emit neither."""
-    from dlightrag.web.markdown import render_chunk_content
+    from dlightrag.adapters.http.browser.markdown import render_chunk_content
 
     content = "<table><tr><td>Name</td></tr></table>\n**Answer:** " + "\\_" * 4
     result = render_chunk_content(content)
@@ -381,7 +381,7 @@ def test_markdown_after_a_one_line_table_still_renders():
 
 
 def test_chunk_without_a_block_tag_is_untouched():
-    from dlightrag.web.markdown import separate_html_blocks
+    from dlightrag.adapters.http.browser.markdown import separate_html_blocks
 
     content = "**Bold** line\n<equation>x = 1</equation>\n<sup>2</sup> trailing"
 
@@ -389,7 +389,7 @@ def test_chunk_without_a_block_tag_is_untouched():
 
 
 def test_a_table_already_followed_by_a_blank_line_is_untouched():
-    from dlightrag.web.markdown import separate_html_blocks
+    from dlightrag.adapters.http.browser.markdown import separate_html_blocks
 
     content = "<table><tr><td>a</td></tr></table>\n\n**After**"
 
@@ -398,7 +398,7 @@ def test_a_table_already_followed_by_a_blank_line_is_untouched():
 
 def test_bold_pseudo_items_each_keep_their_line():
     """Bold is inline, so a parser numbering items as **1.** merges them all."""
-    from dlightrag.web.markdown import render_chunk_content
+    from dlightrag.adapters.http.browser.markdown import render_chunk_content
 
     result = render_chunk_content("**1.** first\n**Answer:** ____\n**2.** second")
 
@@ -408,7 +408,10 @@ def test_bold_pseudo_items_each_keep_their_line():
 
 def test_a_real_list_is_left_for_markdown_to_break():
     """Inserting breaks into a list Markdown already understands loosens it."""
-    from dlightrag.web.markdown import normalize_chunk_source, render_chunk_content
+    from dlightrag.adapters.http.browser.markdown import (
+        normalize_chunk_source,
+        render_chunk_content,
+    )
 
     for source in ("1. one\n2. two", "- alpha\n- beta", "## Heading\nBody"):
         assert normalize_chunk_source(source) == source
@@ -417,7 +420,7 @@ def test_a_real_list_is_left_for_markdown_to_break():
 
 
 def test_a_wrapped_sentence_is_not_broken():
-    from dlightrag.web.markdown import normalize_chunk_source
+    from dlightrag.adapters.http.browser.markdown import normalize_chunk_source
 
     prose = "output fell gradually from\n1978 to 2007"
 
@@ -425,7 +428,7 @@ def test_a_wrapped_sentence_is_not_broken():
 
 
 def test_a_highlight_never_cuts_a_formula_in_half():
-    from dlightrag.web.markdown import inject_highlights, render_chunk_content
+    from dlightrag.adapters.http.browser.markdown import inject_highlights, render_chunk_content
 
     body = "i _ {t} = i ^ {*} + a (\\pi_ {t} - \\pi^ {*})"
     source = f"Taylor argued the bank should use this rule:\n$$\n{body}\n$$\nwhere a is positive."
@@ -439,7 +442,7 @@ def test_a_highlight_never_cuts_a_formula_in_half():
 
 
 def test_a_highlight_outside_a_formula_still_marks_only_itself():
-    from dlightrag.web.markdown import inject_highlights, render_chunk_content
+    from dlightrag.adapters.http.browser.markdown import inject_highlights, render_chunk_content
 
     source = "The rule matters.\n$$\nx = y\n$$\nIt was named after Taylor."
     html = render_chunk_content(source)

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title description">
   <title id="title">DlightRAG compile-time module dependencies</title>
-  <desc id="description">Current product and adapter modules may import Engine Answer, RAG, Runtime, and Memory. Engine Answer may import AI, Agent, RAG, and Runtime. Agent may import AI. RAG may import AI and the external LightRAG package. Runtime and Memory remain independent of Answer policy and storage implementations.</desc>
+  <desc id="description">Inbound HTTP and MCP adapters import Application, not Engine. Application may import Engine Answer, RAG, Runtime, and Memory. Engine Answer may import AI, Agent, RAG, and Runtime. Agent may import AI. RAG may import AI and the external LightRAG package. Runtime and Memory remain independent of Answer policy and storage implementations.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
@@ -40,8 +40,8 @@
 
   <rect class="product" x="80" y="105" width="1120" height="110" rx="18"/>
   <text class="node-title" x="640" y="145" text-anchor="middle">Current product and adapter modules</text>
-  <text class="node-copy" x="640" y="175" text-anchor="middle">application use cases · api / web / mcp · PostgreSQL and Observability adapters</text>
-  <text class="node-copy" x="640" y="198" text-anchor="middle">Private composition wires owner interfaces; unfinished adapter moves remain in later milestones.</text>
+  <text class="node-copy" x="640" y="175" text-anchor="middle">application use cases · adapters.http · adapters.mcp · PostgreSQL and Observability</text>
+  <text class="node-copy" x="640" y="198" text-anchor="middle">Inbound HTTP and MCP call Application; private composition wires adapters.</text>
 
   <rect class="module" x="450" y="265" width="380" height="100" rx="14"/>
   <text class="node-title" x="640" y="304" text-anchor="middle">dlightrag.engine.answer</text>
@@ -88,5 +88,5 @@
   <path class="edge" d="M 400 540 V 625"/>
   <path class="edge" d="M 480 540 V 590 H 620 V 625"/>
 
-  <text class="note" x="910" y="685" text-anchor="middle">Import-linter enforces the landed Engine direction; M5–M7 remain pending.</text>
+  <text class="note" x="910" y="685" text-anchor="middle">Import-linter enforces the landed direction; M7 is the docs/closure audit.</text>
 </svg>

@@ -11,7 +11,7 @@ import asyncpg
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.api.server import create_app
+from dlightrag.adapters.http.server import create_app
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.web_conversations import ConversationSnapshot
 from tests.config_helpers import mutate_config
@@ -488,7 +488,7 @@ async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailabi
 def test_browser_contracts_forbid_extra_fields_and_normalize_titles() -> None:
     from pydantic import ValidationError
 
-    from dlightrag.web.conversation_models import RenameConversationRequest
+    from dlightrag.adapters.http.browser.conversation_models import RenameConversationRequest
 
     request = RenameConversationRequest(title="  Quarterly\n review  ")
 

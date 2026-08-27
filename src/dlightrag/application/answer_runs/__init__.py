@@ -10,7 +10,17 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = [
+from dlightrag.engine.runtime import (
+    AnswerRunCancelledError,
+    AnswerRunEvent,
+    AnswerRunFailedError,
+    AnswerRunPhase,
+    AnswerRunRecord,
+    AnswerRunStatus,
+    IdempotencyKeyConflict,
+)
+
+_SERVICE_EXPORTS = {
     "AgentControlReceipt",
     "AgentTranscriptTail",
     "AnswerHistoryResource",
@@ -19,11 +29,29 @@ __all__ = [
     "AnswerRunAcceptor",
     "AnswerRuntimeUnavailableError",
     "AnswerService",
+}
+
+__all__ = [
+    "AgentControlReceipt",
+    "AgentTranscriptTail",
+    "AnswerHistoryResource",
+    "AnswerInputArtifact",
+    "AnswerRequest",
+    "AnswerRunAcceptor",
+    "AnswerRunCancelledError",
+    "AnswerRunEvent",
+    "AnswerRunFailedError",
+    "AnswerRunPhase",
+    "AnswerRunRecord",
+    "AnswerRunStatus",
+    "AnswerRuntimeUnavailableError",
+    "AnswerService",
+    "IdempotencyKeyConflict",
 ]
 
 
 def __getattr__(name: str) -> Any:
-    if name in __all__:
+    if name in _SERVICE_EXPORTS:
         from .service import (
             AgentControlReceipt,
             AgentTranscriptTail,

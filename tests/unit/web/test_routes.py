@@ -10,7 +10,7 @@ from tests.unit.conftest import answer_capability_view
 
 @pytest.fixture()
 def app(test_config):
-    from dlightrag.api.server import create_app
+    from dlightrag.adapters.http.server import create_app
 
     assert test_config is not None
     real_app = create_app(include_web_app=True)

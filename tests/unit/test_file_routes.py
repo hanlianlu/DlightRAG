@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.api.server import create_app
+from dlightrag.adapters.http.server import create_app
 from dlightrag.application.access import AccessDeniedError
 from dlightrag.application.config import DlightragConfig, set_config
 from dlightrag.application.corpus_admin import (
@@ -172,7 +172,7 @@ async def test_download_authorization_precedes_metadata_lookup(
     set_config(config)
     application_double = AsyncMock()
     application_double.config = config
-    with caplog.at_level(logging.INFO, logger="dlightrag.api.routes.files"):
+    with caplog.at_level(logging.INFO, logger="dlightrag.adapters.http.rest.routes.files"):
         app = create_app(include_web_app=False)
         app.state.application = application_double
         app.state.access_control = DenyFinanceWorkspace()

@@ -18,8 +18,8 @@ paths:
   - scripts
 
 paths-ignore:
-  - src/dlightrag/web/static/generated/**
-  - src/dlightrag/web/static/vendor/**
+  - src/dlightrag/adapters/http/browser/static/generated/**
+  - src/dlightrag/adapters/http/browser/static/vendor/**
   - frontend/node_modules/**
   - dist/**
   - output/**

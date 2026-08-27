@@ -998,7 +998,7 @@ access:
 See security.md for the per-edge credential shapes and the required
 `jwks_url` on `aws`.
 
-The Python SDK and CLI resolve their HTTP target from `DLIGHTRAG_API_URL` and an
+The CLI and evaluation HTTP helper resolve their target from `DLIGHTRAG_API_URL` and an
 optional bearer from `DLIGHTRAG_API_TOKEN` (or the deployment-only
 `DLIGHTRAG_ACCESS__API_TOKEN`). `DLIGHTRAG_CLIENT_TIMEOUT` bounds one caller-owned
 HTTP request and defaults to 120 seconds. It is independent of the server's

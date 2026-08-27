@@ -4,7 +4,8 @@
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
+from dlightrag.adapters.http.rest.models import AnswerRequest, RetrievalResponse, RetrieveRequest
+from dlightrag.adapters.mcp.contracts import AnswerInput, RetrieveInput
 from dlightrag.application.answer_runs.citations import SourceReference, SourceReferencePayload
 from dlightrag.application.answer_runs.client_contracts import (
     MAX_HISTORY_CONTENT_CHARS,
@@ -19,7 +20,6 @@ from dlightrag.application.corpus_admin import (
     ingest_spec_from_payload,
 )
 from dlightrag.engine.rag.corpus.contracts import IngestDocument
-from dlightrag.mcp.contracts import AnswerInput, RetrieveInput
 
 
 def test_per_interface_current_image_admission() -> None:
@@ -349,7 +349,7 @@ def test_non_url_ingest_rejects_download_uri_fields_before_manifest_returns(
 
 
 def test_retrieve_request_accepts_bm25_query() -> None:
-    from dlightrag.api.models import RetrieveRequest
+    from dlightrag.adapters.http.rest.models import RetrieveRequest
 
     body = RetrieveRequest(query="q", bm25_query="alpha beta")
 
@@ -360,14 +360,14 @@ def test_retrieve_request_rejects_overlong_bm25_query() -> None:
     import pytest
     from pydantic import ValidationError
 
-    from dlightrag.api.models import RetrieveRequest
+    from dlightrag.adapters.http.rest.models import RetrieveRequest
 
     with pytest.raises(ValidationError):
         RetrieveRequest(query="q", bm25_query="x" * 2000)
 
 
 def test_retrieve_input_accepts_bm25_query() -> None:
-    from dlightrag.mcp.contracts import RetrieveInput
+    from dlightrag.adapters.mcp.contracts import RetrieveInput
 
     args = RetrieveInput(query="q", bm25_query="alpha beta")
 

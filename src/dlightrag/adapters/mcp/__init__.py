@@ -1,2 +1,2 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Outbound MCP client adapter."""
+"""Inbound MCP server and outbound MCP tool client."""

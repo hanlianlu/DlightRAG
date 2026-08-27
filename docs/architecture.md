@@ -88,7 +88,7 @@ and the temporary Answer resource path never invokes them.
 
 Every answer runs through one `AnswerOrchestrator`. Public callers attach files
 and HTTPS references as **answer attachments**; the same contract is used by
-REST, the Python SDK, MCP, and the Web UI. Attachments become request-local
+REST, MCP, the Web UI, and in-process Application. Attachments become request-local
 resources for the lifetime of one answer and are never promoted into a
 workspace, LightRAG storage, or a durable cache:
 
@@ -198,7 +198,7 @@ cannot be read directly. A missing key removes both capabilities.
 
 ## Durable Answer Runs
 
-Every answer — REST, MCP, Web, Python SDK, CLI, and evaluation — is one durable
+Every answer — REST, MCP, Web, in-process Application, CLI, and evaluation — is one durable
 run with one identifier and one lifecycle owned by PostgreSQL. `POST /answer`
 validates, persists, and returns HTTP 202; the run outlives its creating request,
 and a disconnected client only detaches.
@@ -440,7 +440,7 @@ module at a higher layer may import from lower layers, but lower layers must not
 import higher ones.
 
 ```text
-L6  api, mcp, web                                         inbound transports
+L6  adapters.http, adapters.mcp                           inbound transports
 L5  application                                           config, access, health, use cases
 L4  engine.answer                                         Answer execution policy
 L3  engine.rag.workspace                                  corpus runtime ownership
@@ -460,7 +460,7 @@ LightRAG, PostgreSQL, or transport modules; Agent may use AI but not
 product/RAG/storage/transport code; RAG may use AI and LightRAG APIs but cannot
 import product, Agent, PostgreSQL, or transport modules; and Answer cannot
 import access, PostgreSQL, or inbound transports. Existing root contracts continue to
-keep `api`/`mcp`/`web` out of internal modules, order the foundation and core
+keep `adapters.http`/`adapters.mcp` out of internal modules, order the foundation and core
 coordination stacks, keep Runtime free of Answer/RAG/storage/transport code,
 make status routes depend only on `ApplicationHealth`, and separate resources
 from model-visible tool adapters.

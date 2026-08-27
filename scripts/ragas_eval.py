@@ -34,8 +34,12 @@ from dotenv import load_dotenv
 from lightrag.evaluation.eval_rag_quality import RAGEvaluator
 from lightrag.utils import logger
 
+from dlightrag.adapters.http.client import (
+    AnswerRunCancelledError,
+    AnswerRunClient,
+    AnswerRunFailedError,
+)
 from dlightrag.engine.ai.settings import ModelSettings
-from dlightrag.sdk import AnswerRunCancelledError, AnswerRunClient, AnswerRunFailedError
 
 
 class EvalError(RuntimeError):

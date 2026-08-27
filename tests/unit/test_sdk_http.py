@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Behavioral contract for SDK HTTP configuration."""
 
-from dlightrag.sdk.http import auth_token, client_timeout
+from dlightrag.adapters.http.client.http import auth_token, client_timeout
 
 
 def test_client_timeout_reads_only_dlightrag_client_timeout(
