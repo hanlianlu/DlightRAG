@@ -485,9 +485,9 @@ Answer attachments are read as request-local resources; they are never parsed
 into workspace documents, never written to LightRAG `full_docs`, `doc_status`,
 chunks, vectors, BM25, LLM cache, or KG rows, and never enter `/retrieve`. A
 request-local `ResourceRegistry` owns every resource for the lifetime of one
-answer: inline bytes stay in memory, HTTPS links are fetched lazily and
-revalidated on every live read (HTTPS-only, SSRF guard, per/total byte and pixel
-limits). Fetched bytes settled on an effect already passed that gate and are
+answer: inline bytes stay in memory, public HTTP(S) links are fetched lazily and
+revalidated on every live read (http or https, no scheme rewrite, no
+https-to-http downgrade, SSRF guard, per/total byte and pixel limits). Fetched bytes settled on an effect already passed that gate and are
 replayed from the Blob store without another network request. Full bytes never enter model
 context — only bounded text windows, capped observations, and budgeted image
 blocks do.

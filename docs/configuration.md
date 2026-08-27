@@ -549,10 +549,10 @@ local file or redirects through a supported provider locator. Azure uses
 `DLIGHTRAG_CORPUS__SOURCES__BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential chain
 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS config).
-REST/MCP `source_type="url"` accepts public or signed HTTPS URLs only, does not
-follow redirects to private hosts, and caps each download with
+REST/MCP `source_type="url"` accepts public HTTP or HTTPS URLs, does not rewrite
+schemes, does not follow HTTPS to HTTP or redirects to private hosts, and caps each download with
 `corpus.ingestion.url_max_bytes`. SaaS APIs that require auth headers must stage content
-through a supported local, Azure Blob, or S3 source, or expose a public HTTPS
+through a supported local, Azure Blob, or S3 source, or expose a public HTTP(S)
 fetch URL. `source_uri`/`source_uris` set stable identity; they do not substitute
 for the durable locator required by a non-retained signed fetch.
 Set `corpus.ingestion.url_private_host_allowlist` only for trusted enterprise hosts that

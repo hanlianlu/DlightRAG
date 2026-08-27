@@ -62,7 +62,7 @@ def test_from_bytes_builds_and_bounds() -> None:
         )
 
 
-def test_from_url_validates_https_and_builds() -> None:
+def test_from_url_validates_http_and_builds() -> None:
     attachment = AnswerAttachment.from_url("https://example.com/report.pdf", filename="report.pdf")
     [resource] = resource_inputs_from_attachments([attachment])
 
@@ -70,5 +70,9 @@ def test_from_url_validates_https_and_builds() -> None:
     assert resource.filename == "report.pdf"
     assert resource.content is None
 
+    http_attachment = AnswerAttachment.from_url("http://example.com/report.pdf")
+    [http_resource] = resource_inputs_from_attachments([http_attachment])
+    assert http_resource.url == "http://example.com/report.pdf"
+
     with pytest.raises(ValueError):
-        AnswerAttachment.from_url("http://example.com/report.pdf")
+        AnswerAttachment.from_url("ftp://example.com/report.pdf")

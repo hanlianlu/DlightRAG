@@ -68,11 +68,11 @@ class QueryImage(ClientContractModel):
 
 
 class AnswerAttachmentLink(ClientContractModel):
-    """HTTPS-only reference to an answer attachment resolved on explicit read.
+    """Public HTTP(S) reference to an answer attachment resolved on explicit read.
 
     Discovered links are inert handles; full scheme/credential/host validation is
-    repeated when the resource is actually read. Only ``https`` is admitted and
-    embedded credentials are rejected.
+    repeated when the resource is actually read. Only ``http`` and ``https`` are
+    admitted and embedded credentials are rejected. Identity is not rewritten.
     """
 
     url: str
@@ -80,10 +80,10 @@ class AnswerAttachmentLink(ClientContractModel):
 
     @field_validator("url")
     @classmethod
-    def _validate_https_url(cls, value: str) -> str:
+    def _validate_http_url(cls, value: str) -> str:
         parsed = urlsplit(value)
-        if parsed.scheme != "https":
-            raise ValueError("attachment url must use HTTPS")
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("attachment url must use HTTP or HTTPS")
         if not parsed.hostname:
             raise ValueError("attachment url must include a host")
         if parsed.username or parsed.password:

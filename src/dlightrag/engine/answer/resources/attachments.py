@@ -2,7 +2,7 @@
 """Caller-facing answer-attachment conveniences and their ResourceInput adapter.
 
 ``AnswerAttachment`` is a convenience for Python SDK callers. Its adapter opens
-local paths, bounds inline bytes, and validates HTTPS links before producing the
+local paths, bounds inline bytes, and validates HTTP(S) links before producing the
 transport-neutral :class:`ResourceInput`. A caller path is read immediately and
 never travels into a ``ResourceInput`` (or the model): only the basename
 survives as a display filename.
@@ -20,7 +20,7 @@ _DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 
 @dataclass(frozen=True, slots=True)
 class AnswerAttachment:
-    """One SDK answer attachment: a local path, inline bytes, or an HTTPS link.
+    """One SDK answer attachment: a local path, inline bytes, or an HTTP(S) link.
 
     Constructed only through :meth:`from_path`, :meth:`from_bytes`, or
     :meth:`from_url`; the adapter normalizes it into a :class:`ResourceInput`.
@@ -57,7 +57,7 @@ class AnswerAttachment:
         filename: str | None = None,
         declared_mime: str | None = None,
     ) -> AnswerAttachment:
-        """Attach an inert HTTPS link, validated for scheme and credentials now."""
+        """Attach an inert HTTP(S) link, validated for scheme and credentials now."""
         AnswerAttachmentLink(url=url, filename=filename)
         return cls(filename=filename, url=url, declared_mime=declared_mime)
 

@@ -103,11 +103,13 @@ def test_public_retrieval_response_has_no_session_image_ids() -> None:
     assert "current_image_ids" not in RetrievalResponse.model_fields
 
 
-def test_answer_links_are_https_only() -> None:
-    link = AnswerAttachmentLink(url="https://example.com/report.pdf")
-    assert link.filename is None
+def test_answer_links_accept_http_and_https() -> None:
+    https_link = AnswerAttachmentLink(url="https://example.com/report.pdf")
+    http_link = AnswerAttachmentLink(url="http://example.com/report.pdf")
+    assert https_link.filename is None
+    assert http_link.url == "http://example.com/report.pdf"
     with pytest.raises(ValidationError):
-        AnswerAttachmentLink(url="http://example.com/report.pdf")
+        AnswerAttachmentLink(url="ftp://example.com/report.pdf")
 
 
 def test_answer_links_reject_embedded_credentials() -> None:
@@ -148,8 +150,13 @@ def test_answer_contracts_accept_attachment_links(model) -> None:
     assert parsed.attachments is not None
     assert parsed.attachments[0].url == "https://example.com/report.pdf"
     assert parsed.attachments[0].filename == "report.pdf"
+    http_parsed = model.model_validate(
+        {"query": "q", "attachments": [{"url": "http://example.com/x.pdf"}]}
+    )
+    assert http_parsed.attachments is not None
+    assert http_parsed.attachments[0].url == "http://example.com/x.pdf"
     with pytest.raises(ValidationError):
-        model.model_validate({"query": "q", "attachments": [{"url": "http://example.com/x.pdf"}]})
+        model.model_validate({"query": "q", "attachments": [{"url": "ftp://example.com/x.pdf"}]})
 
 
 @pytest.mark.parametrize("model", [AnswerRequest, AnswerInput])

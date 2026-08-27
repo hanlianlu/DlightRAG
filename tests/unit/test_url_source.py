@@ -301,12 +301,21 @@ async def test_url_data_source_enforces_download_size_limit(tmp_path: Path) -> N
     assert not (tmp_path / "report.pdf").exists()
 
 
-def test_url_data_source_rejects_insecure_or_private_urls() -> None:
-    with pytest.raises(ValueError, match="https"):
-        URLDataSource(urls=["http://example.com/report.pdf"], client=_Client())
+def test_url_data_source_accepts_public_http_urls() -> None:
+    source = URLDataSource(urls=["http://example.com/report.pdf"], client=_Client())
+
+    assert source.source_uri_for_key("report.pdf") == "http://example.com/report.pdf"
+
+
+def test_url_data_source_rejects_non_http_or_private_urls() -> None:
+    with pytest.raises(ValueError, match="http or https"):
+        URLDataSource(urls=["ftp://example.com/report.pdf"], client=_Client())
 
     with pytest.raises(ValueError, match="public"):
         URLDataSource(urls=["https://127.0.0.1/report.pdf"], client=_Client())
+
+    with pytest.raises(ValueError, match="public"):
+        URLDataSource(urls=["http://127.0.0.1/report.pdf"], client=_Client())
 
 
 def test_url_data_source_rejects_hostname_that_resolves_private(
@@ -367,10 +376,14 @@ async def test_url_data_source_keeps_allowlisted_private_fetch_url_out_of_downlo
     assert document.download_uri is None
 
 
-def test_parse_remote_uri_treats_https_as_url_source() -> None:
+def test_parse_remote_uri_treats_http_and_https_as_url_source() -> None:
     assert parse_remote_uri("https://api.bynder.com/docs/getting-started") == (
         "url",
         {"url": "https://api.bynder.com/docs/getting-started"},
+    )
+    assert parse_remote_uri("http://api.bynder.com/docs/getting-started") == (
+        "url",
+        {"url": "http://api.bynder.com/docs/getting-started"},
     )
 
 
@@ -411,10 +424,50 @@ async def test_afetch_public_https_bytes_follows_and_revalidates_redirects() -> 
     ]
 
 
-async def test_afetch_public_https_bytes_rejects_non_https() -> None:
-    with pytest.raises(ValueError, match="https"):
+async def test_afetch_public_https_bytes_fetches_public_http() -> None:
+    client = _Client(content=b"hello http", final_url="http://cdn.example.com/report.txt")
+
+    data = await afetch_public_https_bytes(
+        "http://cdn.example.com/report.txt", max_bytes=1024, client=client
+    )
+
+    assert data == b"hello http"
+    assert client.urls == ["http://cdn.example.com/report.txt"]
+
+
+async def test_afetch_public_https_bytes_rejects_non_http_schemes() -> None:
+    with pytest.raises(ValueError, match="http or https"):
         await afetch_public_https_bytes(
-            "http://cdn.example.com/report.txt", max_bytes=1024, client=_Client()
+            "ftp://cdn.example.com/report.txt", max_bytes=1024, client=_Client()
+        )
+
+
+async def test_afetch_public_https_bytes_follows_http_to_https() -> None:
+    client = _RedirectClient(
+        "http://cdn.example.com/start.txt",
+        "https://cdn.example.com/final.txt",
+    )
+
+    data = await afetch_public_https_bytes(
+        "http://cdn.example.com/start.txt", max_bytes=1024, client=client
+    )
+
+    assert data == b"final body"
+    assert client.urls == [
+        "http://cdn.example.com/start.txt",
+        "https://cdn.example.com/final.txt",
+    ]
+
+
+async def test_afetch_public_https_bytes_rejects_https_to_http_downgrade() -> None:
+    with pytest.raises(ValueError, match="downgrade"):
+        await afetch_public_https_bytes(
+            "https://cdn.example.com/start.txt",
+            max_bytes=1024,
+            client=_RedirectClient(
+                "https://cdn.example.com/start.txt",
+                "http://cdn.example.com/final.txt",
+            ),
         )
 
 

@@ -29,11 +29,13 @@ logger = logging.getLogger(__name__)
 
 
 class URLDataSource(AsyncDataSource):
-    """Download public HTTPS documents by URL.
+    """Download public HTTP(S) documents by URL.
 
     This adapter is intentionally small: it supports signed/public URLs for
     REST/MCP ingestion. Sources that need auth headers or custom pagination must
-    stage content through a supported local, Azure Blob, or S3 source.
+    stage content through a supported local, Azure Blob, or S3 source. Private
+    hosts stay denied unless ``allow_private_hosts`` names them; HTTPS responses
+    cannot redirect to HTTP.
     """
 
     def __init__(
@@ -259,8 +261,9 @@ def _static_url_checks(
 ) -> tuple[str, int] | None:
     """Apply every non-DNS check; return the host/port still needing resolution."""
     parsed = urlparse(raw_url)
-    if parsed.scheme.lower() != "https":
-        raise ValueError("url ingestion only accepts https URLs")
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError("url fetch only accepts http or https URLs")
     if not parsed.hostname:
         raise ValueError("url ingestion requires a hostname")
     if parsed.username or parsed.password:
@@ -275,7 +278,7 @@ def _static_url_checks(
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        return (host, parsed.port or 443)
+        return (host, parsed.port or (80 if scheme == "http" else 443))
     if not ip.is_global:
         raise ValueError("url ingestion requires a public host")
     return None
@@ -294,6 +297,10 @@ def _validate_resolved_public_host(host: str, port: int) -> None:
             raise ValueError("url ingestion requires a public host")
 
 
+def _url_scheme(url: str) -> str:
+    return urlparse(url).scheme.lower()
+
+
 async def _redirect_target(
     current_url: str,
     response: Any,
@@ -304,8 +311,11 @@ async def _redirect_target(
     location = headers.get("location") or headers.get("Location")
     if not location:
         raise ValueError("url redirect is missing Location header")
+    target = urljoin(current_url, str(location))
+    if _url_scheme(current_url) == "https" and _url_scheme(target) == "http":
+        raise ValueError("url redirect cannot downgrade https to http")
     return await _avalidate_public_https_url(
-        urljoin(current_url, str(location)),
+        target,
         allow_private_hosts=allow_private_hosts,
     )
 
@@ -317,10 +327,11 @@ async def _follow_and_consume[T](
     allow_private_hosts: frozenset[str],
     consume: Callable[[Any], Awaitable[T]],
 ) -> T:
-    """Follow bounded HTTPS redirects, revalidate each hop, then consume the body.
+    """Follow bounded HTTP(S) redirects, revalidate each hop, then consume the body.
 
     The single redirect/validation loop is the sole place DNS, scheme, redirect,
-    and public-host checks are applied so callers cannot weaken them.
+    and public-host checks are applied so callers cannot weaken them. HTTPS hops
+    cannot downgrade to HTTP.
     """
     current_url = url
     for _ in range(_MAX_REDIRECTS + 1):
@@ -349,13 +360,14 @@ async def afetch_public_https_bytes(
     client: Any | None = None,
     allow_private_hosts: Sequence[str] | None = None,
 ) -> bytes:
-    """Fetch a public HTTPS URL into memory under the same SSRF and size checks.
+    """Fetch a public HTTP(S) URL into memory under the same SSRF and size checks.
 
     Applies the identical scheme/credential/public-host/DNS/redirect/byte-limit
     validation used for ingestion downloads, but returns bounded bytes instead of
     streaming to disk. ``max_bytes`` caps the accumulated body; the fetch aborts
     as soon as the limit is exceeded. DNS validation remains enabled when a
     caller injects an HTTP client; transport ownership never weakens SSRF policy.
+    HTTP stays HTTP; HTTPS cannot redirect to HTTP.
     """
     patterns = _normalize_host_patterns(allow_private_hosts or ())
     owns_client = client is None
@@ -425,18 +437,19 @@ def _document_key_from_url(
 
 
 def validate_public_https_url(raw_url: str, *, resolve_host: bool = False) -> str:
-    """Return *raw_url* if it is a safe public HTTPS URL, else raise ``ValueError``.
+    """Return *raw_url* if it is a safe public HTTP or HTTPS URL, else raise ``ValueError``.
 
-    Rejects non-HTTPS schemes, embedded credentials, and localhost/``.local``/
-    private/non-global IP-literal hosts. With ``resolve_host=True`` the hostname
-    is additionally resolved and every address checked (blocking DNS lookup);
-    async callers use :func:`avalidate_public_https_url` instead.
+    Rejects non-http(s) schemes, embedded credentials, and localhost/``.local``/
+    private/non-global IP-literal hosts. Does not rewrite ``http`` to ``https``.
+    With ``resolve_host=True`` the hostname is additionally resolved and every
+    address checked (blocking DNS lookup); async callers use
+    :func:`avalidate_public_https_url` instead.
     """
     return _validate_public_https_url(raw_url, resolve_host=resolve_host)
 
 
 async def avalidate_public_https_url(raw_url: str) -> str:
-    """Full public-HTTPS validation for async callers, DNS included.
+    """Full public HTTP(S) validation for async callers, DNS included.
 
     Identical policy to :func:`validate_public_https_url` with ``resolve_host``,
     but the blocking name resolution runs on a worker thread so one slow or
@@ -447,11 +460,7 @@ async def avalidate_public_https_url(raw_url: str) -> str:
 
 def validate_public_web_url(raw_url: str) -> str:
     """Validate a public HTTP(S) provenance URL for browser navigation."""
-    parsed = urlparse(raw_url)
-    if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("public source URL must use HTTP or HTTPS")
-    _validate_public_https_url(parsed._replace(scheme="https").geturl())
-    return raw_url
+    return _validate_public_https_url(raw_url)
 
 
 def normalize_https_url_identity(url: str) -> str:

@@ -1011,7 +1011,7 @@ async def test_mcp_answer_reports_tool_misconfiguration_as_a_server_failure(
         {"path": "/etc/passwd"},
         {"url": "https://example.com/x.pdf", "path": "/etc/passwd"},
         {"url": "https://example.com/x.pdf", "content": "aGVsbG8="},
-        {"url": "http://example.com/x.pdf"},
+        {"url": "ftp://example.com/x.pdf"},
     ],
 )
 async def test_mcp_answer_rejects_local_and_base64_attachments(

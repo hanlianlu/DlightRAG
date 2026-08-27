@@ -605,7 +605,7 @@ is the operational reference.
   deployment must bound and monitor PostgreSQL storage and apply ingress rate
   limits appropriate to its auth mode. If artifact persistence cannot commit,
   POST fails before run acceptance.
-- Public URLs retain HTTPS-only, redirect, DNS, SSRF, and byte validation.
+- Public URLs retain http(s) fetch, redirect (no https-to-http downgrade), DNS, SSRF, and byte validation.
 - Model-visible tool errors are sanitized; operator traces retain the exception
   class and traceback.
 - Duplicate names in a composed per-run tool set fail that run with

@@ -25,6 +25,8 @@ def parse_remote_uri(file_path: str) -> tuple[SourceType, dict[str, Any]]:
     ('s3', {'bucket': 'bucket', 'key': 'key/with/slashes'})
     >>> parse_remote_uri("https://example.com/report.pdf")
     ('url', {'url': 'https://example.com/report.pdf'})
+    >>> parse_remote_uri("http://example.com/report.pdf")
+    ('url', {'url': 'http://example.com/report.pdf'})
 
     Raises ``ValueError`` for malformed URIs (missing container/bucket or
     payload) or unsupported schemes.
@@ -43,7 +45,7 @@ def parse_remote_uri(file_path: str) -> tuple[SourceType, dict[str, Any]]:
             raise ValueError(f"malformed s3 URI (need bucket/key): {file_path!r}")
         return "s3", {"bucket": bucket, "key": key}
 
-    if file_path.startswith("https://"):
+    if file_path.startswith("https://") or file_path.startswith("http://"):
         return "url", {"url": file_path}
 
     if "://" in file_path:

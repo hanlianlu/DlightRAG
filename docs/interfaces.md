@@ -113,7 +113,7 @@ finally:
     await application.aclose()
 ```
 
-  `CorpusAdmin` accepts local, Azure Blob, S3, and public HTTPS sources. SaaS APIs
+  `CorpusAdmin` accepts local, Azure Blob, S3, and public HTTP(S) sources. SaaS APIs
   that require custom authorization or pagination must stage their content through
   one of those supported sources before ingestion.
 
@@ -713,7 +713,7 @@ client against those same routes; there is no public Python SDK package.
 | `chunk_top_k` | `int \| None` | config default | Explicit chunk/visual candidates fetched for `/retrieve` and before `/answer` packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
 | `bm25_query` | `str \| None` | `None` | `retrieve` only. Optional workspace BM25 query override; when omitted, RetrievalPlanner supplies lexical terms or retrieval uses the main query. REST and MCP inputs are capped at 1,024 characters. |
 | `query_images` | `list[QueryImage]` | `None` | `retrieve` only. Current-request OpenAI-style `image_url` blocks for knowledge-base visual search: described by the VLM for semantic/BM25 retrieval and embedded directly for visual retrieval. Capped at 3. Answer calls do not accept this field. |
-| `attachments` | `list[AnswerAttachmentLink]` (Application: `list[AnswerAttachment]` via `resources`) | `None` | `/answer` only. Files or HTTPS references read as request-local resources for one answer. JSON/MCP bodies carry HTTPS link descriptors (`{url, filename?}`, HTTPS-only, no credentials); REST multipart adds uploaded files; in-process Application uses `AnswerAttachment.from_path/from_bytes/from_url`. Bounded by `answer.generation.max_attachments` (6), `answer.generation.max_attachment_bytes` (100 MiB), and `answer.generation.max_total_attachment_bytes` (128 MiB). |
+| `attachments` | `list[AnswerAttachmentLink]` (Application: `list[AnswerAttachment]` via `resources`) | `None` | `/answer` only. Files or public HTTP(S) references read as request-local resources for one answer. JSON/MCP bodies carry link descriptors (`{url, filename?}`, http or https, no credentials, identity not rewritten); REST multipart adds uploaded files; in-process Application uses `AnswerAttachment.from_path/from_bytes/from_url`. Bounded by `answer.generation.max_attachments` (6), `answer.generation.max_attachment_bytes` (100 MiB), and `answer.generation.max_total_attachment_bytes` (128 MiB). |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `answer.citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
 | `history` | `list[ConversationMessage] \| None` | `None` | `/answer` only. Optional caller-supplied prior turns as `role` (`user`/`assistant`) + `content` messages. The accepted run durably pins the bounded projection for recovery and server-owned follow-up/fork; a new independent request still sends the history it wants. Fast retrieval uses it for standalone-query rewrite and generation; Research control sees the same bounded turns, while agent-selected KB queries stay unchanged. Capped at 100 messages. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports `filename`, `file_extension`, `title`, `author`, `creation_date_from`/`creation_date_to`, and any `custom` key |

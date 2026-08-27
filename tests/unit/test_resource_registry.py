@@ -145,11 +145,22 @@ def test_admission_rejects_total_bytes() -> None:
         registry.register(ResourceInput(content=b"bbbbbb"))
 
 
-def test_register_rejects_non_https_link() -> None:
+def test_register_accepts_public_http_link() -> None:
+    registry = ResourceRegistry()
+
+    resource_id = registry.register(ResourceInput(url="http://example.com/report.txt"))
+
+    assert resource_id.startswith("res-")
+    assert registry.evidence_source(resource_id)["source_uri"] == resource_id
+    (entry,) = registry.manifest()
+    assert entry.filename == "report.txt"
+
+
+def test_register_rejects_non_http_link() -> None:
     registry = ResourceRegistry()
 
     with pytest.raises(ValueError):
-        registry.register(ResourceInput(url="http://example.com/report.txt"))
+        registry.register(ResourceInput(url="ftp://example.com/report.txt"))
 
 
 def test_discovered_links_bypass_only_the_caller_attachment_count() -> None:
@@ -192,9 +203,10 @@ def test_discovered_link_deduplicates_with_a_caller_link_and_stays_inert() -> No
 @pytest.mark.parametrize(
     "url",
     [
-        "http://example.com/article",
+        "ftp://example.com/article",
         "https://user:secret@example.com/article",
         "https://localhost/article",
+        "http://127.0.0.1/article",
         "https://127.0.0.1/article",
     ],
 )
@@ -203,6 +215,15 @@ def test_discovered_link_drops_an_unsafe_search_result(url: str) -> None:
 
     assert registry.register_discovered_link(url) is None
     assert registry.manifest() == ()
+
+
+def test_discovered_link_registers_public_http() -> None:
+    registry = ResourceRegistry()
+
+    discovered = registry.register_discovered_link("http://example.com/article")
+
+    assert discovered is not None
+    assert registry.evidence_source(discovered)["source_uri"] == "http://example.com/article"
 
 
 def test_manifest_reports_link_without_size_until_read() -> None:

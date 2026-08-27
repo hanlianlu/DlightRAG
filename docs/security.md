@@ -310,7 +310,7 @@ deliberately owns nothing else at the network layer.
 - authentication, authorization, and owner scope on every run, event, artifact,
   workspace, and conversation read or write;
 - idempotency keys and their 409 conflict on changed input;
-- HTTPS-only fetches with redirect, DNS, and SSRF validation, plus byte,
+- public HTTP(S) fetches with redirect, DNS, and SSRF validation (no scheme rewrite, no https-to-http downgrade), plus byte,
   decompression, part-count, and pixel limits on uploads and fetched bytes;
 - a receive-layer streaming body cap so an oversized or chunked body never
   reaches a parser, in addition to each route's semantic attachment limits;
