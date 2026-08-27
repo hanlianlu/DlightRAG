@@ -13,9 +13,9 @@ from dlightrag.engine.ai.structured import StructuredOutput
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 
 _ROUTER_SYSTEM = (
-    "Pick one allowed mode. Default research. "
-    "fast: one-shot KB retrieve and generate — only if history plus this turn "
-    "asks the corpus or continues corpus-grounded work. "
+    "Pick one allowed mode between **fast** and **research**. Default research. "
+    "fast: one-shot KnowledgeBase (corpus) retrieve and generate — only if you interpret the total context with current query is "
+    "asking the corpus or continues corpus-grounded work. "
     "Otherwise research. Unsure → research."
 )
 
