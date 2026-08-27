@@ -547,7 +547,7 @@ class AnswerExecutor:
         settings: AnswerExecutorSettings,
         telemetry: Telemetry,
         model_fingerprint_for_role: Callable[[ModelRole], ModelFingerprint],
-        execution_environment: str = "disabled",
+        execution_environment: str = "trust",
         workspace_root: str | None = None,
         working_dir: str = "./dlightrag_storage",
         memory_store: MemoryStore | None = None,

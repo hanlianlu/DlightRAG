@@ -14,6 +14,10 @@ from dlightrag.engine.answer.execution_settings import (
 )
 
 
+def test_execution_environment_defaults_to_trust() -> None:
+    assert AgentExecutionConfig().execution_environment == "trust"
+
+
 def test_disabled_ignores_workspace_root(tmp_path: Path) -> None:
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         deployment={

@@ -57,11 +57,8 @@ def verify_repository(root: Path = ROOT) -> None:
         rf"^# DlightRAG {re.escape(major)}\.0 canonical configuration$", config_text, re.M
     ):
         raise ValueError("config.yaml release header is stale")
-    if (
-        "execution_environment: disabled" not in config_text
-        or "outbound_mcp: []" not in config_text
-    ):
-        raise ValueError("config.yaml does not expose the safe Agent defaults")
+    if "execution_environment: trust" not in config_text or "outbound_mcp: []" not in config_text:
+        raise ValueError("config.yaml does not expose the canonical Agent defaults")
 
     source_root = root / "src"
     for path in source_root.rglob("*.py"):

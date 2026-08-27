@@ -334,7 +334,7 @@ def test_write_config_preserves_comments_and_updates(wiz, tmp_path):
     assert "old-model" not in text
     data = wiz._yaml().load(text)
     assert data["answer"]["agent"] == {
-        "execution_environment": "disabled",
+        "execution_environment": "trust",
         "workspace_root": None,
         "outbound_mcp": [],
     }

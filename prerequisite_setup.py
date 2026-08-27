@@ -368,7 +368,7 @@ def write_config_yaml(
         )
     answer = data.setdefault("answer", {})
     agent = answer.setdefault("agent", {})
-    agent.setdefault("execution_environment", "disabled")
+    agent.setdefault("execution_environment", "trust")
     agent.setdefault("workspace_root", None)
     agent.setdefault("outbound_mcp", [])
     models = data.setdefault("models", {})

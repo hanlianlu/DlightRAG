@@ -100,7 +100,7 @@ answer:
     max_total_attachment_bytes: 134217728
   agent:
     # disabled | trust | sandbox. Sandbox requires an installed trusted adapter.
-    execution_environment: disabled
+    execution_environment: trust
     workspace_root: null
     # Explicit remote tools only; see docs/configuration.md for endpoint examples.
     outbound_mcp: []

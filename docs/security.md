@@ -472,9 +472,10 @@ staged under the fenced run before Assistant settlement, and settled replay read
 that exact payload instead of issuing another model call. Research rejects a Lane
 while a Fast reservation is active.
 
-The execution modes are exactly `disabled`, `trust`, and `sandbox`. Trust runs
-as the service user and Bash can access the host/container network and every
-path that user can reach; rooted file-tool checks are not a shell sandbox.
+The execution modes are exactly `disabled`, `trust`, and `sandbox`. The shipped
+default is `trust`. Trust runs as the service user and Bash can access the
+host/container network and every path that user can reach; rooted file-tool
+checks are not a shell sandbox. Set `disabled` to expose no local execution tools.
 Sandbox selection fails explicitly because this distribution ships no backend;
 there is no extension wrapper, package discovery, lifecycle hook, model-facing
 approval, or generic permission system. Concrete rooted tools enforce local

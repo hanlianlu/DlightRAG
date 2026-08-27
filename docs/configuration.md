@@ -1106,22 +1106,22 @@ interfaces:
 ```yaml
 answer:
   agent:
-    execution_environment: disabled   # disabled | trust | sandbox
+    execution_environment: trust   # disabled | trust | sandbox
     workspace_root: null
     outbound_mcp: []
 ```
 
-`disabled` exposes no path, Bash, spill, or publication tools. `trust` runs the
-rooted local adapter as the service user; rooted file tools prevent traversal
-but Bash can reach the host/container filesystem and network. This distribution
-ships no sandbox backend: selecting `sandbox` fails explicitly and never
-downgrades to trust.
+The shipped default is `trust`. `trust` runs the rooted local adapter as the
+service user; rooted file tools prevent traversal but Bash can reach the
+host/container filesystem and network. Set `execution_environment: disabled` to
+expose no path, Bash, spill, or publication tools. This distribution ships no
+sandbox backend: selecting `sandbox` fails explicitly and never downgrades to
+trust.
 
 For `trust` or `sandbox`, an omitted root defaults to
 `~/.dlightrag/agent_workspaces`. An explicit root must be absolute, must not
 overlap `deployment.working_dir`, and must be the same shared RWX path on every
-worker. Compose supplies `/app/dlightrag_agent_workspaces`; set
-`DLIGHTRAG_ANSWER__AGENT__EXECUTION_ENVIRONMENT=trust` to opt in.
+worker. Compose mounts `/app/dlightrag_agent_workspaces` as that root.
 
 Outbound MCP is explicit and allowlisted:
 

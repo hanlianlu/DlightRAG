@@ -284,7 +284,14 @@ class AgentExecutionConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    execution_environment: Literal["disabled", "trust", "sandbox"] = Field(default="disabled")
+    execution_environment: Literal["disabled", "trust", "sandbox"] = Field(
+        default="trust",
+        description=(
+            "disabled | trust | sandbox. Default trust runs the rooted local "
+            "adapter; set disabled to expose no path or Bash tools. sandbox "
+            "requires an installed adapter and never downgrades."
+        ),
+    )
     workspace_root: str | None = Field(
         default=None,
         description=(
