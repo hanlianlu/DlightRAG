@@ -6,9 +6,9 @@ import threading
 
 import pytest
 
-from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.answer.images import AnswerImageBudget
-from dlightrag.answer.tools.web import WebSearchHit, web_context_rows
+from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.images import AnswerImageBudget
+from dlightrag.engine.answer.tools.web import WebSearchHit, web_context_rows
 
 
 def _corpus_row(

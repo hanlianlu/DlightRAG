@@ -4,7 +4,6 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
-from dlightrag.answer.images import AnswerImagePolicy
 from dlightrag.application.answer_runs.capability import (
     AnswerImageCapability,
     answer_image_capability_summary,
@@ -17,6 +16,7 @@ from dlightrag.engine.ai.vision import (
     ImageProbeOutcome,
     ModelImageCapabilities,
 )
+from dlightrag.engine.answer.images import AnswerImagePolicy
 
 
 @dataclass(frozen=True, slots=True)

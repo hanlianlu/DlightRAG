@@ -15,7 +15,6 @@ from pydantic import BaseModel
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository
-from dlightrag.answer.session_host import FastSessionHost, ensure_session_lane
 from dlightrag.application.answer_runs import AnswerService
 from dlightrag.engine.agent.session.effects import ToolResultEntry
 from dlightrag.engine.agent.session.entries import (
@@ -57,6 +56,7 @@ from dlightrag.engine.agent.session.transactions import (
 from dlightrag.engine.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
 from dlightrag.engine.agent.tools import AgentTool, ToolResult
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
 from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
 from dlightrag.engine.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
 from dlightrag.engine.runtime.settlements import (

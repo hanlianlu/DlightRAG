@@ -13,8 +13,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.answer.images import AnswerImagePolicy
-from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.application import config as config_module
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
@@ -27,6 +25,8 @@ from dlightrag.application.config import DlightragConfig
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
+from dlightrag.engine.answer.images import AnswerImagePolicy
+from dlightrag.engine.answer.resources.models import ResourceInput
 
 _REPO_CONFIG_YAML = Path(__file__).resolve().parents[2] / "config.yaml"
 # Bound before the fixture patches the name, otherwise the wrapper recurses.

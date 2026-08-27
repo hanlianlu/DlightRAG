@@ -27,17 +27,6 @@ import pytest
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
-from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
-from dlightrag.answer.citations.streaming import AnswerStream
-from dlightrag.answer.executor import (
-    AnswerExecutor,
-    AnswerResourceResolver,
-    FastRunBoundaries,
-    OrchestratorRun,
-)
-from dlightrag.answer.publication import ArtifactIssue, PublicationPlan
-from dlightrag.answer.resources.models import TextWindowBudget
-from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.application import Application, _compose
 from dlightrag.application.answer_runs.execution import AnswerRunInput, PinnedModelProfile
 from dlightrag.application.config import DlightragConfig, RuntimeConfig
@@ -53,6 +42,17 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.citations.streaming import AnswerStream
+from dlightrag.engine.answer.execution import (
+    AnswerExecutor,
+    AnswerResourceResolver,
+    OrchestratorRun,
+)
+from dlightrag.engine.answer.fast import FastRunBoundaries
+from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.publication import ArtifactIssue, PublicationPlan
+from dlightrag.engine.answer.resources.models import TextWindowBudget
+from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime import (
     RunCoordinator,
@@ -765,7 +765,9 @@ async def test_publication_correction_is_one_linked_agent_operation(
             ),
         )
 
-    monkeypatch.setattr("dlightrag.answer.executor._publication_plan", publication_plan)
+    monkeypatch.setattr(
+        "dlightrag.engine.answer.execution.executor._publication_plan", publication_plan
+    )
     control_polls = 0
     acknowledged_controls: set[int] = set()
 

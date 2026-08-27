@@ -5,9 +5,9 @@ from typing import Any, Self
 
 from pydantic import Field, model_validator
 
-from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
 from dlightrag.application.access import validate_query_workspace_selection
 from dlightrag.application.answer_runs.client_contracts import (
+    MAX_QUERY_IMAGES,
     AnswerAttachmentLink,
     AnswerRequestContract,
     ClientContractModel,

@@ -3,7 +3,8 @@
 
 import pytest
 
-from dlightrag.answer.memory import (
+from dlightrag.application.answer_runs.errors import MemoryWriteRejectedError
+from dlightrag.engine.answer.memory import (
     MEMORY_BODY_LIMIT,
     RECALL_CHAR_BUDGET,
     MemoryOperation,
@@ -14,7 +15,6 @@ from dlightrag.answer.memory import (
     reserved_auto_recall_text,
     standing_memory_for_acceptance,
 )
-from dlightrag.application.answer_runs.errors import MemoryWriteRejectedError
 
 
 def _provenance() -> MemoryProvenance:
@@ -41,7 +41,7 @@ def test_remember_passes() -> None:
 
 
 def test_owner_eligibility_is_root_policy() -> None:
-    from dlightrag.answer.memory import memory_owner_allowed
+    from dlightrag.engine.answer.memory import memory_owner_allowed
 
     assert memory_owner_allowed("jwt")
     assert memory_owner_allowed("none")

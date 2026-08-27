@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock
 import pytest
 from PIL import Image
 
-from dlightrag.answer.resources.images import QueryImageDescriber
 from dlightrag.engine.ai.media import decode_image_base64
+from dlightrag.engine.answer.resources.images import QueryImageDescriber
 from tests.unit.conftest import answer_image_policy
 
 _PNG_B64 = (
@@ -159,7 +159,7 @@ async def test_query_image_vlm_receives_bounded_transport() -> None:
 async def test_query_image_budgeting_runs_off_event_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.answer.images import AnswerImageBudget
+    from dlightrag.engine.answer.images import AnswerImageBudget
 
     loop_thread = threading.get_ident()
     budget_threads: list[int] = []

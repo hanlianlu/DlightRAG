@@ -124,7 +124,7 @@ class Application:
         components = self._components
         components.capabilities.resolve_profiles()
         components.capabilities.validate_startup()
-        from dlightrag.answer.execution_settings import validate_agent_execution
+        from dlightrag.engine.answer.execution_settings import validate_agent_execution
 
         self._workspace_root = validate_agent_execution(
             execution_environment=self._config.answer.agent.execution_environment,
@@ -376,10 +376,10 @@ def _require_compatible_run(
     current_fingerprints: Mapping[ModelRole, ModelFingerprint],
 ) -> None:
     """Fail startup when one accepted run cannot execute under this binary."""
-    from dlightrag.answer.executor import IncompatibleActiveRunError
     from dlightrag.application.answer_runs.execution import PinnedModelProfile
     from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION
     from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES
+    from dlightrag.engine.answer.execution import IncompatibleActiveRunError
 
     try:
         policy_revision = str(requirement.get("context_policy_revision") or "")

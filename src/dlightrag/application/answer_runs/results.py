@@ -11,8 +11,6 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, Field, field_validator
 
-from dlightrag.answer.citations.utils import context_chunk_key
-from dlightrag.answer.runs.snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.application.answer_runs.citations import SourceReference, SourceReferencePayload
 from dlightrag.application.answer_runs.sources import (
     SourceDownloadLinkBuilder,
@@ -20,6 +18,8 @@ from dlightrag.application.answer_runs.sources import (
     project_contexts_for_client,
     project_source_payloads,
 )
+from dlightrag.engine.answer.citations.utils import context_chunk_key
+from dlightrag.engine.answer.runs.snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 IMAGE_URL_PREFIX = "/images"

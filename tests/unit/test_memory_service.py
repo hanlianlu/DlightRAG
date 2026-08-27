@@ -5,9 +5,9 @@ import pytest
 from dlightrag_memory import MemoryProvenance
 from dlightrag_memory.store import InMemoryMemoryStore
 
-from dlightrag.answer.memory import MemoryCapability
 from dlightrag.application.answer_runs.errors import MemoryDisabledError
 from dlightrag.application.memory import InMemoryMemorySettingsStore, MemoryService
+from dlightrag.engine.answer.memory import MemoryCapability
 
 
 def _service() -> MemoryService:

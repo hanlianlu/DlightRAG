@@ -866,6 +866,10 @@ def _smoke_root_interfaces() -> None:
     from dlightrag.engine.agent import AgentSessionRuntime, ContextContribution, ToolRegistry
     from dlightrag.engine.ai.settings import ModelsSettings
     from dlightrag.engine.ai.telemetry import NoopTelemetry
+    from dlightrag.engine.answer.execution import AnswerExecutor
+    from dlightrag.engine.answer.fast import FastRunBoundaries
+    from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+    from dlightrag.engine.answer.research.context import ContextAssembler
     from dlightrag.engine.rag.retrieval import RetrievalResult
     from dlightrag.engine.rag.workspace.settings import (
         CorpusSettings,
@@ -1032,6 +1036,17 @@ def _smoke_root_interfaces() -> None:
         raise ValueError("installed SDK is missing the Agent 3.0 Answer controls")
     if AgentSessionRuntime.__module__ != "dlightrag.engine.agent.session.runtime":
         raise ValueError("installed Agent kernel did not expose AgentSessionRuntime")
+    answer_identities = {
+        AnswerExecutor: "dlightrag.engine.answer.execution.executor",
+        AnswerOrchestrator: "dlightrag.engine.answer.orchestration.orchestrator",
+        FastRunBoundaries: "dlightrag.engine.answer.fast.boundaries",
+        ContextAssembler: "dlightrag.engine.answer.research.context",
+    }
+    for answer_type, expected_module in answer_identities.items():
+        if answer_type.__module__ != expected_module:
+            raise ValueError(
+                f"installed Answer type {answer_type.__name__} came from {answer_type.__module__}"
+            )
     ToolRegistry()
     ContextContribution(
         source="wheel.smoke",
@@ -1060,6 +1075,7 @@ def _smoke_root_interfaces() -> None:
         "dlightrag.model_settings",
         "dlightrag.runtime",
         "dlightrag.rag",
+        "dlightrag." + "answer",
         "dlightrag.maintenance",
         "dlightrag.services",
         "dlightrag.app_state",

@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.application.answer_runs import (
     AnswerHistoryResource,
     AnswerRequest,
@@ -24,6 +23,7 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.runtime import (
     AnswerRunCancelledError,
     AnswerRunEvent,

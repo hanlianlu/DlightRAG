@@ -2416,10 +2416,10 @@ async def test_the_app_admits_answer_history_with_the_shared_body_cap(
 async def test_the_app_still_refuses_a_body_over_the_shared_json_budget(
     mock_config: DlightragConfig,
 ) -> None:
-    from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
     from dlightrag.application.answer_runs.client_contracts import (
         MAX_HISTORY_CONTENT_CHARS,
         MAX_HISTORY_MESSAGES,
+        MAX_QUERY_IMAGES,
     )
 
     set_config(mock_config)
@@ -2442,7 +2442,7 @@ async def test_the_app_still_refuses_a_body_over_the_shared_json_budget(
 async def test_the_app_admits_the_fixed_retrieve_image_contract(
     mock_config: DlightragConfig,
 ) -> None:
-    from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
+    from dlightrag.application.answer_runs.client_contracts import MAX_QUERY_IMAGES
 
     set_config(mock_config)
     image_sized_body = (

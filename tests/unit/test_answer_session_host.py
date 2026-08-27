@@ -5,13 +5,13 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.answer.session_host import FastSessionHost
 from dlightrag.engine.agent.session.entries import AssistantMessageEntry, UserMessageEntry
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.registers import HostTurnReservation, decode_register
 from dlightrag.engine.agent.session.runtime import AgentSessionRuntime, OperationConflictError
+from dlightrag.engine.answer.fast import FastSessionHost
 
 
 async def _no_settled_result() -> None:

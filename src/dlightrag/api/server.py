@@ -16,7 +16,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from dlightrag import create_application
-from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
 from dlightrag.api.middleware import (
     RequestBodyLimitMiddleware,
     RequestIdMiddleware,
@@ -26,6 +25,7 @@ from dlightrag.api.models import ANSWER_REQUEST_PART_MAX_BYTES, ErrorDetail
 from dlightrag.api.routes import router
 from dlightrag.application import ApplicationClosedError
 from dlightrag.application.answer_runs import AnswerRuntimeUnavailableError
+from dlightrag.application.answer_runs.client_contracts import MAX_QUERY_IMAGES
 from dlightrag.application.answer_runs.errors import AnswerInputError, InvalidToolConfigurationError
 from dlightrag.application.corpus_admin import MetadataValidationError
 from dlightrag.application.errors import StorageSchemaError

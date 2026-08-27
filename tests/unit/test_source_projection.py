@@ -336,7 +336,7 @@ def test_project_contexts_for_client_skips_chunks_without_public_id() -> None:
 
 
 def test_evidence_image_helper_derives_cited_visuals() -> None:
-    from dlightrag.answer.media import evidence_images_from_sources
+    from dlightrag.engine.answer.media import evidence_images_from_sources
 
     sources = [
         _internal_source(

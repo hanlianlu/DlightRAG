@@ -17,14 +17,14 @@ def test_agent_session_runtime_never_depends_on_answer_product_modules() -> None
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
-                "dlightrag.answer"
+                "dlightrag.engine.answer"
             ):
                 violations.append(f"{path.relative_to(ROOT)}:{node.lineno}")
             elif isinstance(node, ast.Import):
                 violations.extend(
                     f"{path.relative_to(ROOT)}:{node.lineno}"
                     for alias in node.names
-                    if alias.name.startswith("dlightrag.answer")
+                    if alias.name.startswith("dlightrag.engine.answer")
                 )
     assert violations == []
 

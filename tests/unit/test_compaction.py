@@ -3,7 +3,7 @@
 
 import pytest
 
-from dlightrag.answer.agent.compaction import parse_compaction_summary
+from dlightrag.engine.answer.research.compaction import parse_compaction_summary
 
 
 def test_compaction_summary_parser_preserves_typed_sections() -> None:

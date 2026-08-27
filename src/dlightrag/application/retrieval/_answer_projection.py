@@ -4,9 +4,6 @@
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from dlightrag.answer.citations.source_builder import build_sources
-from dlightrag.answer.model_runtime import AnswerModelRuntime
-from dlightrag.answer.resources.images import prepare_query_images
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilityCoordinator
 from dlightrag.application.answer_runs.sources import (
     SourceDownloadLinkBuilder,
@@ -17,6 +14,9 @@ from dlightrag.application.retrieval import (
     ProjectedRetrieval,
     RetrieveProjection,
 )
+from dlightrag.engine.answer.citations.source_builder import build_sources
+from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
+from dlightrag.engine.answer.resources.images import prepare_query_images
 from dlightrag.engine.rag.retrieval import RetrievalResult
 
 

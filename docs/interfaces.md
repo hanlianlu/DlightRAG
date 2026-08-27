@@ -659,7 +659,7 @@ result.parts  # derived markdown/artifact/evidence_image display order
 # Answer with attachments: files or HTTPS references become request-local
 # resources read on demand. The SDK builds ResourceInput objects from the
 # AnswerAttachment path/bytes/url conveniences owned by the resource domain.
-from dlightrag.answer.resources.attachments import (
+from dlightrag.engine.answer.resources.attachments import (
     AnswerAttachment,
     resource_inputs_from_attachments,
 )
@@ -1157,7 +1157,7 @@ inspects on demand:
 
 ```python
 # Python SDK — answer over an attached image
-from dlightrag.answer.resources.attachments import (
+from dlightrag.engine.answer.resources.attachments import (
     AnswerAttachment,
     resource_inputs_from_attachments,
 )

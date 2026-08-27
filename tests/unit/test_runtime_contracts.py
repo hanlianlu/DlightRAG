@@ -52,7 +52,7 @@ forbidden = (
     "lightrag",
     "PIL",
     "dlightrag.adapters.postgres",
-    "dlightrag.answer",
+    "dlightrag.engine.answer",
     "dlightrag.api",
     "dlightrag.mcp",
     "dlightrag.web",

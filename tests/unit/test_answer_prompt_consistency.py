@@ -1,8 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Research and Fast answers share one grounding and citation contract."""
 
-from dlightrag.answer.prompts import agent_control_prompt, answer_core
-from dlightrag.answer.prompts.answer import answer_grounding_guidance
+from dlightrag.engine.answer.prompts import agent_control_prompt, answer_core
+from dlightrag.engine.answer.prompts.answer import answer_grounding_guidance
 
 
 def test_both_paths_share_the_same_grounding_contract() -> None:

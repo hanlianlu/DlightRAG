@@ -7,9 +7,6 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
-from dlightrag.answer.executor import FetchedResourceBuffer, ResearchRuntimeEffects
-from dlightrag.answer.resources.models import TextWindowBudget
 from dlightrag.engine.agent.session.entries import CompactionEntry, ToolResultMessageEntry
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
@@ -25,6 +22,12 @@ from dlightrag.engine.agent.tools import (
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.research.runtime import (
+    FetchedResourceBuffer,
+    ResearchRuntimeEffects,
+)
+from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
 from tests.unit.conftest import answer_model_profile

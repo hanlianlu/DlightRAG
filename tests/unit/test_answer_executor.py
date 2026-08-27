@@ -11,16 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image
 
-from dlightrag.answer.executor import (
-    AnswerExecutor,
-    AnswerExecutorSettings,
-    AnswerResourceResolver,
-    AnswerResourceSettings,
-    _close_execution_resources,
-    _memory_recall_allowed,
-)
-from dlightrag.answer.highlights import SemanticHighlightSettings
-from dlightrag.answer.session_host import ensure_session_lane
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
 from dlightrag.application.answer_runs.errors import CurrentDocumentParseError
@@ -39,6 +29,18 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.execution import (
+    AnswerExecutor,
+    AnswerExecutorSettings,
+    AnswerResourceResolver,
+    AnswerResourceSettings,
+)
+from dlightrag.engine.answer.execution.executor import (
+    _close_execution_resources,
+    _memory_recall_allowed,
+)
+from dlightrag.engine.answer.fast import ensure_session_lane
+from dlightrag.engine.answer.highlights import SemanticHighlightSettings
 from dlightrag.engine.runtime import RunExecutionError, RunSession, artifact_digest
 
 
@@ -135,11 +137,11 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
 
 
 def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> None:
-    from dlightrag.answer.evidence import EvidenceLedger
-    from dlightrag.answer.tools.composition import compose_research_tools
-    from dlightrag.answer.tools.subagents import SubagentHost
     from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
     from dlightrag.engine.agent.skills import SkillCatalog
+    from dlightrag.engine.answer.evidence import EvidenceLedger
+    from dlightrag.engine.answer.tools.composition import compose_research_tools
+    from dlightrag.engine.answer.tools.subagents import SubagentHost
 
     executor = AnswerExecutor(
         store=MagicMock(),
@@ -189,8 +191,8 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
 def test_execution_rejects_tools_that_differ_from_the_accepted_agent_plan() -> None:
     from pydantic import BaseModel
 
-    from dlightrag.answer.executor import IncompatibleActiveRunError
     from dlightrag.engine.agent.tools import AgentTool, ToolResult
+    from dlightrag.engine.answer.execution import IncompatibleActiveRunError
 
     class Args(BaseModel):
         value: str
@@ -220,7 +222,7 @@ def test_execution_rejects_tools_that_differ_from_the_accepted_agent_plan() -> N
 
 
 def test_execution_rejects_changed_context_or_model_pins() -> None:
-    from dlightrag.answer.executor import IncompatibleActiveRunError
+    from dlightrag.engine.answer.execution import IncompatibleActiveRunError
 
     pins = tuple(
         PinnedModelProfile(
@@ -478,7 +480,7 @@ async def test_stream_close_failure_does_not_skip_registry_close(
 
 
 async def test_durable_child_usage_aggregates_roster_rows() -> None:
-    from dlightrag.answer.executor import _durable_child_usage
+    from dlightrag.engine.answer.research.runtime import _durable_child_usage
 
     store = MagicMock()
     store.list_child_sessions = AsyncMock(

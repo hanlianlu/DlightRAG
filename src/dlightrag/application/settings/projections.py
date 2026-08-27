@@ -1,13 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Map root Pydantic configuration into provider-neutral AI settings."""
 
-from dlightrag.answer.executor import (
-    AnswerExecutorSettings,
-    AnswerResourceSettings,
-)
-from dlightrag.answer.highlights import SemanticHighlightSettings
-from dlightrag.answer.model_runtime import AnswerModelRuntimeSettings
-from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
 from dlightrag.application.access import (
     AccessRule,
     AccessSettings,
@@ -29,6 +22,13 @@ from dlightrag.engine.ai.settings import (
     ModelRole,
     ModelSettings,
 )
+from dlightrag.engine.answer.execution import (
+    AnswerExecutorSettings,
+    AnswerResourceSettings,
+)
+from dlightrag.engine.answer.highlights import SemanticHighlightSettings
+from dlightrag.engine.answer.model_runtime import AnswerModelRuntimeSettings
+from dlightrag.engine.answer.resources.images import MAX_QUERY_IMAGES
 from dlightrag.engine.rag.workspace.settings import RagSettings
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 
@@ -130,7 +130,7 @@ def answer_resource_settings(config: DlightragConfig) -> AnswerResourceSettings:
 
 def answer_executor_settings(config: DlightragConfig) -> AnswerExecutorSettings:
     """Snapshot durable Answer execution and Artifact publication policy."""
-    from dlightrag.answer.publication import PublicationLimits
+    from dlightrag.engine.answer.publication import PublicationLimits
 
     publication = config.answer.agent.publication
     return AnswerExecutorSettings(

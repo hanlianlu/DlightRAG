@@ -8,13 +8,13 @@ import socket
 
 import pytest
 
-from dlightrag.answer.resources.models import (
+from dlightrag.engine.answer.resources.models import (
     ResourceAdmissionError,
     ResourceCursorError,
     ResourceInput,
     ResourceNotFoundError,
 )
-from dlightrag.answer.resources.registry import ResourceRegistry as _ResourceRegistry
+from dlightrag.engine.answer.resources.registry import ResourceRegistry as _ResourceRegistry
 
 
 class ResourceRegistry(_ResourceRegistry):
@@ -285,7 +285,7 @@ async def test_read_uses_settled_bytes_without_live_dns_validation(
         raise AssertionError("settled bytes must not re-enter the network gate")
 
     monkeypatch.setattr(
-        "dlightrag.answer.resources.registry.avalidate_public_https_url",
+        "dlightrag.engine.answer.resources.registry.avalidate_public_https_url",
         reject_validation,
     )
     registry = ResourceRegistry()
@@ -360,7 +360,7 @@ async def test_cursor_pages_do_not_rebuild_whole_resource_windows(
 ) -> None:
     import threading
 
-    from dlightrag.answer.resources import registry as registry_module
+    from dlightrag.engine.answer.resources import registry as registry_module
 
     input_lengths: list[int] = []
     span_threads: list[int] = []
@@ -703,7 +703,7 @@ async def test_invalid_private_url_never_calls_fallback(
 async def test_fallback_empty_preserves_direct_error_and_caches_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.answer.resources.models import ResourceDecodeError
+    from dlightrag.engine.answer.resources.models import ResourceDecodeError
 
     monkeypatch.setattr(
         "dlightrag.engine.rag.corpus.sources.url.socket.getaddrinfo", _public_getaddrinfo
@@ -911,7 +911,7 @@ async def test_text_decode_windowing_and_focus_ranking_run_off_the_event_loop(
 ) -> None:
     import threading
 
-    from dlightrag.answer.resources import registry as registry_module
+    from dlightrag.engine.answer.resources import registry as registry_module
 
     loop_thread = threading.get_ident()
     worker_threads: list[int] = []

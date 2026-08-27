@@ -19,8 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from dlightrag.answer.resources.links import answer_link_resources
-from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor, sse_frame
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
@@ -33,6 +31,8 @@ from dlightrag.api.models import (
 from dlightrag.application.access import AccessAction, UserContext, owner_id_from_user
 from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
 from dlightrag.application.answer_runs.client_contracts import conversation_history_as_dicts
+from dlightrag.application.answer_runs.execution import ResourceInput
+from dlightrag.application.answer_runs.resource_links import answer_link_resources
 from dlightrag.application.answer_runs.results import (
     answer_parts_from_markdown,
     project_answer_result,

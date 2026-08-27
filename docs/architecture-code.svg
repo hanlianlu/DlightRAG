@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title description">
   <title id="title">DlightRAG compile-time module dependencies</title>
-  <desc id="description">Product modules may import the AI, Agent, RAG, Runtime, and Memory modules. Agent may import AI. RAG may import AI and the external LightRAG package. Runtime and Memory remain independent of product policy and storage implementations.</desc>
+  <desc id="description">Current product and adapter modules may import Engine Answer, RAG, Runtime, and Memory. Engine Answer may import AI, Agent, RAG, and Runtime. Agent may import AI. RAG may import AI and the external LightRAG package. Runtime and Memory remain independent of Answer policy and storage implementations.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
@@ -38,50 +38,55 @@
   <text class="heading" x="640" y="42" text-anchor="middle">DlightRAG — Compile-time Dependencies</text>
   <text class="subtitle" x="640" y="70" text-anchor="middle">Every arrow means “may import”; runtime calls and deployment connections are excluded</text>
 
-  <rect class="product" x="80" y="110" width="1120" height="120" rx="18"/>
-  <text class="node-title" x="640" y="153" text-anchor="middle">Root product modules</text>
-  <text class="node-copy" x="640" y="185" text-anchor="middle">application use cases · answer execution · transports · PostgreSQL adapters</text>
-  <text class="node-copy" x="640" y="208" text-anchor="middle">Composition and product policy depend on owner interfaces, never the reverse.</text>
+  <rect class="product" x="80" y="105" width="1120" height="110" rx="18"/>
+  <text class="node-title" x="640" y="145" text-anchor="middle">Current product and adapter modules</text>
+  <text class="node-copy" x="640" y="175" text-anchor="middle">application use cases · api / web / mcp · PostgreSQL and Observability adapters</text>
+  <text class="node-copy" x="640" y="198" text-anchor="middle">Private composition wires owner interfaces; unfinished adapter moves remain in later milestones.</text>
 
-  <rect class="module" x="80" y="330" width="180" height="110" rx="14"/>
-  <text class="node-title" x="170" y="370" text-anchor="middle">dlightrag.engine.agent</text>
-  <text class="node-copy" x="170" y="400" text-anchor="middle">turn execution</text>
-  <text class="node-copy" x="170" y="423" text-anchor="middle">and tool contracts</text>
+  <rect class="module" x="450" y="265" width="380" height="100" rx="14"/>
+  <text class="node-title" x="640" y="304" text-anchor="middle">dlightrag.engine.answer</text>
+  <text class="node-copy" x="640" y="334" text-anchor="middle">execution · orchestration · Fast · Research</text>
 
-  <rect class="module" x="360" y="330" width="180" height="110" rx="14"/>
-  <text class="node-title" x="450" y="370" text-anchor="middle">dlightrag.engine.rag</text>
-  <text class="node-copy" x="450" y="400" text-anchor="middle">workspace + internal LightRAG</text>
-  <text class="node-copy" x="450" y="423" text-anchor="middle">corpus + retrieval owners</text>
+  <rect class="module" x="70" y="440" width="200" height="100" rx="14"/>
+  <text class="node-title" x="170" y="478" text-anchor="middle">dlightrag.engine.agent</text>
+  <text class="node-copy" x="170" y="508" text-anchor="middle">Session kernel + tool contracts</text>
 
-  <rect class="module" x="720" y="330" width="180" height="110" rx="14"/>
-  <text class="node-title" x="810" y="370" text-anchor="middle">dlightrag.engine.runtime</text>
-  <text class="node-copy" x="810" y="400" text-anchor="middle">durable lifecycle</text>
-  <text class="node-copy" x="810" y="423" text-anchor="middle">storage neutral</text>
+  <rect class="module" x="340" y="440" width="200" height="100" rx="14"/>
+  <text class="node-title" x="440" y="478" text-anchor="middle">dlightrag.engine.rag</text>
+  <text class="node-copy" x="440" y="508" text-anchor="middle">workspace · corpus · retrieval</text>
 
-  <rect class="memory" x="1000" y="330" width="180" height="110" rx="14"/>
-  <text class="node-title" x="1090" y="370" text-anchor="middle">dlightrag-memory</text>
-  <text class="node-copy" x="1090" y="400" text-anchor="middle">independent wheel</text>
-  <text class="node-copy" x="1090" y="423" text-anchor="middle">host neutral</text>
+  <rect class="module" x="710" y="440" width="200" height="100" rx="14"/>
+  <text class="node-title" x="810" y="478" text-anchor="middle">dlightrag.engine.runtime</text>
+  <text class="node-copy" x="810" y="508" text-anchor="middle">durable, storage-neutral lifecycle</text>
 
-  <rect class="module" x="210" y="560" width="180" height="90" rx="14"/>
-  <text class="node-title" x="300" y="597" text-anchor="middle">dlightrag.engine.ai</text>
-  <text class="node-copy" x="300" y="627" text-anchor="middle">provider-neutral lifecycle</text>
+  <rect class="memory" x="980" y="440" width="200" height="100" rx="14"/>
+  <text class="node-title" x="1080" y="478" text-anchor="middle">dlightrag-memory</text>
+  <text class="node-copy" x="1080" y="508" text-anchor="middle">independent, host-neutral wheel</text>
 
-  <rect class="external" x="500" y="560" width="180" height="90" rx="14"/>
-  <text class="node-title" x="590" y="597" text-anchor="middle">LightRAG</text>
-  <text class="node-copy" x="590" y="627" text-anchor="middle">external package</text>
+  <rect class="module" x="220" y="625" width="220" height="80" rx="14"/>
+  <text class="node-title" x="330" y="658" text-anchor="middle">dlightrag.engine.ai</text>
+  <text class="node-copy" x="330" y="685" text-anchor="middle">provider-neutral lifecycle</text>
 
-  <path class="edge" d="M 170 230 V 330"/>
-  <path class="edge" d="M 450 230 V 330"/>
-  <path class="edge" d="M 810 230 V 330"/>
-  <path class="edge" d="M 1090 230 V 330"/>
-  <path class="edge" d="M 300 230 V 560"/>
+  <rect class="external" x="520" y="625" width="200" height="80" rx="14"/>
+  <text class="node-title" x="620" y="658" text-anchor="middle">LightRAG</text>
+  <text class="node-copy" x="620" y="685" text-anchor="middle">external package</text>
 
-  <path class="edge" d="M 170 440 V 510 H 250 V 560"/>
-  <text class="edge-label" x="198" y="498">uses AI</text>
-  <path class="edge" d="M 410 440 V 500 H 350 V 560"/>
-  <text class="edge-label" x="395" y="488" text-anchor="end">uses AI</text>
-  <path class="edge" d="M 500 440 V 520 H 590 V 560"/>
+  <path class="edge" d="M 640 215 V 265"/>
+  <path class="edge" d="M 210 215 V 420 H 170 V 440"/>
+  <path class="edge" d="M 390 215 V 440"/>
+  <path class="edge" d="M 860 215 V 440"/>
+  <path class="edge" d="M 1080 215 V 440"/>
 
-  <text class="note" x="640" y="700" text-anchor="middle">Import-linter enforces the independence and direction shown here.</text>
+  <path class="edge" d="M 520 365 V 400 H 170 V 440"/>
+  <path class="edge" d="M 590 365 V 410 H 440 V 440"/>
+  <path class="edge" d="M 700 365 V 410 H 810 V 440"/>
+  <path class="edge" d="M 760 365 V 400 H 1080 V 440"/>
+  <path class="edge" d="M 550 365 V 590 H 400 V 625"/>
+  <text class="edge-label" x="420" y="584">uses AI</text>
+
+  <path class="edge" d="M 170 540 V 590 H 280 V 625"/>
+  <path class="edge" d="M 400 540 V 625"/>
+  <path class="edge" d="M 480 540 V 590 H 620 V 625"/>
+
+  <text class="note" x="910" y="685" text-anchor="middle">Import-linter enforces the landed Engine direction; M5–M7 remain pending.</text>
 </svg>

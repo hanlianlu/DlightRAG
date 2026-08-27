@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image
 
-from dlightrag.answer.executor import AnswerResourceResolver
 from dlightrag.application.answer_runs.capabilities import (
     AnswerCapabilities,
     AnswerCapabilityCoordinator,
@@ -43,6 +42,7 @@ from dlightrag.engine.ai.vision import (
     ImageProbeOutcome,
     ModelImageCapabilities,
 )
+from dlightrag.engine.answer.execution import AnswerResourceResolver
 from tests.config_helpers import mutate_config, replace_config
 
 
@@ -248,7 +248,7 @@ async def test_confirmed_image_context_refreshes_the_query_profile_after_reprobe
 async def test_reprobe_updates_synthesizer_image_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.answer.synthesizer import AnswerSynthesizer
+    from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 
     buffer = io.BytesIO()
     Image.new("RGB", (2, 2), "white").save(buffer, format="PNG")
@@ -587,8 +587,8 @@ def _role_config(**roles: ModelSettings) -> DlightragConfig:
 
 
 async def test_inspect_follows_vlm_capability_not_answer_capability() -> None:
-    from dlightrag.answer.resources import ResourceInput
-    from dlightrag.answer.resources.models import TextWindowBudget
+    from dlightrag.engine.answer.resources import ResourceInput
+    from dlightrag.engine.answer.resources.models import TextWindowBudget
 
     config = _role_config()
     capabilities, _ = _coordinator(config)
@@ -610,8 +610,8 @@ async def test_inspect_follows_vlm_capability_not_answer_capability() -> None:
 
 
 async def test_inspect_is_withheld_when_only_the_answer_model_sees_images() -> None:
-    from dlightrag.answer.resources import ResourceInput
-    from dlightrag.answer.resources.models import TextWindowBudget
+    from dlightrag.engine.answer.resources import ResourceInput
+    from dlightrag.engine.answer.resources.models import TextWindowBudget
 
     config = _role_config()
     capabilities, _ = _coordinator(config)

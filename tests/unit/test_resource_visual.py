@@ -13,13 +13,13 @@ from docx import Document
 from openpyxl.drawing.image import Image as XLImage
 from PIL import Image
 
-from dlightrag.answer.resources.models import ResourceInput
-from dlightrag.answer.resources.registry import ResourceRegistry
-from dlightrag.answer.resources.visual import (
+from dlightrag.engine.ai.media import decode_image_base64
+from dlightrag.engine.answer.resources.models import ResourceInput
+from dlightrag.engine.answer.resources.registry import ResourceRegistry
+from dlightrag.engine.answer.resources.visual import (
     ResourceInspectionError,
     ResourceInspector,
 )
-from dlightrag.engine.ai.media import decode_image_base64
 from tests.unit.conftest import answer_image_policy
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

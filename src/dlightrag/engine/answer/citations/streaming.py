@@ -1,0 +1,87 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Streaming answer wrapper with post-stream citation validation."""
+
+import inspect
+import logging
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
+from typing import Any, cast
+
+from dlightrag.engine.answer.citations.indexer import CitationIndexer
+from dlightrag.engine.answer.citations.parser import (
+    clean_invalid_citations,
+    strip_generated_references_section,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class AnswerStream(AsyncIterator[str]):
+    """Async iterator that passes through tokens and cleans citations post-stream.
+
+    Yields all tokens as-is for real-time display. After the stream ends,
+    ``self.answer`` contains the cleaned answer text (invalid citations
+    referencing non-existent chunks/docs are removed).
+
+    When an ``indexer`` is provided (from the answer engine), invalid
+    citations are cleaned from the final answer. This ensures the streaming
+    path produces the same citation quality as the non-streaming path.
+    """
+
+    def __init__(
+        self,
+        raw_iterator: AsyncIterator[str],
+        *,
+        indexer: CitationIndexer | None = None,
+    ) -> None:
+        self._raw = raw_iterator
+        self._indexer = indexer
+        self._parts: list[str] = []
+        self._gen = self._iterate()
+        self.answer: str = ""
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        return self
+
+    async def __anext__(self) -> str:
+        return await self._gen.__anext__()
+
+    async def aclose(self) -> None:
+        """Cancel the underlying LLM stream to stop wasting tokens on disconnect."""
+        await self._gen.aclose()
+        aclose = getattr(self._raw, "aclose", None)
+        if callable(aclose):
+            result = aclose()
+            if inspect.isawaitable(result):
+                await cast(Awaitable[Any], result)
+
+    async def _iterate(self) -> AsyncGenerator[str]:
+        async for chunk in self._raw:
+            self._parts.append(chunk)
+            yield chunk
+
+        full = "".join(self._parts)
+        full = strip_generated_references_section(full)
+
+        if self._indexer is not None:
+            full = clean_invalid_citations(self._indexer, full)
+
+        self.answer = full
+        logger.info(
+            "[AnswerStream] Post-stream: answer_len=%d, validated=%s",
+            len(self.answer),
+            self._indexer is not None,
+        )
+
+
+async def aclose_answer_stream(token_iter: object) -> None:
+    """Close an answer token iterator if it supports ``aclose``.
+
+    Releases any AI scheduler slot and cancels the upstream LLM connection.
+    No-op for ``None``/``str`` iterators.
+    """
+    aclose = getattr(token_iter, "aclose", None)
+    if aclose is not None:
+        await aclose()
+
+
+__all__ = ["AnswerStream", "aclose_answer_stream"]

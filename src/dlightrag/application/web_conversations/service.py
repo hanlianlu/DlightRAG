@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 from uuid import UUID, uuid5
 
-from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.application.access import UserContext, owner_id_from_user
 from dlightrag.application.answer_runs import (
     AnswerHistoryResource,
@@ -22,6 +21,7 @@ from dlightrag.application.answer_runs import (
 from dlightrag.application.answer_runs.execution import AnswerRunRequest, AttachmentReference
 from dlightrag.application.answer_runs.routing import RoutingAcceptance
 from dlightrag.engine.ai.media import thumbnail_bytes
+from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.runtime import (
     AnswerRunRecord,
     PendingArtifact,

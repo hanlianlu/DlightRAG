@@ -6,20 +6,6 @@ from contextlib import AbstractAsyncContextManager, aclosing
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
 
-from dlightrag.answer.acceptance import research_history_input_measure
-from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.answer.executor import ResolvedAnswerResources
-from dlightrag.answer.history import (
-    HistoryProjectionOverflowError,
-    HistoryProjectionTarget,
-    project_history,
-)
-from dlightrag.answer.images import AnswerImagePolicy
-from dlightrag.answer.memory import memory_owner_allowed, standing_memory_for_acceptance
-from dlightrag.answer.resources.images import QueryImageDescriber, prepare_query_images
-from dlightrag.answer.resources.models import ResourceInput, TextWindowBudget
-from dlightrag.answer.synthesizer import AnswerSynthesizer
-from dlightrag.answer.tools import compose_research_tools
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
 from dlightrag.application.answer_runs.errors import (
@@ -59,6 +45,22 @@ from dlightrag.engine.ai.capacity import (
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.execution import (
+    ResolvedAnswerResources,
+    research_history_input_measure,
+)
+from dlightrag.engine.answer.history import (
+    HistoryProjectionOverflowError,
+    HistoryProjectionTarget,
+    project_history,
+)
+from dlightrag.engine.answer.images import AnswerImagePolicy
+from dlightrag.engine.answer.memory import memory_owner_allowed, standing_memory_for_acceptance
+from dlightrag.engine.answer.resources.images import QueryImageDescriber, prepare_query_images
+from dlightrag.engine.answer.resources.models import ResourceInput, TextWindowBudget
+from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
+from dlightrag.engine.answer.tools import compose_research_tools
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
@@ -1263,7 +1265,7 @@ class AnswerService:
                     )
                 )
             if requested_mode == "auto" and allowed_modes >= {"fast", "research"}:
-                from dlightrag.answer.router import AnswerModeRouter
+                from dlightrag.engine.answer.router import AnswerModeRouter
 
                 async def _unused_router(**_kwargs: Any) -> str:
                     raise RuntimeError("acceptance router measure never calls the model")

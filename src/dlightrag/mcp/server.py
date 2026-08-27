@@ -26,7 +26,6 @@ from starlette.types import ASGIApp
 
 import dlightrag
 from dlightrag import create_application
-from dlightrag.answer.resources.links import answer_link_resources
 from dlightrag.application import Application
 from dlightrag.application.access import (
     AccessAction,
@@ -56,6 +55,7 @@ from dlightrag.application.answer_runs.errors import (
     MemoryUnavailableError,
     MemoryWriteRejectedError,
 )
+from dlightrag.application.answer_runs.resource_links import answer_link_resources
 from dlightrag.application.answer_runs.results import project_answer_result
 from dlightrag.application.config import DlightragConfig, get_config
 from dlightrag.application.corpus_admin import (

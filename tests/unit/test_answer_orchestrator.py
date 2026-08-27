@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
-from dlightrag.answer.resources.models import TextWindowBudget
-from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.resources.models import TextWindowBudget
+from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from tests.unit.conftest import answer_model_profile
 
 
@@ -79,12 +79,12 @@ def test_research_preparation_composes_closed_host_tools() -> None:
 
 
 def test_child_preparation_excludes_every_parent_subagent_control() -> None:
-    from dlightrag.answer.tools.subagents import (
+    from dlightrag.engine.agent.session.ids import EntryId, SessionId
+    from dlightrag.engine.answer.tools.subagents import (
         ChildContextSnapshot,
         ChildRequest,
         SubagentHost,
     )
-    from dlightrag.engine.agent.session.ids import EntryId, SessionId
 
     async def model(**_kwargs):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")

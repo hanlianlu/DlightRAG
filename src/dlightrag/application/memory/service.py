@@ -13,12 +13,12 @@ from dlightrag_memory import (
 )
 from dlightrag_memory.store import default_purge_cutoff
 
-from dlightrag.answer.memory import (
+from dlightrag.application.answer_runs.errors import MemoryDisabledError, MemoryUnavailableError
+from dlightrag.engine.answer.memory import (
     MEMORY_SUPERSEDE_RETENTION_DAYS,
     MemoryCapability,
     memory_owner_allowed,
 )
-from dlightrag.application.answer_runs.errors import MemoryDisabledError, MemoryUnavailableError
 
 
 class MemorySettingsStore(Protocol):

@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for answer prompt composition."""
 
-from dlightrag.answer.prompts import answer_core
+from dlightrag.engine.answer.prompts import answer_core
 
 
 def test_answer_system_prompt_omits_forbidden_clauses() -> None:

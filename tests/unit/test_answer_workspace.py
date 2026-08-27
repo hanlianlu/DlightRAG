@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.answer.workspace import (
+from dlightrag.engine.answer.workspace import (
     WorkspaceIntegrityError,
     bind_run_workspace,
     write_spill_file,

@@ -78,8 +78,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.memory_settings import PGMemorySettingsStore
     from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
-    from dlightrag.answer.executor import AnswerExecutor, AnswerResourceResolver
-    from dlightrag.answer.model_runtime import AnswerModelRuntime
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.answer_runs.capabilities import (
         AnswerCapabilityCoordinator,
@@ -111,6 +109,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.ai.scheduler import ModelScheduler
     from dlightrag.engine.ai.telemetry import safe_log_text
     from dlightrag.engine.ai.vision import ModelImageCapabilities
+    from dlightrag.engine.answer.execution import AnswerExecutor, AnswerResourceResolver
+    from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
     from dlightrag.engine.rag.corpus.downloads import SourceDownloadService
     from dlightrag.engine.rag.corpus.ingestion.jobs import IngestJobCoordinator
     from dlightrag.engine.rag.retrieval.runtime import RetrievalPlannerRuntime

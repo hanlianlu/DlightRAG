@@ -7,7 +7,7 @@ from typing import Any
 
 from dlightrag.adapters.postgres._migrations import TableRequirement
 from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.answer.memory import MemoryCapability
+from dlightrag.engine.answer.memory import MemoryCapability
 
 _CREATE_MEMORY_SETTINGS = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_memory_settings (

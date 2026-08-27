@@ -1,8 +1,23 @@
-"""Citation data models — ported from sandbox_agent, framework-agnostic."""
+"""Caller-facing citation patterns and data models."""
 
+import re
 from typing import Protocol
 
 from pydantic import BaseModel, Field
+
+_CHUNK_INDEX = r"[0-9]{1,9}"
+_NUMERIC_REF = r"[0-9]+"
+_ATTACHMENT_REF = r"att-[0-9]+"
+_GENERIC_CHUNK_REF = rf"(?!att-{_CHUNK_INDEX}\])\w+"
+_CHUNK_REFERENCE_ID = rf"(?:{_ATTACHMENT_REF}|{_NUMERIC_REF}|{_GENERIC_CHUNK_REF})"
+_CITATION_TRAILING_BOUNDARY = r"(?![A-Za-z0-9_-])"
+
+CITATION_PATTERN = re.compile(
+    rf"\[({_CHUNK_REFERENCE_ID})-({_CHUNK_INDEX})\]{_CITATION_TRAILING_BOUNDARY}"
+)
+DOC_CITATION_PATTERN = re.compile(
+    rf"\[((?:{_NUMERIC_REF}|{_ATTACHMENT_REF}))\]{_CITATION_TRAILING_BOUNDARY}"
+)
 
 
 class ChunkSnippet(BaseModel):

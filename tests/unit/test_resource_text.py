@@ -3,8 +3,8 @@
 
 import pytest
 
-from dlightrag.answer.resources.models import ResourceDecodeError, TextWindowLocator
-from dlightrag.answer.resources.text import build_text_windows, decode_text
+from dlightrag.engine.answer.resources.models import ResourceDecodeError, TextWindowLocator
+from dlightrag.engine.answer.resources.text import build_text_windows, decode_text
 
 _WINDOW_TOKENS = 100
 

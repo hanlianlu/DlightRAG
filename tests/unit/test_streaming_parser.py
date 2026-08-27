@@ -3,8 +3,8 @@
 
 import pytest
 
-from dlightrag.answer.citations.indexer import CitationIndexer
-from dlightrag.answer.citations.streaming import AnswerStream
+from dlightrag.engine.answer.citations.indexer import CitationIndexer
+from dlightrag.engine.answer.citations.streaming import AnswerStream
 
 
 @pytest.mark.asyncio

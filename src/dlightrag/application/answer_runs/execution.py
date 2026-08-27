@@ -12,11 +12,11 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.application.answer_runs.mode import canonical_answer_mode
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.runtime.errors import RunExecutionError
 
 
@@ -407,4 +407,5 @@ __all__ = [
     "in_memory_attachment_loader",
     "LinkReference",
     "PinnedModelProfile",
+    "ResourceInput",
 ]

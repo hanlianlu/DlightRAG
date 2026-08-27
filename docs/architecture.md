@@ -376,20 +376,21 @@ complete role, migration-order, and shared-artifact contract.
 ## Code Layering
 
 The repository is one UV workspace with two lockstep distributions. The root
-wheel contains three internal deep modules plus the storage-neutral durable
-Runtime; their import direction remains machine-enforced. Independently
-installable Memory remains a separate distribution seam:
+wheel contains five Engine modules—AI, Agent, Runtime, RAG, and Answer—whose
+import direction remains machine-enforced. Independently installable Memory
+remains a separate distribution seam:
 
 <p align="center">
-  <img src="architecture-code.svg" alt="DlightRAG compile-time dependency view for root product modules, AI, Agent, RAG, Runtime, Memory, and LightRAG" width="1080" />
+  <img src="architecture-code.svg" alt="DlightRAG compile-time dependency view for root product modules, Engine Answer, AI, Agent, RAG, Runtime, Memory, and LightRAG" width="1080" />
 </p>
 
 This is the only figure whose arrows mean compile-time dependency. The arrow
 points from the importing module to the module it may import; it says nothing
 about runtime sequencing or deployment.
 
-Agent and RAG may depend on AI but not on product modules or each other. RAG
-owns its direct LightRAG dependency and never imports concrete PostgreSQL
+Agent and RAG may depend on AI but not on product modules or each other. Answer
+lives at `dlightrag.engine.answer` and may depend on AI, Agent, RAG, and Runtime.
+RAG owns its direct LightRAG dependency and never imports concrete PostgreSQL
 adapters. The root product is batteries-included: all provider and source SDKs
 are direct dependencies, while provider modules remain lazy imports. Memory
 imports no root, AI, Agent, or RAG module; it declares `asyncpg` directly and
@@ -439,12 +440,12 @@ module at a higher layer may import from lower layers, but lower layers must not
 import higher ones.
 
 ```text
-L6  api, mcp, web                                  inbound transports
-L5  application                                    config, access, health, use cases
-L4  answer                                         execution policy still outside Application
-L3  rag WorkspacePool / WorkspaceRag               corpus runtime ownership
-L2  AI, Agent, RAG retrieval/ingestion, Runtime    workspace cores and durable contracts
-L1  PostgreSQL adapters, observability             storage and telemetry implementations
+L6  api, mcp, web                                         inbound transports
+L5  application                                           config, access, health, use cases
+L4  engine.answer                                         Answer execution policy
+L3  engine.rag.workspace                                  corpus runtime ownership
+L2  engine.ai, engine.agent, engine.rag, engine.runtime   Engine cores and durable contracts
+L1  PostgreSQL adapters, observability                    storage and telemetry implementations
 ```
 
 The layering checks are part of local and CI verification:
@@ -454,11 +455,11 @@ uv run lint-imports
 ```
 
 `lint-imports` enforces contracts over the root and Memory distributions plus
-the internal AI, Agent, and RAG module seams: AI cannot import product, Agent,
-RAG, LightRAG, PostgreSQL, or transport modules; Agent may use AI but not
-product/RAG/storage/transport code; and RAG may use AI and LightRAG APIs but
-cannot import product, Agent, PostgreSQL, or transport modules. Existing root
-contracts continue to
+the internal Engine module seams: AI cannot import product, Agent, RAG,
+LightRAG, PostgreSQL, or transport modules; Agent may use AI but not
+product/RAG/storage/transport code; RAG may use AI and LightRAG APIs but cannot
+import product, Agent, PostgreSQL, or transport modules; and Answer cannot
+import access, PostgreSQL, or inbound transports. Existing root contracts continue to
 keep `api`/`mcp`/`web` out of internal modules, order the foundation and core
 coordination stacks, keep Runtime free of Answer/RAG/storage/transport code,
 make status routes depend only on `ApplicationHealth`, and separate resources

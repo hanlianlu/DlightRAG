@@ -1,6 +1,6 @@
 import pytest
 
-from dlightrag.answer.citations.utils import filter_content_for_display, split_source_ids
+from dlightrag.engine.answer.citations.utils import filter_content_for_display, split_source_ids
 
 
 @pytest.mark.parametrize(

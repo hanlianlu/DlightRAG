@@ -7,8 +7,11 @@ from typing import Any, Literal
 import nh3
 from pydantic import Field
 
-from dlightrag.answer.citations.parser import CITATION_PATTERN, DOC_CITATION_PATTERN
-from dlightrag.application.answer_runs.citations import SourceReferencePayload
+from dlightrag.application.answer_runs.citations import (
+    CITATION_PATTERN,
+    DOC_CITATION_PATTERN,
+    SourceReferencePayload,
+)
 from dlightrag.application.answer_runs.client_contracts import ClientContractModel
 from dlightrag.application.answer_runs.results import answer_parts_from_markdown
 from dlightrag.engine.rag.corpus.sources.url import validate_public_web_url

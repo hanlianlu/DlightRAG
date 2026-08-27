@@ -8,7 +8,7 @@ import pypdfium2 as pdfium
 import pytest
 from PIL import Image
 
-from dlightrag.answer.publication import (
+from dlightrag.engine.answer.publication import (
     PublicationLimits,
     PublicationScanError,
     is_empty_answer,

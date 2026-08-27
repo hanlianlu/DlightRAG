@@ -161,7 +161,7 @@ async def test_trace_observation_redacts_input_in_privacy_mode() -> None:
 
 
 async def test_answer_output_follows_the_same_privacy_switch_as_the_query() -> None:
-    from dlightrag.answer.executor import answer_trace_output
+    from dlightrag.engine.answer.execution import answer_trace_output
 
     langfuse_state.install_client(langfuse_state.current_client(), trace_sensitive=True)
     assert (

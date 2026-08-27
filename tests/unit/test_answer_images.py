@@ -8,7 +8,6 @@ from dataclasses import FrozenInstanceError
 import pytest
 from PIL import Image
 
-from dlightrag.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.engine.ai.media import (
     ImagePayloadBudget,
     bounded_embedding_image_data_uri,
@@ -16,6 +15,7 @@ from dlightrag.engine.ai.media import (
     decode_image_base64,
     flatten_image_to_rgb,
 )
+from dlightrag.engine.answer.images import AnswerImageBudget, AnswerImagePolicy
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="

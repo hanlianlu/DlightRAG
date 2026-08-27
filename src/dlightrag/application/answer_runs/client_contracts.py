@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from dlightrag.answer.resources.images import MAX_QUERY_IMAGES as _MAX_QUERY_IMAGES
+from dlightrag.engine.answer.resources.images import MAX_QUERY_IMAGES
 
 MAX_HISTORY_MESSAGES = 100
 MAX_HISTORY_CONTENT_CHARS = 16000
@@ -103,7 +103,7 @@ class RetrieveRequestContract(QueryRequestContract):
     """Shared transport-neutral contract for retrieve requests."""
 
     bm25_query: str | None = Field(default=None, max_length=MAX_BM25_QUERY_CHARS)
-    query_images: list[QueryImage] | None = Field(default=None, max_length=_MAX_QUERY_IMAGES)
+    query_images: list[QueryImage] | None = Field(default=None, max_length=MAX_QUERY_IMAGES)
 
 
 class AnswerRequestContract(QueryRequestContract):
@@ -145,6 +145,7 @@ __all__ = [
     "AnswerRequestContract",
     "ImageURL",
     "MAX_BM25_QUERY_CHARS",
+    "MAX_QUERY_IMAGES",
     "MAX_HISTORY_CONTENT_CHARS",
     "MAX_HISTORY_MESSAGES",
     "QueryImage",

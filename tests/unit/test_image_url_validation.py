@@ -3,7 +3,7 @@
 
 import pytest
 
-from dlightrag.answer.images import (
+from dlightrag.engine.answer.images import (
     AnswerImageBudget,
     _is_unsafe_host,
     _validate_image_url,

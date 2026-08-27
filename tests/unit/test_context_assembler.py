@@ -5,15 +5,15 @@ from typing import Any
 
 import pytest
 
-from dlightrag.answer.agent.context import ContextAssembler
-from dlightrag.answer.agent.orchestrator import research_history_input_measure
-from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.answer.memory import reserved_auto_recall_text
-from dlightrag.answer.prompts import CONTROL_TURN_INSTRUCTION
 from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
+from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.execution import research_history_input_measure
+from dlightrag.engine.answer.memory import reserved_auto_recall_text
+from dlightrag.engine.answer.prompts import CONTROL_TURN_INSTRUCTION
+from dlightrag.engine.answer.research.context import ContextAssembler
 
 _WINDOW = 80_000
 _RETAINED_TAIL = 13_600
@@ -237,7 +237,7 @@ async def test_research_turn_packing_runs_off_the_event_loop(
 ) -> None:
     import threading
 
-    from dlightrag.answer.agent import context as context_module
+    from dlightrag.engine.answer.research import context as context_module
 
     loop_thread = threading.get_ident()
     estimator_threads: list[int] = []

@@ -10,8 +10,6 @@ from dlightrag._compose import _memory_embedder
 from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
-from dlightrag.answer.executor import IncompatibleActiveRunError
-from dlightrag.answer.model_runtime import AnswerModelRuntime
 from dlightrag.application import Application, ApplicationClosedError
 from dlightrag.application.answer_runs import AnswerService
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilityCoordinator
@@ -29,6 +27,8 @@ from dlightrag.application.web_conversations import (
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint, model_fingerprint
 from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES
+from dlightrag.engine.answer.execution import IncompatibleActiveRunError
+from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
 from dlightrag.engine.runtime import RunCoordinator, RunSchemaError

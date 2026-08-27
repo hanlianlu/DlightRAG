@@ -1,8 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for answer-context packing with one shared image budget."""
 
-from dlightrag.answer.context import AnswerContextPacker
-from dlightrag.answer.images import AnswerImageBudget
+from dlightrag.engine.answer.images import AnswerImageBudget
+from dlightrag.engine.answer.synthesis_context import AnswerContextPacker
 from dlightrag.engine.rag.retrieval import RetrievalContexts
 
 _PNG_B64 = (

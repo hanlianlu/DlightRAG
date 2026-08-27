@@ -253,7 +253,7 @@ def test_workspace_wheel_verifier_rejects_answer_import_of_postgres_adapter(
     _write_workspace_artifacts(
         tmp_path,
         root_additional_sources={
-            "answer/example.py": "from dlightrag.adapters.postgres import answer_runs\n"
+            "engine/answer/example.py": "from dlightrag.adapters.postgres import answer_runs\n"
         },
     )
 
@@ -265,7 +265,7 @@ def test_workspace_wheel_verifier_rejects_answer_import_of_postgres_adapter(
 
 @pytest.mark.parametrize(
     "config_source",
-    ["import dlightrag.answer\n", "from dlightrag import answer\n"],
+    ["import dlightrag.engine.answer\n", "from dlightrag.engine import answer\n"],
 )
 def test_workspace_wheel_verifier_enforces_root_source_contract(
     tmp_path: Path, config_source: str
@@ -279,7 +279,7 @@ def test_workspace_wheel_verifier_enforces_root_source_contract(
 
     assert completed.returncode == 1
     assert (
-        "forbidden import dlightrag.answer in dlightrag/application/config/probe.py"
+        "forbidden import dlightrag.engine.answer in dlightrag/application/config/probe.py"
         in completed.stderr
     )
 

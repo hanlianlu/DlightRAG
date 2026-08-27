@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title description">
   <title id="title">DlightRAG runtime ownership</title>
-  <desc id="description">Inside one DlightRAG process, inbound adapters call typed application services. AnswerService uses the durable Runtime which invokes Answer execution; RetrievalService and CorpusAdmin use RAG; MemoryService uses the independent Memory package. Answer, Agent, and RAG call the provider-neutral AI module.</desc>
+  <desc id="description">Inside one DlightRAG process, inbound adapters call typed application services. AnswerService uses the durable Runtime which invokes dlightrag.engine.answer; RetrievalService and CorpusAdmin use Engine RAG; MemoryService uses the independent Memory package. Engine Answer, Agent, and RAG call the provider-neutral AI module.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
@@ -66,7 +66,7 @@
   <text class="node-copy" x="215" y="593" text-anchor="middle">fencing · events</text>
 
   <rect class="module" x="390" y="500" width="250" height="110" rx="14"/>
-  <text class="node-title" x="515" y="540" text-anchor="middle">Answer execution</text>
+  <text class="node-title" x="515" y="540" text-anchor="middle">dlightrag.engine.answer</text>
   <text class="node-copy" x="515" y="570" text-anchor="middle">owns Fast and Research policy</text>
   <text class="node-copy" x="515" y="593" text-anchor="middle">evidence · citations · Memory</text>
 
@@ -81,8 +81,8 @@
   <text class="node-copy" x="1135" y="593" text-anchor="middle">over dlightrag-memory</text>
 
   <rect class="foundation" x="250" y="700" width="230" height="90" rx="14"/>
-  <text class="node-title" x="365" y="736" text-anchor="middle">Agent module</text>
-  <text class="node-copy" x="365" y="766" text-anchor="middle">Research loop and tools</text>
+  <text class="node-title" x="365" y="736" text-anchor="middle">dlightrag.engine.agent</text>
+  <text class="node-copy" x="365" y="766" text-anchor="middle">product-neutral Session kernel</text>
 
   <rect class="foundation" x="560" y="700" width="300" height="90" rx="14"/>
   <text class="node-title" x="710" y="736" text-anchor="middle">AI module</text>

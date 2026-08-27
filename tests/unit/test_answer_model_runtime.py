@@ -6,16 +6,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dlightrag.answer.images import AnswerImagePolicy
-from dlightrag.answer.model_runtime import (
-    AnswerModelRuntime,
-    AnswerModelRuntimeClosedError,
-    AnswerModelRuntimeSettings,
-)
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelRoleSettings, ModelSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.images import AnswerImagePolicy
+from dlightrag.engine.answer.model_runtime import (
+    AnswerModelRuntime,
+    AnswerModelRuntimeClosedError,
+    AnswerModelRuntimeSettings,
+)
 
 
 def _policy(profile: ModelProfile) -> AnswerImagePolicy:
@@ -57,7 +57,9 @@ def test_synthesizer_cache_reuses_one_model_across_profiles() -> None:
     pinned = ModelProfile(context_window_tokens=8_000, supports_images=False)
     model = MagicMock()
 
-    with patch("dlightrag.answer.model_runtime.CompletionModel", return_value=model) as create:
+    with patch(
+        "dlightrag.engine.answer.model_runtime.CompletionModel", return_value=model
+    ) as create:
         live_synthesizer = runtime.answer_synthesizer(live)
         pinned_synthesizer = runtime.answer_synthesizer(pinned)
 
@@ -74,10 +76,10 @@ def test_synthesizer_failure_does_not_construct_provider() -> None:
 
     with (
         patch(
-            "dlightrag.answer.model_runtime.AnswerSynthesizer",
+            "dlightrag.engine.answer.model_runtime.AnswerSynthesizer",
             side_effect=RuntimeError("synthesizer failed"),
         ),
-        patch("dlightrag.answer.model_runtime.CompletionModel") as completion,
+        patch("dlightrag.engine.answer.model_runtime.CompletionModel") as completion,
         pytest.raises(RuntimeError, match="synthesizer failed"),
     ):
         runtime.answer_synthesizer(profile)
@@ -109,7 +111,7 @@ async def test_close_is_idempotent_and_prevents_recreation() -> None:
 def test_query_image_describer_follows_vlm_profile() -> None:
     runtime = _runtime()
 
-    with patch("dlightrag.answer.model_runtime.CompletionModel", return_value=MagicMock()):
+    with patch("dlightrag.engine.answer.model_runtime.CompletionModel", return_value=MagicMock()):
         describer = runtime.query_image_describer()
 
     assert describer._max_images == 3
@@ -121,7 +123,7 @@ async def test_query_image_describer_is_disabled_without_vlm_support() -> None:
         vlm_profile=ModelProfile(context_window_tokens=10_000, supports_images=False)
     )
 
-    with patch("dlightrag.answer.model_runtime.CompletionModel") as create:
+    with patch("dlightrag.engine.answer.model_runtime.CompletionModel") as create:
         describer = runtime.query_image_describer()
 
     assert describer._max_images == 0

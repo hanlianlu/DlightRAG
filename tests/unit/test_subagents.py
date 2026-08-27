@@ -9,16 +9,21 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
-from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.answer.executor import (
+from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
+from dlightrag.engine.agent.session.ids import EntryId, IntentId, SessionId
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY
+from dlightrag.engine.ai.messages import AssistantTurn
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     run_child_session,
 )
-from dlightrag.answer.resources.models import TextWindowBudget
-from dlightrag.answer.synthesizer import AnswerSynthesizer
-from dlightrag.answer.tools.composition import compose_research_tools
-from dlightrag.answer.tools.subagents import (
+from dlightrag.engine.answer.resources.models import TextWindowBudget
+from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
+from dlightrag.engine.answer.tools.composition import compose_research_tools
+from dlightrag.engine.answer.tools.subagents import (
     ChildContextSnapshot,
     ChildControlInput,
     ChildOutcome,
@@ -28,11 +33,6 @@ from dlightrag.answer.tools.subagents import (
     child_session_id,
     subagent_tools,
 )
-from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
-from dlightrag.engine.agent.session.ids import EntryId, IntentId, SessionId
-from dlightrag.engine.ai.capacity import CONTEXT_POLICY
-from dlightrag.engine.ai.messages import AssistantTurn
-from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.runtime import RunCancelledError
 from tests.in_memory_session_repository import InMemoryAgentSessionRepository
 from tests.tool_helpers import tool_runtime
@@ -552,7 +552,9 @@ async def test_child_session_persists_and_replays_without_rerun() -> None:
 async def test_child_renews_its_lease_while_a_provider_call_is_in_flight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.answer.executor._CHILD_LEASE_HEARTBEAT_SECONDS", 0.005)
+    monkeypatch.setattr(
+        "dlightrag.engine.answer.research.runtime._CHILD_LEASE_HEARTBEAT_SECONDS", 0.005
+    )
 
     async def model(**_kwargs: object) -> AssistantTurn:
         await asyncio.sleep(0.03)
