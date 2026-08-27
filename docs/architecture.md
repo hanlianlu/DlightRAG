@@ -18,15 +18,14 @@ This view answers only who uses DlightRAG and which external systems it reaches.
 LightRAG, the Agent loop, and provider adapters are in-process implementation;
 they are deliberately absent here. Optional integrations have dashed borders.
 
-The page uses four independent architectural viewpoints. An arrow keeps exactly
-one meaning inside each figure:
+The page uses three architectural viewpoints. An arrow keeps exactly one
+meaning inside each figure:
 
 | View | Question | Arrow meaning |
 |---|---|---|
 | System context | Who uses the system and what surrounds it? | System interaction |
 | Runtime ownership | Which in-process module owns each behavior? | Primary runtime invocation |
 | PostgreSQL topology | Where do processes and state live? | Cross-runtime or storage connection |
-| Code layering | Which module may import which? | Allowed import direction |
 
 Fast/Research branching, ingestion, retrieval, and run recovery are dynamic
 flows. They stay in their owning sections rather than being mixed into a static
@@ -35,7 +34,7 @@ architecture overview.
 ## Runtime Ownership
 
 <p align="center">
-  <img src="architecture-runtime.svg" alt="DlightRAG runtime ownership from adapters.http and adapters.mcp through Application use cases to Engine runtime, Answer, RAG, Memory, Agent, and AI" width="1180" />
+  <img src="architecture-runtime.svg" alt="DlightRAG runtime ownership from adapters.http and adapters.mcp through Application use cases to Engine runtime, Answer, RAG, Memory, Agent, AI, and LightRAG" width="1180" />
 </p>
 
 `create_application` is the private-composition entry point; `Application` owns lifecycle and use-case accessors.
@@ -377,16 +376,9 @@ complete role, migration-order, and shared-artifact contract.
 
 The repository is one UV workspace with two lockstep distributions. The root
 wheel contains five Engine modules—AI, Agent, Runtime, RAG, and Answer—whose
-import direction remains machine-enforced. Independently installable Memory
-remains a separate distribution seam:
-
-<p align="center">
-  <img src="architecture-code.svg" alt="DlightRAG compile-time dependency view for root product modules, Engine Answer, AI, Agent, RAG, Runtime, Memory, and LightRAG" width="1080" />
-</p>
-
-This is the only figure whose arrows mean compile-time dependency. The arrow
-points from the importing module to the module it may import; it says nothing
-about runtime sequencing or deployment.
+import direction remains machine-enforced and matches Runtime Ownership above.
+Independently installable Memory remains a separate distribution seam. There is
+no second compile-time diagram: arrows on this page never mean “may import”.
 
 Agent and RAG may depend on AI but not on product modules or each other. Answer
 lives at `dlightrag.engine.answer` and may depend on AI, Agent, RAG, and Runtime.
