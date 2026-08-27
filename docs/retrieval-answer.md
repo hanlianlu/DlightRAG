@@ -440,7 +440,7 @@ model only guessed at. Returned `sources` contain only
 cited documents and chunks.
 Answer finalization also derives the `evidence_images` registry and ordered
 `parts` from validated cited sources and explicit Artifact references before
-transport projection. SDK, REST, MCP, and Web therefore expose the same typed
+transport projection. REST, MCP, Web, and in-process Application therefore expose the same typed
 image and Artifact presentation data, including `artifacts` and
 `artifact_outcome`, without trusting model-generated Markdown image URLs.
 Streaming callers receive tokens immediately and a final normalized answer plus
@@ -454,7 +454,7 @@ The highlighter uses the finalized answer text plus cited source chunk content
 to fill `sources[].chunks[].highlight_phrases`.
 
 Web streaming attempts highlight enrichment by default after the answer and
-source panel are finalized. SDK, REST, and MCP answer calls default to no
+source panel are finalized. REST, MCP, and in-process Application answer calls default to no
 semantic highlights; pass `semantic_highlights=True` or
 `semantic_highlights: true` on an answer request to opt in. `/retrieve` never
 emits highlights because it has no finalized answer citations.

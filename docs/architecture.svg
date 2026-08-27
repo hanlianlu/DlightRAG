@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title description">
   <title id="title">DlightRAG system context</title>
-  <desc id="description">Users and client systems call DlightRAG through Web, REST, MCP, SDK, or an embedded Application interface. DlightRAG calls AI providers, optional external tools, and content integrations, and persists state in PostgreSQL and a shared corpus artifact filesystem.</desc>
+  <desc id="description">Users and client systems call DlightRAG through Web, REST, MCP, or an embedded Application. DlightRAG calls AI providers, optional external tools, and content integrations, and persists state in PostgreSQL and a shared corpus artifact filesystem.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>

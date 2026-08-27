@@ -35,7 +35,7 @@ architecture overview.
 ## Runtime Ownership
 
 <p align="center">
-  <img src="architecture-runtime.svg" alt="DlightRAG runtime ownership from inbound adapters through Application use cases to Runtime, Answer, RAG, Memory, Agent, and AI modules" width="1180" />
+  <img src="architecture-runtime.svg" alt="DlightRAG runtime ownership from adapters.http and adapters.mcp through Application use cases to Engine runtime, Answer, RAG, Memory, Agent, and AI" width="1180" />
 </p>
 
 `create_application` is the private-composition entry point; `Application` owns lifecycle and use-case accessors.
@@ -49,7 +49,7 @@ LightRAG remains the core RAG engine. It owns parser routing, staged ingest,
 document chunks, document status, vector storage, and the knowledge graph.
 DlightRAG adds product-layer source staging, metadata governance, durable ingest
 jobs, PostgreSQL BM25, fused visual-vector alignment, answer orchestration,
-citations, REST, Web, SDK, and MCP interfaces.
+citations, REST, Web, MCP, and in-process Application interfaces.
 
 DlightRAG does not reimplement LightRAG parser sidecars, document status, KG
 extraction, or LightRAG `mix` retrieval.
@@ -350,7 +350,7 @@ ownership is separated inside PostgreSQL even though the current deployment
 uses one primary endpoint.
 
 DlightRAG uses one PostgreSQL endpoint per service process. A writer process (the
-default) serves REST, Web, MCP, and SDK operations and owns schema migrations.
+default) serves REST, Web, MCP, and in-process Application operations and owns schema migrations.
 A `reader` process is **corpus-read-only, not process-read-only**: it may create
 and execute answer runs and write DlightRAG operational state (runs, events,
 artifacts, Web conversations), while `CorpusAdmin` rejects ingestion, workspace
@@ -435,18 +435,11 @@ record operations are unavailable except reading or changing the setting. A
 monotonic owner epoch invalidates already-running mutation hosts after deactivate
 or physical Clear.
 
-Inside the root product, modules still sit on a decreasing dependency stack: a
-module at a higher layer may import from lower layers, but lower layers must not
-import higher ones.
-
-```text
-L6  adapters.http, adapters.mcp                           inbound transports
-L5  application                                           config, access, health, use cases
-L4  engine.answer                                         Answer execution policy
-L3  engine.rag.workspace                                  corpus runtime ownership
-L2  engine.ai, engine.agent, engine.rag, engine.runtime   Engine cores and durable contracts
-L1  PostgreSQL adapters, observability                    storage and telemetry implementations
-```
+Inside the root product the compile-time direction is three zones, not a numbered
+stack: inbound adapters import Application; Application imports Engine; only
+private `create_application` / `_compose` wires concrete adapters. Engine must
+not import Application or inbound adapters. PostgreSQL and Observability
+implement owner ports and are not a layer Application may import.
 
 The layering checks are part of local and CI verification:
 

@@ -501,7 +501,7 @@ authorization is evaluated once before the run-creation transaction and only the
 resulting workspace set is stored, never a token or mutable claims; a later policy
 change does not revoke an already accepted run, and its owner may cancel it.
 Follow-up and fork are new ordinary runs, not mutations of that accepted run, so
-every REST, MCP, SDK, and Web continuation rechecks current `workspace.query`
+every REST, MCP, Web, and in-process Application continuation rechecks current `workspace.query`
 authorization before its own acceptance transaction.
 
 ### Answer Artifact browser boundary

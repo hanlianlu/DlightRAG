@@ -1,6 +1,6 @@
 # Configuration
 
-This page is for operators and SDK users deciding which settings to change. It
+This page is for operators and in-process Application users deciding which settings to change. It
 owns configuration precedence, public field groups, defaults, and advanced
 overrides. Runtime architecture lives in [architecture.md](architecture.md);
 auth and access-control guidance lives in [security.md](security.md);
@@ -787,7 +787,7 @@ vector scoring inside a small metadata candidate set.
 ## Image Budgets
 
 `answer.generation.max_images` and the answer byte/geometry fields define one image
-transport budget for every answer, across REST, SDK, MCP, and Web. That single
+transport budget for every answer, across REST, MCP, Web, and in-process Application. That single
 budget covers current attachment images and retrieved workspace visuals.
 Focused VLM inspection is a separate model call: each inspection applies the
 same byte/geometry limits independently and does not consume the final answer
@@ -853,7 +853,7 @@ answer transport use the same ceiling.
 ## Answer Attachments And Web Conversations
 
 Answer public inputs are **attachments**, not query images. REST, the Python
-SDK, MCP, and the Web UI attach files and HTTPS references that become
+REST, MCP, Web, and in-process Application attach files and HTTPS references that become
 request-local resources for the lifetime of one answer. `max_attachments`,
 `answer.generation.max_attachment_bytes`, and `answer.generation.max_total_attachment_bytes` (above) bound admission
 on every channel. Attachments are read on demand — deterministic UTF-8/CSV
@@ -1068,7 +1068,7 @@ separately with a stable proposal id.
 
 Citation validation is always part of answer finalization. Web Inspector Sources
 semantic highlights are enabled by default and use the keyword LLM role after
-the answer has already been streamed/finalized. SDK, REST, and MCP answer calls
+the answer has already been streamed/finalized. REST, MCP, and in-process Application answer calls
 default to no semantic highlights; pass `semantic_highlights=True` in Python or
 `semantic_highlights: true` in JSON on one answer request to include
 `sources[].chunks[].highlight_phrases`.

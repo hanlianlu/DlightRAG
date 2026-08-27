@@ -1,14 +1,14 @@
 # Application, Engine, and Adapters
 
-DlightRAG's first-look source tree mixes capability owners, technical layers, transports, and concrete implementations. The accepted target is three visible code zones plus one private composition factory: inbound adapters call Application; Application owns product use cases; Engine owns execution; concrete adapters implement Application or Engine interfaces. Implementation is pending.
+DlightRAG's first-look source tree is three visible code zones plus one private composition factory: inbound adapters call Application; Application owns product use cases; Engine owns execution; concrete adapters implement Application or Engine interfaces.
 
 ## Status
 
-Accepted. Implementation pending. Canonical architecture documents and diagrams continue to describe the current tree until each reorganization milestone lands.
+Accepted. Implemented on main through M1–M6. M7 is the documentation and diagram closure for that landed tree.
 
 ## Context
 
-The current root mixes four taxonomies at once: product capabilities (`answer`, `rag`, `access`), architectural roles (`application`, `services`, `runtime`, `adapters`), transports (`api`, `web`, `mcp`, `sdk`), and a peer `services` package that already belongs to Application. Two folders named `agent` exist for legitimate reasons — a product-neutral kernel and an Answer host — but the names hide that distinction. Inbound HTTP and MCP currently reach through Application, services, and deep Engine types. The documented layering needs nine levels to explain one request.
+Before this change the root mixed four taxonomies at once: product capabilities (`answer`, `rag`, `access`), architectural roles (`application`, `services`, `runtime`, `adapters`), transports (`api`, `web`, `mcp`, `sdk`), and a peer `services` package that already belonged to Application. Two folders named `agent` existed for legitimate reasons — a product-neutral kernel and an Answer host — but the names hid that distinction. Inbound HTTP and MCP reached through Application, services, and deep Engine types. The documented layering needed nine levels to explain one request.
 
 Pi coding-agent looks clearer because it exposes one product facade (`AgentSession`), one creation function (`createAgentSession`), and modes that call that facade directly. Pi is not smaller internally, and it is not a durable multi-capability service. The lesson worth copying is the short visible path, not a single `core` dump or local JSONL persistence.
 

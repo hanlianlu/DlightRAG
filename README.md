@@ -27,7 +27,7 @@ and provider lifecycles, `dlightrag.engine.agent` for generic tool and turn
 mechanics, `dlightrag.engine.runtime` for durable coordination, and
 `dlightrag.engine.rag` for one workspace runtime with internal LightRAG, corpus,
 and retrieval owners. The root composes those modules into the REST, Web, MCP,
-SDK, and PostgreSQL-backed product. Owner Profile Memory
+and PostgreSQL-backed product, plus in-process Application. Owner Profile Memory
 remains the independently installable `dlightrag-memory` distribution for both
 DlightRAG and external stdio MCP hosts. CI builds and inspects the root and
 Memory wheels outside the editable workspace. `dlightrag.engine.runtime` owns
@@ -245,7 +245,7 @@ re-registered lazily on follow-ups. The separate `/retrieve` path keeps its own
 ### Durable answers
 
 Every answer is one durable run with one identifier and one lifecycle, shared by
-REST, MCP, Web, the SDK, and evaluation. `POST /answer` returns HTTP 202
+REST, MCP, Web, in-process Application, and evaluation. `POST /answer` returns HTTP 202
 with the run's status, events, and cancel URLs; the run outlives its creating
 request, so a disconnected client only detaches. Events are reconnectable SSE
 resumed by durable sequence, and a restart restores typed Agent OperationState
@@ -279,7 +279,7 @@ curl -N "http://localhost:8100/answer/$RUN/events"   # follow, resumable by id
 curl "http://localhost:8100/answer/$RUN"             # status + canonical result
 ```
 
-All SDK, REST, MCP, Web contracts and response shapes are in
+All Application, REST, MCP, and Web contracts and response shapes are in
 [docs/interfaces.md](docs/interfaces.md).
 
 ### In-process Application
@@ -351,7 +351,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`config.yaml` is optional for SDK users; constructor values take precedence.
+`config.yaml` is optional for in-process Application users; constructor values take precedence.
 
 ### MCP
 
@@ -489,7 +489,7 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 
 - [docs/architecture.md](docs/architecture.md) - runtime ownership, storage topology, and code layering.
 - [docs/domain-language.md](docs/domain-language.md) - the project's shared vocabulary for domain terms.
-- [docs/interfaces.md](docs/interfaces.md) - SDK, REST, MCP, and Web contracts.
+- [docs/interfaces.md](docs/interfaces.md) - Application, REST, MCP, and Web contracts.
 - [docs/security.md](docs/security.md) - auth, JWT/JWKS, IdP boundaries, and access control.
 - [docs/configuration.md](docs/configuration.md) - configuration precedence, fields, and defaults.
 - [docs/retrieval-answer.md](docs/retrieval-answer.md) - retrieval, filters, BM25, fusion, rerank, answers, citations, and highlights.

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title description">
   <title id="title">DlightRAG runtime ownership</title>
-  <desc id="description">Inside one DlightRAG process, inbound adapters call typed application services. AnswerService uses the durable Runtime which invokes dlightrag.engine.answer; RetrievalService and CorpusAdmin use Engine RAG; MemoryService uses the independent Memory package. Engine Answer, Agent, and RAG call the provider-neutral AI module.</desc>
+  <desc id="description">Inside one DlightRAG process, inbound HTTP and MCP adapters call Application use cases. Answer Runs use durable Runtime and Engine Answer; Retrieval and Corpus Administration use Engine RAG; Memory uses the independent Memory package. Engine Answer, Agent, and RAG call provider-neutral AI.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
@@ -46,22 +46,22 @@
   <rect class="boundary" x="50" y="100" width="1300" height="750" rx="22"/>
   <text class="boundary-title" x="85" y="134">DLIGHTRAG APPLICATION PROCESS</text>
   <rect class="badge" x="925" y="114" width="380" height="42" rx="10"/>
-  <text class="note" x="1115" y="140" text-anchor="middle">Application composes modules and owns lifecycle</text>
+  <text class="note" x="1115" y="140" text-anchor="middle">Application owns use cases; composition is private</text>
 
   <rect class="interface" x="110" y="180" width="540" height="100" rx="14"/>
   <text class="node-title" x="380" y="219" text-anchor="middle">Inbound adapters</text>
-  <text class="node-copy" x="380" y="249" text-anchor="middle">REST API · Web · inbound MCP</text>
+  <text class="node-copy" x="380" y="249" text-anchor="middle">adapters.http · adapters.mcp</text>
 
   <rect class="interface" x="750" y="180" width="540" height="100" rx="14"/>
   <text class="node-title" x="1020" y="219" text-anchor="middle">Embedded interface</text>
   <text class="node-copy" x="1020" y="249" text-anchor="middle">Python Application interface</text>
 
   <rect class="service" x="180" y="330" width="1040" height="100" rx="16"/>
-  <text class="node-title" x="700" y="370" text-anchor="middle">Typed application services</text>
-  <text class="node-copy" x="700" y="400" text-anchor="middle">AnswerService · RetrievalService · CorpusAdmin · MemoryService · ApplicationHealth</text>
+  <text class="node-title" x="700" y="370" text-anchor="middle">Application use cases</text>
+  <text class="node-copy" x="700" y="400" text-anchor="middle">Answer Runs · Retrieval · Corpus Administration · Memory · Health</text>
 
   <rect class="module" x="90" y="500" width="250" height="110" rx="14"/>
-  <text class="node-title" x="215" y="540" text-anchor="middle">Durable Runtime</text>
+  <text class="node-title" x="215" y="540" text-anchor="middle">engine.runtime</text>
   <text class="node-copy" x="215" y="570" text-anchor="middle">RunCoordinator · leases</text>
   <text class="node-copy" x="215" y="593" text-anchor="middle">fencing · events</text>
 
@@ -71,7 +71,7 @@
   <text class="node-copy" x="515" y="593" text-anchor="middle">evidence · citations · Memory</text>
 
   <rect class="module" x="700" y="500" width="250" height="110" rx="14"/>
-  <text class="node-title" x="825" y="540" text-anchor="middle">RAG module</text>
+  <text class="node-title" x="825" y="540" text-anchor="middle">engine.rag</text>
   <text class="node-copy" x="825" y="570" text-anchor="middle">WorkspacePool · WorkspaceRag</text>
   <text class="node-copy" x="825" y="593" text-anchor="middle">LightRAG integration</text>
 
@@ -85,7 +85,7 @@
   <text class="node-copy" x="365" y="766" text-anchor="middle">product-neutral Session kernel</text>
 
   <rect class="foundation" x="560" y="700" width="300" height="90" rx="14"/>
-  <text class="node-title" x="710" y="736" text-anchor="middle">AI module</text>
+  <text class="node-title" x="710" y="736" text-anchor="middle">engine.ai</text>
   <text class="node-copy" x="710" y="766" text-anchor="middle">Model lifecycles and provider adapters</text>
 
   <path class="edge" d="M 380 280 V 330"/>

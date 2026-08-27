@@ -51,7 +51,7 @@ variables › `.env` › `config.yaml` › defaults (see
 - **Programmatic:** build `DlightragConfig(...)` in code and pass overrides
   directly; no files required.
 
-Once configured, the SDK runtime is a small create-once / call / close lifecycle:
+Once configured, in-process Application is a small create-once / call / close lifecycle:
 
 ```python
 application = await create_application(config)  # start: warms the default workspace
@@ -68,7 +68,7 @@ provider overrides from any configuration source above.
 
 ## Ingestion
 
-### Python SDK
+### In-process Application
 
 ```python
 from dlightrag import DlightragConfig, create_application
@@ -218,7 +218,7 @@ fail-closed contract as REST.
 ### Metadata At Call Time
 
 Custom metadata needs no declaration. Any key passed through `metadata` on a
-REST, MCP, or SDK ingest call is stored verbatim and is immediately filterable.
+REST, MCP, or in-process Application ingest call is stored verbatim and is immediately filterable.
 
 System metadata such as `filename`, `filename_stem`, `file_extension`,
 `title`, and `author` is extracted or mapped by DlightRAG. These names are
@@ -560,17 +560,17 @@ contracts rendered by the Lit Inspector Files content module; answer, source, an
 Artifact presentation surfaces use the shared `AnswerPresentation` contract. Sanitized rich-content
 strings are the only deliberate browser HTML sinks. These browser routes have
 no compatibility aliases at their old
-`/web/*` paths. Prefer REST or the SDK for programmatic access.
+`/web/*` paths. Prefer REST or in-process Application for programmatic access.
 
 Image support is a deployment capability, not a per-request negotiation, so callers
 discover it up front. REST `GET /health` returns `answer_image_capability`
 (`status`, `effective_max_images`, `configured_ceiling`, `model`); the MCP
-`get_capabilities` tool returns the same summary; and the Python SDK exposes it as
+`get_capabilities` tool returns the same summary; and in-process Application exposes it as
 `await application.answers.capabilities()`. When `status` is not `supported`, attaching
 image resources is rejected fail-closed with a stable `error_kind`
 (`CURRENT_IMAGES_UNSUPPORTED` or `ANSWER_IMAGE_CAPABILITY_UNKNOWN`): REST returns
 HTTP 422 (or a classified SSE `error` event carrying `error_kind` when streaming),
-MCP returns the error text, and the SDK raises `AnswerImageError`.
+MCP returns the error text, and Application raises `AnswerImageError`.
 
 `GET /health` is liveness only: it answers from `ApplicationHealth` in-process
 state (degraded state, startup warnings, and the projected
@@ -616,7 +616,7 @@ That authorization-relative multi-workspace selection is independent from
 `Files in`, which continues to name one workspace for file management and
 ingestion.
 
-### Python SDK
+### In-process Application
 
 ```python
 # Retrieve: contexts only, no LLM answer
@@ -657,7 +657,7 @@ result.evidence_images  # cited visual evidence available for rendering
 result.parts  # derived markdown/artifact/evidence_image display order
 
 # Answer with attachments: files or HTTPS references become request-local
-# resources read on demand. The SDK builds ResourceInput objects from the
+# resources read on demand. In-process Application builds ResourceInput objects from the
 # AnswerAttachment path/bytes/url conveniences owned by the resource domain.
 from dlightrag.engine.answer.resources.attachments import (
     AnswerAttachment,
@@ -708,12 +708,12 @@ client against those same routes; there is no public Python SDK package.
 | `mode` | `auto \| fast \| research` | `auto` | Answer Mode. Omitted hashes as `auto`. |
 | `workspace` | `str \| None` | config default | Target workspace |
 | `workspaces` | `list[str] \| None` | `None` | Federated search across multiple workspaces |
-| `all_workspaces` | `bool` | `false` | Query every workspace visible to the current caller. For REST/MCP this is the existing `workspace.query`-authorized set; for the in-process SDK it is every registered workspace. Mutually exclusive with a non-empty `workspace`/`workspaces` selection. |
+| `all_workspaces` | `bool` | `false` | Query every workspace visible to the current caller. For REST/MCP this is the existing `workspace.query`-authorized set; for in-process Application it is every registered workspace. Mutually exclusive with a non-empty `workspace`/`workspaces` selection. |
 | `top_k` | `int \| None` | config default | LightRAG KG breadth: entities in local retrieval and relationships in global retrieval. |
 | `chunk_top_k` | `int \| None` | config default | Explicit chunk/visual candidates fetched for `/retrieve` and before `/answer` packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
 | `bm25_query` | `str \| None` | `None` | `retrieve` only. Optional workspace BM25 query override; when omitted, RetrievalPlanner supplies lexical terms or retrieval uses the main query. REST and MCP inputs are capped at 1,024 characters. |
 | `query_images` | `list[QueryImage]` | `None` | `retrieve` only. Current-request OpenAI-style `image_url` blocks for knowledge-base visual search: described by the VLM for semantic/BM25 retrieval and embedded directly for visual retrieval. Capped at 3. Answer calls do not accept this field. |
-| `attachments` | `list[AnswerAttachmentLink]` (SDK: `list[AnswerAttachment]` via `resources`) | `None` | `/answer` only. Files or HTTPS references read as request-local resources for one answer. JSON/MCP bodies carry HTTPS link descriptors (`{url, filename?}`, HTTPS-only, no credentials); REST multipart adds uploaded files; the SDK uses `AnswerAttachment.from_path/from_bytes/from_url`. Bounded by `answer.generation.max_attachments` (6), `answer.generation.max_attachment_bytes` (100 MiB), and `answer.generation.max_total_attachment_bytes` (128 MiB). |
+| `attachments` | `list[AnswerAttachmentLink]` (Application: `list[AnswerAttachment]` via `resources`) | `None` | `/answer` only. Files or HTTPS references read as request-local resources for one answer. JSON/MCP bodies carry HTTPS link descriptors (`{url, filename?}`, HTTPS-only, no credentials); REST multipart adds uploaded files; in-process Application uses `AnswerAttachment.from_path/from_bytes/from_url`. Bounded by `answer.generation.max_attachments` (6), `answer.generation.max_attachment_bytes` (100 MiB), and `answer.generation.max_total_attachment_bytes` (128 MiB). |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `answer.citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
 | `history` | `list[ConversationMessage] \| None` | `None` | `/answer` only. Optional caller-supplied prior turns as `role` (`user`/`assistant`) + `content` messages. The accepted run durably pins the bounded projection for recovery and server-owned follow-up/fork; a new independent request still sends the history it wants. Fast retrieval uses it for standalone-query rewrite and generation; Research control sees the same bounded turns, while agent-selected KB queries stay unchanged. Capped at 100 messages. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports `filename`, `file_extension`, `title`, `author`, `creation_date_from`/`creation_date_to`, and any `custom` key |
@@ -944,7 +944,7 @@ Retrieved document images are exposed as route references, not embedded bytes:
 | REST | `/images/{workspace}/{chunk_id}?size=thumb\|full` in `image_url`, `thumbnail_url`, and `evidence_images` | Authenticated REST image route |
 | Web | `/web/api/images/{workspace}/{chunk_id}?size=thumb\|full` in rendered HTML/SSE payloads | Same-origin Web image route |
 | MCP | Same JSON `image_url`/`thumbnail_url` references as REST when a REST image route is reachable | No separate MCP binary stream today |
-| SDK | `evidence_images` render references; internal `contexts` may still include `image_data` | In-process caller can inspect internals, but renderers should prefer `evidence_images` |
+| Application | `evidence_images` render references; internal `contexts` may still include `image_data` | In-process caller can inspect internals, but renderers should prefer `evidence_images` |
 
 User-supplied `/retrieve` `query_images` are different: they can arrive as data
 URIs and are bounded before model use. Answer attachments are also different:
@@ -1030,13 +1030,13 @@ Sources are document-level groupings derived from chunks via `build_sources()`.
 They appear in REST/MCP responses and drive the Web UI's source panel. Cited
 answer paths use the same citation indexer as answer validation, so chunk order
 matches `[ref_id-chunk_idx]` markers instead of page sorting. `source_uri` is
-stable provenance and is returned consistently by REST, MCP, SDK, and Web. The
+stable provenance and is returned consistently by REST, MCP, Web, and in-process Application. The
 Web source panel renders it in a new tab when it is a credential-free public
 HTTP(S) URL. HTTP adapters separately project the internal document ID and
 source workspace to an authorized `download_url`, then look up the locator
 server-side; raw storage locators and workspace-routing fields are never public.
 REST links use `/files/raw/{document_id}`; Web links use the Web-authenticated
-`/web/api/files/raw/{document_id}`. Transport-neutral SDK/MCP payloads leave
+`/web/api/files/raw/{document_id}`. Transport-neutral MCP payloads leave
 `download_url` null.
 
 ```json
@@ -1155,7 +1155,7 @@ attachments; they become request-local resources that the orchestrator reads and
 inspects on demand:
 
 ```python
-# Python SDK — answer over an attached image
+# In-process Application — answer over an attached image
 from dlightrag.engine.answer.resources.attachments import (
     AnswerAttachment,
     resource_inputs_from_attachments,

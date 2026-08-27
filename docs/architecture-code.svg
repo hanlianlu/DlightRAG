@@ -39,7 +39,7 @@
   <text class="subtitle" x="640" y="70" text-anchor="middle">Every arrow means “may import”; runtime calls and deployment connections are excluded</text>
 
   <rect class="product" x="80" y="105" width="1120" height="110" rx="18"/>
-  <text class="node-title" x="640" y="145" text-anchor="middle">Current product and adapter modules</text>
+  <text class="node-title" x="640" y="145" text-anchor="middle">Application and Adapters</text>
   <text class="node-copy" x="640" y="175" text-anchor="middle">application use cases · adapters.http · adapters.mcp · PostgreSQL and Observability</text>
   <text class="node-copy" x="640" y="198" text-anchor="middle">Inbound HTTP and MCP call Application; private composition wires adapters.</text>
 
