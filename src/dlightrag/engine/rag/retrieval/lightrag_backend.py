@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from lightrag import QueryParam
+from lightrag.constants import DEFAULT_CHUNK_TOP_K, DEFAULT_TOP_K
 
 from dlightrag.engine.rag.retrieval import ContextRow, RetrievalResult
 from dlightrag.engine.rag.retrieval.references import canonicalize_reference_ids
@@ -40,10 +41,10 @@ class LightRAGMixBackend:
         **kwargs: Any,
     ) -> RetrievalResult:
         del mode, kwargs
-        limit = chunk_top_k or top_k or 30
+        limit = chunk_top_k or top_k or DEFAULT_CHUNK_TOP_K
         param = QueryParam(
             mode="mix",
-            top_k=top_k or 60,
+            top_k=top_k or DEFAULT_TOP_K,
             chunk_top_k=limit,
             max_entity_tokens=self._max_entity_tokens,
             max_relation_tokens=self._max_relation_tokens,

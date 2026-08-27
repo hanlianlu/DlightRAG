@@ -245,8 +245,8 @@ def _bm25_profiles() -> tuple[BM25ProfileSettings, ...]:
 
 
 class RetrievalSettings(FrozenSettings):
-    top_k: int = Field(default=60, ge=1)
-    chunk_top_k: int = Field(default=30, ge=1)
+    top_k: int = Field(default=40, ge=1)
+    chunk_top_k: int = Field(default=20, ge=1)
     timeout: int = Field(default=300, gt=0)
     bm25_enabled: bool = True
     bm25_profiles: tuple[BM25ProfileSettings, ...] = Field(default_factory=_bm25_profiles)

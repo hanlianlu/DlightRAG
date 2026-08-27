@@ -85,8 +85,8 @@ corpus:
     pipeline:
       max_concurrency: 16
   retrieval:
-    top_k: 60
-    chunk_top_k: 30
+    top_k: 40
+    chunk_top_k: 20
     direct_visual_top_k: 20
 
 answer:
