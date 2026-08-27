@@ -21,7 +21,7 @@ _ROUTER_SYSTEM = (
 
 
 class _ModeDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     mode: Literal["fast", "research"]
 
