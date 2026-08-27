@@ -7,7 +7,6 @@ from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 
 from dlightrag.engine.ai.fingerprints import model_fingerprint
 from dlightrag.engine.ai.providers import get_provider
@@ -25,11 +24,43 @@ from dlightrag.engine.ai.telemetry import (
 logger = logging.getLogger(__name__)
 
 
-def _is_default_openai_endpoint(base_url: str | None) -> bool:
-    if not base_url:
-        return True
-    parsed = urlparse(base_url)
-    return parsed.scheme in {"http", "https"} and parsed.netloc == "api.openai.com"
+_JSON_OBJECT_HINT = "Respond with JSON."
+
+
+def _content_mentions_json(content: Any) -> bool:
+    if isinstance(content, str):
+        return "json" in content.casefold()
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, str) and "json" in part.casefold():
+                return True
+            if isinstance(part, dict) and "json" in str(part.get("text") or "").casefold():
+                return True
+    return False
+
+
+def _append_json_hint(content: Any) -> Any:
+    if isinstance(content, str):
+        return f"{content.rstrip()}\n{_JSON_OBJECT_HINT}"
+    if isinstance(content, list):
+        return [*content, {"type": "text", "text": _JSON_OBJECT_HINT}]
+    return _JSON_OBJECT_HINT
+
+
+def _messages_for_json_object(
+    messages: list[dict[str, Any]],
+    response_format: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """json_object requires the word json in some message; fold it into system."""
+    if response_format is None or response_format.get("type") != "json_object":
+        return messages
+    if any(_content_mentions_json(message.get("content")) for message in messages):
+        return messages
+    if messages and messages[0].get("role") == "system":
+        first = dict(messages[0])
+        first["content"] = _append_json_hint(first.get("content"))
+        return [first, *messages[1:]]
+    return [{"role": "system", "content": _JSON_OBJECT_HINT}, *messages]
 
 
 def structured_response_format(
@@ -44,7 +75,7 @@ def structured_response_format(
         return {"type": "json_object"}
     if mode == "json_schema":
         return structured_output.response_format_for_provider(settings.provider)
-    if settings.provider == "openai" and _is_default_openai_endpoint(settings.base_url):
+    if settings.provider == "openai":
         return structured_output.response_format_for_provider("openai")
     if provider is not None and provider.supports_native_json_schema:
         return structured_output.response_format_for_provider(settings.provider)
@@ -149,9 +180,10 @@ class CompletionModel:
             f"llm_{self.settings.model}",
             **observation_kwargs,
         ) as observation:
+            outbound = _messages_for_json_object(messages, response_format)
             try:
                 result = await self._provider.complete(
-                    messages=messages,
+                    messages=outbound,
                     model=self.settings.model,
                     temperature=self.settings.temperature,
                     max_tokens=max_tokens,
@@ -170,13 +202,14 @@ class CompletionModel:
                         self.settings.model,
                         exc_info=True,
                     )
+                    json_object = {"type": "json_object"}
                     try:
                         result = await self._provider.complete(
-                            messages=messages,
+                            messages=_messages_for_json_object(messages, json_object),
                             model=self.settings.model,
                             temperature=self.settings.temperature,
                             max_tokens=max_tokens,
-                            response_format={"type": "json_object"},
+                            response_format=json_object,
                             model_kwargs=model_kwargs,
                         )
                     except Exception as fallback_exc:
@@ -223,7 +256,7 @@ class CompletionModel:
         ) as observation:
             try:
                 stream = self._provider.stream(
-                    messages=messages,
+                    messages=_messages_for_json_object(messages, response_format),
                     model=self.settings.model,
                     temperature=self.settings.temperature,
                     max_tokens=max_tokens,

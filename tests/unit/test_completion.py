@@ -7,10 +7,12 @@ from datetime import datetime
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
-from dlightrag.engine.ai.completion import CompletionModel
+from dlightrag.engine.ai.completion import CompletionModel, structured_response_format
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
+from dlightrag.engine.ai.structured import StructuredOutput
 
 
 class RecordingObservation:
@@ -195,3 +197,99 @@ async def test_stream_consumer_abandonment_closes_provider_iterator(monkeypatch)
         "text_length": 5,
         "text": "first",
     }
+
+
+class _ModeDecision(BaseModel):
+    mode: str
+
+
+_MODE_OUTPUT = StructuredOutput(name="answer_mode", schema=_ModeDecision)
+
+
+def test_auto_openai_compat_prefers_json_schema() -> None:
+    settings = ModelSettings(
+        provider="openai",
+        model="compat",
+        base_url="https://openrouter.ai/api/v1",
+        structured_output="auto",
+    )
+    fmt = structured_response_format(_MODE_OUTPUT, settings)
+    assert fmt["type"] == "json_schema"
+
+
+def test_explicit_json_object_stays_json_object() -> None:
+    settings = ModelSettings(
+        provider="openai",
+        model="compat",
+        structured_output="json_object",
+    )
+    assert structured_response_format(_MODE_OUTPUT, settings) == {"type": "json_object"}
+
+
+async def test_json_object_folds_hint_into_system(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    class Provider:
+        async def complete(self, **kwargs: Any) -> str:
+            seen.update(kwargs)
+            return "{}"
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.completion.get_provider",
+        lambda *_args, **_kwargs: Provider(),
+    )
+    model = CompletionModel(
+        ModelSettings(provider="openai", model="compat", structured_output="json_object"),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    await model(
+        messages=[
+            {"role": "system", "content": "Pick a mode."},
+            {"role": "user", "content": "q"},
+        ],
+        structured_output=_MODE_OUTPUT,
+    )
+    sent = seen["messages"]
+    assert sent[0]["role"] == "system"
+    assert "json" in sent[0]["content"].casefold()
+    assert sent[1]["content"] == "q"
+    assert seen["response_format"] == {"type": "json_object"}
+
+
+async def test_json_schema_failure_retries_json_object_with_system_hint(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class Provider:
+        async def complete(self, **kwargs: Any) -> str:
+            calls.append(kwargs)
+            if kwargs.get("response_format", {}).get("type") == "json_schema":
+                raise RuntimeError("schema unsupported")
+            return "{}"
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.completion.get_provider",
+        lambda *_args, **_kwargs: Provider(),
+    )
+    model = CompletionModel(
+        ModelSettings(
+            provider="openai",
+            model="compat",
+            base_url="https://openrouter.ai/api/v1",
+            structured_output="auto",
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    await model(
+        messages=[{"role": "system", "content": "Pick a mode."}],
+        structured_output=_MODE_OUTPUT,
+    )
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert "json" not in calls[0]["messages"][0]["content"].casefold()
+    assert calls[1]["response_format"] == {"type": "json_object"}
+    assert "json" in calls[1]["messages"][0]["content"].casefold()
