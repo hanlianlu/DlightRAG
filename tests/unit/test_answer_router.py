@@ -55,12 +55,10 @@ async def test_router_defaults_to_research_and_reads_full_context() -> None:
     messages = captured["messages"]
     assert isinstance(messages, list)
     system = messages[0]["content"]
-    assert "Default to research" in system
-    assert "When unsure, choose research" in system
+    assert "Default research" in system
+    assert "Unsure → research" in system
     assert messages[1] == history[0]
-    user = messages[-1]["content"]
-    assert "history_turns: 1" in user
-    assert "Do not judge from the query line alone" in user
+    assert "净利润是多少" in messages[-1]["content"]
 
 
 async def test_router_rejects_invalid_structured_output() -> None:
