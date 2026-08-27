@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Public HTTP client surface for DlightRAG."""
 
-from dlightrag.runtime.errors import AnswerRunCancelledError, AnswerRunFailedError
+from dlightrag.engine.runtime.errors import AnswerRunCancelledError, AnswerRunFailedError
 from dlightrag.sdk.attachments import AnswerAttachmentUpload
 from dlightrag.sdk.client import (
     EVENT_READ_IDLE_SECONDS,

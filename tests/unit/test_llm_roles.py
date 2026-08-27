@@ -7,15 +7,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import (
+from dlightrag.application.config import DlightragConfig
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
     ModelRoleOverrides,
     ModelRoleSettings,
     ModelSettings,
     ModelsSettings,
 )
-from dlightrag.application.config import DlightragConfig
 
 
 def _cfg() -> DlightragConfig:
@@ -55,7 +55,7 @@ def test_root_exposes_only_complete_role_overrides() -> None:
 
 
 async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypatch) -> None:
-    from dlightrag.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
+    from dlightrag.engine.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
     from dlightrag.rag import lightrag_models
 
     class FakeCompletionModel:
@@ -115,7 +115,7 @@ async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypat
 async def test_rag_chat_bundle_closes_created_models_when_role_construction_fails(
     monkeypatch,
 ) -> None:
-    from dlightrag.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
+    from dlightrag.engine.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
     from dlightrag.rag import lightrag_models
 
     class FakeCompletionModel:
@@ -153,7 +153,7 @@ async def test_rag_chat_bundle_closes_created_models_when_role_construction_fail
 async def test_rag_chat_bundle_preserves_construction_error_when_cleanup_fails(
     monkeypatch,
 ) -> None:
-    from dlightrag.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
+    from dlightrag.engine.ai.settings import ModelRoleOverrides, ModelRoleSettings, ModelSettings
     from dlightrag.rag import lightrag_models
 
     class FakeCompletionModel:
@@ -182,7 +182,7 @@ async def test_rag_chat_bundle_preserves_construction_error_when_cleanup_fails(
 
 
 async def test_rag_embedding_adapter_injects_context_and_numpy_shape() -> None:
-    from dlightrag.ai.settings import EmbeddingSettings
+    from dlightrag.engine.ai.settings import EmbeddingSettings
     from dlightrag.rag.lightrag_models import build_lightrag_embedding
 
     embedder = MagicMock()

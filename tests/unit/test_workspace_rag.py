@@ -8,15 +8,16 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import (
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
     ModelSettings,
     ModelsSettings,
     RerankSettings,
 )
-from dlightrag.ai.telemetry import NoopTelemetry
+from dlightrag.engine.ai.telemetry import NoopTelemetry
+from dlightrag.engine.runtime import RunCoordinator
 from dlightrag.rag.ports import WorkspaceCorpusBackend
 from dlightrag.rag.settings import (
     CorpusSettings,
@@ -26,7 +27,6 @@ from dlightrag.rag.settings import (
     RagSettings,
 )
 from dlightrag.rag.workspace_rag import WorkspaceRag
-from dlightrag.runtime import RunCoordinator
 from tests.config_helpers import mutate_config
 
 

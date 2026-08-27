@@ -10,7 +10,7 @@ from dlightrag.answer.workspace import (
     bind_run_workspace,
     write_spill_file,
 )
-from dlightrag.runtime.workspace import InMemoryWorkspaceStore
+from dlightrag.engine.runtime.workspace import InMemoryWorkspaceStore
 
 
 @pytest.mark.asyncio

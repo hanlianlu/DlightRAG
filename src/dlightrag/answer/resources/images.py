@@ -6,9 +6,9 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from dlightrag.ai.concurrency import bounded_map
-from dlightrag.ai.media import image_url_block
 from dlightrag.answer.images import AnswerImagePolicy
+from dlightrag.engine.ai.concurrency import bounded_map
+from dlightrag.engine.ai.media import image_url_block
 
 logger = logging.getLogger(__name__)
 MAX_QUERY_IMAGES = 3

@@ -10,18 +10,18 @@ from contextlib import suppress
 from functools import partial
 from typing import Any
 
-from dlightrag.ai.completion import CompletionModel
-from dlightrag.ai.concurrency import bounded_gather
-from dlightrag.ai.contracts import ResolvedInputModality
-from dlightrag.ai.media import MODEL_IMAGE_MAX_PIXELS, ImagePayloadBudget
-from dlightrag.ai.providers.rerank_base import (
+from dlightrag.engine.ai.completion import CompletionModel
+from dlightrag.engine.ai.concurrency import bounded_gather
+from dlightrag.engine.ai.contracts import ResolvedInputModality
+from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS, ImagePayloadBudget
+from dlightrag.engine.ai.providers.rerank_base import (
     PreparedDocument,
     resolve_rerank_input_modality,
 )
-from dlightrag.ai.rerank import RerankModel, create_rerank_model, rerank_accepts_images
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import ModelSettings, RerankSettings
-from dlightrag.ai.telemetry import NOOP_TELEMETRY, Telemetry, bounded_telemetry_text
+from dlightrag.engine.ai.rerank import RerankModel, create_rerank_model, rerank_accepts_images
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import ModelSettings, RerankSettings
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry, bounded_telemetry_text
 
 logger = logging.getLogger(__name__)
 

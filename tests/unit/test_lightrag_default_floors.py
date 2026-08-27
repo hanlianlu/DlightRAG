@@ -14,8 +14,8 @@ from typing import Any
 import lightrag.constants as lightrag_constants
 import pytest
 
-from dlightrag.ai.settings import ModelRoleSettings
 from dlightrag.application.config import DlightragConfig
+from dlightrag.engine.ai.settings import ModelRoleSettings
 
 # DlightRAG default -> the LightRAG constant it must not undercut.
 UPSTREAM_FLOORS: dict[str, tuple[str, str]] = {

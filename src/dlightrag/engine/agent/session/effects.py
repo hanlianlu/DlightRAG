@@ -1,0 +1,162 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Transient Tool intent values, replay policy, and contract digests.
+
+Durable intent/current progress lives only in typed OperationState and
+ToolArguments registers. ToolResult Entries retain non-sensitive provenance;
+there is no parallel permanent effect table.
+"""
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from hashlib import sha256
+from typing import Any, Literal
+
+from dlightrag.engine.agent.session.ids import IntentId
+from dlightrag.engine.agent.tool_content import ToolContent, tool_content_text
+
+type ReplayPolicy = Literal["replayable", "never"]
+type ToolResultOutcome = Literal[
+    "succeeded",
+    "interrupted",
+    "outcome_unknown",
+    "tool_contract_changed",
+    "failed",
+    "unknown_tool",
+    "invalid_arguments",
+    "plan_denied",
+    "truncated_arguments",
+]
+type JsonValue = Any
+
+
+def canonical_json(value: JsonValue) -> str:
+    """Return canonical UTF-8 JSON with sorted object keys and no NaN."""
+    import json
+
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+# JSON Schema fields that describe presentation, not the accepted input shape.
+# Canonicalization removes them so a contract digest never changes when only a
+# description, example, or declaration order moves.
+_PRESENTATION_SCHEMA_FIELDS = frozenset(
+    {
+        "$comment",
+        "description",
+        "examples",
+        "markdownDescription",
+        "title",
+    }
+)
+
+
+def canonical_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Return one canonical JSON Schema with keys sorted and presentation removed."""
+    cleaned: dict[str, Any] = {}
+    for key in sorted(schema):
+        if key in _PRESENTATION_SCHEMA_FIELDS:
+            continue
+        value = schema[key]
+        if isinstance(value, Mapping):
+            cleaned[key] = canonical_schema(value)
+        elif isinstance(value, list):
+            cleaned[key] = [
+                canonical_schema(item) if isinstance(item, Mapping) else item for item in value
+            ]
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
+def schema_digest(schema: Mapping[str, Any]) -> str:
+    """Return the SHA-256 of one canonicalized input schema."""
+    return sha256(canonical_json(canonical_schema(schema)).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class EffectIntent:
+    """One validated tool call, ordered before execution and settled after it."""
+
+    intent_id: IntentId
+    tool_name: str
+    replay_policy: ReplayPolicy
+    contract_version: int
+    input_schema_digest: str
+    canonical_input: str
+    source_call_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.tool_name.strip():
+            raise ValueError("effect intent tool name cannot be empty")
+        if self.replay_policy not in {"replayable", "never"}:
+            raise ValueError("effect intent replay policy must be replayable or never")
+        if self.contract_version < 1:
+            raise ValueError("effect intent contract version must be positive")
+        if len(self.input_schema_digest) != 64:
+            raise ValueError("effect intent schema digest must be a SHA-256 hex digest")
+        if self.source_call_id is not None and not self.source_call_id.strip():
+            raise ValueError("effect intent source call id cannot be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResultEntry:
+    """One model-visible typed tool result plus transport-private facts."""
+
+    tool_name: str
+    call_id: str
+    outcome: ToolResultOutcome
+    parts: ToolContent
+    details: JsonValue | None = None
+    cached: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.tool_name.strip():
+            raise ValueError("tool result tool name cannot be empty")
+        if not self.call_id.strip():
+            raise ValueError("tool result call id cannot be empty")
+
+    @classmethod
+    def text(
+        cls,
+        *,
+        tool_name: str,
+        call_id: str,
+        outcome: ToolResultOutcome,
+        text: str,
+        details: JsonValue | None = None,
+        cached: bool = False,
+    ) -> ToolResultEntry:
+        """Build the common text-only durable result."""
+        from dlightrag.engine.agent.tool_content import ToolTextPart
+
+        return cls(
+            tool_name=tool_name,
+            call_id=call_id,
+            outcome=outcome,
+            parts=(ToolTextPart(text),),
+            details=details,
+            cached=cached,
+        )
+
+    @property
+    def text_content(self) -> str:
+        """Return the text projection used by logs and evidence adapters."""
+        return tool_content_text(self.parts)
+
+
+__all__ = [
+    "EffectIntent",
+    "JsonValue",
+    "ReplayPolicy",
+    "ToolResultEntry",
+    "ToolResultOutcome",
+    "canonical_json",
+    "canonical_schema",
+    "schema_digest",
+]

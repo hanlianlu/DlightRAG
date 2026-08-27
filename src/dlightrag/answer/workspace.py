@@ -11,14 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from dlightrag.agent.environment import (
+from dlightrag.engine.agent.environment import (
     ExecutionEnvironment,
     ExecutionEnvironmentAdapter,
     TrustExecutionAdapter,
 )
-from dlightrag.agent.tools.contracts import CommittedOutput
-from dlightrag.agent.tools.output import OutputStage
-from dlightrag.runtime.workspace import HandoffCommit, WorkspaceStore
+from dlightrag.engine.agent.tools.contracts import CommittedOutput
+from dlightrag.engine.agent.tools.output import OutputStage
+from dlightrag.engine.runtime.workspace import HandoffCommit, WorkspaceStore
 
 
 class WorkspaceRecoveryFailed(RuntimeError):

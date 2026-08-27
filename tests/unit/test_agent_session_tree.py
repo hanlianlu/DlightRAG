@@ -6,18 +6,18 @@ from datetime import UTC, datetime
 
 import pytest
 
-from dlightrag.agent.session.entries import AssistantMessageEntry, UserMessageEntry
-from dlightrag.agent.session.ids import EntryId, IntentId, LaneId, SessionId
-from dlightrag.agent.session.memory import MemoryAgentSessionRepository
-from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
-from dlightrag.agent.session.transactions import (
+from dlightrag.engine.agent.session.entries import AssistantMessageEntry, UserMessageEntry
+from dlightrag.engine.agent.session.ids import EntryId, IntentId, LaneId, SessionId
+from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
+from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+from dlightrag.engine.agent.session.transactions import (
     HostDeltaSettlement,
     RegisterExpectation,
     SessionTransaction,
     TransactionCommit,
     TransactionLeaseLost,
 )
-from dlightrag.ai.messages import ToolCall
+from dlightrag.engine.ai.messages import ToolCall
 
 
 def _user(session_id: SessionId, content: str) -> UserMessageEntry:

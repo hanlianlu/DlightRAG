@@ -5,15 +5,15 @@ from typing import Any
 
 import pytest
 
-from dlightrag.agent.session.fold import PriorTurns, WorkingContextProjection
-from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
-from dlightrag.ai.tokens import estimate_messages_tokens
 from dlightrag.answer.agent.context import ContextAssembler
 from dlightrag.answer.agent.orchestrator import research_history_input_measure
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.memory import reserved_auto_recall_text
 from dlightrag.answer.prompts import CONTROL_TURN_INSTRUCTION
 from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
+from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
+from dlightrag.engine.ai.tokens import estimate_messages_tokens
 
 _WINDOW = 80_000
 _RETAINED_TAIL = 13_600

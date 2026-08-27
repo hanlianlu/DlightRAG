@@ -15,15 +15,6 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
-from dlightrag.agent.tools import (
-    AgentTool,
-    EvidenceSourceFact,
-    ResourceAttachmentBytes,
-    ToolEffects,
-    ToolResult,
-    ToolRuntime,
-)
 from dlightrag.answer.resources.formatting import (
     format_resource_read,
     resource_read_continuation,
@@ -37,6 +28,15 @@ from dlightrag.answer.resources.visual import (
     InspectionLocator,
     ResourceInspectionResult,
     ResourceInspector,
+)
+from dlightrag.engine.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
+from dlightrag.engine.agent.tools import (
+    AgentTool,
+    EvidenceSourceFact,
+    ResourceAttachmentBytes,
+    ToolEffects,
+    ToolResult,
+    ToolRuntime,
 )
 
 _INSPECT_DESCRIPTION = (

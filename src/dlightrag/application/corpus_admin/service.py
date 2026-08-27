@@ -11,9 +11,9 @@ from typing import Annotated, Any, Literal, Protocol, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from dlightrag.ai.telemetry import safe_log_text
 from dlightrag.application.access import WorkspaceRecord
 from dlightrag.application.errors import CorpusUnavailableError, StorageSchemaError
+from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.rag.contracts import IngestDocument, SourceType, VisualAssetSize
 from dlightrag.rag.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag.rag.ingestion.uploads import (

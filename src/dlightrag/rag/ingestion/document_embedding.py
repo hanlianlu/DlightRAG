@@ -12,10 +12,10 @@ from typing import Any, Literal, get_args
 
 from PIL import Image
 
-from dlightrag.ai.concurrency import bounded_map
-from dlightrag.ai.embedding import MultimodalEmbedder
-from dlightrag.ai.media import flatten_image_to_rgb
-from dlightrag.ai.telemetry import safe_log_text
+from dlightrag.engine.ai.concurrency import bounded_map
+from dlightrag.engine.ai.embedding import MultimodalEmbedder
+from dlightrag.engine.ai.media import flatten_image_to_rgb
+from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.rag.settings import RagSettings
 
 logger = logging.getLogger(__name__)

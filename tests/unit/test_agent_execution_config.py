@@ -6,12 +6,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.agent.environment import SandboxUnavailableError
 from dlightrag.answer.execution_settings import (
     default_local_workspace_root,
     validate_agent_execution,
 )
 from dlightrag.application.config import AgentExecutionConfig, DlightragConfig
+from dlightrag.engine.agent.environment import SandboxUnavailableError
 
 
 def test_disabled_ignores_workspace_root(tmp_path: Path) -> None:

@@ -11,10 +11,6 @@ import pytest
 from PIL import Image
 from pydantic import ValidationError
 
-from dlightrag.agent.environment import AccessScheduler
-from dlightrag.agent.tools import AgentTool
-from dlightrag.agent.tools.files import read_tool
-from dlightrag.ai.tokens import estimate_tokens
 from dlightrag.answer.resources.models import (
     EXTRACTION_TEXT,
     ResourceInput,
@@ -28,6 +24,10 @@ from dlightrag.answer.tools.resources import (
     build_resource_tools as _build_resource_tools,
 )
 from dlightrag.answer.tools.resources import make_resource_reader
+from dlightrag.engine.agent.environment import AccessScheduler
+from dlightrag.engine.agent.tools import AgentTool
+from dlightrag.engine.agent.tools.files import read_tool
+from dlightrag.engine.ai.tokens import estimate_tokens
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy
 

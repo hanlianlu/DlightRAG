@@ -16,7 +16,7 @@ from dlightrag.application.answer_runs.mode import (
     require_supported_mode,
     valid_modes,
 )
-from dlightrag.runtime import answer_run_request_fingerprint
+from dlightrag.engine.runtime import answer_run_request_fingerprint
 
 
 def test_omitted_mode_canonicalizes_to_auto_and_matches_explicit_auto_fingerprint() -> None:

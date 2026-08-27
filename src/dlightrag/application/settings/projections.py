@@ -1,15 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Map root Pydantic configuration into provider-neutral AI settings."""
 
-from dlightrag.ai.capacity import ModelProfile
-from dlightrag.ai.catalog import resolve_model_profile
-from dlightrag.ai.fingerprints import model_endpoint_fingerprint, model_fingerprint
-from dlightrag.ai.providers import get_adapter_model_profile
-from dlightrag.ai.settings import (
-    ModelCapacityOverrideSettings,
-    ModelRole,
-    ModelSettings,
-)
 from dlightrag.answer.executor import (
     AnswerExecutorSettings,
     AnswerResourceSettings,
@@ -29,6 +20,15 @@ from dlightrag.application.answer_runs.capabilities import (
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.corpus_admin import CorpusAdminSettings
 from dlightrag.application.retrieval import RetrievalSettings
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.catalog import resolve_model_profile
+from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint, model_fingerprint
+from dlightrag.engine.ai.providers import get_adapter_model_profile
+from dlightrag.engine.ai.settings import (
+    ModelCapacityOverrideSettings,
+    ModelRole,
+    ModelSettings,
+)
 from dlightrag.rag.settings import RagSettings
 from dlightrag.rag.workspaces import normalize_workspace
 

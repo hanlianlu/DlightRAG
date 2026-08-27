@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-from dlightrag.ai.media import ImagePayloadBudget, image_url_block
-from dlightrag.ai.telemetry import safe_log_text
+from dlightrag.engine.ai.media import ImagePayloadBudget, image_url_block
+from dlightrag.engine.ai.telemetry import safe_log_text
 
 logger = logging.getLogger(__name__)
 

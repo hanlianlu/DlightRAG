@@ -8,12 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.agent.environment import (
-    LocalExecutionEnvironment,
-    PathRejected,
-    ProcessChunk,
-)
-from dlightrag.agent.environment.text import decode_workspace_text, encode_workspace_text
+from dlightrag.engine.agent.environment import PathRejected
+from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment, ProcessChunk
+from dlightrag.engine.agent.environment.text import decode_workspace_text, encode_workspace_text
 
 
 def test_rejects_absolute_parent_and_symlink_escape(tmp_path: Path) -> None:

@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from charset_normalizer import from_bytes
 
-from dlightrag.ai.tokens import estimate_tokens
 from dlightrag.answer.resources.models import ResourceDecodeError, TextWindowLocator
+from dlightrag.engine.ai.tokens import estimate_tokens
 
 # Bytes that legitimately appear in decoded single-/multi-byte text. High bytes
 # stay in the set so UTF-8 and Latin text are not misread as binary; the decoder

@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Literal, Self, TypedDict
 
 from pydantic import Field, field_serializer, field_validator, model_validator
 
-from dlightrag.ai.settings import (
+from dlightrag.engine.ai.settings import (
     FrozenSettings,
     ModelsSettings,
     freeze_settings_value,

@@ -7,16 +7,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
-from dlightrag.ai.completion import CompletionModel
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import ModelRole, ModelRoleSettings
-from dlightrag.ai.telemetry import Telemetry
-from dlightrag.ai.tool_model import ToolModel
 from dlightrag.answer.images import AnswerImagePolicy
 from dlightrag.answer.resources.images import QueryImageDescriber
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools.web import ExaSearch
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
+from dlightrag.engine.ai.completion import CompletionModel
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import ModelRole, ModelRoleSettings
+from dlightrag.engine.ai.telemetry import Telemetry
+from dlightrag.engine.ai.tool_model import ToolModel
 from dlightrag.rag.lifecycle import await_shared_cleanup
 
 logger = logging.getLogger(__name__)

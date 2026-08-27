@@ -8,8 +8,6 @@ from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
 
-from dlightrag.ai.capacity import ModelProfile
-from dlightrag.ai.telemetry import NoopTelemetry
 from dlightrag.application.retrieval import (
     CorpusUnavailableError,
     ProjectedRetrieval,
@@ -19,6 +17,8 @@ from dlightrag.application.retrieval import (
     RetrieveProjection,
     RetrieveRequest,
 )
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.telemetry import NoopTelemetry
 from dlightrag.rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag.rag.retrieval.runtime import RetrievalPlannerRuntime
 

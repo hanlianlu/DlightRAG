@@ -3,8 +3,8 @@
 
 import pytest
 
-from dlightrag.agent.session.ids import EntryId, ProjectionId
-from dlightrag.agent.session.projection import (
+from dlightrag.engine.agent.session.ids import EntryId, ProjectionId
+from dlightrag.engine.agent.session.projection import (
     AgentInputOverflowError,
     CompactionSummary,
     ContextProjection,
@@ -14,7 +14,7 @@ from dlightrag.agent.session.projection import (
     should_compact,
     validate_projection_commit,
 )
-from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 
 PROFILE = ModelProfile(context_window_tokens=100_000)
 

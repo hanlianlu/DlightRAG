@@ -5,17 +5,17 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from dlightrag.ai.capacity import (
+from dlightrag.engine.ai.capacity import (
     CONTEXT_POLICY,
     ContextPolicy,
     ModelInputOverflowError,
     ModelProfile,
 )
-from dlightrag.ai.catalog import (
+from dlightrag.engine.ai.catalog import (
     FALLBACK_MODEL_PROFILE,
     resolve_model_profile,
 )
-from dlightrag.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
+from dlightrag.engine.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
 
 
 def test_context_policy_applies_explicit_model_aware_reserves() -> None:

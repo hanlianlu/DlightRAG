@@ -135,14 +135,14 @@ def test_resolve_eval_env_keeps_api_autoresolution_when_eval_keys_are_set(
 def test_resolve_eval_env_uses_canonical_query_role_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.ai.settings import (
+    from dlightrag.application.config import DlightragConfig
+    from dlightrag.engine.ai.settings import (
         EmbeddingSettings,
         ModelRoleOverrides,
         ModelRoleSettings,
         ModelSettings,
         ModelsSettings,
     )
-    from dlightrag.application.config import DlightragConfig
 
     chat = ModelRoleSettings(
         default=ModelSettings(

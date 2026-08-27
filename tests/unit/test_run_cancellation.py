@@ -4,7 +4,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from dlightrag.runtime.cancellation import (
+from dlightrag.engine.runtime.cancellation import (
     CANCEL_CHANNEL,
     RunCancellationListener,
     cancellation_notify_key,

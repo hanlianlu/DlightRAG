@@ -10,9 +10,6 @@ from dlightrag._compose import _memory_embedder
 from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
-from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION
-from dlightrag.ai.fingerprints import ModelFingerprint, model_fingerprint
-from dlightrag.ai.settings import MODEL_ROLE_NAMES
 from dlightrag.answer.executor import IncompatibleActiveRunError
 from dlightrag.answer.model_runtime import AnswerModelRuntime
 from dlightrag.application import Application, ApplicationClosedError
@@ -29,9 +26,12 @@ from dlightrag.application.web_conversations import (
     WebConversationSchemaError,
     WebConversationService,
 )
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION
+from dlightrag.engine.ai.fingerprints import ModelFingerprint, model_fingerprint
+from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES
+from dlightrag.engine.runtime import RunCoordinator, RunSchemaError
 from dlightrag.rag.ports import CorpusSchemaError
 from dlightrag.rag.workspaces import normalize_workspace
-from dlightrag.runtime import RunCoordinator, RunSchemaError
 from tests.config_helpers import mutate_config
 
 _CLOSE_ORDER = [
@@ -301,7 +301,7 @@ def test_memory_dense_leg_reuses_root_embedding_settings(
         captured.update(settings=settings, scheduler=scheduler, telemetry=telemetry)
         return expected
 
-    monkeypatch.setattr("dlightrag.ai.embedding.create_embedding_model", create)
+    monkeypatch.setattr("dlightrag.engine.ai.embedding.create_embedding_model", create)
     scheduler = object()
     telemetry = object()
 

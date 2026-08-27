@@ -8,7 +8,7 @@ from contextlib import AbstractAsyncContextManager, ExitStack, asynccontextmanag
 from types import TracebackType
 from typing import Any
 
-from dlightrag.ai.telemetry import Observation
+from dlightrag.engine.ai.telemetry import Observation
 from dlightrag.observability.langfuse import current_client, trace_sensitive_enabled
 
 logger = logging.getLogger(__name__)

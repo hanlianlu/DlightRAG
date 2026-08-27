@@ -32,8 +32,8 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from dlightrag.ai.fingerprints import ModelFingerprint, model_endpoint_fingerprint
-from dlightrag.ai.settings import (
+from dlightrag.engine.ai.fingerprints import ModelFingerprint, model_endpoint_fingerprint
+from dlightrag.engine.ai.settings import (
     FrozenSettings,
     ModelsSettings,
     freeze_settings_value,

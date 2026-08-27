@@ -13,12 +13,12 @@ from collections.abc import Awaitable, Callable, Sequence
 
 from pydantic import BaseModel, Field
 
-from dlightrag.ai.concurrency import bounded_map
 from dlightrag.answer.prompts import (
     HIGHLIGHT_BATCH_USER_PROMPT,
     HIGHLIGHT_SYSTEM_PROMPT,
 )
 from dlightrag.application.answer_runs.citations import HighlightSource
+from dlightrag.engine.ai.concurrency import bounded_map
 
 from .parser import CITATION_PATTERN, DOC_CITATION_PATTERN, strip_generated_references_section
 

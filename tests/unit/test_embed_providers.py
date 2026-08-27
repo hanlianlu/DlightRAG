@@ -5,14 +5,14 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.ai.embedding_inputs import (
+from dlightrag.engine.ai.embedding_inputs import (
     ImageEmbeddingInput,
     MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
-from dlightrag.ai.providers import embed_providers
-from dlightrag.ai.providers.embed_base import EmbedProvider
-from dlightrag.ai.providers.embed_providers import (
+from dlightrag.engine.ai.providers import embed_providers
+from dlightrag.engine.ai.providers.embed_base import EmbedProvider
+from dlightrag.engine.ai.providers.embed_providers import (
     AzureCohereEmbedProvider,
     CohereEmbedProvider,
     GeminiEmbedProvider,

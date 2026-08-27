@@ -9,11 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.agent.session.fold import PriorTurns, WorkingContextProjection
-from dlightrag.agent.session.ids import EntryId, IntentId, SessionId
-from dlightrag.ai.capacity import CONTEXT_POLICY
-from dlightrag.ai.messages import AssistantTurn
-from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.executor import (
@@ -33,7 +28,12 @@ from dlightrag.answer.tools.subagents import (
     child_session_id,
     subagent_tools,
 )
-from dlightrag.runtime import RunCancelledError
+from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
+from dlightrag.engine.agent.session.ids import EntryId, IntentId, SessionId
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY
+from dlightrag.engine.ai.messages import AssistantTurn
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.runtime import RunCancelledError
 from tests.in_memory_session_repository import InMemoryAgentSessionRepository
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
@@ -645,10 +645,10 @@ def test_child_inherits_parent_path_tools_except_spawn() -> None:
 
 
 async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
-    from dlightrag.agent.session.entries import ToolResultMessageEntry
-    from dlightrag.agent.session.operation import OperationCancelled
-    from dlightrag.agent.session.registers import OperationStateRegister
-    from dlightrag.ai.messages import ToolCall
+    from dlightrag.engine.agent.session.entries import ToolResultMessageEntry
+    from dlightrag.engine.agent.session.operation import OperationCancelled
+    from dlightrag.engine.agent.session.registers import OperationStateRegister
+    from dlightrag.engine.ai.messages import ToolCall
 
     async def model(**_kwargs: object) -> AssistantTurn:
         return AssistantTurn(

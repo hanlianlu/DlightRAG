@@ -31,7 +31,7 @@ from dlightrag.application.corpus_admin import MetadataValidationError
 from dlightrag.application.errors import StorageSchemaError
 from dlightrag.application.retrieval import CorpusUnavailableError, RetrievalTimeoutError
 from dlightrag.application.web_conversations import WebConversationSchemaError
-from dlightrag.runtime import RunSchemaError
+from dlightrag.engine.runtime import RunSchemaError
 
 if TYPE_CHECKING:
     from dlightrag.application.config import DlightragConfig

@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import dlightrag.rag.rerank as rerank_module
-from dlightrag.ai.media import ImagePayloadBudget
-from dlightrag.ai.providers.rerank_base import resolve_rerank_input_modality
-from dlightrag.ai.providers.rerank_providers import (
+from dlightrag.engine.ai.media import ImagePayloadBudget
+from dlightrag.engine.ai.providers.rerank_base import resolve_rerank_input_modality
+from dlightrag.engine.ai.providers.rerank_providers import (
     AliyunRerankProvider,
     AzureCohereRerankProvider,
     CohereRerankProvider,
@@ -23,9 +23,9 @@ from dlightrag.ai.providers.rerank_providers import (
     VoyageRerankProvider,
     _azure_cohere_rerank_url,
 )
-from dlightrag.ai.rerank import RerankModel
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import ModelSettings, RerankSettings
+from dlightrag.engine.ai.rerank import RerankModel
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import ModelSettings, RerankSettings
 from dlightrag.rag.rerank import (
     _build_scored_chunks,
     _chat_llm_rerank,
@@ -45,7 +45,7 @@ def _chunks() -> list[dict[str, Any]]:
 
 
 async def test_ai_rerank_model_owns_http_provider_execution(monkeypatch) -> None:
-    from dlightrag.ai import rerank
+    from dlightrag.engine.ai import rerank
 
     provider = MagicMock()
     provider.requires_api_key = True
@@ -61,7 +61,7 @@ async def test_ai_rerank_model_owns_http_provider_execution(monkeypatch) -> None
     client = AsyncMock()
     client.post.return_value = response
     monkeypatch.setattr(rerank, "RERANK_PROVIDERS", {"voyage_reranker": provider})
-    monkeypatch.setattr("dlightrag.ai.rerank.httpx.AsyncClient", lambda **_kwargs: client)
+    monkeypatch.setattr("dlightrag.engine.ai.rerank.httpx.AsyncClient", lambda **_kwargs: client)
 
     model = rerank.create_rerank_model(
         RerankSettings(
@@ -502,7 +502,7 @@ class TestChatLlmRerank:
 
     async def test_multimodal_chunks_are_bounded_before_scoring(self, monkeypatch):
         """Rerank image payloads should not bypass the rerank-stage budget."""
-        import dlightrag.ai.media as image_budget_module
+        import dlightrag.engine.ai.media as image_budget_module
 
         raw_image = "RAW_ORIGINAL_IMAGE_PAYLOAD"
         bounded_uri = "data:image/jpeg;base64,BOUNDED"
@@ -556,7 +556,7 @@ class TestChatLlmRerank:
 
     async def test_multimodal_chunks_skip_images_when_batch_budget_is_exhausted(self, monkeypatch):
         """Reranker should omit images that do not fit the batch request budget."""
-        import dlightrag.ai.media as image_budget_module
+        import dlightrag.engine.ai.media as image_budget_module
 
         received_messages = []
 
@@ -847,7 +847,7 @@ class _ScoreModel:
 
 class TestRunHttpRerank:
     async def test_bounds_image_payloads(self, monkeypatch):
-        import dlightrag.ai.media as image_budget_module
+        import dlightrag.engine.ai.media as image_budget_module
 
         raw_image = "RAW_ORIGINAL_IMAGE_PAYLOAD"
         bounded_uri = "data:image/jpeg;base64,BOUNDED"

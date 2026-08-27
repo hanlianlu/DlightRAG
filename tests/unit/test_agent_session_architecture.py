@@ -4,15 +4,16 @@
 import ast
 from pathlib import Path
 
-from dlightrag.agent.session.repository import AgentSessionRepository
+from dlightrag.engine.agent.session.repository import AgentSessionRepository
 
 ROOT = Path(__file__).parents[2]
 SRC = ROOT / "src" / "dlightrag"
+AGENT = SRC / "engine" / "agent"
 
 
 def test_agent_session_runtime_never_depends_on_answer_product_modules() -> None:
     violations: list[str] = []
-    for path in (SRC / "agent" / "session").rglob("*.py"):
+    for path in (AGENT / "session").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
@@ -29,7 +30,7 @@ def test_agent_session_runtime_never_depends_on_answer_product_modules() -> None
 
 
 def test_removed_extension_entry_and_store_passthroughs_cannot_return() -> None:
-    assert not (SRC / "agent" / "extensions.py").exists()
+    assert not (AGENT / "extensions.py").exists()
     forbidden = (
         "TrustedExtensions",
         "AdoptionEntry",

@@ -27,17 +27,6 @@ from uuid import uuid4
 import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
 
-from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
-from dlightrag.ai.catalog import MODEL_CATALOG_REVISION
-from dlightrag.ai.fingerprints import ModelFingerprint
-from dlightrag.ai.media import MODEL_IMAGE_MAX_PIXELS
-from dlightrag.ai.settings import (
-    MODEL_ROLE_NAMES,
-    EmbeddingSettings,
-    ModelCapacityOverrideSettings,
-    ModelRoleSettings,
-    ModelSettings,
-)
 from dlightrag.api.server import create_app
 from dlightrag.application.answer_runs import AnswerInputArtifact
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities
@@ -56,7 +45,18 @@ from dlightrag.application.web_conversations import (
 from dlightrag.application.web_conversations import (
     ConversationSummary as ApplicationConversationSummary,
 )
-from dlightrag.runtime import AnswerRunEvent, AnswerRunRecord
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
+from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
+from dlightrag.engine.ai.settings import (
+    MODEL_ROLE_NAMES,
+    EmbeddingSettings,
+    ModelCapacityOverrideSettings,
+    ModelRoleSettings,
+    ModelSettings,
+)
+from dlightrag.engine.runtime import AnswerRunEvent, AnswerRunRecord
 from dlightrag.web.conversation_models import ConversationHistory
 from dlightrag.web.conversations import (
     project_conversation_summary,

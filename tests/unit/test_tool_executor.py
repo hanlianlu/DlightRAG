@@ -8,19 +8,18 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from dlightrag.agent import AgentEvent
-from dlightrag.agent.tools import (
+from dlightrag.engine.agent import AgentEvent
+from dlightrag.engine.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
+from dlightrag.engine.agent.tools import (
     AgentTool,
     DuplicateToolCallIdError,
-    ToolResourceAttachmentPart,
     ToolResult,
     ToolResultCapacityError,
     ToolRuntime,
-    ToolTextPart,
     ToolTurnExecutor,
 )
-from dlightrag.ai.messages import AssistantTurn, ToolCall
-from dlightrag.ai.tokens import estimate_tokens
+from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.ai.tokens import estimate_tokens
 
 
 class SearchArgs(BaseModel):
@@ -220,7 +219,7 @@ async def test_model_and_tool_lifecycle_events_include_live_updates() -> None:
 
 
 async def test_assistant_message_omits_empty_tool_calls() -> None:
-    from dlightrag.agent.tools.executor import _assistant_message
+    from dlightrag.engine.agent.tools.executor import _assistant_message
 
     turn = AssistantTurn(text="final answer", stop_reason="stop", tool_calls=())
     message = _assistant_message(turn)
@@ -662,7 +661,7 @@ def test_agent_tool_rejects_legacy_or_unknown_replay_policy() -> None:
 
 
 async def test_preflight_creates_ordered_intents_for_valid_calls() -> None:
-    from dlightrag.agent.tools import preflight_tool_calls
+    from dlightrag.engine.agent.tools import preflight_tool_calls
 
     tools = [
         AgentTool(
@@ -687,7 +686,7 @@ async def test_preflight_creates_ordered_intents_for_valid_calls() -> None:
 
 
 async def test_preflight_orders_invalid_calls_as_validation_results() -> None:
-    from dlightrag.agent.tools import preflight_tool_calls
+    from dlightrag.engine.agent.tools import preflight_tool_calls
 
     tools = [
         AgentTool(
@@ -712,7 +711,7 @@ async def test_preflight_orders_invalid_calls_as_validation_results() -> None:
 
 
 async def test_preflight_pins_explicit_replay_policy_and_contract() -> None:
-    from dlightrag.agent.tools import preflight_tool_calls
+    from dlightrag.engine.agent.tools import preflight_tool_calls
 
     web_tool = AgentTool(
         name="search_web",

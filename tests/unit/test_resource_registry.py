@@ -393,7 +393,7 @@ async def test_cursor_pages_do_not_rebuild_whole_resource_windows(
 
 
 async def test_read_continues_within_single_oversized_line() -> None:
-    from dlightrag.ai.tokens import estimate_tokens
+    from dlightrag.engine.ai.tokens import estimate_tokens
 
     registry = ResourceRegistry()
     # A minified single-line JSON payload with no newline, far over one budget.

@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from dlightrag.agent.environment import (
+from dlightrag.engine.agent.environment import (
     AccessScheduler,
     ExternalAccess,
     PathAccess,

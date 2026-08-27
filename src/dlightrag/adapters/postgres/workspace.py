@@ -10,8 +10,8 @@ from typing import Any
 
 from dlightrag.adapters.postgres._operations import ConnectionPool
 from dlightrag.adapters.postgres._pool import pg_pool
-from dlightrag.runtime.settlements import InventoryPathRecord
-from dlightrag.runtime.workspace import (
+from dlightrag.engine.runtime.settlements import InventoryPathRecord
+from dlightrag.engine.runtime.workspace import (
     CommittedSpillRecord,
     HandoffCommit,
     HandoffConflict,

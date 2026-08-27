@@ -11,13 +11,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dlightrag.ai.vision import ImageCapabilityStatus
 from dlightrag.application.answer_runs.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,
     CurrentImagePayloadError,
 )
+from dlightrag.engine.ai.vision import ImageCapabilityStatus
 
 _ERROR_IMAGES_NOT_SUPPORTED = (
     "Current model does not support image input. Use a vision-capable model or remove images."

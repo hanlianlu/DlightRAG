@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from dlightrag.runtime.contracts import ANSWER_RUN_PHASES
+from dlightrag.engine.runtime.contracts import ANSWER_RUN_PHASES
 
 _ROOT = Path(__file__).resolve().parents[2]
 _STATUS_VALUES = ("queued", "running", "succeeded", "failed", "cancelled")
@@ -44,7 +44,7 @@ def test_sdk_and_runtime_import_without_composition_or_transports() -> None:
     script = """
 import sys
 import dlightrag.sdk.client
-import dlightrag.runtime
+import dlightrag.engine.runtime
 
 forbidden = (
     "asyncpg",
@@ -100,7 +100,7 @@ def test_run_status_and_phase_literals_have_one_runtime_owner() -> None:
             if values in owners:
                 owners[values].append(path)
 
-    expected = [_ROOT / "src/dlightrag/runtime/contracts.py"]
+    expected = [_ROOT / "src/dlightrag/engine/runtime/contracts.py"]
     assert owners[_STATUS_VALUES] == expected
     assert owners[_PHASE_VALUES] == expected
 

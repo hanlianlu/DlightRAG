@@ -8,8 +8,8 @@ from typing import Any
 
 from PIL import Image
 
-from dlightrag.ai.concurrency import bounded_map
-from dlightrag.ai.media import (
+from dlightrag.engine.ai.concurrency import bounded_map
+from dlightrag.engine.ai.media import (
     decode_image_base64,
     image_url_block,
     verify_web_image_bytes,

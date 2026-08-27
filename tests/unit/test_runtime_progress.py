@@ -5,15 +5,15 @@ import inspect
 
 import pytest
 
-from dlightrag.agent.session.ids import StageIntentId
-from dlightrag.runtime.progress import RunProgressStore, StageCommitResult
-from dlightrag.runtime.records import (
+from dlightrag.engine.agent.session.ids import StageIntentId
+from dlightrag.engine.runtime.progress import RunProgressStore, StageCommitResult
+from dlightrag.engine.runtime.records import (
     ReclaimDecision,
     ReclaimState,
     RunExecutionContext,
     advance_reclaim,
 )
-from dlightrag.runtime.settlements import (
+from dlightrag.engine.runtime.settlements import (
     CompleteBlobDescriptor,
     EffectHostUpdate,
     OpaqueEvidenceResourceWrite,
@@ -98,7 +98,7 @@ class TestBoundStores:
             assert name not in settle_params
 
     def test_stage_commit_result_is_a_closed_value_union(self) -> None:
-        from dlightrag.runtime.progress import (
+        from dlightrag.engine.runtime.progress import (
             StageCommit,
             StageConflict,
             StageEvidenceConflict,

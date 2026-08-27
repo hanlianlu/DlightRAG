@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 
-from dlightrag.agent.session.memory import MemoryAgentSessionRepository
+from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,8 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Public-seam helpers for exercising Agent Tool Contract v2."""
 
-from dlightrag.agent.session.ids import IntentId
-from dlightrag.agent.tools import ToolResult, ToolRuntime
+from dlightrag.engine.agent.session.ids import IntentId
+from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 
 
 async def _ignore_update(_result: ToolResult) -> None:

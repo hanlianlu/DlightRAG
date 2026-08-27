@@ -4,7 +4,7 @@
 from collections.abc import Mapping
 from typing import Any
 
-from dlightrag.agent.session.effects import canonical_json
+from dlightrag.engine.agent.session.effects import canonical_json
 
 MAX_PREPARED_INPUT_BYTES = 8 * 1024 * 1024
 

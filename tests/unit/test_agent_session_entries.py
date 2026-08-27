@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from dlightrag.agent.session.effects import ToolResultEntry
-from dlightrag.agent.session.entries import (
+from dlightrag.engine.agent.session.effects import ToolResultEntry
+from dlightrag.engine.agent.session.entries import (
     ENTRY_TYPE_TO_CLASS,
     AssistantMessageEntry,
     CompactionEntry,
@@ -16,14 +16,14 @@ from dlightrag.agent.session.entries import (
     UserMessageEntry,
     decode_entry_payload,
 )
-from dlightrag.agent.session.ids import (
+from dlightrag.engine.agent.session.ids import (
     AttemptId,
     EntryId,
     IntentId,
     ProjectionId,
     SessionId,
 )
-from dlightrag.ai.messages import ToolCall
+from dlightrag.engine.ai.messages import ToolCall
 
 
 def _common() -> dict[str, Any]:

@@ -3,7 +3,7 @@
 
 from unittest.mock import AsyncMock
 
-from dlightrag.ai.vision import probe_image_capability
+from dlightrag.engine.ai.vision import probe_image_capability
 
 
 class TestProbeImageCapability:

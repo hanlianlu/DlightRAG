@@ -13,14 +13,14 @@ from dlightrag.application.config import DlightragConfig
 from dlightrag.application.errors import ApplicationClosedError
 
 if TYPE_CHECKING:
-    from dlightrag.ai.fingerprints import ModelFingerprint
-    from dlightrag.ai.settings import ModelRole
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.corpus_admin import CorpusAdmin
     from dlightrag.application.health import ApplicationHealth
     from dlightrag.application.memory import MemoryService
     from dlightrag.application.retrieval import RetrievalService
     from dlightrag.application.web_conversations import WebConversationService
+    from dlightrag.engine.ai.fingerprints import ModelFingerprint
+    from dlightrag.engine.ai.settings import ModelRole
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +171,7 @@ class Application:
         same schema because run retention cascades turns through it, so every
         process that owns runs also establishes that table.
         """
-        from dlightrag.runtime import RunSchemaError
+        from dlightrag.engine.runtime import RunSchemaError
 
         from .web_conversations import WebConversationSchemaError
 
@@ -193,9 +193,9 @@ class Application:
 
     async def _validate_active_runs(self) -> None:
         """Reject a rolling deployment that cannot execute already accepted inputs."""
-        from dlightrag.ai.fingerprints import model_fingerprint
-        from dlightrag.ai.settings import MODEL_ROLE_NAMES
         from dlightrag.application.settings import model_settings_for_role
+        from dlightrag.engine.ai.fingerprints import model_fingerprint
+        from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES
 
         if not self._runs_ready:
             return
@@ -299,7 +299,7 @@ class Application:
             self._memory_janitor = asyncio.create_task(self._purge_memory_forever())
 
     async def _purge_memory_forever(self) -> None:
-        from dlightrag.runtime.coordinator import MAINTENANCE_SECONDS
+        from dlightrag.engine.runtime.coordinator import MAINTENANCE_SECONDS
 
         while True:
             await asyncio.sleep(MAINTENANCE_SECONDS)
@@ -374,10 +374,10 @@ def _require_compatible_run(
     current_fingerprints: Mapping[ModelRole, ModelFingerprint],
 ) -> None:
     """Fail startup when one accepted run cannot execute under this binary."""
-    from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION
-    from dlightrag.ai.settings import MODEL_ROLE_NAMES
     from dlightrag.answer.executor import IncompatibleActiveRunError
     from dlightrag.application.answer_runs.execution import PinnedModelProfile
+    from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION
+    from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES
 
     try:
         policy_revision = str(requirement.get("context_policy_revision") or "")

@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from dlightrag.ai.telemetry import safe_log_text
+from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.rag.lifecycle import shutdown_lightrag_worker_pools
 from dlightrag.rag.ports import CorpusMaintenanceStore, MetadataIndexProtocol
 from dlightrag.rag.workspaces import require_canonical_workspace_id

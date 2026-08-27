@@ -147,7 +147,7 @@ asyncio.run(main())
     + _ABSENT_HELPER
     + """
 assert all(absent(name) for name in (
-    'dlightrag', 'dlightrag.agent', 'dlightrag.ai', 'dlightrag.rag',
+    'dlightrag', 'dlightrag.engine.agent', 'dlightrag.engine.ai', 'dlightrag.rag',
     'lightrag', 'fastapi', 'openai', 'anthropic', 'google.genai'
 ))
 """
@@ -280,7 +280,7 @@ def _wheel_facts(
             set(wheel.namelist()),
             prefix="dlightrag/web/static/app",
         )
-        has_model_catalog = "dlightrag/ai/model_catalog.json" in wheel.namelist()
+        has_model_catalog = "dlightrag/engine/ai/model_catalog.json" in wheel.namelist()
         sources = (
             (name, wheel.read(name))
             for name in wheel.namelist()
@@ -514,7 +514,7 @@ def _sdist_facts(
                     legal_members[Path(member.name).name] = legal_file.read()
             if member.name == expected_py_typed:
                 has_py_typed = True
-            if member.name == f"{sdist_root}/src/dlightrag/ai/model_catalog.json":
+            if member.name == f"{sdist_root}/src/dlightrag/engine/ai/model_catalog.json":
                 has_model_catalog = True
             if len(parts) > 1:
                 frontend_members.add("/".join(parts[1:]))
@@ -729,7 +729,7 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
         if not facts.has_py_typed:
             raise ValueError(f"{distribution}: wheel must contain py.typed")
         if distribution == "dlightrag" and not facts.has_model_catalog:
-            raise ValueError("dlightrag: wheel must contain ai/model_catalog.json")
+            raise ValueError("dlightrag: wheel must contain engine/ai/model_catalog.json")
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: wheel must contain generated frontend assets")
 
@@ -768,7 +768,7 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
         if not facts.has_py_typed:
             raise ValueError(f"{distribution}: sdist must contain py.typed")
         if distribution == "dlightrag" and not facts.has_model_catalog:
-            raise ValueError("dlightrag: sdist must contain ai/model_catalog.json")
+            raise ValueError("dlightrag: sdist must contain engine/ai/model_catalog.json")
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: sdist must contain generated frontend assets")
 
@@ -837,9 +837,6 @@ def _smoke_root_interfaces() -> None:
 
     import dlightrag
     from dlightrag import Application, create_application
-    from dlightrag.agent import AgentSessionRuntime, ContextContribution, ToolRegistry
-    from dlightrag.ai.settings import ModelsSettings
-    from dlightrag.ai.telemetry import NoopTelemetry
     from dlightrag.application.access import DEPLOYMENT_OWNER_ID
     from dlightrag.application.config import AnswerSectionSettings, DlightragConfig, RuntimeConfig
     from dlightrag.application.corpus_admin import CorpusAdmin, CorpusAdminSettings, IngestSpec
@@ -851,9 +848,12 @@ def _smoke_root_interfaces() -> None:
         RetrieveRequest,
     )
     from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.agent import AgentSessionRuntime, ContextContribution, ToolRegistry
+    from dlightrag.engine.ai.settings import ModelsSettings
+    from dlightrag.engine.ai.telemetry import NoopTelemetry
+    from dlightrag.engine.runtime import answer_run_request_fingerprint
     from dlightrag.rag.retrieval import RetrievalResult
     from dlightrag.rag.settings import CorpusSettings, IngestionSettings, PipelineSettings
-    from dlightrag.runtime import answer_run_request_fingerprint
     from dlightrag.sdk import AnswerRunClient
 
     class Planner:
@@ -1011,7 +1011,7 @@ def _smoke_root_interfaces() -> None:
         )
     ):
         raise ValueError("installed SDK is missing the Agent 3.0 Answer controls")
-    if AgentSessionRuntime.__module__ != "dlightrag.agent.session.runtime":
+    if AgentSessionRuntime.__module__ != "dlightrag.engine.agent.session.runtime":
         raise ValueError("installed Agent kernel did not expose AgentSessionRuntime")
     ToolRegistry()
     ContextContribution(
@@ -1034,9 +1034,12 @@ def _smoke_root_interfaces() -> None:
         raise ValueError("installed root facade exports unexpected names")
     for retired_module in (
         "dlightrag.access",
+        "dlightrag.agent",
+        "dlightrag.ai",
         "dlightrag.config",
         "dlightrag.health",
         "dlightrag.model_settings",
+        "dlightrag.runtime",
         "dlightrag.services",
         "dlightrag.app_state",
         "dlightrag.contracts",

@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Bounded streaming tool output with durable full-result staging."""
 
-from dlightrag.agent.environment import ProcessChunk
-from dlightrag.agent.tools.contracts import CommittedOutput
-from dlightrag.agent.tools.output import OutputStage, StreamingToolOutput
+from dlightrag.engine.agent.environment.local import ProcessChunk
+from dlightrag.engine.agent.tools.contracts import CommittedOutput
+from dlightrag.engine.agent.tools.output import OutputStage, StreamingToolOutput
 
 
 class _Stage(OutputStage):

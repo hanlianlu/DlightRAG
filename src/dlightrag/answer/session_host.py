@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from dlightrag.agent.session.entries import AssistantMessageEntry, UserMessageEntry
-from dlightrag.agent.session.ids import EntryId, LaneId, SessionId
-from dlightrag.agent.session.registers import (
+from dlightrag.engine.agent.session.entries import AssistantMessageEntry, UserMessageEntry
+from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId
+from dlightrag.engine.agent.session.registers import (
     DeleteRegister,
     HostTurnReservation,
     LaneHead,
@@ -20,9 +20,9 @@ from dlightrag.agent.session.registers import (
     SessionFault,
     SetRegister,
 )
-from dlightrag.agent.session.repository import AgentSessionSnapshot
-from dlightrag.agent.session.runtime import OperationConflictError, SessionLeaseLostError
-from dlightrag.agent.session.transactions import (
+from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
+from dlightrag.engine.agent.session.runtime import OperationConflictError, SessionLeaseLostError
+from dlightrag.engine.agent.session.transactions import (
     RegisterConflict,
     RegisterExpectation,
     SessionTransaction,
@@ -30,7 +30,7 @@ from dlightrag.agent.session.transactions import (
     TransactionCommit,
     TransactionLeaseLost,
 )
-from dlightrag.runtime import LeaseLostError, RunExecutionError
+from dlightrag.engine.runtime import LeaseLostError, RunExecutionError
 
 
 @dataclass(frozen=True, slots=True)

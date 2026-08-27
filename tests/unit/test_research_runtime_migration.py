@@ -7,26 +7,26 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.agent.session.entries import CompactionEntry, ToolResultMessageEntry
-from dlightrag.agent.session.ids import LaneId, SessionId
-from dlightrag.agent.session.memory import MemoryAgentSessionRepository
-from dlightrag.agent.session.operation import OperationCompleted
-from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.agent.session.runtime import AgentSessionRuntime
-from dlightrag.agent.tools import (
+from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
+from dlightrag.answer.executor import FetchedResourceBuffer, ResearchRuntimeEffects
+from dlightrag.answer.resources.models import TextWindowBudget
+from dlightrag.engine.agent.session.entries import CompactionEntry, ToolResultMessageEntry
+from dlightrag.engine.agent.session.ids import LaneId, SessionId
+from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
+from dlightrag.engine.agent.session.operation import OperationCompleted
+from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.session.runtime import AgentSessionRuntime
+from dlightrag.engine.agent.tools import (
     EvidenceSourceFact,
     ResourceAttachmentBytes,
     ToolEffects,
     ToolResult,
 )
-from dlightrag.ai.fingerprints import ModelFingerprint
-from dlightrag.ai.messages import AssistantTurn, ToolCall
-from dlightrag.ai.telemetry import NOOP_TELEMETRY
-from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
-from dlightrag.answer.executor import FetchedResourceBuffer, ResearchRuntimeEffects
-from dlightrag.answer.resources.models import TextWindowBudget
+from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.runtime.settlements import EffectHostUpdate
 from dlightrag.rag.retrieval import RetrievalResult
-from dlightrag.runtime.settlements import EffectHostUpdate
 from tests.unit.conftest import answer_model_profile
 
 
@@ -218,7 +218,7 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
 
 @pytest.mark.asyncio
 async def test_provider_overflow_compacts_shrinks_and_retries_through_host_effects() -> None:
-    from dlightrag.ai.capacity import CONTEXT_POLICY
+    from dlightrag.engine.ai.capacity import CONTEXT_POLICY
 
     model_calls = 0
     summary_calls: list[dict[str, Any]] = []

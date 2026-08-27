@@ -10,13 +10,6 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.ai.settings import (
-    EmbeddingSettings,
-    ModelCapacityOverrideSettings,
-    ModelSettings,
-    ModelsSettings,
-    RerankSettings,
-)
 from dlightrag.application.config import (
     AccessSectionSettings,
     AnswerConfig,
@@ -31,6 +24,13 @@ from dlightrag.application.config import (
     PostgresSettings,
     StorageSettings,
     load_config,
+)
+from dlightrag.engine.ai.settings import (
+    EmbeddingSettings,
+    ModelCapacityOverrideSettings,
+    ModelSettings,
+    ModelsSettings,
+    RerankSettings,
 )
 from dlightrag.rag.settings import (
     BM25ProfileSettings,

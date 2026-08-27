@@ -5,7 +5,7 @@ import hashlib
 
 import pytest
 
-from dlightrag.runtime.blob_chunks import (
+from dlightrag.engine.runtime.blob_chunks import (
     BLOB_CHUNK_BYTES,
     blob_digest,
     plan_blob,

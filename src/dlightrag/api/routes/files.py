@@ -7,7 +7,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.responses import FileResponse, RedirectResponse
 
-from dlightrag.ai.telemetry import safe_log_text
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     DeleteFilesResponse,
@@ -24,6 +23,7 @@ from dlightrag.application.corpus_admin import (
     SourceDownloadTarget,
     SourceDownloadUnavailableError,
 )
+from dlightrag.engine.ai.telemetry import safe_log_text
 
 from .deps import enforce_access, get_application, resolve_workspace
 

@@ -44,7 +44,7 @@
   <text class="node-copy" x="640" y="208" text-anchor="middle">Composition and product policy depend on owner interfaces, never the reverse.</text>
 
   <rect class="module" x="80" y="330" width="180" height="110" rx="14"/>
-  <text class="node-title" x="170" y="370" text-anchor="middle">dlightrag.agent</text>
+  <text class="node-title" x="170" y="370" text-anchor="middle">dlightrag.engine.agent</text>
   <text class="node-copy" x="170" y="400" text-anchor="middle">turn execution</text>
   <text class="node-copy" x="170" y="423" text-anchor="middle">and tool contracts</text>
 
@@ -54,7 +54,7 @@
   <text class="node-copy" x="450" y="423" text-anchor="middle">and corpus ports</text>
 
   <rect class="module" x="720" y="330" width="180" height="110" rx="14"/>
-  <text class="node-title" x="810" y="370" text-anchor="middle">dlightrag.runtime</text>
+  <text class="node-title" x="810" y="370" text-anchor="middle">dlightrag.engine.runtime</text>
   <text class="node-copy" x="810" y="400" text-anchor="middle">durable lifecycle</text>
   <text class="node-copy" x="810" y="423" text-anchor="middle">storage neutral</text>
 
@@ -64,7 +64,7 @@
   <text class="node-copy" x="1090" y="423" text-anchor="middle">host neutral</text>
 
   <rect class="module" x="210" y="560" width="180" height="90" rx="14"/>
-  <text class="node-title" x="300" y="597" text-anchor="middle">dlightrag.ai</text>
+  <text class="node-title" x="300" y="597" text-anchor="middle">dlightrag.engine.ai</text>
   <text class="node-copy" x="300" y="627" text-anchor="middle">provider-neutral lifecycle</text>
 
   <rect class="external" x="500" y="560" width="180" height="90" rx="14"/>

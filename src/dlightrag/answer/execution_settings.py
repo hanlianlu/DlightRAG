@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dlightrag.agent.environment import (
+from dlightrag.engine.agent.environment import (
     WORKSPACE_MAX_BYTES,
     ExecutionEnvironmentAdapter,
     resolve_execution_adapter,

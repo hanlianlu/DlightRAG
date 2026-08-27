@@ -12,62 +12,6 @@ from typing import Any, Literal, Protocol, cast
 
 from dlightrag_memory import Memory, MemoryStore
 
-from dlightrag.agent.environment import (
-    ExecutionEnvironment,
-    resolve_execution_adapter,
-)
-from dlightrag.agent.session.effects import (
-    EffectIntent,
-    ToolResultEntry,
-    canonical_json,
-)
-from dlightrag.agent.session.fold import PriorTurns, project_session_messages
-from dlightrag.agent.session.ids import (
-    AttemptId,
-    IntentId,
-    LaneId,
-    OperationId,
-    SessionId,
-    StageIntentId,
-)
-from dlightrag.agent.session.operation import (
-    OperationCancelled,
-    OperationCompleted,
-    OperationFailed,
-    ToolBatchItem,
-)
-from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.agent.session.registers import PendingInput, RequestSnapshot
-from dlightrag.agent.session.repository import (
-    AgentSessionRepository,
-)
-from dlightrag.agent.session.runtime import (
-    AgentOperationCancelled,
-    AgentSessionEvent,
-    AgentSessionRuntime,
-    FollowUpCommand,
-    OperationEffectFailed,
-    ProviderAttemptFailed,
-    ProviderContextOverflow,
-    RuntimeContext,
-    SessionLeaseLostError,
-    SteerCommand,
-    ToolEffectResult,
-)
-from dlightrag.agent.tools import (
-    AgentTool,
-    ToolEffects,
-    ToolResult,
-    ToolRuntime,
-    fit_tool_result,
-)
-from dlightrag.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
-from dlightrag.ai.fingerprints import ModelFingerprint
-from dlightrag.ai.messages import AssistantTurn
-from dlightrag.ai.providers.base import is_provider_context_overflow
-from dlightrag.ai.scheduler import model_call_scope
-from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
-from dlightrag.ai.telemetry import Telemetry, safe_log_text
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.citations.finalization import finalize_answer
 from dlightrag.answer.citations.streaming import aclose_answer_stream
@@ -137,26 +81,73 @@ from dlightrag.application.answer_runs.mode import ModeResource, ResolvedMode, r
 from dlightrag.application.answer_runs.results import store_answer_result
 from dlightrag.application.answer_runs.routing import AnswerRoutingStore, decide_resolved_mode
 from dlightrag.application.answer_runs.sources import project_contexts_for_client
-from dlightrag.rag.lifecycle import defer_cancellation
-from dlightrag.rag.pool import WorkspacePool
-from dlightrag.rag.retrieval import (
-    MetadataFilter,
-    RetrievalContexts,
-    RetrievalResult,
+from dlightrag.engine.agent.environment import (
+    ExecutionEnvironment,
+    resolve_execution_adapter,
 )
-from dlightrag.rag.sourcing.source_contract import safe_source_filename
-from dlightrag.rag.sourcing.url import afetch_public_https_bytes, avalidate_public_https_url
-from dlightrag.runtime import (
+from dlightrag.engine.agent.session.effects import (
+    EffectIntent,
+    ToolResultEntry,
+    canonical_json,
+)
+from dlightrag.engine.agent.session.fold import PriorTurns, project_session_messages
+from dlightrag.engine.agent.session.ids import (
+    AttemptId,
+    IntentId,
+    LaneId,
+    OperationId,
+    SessionId,
+    StageIntentId,
+)
+from dlightrag.engine.agent.session.operation import (
+    OperationCancelled,
+    OperationCompleted,
+    OperationFailed,
+    ToolBatchItem,
+)
+from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.session.registers import PendingInput, RequestSnapshot
+from dlightrag.engine.agent.session.repository import (
+    AgentSessionRepository,
+)
+from dlightrag.engine.agent.session.runtime import (
+    AgentOperationCancelled,
+    AgentSessionEvent,
+    AgentSessionRuntime,
+    FollowUpCommand,
+    OperationEffectFailed,
+    ProviderAttemptFailed,
+    ProviderContextOverflow,
+    RuntimeContext,
+    SessionLeaseLostError,
+    SteerCommand,
+    ToolEffectResult,
+)
+from dlightrag.engine.agent.tools import (
+    AgentTool,
+    ToolEffects,
+    ToolResult,
+    ToolRuntime,
+    fit_tool_result,
+)
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.messages import AssistantTurn
+from dlightrag.engine.ai.providers.base import is_provider_context_overflow
+from dlightrag.engine.ai.scheduler import model_call_scope
+from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.ai.telemetry import Telemetry, safe_log_text
+from dlightrag.engine.runtime import (
     ANSWER_RUN_LEASE_SECONDS,
     LeaseLostError,
     RunCancelledError,
     RunExecutionError,
     RunSession,
 )
-from dlightrag.runtime.blob_chunks import blob_digest, plan_blob
-from dlightrag.runtime.progress import RunProgressStore, StageCommit
-from dlightrag.runtime.records import PendingPublication, artifact_digest
-from dlightrag.runtime.settlements import (
+from dlightrag.engine.runtime.blob_chunks import blob_digest, plan_blob
+from dlightrag.engine.runtime.progress import RunProgressStore, StageCommit
+from dlightrag.engine.runtime.records import PendingPublication, artifact_digest
+from dlightrag.engine.runtime.settlements import (
     CommittedSpillUpdate,
     CompleteBlobDescriptor,
     EffectHostUpdate,
@@ -167,6 +158,15 @@ from dlightrag.runtime.settlements import (
     OpaqueFetchedResourceWrite,
     WorkspaceInventoryUpdate,
 )
+from dlightrag.rag.lifecycle import defer_cancellation
+from dlightrag.rag.pool import WorkspacePool
+from dlightrag.rag.retrieval import (
+    MetadataFilter,
+    RetrievalContexts,
+    RetrievalResult,
+)
+from dlightrag.rag.sourcing.source_contract import safe_source_filename
+from dlightrag.rag.sourcing.url import afetch_public_https_bytes, avalidate_public_https_url
 
 logger = logging.getLogger(__name__)
 
@@ -615,13 +615,13 @@ class AnswerExecutor:
         Acceptance combines these exact factories with request-specific search
         and resource tools. The execute closures are never invoked here.
         """
-        from dlightrag.agent.environment import AccessScheduler
-        from dlightrag.agent.environment.local import LocalExecutionEnvironment
-        from dlightrag.agent.skills import SkillCatalog, SkillMetadata, load_skill_tool
-        from dlightrag.agent.tools.files import path_tools, read_tool
-        from dlightrag.agent.tools.registry import ToolRegistry
         from dlightrag.answer.tools.memory import forget_tool, recall_memory_tool, remember_tool
         from dlightrag.answer.tools.subagents import subagent_tools
+        from dlightrag.engine.agent.environment import AccessScheduler
+        from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+        from dlightrag.engine.agent.skills import SkillCatalog, SkillMetadata, load_skill_tool
+        from dlightrag.engine.agent.tools.files import path_tools, read_tool
+        from dlightrag.engine.agent.tools.registry import ToolRegistry
 
         access = AccessScheduler()
         # Resource reads exist independently of local execution and use the
@@ -2535,7 +2535,7 @@ def _fenced_child_writer(store: object, name: str, session: RunSession) -> Any |
 
 
 def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[str, str]:
-    from dlightrag.ai.media import image_bytes_to_data_uri, verify_web_image_bytes
+    from dlightrag.engine.ai.media import image_bytes_to_data_uri, verify_web_image_bytes
 
     mime = verify_web_image_bytes(data, max_pixels=max_pixels)
     return mime, image_bytes_to_data_uri(data, fallback_mime=mime)

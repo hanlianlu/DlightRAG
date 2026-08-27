@@ -6,9 +6,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.agent.session.fold import PriorTurns
-from dlightrag.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
-from dlightrag.ai.tokens import truncate_to_estimated_tokens
+from dlightrag.engine.agent.session.fold import PriorTurns
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
+from dlightrag.engine.ai.tokens import truncate_to_estimated_tokens
 
 type HistoryInputMeasure = Callable[[list[dict[str, Any]]], int]
 

@@ -6,15 +6,15 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import (
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
     ModelSettings,
     ModelsSettings,
     RerankSettings,
 )
-from dlightrag.ai.telemetry import NoopTelemetry
+from dlightrag.engine.ai.telemetry import NoopTelemetry
 from dlightrag.rag.ports import WorkspaceCorpusBackend
 from dlightrag.rag.settings import CorpusSettings, IngestionSettings, PipelineSettings, RagSettings
 from dlightrag.rag.workspace_rag import WorkspaceRag

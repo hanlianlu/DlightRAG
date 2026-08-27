@@ -8,16 +8,16 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from dlightrag.agent.session.effects import ToolResultEntry
-from dlightrag.agent.session.entries import (
+from dlightrag.engine.agent.session.effects import ToolResultEntry
+from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
     ControlMessageEntry,
     ToolResultMessageEntry,
     UserMessageEntry,
 )
-from dlightrag.agent.session.ids import AttemptId, LaneId, SessionId
-from dlightrag.agent.session.memory import MemoryAgentSessionRepository
-from dlightrag.agent.session.operation import (
+from dlightrag.engine.agent.session.ids import AttemptId, LaneId, SessionId
+from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
+from dlightrag.engine.agent.session.operation import (
     Cancelling,
     CompletionReady,
     OperationCancelled,
@@ -25,9 +25,9 @@ from dlightrag.agent.session.operation import (
     OperationFailed,
     ToolEffectPending,
 )
-from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.agent.session.registers import RequestSnapshot
-from dlightrag.agent.session.runtime import (
+from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.session.registers import RequestSnapshot
+from dlightrag.engine.agent.session.runtime import (
     AgentSessionEvent,
     AgentSessionRuntime,
     CompactionRequired,
@@ -37,8 +37,8 @@ from dlightrag.agent.session.runtime import (
     SteerCommand,
     ToolEffectResult,
 )
-from dlightrag.agent.tools import AgentTool, ToolResult
-from dlightrag.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.agent.tools import AgentTool, ToolResult
+from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 
 
 class _Args(BaseModel):
@@ -144,9 +144,9 @@ class _Effects:
         )
 
     async def compact(self, context: RuntimeContext, attempt: int) -> Any:
-        from dlightrag.agent.session.entries import CompactionEntry
-        from dlightrag.agent.session.ids import EntryId, ProjectionId
-        from dlightrag.agent.session.projection import ContextProjection
+        from dlightrag.engine.agent.session.entries import CompactionEntry
+        from dlightrag.engine.agent.session.ids import EntryId, ProjectionId
+        from dlightrag.engine.agent.session.projection import ContextProjection
 
         del attempt
         self._compacted = True
@@ -157,7 +157,7 @@ class _Effects:
             summary=None,
         )
         return __import__(
-            "dlightrag.agent.session.runtime", fromlist=["CompactionResult"]
+            "dlightrag.engine.agent.session.runtime", fromlist=["CompactionResult"]
         ).CompactionResult(
             entry=CompactionEntry(
                 entry_id=EntryId.new(),
@@ -490,8 +490,8 @@ async def test_runtime_event_sink_failure_is_observe_only() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_invariant_faults_session_and_rejects_new_work() -> None:
-    from dlightrag.agent.session.operation import OperationFailed
-    from dlightrag.agent.session.runtime import AgentSessionRuntimeError
+    from dlightrag.engine.agent.session.operation import OperationFailed
+    from dlightrag.engine.agent.session.runtime import AgentSessionRuntimeError
 
     tool = _agent_tool()
 

@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from dlightrag.ai.completion import CompletionModel
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import ModelSettings
+from dlightrag.engine.ai.completion import CompletionModel
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import ModelSettings
 
 
 class RecordingObservation:
@@ -47,7 +47,7 @@ async def test_provider_error_text_is_redacted_when_sensitive_capture_is_disable
     telemetry = RecordingTelemetry()
     telemetry.capture_sensitive_data = False
     monkeypatch.setattr(
-        "dlightrag.ai.completion.get_provider",
+        "dlightrag.engine.ai.completion.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -81,7 +81,7 @@ async def test_stream_records_ttft_usage_cost_and_sensitive_text(monkeypatch) ->
 
     telemetry = RecordingTelemetry()
     monkeypatch.setattr(
-        "dlightrag.ai.completion.get_provider",
+        "dlightrag.engine.ai.completion.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -138,7 +138,7 @@ async def test_stream_propagates_cancellation_without_false_error(monkeypatch) -
 
     telemetry = RecordingTelemetry()
     monkeypatch.setattr(
-        "dlightrag.ai.completion.get_provider",
+        "dlightrag.engine.ai.completion.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(
@@ -177,7 +177,7 @@ async def test_stream_consumer_abandonment_closes_provider_iterator(monkeypatch)
 
     telemetry = RecordingTelemetry()
     monkeypatch.setattr(
-        "dlightrag.ai.completion.get_provider",
+        "dlightrag.engine.ai.completion.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     model = CompletionModel(

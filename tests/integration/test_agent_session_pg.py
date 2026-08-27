@@ -15,14 +15,16 @@ from pydantic import BaseModel
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository
-from dlightrag.agent.session.effects import ToolResultEntry
-from dlightrag.agent.session.entries import (
+from dlightrag.answer.session_host import FastSessionHost, ensure_session_lane
+from dlightrag.application.answer_runs import AnswerService
+from dlightrag.engine.agent.session.effects import ToolResultEntry
+from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
     SessionEntry,
     ToolResultMessageEntry,
     UserMessageEntry,
 )
-from dlightrag.agent.session.ids import (
+from dlightrag.engine.agent.session.ids import (
     AttemptId,
     EntryId,
     IntentId,
@@ -30,36 +32,34 @@ from dlightrag.agent.session.ids import (
     SessionId,
     StageIntentId,
 )
-from dlightrag.agent.session.memory import MemoryAgentSessionRepository
-from dlightrag.agent.session.operation import OperationCompleted, ToolBatchItem
-from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.agent.session.registers import (
+from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
+from dlightrag.engine.agent.session.operation import OperationCompleted, ToolBatchItem
+from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.session.registers import (
     LaneHead,
     LaneState,
     RegisterRecord,
     RequestSnapshot,
     SetRegister,
 )
-from dlightrag.agent.session.runtime import (
+from dlightrag.engine.agent.session.runtime import (
     AgentSessionRuntime,
     RuntimeContext,
     ToolEffectResult,
 )
-from dlightrag.agent.session.transactions import (
+from dlightrag.engine.agent.session.transactions import (
     HostDeltaSettlement,
     RegisterConflict,
     RegisterExpectation,
     SessionTransaction,
     TransactionCommit,
 )
-from dlightrag.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
-from dlightrag.agent.tools import AgentTool, ToolResult
-from dlightrag.ai.messages import AssistantTurn, ToolCall
-from dlightrag.answer.session_host import FastSessionHost, ensure_session_lane
-from dlightrag.application.answer_runs import AnswerService
-from dlightrag.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
-from dlightrag.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
-from dlightrag.runtime.settlements import (
+from dlightrag.engine.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
+from dlightrag.engine.agent.tools import AgentTool, ToolResult
+from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
+from dlightrag.engine.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
+from dlightrag.engine.runtime.settlements import (
     CommittedSpillUpdate,
     CompleteBlobDescriptor,
     EffectHostUpdate,
@@ -1092,8 +1092,8 @@ async def test_stale_epoch_writes_zero_rows(pool) -> None:
         fencing_epoch=claimed.execution.fencing_epoch + 99,
     )
     session_id = SessionId.new()
-    from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
-    from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
+    from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+    from dlightrag.engine.agent.session.transactions import RegisterExpectation, SessionTransaction
 
     head = LaneHead(LaneId.main(), None)
     state = LaneState(LaneId.main())

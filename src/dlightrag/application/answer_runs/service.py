@@ -6,18 +6,6 @@ from contextlib import AbstractAsyncContextManager, aclosing
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
 
-from dlightrag.agent.session.ids import LaneId, SessionId
-from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.agent.tools import AgentTool
-from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
-from dlightrag.ai.capacity import (
-    CONTEXT_POLICY,
-    CONTEXT_POLICY_REVISION,
-    ModelProfile,
-)
-from dlightrag.ai.catalog import MODEL_CATALOG_REVISION
-from dlightrag.ai.fingerprints import ModelFingerprint
-from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.answer.acceptance import research_history_input_measure
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.executor import ResolvedAnswerResources
@@ -59,11 +47,19 @@ from dlightrag.application.answer_runs.mode import (
 from dlightrag.application.answer_runs.prepared_input import require_prepared_input_bounds
 from dlightrag.application.answer_runs.results import AnswerResult, restore_answer_result
 from dlightrag.application.answer_runs.routing import RoutingAcceptance
-from dlightrag.rag.retrieval import MetadataFilter, RetrievalResult
-from dlightrag.rag.retrieval.planner import RetrievalPlanner
-from dlightrag.rag.sourcing.source_contract import safe_source_filename
-from dlightrag.rag.workspaces import require_canonical_workspace_id
-from dlightrag.runtime import (
+from dlightrag.engine.agent.session.ids import LaneId, SessionId
+from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.tools import AgentTool
+from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
+from dlightrag.engine.ai.capacity import (
+    CONTEXT_POLICY,
+    CONTEXT_POLICY_REVISION,
+    ModelProfile,
+)
+from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
+from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.runtime import (
     AnswerRunCancelledError,
     AnswerRunEvent,
     AnswerRunFailedError,
@@ -77,6 +73,10 @@ from dlightrag.runtime import (
     answer_run_request_fingerprint,
     artifact_digest,
 )
+from dlightrag.rag.retrieval import MetadataFilter, RetrievalResult
+from dlightrag.rag.retrieval.planner import RetrievalPlanner
+from dlightrag.rag.sourcing.source_contract import safe_source_filename
+from dlightrag.rag.workspaces import require_canonical_workspace_id
 
 #: Accepted input uploads, in the precedence one ordinal resolves against.
 _INPUT_REFERENCE_KINDS: tuple[ArtifactReferenceKind, ...] = (

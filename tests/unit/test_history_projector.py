@@ -3,12 +3,12 @@
 
 import pytest
 
-from dlightrag.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.answer.history import (
     HistoryProjectionOverflowError,
     HistoryProjectionTarget,
     project_history,
 )
+from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
 
 
 def _measure(fixed: int):

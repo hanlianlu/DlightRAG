@@ -22,14 +22,14 @@ DlightRAG has one unified production RAG path: LightRAG provides fusional one-ho
 [docs/architecture.md](docs/architecture.md).
 
 The repository is one UV workspace with two lockstep distributions. The root
-`dlightrag` distribution contains three internal deep modules: `dlightrag.ai`
-owns model settings and provider lifecycles, `dlightrag.agent` owns generic tool
+`dlightrag` distribution contains three internal deep modules: `dlightrag.engine.ai`
+owns model settings and provider lifecycles, `dlightrag.engine.agent` owns generic tool
 and turn mechanics, and `dlightrag.rag` owns LightRAG integration plus
 storage-neutral retrieval and corpus contracts. The root composes those modules
 into the REST, Web, MCP, SDK, and PostgreSQL-backed product. Owner Profile Memory
 remains the independently installable `dlightrag-memory` distribution for both
 DlightRAG and external stdio MCP hosts. CI builds and inspects the root and
-Memory wheels outside the editable workspace. `dlightrag.runtime` owns
+Memory wheels outside the editable workspace. `dlightrag.engine.runtime` owns
 storage-neutral durable-run contracts and coordination;
 `dlightrag.adapters.postgres` owns every concrete product PostgreSQL
 implementation; and `ApplicationHealth` is the single process-health state
@@ -293,7 +293,7 @@ import os
 
 from dlightrag import create_application
 from dlightrag.application.access import DEPLOYMENT_OWNER_ID
-from dlightrag.ai.settings import (
+from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
     ModelSettings,

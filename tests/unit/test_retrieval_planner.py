@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from dlightrag.ai.capacity import ModelProfile
-from dlightrag.ai.structured import StructuredOutput
-from dlightrag.ai.tokens import estimate_messages_tokens
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.structured import StructuredOutput
+from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.rag.retrieval import MetadataFilter, RetrievalPlan, RetrievalPlanner
 from dlightrag.rag.retrieval.planner import (
     _build_custom_keys_hint,

@@ -6,13 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.agent.environment import (
-    AccessScheduler,
-    FullOutputUnavailable,
-    LocalExecutionEnvironment,
-)
-from dlightrag.agent.tools.contracts import CommittedOutput
-from dlightrag.agent.tools.files import (
+from dlightrag.engine.agent.environment import AccessScheduler, FullOutputUnavailable
+from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+from dlightrag.engine.agent.tools.contracts import CommittedOutput
+from dlightrag.engine.agent.tools.files import (
     BashArgs,
     EditArgs,
     EditOperation,
@@ -134,7 +131,7 @@ async def test_read_image_path_attaches_the_original_snapshot(tmp_path: Path) ->
     result = await read_tool(env, scheduler).execute(ReadArgs(path="chart.png"), tool_runtime())
 
     assert result.is_error is False
-    from dlightrag.agent.tool_content import tool_content_attachments
+    from dlightrag.engine.agent.tool_content import tool_content_attachments
 
     (attachment,) = tool_content_attachments(result.parts)
     assert attachment.media_type == "image/png"
@@ -153,7 +150,7 @@ async def test_read_corrupt_image_falls_back_to_text_decoding(tmp_path: Path) ->
 
     result = await read_tool(env, scheduler).execute(ReadArgs(path="fake.png"), tool_runtime())
 
-    from dlightrag.agent.tool_content import tool_content_attachments
+    from dlightrag.engine.agent.tool_content import tool_content_attachments
 
     assert tool_content_attachments(result.parts) == ()
 
@@ -291,7 +288,7 @@ async def test_grep_limit_terminates_early_and_counts_single_file_matches(
     (tmp_path / "single.txt").write_text(
         "".join(f"hit {i}\n" for i in range(1, 12)), encoding="utf-8"
     )
-    from dlightrag.agent.tools.files import GrepArgs, grep_tool
+    from dlightrag.engine.agent.tools.files import GrepArgs, grep_tool
 
     tool = grep_tool(env, scheduler, ripgrep=rg)
     # Single-file search: rg emits bare `NUM:content` with no path prefix.
@@ -323,7 +320,7 @@ async def test_grep_uses_argv_not_a_shell(tmp_path: Path) -> None:
     fake.chmod(0o755)
     env, scheduler = _env(tmp_path)
     (tmp_path / "hit.txt").write_text("needle", encoding="utf-8")
-    from dlightrag.agent.tools.files import GrepArgs, grep_tool
+    from dlightrag.engine.agent.tools.files import GrepArgs, grep_tool
 
     tool = grep_tool(env, scheduler, ripgrep=str(fake))
     result = await tool.execute(GrepArgs(pattern="needle"), tool_runtime())
@@ -344,7 +341,7 @@ async def test_grep_searches_hidden_ignored_and_limits_matching_lines(
     (tmp_path / ".hidden.txt").write_text("hidden needle\n", encoding="utf-8")
     (tmp_path / "ignored.txt").write_text("ignored needle\n", encoding="utf-8")
     (tmp_path / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
-    from dlightrag.agent.tools.files import GrepArgs, grep_tool
+    from dlightrag.engine.agent.tools.files import GrepArgs, grep_tool
 
     tool = grep_tool(env, scheduler, ripgrep=rg)
     result = await tool.execute(
@@ -369,7 +366,7 @@ async def test_grep_literal_flag_disables_regex_and_relative_paths_are_posix(
     env, scheduler = _env(tmp_path)
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "dots.txt").write_text("a.b literal\naxb\n", encoding="utf-8")
-    from dlightrag.agent.tools.files import GrepArgs, grep_tool
+    from dlightrag.engine.agent.tools.files import GrepArgs, grep_tool
 
     tool = grep_tool(env, scheduler, ripgrep=rg)
     regex = await tool.execute(GrepArgs(pattern="a.b", path="sub"), tool_runtime())

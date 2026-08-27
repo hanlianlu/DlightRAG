@@ -10,10 +10,10 @@ import numpy as np
 from lightrag import RoleLLMConfig
 from lightrag.utils import EmbeddingFunc
 
-from dlightrag.ai.completion import CompletionModel
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import EmbeddingSettings, ModelRoleSettings
-from dlightrag.ai.telemetry import NOOP_TELEMETRY, Telemetry
+from dlightrag.engine.ai.completion import CompletionModel
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry
 
 logger = logging.getLogger(__name__)
 

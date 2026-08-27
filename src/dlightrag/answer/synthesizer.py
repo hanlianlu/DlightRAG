@@ -23,10 +23,6 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from dlightrag.agent.context import ContextContribution, ContextProjector
-from dlightrag.agent.session.fold import PriorTurns
-from dlightrag.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
-from dlightrag.ai.tokens import estimate_content_tokens, estimate_messages_tokens
 from dlightrag.answer.citations.indexer import CitationIndexer
 from dlightrag.answer.citations.streaming import AnswerStream, aclose_answer_stream
 from dlightrag.answer.context import AnswerContextPacker
@@ -35,6 +31,10 @@ from dlightrag.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.answer.memory import standing_memory_message
 from dlightrag.answer.prompts import answer_core
 from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
+from dlightrag.engine.agent.context import ContextContribution, ContextProjector
+from dlightrag.engine.agent.session.fold import PriorTurns
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
+from dlightrag.engine.ai.tokens import estimate_content_tokens, estimate_messages_tokens
 from dlightrag.rag.retrieval import RetrievalContexts
 
 logger = logging.getLogger(__name__)

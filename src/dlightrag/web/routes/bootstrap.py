@@ -5,9 +5,9 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from dlightrag.ai.vision import ImageCapabilityStatus
 from dlightrag.application.access import AccessAction, WorkspaceRecord
 from dlightrag.application.answer_runs.client_contracts import ClientContractModel
+from dlightrag.engine.ai.vision import ImageCapabilityStatus
 from dlightrag.rag.workspaces import normalize_workspace
 from dlightrag.web.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from dlightrag.web.deps import (

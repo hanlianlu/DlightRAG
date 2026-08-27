@@ -11,13 +11,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from lightrag.kg.pgtable_impl import PGTableGraphStorage
 
-from dlightrag.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelsSettings
 from dlightrag.application.config import (
     DeploymentSettings,
     DlightragConfig,
     PostgresSettings,
     StorageSettings,
 )
+from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelsSettings
 
 
 def _config(*, service_role: str = "writer", **overrides) -> DlightragConfig:
@@ -234,8 +234,8 @@ def _required_domain_scopes() -> list[
         workspaces,
     )
     from dlightrag.application.web_conversations import WebConversationSchemaError
+    from dlightrag.engine.runtime import RunSchemaError
     from dlightrag.rag.ports import CorpusSchemaError
-    from dlightrag.runtime import RunSchemaError
 
     return [
         (
@@ -318,7 +318,7 @@ async def test_reader_startup_validates_domain_schema_without_ddl(scope_index: i
 
 @pytest.mark.parametrize("scope_index", range(4))
 async def test_reader_startup_fails_on_incompatible_domain_schema(scope_index: int) -> None:
-    from dlightrag.runtime import RunSchemaError
+    from dlightrag.engine.runtime import RunSchemaError
 
     scope, _migrations, tables, store_cls, schema_error = _required_domain_scopes()[scope_index]
     conn = _SchemaConn(set(), tables + _prerequisite_tables(scope))
@@ -351,7 +351,7 @@ async def test_reader_startup_fails_when_a_required_table_is_absent(scope_index:
 
 @pytest.mark.parametrize("scope_index", range(4))
 async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_index: int) -> None:
-    from dlightrag.runtime import RunSchemaError
+    from dlightrag.engine.runtime import RunSchemaError
 
     _scope, _migrations, tables, store_cls, schema_error = _required_domain_scopes()[scope_index]
     conn = _SchemaConn(set(), tables + _prerequisite_tables(_scope), ledger_exists=False)

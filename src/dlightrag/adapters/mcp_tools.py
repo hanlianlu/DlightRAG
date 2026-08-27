@@ -19,7 +19,7 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, RootModel
 
-from dlightrag.agent.tools import AgentTool, ToolResult, ToolRuntime
+from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
 
 _NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 

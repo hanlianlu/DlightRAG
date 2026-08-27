@@ -6,8 +6,8 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
-from dlightrag.ai.concurrency import bounded_gather
-from dlightrag.ai.telemetry import safe_log_text
+from dlightrag.engine.ai.concurrency import bounded_gather
+from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.rag.retrieval import RetrievalResult
 
 logger = logging.getLogger(__name__)

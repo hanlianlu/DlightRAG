@@ -112,8 +112,8 @@ class TestPGWorkspaceDiscovery:
     async def test_discovers_workspaces_from_workspace_meta(self) -> None:
         """list_workspaces() returns workspaces found in dlightrag_workspace_meta."""
         from dlightrag.adapters.postgres._pool import pg_pool
-        from dlightrag.ai.settings import EmbeddingSettings
         from dlightrag.application.config import DlightragConfig, set_config
+        from dlightrag.engine.ai.settings import EmbeddingSettings
 
         pool, registry = await _open_workspace_registry()
         try:
@@ -157,8 +157,8 @@ class TestPGWorkspaceDiscovery:
     async def test_empty_table_returns_default_workspace(self) -> None:
         """Empty workspace metadata falls back to config.deployment.workspace."""
         from dlightrag.adapters.postgres._pool import pg_pool
-        from dlightrag.ai.settings import EmbeddingSettings
         from dlightrag.application.config import DlightragConfig, set_config
+        from dlightrag.engine.ai.settings import EmbeddingSettings
 
         pool, registry = await _open_workspace_registry()
         try:

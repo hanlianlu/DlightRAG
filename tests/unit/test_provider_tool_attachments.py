@@ -4,9 +4,9 @@
 import base64
 import json
 
-from dlightrag.ai.providers.anthropic_native import _anthropic_tool_messages
-from dlightrag.ai.providers.gemini_native import _gemini_tool_contents
-from dlightrag.ai.providers.openai_compatible import _openai_tool_messages
+from dlightrag.engine.ai.providers.anthropic_native import _anthropic_tool_messages
+from dlightrag.engine.ai.providers.gemini_native import _gemini_tool_contents
+from dlightrag.engine.ai.providers.openai_compatible import _openai_tool_messages
 
 _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
 DATA_URL = f"data:image/png;base64,{_PNG}"

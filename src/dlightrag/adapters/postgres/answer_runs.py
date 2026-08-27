@@ -34,19 +34,19 @@ from dlightrag.adapters.postgres.memory_settings import (
 )
 from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository, PGProgressStore
 from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
-from dlightrag.agent.session.ids import SessionId
-from dlightrag.agent.tool_content import decode_tool_content, tool_content_message_fields
 from dlightrag.application.answer_runs.routing import RoutingAcceptance, RoutingRecord
-from dlightrag.runtime.cancellation import RunCancellationListener, cancellation_notify_key
-from dlightrag.runtime.contracts import AnswerRunPhase
-from dlightrag.runtime.errors import RunSchemaError
-from dlightrag.runtime.policy import (
+from dlightrag.engine.agent.session.ids import SessionId
+from dlightrag.engine.agent.tool_content import decode_tool_content, tool_content_message_fields
+from dlightrag.engine.runtime.cancellation import RunCancellationListener, cancellation_notify_key
+from dlightrag.engine.runtime.contracts import AnswerRunPhase
+from dlightrag.engine.runtime.errors import RunSchemaError
+from dlightrag.engine.runtime.policy import (
     ANSWER_RUN_LEASE_SECONDS,
     DEFAULT_RUN_RETENTION_SECONDS,
     MAX_RECLAIMS_WITHOUT_PROGRESS,
     RUN_ABANDONED_ERROR_KIND,
 )
-from dlightrag.runtime.records import (
+from dlightrag.engine.runtime.records import (
     AnswerRunEvent,
     AnswerRunRecord,
     CancellationOutcome,
@@ -3256,7 +3256,7 @@ def _require_replay_match(
 
 
 def _plan_blob(content: bytes):
-    from dlightrag.runtime.blob_chunks import plan_blob
+    from dlightrag.engine.runtime.blob_chunks import plan_blob
 
     return plan_blob(content)
 

@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from dlightrag.ai.concurrency import bounded_gather, bounded_map
+from dlightrag.engine.ai.concurrency import bounded_gather, bounded_map
 
 
 class TestBoundedGather:

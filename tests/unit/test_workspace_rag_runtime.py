@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.telemetry import NoopTelemetry
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.settings import rag_settings
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.telemetry import NoopTelemetry
 from dlightrag.rag.ingestion.document_embedding import (
     RobustDocumentEmbedder,
     build_document_embedder,

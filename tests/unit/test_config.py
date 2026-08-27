@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.ai.settings import EmbeddingSettings, ModelSettings, ModelsSettings
 from dlightrag.application.config import (
     AccessSectionSettings,
     DeploymentSettings,
@@ -16,6 +15,7 @@ from dlightrag.application.config import (
     StorageSettings,
     load_config,
 )
+from dlightrag.engine.ai.settings import EmbeddingSettings, ModelSettings, ModelsSettings
 from dlightrag.rag.settings import (
     CorpusSettings,
     MinerUSidecarSettings,

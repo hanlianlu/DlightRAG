@@ -16,7 +16,7 @@ from dlightrag.application.answer_runs.client_contracts import (
     RetrieveRequestContract,
 )
 from dlightrag.application.corpus_admin import IngestSpec
-from dlightrag.runtime import AnswerRunPhase, AnswerRunStatus
+from dlightrag.engine.runtime import AnswerRunPhase, AnswerRunStatus
 
 # Maximum UTF-8 history payload plus query/workspace/JSON framing. Shared by the
 # REST multipart parser and its receive-layer body cap.

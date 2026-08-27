@@ -24,8 +24,8 @@ from dlightrag.application.config import (
 )
 from dlightrag.application.corpus_admin import IngestSpec
 from dlightrag.application.retrieval import RetrieveResponse as ServiceResponse
+from dlightrag.engine.runtime import AnswerRunRecord
 from dlightrag.mcp import server as mcp_server
-from dlightrag.runtime import AnswerRunRecord
 from tests.config_helpers import mutate_config, replace_config
 from tests.unit.conftest import answer_capability_view
 
@@ -831,7 +831,7 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
 async def test_mcp_answer_reports_a_reused_key_with_different_input(
     mock_mcp_application: AsyncMock,
 ) -> None:
-    from dlightrag.runtime import IdempotencyKeyConflict
+    from dlightrag.engine.runtime import IdempotencyKeyConflict
 
     mock_mcp_application.answers.create.side_effect = IdempotencyKeyConflict("reused")
 

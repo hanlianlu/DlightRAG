@@ -11,15 +11,15 @@ import pytest
 from dlightrag.adapters.postgres.answer_runs import (
     PGAnswerRunStore,
 )
-from dlightrag.ai.settings import (
+from dlightrag.application.answer_runs.routing import RoutingAcceptance
+from dlightrag.application.config import DlightragConfig, reset_config, set_config
+from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
     ModelCapacityOverrideSettings,
     ModelRoleSettings,
     ModelSettings,
 )
-from dlightrag.application.answer_runs.routing import RoutingAcceptance
-from dlightrag.application.config import DlightragConfig, reset_config, set_config
-from dlightrag.runtime import (
+from dlightrag.engine.runtime import (
     PendingArtifact,
     PendingArtifactReference,
     RunCreation,
@@ -42,7 +42,7 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
         references: Sequence[PendingArtifactReference] = (),
     ) -> RunCreation:
 
-        from dlightrag.agent.session.ids import SessionId
+        from dlightrag.engine.agent.session.ids import SessionId
 
         if prepared_input is not None:
             prepared = {
@@ -90,7 +90,7 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
         routing: RoutingAcceptance | None = None,
     ) -> RunCreation:
 
-        from dlightrag.agent.session.ids import SessionId
+        from dlightrag.engine.agent.session.ids import SessionId
 
         prepared: dict[str, Any] = {
             "agent_session_id": SessionId.new().value,

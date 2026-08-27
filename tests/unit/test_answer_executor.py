@@ -11,13 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image
 
-from dlightrag.agent.session.ids import LaneId, SessionId
-from dlightrag.agent.session.memory import MemoryAgentSessionRepository
-from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
-from dlightrag.ai.fingerprints import ModelFingerprint
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.executor import (
     AnswerExecutor,
     AnswerExecutorSettings,
@@ -39,7 +32,14 @@ from dlightrag.application.answer_runs.execution import (
     build_current_answer_resources,
     in_memory_attachment_loader,
 )
-from dlightrag.runtime import RunExecutionError, RunSession, artifact_digest
+from dlightrag.engine.agent.session.ids import LaneId, SessionId
+from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
+from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.runtime import RunExecutionError, RunSession, artifact_digest
 
 
 @pytest.mark.asyncio
@@ -91,7 +91,7 @@ def _executor() -> AnswerExecutor:
 def test_acceptance_research_tools_include_every_configured_non_resource_surface() -> None:
     from pydantic import BaseModel
 
-    from dlightrag.agent.tools import AgentTool, ToolResult
+    from dlightrag.engine.agent.tools import AgentTool, ToolResult
 
     class Args(BaseModel):
         value: str
@@ -135,11 +135,11 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
 
 
 def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> None:
-    from dlightrag.agent.environment.local import LocalExecutionEnvironment
-    from dlightrag.agent.skills import SkillCatalog
     from dlightrag.answer.evidence import EvidenceLedger
     from dlightrag.answer.tools.composition import compose_research_tools
     from dlightrag.answer.tools.subagents import SubagentHost
+    from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+    from dlightrag.engine.agent.skills import SkillCatalog
 
     executor = AnswerExecutor(
         store=MagicMock(),
@@ -189,8 +189,8 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
 def test_execution_rejects_tools_that_differ_from_the_accepted_agent_plan() -> None:
     from pydantic import BaseModel
 
-    from dlightrag.agent.tools import AgentTool, ToolResult
     from dlightrag.answer.executor import IncompatibleActiveRunError
+    from dlightrag.engine.agent.tools import AgentTool, ToolResult
 
     class Args(BaseModel):
         value: str

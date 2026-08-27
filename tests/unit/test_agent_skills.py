@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.agent.skills import LoadSkillInput, SkillCatalog, load_skill_tool
+from dlightrag.engine.agent.skills import LoadSkillInput, SkillCatalog, load_skill_tool
 from tests.tool_helpers import tool_runtime
 
 

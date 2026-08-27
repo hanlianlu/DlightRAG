@@ -10,10 +10,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
-from dlightrag.ai.catalog import MODEL_CATALOG_REVISION
-from dlightrag.ai.fingerprints import ModelFingerprint
-from dlightrag.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.application.answer_runs import (
     AnswerHistoryResource,
@@ -24,7 +20,11 @@ from dlightrag.application.answer_runs import (
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.application.answer_runs.errors import UnsupportedAnswerModeError
 from dlightrag.application.answer_runs.execution import AnswerRunInput, AnswerRunRequest
-from dlightrag.runtime import (
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
+from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.runtime import (
     AnswerRunCancelledError,
     AnswerRunEvent,
     AnswerRunFailedError,

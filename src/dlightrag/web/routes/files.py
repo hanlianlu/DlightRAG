@@ -9,7 +9,6 @@ from typing import Any, NoReturn
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
-from dlightrag.ai.telemetry import safe_log_text
 from dlightrag.application.access import AccessAction
 from dlightrag.application.corpus_admin import (
     IngestSpec,
@@ -22,6 +21,7 @@ from dlightrag.application.corpus_admin import (
     UnsafeUploadNameError,
     UploadTooLargeError,
 )
+from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.web.deps import enforce_web_access, get_application, get_workspace
 from dlightrag.web.file_models import (
     WebFileItem,

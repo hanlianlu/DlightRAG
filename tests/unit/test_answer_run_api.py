@@ -16,7 +16,7 @@ from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
 from dlightrag.application.access import UserContext
 from dlightrag.application.config import DlightragConfig
-from dlightrag.runtime import (
+from dlightrag.engine.runtime import (
     AnswerRunEvent,
     AnswerRunRecord,
     CancellationOutcome,
@@ -753,7 +753,7 @@ class TestCancel:
 async def test_schema_validation_error_is_a_safe_503(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:
-    from dlightrag.runtime import RunSchemaError
+    from dlightrag.engine.runtime import RunSchemaError
 
     run_application.get = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
         side_effect=RunSchemaError("column dlightrag_answer_runs.secret is missing")

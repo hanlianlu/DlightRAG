@@ -12,12 +12,12 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.ai.capacity import ModelProfile
-from dlightrag.ai.fingerprints import ModelFingerprint
 from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.application.answer_runs.mode import canonical_answer_mode
-from dlightrag.runtime.errors import RunExecutionError
+from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.runtime.errors import RunExecutionError
 
 
 @dataclass(frozen=True, slots=True)

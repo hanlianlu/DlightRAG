@@ -131,7 +131,7 @@ def _write_workspace_artifacts(
 ) -> None:
     root_sources = dict(root_additional_sources or {})
     if root_include_model_catalog:
-        root_sources["ai/model_catalog.json"] = '{"revision":"test","models":[]}'
+        root_sources["engine/ai/model_catalog.json"] = '{"revision":"test","models":[]}'
     _write_wheel(
         tmp_path,
         distribution="dlightrag",
@@ -188,7 +188,7 @@ def test_workspace_wheel_verifier_accepts_root_and_memory(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize(
     "memory_source",
-    ["import fastapi\n", "import dlightrag\n", "from dlightrag import ai\n"],
+    ["import fastapi\n", "import dlightrag\n", "from dlightrag.engine import ai\n"],
 )
 def test_workspace_wheel_verifier_rejects_memory_host_imports(
     tmp_path: Path, memory_source: str

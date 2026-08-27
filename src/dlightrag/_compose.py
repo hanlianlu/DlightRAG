@@ -8,11 +8,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from dlightrag.ai.embedding import MultimodalEmbedder
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.telemetry import Telemetry
 from dlightrag.application.application import Application, _ApplicationComponents
 from dlightrag.application.config import DlightragConfig, get_config
+from dlightrag.engine.ai.embedding import MultimodalEmbedder
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.telemetry import Telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ def _memory_embedder(
     config: DlightragConfig, *, scheduler: ModelScheduler, telemetry: Telemetry
 ) -> MultimodalEmbedder:
     """Build the Memory dense leg from DlightRAG's embedding endpoint."""
-    from dlightrag.ai.embedding import create_embedding_model
+    from dlightrag.engine.ai.embedding import create_embedding_model
 
     return create_embedding_model(config.models.embedding, scheduler=scheduler, telemetry=telemetry)
 
@@ -78,11 +78,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.memory_settings import PGMemorySettingsStore
     from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
-    from dlightrag.ai.fingerprints import model_fingerprint
-    from dlightrag.ai.media import MAX_DECODE_IMAGE_PIXELS
-    from dlightrag.ai.scheduler import ModelScheduler
-    from dlightrag.ai.telemetry import safe_log_text
-    from dlightrag.ai.vision import ModelImageCapabilities
     from dlightrag.answer.executor import AnswerExecutor, AnswerResourceResolver
     from dlightrag.answer.model_runtime import AnswerModelRuntime
     from dlightrag.application.answer_runs import AnswerService
@@ -111,6 +106,12 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         retrieval_settings,
     )
     from dlightrag.application.web_conversations import WebConversationService
+    from dlightrag.engine.ai.fingerprints import model_fingerprint
+    from dlightrag.engine.ai.media import MAX_DECODE_IMAGE_PIXELS
+    from dlightrag.engine.ai.scheduler import ModelScheduler
+    from dlightrag.engine.ai.telemetry import safe_log_text
+    from dlightrag.engine.ai.vision import ModelImageCapabilities
+    from dlightrag.engine.runtime import RunCoordinator
     from dlightrag.observability import LangfuseTelemetry
     from dlightrag.rag.ingestion.jobs import IngestJobCoordinator
     from dlightrag.rag.pool import WorkspacePool
@@ -119,7 +120,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.rag.source_download import SourceDownloadService
     from dlightrag.rag.workspace_rag import WorkspaceRag
     from dlightrag.rag.workspaces import normalize_workspace
-    from dlightrag.runtime import RunCoordinator
 
     # Large document scans are DlightRAG product policy, not an AI package import side effect.
     Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS

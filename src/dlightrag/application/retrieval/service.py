@@ -9,9 +9,9 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from dlightrag.ai.capacity import ModelProfile
-from dlightrag.ai.telemetry import Telemetry
 from dlightrag.application.errors import CorpusUnavailableError
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.rag.federation import federated_retrieve
 from dlightrag.rag.lifecycle import await_shared_cleanup
 from dlightrag.rag.pool import WorkspacePool

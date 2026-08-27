@@ -22,7 +22,7 @@ from lightrag.parser.routing import (
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path, resolve_sidecar_uri
 
-from dlightrag.ai.telemetry import NOOP_TELEMETRY, Telemetry
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry
 from dlightrag.rag.ingestion.document_embedding import (
     DocumentEmbeddingInput,
     RobustDocumentEmbedder,

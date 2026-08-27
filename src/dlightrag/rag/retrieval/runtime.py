@@ -4,11 +4,11 @@
 import asyncio
 from collections.abc import Callable
 
-from dlightrag.ai.capacity import CONTEXT_POLICY, ModelProfile
-from dlightrag.ai.completion import CompletionModel
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import ModelSettings
-from dlightrag.ai.telemetry import Telemetry
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
+from dlightrag.engine.ai.completion import CompletionModel
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import ModelSettings
+from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.rag.lifecycle import await_shared_cleanup
 from dlightrag.rag.retrieval.planner import RetrievalPlanner
 

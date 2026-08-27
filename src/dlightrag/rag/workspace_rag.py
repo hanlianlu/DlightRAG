@@ -13,9 +13,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 from lightrag.constants import PARSED_DIR_NAME
 
-from dlightrag.ai.embedding import MultimodalEmbedder, create_embedding_model
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.telemetry import Telemetry
+from dlightrag.engine.ai.embedding import MultimodalEmbedder, create_embedding_model
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.rag.contracts import IngestDocument, SourceType, VisualAssetSize
 from dlightrag.rag.ingestion.document_embedding import (
     build_document_embedder,
@@ -894,7 +894,7 @@ class WorkspaceRag:
         """Download remote objects into ephemeral parser batches and ingest them."""
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
-        from dlightrag.ai.concurrency import bounded_map
+        from dlightrag.engine.ai.concurrency import bounded_map
 
         resume_from_window = max(0, int(resume_from_window))
         processed = 0

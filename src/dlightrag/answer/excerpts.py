@@ -4,9 +4,9 @@
 from pathlib import Path
 from typing import Any
 
-from dlightrag.ai.media import image_data_uri
 from dlightrag.answer.citations.indexer import CitationIndexer
 from dlightrag.answer.citations.utils import context_chunk_key
+from dlightrag.engine.ai.media import image_data_uri
 from dlightrag.rag.retrieval import RetrievalContexts
 
 _INTERNAL_KEYS: frozenset[str] = frozenset(

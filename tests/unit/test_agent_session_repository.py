@@ -6,11 +6,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from dlightrag.agent.session.entries import UserMessageEntry
-from dlightrag.agent.session.ids import EntryId, IntentId, LaneId, OperationId, SessionId
-from dlightrag.agent.session.memory import MemoryAgentSessionRepository
-from dlightrag.agent.session.operation import OperationMeta, ReadyForProvider
-from dlightrag.agent.session.registers import (
+from dlightrag.engine.agent.session.entries import UserMessageEntry
+from dlightrag.engine.agent.session.ids import EntryId, IntentId, LaneId, OperationId, SessionId
+from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
+from dlightrag.engine.agent.session.operation import OperationMeta, ReadyForProvider
+from dlightrag.engine.agent.session.registers import (
     DeleteRegister,
     LaneHead,
     LaneState,
@@ -21,7 +21,7 @@ from dlightrag.agent.session.registers import (
     SessionFault,
     SetRegister,
 )
-from dlightrag.agent.session.transactions import (
+from dlightrag.engine.agent.session.transactions import (
     HostDeltaSettlement,
     RegisterConflict,
     RegisterExpectation,

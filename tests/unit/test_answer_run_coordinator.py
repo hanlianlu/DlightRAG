@@ -14,8 +14,8 @@ from typing import Any, cast
 
 import pytest
 
-import dlightrag.runtime.coordinator as coordinator_module
-from dlightrag.runtime import (
+import dlightrag.engine.runtime.coordinator as coordinator_module
+from dlightrag.engine.runtime import (
     MAX_RECLAIMS_WITHOUT_PROGRESS,
     AnswerRunEvent,
     AnswerRunRecord,
@@ -145,7 +145,7 @@ class _MemoryStore:
             row["lease_owner"] = worker_id
             row["lease_live"] = True
             row["fencing_epoch"] = int(row["fencing_epoch"]) + 1
-            from dlightrag.runtime.records import RunExecutionContext
+            from dlightrag.engine.runtime.records import RunExecutionContext
             from tests.in_memory_session_repository import InMemoryAgentSessionRepository
 
             class _Progress:
@@ -157,7 +157,7 @@ class _MemoryStore:
                     return None
 
                 async def settle_stage(self, **kwargs):
-                    from dlightrag.runtime.progress import StageCommit
+                    from dlightrag.engine.runtime.progress import StageCommit
 
                     row = self._store.runs[self._run_id]
                     row["durable_progress_version"] = int(row["durable_progress_version"]) + 1

@@ -3,23 +3,23 @@
 
 from datetime import UTC, datetime
 
-from dlightrag.agent.session.effects import ToolResultEntry
-from dlightrag.agent.session.entries import (
+from dlightrag.engine.agent.session.effects import ToolResultEntry
+from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
     CompactionEntry,
     ControlMessageEntry,
     ToolResultMessageEntry,
     UserMessageEntry,
 )
-from dlightrag.agent.session.fold import (
+from dlightrag.engine.agent.session.fold import (
     exchange_starts,
     fold_entries,
     project_session_messages,
     select_compaction_boundary,
 )
-from dlightrag.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
-from dlightrag.agent.session.projection import ContextProjection, projection_source_digest
-from dlightrag.ai.messages import ToolCall
+from dlightrag.engine.agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
+from dlightrag.engine.agent.session.projection import ContextProjection, projection_source_digest
+from dlightrag.engine.ai.messages import ToolCall
 
 
 def _now():

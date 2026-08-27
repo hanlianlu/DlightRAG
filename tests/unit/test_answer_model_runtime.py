@@ -6,16 +6,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dlightrag.ai.capacity import ModelProfile
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.settings import ModelRoleSettings, ModelSettings
-from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.images import AnswerImagePolicy
 from dlightrag.answer.model_runtime import (
     AnswerModelRuntime,
     AnswerModelRuntimeClosedError,
     AnswerModelRuntimeSettings,
 )
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import ModelRoleSettings, ModelSettings
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 
 
 def _policy(profile: ModelProfile) -> AnswerImagePolicy:

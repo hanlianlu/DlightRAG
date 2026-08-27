@@ -222,7 +222,7 @@ fork creates a new Lane on the same Session.
 See [durable-answer-runs.md](durable-answer-runs.md) for the contract and
 [postgresql.md](postgresql.md#durable-answer-run-state) for the schema.
 
-`dlightrag.runtime` owns the storage-neutral records, store protocol,
+`dlightrag.engine.runtime` owns the storage-neutral records, store protocol,
 subscription, coordinator, fenced session, and caller-wait failures. It imports
 neither Answer policy nor PostgreSQL. The Answer executor classifies product
 errors into `RunExecutionError` before they cross that boundary;

@@ -10,11 +10,17 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from dlightrag.ai.capacity import ModelProfile
-from dlightrag.ai.completion import CompletionModel
-from dlightrag.ai.providers.base import CompletionOutput
-from dlightrag.ai.scheduler import ModelScheduler, model_call_scope
-from dlightrag.ai.settings import (
+from dlightrag.application.config import DlightragConfig
+from dlightrag.application.settings import (
+    model_profile_for_role,
+    model_settings_for_role,
+    rerank_scoring_model_settings,
+)
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.completion import CompletionModel
+from dlightrag.engine.ai.providers.base import CompletionOutput
+from dlightrag.engine.ai.scheduler import ModelScheduler, model_call_scope
+from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
     ModelCapacityOverrideSettings,
     ModelRoleOverrides,
@@ -22,13 +28,7 @@ from dlightrag.ai.settings import (
     ModelSettings,
     RerankSettings,
 )
-from dlightrag.ai.structured import StructuredOutput
-from dlightrag.application.config import DlightragConfig
-from dlightrag.application.settings import (
-    model_profile_for_role,
-    model_settings_for_role,
-    rerank_scoring_model_settings,
-)
+from dlightrag.engine.ai.structured import StructuredOutput
 
 
 class DemoPlan(BaseModel):
@@ -65,7 +65,7 @@ def _capture_provider(
 ) -> dict[str, Any]:
     seen: dict[str, Any] = {}
     monkeypatch.setattr(
-        "dlightrag.ai.completion.get_provider",
+        "dlightrag.engine.ai.completion.get_provider",
         lambda *_args, **_kwargs: CapturingProvider(
             seen,
             supports_native_json_schema=supports_native_json_schema,
@@ -216,7 +216,7 @@ def test_root_override_short_circuits_adapter_metadata(
 
 
 def test_model_fingerprint_canonicalizes_endpoint_without_retaining_url() -> None:
-    from dlightrag.ai.fingerprints import model_fingerprint
+    from dlightrag.engine.ai.fingerprints import model_fingerprint
 
     first = model_fingerprint(
         ModelSettings(
@@ -269,7 +269,7 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
 
     provider = Provider()
     monkeypatch.setattr(
-        "dlightrag.ai.completion.get_provider",
+        "dlightrag.engine.ai.completion.get_provider",
         lambda *_args, **_kwargs: provider,
     )
     model = CompletionModel(
@@ -293,8 +293,8 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
 
 
 async def test_root_maps_embedding_settings_into_ai_factory() -> None:
-    from dlightrag.ai import embedding
-    from dlightrag.ai.providers.embed_providers import VoyageEmbedProvider
+    from dlightrag.engine.ai import embedding
+    from dlightrag.engine.ai.providers.embed_providers import VoyageEmbedProvider
 
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         models={
@@ -522,7 +522,7 @@ async def test_openai_strict_schema_failure_retries_json_object(monkeypatch) -> 
             return None
 
     monkeypatch.setattr(
-        "dlightrag.ai.completion.get_provider",
+        "dlightrag.engine.ai.completion.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
     scheduler = ModelScheduler(max_concurrency=1)

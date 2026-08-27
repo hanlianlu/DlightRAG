@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dlightrag.ai.messages import ToolDefinition
-from dlightrag.ai.providers import get_provider
-from dlightrag.ai.providers.base import CompletionOutput, CompletionProvider
-from dlightrag.ai.providers.openai_compatible import (
+from dlightrag.engine.ai.messages import ToolDefinition
+from dlightrag.engine.ai.providers import get_provider
+from dlightrag.engine.ai.providers.base import CompletionOutput, CompletionProvider
+from dlightrag.engine.ai.providers.openai_compatible import (
     OpenAICompatibleProvider,
     _openai_tool_messages,
 )
@@ -57,7 +57,7 @@ class TestAnthropicProvider:
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
         mock_response.content = [MagicMock(type="text", text="reply")]
-        with patch("dlightrag.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
             result = await p.complete(
@@ -77,7 +77,7 @@ class TestAnthropicProvider:
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
         mock_response.content = [MagicMock(type="text", text="ok")]
-        with patch("dlightrag.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
             await p.complete([{"role": "user", "content": "hi"}], "claude-sonnet-4-20250514")
@@ -142,7 +142,7 @@ class TestAnthropicProvider:
             },
         ]
 
-        with patch("dlightrag.ai.providers.anthropic_native.AsyncAnthropic") as sdk:
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as sdk:
             create = AsyncMock(return_value=response)
             sdk.return_value.messages.create = create
             cast(Any, p)._client = None
@@ -212,7 +212,7 @@ class TestAnthropicProvider:
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
         mock_response.content = [MagicMock(type="text", text="thought")]
-        with patch("dlightrag.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
             await p.complete(
@@ -227,7 +227,7 @@ class TestAnthropicProvider:
     @pytest.mark.asyncio
     async def test_json_object_response_format_is_rejected(self):
         p = get_provider("anthropic", api_key="test-key")
-        with patch("dlightrag.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             cast(Any, p)._client = None
             with pytest.raises(ValueError, match="json_schema"):
                 await p.complete(
@@ -248,7 +248,7 @@ class TestAnthropicProvider:
             "required": ["answer"],
             "additionalProperties": False,
         }
-        with patch("dlightrag.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
             await p.complete(
@@ -270,7 +270,7 @@ class TestAnthropicProvider:
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
         mock_response.content = [MagicMock(type="text", text="ok")]
-        with patch("dlightrag.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
             await p.complete(
@@ -308,7 +308,7 @@ class TestAnthropicProvider:
             cache_read_input_tokens=3,
             cache_creation=SimpleNamespace(ephemeral_5m_input_tokens=7),
         )
-        with patch("dlightrag.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
             result = await p.complete(
@@ -341,7 +341,7 @@ class TestAnthropicProvider:
             )
             yield SimpleNamespace(type="message_delta", usage=SimpleNamespace(output_tokens=6))
 
-        with patch("dlightrag.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=fake_stream())
             cast(Any, p)._client = None
             tokens = [
@@ -399,7 +399,7 @@ class TestAnthropicProvider:
                 "is_error": False,
             },
         ]
-        with patch("dlightrag.ai.providers.anthropic_native.AsyncAnthropic") as sdk:
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as sdk:
             create = AsyncMock(return_value=fake_stream())
             sdk.return_value.messages.create = create
             cast(Any, p)._client = None
@@ -972,7 +972,7 @@ class TestGeminiProvider:
         p = get_provider("gemini", api_key="test-key")
         mock_response = MagicMock()
         mock_response.text = "reply"
-        with patch("dlightrag.ai.providers.gemini_native.genai") as mock_genai:
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as mock_genai:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
             mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -993,7 +993,7 @@ class TestGeminiProvider:
         p = get_provider("gemini", api_key="test-key")
         mock_response = MagicMock()
         mock_response.text = "ok"
-        with patch("dlightrag.ai.providers.gemini_native.genai") as mock_genai:
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as mock_genai:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
             mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -1068,7 +1068,7 @@ class TestGeminiProvider:
             },
         ]
 
-        with patch("dlightrag.ai.providers.gemini_native.genai") as sdk:
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as sdk:
             client = MagicMock()
             sdk.Client.return_value = client
             create = AsyncMock(return_value=response)
@@ -1137,7 +1137,7 @@ class TestGeminiProvider:
             for text in ("hel", "lo"):
                 yield SimpleNamespace(text=text)
 
-        with patch("dlightrag.ai.providers.gemini_native.genai") as mock_genai:
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as mock_genai:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
             mock_client.aio.models.generate_content_stream = AsyncMock(return_value=fake_stream())
@@ -1167,7 +1167,7 @@ class TestGeminiProvider:
                 ),
             )
 
-        with patch("dlightrag.ai.providers.gemini_native.genai") as mock_genai:
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as mock_genai:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
             mock_client.aio.models.generate_content_stream = AsyncMock(return_value=fake_stream())
@@ -1219,7 +1219,7 @@ class TestGeminiProvider:
                 "is_error": False,
             },
         ]
-        with patch("dlightrag.ai.providers.gemini_native.genai") as sdk:
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as sdk:
             client = MagicMock()
             sdk.Client.return_value = client
             stream = AsyncMock(return_value=fake_stream())
@@ -1250,7 +1250,7 @@ class TestGeminiProvider:
             "required": ["answer"],
             "additionalProperties": False,
         }
-        with patch("dlightrag.ai.providers.gemini_native.genai") as mock_genai:
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as mock_genai:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
             mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -1289,7 +1289,7 @@ class TestGeminiProvider:
             cached_content_token_count=80,
             thoughts_token_count=20,
         )
-        with patch("dlightrag.ai.providers.gemini_native.genai") as mock_genai:
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as mock_genai:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
             mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)

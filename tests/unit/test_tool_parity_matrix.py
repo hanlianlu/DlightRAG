@@ -9,8 +9,9 @@ negotiated baseline fails CI instead of passing silently.
 
 from pathlib import Path
 
-from dlightrag.agent.environment import AccessScheduler, LocalExecutionEnvironment
-from dlightrag.agent.tools.files import path_tools
+from dlightrag.engine.agent.environment import AccessScheduler
+from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+from dlightrag.engine.agent.tools.files import path_tools
 
 # tool name -> (required params, optional params with defaults, replay policy, contract)
 MATRIX: dict[str, tuple[tuple[str, ...], dict[str, object], str, int]] = {

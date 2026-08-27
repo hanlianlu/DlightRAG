@@ -38,13 +38,13 @@ from dlightrag.adapters.postgres.answer_runs import (
     ANSWER_RUN_SCHEMA_TABLES,
     PGAnswerRunStore,
 )
-from dlightrag.ai.settings import EmbeddingSettings, ModelsSettings
 from dlightrag.application.config import (
     DeploymentSettings,
     DlightragConfig,
     PostgresSettings,
     StorageSettings,
 )
+from dlightrag.engine.ai.settings import EmbeddingSettings, ModelsSettings
 from dlightrag.rag.ports import CorpusSchemaError
 
 pytestmark = [

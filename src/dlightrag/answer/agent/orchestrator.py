@@ -18,52 +18,6 @@ from uuid import uuid4
 
 from dlightrag_memory import Memory
 
-from dlightrag.agent.context import ContextContribution
-from dlightrag.agent.environment.access import AccessScheduler
-from dlightrag.agent.environment.errors import TOOL_RESULT_MAX_BYTES, TOOL_RESULT_MAX_LINES
-from dlightrag.agent.environment.execution import ExecutionEnvironment
-from dlightrag.agent.events import AgentEvent
-from dlightrag.agent.session.entries import AssistantMessageEntry, CompactionEntry
-from dlightrag.agent.session.fold import (
-    PriorTurns,
-    WorkingContextProjection,
-    project_session_messages,
-)
-from dlightrag.agent.session.ids import EntryId, ProjectionId, SessionId
-from dlightrag.agent.session.projection import (
-    AgentInputOverflowError,
-    ContextProjection,
-    require_compactable,
-    should_compact,
-)
-from dlightrag.agent.session.registers import (
-    ContextProjectionRegister,
-    RegisterRecord,
-    RequestSnapshot,
-)
-from dlightrag.agent.session.runtime import (
-    CompactionRequired,
-    CompactionResult,
-    RuntimeContext,
-)
-from dlightrag.agent.skills import SkillCatalog
-from dlightrag.agent.tools import (
-    AgentTool,
-    ExecutedTurn,
-    ToolResult,
-    ToolRuntime,
-)
-from dlightrag.agent.tools.contracts import ToolModelFunc
-from dlightrag.agent.tools.files import ResourceReader
-from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
-from dlightrag.ai.capacity import (
-    CONTEXT_POLICY,
-    ContextPolicy,
-    ModelProfile,
-)
-from dlightrag.ai.messages import AssistantTurn, ToolDefinition
-from dlightrag.ai.telemetry import Telemetry
-from dlightrag.ai.tokens import estimate_tokens
 from dlightrag.answer.acceptance import research_history_input_measure
 from dlightrag.answer.agent.compaction import CompactionCoordinator
 from dlightrag.answer.agent.context import ContextAssembler
@@ -83,6 +37,52 @@ from dlightrag.application.answer_runs.errors import (
     InvalidToolConfigurationError,
 )
 from dlightrag.application.answer_runs.mode import ResolvedMode
+from dlightrag.engine.agent.context import ContextContribution
+from dlightrag.engine.agent.environment.access import AccessScheduler
+from dlightrag.engine.agent.environment.errors import TOOL_RESULT_MAX_BYTES, TOOL_RESULT_MAX_LINES
+from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
+from dlightrag.engine.agent.events import AgentEvent
+from dlightrag.engine.agent.session.entries import AssistantMessageEntry, CompactionEntry
+from dlightrag.engine.agent.session.fold import (
+    PriorTurns,
+    WorkingContextProjection,
+    project_session_messages,
+)
+from dlightrag.engine.agent.session.ids import EntryId, ProjectionId, SessionId
+from dlightrag.engine.agent.session.projection import (
+    AgentInputOverflowError,
+    ContextProjection,
+    require_compactable,
+    should_compact,
+)
+from dlightrag.engine.agent.session.registers import (
+    ContextProjectionRegister,
+    RegisterRecord,
+    RequestSnapshot,
+)
+from dlightrag.engine.agent.session.runtime import (
+    CompactionRequired,
+    CompactionResult,
+    RuntimeContext,
+)
+from dlightrag.engine.agent.skills import SkillCatalog
+from dlightrag.engine.agent.tools import (
+    AgentTool,
+    ExecutedTurn,
+    ToolResult,
+    ToolRuntime,
+)
+from dlightrag.engine.agent.tools.contracts import ToolModelFunc
+from dlightrag.engine.agent.tools.files import ResourceReader
+from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
+from dlightrag.engine.ai.capacity import (
+    CONTEXT_POLICY,
+    ContextPolicy,
+    ModelProfile,
+)
+from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
+from dlightrag.engine.ai.telemetry import Telemetry
+from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.rag.retrieval import RetrievalContexts
 
 logger = logging.getLogger(__name__)

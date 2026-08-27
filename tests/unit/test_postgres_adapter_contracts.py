@@ -52,8 +52,8 @@ def test_asyncpg_is_private_to_the_postgres_adapter() -> None:
 def test_owner_modules_do_not_import_the_postgres_adapter() -> None:
     owner_roots = (
         _ROOT / "src/dlightrag/application",
+        _ROOT / "src/dlightrag/engine/runtime",
         _ROOT / "src/dlightrag/rag",
-        _ROOT / "src/dlightrag/runtime",
     )
     owner_files = [path for root in owner_roots for path in root.rglob("*.py")]
     owner_files.append(_ROOT / "src/dlightrag/api/routes/status.py")

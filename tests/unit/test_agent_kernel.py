@@ -5,12 +5,12 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
-from dlightrag.agent.context import ContextContribution, ContextProjector
-from dlightrag.agent.session.entries import UserMessageEntry
-from dlightrag.agent.session.graph import AgentSessionGraph
-from dlightrag.agent.session.ids import EntryId, SessionId
-from dlightrag.agent.tools import AgentTool, ToolResult
-from dlightrag.agent.tools.registry import DuplicateToolError, ToolRegistry
+from dlightrag.engine.agent.context import ContextContribution, ContextProjector
+from dlightrag.engine.agent.session.entries import UserMessageEntry
+from dlightrag.engine.agent.session.graph import AgentSessionGraph
+from dlightrag.engine.agent.session.ids import EntryId, SessionId
+from dlightrag.engine.agent.tools import AgentTool, ToolResult
+from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
 
 
 class _Input(BaseModel):

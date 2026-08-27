@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from dlightrag.application.answer_runs.routing import RoutingAcceptance
-from dlightrag.runtime import AnswerRunRecord, PendingArtifact, PendingArtifactReference
+from dlightrag.engine.runtime import AnswerRunRecord, PendingArtifact, PendingArtifactReference
 
 
 @dataclass(frozen=True, slots=True)

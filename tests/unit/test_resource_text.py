@@ -97,7 +97,7 @@ def test_windows_split_above_observation_budget() -> None:
 
     assert len(windows) >= 2
     # Every window stays within the per-observation token budget.
-    from dlightrag.ai.tokens import estimate_tokens
+    from dlightrag.engine.ai.tokens import estimate_tokens
 
     for _, content in windows:
         assert estimate_tokens(content) <= _WINDOW_TOKENS
@@ -109,7 +109,7 @@ def test_windows_split_above_observation_budget() -> None:
 
 
 def test_single_line_over_budget_splits_into_subline_windows() -> None:
-    from dlightrag.ai.tokens import estimate_tokens
+    from dlightrag.engine.ai.tokens import estimate_tokens
 
     # One physical line (no newline) far larger than a single observation budget.
     line = "x" * (_WINDOW_TOKENS * 8)

@@ -16,11 +16,11 @@ from lightrag.tools.rebuild_vdb import DEFAULT_BATCH_SIZE, RebuildTool
 from lightrag.utils import get_env_value
 
 from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
-from dlightrag.ai.embedding import create_embedding_model
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.telemetry import Telemetry
 from dlightrag.application.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.application.settings import rag_settings
+from dlightrag.engine.ai.embedding import create_embedding_model
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.maintenance.rebuild_bm25 import run_rebuild_bm25
 from dlightrag.observability import LangfuseTelemetry
 from dlightrag.rag.ingestion.document_embedding import (

@@ -3,13 +3,13 @@
 
 import pytest
 
-from dlightrag.runtime.settlements import (
+from dlightrag.engine.runtime.settlements import (
     CommittedSpillUpdate,
     EffectHostUpdate,
     InventoryPathRecord,
     WorkspaceInventoryUpdate,
 )
-from dlightrag.runtime.workspace import (
+from dlightrag.engine.runtime.workspace import (
     CommittedSpillRecord,
     HandoffCommit,
     HandoffConflict,

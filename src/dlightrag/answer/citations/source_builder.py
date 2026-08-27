@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from dlightrag.ai.telemetry import safe_log_text
 from dlightrag.application.answer_runs.citations import ChunkSnippet, SourceReference
+from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.rag.retrieval import RetrievalContexts
 
 from .indexer import CitationIndexer

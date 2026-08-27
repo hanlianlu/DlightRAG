@@ -20,18 +20,18 @@ from typing import Any
 
 from dlightrag.adapters.postgres._operations import ConnectionPool
 from dlightrag.adapters.postgres._pool import pg_pool
-from dlightrag.agent.session.effects import JsonValue
-from dlightrag.agent.session.entries import (
+from dlightrag.engine.agent.session.effects import JsonValue
+from dlightrag.engine.agent.session.entries import (
     SessionEntry,
 )
-from dlightrag.agent.session.ids import (
+from dlightrag.engine.agent.session.ids import (
     EntryId,
     IntentId,
     LaneId,
     SessionId,
     StageIntentId,
 )
-from dlightrag.agent.session.registers import (
+from dlightrag.engine.agent.session.registers import (
     DeleteRegister,
     LaneHead,
     LaneState,
@@ -40,17 +40,17 @@ from dlightrag.agent.session.registers import (
     SetRegister,
     decode_register,
 )
-from dlightrag.agent.session.repository import (
+from dlightrag.engine.agent.session.repository import (
     AgentSessionSnapshot,
 )
-from dlightrag.agent.session.transactions import (
+from dlightrag.engine.agent.session.transactions import (
     RegisterConflict,
     SessionTransaction,
     TransactionCommit,
     TransactionLeaseLost,
     TransactionOutcome,
 )
-from dlightrag.runtime.progress import (
+from dlightrag.engine.runtime.progress import (
     StageCommit,
     StageCommitResult,
     StageConflict,
@@ -59,7 +59,7 @@ from dlightrag.runtime.progress import (
     StageProgressConflict,
     StageRecord,
 )
-from dlightrag.runtime.settlements import (
+from dlightrag.engine.runtime.settlements import (
     CompleteBlobDescriptor,
     EffectHostUpdate,
     MemoryOperationSettlement,
@@ -652,7 +652,7 @@ class PGAgentSessionRepository:
 
         if update.committed_outputs:
             from dlightrag.adapters.postgres.workspace import _upsert_spill
-            from dlightrag.runtime.workspace import CommittedSpillRecord
+            from dlightrag.engine.runtime.workspace import CommittedSpillRecord
 
             for output in update.committed_outputs:
                 await _upsert_spill(
@@ -1165,8 +1165,8 @@ def _json_payload(value: Any) -> dict[str, Any]:
 
 
 def _decode_entry(row: Any, *, session_id: SessionId) -> SessionEntry:
-    from dlightrag.agent.session.entries import ENTRY_TYPE_TO_CLASS, decode_entry_payload
-    from dlightrag.agent.session.ids import EntryId
+    from dlightrag.engine.agent.session.entries import ENTRY_TYPE_TO_CLASS, decode_entry_payload
+    from dlightrag.engine.agent.session.ids import EntryId
 
     entry_class = ENTRY_TYPE_TO_CLASS.get(str(row["entry_type"]))
     if entry_class is None:

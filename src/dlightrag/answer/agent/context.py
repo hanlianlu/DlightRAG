@@ -4,16 +4,16 @@
 import asyncio
 from typing import Any
 
-from dlightrag.agent.context import ContextContribution, ContextProjector
-from dlightrag.agent.session.fold import PriorTurns, WorkingContextProjection
-from dlightrag.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
-from dlightrag.ai.tokens import estimate_messages_tokens
 from dlightrag.answer.citations.indexer import CitationIndexer
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.memory import standing_memory_message
 from dlightrag.answer.prompts import CONTROL_TURN_INSTRUCTION, agent_control_prompt
 from dlightrag.answer.resources.models import ResourceManifestEntry
 from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
+from dlightrag.engine.agent.context import ContextContribution, ContextProjector
+from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
+from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.rag.sourcing.source_contract import safe_source_filename
 
 

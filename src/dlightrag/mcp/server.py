@@ -72,6 +72,7 @@ from dlightrag.application.retrieval import (
     RetrieveRequest as ServiceRequest,
 )
 from dlightrag.application.settings import access_settings
+from dlightrag.engine.runtime import AnswerRunRecord, IdempotencyKeyConflict
 from dlightrag.mcp.auth import DlightRAGTokenVerifier
 from dlightrag.mcp.contracts import (
     AnswerInput,
@@ -88,7 +89,6 @@ from dlightrag.mcp.contracts import (
 from dlightrag.rag.contracts import SourceType
 from dlightrag.rag.retrieval import MetadataFilter
 from dlightrag.rag.workspaces import normalize_workspace, normalize_workspace_ids
-from dlightrag.runtime import AnswerRunRecord, IdempotencyKeyConflict
 
 logger = logging.getLogger(__name__)
 

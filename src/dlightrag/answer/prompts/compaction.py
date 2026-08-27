@@ -2,7 +2,7 @@
 """The compaction summarizer prompt: typed continuation memory, markdown out.
 
 The summarizer writes one structured markdown document whose headings map
-onto :class:`~dlightrag.agent.session.projection.CompactionSummary` fields.
+onto :class:`~dlightrag.engine.agent.session.projection.CompactionSummary` fields.
 The framework parses the headings back into the typed summary; the model is
 never asked to invent paths or durable handles — those are extracted from the
 covered branch-ancestry prefix by the framework. Prompts modules stay import-free:

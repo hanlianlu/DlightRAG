@@ -27,17 +27,6 @@ import pytest
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
-from dlightrag.agent.session.effects import canonical_json
-from dlightrag.agent.session.entries import UserMessageEntry
-from dlightrag.agent.session.fold import PriorTurns
-from dlightrag.agent.session.fold import WorkingContextProjection as _RunWorking
-from dlightrag.agent.session.ids import SessionId, StageIntentId
-from dlightrag.agent.session.plan import AgentRunPlan
-from dlightrag.agent.session.registers import HostTurnReservation
-from dlightrag.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
-from dlightrag.ai.fingerprints import ModelFingerprint
-from dlightrag.ai.messages import AssistantTurn
-from dlightrag.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.citations.streaming import AnswerStream
 from dlightrag.answer.executor import (
@@ -53,12 +42,23 @@ from dlightrag.application import Application, _compose
 from dlightrag.application.answer_runs.execution import AnswerRunInput, PinnedModelProfile
 from dlightrag.application.config import DlightragConfig, RuntimeConfig
 from dlightrag.application.settings import answer_executor_settings, answer_resource_settings
-from dlightrag.rag.retrieval import RetrievalResult
-from dlightrag.runtime import (
+from dlightrag.engine.agent.session.effects import canonical_json
+from dlightrag.engine.agent.session.entries import UserMessageEntry
+from dlightrag.engine.agent.session.fold import PriorTurns
+from dlightrag.engine.agent.session.fold import WorkingContextProjection as _RunWorking
+from dlightrag.engine.agent.session.ids import SessionId, StageIntentId
+from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.session.registers import HostTurnReservation
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.messages import AssistantTurn
+from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.runtime import (
     RunCoordinator,
     RunSession,
     answer_run_request_fingerprint,
 )
+from dlightrag.rag.retrieval import RetrievalResult
 from tests.conftest import FingerprintingAnswerRunStore
 
 pytestmark = [
@@ -186,10 +186,10 @@ async def test_session_turn_survives_a_new_worker(store: FingerprintingAnswerRun
     run_id = creation.run.run_id
     seen: list[int] = []
 
-    from dlightrag.agent.session.entries import AssistantMessageEntry
-    from dlightrag.agent.session.ids import EntryId, LaneId, SessionId
-    from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
-    from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
+    from dlightrag.engine.agent.session.entries import AssistantMessageEntry
+    from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId
+    from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+    from dlightrag.engine.agent.session.transactions import RegisterExpectation, SessionTransaction
 
     async def body(session: RunSession) -> Mapping[str, Any]:
         repository = session.execution.session_repository
@@ -428,11 +428,11 @@ async def test_session_round_trips_through_jsonb(store: FingerprintingAnswerRunS
     assert claimed is not None
     repository = claimed.execution.session_repository
 
-    from dlightrag.agent.session.entries import AssistantMessageEntry, UserMessageEntry
-    from dlightrag.agent.session.fold import fold_entries
-    from dlightrag.agent.session.ids import EntryId, LaneId, SessionId
-    from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
-    from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
+    from dlightrag.engine.agent.session.entries import AssistantMessageEntry, UserMessageEntry
+    from dlightrag.engine.agent.session.fold import fold_entries
+    from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId
+    from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+    from dlightrag.engine.agent.session.transactions import RegisterExpectation, SessionTransaction
 
     assert creation.run.prepared_input is not None
     session_id = SessionId(str(creation.run.prepared_input["agent_session_id"]))

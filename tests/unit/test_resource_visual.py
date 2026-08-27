@@ -13,13 +13,13 @@ from docx import Document
 from openpyxl.drawing.image import Image as XLImage
 from PIL import Image
 
-from dlightrag.ai.media import decode_image_base64
 from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.answer.resources.registry import ResourceRegistry
 from dlightrag.answer.resources.visual import (
     ResourceInspectionError,
     ResourceInspector,
 )
+from dlightrag.engine.ai.media import decode_image_base64
 from tests.unit.conftest import answer_image_policy
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -123,7 +123,7 @@ async def test_inspect_source_image_returns_vlm_evidence() -> None:
 async def test_inspection_image_budgeting_runs_off_event_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.ai.media import ImagePayloadBudget
+    from dlightrag.engine.ai.media import ImagePayloadBudget
 
     loop_thread = threading.get_ident()
     budget_threads: list[int] = []

@@ -22,7 +22,7 @@ import asyncpg
 import pytest
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-from dlightrag.runtime import (
+from dlightrag.engine.runtime import (
     MAX_RECLAIMS_WITHOUT_PROGRESS,
     IdempotencyKeyConflict,
     PendingArtifact,
@@ -593,9 +593,12 @@ class TestLeaseFencing:
             )
         ).committed is False
         assert await store.release_for_shutdown(**stale_args) == "lease_lost"
-        from dlightrag.agent.session.ids import LaneId, SessionId
-        from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
-        from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
+        from dlightrag.engine.agent.session.ids import LaneId, SessionId
+        from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+        from dlightrag.engine.agent.session.transactions import (
+            RegisterExpectation,
+            SessionTransaction,
+        )
 
         assert creation.run.prepared_input is not None
         stale_session = SessionId(str(creation.run.prepared_input["agent_session_id"]))
@@ -1036,9 +1039,12 @@ class TestArtifacts:
             request=_request("second", agent_session_id=session_id),
         )
         claimed = await _claimed(store)
-        from dlightrag.agent.session.ids import LaneId, SessionId
-        from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
-        from dlightrag.agent.session.transactions import RegisterExpectation, SessionTransaction
+        from dlightrag.engine.agent.session.ids import LaneId, SessionId
+        from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+        from dlightrag.engine.agent.session.transactions import (
+            RegisterExpectation,
+            SessionTransaction,
+        )
 
         head = LaneHead(LaneId.main(), None)
         state = LaneState(LaneId.main())
@@ -1478,9 +1484,9 @@ class TestAgentControlsAndChildren:
             )
             assert child_epoch is not None
             child_epochs.append(child_epoch)
-            from dlightrag.agent.session.ids import LaneId, SessionId
-            from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
-            from dlightrag.agent.session.transactions import (
+            from dlightrag.engine.agent.session.ids import LaneId, SessionId
+            from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+            from dlightrag.engine.agent.session.transactions import (
                 RegisterExpectation,
                 SessionTransaction,
                 TransactionCommit,
@@ -1600,9 +1606,9 @@ class TestAgentControlsAndChildren:
         async with pool.acquire() as conn:
             assert await conn.fetchval("SELECT NOW() > $1", original_expiry)
 
-        from dlightrag.agent.session.ids import LaneId, SessionId
-        from dlightrag.agent.session.registers import LaneHead, LaneState, SetRegister
-        from dlightrag.agent.session.transactions import (
+        from dlightrag.engine.agent.session.ids import LaneId, SessionId
+        from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+        from dlightrag.engine.agent.session.transactions import (
             RegisterExpectation,
             SessionTransaction,
             TransactionCommit,

@@ -1,7 +1,7 @@
 # Durable Answer Runs
 
 This document defines durable Answer behavior across two owners. The neutral
-`dlightrag.runtime` package owns lifecycle records, the store port, fenced
+`dlightrag.engine.runtime` package owns lifecycle records, the store port, fenced
 sessions, subscriptions, durable progress, the cancellation listener, and
 `RunCoordinator`. The Answer executor owns retrieval/synthesis, converts
 product failures to `RunExecutionError`, and drives Research through the

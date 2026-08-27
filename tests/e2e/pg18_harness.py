@@ -12,8 +12,8 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from dlightrag.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
 from dlightrag.application.config import DlightragConfig
+from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
 
 RUN_E2E_ENV = "DLIGHTRAG_RUN_E2E_PG18"
 REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba")

@@ -65,7 +65,7 @@ class EvidenceLedger:
         same order instead of storing a second copy of every visual. An empty
         ledger serializes as ``{}`` so settlement can skip a no-op write.
         """
-        from dlightrag.agent.session.effects import canonical_json
+        from dlightrag.engine.agent.session.effects import canonical_json
 
         if not self.row_count and not self._source_ids:
             return canonical_json({})
@@ -364,7 +364,7 @@ class EvidenceLedger:
 
 
 def _chunk_evidence_cost(row: ContextRow) -> int:
-    from dlightrag.ai.tokens import estimate_tokens
+    from dlightrag.engine.ai.tokens import estimate_tokens
 
     cost = estimate_tokens(str(row.get("content") or ""))
     if row.get("image_data"):

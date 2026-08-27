@@ -16,8 +16,8 @@ from dlightrag_memory import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.answer.memory import memory_owner_allowed
+from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
 
 MemoryKindInput = Literal["preference", "fact"]
 _MEMORY_MUTATION_LIMIT = 10

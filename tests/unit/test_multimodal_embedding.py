@@ -13,24 +13,24 @@ import httpx
 import pytest
 from PIL import Image
 
-from dlightrag.ai.contracts import InputModality, ResolvedInputModality
-from dlightrag.ai.embedding import MultimodalEmbedder as _MultimodalEmbedder
-from dlightrag.ai.embedding import resolve_embedding_input_modality
-from dlightrag.ai.fingerprints import ModelFingerprint
-from dlightrag.ai.media import decode_image_base64
-from dlightrag.ai.providers.embed_base import EmbedProvider, OutputDimensionPolicy
-from dlightrag.ai.providers.embed_providers import (
+from dlightrag.engine.ai.contracts import InputModality, ResolvedInputModality
+from dlightrag.engine.ai.embedding import MultimodalEmbedder as _MultimodalEmbedder
+from dlightrag.engine.ai.embedding import resolve_embedding_input_modality
+from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.media import decode_image_base64
+from dlightrag.engine.ai.providers.embed_base import EmbedProvider, OutputDimensionPolicy
+from dlightrag.engine.ai.providers.embed_providers import (
     GeminiEmbedProvider as _GeminiEmbedProvider,
 )
-from dlightrag.ai.providers.embed_providers import (
+from dlightrag.engine.ai.providers.embed_providers import (
     JinaEmbedProvider,
     OpenAICompatibleEmbedProvider,
     OpenAIEmbedProvider,
 )
-from dlightrag.ai.providers.embed_providers import (
+from dlightrag.engine.ai.providers.embed_providers import (
     VoyageEmbedProvider as _VoyageEmbedProvider,
 )
-from dlightrag.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.scheduler import ModelScheduler
 
 _TEST_FINGERPRINT = ModelFingerprint(
     provider="test",
@@ -534,7 +534,7 @@ async def test_embed_query_images_batches_with_query_context() -> None:
 
 
 async def test_image_payload_preparation_runs_off_event_loop(monkeypatch) -> None:
-    from dlightrag.ai import embedding
+    from dlightrag.engine.ai import embedding
 
     provider = VoyageEmbedProvider()
     loop_thread = threading.get_ident()

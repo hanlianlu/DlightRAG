@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.ai.scheduler import ModelScheduler
-from dlightrag.ai.telemetry import NoopTelemetry
+from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.telemetry import NoopTelemetry
 from tests.config_helpers import mutate_config
 
 

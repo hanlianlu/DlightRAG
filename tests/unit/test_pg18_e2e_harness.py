@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from dlightrag.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.scheduler import ModelScheduler
 from tests.e2e.pg18_harness import (
     REQUIRED_EXTENSIONS,
     e2e_enabled,

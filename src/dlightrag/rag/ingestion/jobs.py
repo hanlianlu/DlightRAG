@@ -10,7 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from dlightrag.ai.telemetry import safe_log_text
+from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.rag.contracts import SourceType
 from dlightrag.rag.ports import (
     JOB_HEARTBEAT_SECONDS,

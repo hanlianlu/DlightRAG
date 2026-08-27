@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for dlightrag.ai.tokens."""
+"""Tests for dlightrag.engine.ai.tokens."""
 
-from dlightrag.ai.tokens import estimate_tokens
+from dlightrag.engine.ai.tokens import estimate_tokens
 
 
 class TestEstimateTokens:

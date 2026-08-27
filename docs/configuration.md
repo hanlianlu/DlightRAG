@@ -398,7 +398,7 @@ context window (`C`), optional maximum input (`I`), optional maximum output
 `provider`, exact `model`, and normalized `base_url`; the same model name at a
 different endpoint is a different profile. Resolution precedence is an
 explicit root override, trusted provider-adapter facts, then the versioned
-catalog shipped inside the root wheel at `dlightrag.ai`. Unknown endpoints fail closed instead of
+catalog shipped inside the root wheel at `dlightrag.engine.ai`. Unknown endpoints fail closed instead of
 inheriting a global default or being probed.
 
 Adapter facts are an optional, static class-level declaration: DlightRAG asks

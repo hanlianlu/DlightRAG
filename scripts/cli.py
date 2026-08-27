@@ -190,9 +190,9 @@ def _render_answer_for_terminal(data: AnswerResult) -> str:
 
 
 async def _run_ingest(args: argparse.Namespace) -> None:
-    from dlightrag.ai.scheduler import ModelScheduler
     from dlightrag.application.config import get_config
     from dlightrag.application.settings import rag_settings
+    from dlightrag.engine.ai.scheduler import ModelScheduler
     from dlightrag.observability import LangfuseTelemetry
     from dlightrag.rag.workspace_rag import WorkspaceRag
     from dlightrag.rag.workspaces import normalize_workspace
