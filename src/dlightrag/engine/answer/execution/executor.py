@@ -110,7 +110,7 @@ from dlightrag.engine.answer.resources.registry import (
     FetchedBytesSink,
 )
 from dlightrag.engine.answer.resources.visual import ResourceInspector
-from dlightrag.engine.answer.router import AnswerModeRouter, RoutingFailedError
+from dlightrag.engine.answer.router import AnswerModeRouter
 from dlightrag.engine.answer.tools.memory import MemoryHost
 from dlightrag.engine.answer.tools.resources import build_resource_tools, make_resource_reader
 from dlightrag.engine.answer.tools.subagents import (
@@ -699,7 +699,16 @@ class AnswerExecutor:
                 has_images=any(item.role == "image" for item in resources),
                 valid_modes=valid_modes,
             )
-        except RoutingFailedError as exc:
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "auto router failed; defaulting to research",
+                extra={"valid_modes": list(valid_modes)},
+                exc_info=True,
+            )
+            if "research" in valid_modes:
+                return "research"
             raise RunExecutionError("routing_failed", "Answer mode routing failed.") from exc
 
     async def _execute(self, session: RunSession) -> Mapping[str, Any]:

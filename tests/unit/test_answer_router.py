@@ -61,6 +61,17 @@ async def test_router_defaults_to_research_and_reads_full_context() -> None:
     assert "净利润是多少" in messages[-1]["content"]
 
 
+async def test_router_accepts_a_bare_mode_token() -> None:
+    async def llm(**_kwargs: object) -> str:
+        return "research"
+
+    chosen = await AnswerModeRouter(llm).choose(
+        query="write a poem",
+        valid_modes=("fast", "research"),
+    )
+    assert chosen == "research"
+
+
 async def test_router_rejects_invalid_structured_output() -> None:
     async def llm(**_kwargs: object) -> str:
         return "not-json"

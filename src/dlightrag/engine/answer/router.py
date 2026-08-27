@@ -13,10 +13,10 @@ from dlightrag.engine.ai.structured import StructuredOutput
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 
 _ROUTER_SYSTEM = (
-    "Pick one allowed mode between **fast** and **research**. Default research. "
-    "fast: one-shot KnowledgeBase (corpus) retrieve and generate — only if you interpret the total context with current query is "
-    "asking the corpus or continues corpus-grounded work. "
-    "Otherwise research. Unsure → research. Reply with only the mode name, no explanation. "
+    "Pick one allowed mode. Default research. "
+    "fast: one-shot KB retrieve and generate — only if history plus this turn "
+    "asks the corpus or continues corpus-grounded work. "
+    "Otherwise research. Unsure → research."
 )
 
 
@@ -27,6 +27,21 @@ class _ModeDecision(BaseModel):
 
 
 ROUTER_STRUCTURED_OUTPUT = StructuredOutput(name="answer_mode", schema=_ModeDecision)
+
+
+def _coerce_mode(raw: Any, valid_modes: Sequence[str]) -> ResolvedMode:
+    """Accept {\"mode\": ...} JSON or a bare fast/research token."""
+    try:
+        parsed = ROUTER_STRUCTURED_OUTPUT.parse(raw)
+        mode = getattr(parsed, "mode", None)
+        if mode in {"fast", "research"} and mode in valid_modes:
+            return mode
+    except ValueError, TypeError:
+        pass
+    token = str(raw).strip().strip("`\"'").casefold()
+    if token in {"fast", "research"} and token in valid_modes:
+        return token  # type: ignore[return-value]
+    raise RoutingFailedError(f"router chose {raw!r} outside {list(valid_modes)}")
 
 
 class RoutingFailedError(RuntimeError):
@@ -82,13 +97,11 @@ class AnswerModeRouter:
             structured_output=ROUTER_STRUCTURED_OUTPUT,
         )
         try:
-            parsed = ROUTER_STRUCTURED_OUTPUT.parse(raw)
+            return _coerce_mode(raw, valid_modes)
+        except RoutingFailedError:
+            raise
         except (ValueError, TypeError) as exc:
             raise RoutingFailedError("router output was not a valid mode") from exc
-        mode = getattr(parsed, "mode", None)
-        if mode not in {"fast", "research"} or mode not in valid_modes:
-            raise RoutingFailedError(f"router chose {mode!r} outside {list(valid_modes)}")
-        return mode
 
     def _messages(
         self,
