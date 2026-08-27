@@ -13,10 +13,16 @@ from dlightrag.engine.ai.structured import StructuredOutput
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 
 _ROUTER_SYSTEM = (
-    "Choose exactly one answer mode. "
-    "fast: one-shot retrieve and generate. "
-    "research: multi-step tools. "
-    "Use only the allowed modes. "
+    "Choose exactly one answer mode from the allowed set. "
+    "Default to research. "
+    "fast: one-shot knowledge-base retrieve and generate. Choose fast only when "
+    "the conversation context — history above plus this turn's query and "
+    "resources — shows the user wants the knowledge base, or is continuing "
+    "corpus-grounded work. "
+    "research: multi-step tools. Choose research for open-world questions, "
+    "appearance or photos, current events, tool or file work, or whenever fast "
+    "is not clearly justified. "
+    "When unsure, choose research. "
     'Reply with JSON: {"mode": "fast"} or {"mode": "research"}.'
 )
 
@@ -105,11 +111,14 @@ class AnswerModeRouter:
         tools = ",".join(tool_categories) or "none"
         allowed = ",".join(valid_modes)
         user = (
+            f"history_turns: {len(history)}\n"
             f"query: {query}\n"
             f"resources: {roles}\n"
             f"images: {has_images}\n"
             f"tools: {tools}\n"
-            f"allowed: {allowed}"
+            f"allowed: {allowed}\n"
+            "Judge from the history messages above together with this turn. "
+            "Do not judge from the query line alone."
         )
         messages: list[dict[str, Any]] = [{"role": "system", "content": _ROUTER_SYSTEM}]
         messages.extend(history)

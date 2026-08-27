@@ -16,7 +16,10 @@ search and every `top_k`/`chunk_top_k`/`direct_visual`/KG/BM25/RRF/rerank contro
 `/answer` takes a query plus optional **attachments** and routes through one
 `AnswerOrchestrator`. The public Answer Mode is ``auto | fast | research`` (omitted means auto).
 Fast and Research are resolved from that selector and the Valid Mode Set;
-configuring Web Search does not by itself force Research.
+configuring Web Search does not by itself force Research. When ``auto`` can
+legally choose either path, a dedicated router call defaults to Research unless
+the conversation context — history plus this turn, not the query line alone —
+shows a knowledge-base question or continuing corpus-grounded work.
 
 REST, MCP, and Python answer/retrieve calls require no client-managed conversation ID.
 Each accepted Answer run durably pins its query, bounded caller-supplied history,

@@ -39,6 +39,30 @@ async def test_router_accepts_structured_mode() -> None:
     assert chosen == "research"
 
 
+async def test_router_defaults_to_research_and_reads_full_context() -> None:
+    captured: dict[str, object] = {}
+
+    async def llm(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return '{"mode":"fast"}'
+
+    history = [{"role": "user", "content": "根据刚上传的年报"}]
+    await AnswerModeRouter(llm).choose(
+        query="净利润是多少",
+        history=history,
+        valid_modes=("fast", "research"),
+    )
+    messages = captured["messages"]
+    assert isinstance(messages, list)
+    system = messages[0]["content"]
+    assert "Default to research" in system
+    assert "When unsure, choose research" in system
+    assert messages[1] == history[0]
+    user = messages[-1]["content"]
+    assert "history_turns: 1" in user
+    assert "Do not judge from the query line alone" in user
+
+
 async def test_router_rejects_invalid_structured_output() -> None:
     async def llm(**_kwargs: object) -> str:
         return "not-json"
