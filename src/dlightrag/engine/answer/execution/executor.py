@@ -44,8 +44,14 @@ from dlightrag.engine.agent.environment import (
 from dlightrag.engine.agent.session.effects import (
     canonical_json,
 )
-from dlightrag.engine.agent.session.fold import PriorTurns, project_session_messages
+from dlightrag.engine.agent.session.entries import CompactionEntry, UserMessageEntry
+from dlightrag.engine.agent.session.fold import (
+    PriorTurns,
+    host_turn_starts,
+    project_session_messages,
+)
 from dlightrag.engine.agent.session.ids import (
+    EntryId,
     LaneId,
     OperationId,
     SessionId,
@@ -54,9 +60,13 @@ from dlightrag.engine.agent.session.operation import (
     OperationCompleted,
 )
 from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.session.projection import ContextProjection
+from dlightrag.engine.agent.session.registers import HostTurnReservation, RegisterRef
 from dlightrag.engine.agent.session.runtime import (
     AgentSessionRuntime,
     FollowUpCommand,
+    OperationConflictError,
+    SessionLeaseLostError,
 )
 from dlightrag.engine.agent.tools import (
     AgentTool,
@@ -68,8 +78,10 @@ from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.engine.ai.telemetry import Telemetry, safe_log_text
 from dlightrag.engine.answer.citations.finalization import finalize_answer
 from dlightrag.engine.answer.citations.streaming import aclose_answer_stream
+from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.fast import FastRunBoundaries, FastSessionHost, ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
+from dlightrag.engine.answer.history import HistoryInputMeasure, HistoryProjectionTarget
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.media import evidence_images_from_sources
 from dlightrag.engine.answer.memory import memory_owner_allowed, render_auto_recall
@@ -146,6 +158,7 @@ from dlightrag.engine.runtime.settlements import (
 )
 
 logger = logging.getLogger(__name__)
+_FAST_COMPACTION_ATTEMPT_LIMIT = 3
 
 
 class ArtifactReader(Protocol):
@@ -164,6 +177,9 @@ class ArtifactReader(Protocol):
 
 class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, Protocol):
     """Executor store: artifacts plus the lease-fenced Routing Record."""
+
+
+type PlannerHistoryInputMeasureFactory = Callable[..., Awaitable[HistoryInputMeasure]]
 
 
 class RawRetrieval(Protocol):
@@ -201,7 +217,7 @@ class AnswerExecutorSettings:
     publication: PublicationLimits = PublicationLimits()
 
 
-@dataclass(frozen=True)
+@dataclass
 class OrchestratorRun:
     """One durable request resolved into an orchestrator and its exact inputs."""
 
@@ -209,6 +225,7 @@ class OrchestratorRun:
     image_descriptions: list[str]
     query_images: list[dict[str, Any]] | None
     history: PriorTurns
+    fast_history_targets: tuple[HistoryProjectionTarget, ...]
     current_image_count: int
     workspaces: list[str]
     registry: ResourceRegistry | None
@@ -541,6 +558,7 @@ class AnswerExecutor:
         store: AnswerExecutionStore,
         pool: WorkspacePool,
         retrieve: RawRetrieval,
+        planner_history_input_measure: PlannerHistoryInputMeasureFactory,
         models: AnswerModelRuntime,
         capabilities: AnswerCapabilityCoordinator,
         resources: AnswerResourceResolver,
@@ -559,6 +577,7 @@ class AnswerExecutor:
         self._store = store
         self._pool = pool
         self._retrieve_result = retrieve
+        self._planner_history_input_measure = planner_history_input_measure
         self._models = models
         self._capabilities = capabilities
         self._resources = resources
@@ -711,6 +730,133 @@ class AnswerExecutor:
                 return "research"
             raise RunExecutionError("routing_failed", "Answer mode routing failed.") from exc
 
+    async def _compact_fast_history_if_needed(
+        self,
+        *,
+        repository: Any,
+        host: FastSessionHost,
+        session_id: SessionId,
+        lane_id: LaneId,
+        reservation_id: str,
+        accepted_user_entry_id: EntryId,
+        targets: Sequence[HistoryProjectionTarget],
+        compaction_model_profile: ModelProfile,
+    ) -> tuple[PriorTurns, dict[str, Any], bool]:
+        """Commit one canonical projection satisfying every reachable Fast serializer."""
+        snapshot = replace(await repository.load(session_id), selected_lane_id=lane_id)
+        coordinator = CompactionCoordinator(
+            model_profile=compaction_model_profile,
+            context_policy=CONTEXT_POLICY,
+            stream_model=self._models.query_tool_model().stream_text,
+            exchange_starts_func=host_turn_starts,
+        )
+        failures: list[dict[str, Any]] = []
+        refreshed_after_commit_error = False
+        tail_reductions = 0
+        for attempt in range(1, _FAST_COMPACTION_ATTEMPT_LIMIT + 1):
+            history = _project_fast_history_before_current_user(
+                snapshot,
+                lane_id=lane_id,
+                projection=snapshot.active_projection,
+                accepted_user_entry_id=accepted_user_entry_id,
+            )
+            before = _measure_fast_history_targets(history, targets)
+            if _fast_history_targets_fit(before):
+                recovered_projection = (
+                    refreshed_after_commit_error and snapshot.active_projection is not None
+                )
+                trace = _durable_fast_compaction_trace(snapshot) if recovered_projection else {}
+                return history, trace, recovered_projection
+
+            attempt_trace: dict[str, Any] = {}
+            tail = CONTEXT_POLICY.retained_tail_target(compaction_model_profile) // (
+                2**tail_reductions
+            )
+            try:
+                projection, _outcome = await coordinator.prepare(
+                    snapshot,
+                    tail_target_tokens=tail,
+                    accounted_before=max(item["input_tokens"] for item in before.values()),
+                    trace=attempt_trace,
+                )
+                candidate = _project_fast_history_before_current_user(
+                    snapshot,
+                    lane_id=lane_id,
+                    projection=projection,
+                    accepted_user_entry_id=accepted_user_entry_id,
+                )
+                after = _measure_fast_history_targets(candidate, targets)
+                if not _fast_history_targets_fit(after):
+                    overflowing = ", ".join(
+                        name
+                        for name, item in after.items()
+                        if item["input_tokens"] > item["input_limit_tokens"]
+                    )
+                    raise ValueError(
+                        f"prepared Fast projection still exceeds targets: {overflowing}"
+                    )
+            except asyncio.CancelledError, SessionLeaseLostError:
+                raise
+            except Exception as exc:
+                failures.append(_fast_compaction_failure(attempt, "prepare", exc))
+                tail_reductions += 1
+                continue
+
+            try:
+                await host.commit_compaction(
+                    snapshot=snapshot,
+                    session_id=session_id,
+                    lane_id=lane_id,
+                    reservation_id=reservation_id,
+                    projection=projection,
+                )
+            except asyncio.CancelledError, SessionLeaseLostError:
+                raise
+            except Exception as exc:
+                failures.append(_fast_compaction_failure(attempt, "commit", exc))
+                authoritative = replace(await repository.load(session_id), selected_lane_id=lane_id)
+                if _active_fast_compaction(authoritative, projection) is not None:
+                    recovered = _project_fast_history_before_current_user(
+                        authoritative,
+                        lane_id=lane_id,
+                        projection=authoritative.active_projection,
+                        accepted_user_entry_id=accepted_user_entry_id,
+                    )
+                    return recovered, _durable_fast_compaction_trace(authoritative), True
+                _require_fast_turn_reservation(
+                    authoritative,
+                    lane_id=lane_id,
+                    reservation_id=reservation_id,
+                    accepted_user_entry_id=accepted_user_entry_id,
+                )
+                snapshot = authoritative
+                refreshed_after_commit_error = True
+                continue
+
+            trace = dict(attempt_trace)
+            trace["fast_compaction_attempt"] = attempt
+            if failures:
+                trace["fast_compaction_retries"] = list(failures)
+            trace["fast_compaction_targets"] = {
+                name: {
+                    "input_tokens_before": before[name]["input_tokens"],
+                    "input_tokens_after": after[name]["input_tokens"],
+                    "input_limit_tokens": after[name]["input_limit_tokens"],
+                }
+                for name in before
+            }
+            return candidate, trace, True
+
+        failure_trace = {"compaction_failed": {"attempts": failures}}
+        logger.warning(
+            "Fast Session compaction failed",
+            extra={"trace": failure_trace, "session_id": session_id.value},
+        )
+        raise RunExecutionError(
+            "compaction_failed",
+            "Fast Answer could not compact the conversation within model capacity.",
+        )
+
     async def _execute(self, session: RunSession) -> Mapping[str, Any]:
         request = AnswerRunInput.from_prepared_input(session.prepared_input)
         model_profiles = self.validate_pinned_model_profiles(request)
@@ -747,6 +893,7 @@ class AnswerExecutor:
 
         fast_boundaries: FastRunBoundaries | None = None
         fast_session_host: FastSessionHost | None = None
+        fast_compaction_trace: dict[str, Any] = {}
         fast_reservation_active = False
         agent_runtime: AgentSessionRuntime[EffectHostUpdate] | None = None
         research_operation_id: OperationId | None = None
@@ -756,6 +903,7 @@ class AnswerExecutor:
         fetched_buffer = FetchedResourceBuffer()
 
         run = await self.prepare_orchestrated_run(
+            query=request.query,
             workspaces=list(request.workspaces),
             top_k=request.top_k,
             chunk_top_k=request.chunk_top_k,
@@ -1050,6 +1198,42 @@ class AnswerExecutor:
                     )
                     return stored
                 fast_reservation_active = True
+                if not fast_turn.created:
+                    replay_snapshot = replace(
+                        await repository.load(agent_session_id),
+                        selected_lane_id=agent_lane_id,
+                    )
+                    run.history = _project_fast_history_before_current_user(
+                        replay_snapshot,
+                        lane_id=agent_lane_id,
+                        projection=replay_snapshot.active_projection,
+                        accepted_user_entry_id=fast_turn.user_entry_id,
+                    )
+                    if replay_snapshot.active_projection is not None:
+                        fast_compaction_trace.update(
+                            _durable_fast_compaction_trace(replay_snapshot)
+                        )
+                if canonical_snapshot.entries:
+                    (
+                        compacted_history,
+                        compaction_trace,
+                        compacted,
+                    ) = await self._compact_fast_history_if_needed(
+                        repository=repository,
+                        host=fast_session_host,
+                        session_id=agent_session_id,
+                        lane_id=agent_lane_id,
+                        reservation_id=session.run_id,
+                        accepted_user_entry_id=fast_turn.user_entry_id,
+                        targets=run.fast_history_targets,
+                        compaction_model_profile=model_profiles["query"],
+                    )
+                    run.history = compacted_history
+                    if "fast_compaction_attempt" in compaction_trace:
+                        fast_compaction_trace.clear()
+                    fast_compaction_trace.update(compaction_trace)
+                    if compacted:
+                        fast_boundaries.observe_session_progress()
                 await fast_boundaries.settle_planner()
 
             async with self._telemetry.observe(
@@ -1167,6 +1351,8 @@ class AnswerExecutor:
                         model_factory=self._models.new_highlight_model,
                     )
                 trace = dict(getattr(stream, "trace", None) or {})
+                if fast_compaction_trace:
+                    trace.update(fast_compaction_trace)
                 if agent_runtime is not None and research_operation_id is not None:
                     root_usage: dict[str, int] = {}
                     for item in agent_operations:
@@ -1265,6 +1451,7 @@ class AnswerExecutor:
     async def prepare_orchestrated_run(
         self,
         *,
+        query: str,
         workspaces: list[str],
         top_k: int | None,
         chunk_top_k: int | None,
@@ -1297,12 +1484,39 @@ class AnswerExecutor:
             models = resolved.models
             query_profile = models.query
             image_descriptions = list(pinned_image_descriptions)
+            fast_history_targets: tuple[HistoryProjectionTarget, ...] = ()
+            if resolved_mode == "fast":
+                planner_measure = await self._planner_history_input_measure(
+                    query=query,
+                    workspaces=tuple(workspaces),
+                    model_profile=models.extract,
+                    current_image_descriptions=image_descriptions,
+                    preserve_query=None,
+                )
+                fast_history_targets = (
+                    HistoryProjectionTarget(
+                        "planner",
+                        models.extract,
+                        planner_measure,
+                        proactive_compaction=True,
+                    ),
+                    HistoryProjectionTarget(
+                        "fast_generation",
+                        models.query,
+                        self._models.answer_synthesizer(models.query).history_input_measure(query),
+                        proactive_compaction=True,
+                    ),
+                )
+            orchestrated_run: OrchestratorRun | None = None
 
             async def retrieve_knowledge_base(search_query: str) -> RetrievalResult:
+                active_history = (
+                    orchestrated_run.history if orchestrated_run is not None else history
+                )
                 return await self._retrieve_result(
                     search_query,
                     workspaces=workspaces,
-                    conversation_history=history.messages,
+                    conversation_history=active_history.messages,
                     top_k=top_k,
                     chunk_top_k=chunk_top_k,
                     filters=filters,
@@ -1365,15 +1579,17 @@ class AnswerExecutor:
                 child_model_resolver=resolve_child_model,
                 skills_global_root=self._skills_global_root,
             )
-            return OrchestratorRun(
+            orchestrated_run = OrchestratorRun(
                 orchestrator=orchestrator,
                 image_descriptions=image_descriptions,
                 query_images=resolved.query_images,
                 history=history,
+                fast_history_targets=fast_history_targets,
                 current_image_count=resolved.current_image_count,
                 workspaces=workspaces,
                 registry=resolved.registry,
             )
+            return orchestrated_run
         except BaseException:
             if resolved.registry is not None:
                 await resolved.registry.aclose()
@@ -1482,6 +1698,134 @@ class AnswerExecutor:
                 "answer run targets another model endpoint configuration"
             )
         return {role: pinned[role].profile for role in MODEL_ROLE_NAMES}
+
+
+def _measure_fast_history_targets(
+    history: PriorTurns,
+    targets: Sequence[HistoryProjectionTarget],
+) -> dict[str, dict[str, int]]:
+    """Measure the authoritative history with every exact Fast serializer."""
+    measured: dict[str, dict[str, int]] = {}
+    for target in targets:
+        if target.name in measured:
+            raise ValueError(f"duplicate Fast history target: {target.name}")
+        limit = (
+            CONTEXT_POLICY.compaction_trigger(target.profile)
+            if target.proactive_compaction
+            else CONTEXT_POLICY.hard_input_limit(target.profile)
+        )
+        measured[target.name] = {
+            "input_tokens": target.measure_input(
+                history.messages,
+                history.episodic_summary,
+            ),
+            "input_limit_tokens": limit,
+        }
+    return measured
+
+
+def _fast_history_targets_fit(measured: Mapping[str, Mapping[str, int]]) -> bool:
+    return all(item["input_tokens"] <= item["input_limit_tokens"] for item in measured.values())
+
+
+def _fast_compaction_failure(
+    attempt: int,
+    stage: str,
+    error: Exception,
+) -> dict[str, Any]:
+    return {
+        "attempt": attempt,
+        "stage": stage,
+        "error_type": type(error).__name__,
+        "detail": safe_log_text(str(error)),
+    }
+
+
+def _active_fast_compaction(
+    snapshot: Any,
+    projection: ContextProjection,
+) -> CompactionEntry | None:
+    """Return the active checkpoint only when it exactly materializes a projection."""
+    if snapshot.active_projection != projection:
+        return None
+    ancestry = snapshot.graph.ancestry()
+    latest = ancestry[-1] if ancestry else None
+    if not isinstance(latest, CompactionEntry):
+        return None
+    if (
+        latest.projection_id != projection.projection_id
+        or latest.summary != projection.summary
+        or latest.covered_through_sequence != projection.covered_through_sequence
+        or latest.first_retained_sequence != projection.first_retained_sequence
+        or latest.covered_through_entry_id != projection.covered_through_entry_id
+        or latest.first_retained_entry_id != projection.first_retained_entry_id
+        or latest.source_digest != projection.source_digest
+    ):
+        return None
+    return latest
+
+
+def _durable_fast_compaction_trace(snapshot: Any) -> dict[str, Any]:
+    """Reconstruct only coverage facts that the durable checkpoint actually stores."""
+    projection = snapshot.active_projection
+    if projection is None:
+        return {}
+    entry = _active_fast_compaction(snapshot, projection)
+    if entry is None:
+        return {}
+    return {
+        "fast_compaction_recovered": True,
+        "fast_compaction_coverage": {
+            "projection_id": projection.projection_id.value,
+            "covered_through_sequence": projection.covered_through_sequence,
+            "first_retained_sequence": projection.first_retained_sequence,
+        },
+    }
+
+
+def _require_fast_turn_reservation(
+    snapshot: Any,
+    *,
+    lane_id: LaneId,
+    reservation_id: str,
+    accepted_user_entry_id: EntryId,
+) -> None:
+    record = next(
+        (
+            item
+            for item in snapshot.registers
+            if item.ref == RegisterRef("host_turn_reservation", lane_id.value)
+        ),
+        None,
+    )
+    if record is None or not isinstance(record.value, HostTurnReservation):
+        raise OperationConflictError("Fast Host turn reservation is not active")
+    reservation = record.value
+    if (
+        reservation.reservation_id != reservation_id
+        or reservation.user_entry_id != accepted_user_entry_id
+    ):
+        raise OperationConflictError("Fast Host turn reservation identity changed")
+
+
+def _project_fast_history_before_current_user(
+    snapshot: Any,
+    *,
+    lane_id: LaneId,
+    projection: ContextProjection | None,
+    accepted_user_entry_id: EntryId,
+) -> PriorTurns:
+    """Fold a prepared projection while leaving the separately serialized query out."""
+    selected = replace(snapshot, selected_lane_id=lane_id)
+    ancestry = selected.graph.ancestry()
+    semantic_entries = [entry for entry in ancestry if not isinstance(entry, CompactionEntry)]
+    latest = semantic_entries[-1] if semantic_entries else None
+    if not isinstance(latest, UserMessageEntry) or latest.entry_id != accepted_user_entry_id:
+        raise ValueError("Fast compaction lost the current accepted User Entry")
+    messages = project_session_messages(ancestry, projection)
+    if not messages or messages[-1].get("role") != "user":
+        raise ValueError("Fast compaction projection did not retain the current User query")
+    return PriorTurns(messages[:-1])
 
 
 async def _close_execution_resources(

@@ -60,8 +60,13 @@ class AnswerModeRouter:
         *,
         resources: Sequence[ModeResource] = (),
         valid_modes: Sequence[str] = ("fast", "research"),
-    ) -> Callable[[list[dict[str, Any]]], int]:
-        def measure(history: list[dict[str, Any]]) -> int:
+    ) -> Callable[..., int]:
+        def measure(
+            history: list[dict[str, Any]],
+            projected_summary: str = "",
+        ) -> int:
+            # Routing receives the pinned recent-message projection only.
+            del projected_summary
             return estimate_messages_tokens(
                 self._messages(
                     query,

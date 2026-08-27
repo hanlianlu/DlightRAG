@@ -338,7 +338,7 @@ class _Resources:
 
 def _planner() -> Any:
     planner = MagicMock()
-    planner.history_input_measure.return_value = lambda messages: 10 * len(messages)
+    planner.history_input_measure.return_value = lambda messages, _summary="": 10 * len(messages)
     return planner
 
 

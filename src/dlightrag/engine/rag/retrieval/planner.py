@@ -227,7 +227,7 @@ class RetrievalPlanner:
         schema: dict[str, Any] | None = None,
         current_image_descriptions: list[str] | None = None,
         preserve_query: bool | None = None,
-    ) -> Callable[[PlannerHistory], int]:
+    ) -> Callable[..., int]:
         """Return the exact planner serializer used by the shared projector."""
         system_prompt, render_input = self._input_renderer(
             query,
@@ -235,7 +235,14 @@ class RetrievalPlanner:
             current_image_descriptions=current_image_descriptions,
             preserve_query=preserve_query,
         )
-        return lambda messages: _planner_request_tokens(system_prompt, render_input(messages))
+
+        def measure(messages: PlannerHistory, projected_summary: str = "") -> int:
+            # Retrieval planning currently receives recent messages only; the
+            # episodic continuation belongs to the answer model serializer.
+            del projected_summary
+            return _planner_request_tokens(system_prompt, render_input(messages))
+
+        return measure
 
     def _input_renderer(
         self,

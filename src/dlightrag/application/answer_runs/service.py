@@ -1176,18 +1176,34 @@ class AnswerService:
             )
             schema = await self._retrieval.schema_for(workspaces)
             memory_text = standing_memory_for_acceptance(auth_mode) if memory_enabled else ""
-            targets = [
-                HistoryProjectionTarget(
-                    "planner",
-                    models.extract,
-                    planner.history_input_measure(
-                        request.query,
-                        schema=schema,
-                        current_image_descriptions=list(image_descriptions) or None,
-                        preserve_query=True if "research" in allowed_modes else None,
-                    ),
+            targets: list[HistoryProjectionTarget] = []
+            if "research" in allowed_modes:
+                targets.append(
+                    HistoryProjectionTarget(
+                        "research_planner",
+                        models.extract,
+                        planner.history_input_measure(
+                            request.query,
+                            schema=schema,
+                            current_image_descriptions=list(image_descriptions) or None,
+                            preserve_query=True,
+                        ),
+                    )
                 )
-            ]
+            if "fast" in allowed_modes:
+                targets.append(
+                    HistoryProjectionTarget(
+                        "fast_planner",
+                        models.extract,
+                        planner.history_input_measure(
+                            request.query,
+                            schema=schema,
+                            current_image_descriptions=list(image_descriptions) or None,
+                            preserve_query=None,
+                        ),
+                        proactive_compaction=True,
+                    )
+                )
             if "research" in allowed_modes:
                 evidence = EvidenceLedger(image_budget=resolved.image_budget)
 
@@ -1262,6 +1278,7 @@ class AnswerService:
                             memory_text=memory_text,
                             episodic_summary=request.episodic_summary,
                         ),
+                        proactive_compaction=True,
                     )
                 )
             if requested_mode == "auto" and allowed_modes >= {"fast", "research"}:

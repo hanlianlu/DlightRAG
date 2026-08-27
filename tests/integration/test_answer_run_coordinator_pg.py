@@ -896,6 +896,7 @@ def _answer_runtime(
         store=store,
         pool=components.pool,
         retrieve=components.retrieval.retrieve_result,
+        planner_history_input_measure=components.retrieval.planner_history_input_measure,
         models=components.models,
         capabilities=components.capabilities,
         resources=AnswerResourceResolver(
@@ -916,6 +917,7 @@ def _answer_runtime(
             image_descriptions=[],
             query_images=None,
             history=PriorTurns(),
+            fast_history_targets=(),
             current_image_count=0,
             workspaces=["default"],
             registry=None,

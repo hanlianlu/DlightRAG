@@ -94,10 +94,13 @@ class AnswerSynthesizer:
         query: str,
         memory_text: str = "",
         episodic_summary: str = "",
-    ) -> Callable[[list[dict[str, Any]]], int]:
+    ) -> Callable[..., int]:
         """Return the exact zero-evidence final-call serializer for history fitting."""
 
-        def measure(history: list[dict[str, Any]]) -> int:
+        def measure(
+            history: list[dict[str, Any]],
+            projected_summary: str = "",
+        ) -> int:
             budget = self._image_policy.new_budget()
             empty_contexts: RetrievalContexts = {
                 "chunks": [],
@@ -119,7 +122,9 @@ class AnswerSynthesizer:
                 prepared.user_prompt,
                 excerpt_blocks,
                 history_messages=history,
-                episodic_summary=episodic_summary,
+                episodic_summary="\n\n".join(
+                    part for part in (episodic_summary, projected_summary) if part.strip()
+                ),
                 memory_text=memory_text,
             )
             return estimate_messages_tokens(messages)

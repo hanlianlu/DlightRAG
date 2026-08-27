@@ -34,16 +34,13 @@ from dlightrag.engine.agent.session.fold import (
     WorkingContextProjection,
     project_session_messages,
 )
-from dlightrag.engine.agent.session.ids import EntryId, ProjectionId, SessionId
+from dlightrag.engine.agent.session.ids import EntryId, SessionId
 from dlightrag.engine.agent.session.projection import (
     AgentInputOverflowError,
-    ContextProjection,
     require_compactable,
     should_compact,
 )
 from dlightrag.engine.agent.session.registers import (
-    ContextProjectionRegister,
-    RegisterRecord,
     RequestSnapshot,
 )
 from dlightrag.engine.agent.session.runtime import (
@@ -70,10 +67,10 @@ from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.citations.streaming import AnswerStream
+from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.answer.publication import StagedArtifact, scan_artifact_directory
-from dlightrag.engine.answer.research.compaction import CompactionCoordinator
 from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
@@ -414,24 +411,6 @@ class AnswerOrchestrator:
     ) -> CompactionResult:
         """Prepare one automatic checkpoint compaction for Runtime settlement."""
         snapshot = runtime_context.snapshot
-        if snapshot.active_projection is None:
-            baseline = ContextProjection(
-                projection_id=ProjectionId.new(),
-                first_retained_sequence=1,
-                covered_through_sequence=0,
-                summary=None,
-            )
-            snapshot = replace(
-                snapshot,
-                registers=(
-                    *snapshot.registers,
-                    RegisterRecord(
-                        ContextProjectionRegister(runtime_context.lane_id, baseline),
-                        max(1, snapshot.commit_sequence),
-                    ),
-                ),
-            )
-
         coordinator = self._compaction_coordinator(run)
         tail = self._context_policy.retained_tail_target(run.model_profile) // (
             2 ** max(0, attempt - 1)

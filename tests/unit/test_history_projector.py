@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Behavioral tests for one shared conversation-history projection."""
 
+from typing import Any
+
 import pytest
 
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
@@ -11,9 +13,14 @@ from dlightrag.engine.answer.history import (
 )
 
 
-def _measure(fixed: int):
-    def measure(messages: list[dict[str, object]]) -> int:
-        return fixed + sum(len(str(message.get("content") or "")) for message in messages)
+def _measure(fixed: int, *, pinned_summary: str = ""):
+    def measure(messages: list[dict[str, Any]], projected_summary: str = "") -> int:
+        return (
+            fixed
+            + len(pinned_summary)
+            + len(projected_summary)
+            + sum(len(str(message.get("content") or "")) for message in messages)
+        )
 
     return measure
 
@@ -26,7 +33,7 @@ _POLICY = ContextPolicy(
 )
 
 
-def _history() -> list[dict[str, object]]:
+def _history() -> list[dict[str, Any]]:
     return [
         {"role": "user", "content": "old"},
         {"role": "assistant", "content": "reply"},
@@ -36,7 +43,7 @@ def _history() -> list[dict[str, object]]:
     ]
 
 
-def test_projector_keeps_newest_pairs_and_summarizes_omitted_history() -> None:
+def test_projector_keeps_newest_pairs_before_fitting_omitted_summary() -> None:
     profile = ModelProfile(context_window_tokens=100)
     projected = project_history(
         _history(),
@@ -51,11 +58,10 @@ def test_projector_keeps_newest_pairs_and_summarizes_omitted_history() -> None:
         {"role": "user", "content": "new"},
         {"role": "assistant", "content": "answer"},
     ]
-    assert "user: old" in projected.episodic_summary
-    assert "assistant: reply" in projected.episodic_summary
+    assert projected.episodic_summary == ""
 
 
-def test_zero_allowance_produces_only_episodic_continuation() -> None:
+def test_zero_allowance_drops_even_the_generated_continuation() -> None:
     profile = ModelProfile(context_window_tokens=100)
 
     projected = project_history(
@@ -65,7 +71,56 @@ def test_zero_allowance_produces_only_episodic_continuation() -> None:
     )
 
     assert projected.messages == []
-    assert "new" in projected.episodic_summary
+    assert projected.episodic_summary == ""
+
+
+def test_generated_summary_is_exactly_remeasured_in_remaining_residual() -> None:
+    profile = ModelProfile(context_window_tokens=100)
+    measure = _measure(69, pinned_summary="pin")
+
+    projected = project_history(
+        _history(),
+        targets=(HistoryProjectionTarget("fast", profile, measure),),
+        context_policy=_POLICY,
+    )
+
+    assert projected.messages == [
+        {"role": "user", "content": "new"},
+        {"role": "assistant", "content": "answer"},
+    ]
+    assert projected.episodic_summary
+    assert measure(projected.messages, projected.episodic_summary) - measure([], "") <= 13
+
+
+def test_new_fast_session_projects_external_history_to_compaction_trigger() -> None:
+    profile = ModelProfile(context_window_tokens=100)
+    history = [
+        {"role": "user", "content": "u" * 30},
+        {"role": "assistant", "content": "a" * 30},
+    ]
+
+    hard_limit_projection = project_history(
+        history,
+        targets=(HistoryProjectionTarget("generation", profile, _measure(20)),),
+        context_policy=_POLICY,
+    )
+    fast_projection = project_history(
+        history,
+        targets=(
+            HistoryProjectionTarget(
+                "fast_generation",
+                profile,
+                _measure(20),
+                proactive_compaction=True,
+            ),
+        ),
+        context_policy=_POLICY,
+    )
+
+    assert hard_limit_projection.messages == history
+    assert fast_projection.messages == []
+    assert fast_projection.episodic_summary
+    assert _measure(20)([], fast_projection.episodic_summary) <= 72
 
 
 def test_research_seed_uses_compaction_trigger_as_acceptance_target() -> None:

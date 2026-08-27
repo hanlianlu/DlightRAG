@@ -202,10 +202,20 @@ def exchange_starts(entries: Sequence[SessionEntry]) -> tuple[int, ...]:
     return tuple(starts)
 
 
+def host_turn_starts(entries: Sequence[SessionEntry]) -> tuple[int, ...]:
+    """Return direct Host conversation-turn starts for Fast compaction."""
+    return tuple(
+        index
+        for index, entry in enumerate(entries)
+        if isinstance(entry, UserMessageEntry | ControlMessageEntry)
+    )
+
+
 def select_compaction_boundary(
     entries: Sequence[SessionEntry],
     *,
     retained_tail_tokens: int,
+    starts: Sequence[int] | None = None,
 ) -> int:
     """Return the first retained entry index targeting the tail budget.
 
@@ -216,21 +226,21 @@ def select_compaction_boundary(
     """
     if retained_tail_tokens < 0:
         raise ValueError("retained_tail_tokens cannot be negative")
-    starts = exchange_starts(entries)
-    if not starts:
+    resolved_starts = tuple(starts) if starts is not None else exchange_starts(entries)
+    if not resolved_starts:
         return 0
-    boundaries = (*starts, len(entries))
-    retained_start = starts[-1]
-    newest = entries[starts[-1] :]
+    boundaries = (*resolved_starts, len(entries))
+    retained_start = resolved_starts[-1]
+    newest = entries[resolved_starts[-1] :]
     remaining = retained_tail_tokens - estimate_messages_tokens(fold_entries(newest))
     if remaining < 0:
-        return starts[-1]
-    for position in reversed(range(len(starts) - 1)):
+        return resolved_starts[-1]
+    for position in reversed(range(len(resolved_starts) - 1)):
         exchange = entries[boundaries[position] : boundaries[position + 1]]
         remaining -= estimate_messages_tokens(fold_entries(exchange))
         if remaining < 0:
             break
-        retained_start = starts[position]
+        retained_start = resolved_starts[position]
     return retained_start
 
 
@@ -323,6 +333,7 @@ __all__ = [
     "fold_entries",
     "fold_tool_call",
     "fold_tool_message",
+    "host_turn_starts",
     "project_session_messages",
     "select_compaction_boundary",
 ]

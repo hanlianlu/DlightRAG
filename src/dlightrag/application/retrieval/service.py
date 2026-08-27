@@ -130,6 +130,25 @@ class RetrievalService:
             raise CorpusUnavailableError("Retrieval service is closed")
         return self._planners.planner_for(model_profile)
 
+    async def planner_history_input_measure(
+        self,
+        *,
+        query: str,
+        workspaces: Sequence[str],
+        model_profile: ModelProfile,
+        current_image_descriptions: Sequence[str] = (),
+        preserve_query: bool | None = None,
+    ) -> Callable[..., int]:
+        """Return the exact planner serializer for the schema used by retrieval."""
+        planner = self.planner_for(model_profile)
+        schema = await self.schema_for(workspaces)
+        return planner.history_input_measure(
+            query,
+            schema=schema,
+            current_image_descriptions=list(current_image_descriptions) or None,
+            preserve_query=preserve_query,
+        )
+
     async def schema_for(self, workspaces: Sequence[str]) -> dict[str, Any]:
         key = tuple(sorted(workspaces))
         now = self._clock()

@@ -8,9 +8,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from dlightrag.engine.agent.session.entries import AssistantMessageEntry, UserMessageEntry
+from dlightrag.engine.agent.session.entries import (
+    AssistantMessageEntry,
+    CompactionEntry,
+    UserMessageEntry,
+)
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId
+from dlightrag.engine.agent.session.projection import ContextProjection, projection_source_digest
 from dlightrag.engine.agent.session.registers import (
+    ContextProjectionRegister,
     DeleteRegister,
     HostTurnReservation,
     LaneHead,
@@ -98,16 +104,21 @@ class FastSessionHost:
             ancestry = snapshot.tree.ancestry(lane_id)
             latest = ancestry[-1] if ancestry else None
             if isinstance(latest, AssistantMessageEntry):
-                if (
-                    latest.acceptance_id != reservation_id
-                    or latest.parent_entry_id != user.entry_id
+                if latest.acceptance_id != reservation_id or not _is_reserved_turn_head(
+                    snapshot,
+                    user_entry_id=user.entry_id,
+                    head_entry_id=latest.parent_entry_id,
                 ):
                     raise OperationConflictError("settled Fast result lost its accepted lane head")
                 if latest.content != _settled_answer(settled_payload):
                     raise OperationConflictError(
                         "settled Fast Assistant disagrees with its durable Host result"
                     )
-            elif not isinstance(latest, UserMessageEntry) or latest.entry_id != user.entry_id:
+            elif latest is None or not _is_reserved_turn_head(
+                snapshot,
+                user_entry_id=user.entry_id,
+                head_entry_id=latest.entry_id,
+            ):
                 raise OperationConflictError("settled Fast result lost its reserved User lane head")
             await self.complete(
                 session_id=session_id,
@@ -168,9 +179,11 @@ class FastSessionHost:
                         raise OperationConflictError(
                             "settled Fast turn lost its durable Host result"
                         )
-                    if latest.parent_entry_id != user.entry_id or latest.content != _settled_answer(
-                        settled_payload
-                    ):
+                    if not _is_reserved_turn_head(
+                        snapshot,
+                        user_entry_id=user.entry_id,
+                        head_entry_id=latest.parent_entry_id,
+                    ) or latest.content != _settled_answer(settled_payload):
                         raise OperationConflictError(
                             "settled Fast Assistant disagrees with its durable Host result"
                         )
@@ -182,8 +195,9 @@ class FastSessionHost:
                         created=False,
                         settled_payload=settled_payload,
                     )
-                if isinstance(latest, UserMessageEntry) and latest.acceptance_id == reservation_id:
-                    if latest.content != content:
+                replay_user = _unanswered_user_at_head(snapshot, lane_id)
+                if replay_user is not None and replay_user.acceptance_id == reservation_id:
+                    if replay_user.content != content:
                         raise OperationConflictError(
                             "Fast turn replay changed its accepted content"
                         )
@@ -191,13 +205,20 @@ class FastSessionHost:
                         lane_id=lane_id,
                         reservation_id=reservation_id,
                         idempotency_key=idempotency_key,
-                        user_entry_id=latest.entry_id,
+                        user_entry_id=replay_user.entry_id,
                     )
                     await self._transact(
                         session_id,
                         SessionTransaction.from_parts(
-                            register_writes=[SetRegister(reservation)],
-                            expectations=[RegisterExpectation(reservation.ref, None)],
+                            register_writes=[
+                                SetRegister(lane_state),
+                                SetRegister(reservation),
+                            ],
+                            expectations=[
+                                RegisterExpectation(lane.head.ref, lane.head.sequence),
+                                RegisterExpectation(lane_state.ref, state_sequence),
+                                RegisterExpectation(reservation.ref, None),
+                            ],
                         ),
                     )
                     if settled_payload is None:
@@ -205,7 +226,7 @@ class FastSessionHost:
                             session_id,
                             lane_id,
                             reservation_id,
-                            latest.entry_id,
+                            replay_user.entry_id,
                             created=False,
                         )
                     await self.complete(
@@ -219,7 +240,7 @@ class FastSessionHost:
                         session_id,
                         lane_id,
                         reservation_id,
-                        latest.entry_id,
+                        replay_user.entry_id,
                         created=False,
                         settled_payload=settled_payload,
                         progress_advanced=True,
@@ -268,6 +289,86 @@ class FastSessionHost:
             progress_advanced=True,
         )
 
+    async def commit_compaction(
+        self,
+        *,
+        snapshot: AgentSessionSnapshot,
+        session_id: SessionId,
+        lane_id: LaneId,
+        reservation_id: str,
+        projection: ContextProjection,
+    ) -> TransactionCommit:
+        """CAS one projection against the exact snapshot it was prepared from."""
+        if snapshot.session_id != session_id:
+            raise ValueError("Fast compaction snapshot belongs to another Session")
+        _reject_fault(snapshot)
+        reservation = _reservation(snapshot, lane_id)
+        if reservation is None:
+            raise OperationConflictError("Fast Host turn reservation identity changed")
+        reservation_value = reservation.value
+        if not isinstance(reservation_value, HostTurnReservation):
+            raise TypeError("Host turn reservation register has the wrong value type")
+        if reservation_value.reservation_id != reservation_id:
+            raise OperationConflictError("Fast Host turn reservation identity changed")
+        user = _accepted_user(snapshot, lane_id, reservation_id)
+        lane = snapshot.tree.lane(lane_id)
+        head = lane.head
+        if not isinstance(head.value, LaneHead):
+            raise TypeError("Lane Head register has the wrong value type")
+        ancestry = snapshot.tree.ancestry(lane_id)
+        latest = ancestry[-1] if ancestry else None
+        if latest is None or not _is_reserved_turn_head(
+            snapshot,
+            user_entry_id=user.entry_id,
+            head_entry_id=latest.entry_id,
+        ):
+            raise OperationConflictError("Fast Host turn lane head changed before compaction")
+        previous_projection = _projection(snapshot, lane_id)
+        if previous_projection is not None:
+            previous_value = previous_projection.value
+            if not isinstance(previous_value, ContextProjectionRegister):
+                raise TypeError("Context projection register has the wrong value type")
+            if (
+                projection.covered_through_sequence
+                <= previous_value.projection.covered_through_sequence
+            ):
+                raise OperationConflictError("Fast compaction projection does not advance")
+        if not _projection_belongs_to_lane(snapshot, lane_id, projection):
+            raise OperationConflictError("Fast compaction projection source changed")
+
+        entry = CompactionEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.now(UTC),
+            parent_entry_id=head.value.entry_id,
+            projection_id=projection.projection_id,
+            summary=projection.summary,
+            covered_through_sequence=projection.covered_through_sequence,
+            first_retained_sequence=projection.first_retained_sequence,
+            covered_through_entry_id=projection.covered_through_entry_id,
+            first_retained_entry_id=projection.first_retained_entry_id,
+            source_digest=projection.source_digest,
+        )
+        projection_value = ContextProjectionRegister(lane_id, projection)
+        return await self._transact(
+            session_id,
+            SessionTransaction.from_parts(
+                entries=[entry],
+                register_writes=[
+                    SetRegister(LaneHead(lane_id, entry.entry_id)),
+                    SetRegister(projection_value),
+                ],
+                expectations=[
+                    RegisterExpectation(head.ref, head.sequence),
+                    RegisterExpectation(
+                        projection_value.ref,
+                        previous_projection.sequence if previous_projection is not None else None,
+                    ),
+                    RegisterExpectation(reservation.ref, reservation.sequence),
+                ],
+            ),
+        )
+
     async def complete(
         self,
         *,
@@ -302,7 +403,11 @@ class FastSessionHost:
         if isinstance(latest, AssistantMessageEntry):
             if (
                 latest.acceptance_id != reservation_id
-                or latest.parent_entry_id != reservation_record.value.user_entry_id
+                or not _is_reserved_turn_head(
+                    snapshot,
+                    user_entry_id=reservation_record.value.user_entry_id,
+                    head_entry_id=latest.parent_entry_id,
+                )
                 or latest.content != content
             ):
                 raise OperationConflictError("Fast Host turn lane head changed")
@@ -318,9 +423,10 @@ class FastSessionHost:
                     ],
                 ),
             )
-        if (
-            not isinstance(latest, UserMessageEntry)
-            or latest.entry_id != reservation_record.value.user_entry_id
+        if latest is None or not _is_reserved_turn_head(
+            snapshot,
+            user_entry_id=reservation_record.value.user_entry_id,
+            head_entry_id=latest.entry_id,
         ):
             raise OperationConflictError("Fast Host turn lane head changed")
         entry = AssistantMessageEntry(
@@ -362,9 +468,12 @@ class FastSessionHost:
         reservation = _reservation(snapshot, lane_id)
         if reservation is None:
             ancestry = snapshot.tree.ancestry(lane_id)
-            if ancestry and isinstance(ancestry[-1], (UserMessageEntry, AssistantMessageEntry)):
+            if ancestry and isinstance(ancestry[-1], AssistantMessageEntry):
                 if ancestry[-1].acceptance_id == reservation_id:
                     return None
+            unanswered = _unanswered_user_at_head(snapshot, lane_id)
+            if unanswered is not None and unanswered.acceptance_id == reservation_id:
+                return None
             raise OperationConflictError("Fast Host turn reservation is not active")
         if not isinstance(reservation.value, HostTurnReservation):
             raise TypeError("Host turn reservation register has the wrong value type")
@@ -484,6 +593,98 @@ def _settled_answer(payload: Mapping[str, Any]) -> str:
 def _settled_usage(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
     usage = payload.get("usage")
     return usage if isinstance(usage, Mapping) else None
+
+
+def _unanswered_user_at_head(
+    snapshot: AgentSessionSnapshot,
+    lane_id: LaneId,
+) -> UserMessageEntry | None:
+    """Return the User at a Head made only of its following checkpoints."""
+    ancestry = snapshot.tree.ancestry(lane_id)
+    if not ancestry:
+        return None
+    by_id = {entry.entry_id: entry for entry in ancestry}
+    current = ancestry[-1]
+    seen: set[EntryId] = set()
+    while isinstance(current, CompactionEntry) and current.entry_id not in seen:
+        seen.add(current.entry_id)
+        if current.parent_entry_id is None:
+            return None
+        parent = by_id.get(current.parent_entry_id)
+        if parent is None:
+            return None
+        current = parent
+    return current if isinstance(current, UserMessageEntry) else None
+
+
+def _projection_belongs_to_lane(
+    snapshot: AgentSessionSnapshot,
+    lane_id: LaneId,
+    projection: ContextProjection,
+) -> bool:
+    """Verify a candidate's branch identities against its preparation snapshot."""
+    branch = [
+        entry for entry in snapshot.tree.ancestry(lane_id) if not isinstance(entry, CompactionEntry)
+    ]
+    covered_index = next(
+        (
+            index
+            for index, entry in enumerate(branch)
+            if entry.entry_id == projection.covered_through_entry_id
+        ),
+        None,
+    )
+    if covered_index is None:
+        return False
+    if (
+        projection_source_digest([entry.entry_id for entry in branch[: covered_index + 1]])
+        != projection.source_digest
+    ):
+        return False
+    if projection.first_retained_entry_id is None:
+        return covered_index == len(branch) - 1
+    retained_index = next(
+        (
+            index
+            for index, entry in enumerate(branch)
+            if entry.entry_id == projection.first_retained_entry_id
+        ),
+        None,
+    )
+    return retained_index is not None and retained_index > covered_index
+
+
+def _is_reserved_turn_head(
+    snapshot: AgentSessionSnapshot,
+    *,
+    user_entry_id: EntryId,
+    head_entry_id: EntryId | None,
+) -> bool:
+    """Whether a Head is the accepted User or its compaction-checkpoint chain."""
+    by_id = {entry.entry_id: entry for entry in snapshot.entries}
+    current = head_entry_id
+    seen: set[EntryId] = set()
+    while current is not None and current not in seen:
+        if current == user_entry_id:
+            return True
+        seen.add(current)
+        entry = by_id.get(current)
+        if not isinstance(entry, CompactionEntry):
+            return False
+        current = entry.parent_entry_id
+    return False
+
+
+def _projection(
+    snapshot: AgentSessionSnapshot,
+    lane_id: LaneId,
+) -> RegisterRecord | None:
+    record = _register(snapshot, RegisterRef("context_projection", lane_id.value))
+    if record is None:
+        return None
+    if not isinstance(record.value, ContextProjectionRegister):
+        raise TypeError("Context projection register has the wrong value type")
+    return record
 
 
 def _reservation(

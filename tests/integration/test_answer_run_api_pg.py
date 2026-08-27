@@ -199,7 +199,9 @@ class _Capabilities:
 class _Retrieval:
     def planner_for(self, _profile: ModelProfile | None = None) -> Any:
         planner = MagicMock()
-        planner.history_input_measure.return_value = lambda messages: 10 * len(messages)
+        planner.history_input_measure.return_value = lambda messages, _summary="": (
+            10 * len(messages)
+        )
         return planner
 
     def warm(self, _workspaces: Any) -> None:

@@ -1,12 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The Research compaction collaborator: summarize, validate, commit.
+"""Mode-neutral Answer compaction: summarize and validate one projection.
 
-Owns the runtime the grill decided: a tools-disabled summarizer call on the
-pinned Research model, a markdown-to-typed-summary parser, framework-extracted
-paths/handles, whole-exchange boundaries, hierarchical slices when the
-covered prefix does not fit the summarizer window, and a bounded
-shrink-and-retry loop with halved retained tails. Pure vocabulary stays in
-``dlightrag.engine.agent.session``; prompts live in ``dlightrag.engine.answer.prompts``.
+The coordinator is shared by Fast Host turns and Research Agent operations. It
+performs a tools-disabled call on the pinned query model, parses the typed
+summary, preserves whole-exchange boundaries, and returns an uncommitted
+projection. The caller that owns the Session lane remains responsible for the
+atomic ``CompactionEntry`` and projection-register commit.
 """
 
 from __future__ import annotations
@@ -39,6 +38,7 @@ from dlightrag.engine.answer.prompts.compaction import (
 )
 
 StreamModel = Callable[..., AsyncIterator[str]]
+ExchangeStarts = Callable[[Sequence[SessionEntry]], Sequence[int]]
 
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _FENCE_RE = re.compile(r"^```(?:markdown|md)?\s*\n(.*)\n```\s*$", re.DOTALL)
@@ -177,10 +177,12 @@ class CompactionCoordinator:
         model_profile: ModelProfile,
         context_policy: ContextPolicy,
         stream_model: StreamModel,
+        exchange_starts_func: ExchangeStarts = exchange_starts,
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
         self._stream_model = stream_model
+        self._exchange_starts = exchange_starts_func
 
     async def prepare(
         self,
@@ -192,9 +194,12 @@ class CompactionCoordinator:
     ) -> tuple[ContextProjection, CompactionOutcome]:
         """Prepare one projection effect result; Runtime owns its atomic commit."""
         entries = snapshot.graph.ancestry()
-        previous = snapshot.active_projection
-        if previous is None:
-            raise _CompactionAttemptFailed("no active projection to compact from")
+        previous = snapshot.active_projection or ContextProjection(
+            projection_id=ProjectionId.new(),
+            first_retained_sequence=1,
+            covered_through_sequence=0,
+            summary=None,
+        )
         branch_entries = [entry for entry in entries if not isinstance(entry, CompactionEntry)]
         if previous.first_retained_entry_id is None:
             summarizable = [
@@ -219,7 +224,9 @@ class CompactionCoordinator:
         if not summarizable:
             raise _CompactionAttemptFailed("nothing left to compact")
         tail_index = select_compaction_boundary(
-            summarizable, retained_tail_tokens=tail_target_tokens
+            summarizable,
+            retained_tail_tokens=tail_target_tokens,
+            starts=self._exchange_starts(summarizable),
         )
         target = summarizable[:tail_index]
         if not target:
@@ -372,7 +379,7 @@ class CompactionCoordinator:
         # role, never just below the hard limit (living spec Proactive
         # Compaction).
         budget = self._context_policy.compaction_trigger(self._model_profile)
-        starts = exchange_starts(target)
+        starts = tuple(self._exchange_starts(target))
         if not starts:
             return tuple(target)
         end = 0

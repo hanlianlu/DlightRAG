@@ -19,6 +19,7 @@ from dlightrag.application.answer_runs import AnswerService
 from dlightrag.engine.agent.session.effects import ToolResultEntry
 from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
+    CompactionEntry,
     SessionEntry,
     ToolResultMessageEntry,
     UserMessageEntry,
@@ -28,12 +29,14 @@ from dlightrag.engine.agent.session.ids import (
     EntryId,
     IntentId,
     LaneId,
+    ProjectionId,
     SessionId,
     StageIntentId,
 )
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.operation import OperationCompleted, ToolBatchItem
 from dlightrag.engine.agent.session.plan import AgentRunPlan
+from dlightrag.engine.agent.session.projection import ContextProjection, projection_source_digest
 from dlightrag.engine.agent.session.registers import (
     LaneHead,
     LaneState,
@@ -890,6 +893,107 @@ async def test_postgres_and_service_transcript_project_typed_tool_result_parts(p
     )
     assert transcript is not None
     assert transcript.messages[-1] == projected[-1]
+
+
+async def test_fast_compaction_recovers_between_projection_and_assistant(pool) -> None:
+    session_id = SessionId.new()
+    first = await _claim(pool, session_id=session_id)
+    first_host = FastSessionHost(
+        transactions=first.execution.session_repository,
+        load=first.execution.session_repository.load,
+        load_settled_result=_no_settled_result,
+        fencing_epoch=first.execution.fencing_epoch,
+    )
+    await first_host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id=first.run.run_id,
+        idempotency_key="first-compaction-turn",
+        content="old question",
+    )
+    await first_host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id=first.run.run_id,
+        content="old answer",
+    )
+    run_store = await _store(pool)
+    await run_store.finish_success(
+        owner_id=_OWNER,
+        run_id=first.run.run_id,
+        worker_id=_WORKER,
+        fencing_epoch=first.execution.fencing_epoch,
+        result={"answer": "old answer"},
+    )
+
+    second = await _claim(pool, session_id=session_id)
+    settled_result: dict[str, Any] | None = None
+
+    async def load_settled_result() -> dict[str, Any] | None:
+        return settled_result
+
+    second_host = FastSessionHost(
+        transactions=second.execution.session_repository,
+        load=second.execution.session_repository.load,
+        load_settled_result=load_settled_result,
+        fencing_epoch=second.execution.fencing_epoch,
+    )
+    await second_host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id=second.run.run_id,
+        idempotency_key="second-compaction-turn",
+        content="current question",
+    )
+    before = await second.execution.session_repository.load(session_id)
+    ancestry = before.tree.ancestry()
+    projection = ContextProjection(
+        projection_id=ProjectionId.new(),
+        covered_through_sequence=ancestry[1].sequence,
+        first_retained_sequence=ancestry[2].sequence,
+        summary='{"goal":"old turn"}',
+        covered_through_entry_id=ancestry[1].entry_id,
+        first_retained_entry_id=ancestry[2].entry_id,
+        source_digest=projection_source_digest([entry.entry_id for entry in ancestry[:2]]),
+    )
+    await second_host.commit_compaction(
+        snapshot=before,
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id=second.run.run_id,
+        projection=projection,
+    )
+
+    settled_result = {
+        "answer": "recovered answer",
+        "contexts": {"chunks": []},
+        "sources": [],
+        "artifacts": [],
+        "usage": {"input_tokens": 4, "output_tokens": 2},
+    }
+    replay = await second_host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id=second.run.run_id,
+        idempotency_key="second-compaction-turn",
+        content="current question",
+    )
+
+    assert replay.settled_payload == settled_result
+    recovered = await second.execution.session_repository.load(session_id)
+    assert [entry.entry_type for entry in recovered.tree.ancestry()] == [
+        "user_message",
+        "assistant_message",
+        "user_message",
+        "compaction",
+        "assistant_message",
+    ]
+    checkpoint = recovered.tree.ancestry()[-2]
+    assistant = recovered.tree.ancestry()[-1]
+    assert isinstance(checkpoint, CompactionEntry)
+    assert isinstance(assistant, AssistantMessageEntry)
+    assert assistant.parent_entry_id == checkpoint.entry_id
+    assert recovered.active_projection == projection
 
 
 async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool) -> None:

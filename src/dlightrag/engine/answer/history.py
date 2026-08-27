@@ -2,15 +2,23 @@
 """Project one pinned history across every reachable model call."""
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag.engine.ai.tokens import truncate_to_estimated_tokens
 
-type HistoryInputMeasure = Callable[[list[dict[str, Any]]], int]
+
+class HistoryInputMeasure(Protocol):
+    """Exact target serializer for recent messages plus a projected summary."""
+
+    def __call__(
+        self,
+        messages: list[dict[str, Any]],
+        projected_summary: str = "",
+    ) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,28 +72,20 @@ def project_history(
     pairs = _complete_pairs(messages)
     if not resolved:
         return PriorTurns()
-    if any(target.allowance_tokens == 0 for target in resolved):
-        return PriorTurns(
-            episodic_summary=_episodic_summary(
-                pairs,
-                max_tokens=context_policy.episodic_summary_tokens,
-            )
-        )
-
     kept: list[dict[str, Any]] = []
     for pair in reversed(pairs):
         candidate = [*pair, *kept]
-        if not all(_fits(candidate, target) for target in resolved):
+        if not all(_fits(candidate, "", target) for target in resolved):
             break
         kept = candidate
     omitted_pairs = pairs[: len(pairs) - len(kept) // 2]
-    return PriorTurns(
+    summary = _fit_episodic_summary(
         kept,
-        episodic_summary=_episodic_summary(
-            omitted_pairs,
-            max_tokens=context_policy.episodic_summary_tokens,
-        ),
+        omitted_pairs,
+        resolved=resolved,
+        max_tokens=context_policy.episodic_summary_tokens,
     )
+    return PriorTurns(kept, episodic_summary=summary)
 
 
 def _resolve_target(
@@ -98,7 +98,7 @@ def _resolve_target(
         if target.proactive_compaction
         else hard_limit
     )
-    fixed_input = target.measure_input([])
+    fixed_input = target.measure_input([], "")
     if fixed_input > acceptance_limit:
         raise HistoryProjectionOverflowError(
             target=target.name,
@@ -115,12 +115,42 @@ def _resolve_target(
     return _ResolvedTarget(target, fixed_input, allowance)
 
 
-def _fits(messages: list[dict[str, Any]], resolved: _ResolvedTarget) -> bool:
+def _fits(
+    messages: list[dict[str, Any]],
+    episodic_summary: str,
+    resolved: _ResolvedTarget,
+) -> bool:
     history_tokens = max(
         0,
-        resolved.target.measure_input(messages) - resolved.fixed_input_tokens,
+        resolved.target.measure_input(messages, episodic_summary) - resolved.fixed_input_tokens,
     )
     return history_tokens <= resolved.allowance_tokens
+
+
+def _fit_episodic_summary(
+    kept: list[dict[str, Any]],
+    omitted_pairs: Sequence[Sequence[dict[str, Any]]],
+    *,
+    resolved: Sequence[_ResolvedTarget],
+    max_tokens: int,
+) -> str:
+    """Fit the extractive continuation after preserving the recent-pair set."""
+    summary = _episodic_summary(omitted_pairs, max_tokens=max_tokens)
+    if not summary or all(_fits(kept, summary, target) for target in resolved):
+        return summary
+
+    low = 0
+    high = max_tokens
+    fitted = ""
+    while low <= high:
+        middle = (low + high) // 2
+        candidate = truncate_to_estimated_tokens(summary, middle) if middle else ""
+        if all(_fits(kept, candidate, target) for target in resolved):
+            fitted = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return fitted
 
 
 def _episodic_summary(

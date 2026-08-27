@@ -14,6 +14,7 @@ from dlightrag.engine.agent.session.entries import (
 from dlightrag.engine.agent.session.fold import (
     exchange_starts,
     fold_entries,
+    host_turn_starts,
     project_session_messages,
     select_compaction_boundary,
 )
@@ -109,6 +110,29 @@ def test_exchange_boundaries_never_split_assistant_from_ordered_results() -> Non
     )
     assert exchange_starts(entries) == (1,)
     assert select_compaction_boundary(entries, retained_tail_tokens=0) == 1
+
+
+def test_direct_host_turns_are_complete_compaction_exchanges() -> None:
+    session_id = SessionId.new()
+    entries = (
+        UserMessageEntry(
+            entry_id=EntryId.new(), session_id=session_id, timestamp=_now(), content="old"
+        ),
+        AssistantMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=_now(),
+            content="answer",
+            stop_reason="stop",
+        ),
+        UserMessageEntry(
+            entry_id=EntryId.new(), session_id=session_id, timestamp=_now(), content="current"
+        ),
+    )
+
+    starts = host_turn_starts(entries)
+    assert starts == (0, 2)
+    assert select_compaction_boundary(entries, retained_tail_tokens=0, starts=starts) == 2
 
 
 def test_projection_is_bound_to_physical_branch_entry_identity() -> None:
