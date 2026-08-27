@@ -231,7 +231,7 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
         model="test-model",
         failure_kind=None,
     )
-    from dlightrag.adapters.postgres.corpus import PGReadinessProbe
+    from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe
     from dlightrag.application.answer_runs.capability import answer_image_capability_summary
 
     application.health = ApplicationHealth(
@@ -1296,7 +1296,7 @@ class TestHealthEndpoint:
         mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
 
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
@@ -1362,7 +1362,7 @@ class TestReadinessEndpoint:
         mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
 
         mutate_config(mock_config_no_auth_override, "access.auth_mode", "simple")
         mutate_config(mock_config_no_auth_override, "access.api_token", "required-elsewhere")
@@ -1383,7 +1383,7 @@ class TestReadinessEndpoint:
         mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
 
         mock_application.health.mark_closed()
         probe = AsyncMock(return_value="off")
@@ -1407,7 +1407,7 @@ class TestReadinessEndpoint:
         mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
 
         mutate_config(mock_config, "deployment.service_role", "reader")
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="on"))
@@ -1429,7 +1429,7 @@ class TestReadinessEndpoint:
         mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
 
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="on"))
         app.state.application = mock_application
@@ -1450,9 +1450,9 @@ class TestReadinessEndpoint:
         mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import dlightrag.adapters.postgres.corpus as corpus_module
-        from dlightrag.adapters.postgres._pool import pg_pool
-        from dlightrag.adapters.postgres.corpus import PGReadinessProbe
+        import dlightrag.adapters.postgres.corpus.corpus as corpus_module
+        from dlightrag.adapters.postgres.core._pool import pg_pool
+        from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe
 
         mutate_config(mock_config, "deployment.service_role", "reader")
         mock_application.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
@@ -1482,9 +1482,9 @@ class TestReadinessEndpoint:
         mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import dlightrag.adapters.postgres.corpus as corpus_module
-        from dlightrag.adapters.postgres._pool import pg_pool
-        from dlightrag.adapters.postgres.corpus import PGReadinessProbe
+        import dlightrag.adapters.postgres.corpus.corpus as corpus_module
+        from dlightrag.adapters.postgres.core._pool import pg_pool
+        from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe
 
         mutate_config(mock_config, "deployment.service_role", "reader")
         mock_application.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
@@ -1508,7 +1508,7 @@ class TestReadinessEndpoint:
         mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
 
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
@@ -1527,7 +1527,7 @@ class TestReadinessEndpoint:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A burst against a cold cache costs one round trip, not one per caller."""
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
 
         started = asyncio.Event()
         release = asyncio.Event()
@@ -1556,7 +1556,7 @@ class TestReadinessEndpoint:
         mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
 
         started = asyncio.Event()
         release = asyncio.Event()
@@ -1606,7 +1606,7 @@ class TestReadinessEndpoint:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Startup and schema transitions must never be served from a stale verdict."""
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
 
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)

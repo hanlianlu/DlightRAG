@@ -13,7 +13,7 @@ from dlightrag_memory import Memory, MemoryProvenance, MemoryRecord
 from dlightrag_memory._storage.pg_bm25 import index_name
 from dlightrag_memory.postgres import PostgresMemoryStore
 
-from dlightrag.adapters.postgres.memory_settings import (
+from dlightrag.adapters.postgres.answer.memory_settings import (
     MEMORY_SETTINGS_DDL,
     PGMemorySettingsStore,
 )

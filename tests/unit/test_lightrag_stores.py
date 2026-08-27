@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.adapters.postgres.corpus_chunks import PGCorpusChunkStore
+from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
 from dlightrag.engine.rag.lightrag.stores import LightRAGStores
 
 

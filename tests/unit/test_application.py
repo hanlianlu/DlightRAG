@@ -7,9 +7,9 @@ from typing import Any, cast
 import pytest
 
 from dlightrag._compose import _memory_embedder
-from dlightrag.adapters.postgres._pool import pg_pool
-from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
+from dlightrag.adapters.postgres.core._pool import pg_pool
+from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
 from dlightrag.application import Application, ApplicationClosedError
 from dlightrag.application.answer_runs import AnswerService
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilityCoordinator

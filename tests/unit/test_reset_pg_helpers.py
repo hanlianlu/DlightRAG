@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.adapters.postgres.corpus import PGCorpusMaintenanceStore
-from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
+from dlightrag.adapters.postgres.corpus.corpus import PGCorpusMaintenanceStore
+from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
 
 
 class _Acquire:
@@ -64,7 +64,7 @@ def config() -> MagicMock:
 async def test_delete_workspace_record_uses_the_operational_registry(monkeypatch, config) -> None:
     conn = _Conn()
     connect = AsyncMock(side_effect=AssertionError("registry operations must not connect directly"))
-    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.asyncpg.connect", connect)
+    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", connect)
 
     store = _maintenance_store(config, conn)
     assert await store.delete_workspace_record("research") is True
@@ -119,7 +119,7 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, 
         assert kwargs == config.pg_connection_kwargs.return_value
         return conn
 
-    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.asyncpg.connect", fake_connect)
+    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", fake_connect)
 
     store = PGCorpusMaintenanceStore(config.pg_connection_kwargs())
     cleaned = await store.clean_orphan_rows("research", dry_run=False)
@@ -178,7 +178,7 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
     async def fake_connect(**kwargs):
         return conn
 
-    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.asyncpg.connect", fake_connect)
+    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", fake_connect)
 
     store = PGCorpusMaintenanceStore(config.pg_connection_kwargs())
     cleaned = await store.clean_orphan_rows("default", dry_run=False)

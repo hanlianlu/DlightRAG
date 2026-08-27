@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from dlightrag.adapters.postgres.answer_runs import (
+from dlightrag.adapters.postgres.answer.answer_runs import (
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
     PGAnswerRunStore,

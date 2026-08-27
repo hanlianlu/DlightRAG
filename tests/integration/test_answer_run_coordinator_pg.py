@@ -24,9 +24,9 @@ from typing import Any, cast
 import asyncpg
 import pytest
 
-from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository
-from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
+from dlightrag.adapters.postgres.answer.session_repository import PGAgentSessionRepository
+from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
 from dlightrag.application import Application, _compose
 from dlightrag.application.answer_runs.execution import AnswerRunInput, PinnedModelProfile
 from dlightrag.application.config import DlightragConfig, RuntimeConfig

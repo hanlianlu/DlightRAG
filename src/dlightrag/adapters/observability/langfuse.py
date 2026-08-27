@@ -4,7 +4,7 @@
 import logging
 from typing import Any
 
-from dlightrag.observability.masking import mask_langfuse_payload
+from dlightrag.adapters.observability.masking import mask_langfuse_payload
 
 logger = logging.getLogger(__name__)
 

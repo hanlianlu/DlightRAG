@@ -4,7 +4,7 @@
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Protocol, TypeVar
 
-from dlightrag.adapters.postgres._pool import pg_pool
+from dlightrag.adapters.postgres.core._pool import pg_pool
 
 T = TypeVar("T")
 

@@ -30,8 +30,8 @@ from lightrag.kg.shared_storage import (
 from lightrag.lightrag import StoragesStatus
 from pgvector.asyncpg import register_vector
 
-from dlightrag.adapters.postgres.identifiers import pg_qualified_identifier
-from dlightrag.adapters.postgres.lightrag_contract import READ_ONLY_STORAGE_ATTRS
+from dlightrag.adapters.postgres.core.identifiers import pg_qualified_identifier
+from dlightrag.adapters.postgres.corpus.lightrag_contract import READ_ONLY_STORAGE_ATTRS
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 
 logger = logging.getLogger(__name__)

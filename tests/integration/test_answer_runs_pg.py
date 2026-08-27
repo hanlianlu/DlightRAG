@@ -21,7 +21,7 @@ from typing import Any
 import asyncpg
 import pytest
 
-from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
+from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
 from dlightrag.engine.runtime import (
     MAX_RECLAIMS_WITHOUT_PROGRESS,
     IdempotencyKeyConflict,
@@ -91,7 +91,7 @@ async def store(pool: Any) -> PGAnswerRunStore:
     created = FingerprintingAnswerRunStore(pool=pool)
     await created.initialize()
     # Establish the complete operational schema exactly as a real process does.
-    from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+    from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
 
     await PGWebConversationStore(pool=pool, run_store=created).initialize()
     return created
@@ -190,7 +190,7 @@ class TestSchema:
 
     async def test_memory_settings_default_and_roundtrip(self, store, pool) -> None:
         """Enablement defaults on for absent rows and persists across updates."""
-        from dlightrag.adapters.postgres.memory_settings import PGMemorySettingsStore
+        from dlightrag.adapters.postgres.answer.memory_settings import PGMemorySettingsStore
 
         settings = PGMemorySettingsStore(pool=pool)
 
@@ -299,7 +299,7 @@ class TestSchema:
                 )
 
     async def test_preserves_ingest_job_migration_scope(self, store, pool) -> None:
-        from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
+        from dlightrag.adapters.postgres.corpus.ingest_jobs import PGIngestJobStore
 
         await PGIngestJobStore(pool=pool).initialize()
         async with pool.acquire() as conn:
@@ -602,7 +602,7 @@ class TestLeaseFencing:
 
         assert creation.run.prepared_input is not None
         stale_session = SessionId(str(creation.run.prepared_input["agent_session_id"]))
-        from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository
+        from dlightrag.adapters.postgres.answer.session_repository import PGAgentSessionRepository
 
         stale_repository = PGAgentSessionRepository(
             pool=pool,

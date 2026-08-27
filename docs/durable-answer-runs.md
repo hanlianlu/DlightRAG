@@ -8,7 +8,7 @@ product failures to `RunExecutionError`, and drives Research through the
 product-neutral Agent Session Runtime. `AnswerService` gives REST, MCP, Web, and
 in-process Python callers the same coordinator-backed lifecycle.
 
-`dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore` implements the store
+`dlightrag.adapters.postgres.answer.answer_runs.PGAnswerRunStore` implements the store
 port. Runtime never imports PostgreSQL, Answer implementation, RAG
 implementation, or a transport package; the root adapter imports the records it
 persists from Runtime. No `dlightrag.storage` compatibility package exists.

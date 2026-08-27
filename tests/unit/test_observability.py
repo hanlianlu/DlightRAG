@@ -9,15 +9,15 @@ from typing import Any
 
 import pytest
 
-from dlightrag import observability
+import dlightrag.adapters.observability as observability
+from dlightrag.adapters.observability import langfuse as langfuse_state
+from dlightrag.adapters.observability import tracing as tracing_module
+from dlightrag.adapters.observability.masking import mask_langfuse_payload
 from dlightrag.engine.ai.telemetry import NoopTelemetry
-from dlightrag.observability import langfuse as langfuse_state
-from dlightrag.observability import tracing as tracing_module
-from dlightrag.observability.masking import mask_langfuse_payload
 
 
 def test_importing_langfuse_adapter_does_not_initialize_tracing() -> None:
-    from dlightrag.observability import langfuse as langfuse_adapter
+    from dlightrag.adapters.observability import langfuse as langfuse_adapter
 
     assert langfuse_adapter.current_client() is None
 

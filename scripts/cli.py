@@ -190,12 +190,12 @@ def _render_answer_for_terminal(data: AnswerResult) -> str:
 
 
 async def _run_ingest(args: argparse.Namespace) -> None:
+    from dlightrag.adapters.observability import LangfuseTelemetry
     from dlightrag.application.config import get_config
     from dlightrag.application.settings import rag_settings
     from dlightrag.engine.ai.scheduler import ModelScheduler
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
-    from dlightrag.observability import LangfuseTelemetry
 
     source = args.source_type
     kwargs = ingest_kwargs_from_spec(ingest_spec_from_payload(args))
@@ -219,7 +219,7 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         )
     print(f"Workspace: {workspace}\n")
 
-    from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
+    from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
 
     service = await WorkspaceRag.acreate(
         workspace_id=workspace,

@@ -8,13 +8,13 @@ this table owns the user-facing workspace list, including empty workspaces.
 
 from typing import Any
 
-from dlightrag.adapters.postgres._migrations import (
+from dlightrag.adapters.postgres.core._migrations import (
     Migration,
     TableRequirement,
     apply_migrations,
     verify_migrations,
 )
-from dlightrag.adapters.postgres._operations import PostgresOperationRunner
+from dlightrag.adapters.postgres.core._operations import PostgresOperationRunner
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 
 _CREATE = """

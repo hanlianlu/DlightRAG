@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.adapters.postgres._pool import PGPool
-from dlightrag.adapters.postgres.corpus_bm25 import (
+from dlightrag.adapters.postgres.core._pool import PGPool
+from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
     BM25_LANGUAGE_COLUMN,
     BM25IndexOptions,
     PGBM25ProfileSearch,
@@ -173,7 +173,7 @@ async def test_create_postgres_bm25_provisions_for_service_role(
     monkeypatch: pytest.MonkeyPatch,
     is_reader: bool,
 ) -> None:
-    from dlightrag.adapters.postgres import corpus_bm25 as module
+    from dlightrag.adapters.postgres.corpus import corpus_bm25 as module
 
     instance = SimpleNamespace(
         ensure_indexes=AsyncMock(),
@@ -206,7 +206,7 @@ async def test_create_postgres_bm25_provisions_for_service_role(
 async def test_rebuild_postgres_bm25_provisions_then_relabels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.adapters.postgres import corpus_bm25 as module
+    from dlightrag.adapters.postgres.corpus import corpus_bm25 as module
 
     adapter = SimpleNamespace(
         relabel_chunk_languages=AsyncMock(return_value={"processed_chunks": 3, "updated_chunks": 3})

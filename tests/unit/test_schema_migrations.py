@@ -6,15 +6,15 @@ from typing import Any
 
 import pytest
 
-from dlightrag.adapters.postgres._migrations import (
+from dlightrag.adapters.postgres.core._migrations import (
     ForeignKeyRequirement,
     Migration,
     TableRequirement,
 )
-from dlightrag.adapters.postgres._migrations import (
+from dlightrag.adapters.postgres.core._migrations import (
     apply_migrations as _apply_migrations,
 )
-from dlightrag.adapters.postgres._migrations import (
+from dlightrag.adapters.postgres.core._migrations import (
     verify_migrations as _verify_migrations,
 )
 
@@ -444,7 +444,7 @@ async def test_verify_migrations_rejects_a_fully_recorded_ledger_missing_an_obje
 
 async def test_web_conversation_migration_creates_only_final_run_links() -> None:
     """The baseline creates only final Web conversation and run-link state."""
-    from dlightrag.adapters.postgres.web_conversations import WEB_CONVERSATION_MIGRATIONS
+    from dlightrag.adapters.postgres.web.web_conversations import WEB_CONVERSATION_MIGRATIONS
 
     conn = _Conn()
     await apply_migrations(

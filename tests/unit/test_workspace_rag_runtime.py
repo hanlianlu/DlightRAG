@@ -848,7 +848,7 @@ class TestWorkspaceRagLightRAGMainPath:
             "lightrag.parser.routing.validate_parser_routing_config",
             lambda rules: events.append(f"validate:{rules}"),
         )
-        from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
+        from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
 
         backend = build_pg_corpus_backend(test_config)
         service = _service(test_config, backend=backend)

@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from dlightrag.adapters.postgres.identifiers import pg_identifier, pg_qualified_identifier
+from dlightrag.adapters.postgres.core.identifiers import pg_identifier, pg_qualified_identifier
 from dlightrag.engine.rag.retrieval import MetadataScope
 
 logger = logging.getLogger(__name__)

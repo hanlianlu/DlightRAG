@@ -13,8 +13,8 @@ import asyncpg
 import pytest
 from pydantic import BaseModel
 
-from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository
+from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
+from dlightrag.adapters.postgres.answer.session_repository import PGAgentSessionRepository
 from dlightrag.application.answer_runs import AnswerService
 from dlightrag.engine.agent.session.effects import ToolResultEntry
 from dlightrag.engine.agent.session.entries import (
@@ -418,7 +418,7 @@ async def test_agent_session_runtime_memory_and_pg_have_atomic_state_parity(pool
 
 
 async def test_host_delta_identity_conflict_rolls_back_entry_and_register(pool) -> None:
-    from dlightrag.adapters.postgres.session_repository import _EvidenceIdentityConflict
+    from dlightrag.adapters.postgres.answer.session_repository import _EvidenceIdentityConflict
 
     claimed = await _claim(pool)
     store = claimed.execution.session_repository

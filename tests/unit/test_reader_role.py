@@ -97,14 +97,14 @@ class TestReaderPoolSessionModes:
 
 class TestPgPoolBinding:
     def test_bind_same_signature_ok(self) -> None:
-        from dlightrag.adapters.postgres._pool import PGPool
+        from dlightrag.adapters.postgres.core._pool import PGPool
 
         pool = PGPool()
         pool.bind(_config())
         pool.bind(_config())  # identical signature -> no raise
 
     def test_bind_incompatible_role_raises(self) -> None:
-        from dlightrag.adapters.postgres._pool import PGPool
+        from dlightrag.adapters.postgres.core._pool import PGPool
 
         pool = PGPool()
         pool.bind(_config())
@@ -112,7 +112,7 @@ class TestPgPoolBinding:
             pool.bind(_config(service_role="reader"))
 
     def test_bind_incompatible_endpoint_raises(self) -> None:
-        from dlightrag.adapters.postgres._pool import PGPool
+        from dlightrag.adapters.postgres.core._pool import PGPool
 
         pool = PGPool()
         pool.bind(_config())
@@ -120,7 +120,7 @@ class TestPgPoolBinding:
             pool.bind(_config(postgres_host="other-host"))
 
     async def test_close_clears_binding(self) -> None:
-        from dlightrag.adapters.postgres._pool import PGPool
+        from dlightrag.adapters.postgres.core._pool import PGPool
 
         pool = PGPool()
         pool.bind(_config())
@@ -227,12 +227,9 @@ def _required_domain_scopes() -> list[
     turns carry a foreign key into ``dlightrag_answer_runs``, so a reader whose
     run schema is absent must fail there as well.
     """
-    from dlightrag.adapters.postgres import (
-        answer_runs,
-        pg_metadata_index,
-        web_conversations,
-        workspaces,
-    )
+    from dlightrag.adapters.postgres.answer import answer_runs
+    from dlightrag.adapters.postgres.corpus import pg_metadata_index, workspaces
+    from dlightrag.adapters.postgres.web import web_conversations
     from dlightrag.application.web_conversations import WebConversationSchemaError
     from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
     from dlightrag.engine.runtime import RunSchemaError
@@ -271,7 +268,7 @@ def _required_domain_scopes() -> list[
 
 def _prerequisite_versions(scope: str) -> set[tuple[str, str]]:
     """Versions another scope must already carry before this one validates."""
-    from dlightrag.adapters.postgres import answer_runs
+    from dlightrag.adapters.postgres.answer import answer_runs
 
     if scope != "web_conversations":
         return set()
@@ -282,7 +279,7 @@ def _prerequisite_versions(scope: str) -> set[tuple[str, str]]:
 
 
 def _prerequisite_tables(scope: str) -> tuple[Any, ...]:
-    from dlightrag.adapters.postgres import answer_runs
+    from dlightrag.adapters.postgres.answer import answer_runs
 
     return answer_runs.ANSWER_RUN_SCHEMA_TABLES if scope == "web_conversations" else ()
 
@@ -290,7 +287,7 @@ def _prerequisite_tables(scope: str) -> tuple[Any, ...]:
 @contextmanager
 def _domain_pool_routed_to(conn: _SchemaConn) -> Iterator[None]:
     """Route every domain-store operation at ``conn`` without a real pool."""
-    from dlightrag.adapters.postgres._pool import pg_pool
+    from dlightrag.adapters.postgres.core._pool import pg_pool
 
     async def _run(operation: Any) -> Any:
         return await operation(conn)
@@ -386,7 +383,7 @@ class TestReadOnlyAdapter:
     def test_overrides_initdb_without_ddl_bootstrap(self) -> None:
         from lightrag.kg.postgres_impl import PostgreSQLDB
 
-        from dlightrag.adapters.postgres.lightrag_readonly import ReadOnlyPostgreSQLDB
+        from dlightrag.adapters.postgres.corpus.lightrag_readonly import ReadOnlyPostgreSQLDB
 
         # The reader adapter must override initdb so reconnect never re-enters
         # LightRAG's extension/table/graph bootstrap.
@@ -398,7 +395,7 @@ class TestReadOnlyAdapter:
     async def test_attach_entry_point_initializes_binds_schema_and_status(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import dlightrag.adapters.postgres.lightrag_readonly as readonly
+        import dlightrag.adapters.postgres.corpus.lightrag_readonly as readonly
 
         class FakeConn:
             def __init__(self) -> None:
@@ -540,7 +537,7 @@ class TestReadOnlyAdapter:
     async def test_attach_entry_point_reuses_db_and_preserves_signature_checks(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import dlightrag.adapters.postgres.lightrag_readonly as readonly
+        import dlightrag.adapters.postgres.corpus.lightrag_readonly as readonly
 
         class FakeConn:
             async def fetchval(self, sql: str, *args: Any) -> Any:
@@ -622,7 +619,7 @@ class TestReadOnlyAdapter:
     async def test_attach_entry_point_releases_db_when_schema_verification_fails(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import dlightrag.adapters.postgres.lightrag_readonly as readonly
+        import dlightrag.adapters.postgres.corpus.lightrag_readonly as readonly
 
         class FakeConn:
             async def fetchval(self, sql: str, *args: Any) -> Any:
@@ -690,7 +687,7 @@ class TestReadOnlyAdapter:
     async def test_read_only_db_rollback_finishes_before_propagating_cancellation(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import dlightrag.adapters.postgres.lightrag_readonly as readonly
+        import dlightrag.adapters.postgres.corpus.lightrag_readonly as readonly
 
         close_started = asyncio.Event()
         allow_close = asyncio.Event()
@@ -733,7 +730,7 @@ class TestReadOnlyAdapter:
     async def test_attach_entry_point_signature_mismatch_keeps_refcount(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import dlightrag.adapters.postgres.lightrag_readonly as readonly
+        import dlightrag.adapters.postgres.corpus.lightrag_readonly as readonly
 
         class FakeConn:
             async def fetchval(self, sql: str, *args: Any) -> Any:

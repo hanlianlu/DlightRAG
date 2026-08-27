@@ -6,14 +6,14 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.adapters.postgres._migrations import (
+from dlightrag.adapters.postgres.core._migrations import (
     Migration,
     TableRequirement,
     apply_migrations,
     verify_migrations,
 )
-from dlightrag.adapters.postgres._operations import PostgresOperationRunner
-from dlightrag.adapters.postgres.identifiers import pg_identifier
+from dlightrag.adapters.postgres.core._operations import PostgresOperationRunner
+from dlightrag.adapters.postgres.core.identifiers import pg_identifier
 from dlightrag.engine.rag.retrieval import MetadataFilter
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,

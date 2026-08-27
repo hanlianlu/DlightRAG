@@ -62,7 +62,7 @@ _TEST_WORKSPACES = (_TEST_WORKSPACE_ALPHA, _TEST_WORKSPACE_BETA)
 async def _open_workspace_registry() -> tuple[Any, Any]:
     import asyncpg
 
-    from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
+    from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
 
     pool = await asyncpg.create_pool(
         host=str(_PG_CONN_KWARGS["host"]),
@@ -85,7 +85,7 @@ async def _delete_test_workspaces(registry: Any, *extra_workspaces: str) -> None
 
 
 def _corpus_admin(config: Any) -> Any:
-    from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
+    from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.application.corpus_admin import CorpusAdmin
     from dlightrag.application.settings import corpus_admin_settings
 
@@ -111,7 +111,7 @@ class TestPGWorkspaceDiscovery:
 
     async def test_discovers_workspaces_from_workspace_meta(self) -> None:
         """list_workspaces() returns workspaces found in dlightrag_workspace_meta."""
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
         from dlightrag.application.config import DlightragConfig, set_config
         from dlightrag.engine.ai.settings import EmbeddingSettings
 
@@ -156,7 +156,7 @@ class TestPGWorkspaceDiscovery:
 
     async def test_empty_table_returns_default_workspace(self) -> None:
         """Empty workspace metadata falls back to config.deployment.workspace."""
-        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.core._pool import pg_pool
         from dlightrag.application.config import DlightragConfig, set_config
         from dlightrag.engine.ai.settings import EmbeddingSettings
 

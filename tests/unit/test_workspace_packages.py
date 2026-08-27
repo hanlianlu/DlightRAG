@@ -237,7 +237,7 @@ def test_workspace_wheel_verifier_allows_offline_rebuild_composition(tmp_path: P
         tmp_path,
         root_additional_sources={
             "engine/rag/corpus/rebuild_bm25.py": (
-                "from dlightrag.adapters.postgres._pool import pg_pool\n"
+                "from dlightrag.adapters.postgres.core._pool import pg_pool\n"
             )
         },
     )

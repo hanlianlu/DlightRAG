@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
+from dlightrag.adapters.postgres.corpus.ingest_jobs import PGIngestJobStore
 from dlightrag.engine.rag.corpus.ingest_jobs import (
     JOB_LEASE_SECONDS,
     JOB_ORPHAN_AFTER_SECONDS,

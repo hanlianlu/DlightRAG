@@ -1077,6 +1077,8 @@ def _smoke_root_interfaces() -> None:
         "dlightrag.rag",
         "dlightrag." + "answer",
         "dlightrag.maintenance",
+        "dlightrag.observability",
+        "dlightrag.adapters.mcp_tools",
         "dlightrag.services",
         "dlightrag.app_state",
         "dlightrag.contracts",

@@ -432,7 +432,7 @@ async def test_store_unavailability_returns_retryable_503(
     ),
 )
 async def test_postgres_adapter_translates_shutdown_errors(shutdown_error: Exception) -> None:
-    from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+    from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
     from dlightrag.application.web_conversations import WebConversationUnavailableError
 
     class Acquire:

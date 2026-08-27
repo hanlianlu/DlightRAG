@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from dlightrag.adapters.postgres.lightrag_contract import PGLightRAGContractGuard
+from dlightrag.adapters.postgres.corpus.lightrag_contract import PGLightRAGContractGuard
 
 
 def _fake_lightrag(*, graph_storage: object | None = None) -> SimpleNamespace:

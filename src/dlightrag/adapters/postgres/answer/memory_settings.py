@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from dlightrag.adapters.postgres._migrations import TableRequirement
-from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
+from dlightrag.adapters.postgres.core._migrations import TableRequirement
+from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.engine.answer.memory import MemoryCapability
 
 _CREATE_MEMORY_SETTINGS = """

@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.adapters.postgres.answer_runs import (
+from dlightrag.adapters.postgres.answer.answer_runs import (
     PGAnswerRunStore,
 )
 from dlightrag.application.answer_runs.routing import RoutingAcceptance

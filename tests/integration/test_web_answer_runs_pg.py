@@ -22,10 +22,10 @@ from typing import Any
 import asyncpg
 import pytest
 
-from dlightrag.adapters.postgres.answer_runs import (
+from dlightrag.adapters.postgres.answer.answer_runs import (
     PGAnswerRunStore,
 )
-from dlightrag.adapters.postgres.web_conversations import (
+from dlightrag.adapters.postgres.web.web_conversations import (
     PGWebConversationStore,
 )
 from dlightrag.application.web_conversations import ConversationSubmissionConflict

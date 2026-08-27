@@ -4,7 +4,7 @@
 from collections.abc import Mapping
 from typing import Any
 
-from dlightrag.adapters.postgres._corpus_schema import (
+from dlightrag.adapters.postgres.corpus._corpus_schema import (
     BM25_LANGUAGE_COLUMN,
     LIGHTRAG_CHUNKS_TABLE,
 )

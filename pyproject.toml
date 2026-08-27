@@ -151,39 +151,39 @@ id = "ai-module-independence"
 name = "AI remains provider-neutral and independent of product modules"
 type = "forbidden"
 source_modules = ["dlightrag.engine.ai"]
-forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.observability", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag.sdk", "dlightrag.web", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.adapters.observability", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag.sdk", "dlightrag.web", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "agent-module-independence"
 name = "Agent may depend on AI but not product or RAG modules"
 type = "forbidden"
 source_modules = ["dlightrag.engine.agent"]
-forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.observability", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag.sdk", "dlightrag.web", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.adapters.observability", "dlightrag.engine.rag", "dlightrag.engine.runtime", "dlightrag.sdk", "dlightrag.web", "dlightrag_memory", "lightrag", "asyncpg", "fastapi", "mcp"]
 
 [[tool.importlinter.contracts]]
 id = "rag-module-independence"
 name = "RAG runtime remains storage-neutral and independent of product modules"
 type = "forbidden"
 source_modules = ["dlightrag.engine.rag"]
-forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.observability", "dlightrag.engine.runtime", "dlightrag.sdk", "dlightrag.web", "dlightrag_memory", "asyncpg", "fastapi", "mcp"]
+forbidden_modules = ["dlightrag.application", "dlightrag.adapters", "dlightrag.engine.agent", "dlightrag.engine.answer", "dlightrag.api", "dlightrag.mcp", "dlightrag.adapters.observability", "dlightrag.engine.runtime", "dlightrag.sdk", "dlightrag.web", "dlightrag_memory", "asyncpg", "fastapi", "mcp"]
 ignore_imports = [
-    "dlightrag.engine.rag.corpus.rebuild_bm25 -> dlightrag.adapters.postgres._pool",
-    "dlightrag.engine.rag.corpus.rebuild_bm25 -> dlightrag.adapters.postgres.corpus",
-    "dlightrag.engine.rag.corpus.rebuild_bm25 -> dlightrag.adapters.postgres.corpus_bm25",
+    "dlightrag.engine.rag.corpus.rebuild_bm25 -> dlightrag.adapters.postgres.core._pool",
+    "dlightrag.engine.rag.corpus.rebuild_bm25 -> dlightrag.adapters.postgres.corpus.corpus",
+    "dlightrag.engine.rag.corpus.rebuild_bm25 -> dlightrag.adapters.postgres.corpus.corpus_bm25",
     "dlightrag.engine.rag.corpus.rebuild_bm25 -> dlightrag.application.config",
-    "dlightrag.engine.rag.corpus.rebuild_vdb -> dlightrag.adapters.postgres.corpus",
-    "dlightrag.engine.rag.corpus.rebuild_vdb -> dlightrag.adapters.postgres.corpus_chunks",
-    "dlightrag.engine.rag.corpus.rebuild_vdb -> dlightrag.adapters.postgres.lightrag_contract",
+    "dlightrag.engine.rag.corpus.rebuild_vdb -> dlightrag.adapters.postgres.corpus.corpus",
+    "dlightrag.engine.rag.corpus.rebuild_vdb -> dlightrag.adapters.postgres.corpus.corpus_chunks",
+    "dlightrag.engine.rag.corpus.rebuild_vdb -> dlightrag.adapters.postgres.corpus.lightrag_contract",
     "dlightrag.engine.rag.corpus.rebuild_vdb -> dlightrag.application.config",
     "dlightrag.engine.rag.corpus.rebuild_vdb -> dlightrag.application.settings",
-    "dlightrag.engine.rag.corpus.rebuild_vdb -> dlightrag.observability",
+    "dlightrag.engine.rag.corpus.rebuild_vdb -> dlightrag.adapters.observability",
 ]
 
 [[tool.importlinter.contracts]]
 id = "no-transport-internals"
 name = "Internal packages must not import transport layers"
 type = "forbidden"
-source_modules = ["dlightrag.engine.answer", "dlightrag.application", "dlightrag.observability"]
+source_modules = ["dlightrag.engine.answer", "dlightrag.application", "dlightrag.adapters.observability"]
 forbidden_modules = ["dlightrag.web", "dlightrag.api", "dlightrag.mcp"]
 
 [[tool.importlinter.contracts]]
@@ -245,6 +245,24 @@ source_modules = ["dlightrag.adapters.postgres"]
 forbidden_modules = ["dlightrag.api", "dlightrag.mcp"]
 
 [[tool.importlinter.contracts]]
+id = "postgres-answer-not-web"
+name = "PostgreSQL answer adapters must not import postgres.web"
+type = "forbidden"
+source_modules = ["dlightrag.adapters.postgres.answer"]
+forbidden_modules = ["dlightrag.adapters.postgres.web"]
+
+[[tool.importlinter.contracts]]
+id = "postgres-core-no-capability-adapters"
+name = "PostgreSQL core imports no capability adapters"
+type = "forbidden"
+source_modules = ["dlightrag.adapters.postgres.core"]
+forbidden_modules = [
+    "dlightrag.adapters.postgres.corpus",
+    "dlightrag.adapters.postgres.answer",
+    "dlightrag.adapters.postgres.web",
+]
+
+[[tool.importlinter.contracts]]
 id = "runtime-independence"
 name = "Durable runtime remains storage and product-policy neutral"
 type = "forbidden"
@@ -284,7 +302,7 @@ id = "no-circular-foundation"
 name = "Configuration does not import projections, Answer, PostgreSQL, or Observability"
 type = "forbidden"
 source_modules = ["dlightrag.application.config"]
-forbidden_modules = ["dlightrag.application.settings", "dlightrag.application.answer_runs", "dlightrag.adapters.postgres", "dlightrag.observability", "dlightrag.engine.answer"]
+forbidden_modules = ["dlightrag.application.settings", "dlightrag.application.answer_runs", "dlightrag.adapters.postgres", "dlightrag.adapters.observability", "dlightrag.engine.answer"]
 
 [[tool.importlinter.contracts]]
 id = "transport-postgres-adapter-direction"
@@ -298,7 +316,7 @@ allow_indirect_imports = true
 id = "foundation-layers"
 name = "Application settings project Application configuration"
 type = "layers"
-layers = ["dlightrag.application.settings", "dlightrag.application.config", "dlightrag.observability"]
+layers = ["dlightrag.application.settings", "dlightrag.application.config", "dlightrag.adapters.observability"]
 
 [[tool.importlinter.contracts]]
 id = "resources-below-tools"

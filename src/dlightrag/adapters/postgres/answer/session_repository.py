@@ -18,8 +18,8 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
-from dlightrag.adapters.postgres._operations import ConnectionPool
-from dlightrag.adapters.postgres._pool import pg_pool
+from dlightrag.adapters.postgres.core._operations import ConnectionPool
+from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.engine.agent.session.effects import JsonValue
 from dlightrag.engine.agent.session.entries import (
     SessionEntry,
@@ -651,7 +651,7 @@ class PGAgentSessionRepository:
                 await self._write_evidence(conn, write)
 
         if update.committed_outputs:
-            from dlightrag.adapters.postgres.workspace import _upsert_spill
+            from dlightrag.adapters.postgres.answer.workspace import _upsert_spill
             from dlightrag.engine.runtime.workspace import CommittedSpillRecord
 
             for output in update.committed_outputs:

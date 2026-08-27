@@ -12,28 +12,28 @@ from typing import Any
 import asyncpg
 from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 
-from dlightrag.adapters.postgres._errors import is_postgres_unavailable
-from dlightrag.adapters.postgres._locks import advisory_lock_key
-from dlightrag.adapters.postgres._pool import pg_pool
-from dlightrag.adapters.postgres._version import (
+from dlightrag.adapters.postgres.core._errors import is_postgres_unavailable
+from dlightrag.adapters.postgres.core._locks import advisory_lock_key
+from dlightrag.adapters.postgres.core._pool import pg_pool
+from dlightrag.adapters.postgres.core._version import (
     ensure_pgvector_halfvec,
     ensure_postgres_extensions,
     ensure_postgres_major,
 )
-from dlightrag.adapters.postgres.corpus_bm25 import (
+from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
     create_postgres_bm25,
     required_postgres_extensions,
 )
-from dlightrag.adapters.postgres.corpus_chunks import PGCorpusChunkStore
-from dlightrag.adapters.postgres.corpus_vectors import PGFilteredVectorSearch
-from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
-from dlightrag.adapters.postgres.lightrag_contract import PGLightRAGContractGuard
-from dlightrag.adapters.postgres.lightrag_readonly import (
+from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
+from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+from dlightrag.adapters.postgres.corpus.ingest_jobs import PGIngestJobStore
+from dlightrag.adapters.postgres.corpus.lightrag_contract import PGLightRAGContractGuard
+from dlightrag.adapters.postgres.corpus.lightrag_readonly import (
     attach_lightrag_storages_read_only,
     verify_reader_corpus_session,
 )
-from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
-from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
+from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
 from dlightrag.application.config import DlightragConfig
 from dlightrag.engine.rag.retrieval.bm25 import profile_languages, profiles_from_config
 from dlightrag.engine.rag.workspace.ports import (

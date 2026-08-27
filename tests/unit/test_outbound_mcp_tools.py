@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.adapters.mcp_tools import (
+from dlightrag.adapters.mcp.outbound import (
     McpToolArguments,
     OutboundMcpServer,
     outbound_mcp_tools,
@@ -47,7 +47,7 @@ async def test_declared_tool_calls_sdk_session_and_closes_before_return(monkeypa
         finally:
             closed = True
 
-    monkeypatch.setattr("dlightrag.adapters.mcp_tools._session", fake_session)
+    monkeypatch.setattr("dlightrag.adapters.mcp.outbound._session", fake_session)
     (tool,) = outbound_mcp_tools(
         (
             OutboundMcpServer(
@@ -84,7 +84,7 @@ async def test_declared_tool_preserves_remote_error_semantics(monkeypatch) -> No
     async def fake_session(_server):
         yield session
 
-    monkeypatch.setattr("dlightrag.adapters.mcp_tools._session", fake_session)
+    monkeypatch.setattr("dlightrag.adapters.mcp.outbound._session", fake_session)
     (tool,) = outbound_mcp_tools(
         (
             OutboundMcpServer(

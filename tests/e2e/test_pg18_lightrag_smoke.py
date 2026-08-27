@@ -60,11 +60,11 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.adapters.postgres._pool import pg_pool
-    from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
+    from dlightrag.adapters.observability import LangfuseTelemetry
+    from dlightrag.adapters.postgres.core._pool import pg_pool
+    from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.application.settings import rag_settings
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
-    from dlightrag.observability import LangfuseTelemetry
 
     conn_kwargs = pg_conn_kwargs_from_env()
     workspace = make_workspace_name()
@@ -178,14 +178,14 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     reads the corpus through read-only sessions while its DlightRAG domain pool
     stays writable for durable Answer run state.
     """
-    from dlightrag.adapters.postgres._pool import pg_pool
-    from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-    from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
+    from dlightrag.adapters.observability import LangfuseTelemetry
+    from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
+    from dlightrag.adapters.postgres.core._pool import pg_pool
+    from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
     from dlightrag.application.config import reset_config, set_config
     from dlightrag.application.settings import rag_settings
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.engine.runtime import answer_run_request_fingerprint
-    from dlightrag.observability import LangfuseTelemetry
 
     conn_kwargs = pg_conn_kwargs_from_env()
     workspace = make_workspace_name("reader")

@@ -6,7 +6,7 @@ from typing import Any
 import asyncpg
 import pytest
 
-from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
+from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
 from dlightrag.engine.runtime import RunCoordinator
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]

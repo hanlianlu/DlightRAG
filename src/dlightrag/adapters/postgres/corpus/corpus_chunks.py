@@ -6,11 +6,11 @@ import datetime
 import json
 from typing import Any, ClassVar
 
-from dlightrag.adapters.postgres._corpus_schema import (
+from dlightrag.adapters.postgres.core.identifiers import pg_qualified_identifier
+from dlightrag.adapters.postgres.corpus._corpus_schema import (
     LIGHTRAG_CHUNKS_TABLE,
 )
-from dlightrag.adapters.postgres.corpus_languages import update_chunk_bm25_languages
-from dlightrag.adapters.postgres.identifiers import pg_qualified_identifier
+from dlightrag.adapters.postgres.corpus.corpus_languages import update_chunk_bm25_languages
 
 
 class PGCorpusChunkStore:

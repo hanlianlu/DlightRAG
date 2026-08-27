@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 def _operational_pool_factory() -> Any:
     """Lazily resolve DlightRAG's process-wide operational pool."""
-    from dlightrag.adapters.postgres._pool import pg_pool
+    from dlightrag.adapters.postgres.core._pool import pg_pool
 
     return pg_pool.get
 
@@ -49,8 +49,8 @@ def _actionable_error(exc: Exception) -> str:
 
 def _initialize_process(config: DlightragConfig) -> None:
     """Initialize tracing and bind the process-wide operational pool."""
-    from dlightrag.adapters.postgres._pool import pg_pool
-    from dlightrag.observability import init_tracing
+    from dlightrag.adapters.observability import init_tracing
+    from dlightrag.adapters.postgres.core._pool import pg_pool
 
     init_tracing(config.observability)
     pg_pool.bind(config)
@@ -58,8 +58,8 @@ def _initialize_process(config: DlightragConfig) -> None:
 
 async def _close_process() -> None:
     """Close process-wide resources while always flushing tracing."""
-    from dlightrag.adapters.postgres._pool import pg_pool
-    from dlightrag.observability import shutdown_tracing
+    from dlightrag.adapters.observability import shutdown_tracing
+    from dlightrag.adapters.postgres.core._pool import pg_pool
 
     try:
         await pg_pool.close()
@@ -72,12 +72,13 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag_memory.postgres import PostgresMemoryStore
     from PIL import Image
 
-    from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
-    from dlightrag.adapters.postgres.corpus import PGReadinessProbe, build_pg_corpus_backend
-    from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
-    from dlightrag.adapters.postgres.memory_settings import PGMemorySettingsStore
-    from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
-    from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+    from dlightrag.adapters.observability import LangfuseTelemetry
+    from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
+    from dlightrag.adapters.postgres.answer.memory_settings import PGMemorySettingsStore
+    from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe, build_pg_corpus_backend
+    from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+    from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.answer_runs.capabilities import (
         AnswerCapabilityCoordinator,
@@ -119,7 +120,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
     from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
     from dlightrag.engine.runtime import RunCoordinator
-    from dlightrag.observability import LangfuseTelemetry
 
     # Large document scans are DlightRAG product policy, not an AI package import side effect.
     Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS
@@ -230,7 +230,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         settings_store=memory_settings,
         superseded_retention_days=config.answer.runtime.answer_run_retention_days,
     )
-    from dlightrag.adapters.mcp_tools import OutboundMcpServer, outbound_mcp_tools
+    from dlightrag.adapters.mcp.outbound import OutboundMcpServer, outbound_mcp_tools
 
     outbound_tools = outbound_mcp_tools(
         tuple(

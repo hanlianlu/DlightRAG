@@ -5,9 +5,9 @@ import argparse
 import asyncio
 import logging
 
-from dlightrag.adapters.postgres._pool import pg_pool
-from dlightrag.adapters.postgres.corpus import build_pg_corpus_backend
-from dlightrag.adapters.postgres.corpus_bm25 import (
+from dlightrag.adapters.postgres.core._pool import pg_pool
+from dlightrag.adapters.postgres.corpus.corpus import build_pg_corpus_backend
+from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
     rebuild_postgres_bm25,
 )
 from dlightrag.application.config import DlightragConfig, get_config, load_config, set_config

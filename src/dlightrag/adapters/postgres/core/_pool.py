@@ -6,7 +6,7 @@ under concurrent ingestion/retrieval workloads.
 
 Usage::
 
-    from dlightrag.adapters.postgres._pool import pg_pool
+    from dlightrag.adapters.postgres.core._pool import pg_pool
 
     pool = await pg_pool.get()           # lazily creates the pool
     async with pool.acquire() as conn:
@@ -22,7 +22,7 @@ from typing import Any, TypeVar
 
 import asyncpg
 
-from dlightrag.adapters.postgres._errors import is_postgres_unavailable
+from dlightrag.adapters.postgres.core._errors import is_postgres_unavailable
 
 logger = logging.getLogger(__name__)
 

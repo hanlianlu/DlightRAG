@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from dlightrag.adapters.postgres._operations import PostgresOperationRunner
+from dlightrag.adapters.postgres.core._operations import PostgresOperationRunner
 
 
 class PGFilePanelStore(PostgresOperationRunner):

@@ -15,7 +15,8 @@ from lightrag.namespace import NameSpace
 from lightrag.tools.rebuild_vdb import DEFAULT_BATCH_SIZE, RebuildTool
 from lightrag.utils import get_env_value
 
-from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
+from dlightrag.adapters.observability import LangfuseTelemetry
+from dlightrag.adapters.postgres.corpus.corpus import apply_lightrag_environment
 from dlightrag.application.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.application.settings import rag_settings
 from dlightrag.engine.ai.embedding import create_embedding_model
@@ -30,7 +31,6 @@ from dlightrag.engine.rag.corpus.rebuild_bm25 import run_rebuild_bm25
 from dlightrag.engine.rag.lightrag.models import build_lightrag_embedding
 from dlightrag.engine.rag.lightrag.stores import LightRAGStores
 from dlightrag.engine.rag.workspace.settings import RagSettings
-from dlightrag.observability import LangfuseTelemetry
 
 logger = logging.getLogger(__name__)
 
@@ -344,8 +344,10 @@ async def run_rebuild(
 
             if restore_sidecar_alignment:
                 lightrag_surface = _lightrag_surface(tool)
-                from dlightrag.adapters.postgres.corpus_chunks import PGCorpusChunkStore
-                from dlightrag.adapters.postgres.lightrag_contract import PGLightRAGContractGuard
+                from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
+                from dlightrag.adapters.postgres.corpus.lightrag_contract import (
+                    PGLightRAGContractGuard,
+                )
 
                 PGLightRAGContractGuard(lightrag_surface).verify_surface()
                 stores = LightRAGStores(

@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.adapters.postgres import corpus as corpus_module
-from dlightrag.adapters.postgres.corpus import (
+from dlightrag.adapters.postgres.corpus import corpus as corpus_module
+from dlightrag.adapters.postgres.corpus.corpus import (
     PGCorpusCoordination,
     PGCorpusRuntimeBinder,
     build_pg_corpus_backend,
@@ -44,7 +44,7 @@ async def test_connection_budget_warning_is_owned_by_coordination(
         acquire_timeout=test_config.storage.postgres.acquire_timeout,
     )
 
-    with caplog.at_level(logging.WARNING, logger="dlightrag.adapters.postgres.corpus"):
+    with caplog.at_level(logging.WARNING, logger="dlightrag.adapters.postgres.corpus.corpus"):
         await coordination._log_connection_budget(_Connection(max_connections="50"))
 
     assert "PostgreSQL connection budget is tight" in caplog.text

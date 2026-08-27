@@ -114,7 +114,7 @@ def test_frontend_phase_union_matches_runtime() -> None:
 
 
 def test_postgres_adapter_does_not_publish_or_supply_runtime_records() -> None:
-    adapter_path = _ROOT / "src/dlightrag/adapters/postgres/answer_runs.py"
+    adapter_path = _ROOT / "src/dlightrag/adapters/postgres/answer/answer_runs.py"
     adapter_tree = ast.parse(adapter_path.read_text(encoding="utf-8"), filename=str(adapter_path))
     public_names = {
         item.value
@@ -133,7 +133,7 @@ def test_postgres_adapter_does_not_publish_or_supply_runtime_records() -> None:
         for node in ast.walk(tree):
             if not (
                 isinstance(node, ast.ImportFrom)
-                and node.module == "dlightrag.adapters.postgres.answer_runs"
+                and node.module == "dlightrag.adapters.postgres.answer.answer_runs"
             ):
                 continue
             stale_imports.extend(

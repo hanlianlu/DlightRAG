@@ -226,7 +226,7 @@ See [durable-answer-runs.md](durable-answer-runs.md) for the contract and
 subscription, coordinator, fenced session, and caller-wait failures. It imports
 neither Answer policy nor PostgreSQL. The Answer executor classifies product
 errors into `RunExecutionError` before they cross that boundary;
-`dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore` implements the runtime
+`dlightrag.adapters.postgres.answer.answer_runs.PGAnswerRunStore` implements the runtime
 store port.
 
 `dlightrag.engine.rag` groups one workspace runtime into `workspace`, internal

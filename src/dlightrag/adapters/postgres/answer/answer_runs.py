@@ -19,21 +19,24 @@ from typing import Any
 
 import asyncpg
 
-from dlightrag.adapters.postgres._migrations import (
+from dlightrag.adapters.postgres.answer.memory_settings import (
+    MEMORY_SETTINGS_DDL,
+    MEMORY_SETTINGS_SCHEMA_TABLE,
+)
+from dlightrag.adapters.postgres.answer.session_repository import (
+    PGAgentSessionRepository,
+    PGProgressStore,
+)
+from dlightrag.adapters.postgres.answer.workspace import PGWorkspaceStore
+from dlightrag.adapters.postgres.core._migrations import (
     ForeignKeyRequirement,
     Migration,
     TableRequirement,
     apply_migrations,
     verify_migrations,
 )
-from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.adapters.postgres._pool import pg_pool
-from dlightrag.adapters.postgres.memory_settings import (
-    MEMORY_SETTINGS_DDL,
-    MEMORY_SETTINGS_SCHEMA_TABLE,
-)
-from dlightrag.adapters.postgres.session_repository import PGAgentSessionRepository, PGProgressStore
-from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
+from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
+from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.application.answer_runs.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.engine.agent.session.ids import SessionId
 from dlightrag.engine.agent.tool_content import decode_tool_content, tool_content_message_fields

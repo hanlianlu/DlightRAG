@@ -5,8 +5,8 @@ import json
 import re
 from typing import Any
 
-from dlightrag.adapters.postgres import pg_metadata_index
-from dlightrag.adapters.postgres.pg_metadata_index import _SCHEMA_MIGRATIONS, _UPSERT
+from dlightrag.adapters.postgres.corpus import pg_metadata_index
+from dlightrag.adapters.postgres.corpus.pg_metadata_index import _SCHEMA_MIGRATIONS, _UPSERT
 from dlightrag.engine.rag.retrieval import MetadataFilter
 from dlightrag.engine.rag.retrieval.metadata_fields import METADATA_FIELD_IDS
 

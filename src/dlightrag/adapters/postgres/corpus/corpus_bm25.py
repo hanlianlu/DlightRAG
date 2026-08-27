@@ -7,13 +7,13 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.adapters.postgres._corpus_schema import (
+from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
+from dlightrag.adapters.postgres.core.identifiers import pg_identifier, pg_qualified_identifier
+from dlightrag.adapters.postgres.corpus._corpus_schema import (
     BM25_LANGUAGE_COLUMN,
     LIGHTRAG_CHUNKS_TABLE,
 )
-from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.adapters.postgres.corpus_languages import update_chunk_bm25_languages
-from dlightrag.adapters.postgres.identifiers import pg_identifier, pg_qualified_identifier
+from dlightrag.adapters.postgres.corpus.corpus_languages import update_chunk_bm25_languages
 from dlightrag.engine.rag.retrieval import ContextRow
 from dlightrag.engine.rag.retrieval.bm25 import (
     BM25_PROFILE_FALLBACK,

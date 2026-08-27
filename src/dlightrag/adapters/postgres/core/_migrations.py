@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.adapters.postgres._locks import advisory_lock_key
+from dlightrag.adapters.postgres.core._locks import advisory_lock_key
 
 _CREATE_LEDGER = """CREATE TABLE IF NOT EXISTS dlightrag_schema_migrations (
     scope       TEXT NOT NULL,

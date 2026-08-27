@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
+from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
 
 
 class _Acquire:

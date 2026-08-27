@@ -21,23 +21,24 @@ from typing import Any, cast
 import asyncpg
 import pytest
 
-from dlightrag.adapters.postgres import pg_metadata_index, web_conversations, workspaces
-from dlightrag.adapters.postgres._migrations import (
-    Migration,
-    TableRequirement,
-)
-from dlightrag.adapters.postgres._migrations import (
-    apply_migrations as _apply_migrations,
-)
-from dlightrag.adapters.postgres._migrations import (
-    verify_migrations as _verify_migrations,
-)
-from dlightrag.adapters.postgres.answer_runs import (
+from dlightrag.adapters.postgres.answer.answer_runs import (
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
     ANSWER_RUN_SCHEMA_TABLES,
     PGAnswerRunStore,
 )
+from dlightrag.adapters.postgres.core._migrations import (
+    Migration,
+    TableRequirement,
+)
+from dlightrag.adapters.postgres.core._migrations import (
+    apply_migrations as _apply_migrations,
+)
+from dlightrag.adapters.postgres.core._migrations import (
+    verify_migrations as _verify_migrations,
+)
+from dlightrag.adapters.postgres.corpus import pg_metadata_index, workspaces
+from dlightrag.adapters.postgres.web import web_conversations
 from dlightrag.application.config import (
     DeploymentSettings,
     DlightragConfig,

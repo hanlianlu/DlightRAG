@@ -18,16 +18,7 @@ from uuid import uuid4
 
 import asyncpg
 
-from dlightrag.adapters.postgres._errors import is_postgres_unavailable
-from dlightrag.adapters.postgres._migrations import (
-    ForeignKeyRequirement,
-    Migration,
-    TableRequirement,
-    apply_migrations,
-    verify_migrations,
-)
-from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.adapters.postgres.answer_runs import (
+from dlightrag.adapters.postgres.answer.answer_runs import (
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
     ANSWER_RUN_SCHEMA_TABLES,
@@ -35,6 +26,15 @@ from dlightrag.adapters.postgres.answer_runs import (
     answer_run_columns,
     answer_run_record,
 )
+from dlightrag.adapters.postgres.core._errors import is_postgres_unavailable
+from dlightrag.adapters.postgres.core._migrations import (
+    ForeignKeyRequirement,
+    Migration,
+    TableRequirement,
+    apply_migrations,
+    verify_migrations,
+)
+from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.application.answer_runs.routing import RoutingAcceptance
 from dlightrag.application.web_conversations import (
     AnswerTurnCreation,
