@@ -2,39 +2,41 @@
   <title id="title">DlightRAG system context</title>
   <desc id="description">Users and client systems call DlightRAG through Web, REST, MCP, or an embedded Application. DlightRAG calls AI providers, optional external tools, and content integrations, and persists state in PostgreSQL and a shared corpus artifact filesystem.</desc>
   <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.2 L 8 5 L 0 8.8 z" class="arrow-head"/>
     </marker>
     <style>
       :root { color-scheme: light dark; }
-      .canvas { fill: #ffffff; }
-      .heading { fill: #172033; font: 700 28px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .subtitle { fill: #526076; font: 400 15px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .node-title { fill: #172033; font: 700 18px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .node-copy { fill: #35445a; font: 400 15px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .system-title { fill: #ffffff; font: 700 26px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .system-copy { fill: #eaf2ff; font: 400 16px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .edge-label { fill: #526076; font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .actor { fill: #eef4ff; stroke: #4f79bd; stroke-width: 1.5; }
-      .system { fill: #245aa5; stroke: #164580; stroke-width: 2; }
-      .system-divider { stroke: #8db6e8; stroke-width: 1; opacity: 0.8; }
-      .external { fill: #fff7e6; stroke: #b7791f; stroke-width: 1.5; }
-      .store { fill: #edf8f1; stroke: #3f8060; stroke-width: 1.5; }
-      .optional { stroke-dasharray: 7 5; }
-      .edge { fill: none; stroke: #46566d; stroke-width: 2; marker-end: url(#arrow); }
-      .arrow-head { fill: #46566d; }
+      .canvas { fill: #f3efe8; }
+      .heading { fill: #1c1915; font: 600 25px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.03em; }
+      .subtitle { fill: #6f6a63; font: 400 14px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .node-title { fill: #1c1915; font: 600 16px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.01em; }
+      .node-copy { fill: #5c574f; font: 400 13.5px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .system-title { fill: #f6f1e8; font: 600 24px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.03em; }
+      .system-copy { fill: #c9c0b3; font: 400 15px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .edge-label { fill: #8a847c; font: 500 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .actor { fill: #faf7f2; stroke: #d8d2c8; stroke-width: 1; }
+      .system { fill: #2a2722; stroke: #2a2722; stroke-width: 1; }
+      .system-divider { stroke: #5a554c; stroke-width: 1; }
+      .external { fill: #f7f3ea; stroke: #e0d5c2; stroke-width: 1; }
+      .store { fill: #eef3ee; stroke: #d3ddd4; stroke-width: 1; }
+      .optional { stroke-dasharray: 5 4; }
+      .edge { fill: none; stroke: #b7b0a6; stroke-width: 1.35; marker-end: url(#arrow); }
+      .arrow-head { fill: #b7b0a6; }
       @media (prefers-color-scheme: dark) {
-        .canvas { fill: #0d1117; }
-        .heading, .node-title { fill: #f0f4fa; }
-        .subtitle, .edge-label { fill: #aeb9ca; }
-        .node-copy { fill: #d2d9e5; }
-        .actor { fill: #17243a; stroke: #78a5e8; }
-        .system { fill: #174d91; stroke: #86b7f5; }
-        .system-divider { stroke: #6d9dd5; }
-        .external { fill: #2c2518; stroke: #d2a24b; }
-        .store { fill: #14271d; stroke: #62a77f; }
-        .edge { stroke: #aeb9ca; }
-        .arrow-head { fill: #aeb9ca; }
+        .canvas { fill: #141210; }
+        .heading, .node-title { fill: #f4efe6; }
+        .subtitle, .edge-label { fill: #9a948a; }
+        .node-copy { fill: #c4bdb3; }
+        .actor { fill: #1c1a17; stroke: #3a362f; }
+        .system { fill: #2f2b26; stroke: #2f2b26; }
+        .system-title { fill: #f4efe6; }
+        .system-copy { fill: #b7aea2; }
+        .system-divider { stroke: #5a554c; }
+        .external { fill: #231f18; stroke: #4a4234; }
+        .store { fill: #1a221c; stroke: #3a4a3e; }
+        .edge { stroke: #6e6860; }
+        .arrow-head { fill: #6e6860; }
       }
     </style>
   </defs>
@@ -43,17 +45,17 @@
   <text class="heading" x="640" y="42" text-anchor="middle">DlightRAG — System Context</text>
   <text class="subtitle" x="640" y="70" text-anchor="middle">People, calling systems, external integrations, and persistent infrastructure</text>
 
-  <rect class="actor" x="30" y="170" width="250" height="120" rx="14"/>
+  <rect class="actor" x="30" y="170" width="250" height="120" rx="12"/>
   <text class="node-title" x="155" y="211" text-anchor="middle">Browser users</text>
   <text class="node-copy" x="155" y="241" text-anchor="middle">Grounded answers, sources,</text>
   <text class="node-copy" x="155" y="264" text-anchor="middle">workspace administration</text>
 
-  <rect class="actor" x="30" y="350" width="250" height="120" rx="14"/>
+  <rect class="actor" x="30" y="350" width="250" height="120" rx="12"/>
   <text class="node-title" x="155" y="391" text-anchor="middle">Client systems</text>
   <text class="node-copy" x="155" y="421" text-anchor="middle">Apps and agents via REST/MCP</text>
   <text class="node-copy" x="155" y="444" text-anchor="middle">Embedded Python hosts</text>
 
-  <rect class="system" x="350" y="130" width="570" height="430" rx="22"/>
+  <rect class="system" x="350" y="130" width="570" height="430" rx="18"/>
   <text class="system-title" x="635" y="190" text-anchor="middle">DlightRAG</text>
   <text class="system-copy" x="635" y="223" text-anchor="middle">Multimodal RAG and durable answer system</text>
   <line class="system-divider" x1="410" y1="253" x2="860" y2="253"/>
@@ -62,24 +64,24 @@
   <text class="system-copy" x="635" y="396" text-anchor="middle">Corpus ingestion and workspace governance</text>
   <text class="system-copy" x="635" y="458" text-anchor="middle">LightRAG-backed · server or embedded</text>
 
-  <rect class="external" x="1000" y="130" width="250" height="110" rx="14"/>
+  <rect class="external" x="1000" y="130" width="250" height="110" rx="12"/>
   <text class="node-title" x="1125" y="172" text-anchor="middle">AI providers</text>
   <text class="node-copy" x="1125" y="202" text-anchor="middle">Chat · VLM · embedding · rerank</text>
 
-  <rect class="external optional" x="1000" y="280" width="250" height="110" rx="14"/>
+  <rect class="external optional" x="1000" y="280" width="250" height="110" rx="12"/>
   <text class="node-title" x="1125" y="322" text-anchor="middle">Optional tools</text>
   <text class="node-copy" x="1125" y="352" text-anchor="middle">Exa · outbound MCP servers</text>
 
-  <rect class="external optional" x="1000" y="430" width="250" height="110" rx="14"/>
+  <rect class="external optional" x="1000" y="430" width="250" height="110" rx="12"/>
   <text class="node-title" x="1125" y="469" text-anchor="middle">Content integrations</text>
   <text class="node-copy" x="1125" y="499" text-anchor="middle">Sources · MinerU · Docling</text>
   <text class="node-copy" x="1125" y="522" text-anchor="middle">parser sidecars</text>
 
-  <rect class="store" x="350" y="610" width="270" height="80" rx="14"/>
+  <rect class="store" x="350" y="610" width="270" height="80" rx="12"/>
   <text class="node-title" x="485" y="643" text-anchor="middle">PostgreSQL 18</text>
   <text class="node-copy" x="485" y="670" text-anchor="middle">Operational · corpus · Memory</text>
 
-  <rect class="store" x="650" y="610" width="270" height="80" rx="14"/>
+  <rect class="store" x="650" y="610" width="270" height="80" rx="12"/>
   <text class="node-title" x="785" y="643" text-anchor="middle">Corpus artifacts</text>
   <text class="node-copy" x="785" y="670" text-anchor="middle">Shared POSIX working directory</text>
 

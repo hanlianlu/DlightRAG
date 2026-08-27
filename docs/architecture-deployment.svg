@@ -2,39 +2,39 @@
   <title id="title">DlightRAG deployment and storage topology</title>
   <desc id="description">Writer and reader DlightRAG processes share one PostgreSQL 18 primary and the same corpus artifact directory. Both process roles execute durable answers and write operational state; only the writer mutates corpus state and owns migrations. External AI, parser, and optional tool endpoints are separate runtimes.</desc>
   <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.2 L 8 5 L 0 8.8 z" class="arrow-head"/>
     </marker>
     <style>
       :root { color-scheme: light dark; }
-      .canvas { fill: #ffffff; }
-      .heading { fill: #172033; font: 700 28px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .subtitle, .note { fill: #526076; font: 400 15px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .group-title { fill: #35445a; font: 700 16px system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: 0.04em; }
-      .node-title { fill: #172033; font: 700 18px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .node-copy { fill: #35445a; font: 400 15px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .edge-label { fill: #526076; font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .process-group { fill: #f8fafc; stroke: #8a98ac; stroke-width: 1.5; }
-      .process { fill: #eef4ff; stroke: #4f79bd; stroke-width: 1.5; }
-      .external { fill: #fff7e6; stroke: #b7791f; stroke-width: 1.5; }
-      .store { fill: #edf8f1; stroke: #3f8060; stroke-width: 1.5; }
-      .divider { stroke: #8db39b; stroke-width: 1; }
-      .external-divider { stroke: #c79b4e; stroke-width: 1; }
-      .edge { fill: none; stroke: #46566d; stroke-width: 2; marker-end: url(#arrow); }
-      .arrow-head { fill: #46566d; }
+      .canvas { fill: #f3efe8; }
+      .heading { fill: #1c1915; font: 600 25px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.03em; }
+      .subtitle, .note { fill: #6f6a63; font: 400 14px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .group-title { fill: #8a847c; font: 600 11px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: 0.14em; }
+      .node-title { fill: #1c1915; font: 600 16px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.01em; }
+      .node-copy { fill: #5c574f; font: 400 13.5px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .edge-label { fill: #8a847c; font: 500 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .process-group { fill: #ece7de; stroke: #ddd6ca; stroke-width: 1; }
+      .process { fill: #f3f6f8; stroke: #d3dbe2; stroke-width: 1; }
+      .external { fill: #f7f3ea; stroke: #e0d5c2; stroke-width: 1; }
+      .store { fill: #eef3ee; stroke: #d3ddd4; stroke-width: 1; }
+      .divider { stroke: #c9d4cb; stroke-width: 1; }
+      .external-divider { stroke: #e0d5c2; stroke-width: 1; }
+      .edge { fill: none; stroke: #b7b0a6; stroke-width: 1.35; marker-end: url(#arrow); }
+      .arrow-head { fill: #b7b0a6; }
       @media (prefers-color-scheme: dark) {
-        .canvas { fill: #0d1117; }
-        .heading, .node-title { fill: #f0f4fa; }
-        .subtitle, .note, .edge-label { fill: #aeb9ca; }
-        .group-title, .node-copy { fill: #d2d9e5; }
-        .process-group { fill: #111821; stroke: #59677a; }
-        .process { fill: #17243a; stroke: #78a5e8; }
-        .external { fill: #2c2518; stroke: #d2a24b; }
-        .store { fill: #14271d; stroke: #62a77f; }
-        .divider { stroke: #456c55; }
-        .external-divider { stroke: #8f6f31; }
-        .edge { stroke: #aeb9ca; }
-        .arrow-head { fill: #aeb9ca; }
+        .canvas { fill: #141210; }
+        .heading, .node-title { fill: #f4efe6; }
+        .subtitle, .note, .edge-label { fill: #9a948a; }
+        .group-title, .node-copy { fill: #c4bdb3; }
+        .process-group { fill: #1a1815; stroke: #2e2b26; }
+        .process { fill: #1c2228; stroke: #3a4650; }
+        .external { fill: #231f18; stroke: #4a4234; }
+        .store { fill: #1a221c; stroke: #3a4a3e; }
+        .divider { stroke: #3a4a3e; }
+        .external-divider { stroke: #4a4234; }
+        .edge { stroke: #6e6860; }
+        .arrow-head { fill: #6e6860; }
       }
     </style>
   </defs>
@@ -43,22 +43,22 @@
   <text class="heading" x="640" y="42" text-anchor="middle">DlightRAG — Deployment and Storage</text>
   <text class="subtitle" x="640" y="70" text-anchor="middle">Process roles, shared state, and external runtimes</text>
 
-  <rect class="process-group" x="60" y="120" width="730" height="300" rx="20"/>
+  <rect class="process-group" x="60" y="120" width="730" height="300" rx="16"/>
   <text class="group-title" x="90" y="154">DLIGHTRAG SERVICE PROCESSES</text>
 
-  <rect class="process" x="100" y="185" width="300" height="175" rx="14"/>
+  <rect class="process" x="100" y="185" width="300" height="175" rx="12"/>
   <text class="node-title" x="250" y="225" text-anchor="middle">Writer role</text>
   <text class="node-copy" x="250" y="260" text-anchor="middle">Answers and operational writes</text>
   <text class="node-copy" x="250" y="286" text-anchor="middle">Corpus mutation and ingestion</text>
   <text class="node-copy" x="250" y="312" text-anchor="middle">Schema migration owner</text>
 
-  <rect class="process" x="450" y="185" width="300" height="175" rx="14"/>
+  <rect class="process" x="450" y="185" width="300" height="175" rx="12"/>
   <text class="node-title" x="600" y="225" text-anchor="middle">Reader role</text>
   <text class="node-copy" x="600" y="260" text-anchor="middle">Answers and operational writes</text>
   <text class="node-copy" x="600" y="286" text-anchor="middle">Corpus reads only</text>
   <text class="node-copy" x="600" y="312" text-anchor="middle">No corpus administration</text>
 
-  <rect class="external" x="860" y="120" width="350" height="300" rx="20"/>
+  <rect class="external" x="860" y="120" width="350" height="300" rx="16"/>
   <text class="group-title" x="890" y="154">EXTERNAL RUNTIMES</text>
   <text class="node-title" x="1035" y="214" text-anchor="middle">AI provider endpoints</text>
   <text class="node-copy" x="1035" y="243" text-anchor="middle">Chat · VLM · embedding · rerank</text>
@@ -67,7 +67,7 @@
   <text class="node-copy" x="1035" y="341" text-anchor="middle">MinerU · Docling</text>
   <text class="node-copy" x="1035" y="376" text-anchor="middle">Optional Exa and outbound MCP</text>
 
-  <rect class="store" x="60" y="500" width="730" height="160" rx="18"/>
+  <rect class="store" x="60" y="500" width="730" height="160" rx="16"/>
   <text class="node-title" x="425" y="536" text-anchor="middle">PostgreSQL 18 primary</text>
   <line class="divider" x1="303" y1="553" x2="303" y2="640"/>
   <line class="divider" x1="547" y1="553" x2="547" y2="640"/>
@@ -81,7 +81,7 @@
   <text class="node-copy" x="668" y="608" text-anchor="middle">owner records</text>
   <text class="node-copy" x="668" y="631" text-anchor="middle">package-owned migration</text>
 
-  <rect class="store" x="860" y="500" width="350" height="160" rx="18"/>
+  <rect class="store" x="860" y="500" width="350" height="160" rx="16"/>
   <text class="node-title" x="1035" y="550" text-anchor="middle">Shared corpus artifacts</text>
   <text class="node-copy" x="1035" y="585" text-anchor="middle">Same absolute working_dir</text>
   <text class="node-copy" x="1035" y="611" text-anchor="middle">mounted by every process</text>
