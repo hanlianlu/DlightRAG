@@ -75,7 +75,7 @@ class RetrievalPlan:
 class RetrievalFilterEvidence(BaseModel):
     """Evidence attached to one LLM-proposed metadata filter."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     field: str
     value: str = ""
@@ -86,7 +86,7 @@ class RetrievalFilterEvidence(BaseModel):
 class RetrievalFilters(BaseModel):
     """Structured filter proposal emitted by the planner LLM."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     filename: str | None = None
     file_extension: str | None = None
@@ -100,7 +100,7 @@ class RetrievalFilters(BaseModel):
 class RetrievalPlannerResponse(BaseModel):
     """Pydantic schema for planner structured-output calls."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     standalone_query: str
     bm25_query: str | None = None

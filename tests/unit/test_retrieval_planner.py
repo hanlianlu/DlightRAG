@@ -13,6 +13,7 @@ from dlightrag.engine.ai.structured import StructuredOutput
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalPlan, RetrievalPlanner
 from dlightrag.engine.rag.retrieval.planner import (
+    RETRIEVAL_PLAN_STRUCTURED_OUTPUT,
     _build_custom_keys_hint,
     _build_schema_section,
 )
@@ -25,6 +26,21 @@ _SMALL_PROFILE = ModelProfile(
     context_window_tokens=1_295,
     max_input_tokens=1_100,
 )
+
+
+def test_planner_structured_output_ignores_extra_keys() -> None:
+    parsed = RETRIEVAL_PLAN_STRUCTURED_OUTPUT.parse(
+        json.dumps(
+            {
+                "standalone_query": "Ada report",
+                "explanation": "leftover model chatter",
+                "filters": {"author": "Ada", "note": "ignore me"},
+            }
+        )
+    )
+    data = parsed.model_dump()
+    assert data["standalone_query"] == "Ada report"
+    assert data["filters"]["author"] == "Ada"
 
 
 async def test_planner_fits_a_complete_request_without_root_imports() -> None:
