@@ -16,7 +16,7 @@ _ROUTER_SYSTEM = (
     "Pick one allowed mode between **fast** and **research**. Default research. "
     "fast: one-shot KnowledgeBase (corpus) retrieve and generate — only if you interpret the total context with current query is "
     "asking the corpus or continues corpus-grounded work. "
-    "Otherwise research. Unsure → research."
+    "Otherwise research. Unsure → research. Reply with only the mode name, no explanation. "
 )
 
 
