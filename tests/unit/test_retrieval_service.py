@@ -3,7 +3,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
@@ -21,6 +21,8 @@ from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.telemetry import NoopTelemetry
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag.engine.rag.retrieval.runtime import RetrievalPlannerRuntime
+from dlightrag.engine.rag.workspace.pool import WorkspacePool
+from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 
 _PROJECTION = RetrieveProjection(
     downloadable_workspaces=frozenset(),
@@ -500,6 +502,127 @@ async def test_retrieve_starts_workspace_warmup_before_planning() -> None:
 
     await task
     pool.warm.assert_awaited_once_with(("reports",))
+
+
+async def test_one_thousand_identical_service_warms_share_one_outer_task() -> None:
+    warm_started = asyncio.Event()
+    release_warm = asyncio.Event()
+
+    async def warm(_workspaces) -> None:
+        warm_started.set()
+        await release_warm.wait()
+
+    pool = AsyncMock()
+    pool.warm.side_effect = warm
+    service = RetrievalService(
+        pool=pool,
+        planners=_Planners(),
+        schema_lookup=AsyncMock(return_value={}),
+        image_preparer=AsyncMock(return_value=[]),
+        projector=Mock(),
+        settings=RetrievalSettings(
+            default_top_k=8,
+            default_chunk_top_k=5,
+            timeout_seconds=30,
+            query_image_limit=4,
+        ),
+        telemetry=NoopTelemetry(),
+    )
+
+    for index in range(1000):
+        workspaces = ("legal", "reports", "reports") if index % 2 else ("reports", "legal")
+        service.warm(workspaces)
+    await warm_started.wait()
+
+    pool.warm.assert_awaited_once_with(("legal", "reports"))
+    assert len(service._warmups) == 1
+
+    release_warm.set()
+    while service._warmups:
+        await asyncio.sleep(0)
+
+
+async def test_coalesced_warm_failure_is_observed_once() -> None:
+    release_warm = asyncio.Event()
+
+    async def warm(_workspaces) -> None:
+        await release_warm.wait()
+        raise RuntimeError("warm failed")
+
+    pool = AsyncMock()
+    pool.warm.side_effect = warm
+    service = RetrievalService(
+        pool=pool,
+        planners=_Planners(),
+        schema_lookup=AsyncMock(return_value={}),
+        image_preparer=AsyncMock(return_value=[]),
+        projector=Mock(),
+        settings=RetrievalSettings(
+            default_top_k=8,
+            default_chunk_top_k=5,
+            timeout_seconds=30,
+            query_image_limit=4,
+        ),
+        telemetry=NoopTelemetry(),
+    )
+
+    with patch("dlightrag.application.retrieval.service.logger.debug") as log_debug:
+        for _ in range(1000):
+            service.warm(("reports",))
+        release_warm.set()
+        while service._warmups:
+            await asyncio.sleep(0)
+
+    pool.warm.assert_awaited_once_with(("reports",))
+    log_debug.assert_called_once()
+    assert log_debug.call_args.args[0] == "Workspace warm-up failed"
+
+
+async def test_service_close_cancels_only_its_waiter_not_the_pool_flight() -> None:
+    runtime = cast(WorkspaceRag, AsyncMock())
+    build_started = asyncio.Event()
+    release_build = asyncio.Event()
+    build_cancelled = False
+
+    async def build(*_args: Any) -> WorkspaceRag:
+        nonlocal build_cancelled
+        build_started.set()
+        try:
+            await release_build.wait()
+        except asyncio.CancelledError:
+            build_cancelled = True
+            raise
+        return runtime
+
+    pool = WorkspacePool(build=build)
+    service = RetrievalService(
+        pool=pool,
+        planners=_Planners(),
+        schema_lookup=AsyncMock(return_value={}),
+        image_preparer=AsyncMock(return_value=[]),
+        projector=Mock(),
+        settings=RetrievalSettings(
+            default_top_k=8,
+            default_chunk_top_k=5,
+            timeout_seconds=30,
+            query_image_limit=4,
+        ),
+        telemetry=NoopTelemetry(),
+    )
+
+    service.warm(("reports",))
+    await build_started.wait()
+    other_consumer = asyncio.create_task(pool.acquire("reports"))
+    await asyncio.sleep(0)
+    await service.aclose()
+
+    assert not build_cancelled
+    assert not other_consumer.done()
+
+    release_build.set()
+    assert await other_consumer is runtime
+    await pool.aclose()
+    cast(AsyncMock, runtime.aclose).assert_awaited_once()
 
 
 async def test_close_cancels_warmups_and_closed_service_starts_no_new_warmup() -> None:

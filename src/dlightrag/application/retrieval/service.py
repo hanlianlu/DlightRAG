@@ -129,7 +129,7 @@ class RetrievalService:
         self._visual_query_flights: dict[
             _VisualQueryCacheKey, asyncio.Task[PreparedVisualQuery | None]
         ] = {}
-        self._warmups: set[asyncio.Task[None]] = set()
+        self._warmups: dict[tuple[str, ...], asyncio.Task[None]] = {}
         self._close_task: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -298,12 +298,20 @@ class RetrievalService:
             ) from exc
 
     def warm(self, workspaces: Sequence[str]) -> None:
-        """Start pool-owned initialization for an imminent request."""
+        """Start or join one owned warm waiter for an identical workspace set."""
         if self._closed:
             return
-        warmup = asyncio.create_task(self._pool.warm(workspaces))
-        self._warmups.add(warmup)
-        warmup.add_done_callback(self._observe_warmup)
+        key = tuple(sorted(set(workspaces)))
+        if key in self._warmups:
+            return
+        warmup = asyncio.create_task(
+            self._pool.warm(key),
+            name=f"retrieval-warm:{','.join(key)}",
+        )
+        self._warmups[key] = warmup
+        warmup.add_done_callback(
+            lambda completed, warm_key=key: self._observe_warmup(warm_key, completed)
+        )
 
     async def _retrieve(self, request: RetrieveRequest) -> RetrieveResponse:
         images = tuple(dict(image) for image in request.query_images)
@@ -463,15 +471,17 @@ class RetrievalService:
         await await_shared_cleanup(close_task)
 
     async def _close_resources(self) -> None:
-        for warmup in self._warmups:
+        warmups = list(self._warmups.values())
+        for warmup in warmups:
             warmup.cancel()
         for refresh in self._schema_refreshes.values():
             refresh.cancel()
         visual_flights = list(self._visual_query_flights.values())
         for flight in visual_flights:
             flight.cancel()
-        if self._warmups:
-            await asyncio.gather(*self._warmups, return_exceptions=True)
+        if warmups:
+            await asyncio.gather(*warmups, return_exceptions=True)
+        self._warmups.clear()
         if self._schema_refreshes:
             await asyncio.gather(*self._schema_refreshes.values(), return_exceptions=True)
             self._schema_refreshes.clear()
@@ -481,8 +491,13 @@ class RetrievalService:
         self._visual_query_cache.clear()
         await self._planners.aclose()
 
-    def _observe_warmup(self, task: asyncio.Task[None]) -> None:
-        self._warmups.discard(task)
+    def _observe_warmup(
+        self,
+        key: tuple[str, ...],
+        task: asyncio.Task[None],
+    ) -> None:
+        if self._warmups.get(key) is task:
+            self._warmups.pop(key, None)
         if task.cancelled():
             return
         error = task.exception()

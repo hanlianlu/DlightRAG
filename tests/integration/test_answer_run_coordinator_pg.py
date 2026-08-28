@@ -1205,6 +1205,7 @@ def _answer_runtime(
     executor = AnswerExecutor(
         store=store,
         pool=components.pool,
+        warm=components.retrieval.warm,
         retrieve=components.retrieval.retrieve_result,
         planner_history_input_measure=components.retrieval.planner_history_input_measure,
         models=components.models,

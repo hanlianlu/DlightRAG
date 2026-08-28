@@ -46,7 +46,7 @@ class WorkspacePool:
         self._runtimes: dict[str, WorkspaceRag] = {}
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._backoff: dict[str, tuple[float, float]] = {}
-        self._warmups: set[asyncio.Task[None]] = set()
+        self._workspace_flights: dict[str, asyncio.Task[WorkspaceRag]] = {}
         self._close_task: asyncio.Task[asyncio.CancelledError | None] | None = None
         self._closed = False
 
@@ -70,89 +70,62 @@ class WorkspacePool:
             return workspace in self._runtimes and not self._closed
 
     async def acquire(self, workspace_id: str) -> WorkspaceRag:
-        """Return one runtime, constructing it once under a per-workspace lock."""
+        """Return one runtime, joining pool-owned construction when it is cold."""
         workspace = require_canonical_workspace_id(workspace_id)
-        if self._closed:
-            raise WorkspaceUnavailableError("Workspace pool is closed")
-
-        async with self._locks[workspace]:
-            if self._closed:
-                raise WorkspaceUnavailableError("Workspace pool is closed")
-            loaded = self._runtimes.get(workspace)
-            if loaded is not None:
-                return loaded
-            self._raise_during_backoff(workspace)
-            try:
-                runtime = await self._build(workspace)
-            except CorpusSchemaError:
-                raise
-            except Exception as exc:
-                failed = self._backoff.get(workspace)
-                interval = (
-                    self._initial_backoff
-                    if failed is None
-                    else min(failed[1] * 2, self._max_backoff)
-                )
-                self._backoff[workspace] = (self._clock(), interval)
-                logger.warning(
-                    "Workspace '%s' construction failed; retry in %.0fs",
-                    workspace,
-                    interval,
-                    exc_info=True,
-                )
-                detail = str(exc)
-                if exc.__cause__ is None:
-                    detail = f"{type(exc).__name__}: {detail}"
-                raise WorkspaceUnavailableError(
-                    f"Workspace '{workspace}' is unavailable: {detail}"
-                ) from exc
-            if self._closed:
-                await runtime.aclose()
-                raise WorkspaceUnavailableError("Workspace pool is closed")
-            self._runtimes[workspace] = runtime
-            self._backoff.pop(workspace, None)
+        runtime, flight = await self._runtime_or_flight(workspace)
+        if runtime is not None:
             return runtime
+        if flight is None:
+            raise WorkspaceUnavailableError("Workspace runtime could not be initialized")
+        return await self._await_workspace_flight(flight)
 
     async def warm(self, workspace_ids: Sequence[str]) -> None:
-        """Warm canonical workspaces in a dedicated caller-owned task."""
-        current = asyncio.current_task()
-        if current is not None:
-            self._warmups.add(current)
+        """Warm each distinct canonical workspace through its pool-owned flight."""
+        workspaces = tuple(
+            dict.fromkeys(require_canonical_workspace_id(item) for item in workspace_ids)
+        )
+        flights: list[asyncio.Task[WorkspaceRag]] = []
+        for workspace in workspaces:
+            _, flight = await self._runtime_or_flight(workspace)
+            if flight is not None:
+                flights.append(flight)
 
-        async def _warm(workspace_id: str) -> None:
-            async with self._warm_semaphore:
-                await self.acquire(workspace_id)
-
-        tasks = [
-            asyncio.create_task(_warm(workspace)) for workspace in dict.fromkeys(workspace_ids)
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        except BaseException:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-        finally:
-            if current is not None:
-                self._warmups.discard(current)
+        # Every flight is already running. Awaiting them in place avoids creating
+        # caller-owned per-workspace tasks, while shield isolates this waiter.
+        for flight in flights:
+            await self._await_workspace_flight(flight)
 
     async def evict(self, workspace_id: str) -> None:
-        """Close and remove one loaded runtime; a cold workspace is a no-op."""
+        """Close and remove one runtime, waiting for overlapping construction."""
         workspace = require_canonical_workspace_id(workspace_id)
-        async with self._locks[workspace]:
-            runtime = self._runtimes.get(workspace)
-            if runtime is None:
-                self._backoff.pop(workspace, None)
-                return
+        lock = self._locks[workspace]
+        while True:
+            async with lock:
+                runtime = self._runtimes.get(workspace)
+                if runtime is not None:
+                    try:
+                        await runtime.aclose()
+                    finally:
+                        if self._runtimes.get(workspace) is runtime:
+                            self._runtimes.pop(workspace, None)
+                        self._backoff.pop(workspace, None)
+                    return
+                flight = self._workspace_flights.get(workspace)
+                if flight is None:
+                    self._backoff.pop(workspace, None)
+                    return
+
+            # Eviction must not cancel pool-owned construction if its own caller
+            # is cancelled. Once the flight settles, loop under the lifecycle lock
+            # and close only the runtime that was actually published.
             try:
-                await runtime.aclose()
+                await asyncio.gather(asyncio.shield(flight), return_exceptions=True)
             finally:
-                self._runtimes.pop(workspace, None)
-                self._backoff.pop(workspace, None)
+                if flight.done():
+                    self._finish_workspace_flight(workspace, flight)
 
     async def aclose(self) -> None:
-        """Cancel warmups, close all runtimes, and reject future acquires."""
+        """Cancel workspace flights, close runtimes, and reject future acquires."""
         close_task = self._close_task
         if close_task is None:
             self._closed = True
@@ -163,13 +136,124 @@ class WorkspacePool:
         if resource_cancellation is not None:
             raise resource_cancellation
 
+    async def _runtime_or_flight(
+        self,
+        workspace: str,
+    ) -> tuple[WorkspaceRag | None, asyncio.Task[WorkspaceRag] | None]:
+        if self._closed:
+            raise WorkspaceUnavailableError("Workspace pool is closed")
+
+        async with self._locks[workspace]:
+            if self._closed:
+                raise WorkspaceUnavailableError("Workspace pool is closed")
+            loaded = self._runtimes.get(workspace)
+            if loaded is not None:
+                return loaded, None
+            self._raise_during_backoff(workspace)
+            flight = self._workspace_flights.get(workspace)
+            if flight is None:
+                flight = asyncio.create_task(
+                    self._run_workspace_flight(workspace),
+                    name=f"workspace-warm:{workspace}",
+                )
+                self._workspace_flights[workspace] = flight
+                flight.add_done_callback(
+                    lambda completed, flight_workspace=workspace: self._finish_workspace_flight(
+                        flight_workspace, completed
+                    )
+                )
+            return None, flight
+
+    async def _run_workspace_flight(self, workspace: str) -> WorkspaceRag:
+        async with self._warm_semaphore:
+            async with self._locks[workspace]:
+                if self._closed:
+                    raise WorkspaceUnavailableError("Workspace pool is closed")
+                loaded = self._runtimes.get(workspace)
+                if loaded is not None:
+                    return loaded
+                self._raise_during_backoff(workspace)
+                try:
+                    runtime = await self._build(workspace)
+                except CorpusSchemaError:
+                    raise
+                except Exception as exc:
+                    failed = self._backoff.get(workspace)
+                    interval = (
+                        self._initial_backoff
+                        if failed is None
+                        else min(failed[1] * 2, self._max_backoff)
+                    )
+                    self._backoff[workspace] = (self._clock(), interval)
+                    logger.warning(
+                        "Workspace '%s' construction failed; retry in %.0fs",
+                        workspace,
+                        interval,
+                        exc_info=True,
+                    )
+                    detail = str(exc)
+                    if exc.__cause__ is None:
+                        detail = f"{type(exc).__name__}: {detail}"
+                    raise WorkspaceUnavailableError(
+                        f"Workspace '{workspace}' is unavailable: {detail}"
+                    ) from exc
+                if self._closed:
+                    await self._close_unpublished_runtime(workspace, runtime)
+                    raise WorkspaceUnavailableError("Workspace pool is closed")
+                self._runtimes[workspace] = runtime
+                self._backoff.pop(workspace, None)
+                return runtime
+
+    async def _close_unpublished_runtime(
+        self,
+        workspace: str,
+        runtime: WorkspaceRag,
+    ) -> None:
+        close_task = asyncio.create_task(runtime.aclose())
+        try:
+            await await_shared_cleanup(close_task)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "Failed to close unpublished workspace '%s'",
+                workspace,
+                exc_info=True,
+            )
+
+    async def _await_workspace_flight(
+        self,
+        flight: asyncio.Task[WorkspaceRag],
+    ) -> WorkspaceRag:
+        try:
+            return await asyncio.shield(flight)
+        except asyncio.CancelledError as exc:
+            current = asyncio.current_task()
+            caller_was_cancelled = current is not None and current.cancelling() > 0
+            if self._closed and flight.cancelled() and not caller_was_cancelled:
+                raise WorkspaceUnavailableError("Workspace pool is closed") from exc
+            raise
+
+    def _finish_workspace_flight(
+        self,
+        workspace: str,
+        task: asyncio.Task[WorkspaceRag],
+    ) -> None:
+        if self._workspace_flights.get(workspace) is task:
+            self._workspace_flights.pop(workspace, None)
+        if not task.cancelled():
+            # Pool ownership includes consuming every flight exception. Build
+            # failures are logged at their translation site, not again here.
+            task.exception()
+
     async def _close_resources(self) -> asyncio.CancelledError | None:
         cancellation: asyncio.CancelledError | None = None
-        warmups = list(self._warmups)
-        for task in warmups:
-            task.cancel()
-        if warmups:
-            await asyncio.gather(*warmups, return_exceptions=True)
+        flights = list(self._workspace_flights.values())
+        for flight in flights:
+            flight.cancel()
+        if flights:
+            await asyncio.gather(*flights, return_exceptions=True)
+        self._workspace_flights.clear()
 
         for workspace, lock in list(self._locks.items()):
             async with lock:
@@ -187,7 +271,8 @@ class WorkspacePool:
                         exc_info=True,
                     )
                 finally:
-                    self._runtimes.pop(workspace, None)
+                    if self._runtimes.get(workspace) is runtime:
+                        self._runtimes.pop(workspace, None)
         self._backoff.clear()
         self._locks.clear()
         return cancellation

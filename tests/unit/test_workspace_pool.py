@@ -96,6 +96,47 @@ async def test_retryable_failure_backoff_grows_and_caps_at_five_minutes() -> Non
         now += expected_interval + 1
 
 
+async def test_stale_flight_callback_cannot_remove_a_retry_flight() -> None:
+    now = 0.0
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+    runtime = cast(WorkspaceRag, AsyncMock())
+    calls = 0
+
+    async def build(*_args: Any) -> WorkspaceRag:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            await release_first.wait()
+            raise ConnectionError("down")
+        second_started.set()
+        await release_second.wait()
+        return runtime
+
+    pool = _pool(build, clock=lambda: now)
+    first_waiter = asyncio.create_task(pool.acquire("research"))
+    await first_started.wait()
+    first_flight = pool._workspace_flights["research"]
+    release_first.set()
+    with pytest.raises(WorkspaceUnavailableError, match="ConnectionError"):
+        await first_waiter
+
+    now = 16.0
+    second_waiter = asyncio.create_task(pool.acquire("research"))
+    await second_started.wait()
+    second_flight = pool._workspace_flights["research"]
+    assert second_flight is not first_flight
+
+    pool._finish_workspace_flight("research", first_flight)
+    assert pool._workspace_flights["research"] is second_flight
+
+    release_second.set()
+    assert await second_waiter is runtime
+
+
 async def test_evict_closes_before_recreating_runtime() -> None:
     runtimes = [cast(WorkspaceRag, AsyncMock()), cast(WorkspaceRag, AsyncMock())]
 
@@ -125,6 +166,105 @@ async def test_close_is_idempotent_and_rejects_future_acquire() -> None:
     cast(AsyncMock, runtime.aclose).assert_awaited_once()
     with pytest.raises(WorkspaceUnavailableError, match="closed"):
         await pool.acquire("research")
+
+
+async def test_one_thousand_warm_callers_share_one_workspace_flight() -> None:
+    runtime = cast(WorkspaceRag, AsyncMock())
+    build_started = asyncio.Event()
+    release_build = asyncio.Event()
+    calls = 0
+
+    async def build(*_args: Any) -> WorkspaceRag:
+        nonlocal calls
+        calls += 1
+        build_started.set()
+        await release_build.wait()
+        return runtime
+
+    pool = _pool(build)
+    warmups = [asyncio.create_task(pool.warm(["research", "research"])) for _ in range(1000)]
+    await asyncio.wait_for(build_started.wait(), timeout=1)
+
+    assert calls == 1
+    assert len(pool._workspace_flights) == 1
+
+    release_build.set()
+    await asyncio.gather(*warmups)
+    assert await pool.acquire("research") is runtime
+    assert calls == 1
+    assert not pool._workspace_flights
+
+
+async def test_overlapping_warm_callers_create_distinct_workspace_flights_only() -> None:
+    active = 0
+    peak = 0
+    calls: dict[str, int] = {}
+    first_wave_started = asyncio.Event()
+    release = asyncio.Event()
+    workspaces = tuple(f"workspace_{index}" for index in range(12))
+
+    async def build(workspace: str) -> WorkspaceRag:
+        nonlocal active, peak
+        calls[workspace] = calls.get(workspace, 0) + 1
+        active += 1
+        peak = max(peak, active)
+        if active == 8:
+            first_wave_started.set()
+        try:
+            await release.wait()
+        finally:
+            active -= 1
+        return cast(WorkspaceRag, AsyncMock())
+
+    pool = WorkspacePool(build=build, warm_concurrency=8)
+    warmups = [
+        asyncio.create_task(pool.warm(workspaces if index % 2 else tuple(reversed(workspaces))))
+        for index in range(1000)
+    ]
+    await asyncio.wait_for(first_wave_started.wait(), timeout=1)
+
+    assert peak == 8
+    assert len(calls) == 8
+    assert len(pool._workspace_flights) == len(workspaces)
+
+    release.set()
+    await asyncio.gather(*warmups)
+    assert calls == dict.fromkeys(workspaces, 1)
+
+
+async def test_cancelling_warm_waiters_does_not_cancel_the_shared_flight() -> None:
+    runtime = cast(WorkspaceRag, AsyncMock())
+    build_started = asyncio.Event()
+    release_build = asyncio.Event()
+    build_cancelled = False
+    calls = 0
+
+    async def build(*_args: Any) -> WorkspaceRag:
+        nonlocal build_cancelled, calls
+        calls += 1
+        build_started.set()
+        try:
+            await release_build.wait()
+        except asyncio.CancelledError:
+            build_cancelled = True
+            raise
+        return runtime
+
+    pool = _pool(build)
+    waiters = [asyncio.create_task(pool.warm(["research"])) for _ in range(1000)]
+    await asyncio.wait_for(build_started.wait(), timeout=1)
+
+    for waiter in waiters[:-1]:
+        waiter.cancel()
+    cancelled = await asyncio.gather(*waiters[:-1], return_exceptions=True)
+    assert all(isinstance(result, asyncio.CancelledError) for result in cancelled)
+    assert not build_cancelled
+    assert not waiters[-1].done()
+
+    release_build.set()
+    await waiters[-1]
+    assert calls == 1
+    assert await pool.acquire("research") is runtime
 
 
 async def test_warm_limits_concurrency_to_eight() -> None:
@@ -160,7 +300,7 @@ async def test_warm_limits_concurrency_to_eight() -> None:
     assert len(started) == 10
 
 
-async def test_warm_cancels_siblings_when_one_workspace_fails() -> None:
+async def test_warm_failure_does_not_cancel_an_independent_workspace_flight() -> None:
     sibling_started = asyncio.Event()
     sibling_cancelled = asyncio.Event()
 
@@ -179,6 +319,8 @@ async def test_warm_cancels_siblings_when_one_workspace_fails() -> None:
     with pytest.raises(WorkspaceUnavailableError, match="ConnectionError"):
         await pool.warm(["failed", "sibling"])
 
+    assert not sibling_cancelled.is_set()
+    await pool.aclose()
     assert sibling_cancelled.is_set()
 
 
@@ -205,29 +347,73 @@ async def test_close_cancels_and_joins_active_warmup() -> None:
     await asyncio.gather(warmup, return_exceptions=True)
 
 
-async def test_close_waits_for_inflight_build_and_closes_its_runtime() -> None:
+async def test_close_cancels_inflight_build_and_rejects_its_acquire() -> None:
     runtime = cast(WorkspaceRag, AsyncMock())
     build_started = asyncio.Event()
-    release_build = asyncio.Event()
+    build_cancelled = asyncio.Event()
 
     async def build(*_args: Any) -> WorkspaceRag:
         build_started.set()
-        await release_build.wait()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            build_cancelled.set()
         return runtime
 
     pool = _pool(build)
     acquire = asyncio.create_task(pool.acquire("research"))
     await asyncio.wait_for(build_started.wait(), timeout=1)
-    close = asyncio.create_task(pool.aclose())
-    while not pool._closed:
-        await asyncio.sleep(0)
-    release_build.set()
+    await pool.aclose()
 
     with pytest.raises(WorkspaceUnavailableError, match="closed"):
         await acquire
-    await close
+    assert build_cancelled.is_set()
+    cast(AsyncMock, runtime.aclose).assert_not_awaited()
+    assert await pool.is_loaded("research") is False
 
+
+async def test_close_settles_eviction_waiting_on_a_cancelled_flight() -> None:
+    build_started = asyncio.Event()
+
+    async def build(*_args: Any) -> WorkspaceRag:
+        build_started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    pool = _pool(build)
+    acquire = asyncio.create_task(pool.acquire("research"))
+    await build_started.wait()
+    eviction = asyncio.create_task(pool.evict("research"))
+    await asyncio.sleep(0)
+
+    await pool.aclose()
+    await eviction
+    with pytest.raises(WorkspaceUnavailableError, match="closed"):
+        await acquire
+    assert not pool._workspace_flights
+
+
+async def test_close_closes_runtime_returned_by_a_cancellation_suppressing_builder() -> None:
+    runtime = cast(WorkspaceRag, AsyncMock())
+    build_started = asyncio.Event()
+
+    async def build(*_args: Any) -> WorkspaceRag:
+        build_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return runtime
+        raise AssertionError("unreachable")
+
+    pool = _pool(build)
+    acquire = asyncio.create_task(pool.acquire("research"))
+    await asyncio.wait_for(build_started.wait(), timeout=1)
+    await pool.aclose()
+
+    with pytest.raises(WorkspaceUnavailableError, match="closed"):
+        await acquire
     cast(AsyncMock, runtime.aclose).assert_awaited_once()
+    assert not pool._workspace_flights
     assert await pool.is_loaded("research") is False
 
 
@@ -325,6 +511,36 @@ async def test_acquire_waits_while_evict_closes_loaded_runtime() -> None:
     release_close.set()
     await eviction
     assert await acquisition is second
+
+
+async def test_warm_waits_for_eviction_and_replaces_the_closing_runtime() -> None:
+    first = cast(WorkspaceRag, AsyncMock())
+    second = cast(WorkspaceRag, AsyncMock())
+    close_started = asyncio.Event()
+    release_close = asyncio.Event()
+    runtimes = [first, second]
+
+    async def build(*_args: Any) -> WorkspaceRag:
+        return runtimes.pop(0)
+
+    async def close_first() -> None:
+        close_started.set()
+        await release_close.wait()
+
+    first.aclose = AsyncMock(side_effect=close_first)  # type: ignore[method-assign]
+    pool = _pool(build)
+    assert await pool.acquire("research") is first
+    eviction = asyncio.create_task(pool.evict("research"))
+    await asyncio.wait_for(close_started.wait(), timeout=1)
+    warmup = asyncio.create_task(pool.warm(["research"]))
+    await asyncio.sleep(0)
+
+    assert not warmup.done()
+
+    release_close.set()
+    await eviction
+    await warmup
+    assert await pool.acquire("research") is second
 
 
 async def test_pipeline_status_waits_for_eviction_and_does_not_use_closing_runtime() -> None:

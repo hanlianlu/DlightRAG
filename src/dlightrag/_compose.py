@@ -248,6 +248,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     answer_executor = AnswerExecutor(
         store=run_store,
         pool=pool,
+        warm=retrieval.warm,
         retrieve=retrieval.retrieve_result,
         planner_history_input_measure=retrieval.planner_history_input_measure,
         models=models,

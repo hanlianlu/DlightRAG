@@ -6,7 +6,7 @@ import io
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from PIL import Image
@@ -85,6 +85,7 @@ def _executor() -> AnswerExecutor:
     return AnswerExecutor(
         store=MagicMock(),
         pool=MagicMock(),
+        warm=Mock(),
         retrieve=AsyncMock(),
         planner_history_input_measure=AsyncMock(),
         models=MagicMock(),
@@ -121,6 +122,7 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
     executor = AnswerExecutor(
         store=MagicMock(),
         pool=MagicMock(),
+        warm=Mock(),
         retrieve=AsyncMock(),
         planner_history_input_measure=AsyncMock(),
         models=MagicMock(),
@@ -164,6 +166,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
     executor = AnswerExecutor(
         store=MagicMock(),
         pool=MagicMock(),
+        warm=Mock(),
         retrieve=AsyncMock(),
         planner_history_input_measure=AsyncMock(),
         models=MagicMock(),

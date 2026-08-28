@@ -185,6 +185,7 @@ class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, Protocol):
 
 
 type PlannerHistoryInputMeasureFactory = Callable[..., Awaitable[HistoryInputMeasure]]
+type WorkspaceWarmer = Callable[[Sequence[str]], None]
 
 
 class RawRetrieval(Protocol):
@@ -634,6 +635,7 @@ class AnswerExecutor:
         *,
         store: AnswerExecutionStore,
         pool: WorkspacePool,
+        warm: WorkspaceWarmer,
         retrieve: RawRetrieval,
         planner_history_input_measure: PlannerHistoryInputMeasureFactory,
         models: AnswerModelRuntime,
@@ -653,6 +655,7 @@ class AnswerExecutor:
     ) -> None:
         self._store = store
         self._pool = pool
+        self._warm = warm
         self._retrieve_result = retrieve
         self._planner_history_input_measure = planner_history_input_measure
         self._models = models
@@ -1562,8 +1565,7 @@ class AnswerExecutor:
         query_profile = models.query
         if not workspaces:
             raise ValueError("an Answer run requires at least one workspace")
-        warmup = asyncio.create_task(self._pool.warm(workspaces))
-        warmup.add_done_callback(_observe_workspace_warmup)
+        self._warm(workspaces)
         text_window_budget = TextWindowBudget(CONTEXT_POLICY.hard_input_limit(query_profile))
         resolved = await self._resources.resolve(
             resources,
@@ -2038,13 +2040,6 @@ def answer_trace_output(
     if capture_sensitive_data:
         output["answer"] = answer or ""
     return output
-
-
-def _observe_workspace_warmup(task: asyncio.Task[None]) -> None:
-    if task.cancelled():
-        return
-    if error := task.exception():
-        logger.debug("Workspace warm-up failed", exc_info=error)
 
 
 __all__ = [
