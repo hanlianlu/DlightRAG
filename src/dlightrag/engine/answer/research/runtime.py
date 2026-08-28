@@ -725,8 +725,7 @@ async def run_child_session(
         persist_child_intent=None,
     )
     runtime = AgentSessionRuntime(
-        transactions=child_repository,
-        load=child_repository.load,
+        repository=child_repository,
         effects=effects,
         tools=prepared.tools,
         fencing_epoch=child_epoch,

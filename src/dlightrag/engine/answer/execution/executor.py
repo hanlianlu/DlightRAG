@@ -1154,8 +1154,7 @@ class AnswerExecutor:
                     else None
                 )
                 agent_runtime = AgentSessionRuntime(
-                    transactions=repository,
-                    load=repository.load,
+                    repository=repository,
                     effects=effects,
                     tools=prepared_early.tools,
                     fencing_epoch=session.execution.fencing_epoch,

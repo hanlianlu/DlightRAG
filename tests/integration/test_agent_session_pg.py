@@ -103,8 +103,8 @@ class _CountingConnection:
         self._connection = connection
         self._calls = calls
 
-    def transaction(self):
-        return self._connection.transaction()
+    def transaction(self, **kwargs: Any):
+        return self._connection.transaction(**kwargs)
 
     async def execute(self, query: str, *args: Any) -> str:
         result = await self._connection.execute(query, *args)
@@ -295,8 +295,7 @@ class Effects:
 
 async def _drive(adapter, *, session_id: SessionId, fencing_epoch: int):
     runtime = AgentSessionRuntime(
-        transactions=adapter,
-        load=adapter.load,
+        repository=adapter,
         effects=Effects(session_id=session_id),
         tools=[_TOOL],
         fencing_epoch=fencing_epoch,
@@ -620,6 +619,116 @@ async def test_transact_query_work_is_constant_with_large_retained_session(pool)
             assert "entry_id = ANY($3::uuid[])" in query
         if method == "fetch" and "dlightrag_agent_session_registers" in query:
             assert "register_key = ANY($3::text[])" in query or "WITH expected" in query
+
+
+async def test_pg_refresh_is_bounded_gap_free_and_metadata_only_when_unchanged(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    seeded = await store.load(session_id)
+    root = seeded.entries[0]
+
+    branch_id = LaneId.new()
+    branch_head = LaneHead(branch_id, root.entry_id)
+    branch_state = LaneState(branch_id)
+    branch_commit = await store.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(branch_head), SetRegister(branch_state)],
+            expectations=[
+                RegisterExpectation(branch_head.ref, None),
+                RegisterExpectation(branch_state.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(branch_commit, TransactionCommit)
+    previous = await store.load(session_id)
+
+    second = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="second",
+        parent_entry_id=root.entry_id,
+    )
+    third = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="third",
+        parent_entry_id=second.entry_id,
+    )
+    appended = await store.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=[second, third],
+            register_writes=[SetRegister(LaneHead(LaneId.main(), third.entry_id))],
+            expectations=[
+                RegisterExpectation(
+                    LaneHead(LaneId.main(), root.entry_id).ref,
+                    seeded.tree.lane().head.sequence,
+                )
+            ],
+        ),
+    )
+    assert isinstance(appended, TransactionCommit)
+    assert appended.appended_sequences == (2, 3)
+    deleted = await store.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[
+                DeleteRegister(branch_head.ref),
+                DeleteRegister(branch_state.ref),
+            ],
+            expectations=[
+                RegisterExpectation(branch_head.ref, branch_commit.commit_sequence),
+                RegisterExpectation(branch_state.ref, branch_commit.commit_sequence),
+            ],
+        ),
+    )
+    assert isinstance(deleted, TransactionCommit)
+
+    calls: list[tuple[str, str, int]] = []
+    measured = PGAgentSessionRepository(
+        pool=cast(Any, _CountingPool(pool, calls)),
+        owner_id=_OWNER,
+        run_id=uuid.UUID(claimed.run.run_id),
+        worker_id=_WORKER,
+        lease_owner=_WORKER,
+        fencing_epoch=epoch,
+    )
+    refreshed = await measured.refresh(session_id, previous=previous)
+
+    assert [entry.sequence for entry in refreshed.entries] == [1, 2, 3]
+    assert len({entry.entry_id for entry in refreshed.entries}) == 3
+    assert refreshed.entries[0] is previous.entries[0]
+    assert not any(record.ref.key == branch_id.value for record in refreshed.registers)
+    delta_calls = [
+        call
+        for call in calls
+        if call[0] == "fetch" and "dlightrag_agent_session_entries" in call[1]
+    ]
+    assert len(delta_calls) == 1
+    assert "sequence > $3 AND sequence <= $4" in delta_calls[0][1]
+    assert delta_calls[0][2] == 2
+    assert (
+        sum(
+            1
+            for method, query, _rows in calls
+            if method == "fetch" and "dlightrag_agent_session_registers" in query
+        )
+        == 1
+    )
+
+    calls.clear()
+    unchanged = await measured.refresh(session_id, previous=refreshed)
+    assert unchanged is refreshed
+    assert [(method, rows) for method, _query, rows in calls] == [("fetchrow", 1)]
 
 
 async def test_pg_entry_delta_validation_regressions(pool) -> None:

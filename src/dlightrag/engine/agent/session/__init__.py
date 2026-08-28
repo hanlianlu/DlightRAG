@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from dlightrag.engine.agent.session.repository import (
+        AgentSessionCursor,
         AgentSessionRepository,
         AgentSessionSnapshot,
     )
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from dlightrag.engine.agent.session.tree import AgentSessionTree
 
 __all__ = [
+    "AgentSessionCursor",
     "AgentSessionRepository",
     "AgentSessionRuntime",
     "AgentSessionSnapshot",
@@ -30,13 +32,15 @@ def __getattr__(name: str) -> Any:
         from dlightrag.engine.agent.session.runtime import AgentSessionRuntime
 
         return AgentSessionRuntime
-    if name in {"AgentSessionRepository", "AgentSessionSnapshot"}:
+    if name in {"AgentSessionCursor", "AgentSessionRepository", "AgentSessionSnapshot"}:
         from dlightrag.engine.agent.session.repository import (
+            AgentSessionCursor,
             AgentSessionRepository,
             AgentSessionSnapshot,
         )
 
         return {
+            "AgentSessionCursor": AgentSessionCursor,
             "AgentSessionRepository": AgentSessionRepository,
             "AgentSessionSnapshot": AgentSessionSnapshot,
         }[name]

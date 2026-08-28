@@ -21,6 +21,7 @@ from dlightrag.engine.agent.session.registers import (
     SessionFault,
     SetRegister,
 )
+from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.agent.session.transactions import (
     HostDeltaSettlement,
     RegisterConflict,
@@ -147,6 +148,100 @@ async def test_exact_lane_cas_ignores_unrelated_branch_commit() -> None:
         entries=[_user(session_id, "main")],
     )
     assert isinstance(main_commit, TransactionCommit)
+
+
+@pytest.mark.asyncio
+async def test_refresh_is_identity_stable_and_merges_only_gap_free_entry_suffix() -> None:
+    store = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    await _seed(store, session_id)
+    initial = await store.load(session_id)
+
+    assert await store.refresh(session_id, previous=initial) is initial
+
+    branch_id = LaneId.new()
+    await _fork_branch(
+        store,
+        session_id=session_id,
+        source_lane_id=LaneId.main(),
+        lane_id=branch_id,
+    )
+    first_head = initial.tree.lane().head
+    first_commit = await _append_entries(
+        store,
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        expected_head=first_head,
+        entries=[_user(session_id, "first delta")],
+    )
+    assert isinstance(first_commit, TransactionCommit)
+    one_delta = await store.refresh(session_id, previous=initial)
+    assert [entry.sequence for entry in one_delta.entries] == [1, 2]
+    assert one_delta.entries[0] is initial.entries[0]
+
+    second_head = one_delta.tree.lane().head
+    multiple_commit = await _append_entries(
+        store,
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        expected_head=second_head,
+        entries=[_user(session_id, "second delta"), _user(session_id, "third delta")],
+    )
+    assert isinstance(multiple_commit, TransactionCommit)
+    branch = (await store.load(session_id)).tree.lane(branch_id)
+    deleted = await store.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[DeleteRegister(branch.head.ref), DeleteRegister(branch.state.ref)],
+            expectations=[
+                RegisterExpectation(branch.head.ref, branch.head.sequence),
+                RegisterExpectation(branch.state.ref, branch.state.sequence),
+            ],
+        ),
+    )
+    assert isinstance(deleted, TransactionCommit)
+
+    refreshed = await store.refresh(session_id, previous=one_delta)
+    full = await store.load(session_id)
+    assert [entry.sequence for entry in refreshed.entries] == [1, 2, 3, 4]
+    assert [
+        entry.content for entry in refreshed.entries if isinstance(entry, UserMessageEntry)
+    ] == [
+        "root",
+        "first delta",
+        "second delta",
+        "third delta",
+    ]
+    assert refreshed.entries[:2] == one_delta.entries
+    assert all(
+        refreshed.entries[index] is one_delta.entries[index]
+        for index in range(len(one_delta.entries))
+    )
+    assert refreshed.registers == full.registers
+    assert not any(record.ref.key == branch_id.value for record in refreshed.registers)
+
+
+async def test_refresh_rejects_malformed_or_regressed_cursors() -> None:
+    store = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    await _seed(store, session_id)
+    snapshot = await store.load(session_id)
+
+    with pytest.raises(ValueError, match="gap-free"):
+        AgentSessionSnapshot(
+            session_id=session_id,
+            commit_sequence=1,
+            last_entry_sequence=1,
+            entries=(replace(snapshot.entries[0], sequence=2),),
+            registers=snapshot.registers,
+        )
+
+    empty = MemoryAgentSessionRepository[None]()
+    with pytest.raises(ValueError, match="regressed"):
+        await empty.refresh(session_id, previous=snapshot)
+    with pytest.raises(ValueError, match="another Session"):
+        await store.refresh(SessionId.new(), previous=snapshot)
 
 
 @pytest.mark.asyncio

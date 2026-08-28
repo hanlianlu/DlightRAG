@@ -96,13 +96,15 @@ from dlightrag.engine.agent.session.registers import (
     SetRegister,
     ToolArguments,
 )
-from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
+from dlightrag.engine.agent.session.repository import (
+    AgentSessionRepository,
+    AgentSessionSnapshot,
+)
 from dlightrag.engine.agent.session.transactions import (
     HostDeltaSettlement,
     RegisterConflict,
     RegisterExpectation,
     SessionTransaction,
-    SessionTransactionPort,
     TransactionCommit,
     TransactionLeaseLost,
 )
@@ -321,8 +323,7 @@ class AgentSessionRuntime[HostDeltaT]:
     def __init__(
         self,
         *,
-        transactions: SessionTransactionPort[HostDeltaT],
-        load: Callable[[SessionId], Awaitable[AgentSessionSnapshot]],
+        repository: AgentSessionRepository[HostDeltaT],
         effects: AgentRuntimeEffects[HostDeltaT],
         tools: Sequence[AgentTool],
         fencing_epoch: int,
@@ -334,8 +335,7 @@ class AgentSessionRuntime[HostDeltaT]:
             raise ValueError("Agent Session Runtime fencing epoch must be positive")
         if provider_attempt_limit < 1:
             raise ValueError("provider attempt limit must be positive")
-        self._transactions = transactions
-        self._load = load
+        self._repository = repository
         self._effects = effects
         self._tools = {tool.name: tool for tool in tools}
         if len(self._tools) != len(tools):
@@ -344,6 +344,8 @@ class AgentSessionRuntime[HostDeltaT]:
         self._provider_attempt_limit = provider_attempt_limit
         self._event_sink = event_sink
         self._controls = controls
+        self._snapshots: dict[SessionId, AgentSessionSnapshot] = {}
+        self._snapshot_locks: dict[SessionId, asyncio.Lock] = {}
 
     async def accept(
         self,
@@ -367,7 +369,7 @@ class AgentSessionRuntime[HostDeltaT]:
                 "plan_digest": plan.digest,
             }
         )
-        snapshot = await self._load(session_id)
+        snapshot = await self._refresh_snapshot(session_id)
         if _register(snapshot, RegisterRef("session_fault", "session")) is not None:
             raise AgentSessionRuntimeError("a faulted Session cannot accept new work")
         reservation = _register(
@@ -485,7 +487,7 @@ class AgentSessionRuntime[HostDeltaT]:
         session_id: SessionId,
         operation_id: OperationId,
     ) -> OperationView:
-        snapshot = await self._load(session_id)
+        snapshot = await self._refresh_snapshot(session_id)
         meta_record = _require_register(snapshot, RegisterRef("operation_meta", operation_id.value))
         state_record = _require_register(
             snapshot, RegisterRef("operation_state", operation_id.value)
@@ -661,7 +663,7 @@ class AgentSessionRuntime[HostDeltaT]:
         content: Any,
     ) -> None:
         """Queue bounded unaccepted input; it receives a fresh Plan when dequeued."""
-        snapshot = await self._load(session_id)
+        snapshot = await self._refresh_snapshot(session_id)
         if _register(snapshot, RegisterRef("session_fault", "session")) is not None:
             raise AgentSessionRuntimeError("a faulted Session cannot accept follow-up input")
         lane = snapshot.tree.lane(lane_id)
@@ -1568,21 +1570,60 @@ class AgentSessionRuntime[HostDeltaT]:
             data={"entry_id": entry.entry_id.value},
         )
 
+    def _snapshot_lock(self, session_id: SessionId) -> asyncio.Lock:
+        lock = self._snapshot_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._snapshot_locks[session_id] = lock
+        return lock
+
+    async def _refresh_snapshot(self, session_id: SessionId) -> AgentSessionSnapshot:
+        """Refresh and publish one base snapshot without allowing cache regression."""
+        async with self._snapshot_lock(session_id):
+            previous = self._snapshots.get(session_id)
+            try:
+                snapshot = (
+                    await self._repository.load(session_id)
+                    if previous is None
+                    else await self._repository.refresh(session_id, previous=previous)
+                )
+            except Exception:
+                self._snapshots.pop(session_id, None)
+                raise
+            if snapshot.session_id != session_id:
+                self._snapshots.pop(session_id, None)
+                raise ValueError("Agent Session repository returned another Session")
+            self._snapshots[session_id] = snapshot
+            return snapshot
+
     async def _transact(
         self,
         session_id: SessionId,
         transaction: SessionTransaction[HostDeltaT],
     ) -> TransactionCommit:
-        outcome = await self._transactions.transact(
-            session_id=session_id,
-            fencing_epoch=self._fencing_epoch,
-            transaction=transaction,
-        )
-        if isinstance(outcome, RegisterConflict):
-            raise OperationConflictError(f"register {outcome.ref.kind}:{outcome.ref.key} changed")
-        if isinstance(outcome, TransactionLeaseLost):
-            raise SessionLeaseLostError(session_id.value)
-        return outcome
+        # The same per-Session lock orders repository outcomes and cache publication.
+        async with self._snapshot_lock(session_id):
+            outcome = await self._repository.transact(
+                session_id=session_id,
+                fencing_epoch=self._fencing_epoch,
+                transaction=transaction,
+            )
+            if isinstance(outcome, RegisterConflict):
+                self._snapshots.pop(session_id, None)
+                raise OperationConflictError(
+                    f"register {outcome.ref.kind}:{outcome.ref.key} changed"
+                )
+            if isinstance(outcome, TransactionLeaseLost):
+                self._snapshots.pop(session_id, None)
+                raise SessionLeaseLostError(session_id.value)
+            previous = self._snapshots.get(session_id)
+            if previous is not None:
+                projected = _project_commit(previous, transaction, outcome)
+                if projected is None:
+                    self._snapshots.pop(session_id, None)
+                else:
+                    self._snapshots[session_id] = projected
+            return outcome
 
     async def _emit_commit(
         self,
@@ -1638,6 +1679,64 @@ def _duplicates(values: Iterable[str]) -> list[str]:
             repeated.add(value)
         seen.add(value)
     return sorted(repeated)
+
+
+def _project_commit(
+    snapshot: AgentSessionSnapshot,
+    transaction: SessionTransaction[Any],
+    commit: TransactionCommit,
+) -> AgentSessionSnapshot | None:
+    """Project only a contiguous authoritative commit; otherwise force a full reload."""
+    if commit.commit_sequence != snapshot.commit_sequence + 1:
+        return None
+    expected_sequences = tuple(
+        range(
+            snapshot.last_entry_sequence + 1,
+            snapshot.last_entry_sequence + 1 + len(transaction.entries),
+        )
+    )
+    if commit.appended_sequences != expected_sequences:
+        return None
+    expected_register_sequences = tuple(
+        (write.ref, commit.commit_sequence) for write in transaction.register_writes
+    )
+    if commit.register_sequences != expected_register_sequences:
+        return None
+    stamped_entries = tuple(
+        replace(entry, sequence=sequence)
+        for entry, sequence in zip(
+            transaction.entries,
+            commit.appended_sequences,
+            strict=True,
+        )
+    )
+    registers = {record.ref: record for record in snapshot.registers}
+    for write in transaction.register_writes:
+        if isinstance(write, SetRegister):
+            registers[write.ref] = RegisterRecord(
+                value=write.value,
+                sequence=commit.commit_sequence,
+            )
+        elif isinstance(write, DeleteRegister):
+            registers.pop(write.ref, None)
+    try:
+        # Tuple concatenation preserves the identity of every decoded historical Entry.
+        return AgentSessionSnapshot(
+            session_id=snapshot.session_id,
+            commit_sequence=commit.commit_sequence,
+            last_entry_sequence=snapshot.last_entry_sequence + len(stamped_entries),
+            entries=snapshot.entries + stamped_entries,
+            registers=tuple(
+                record
+                for _, record in sorted(
+                    registers.items(),
+                    key=lambda item: (item[0].kind, item[0].key),
+                )
+            ),
+            selected_lane_id=snapshot.selected_lane_id,
+        )
+    except TypeError, ValueError:
+        return None
 
 
 def _register(snapshot: AgentSessionSnapshot, ref: RegisterRef) -> RegisterRecord | None:

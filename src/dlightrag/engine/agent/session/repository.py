@@ -19,14 +19,42 @@ from dlightrag.engine.agent.session.tree import AgentSessionTree, LaneSnapshot
 
 
 @dataclass(frozen=True, slots=True)
+class AgentSessionCursor:
+    """Authoritative mutable and immutable high-water marks for one Session."""
+
+    commit_sequence: int
+    last_entry_sequence: int
+
+    def __post_init__(self) -> None:
+        if self.commit_sequence < 0 or self.last_entry_sequence < 0:
+            raise ValueError("Agent Session cursor sequences cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
 class AgentSessionSnapshot:
     """One immutable Session Tree and its exact current-register snapshot."""
 
     session_id: SessionId
     commit_sequence: int
+    last_entry_sequence: int
     entries: tuple[SessionEntry, ...]
     registers: tuple[RegisterRecord, ...] = ()
     selected_lane_id: LaneId = LaneId.main()
+
+    def __post_init__(self) -> None:
+        AgentSessionCursor(self.commit_sequence, self.last_entry_sequence)
+        if len(self.entries) != self.last_entry_sequence:
+            raise ValueError("Agent Session Entry count does not match its cursor")
+        # Keep incremental construction O(delta): full repository loads scrub every
+        # decoded row, while refresh/projection validate only the newly appended suffix.
+        if self.entries and (
+            self.entries[0].sequence != 1 or self.entries[-1].sequence != self.last_entry_sequence
+        ):
+            raise ValueError("Agent Session snapshot Entry sequence is not gap-free")
+
+    @property
+    def cursor(self) -> AgentSessionCursor:
+        return AgentSessionCursor(self.commit_sequence, self.last_entry_sequence)
 
     @property
     def active_projection(self) -> ContextProjection | None:
@@ -79,9 +107,16 @@ class AgentSessionSnapshot:
 
 
 class AgentSessionRepository[HostDeltaT](Protocol):
-    """Host-facing immutable opens plus the atomic transaction adapter seam."""
+    """Coherent snapshot reads plus the atomic transaction adapter seam."""
 
     async def load(self, session_id: SessionId) -> AgentSessionSnapshot: ...
+
+    async def refresh(
+        self,
+        session_id: SessionId,
+        *,
+        previous: AgentSessionSnapshot,
+    ) -> AgentSessionSnapshot: ...
 
     async def transact(
         self,
@@ -92,4 +127,4 @@ class AgentSessionRepository[HostDeltaT](Protocol):
     ) -> TransactionOutcome: ...
 
 
-__all__ = ["AgentSessionRepository", "AgentSessionSnapshot"]
+__all__ = ["AgentSessionCursor", "AgentSessionRepository", "AgentSessionSnapshot"]

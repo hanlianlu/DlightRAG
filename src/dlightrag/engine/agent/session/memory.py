@@ -52,10 +52,57 @@ class MemoryAgentSessionRepository[HostDeltaT]:
             return AgentSessionSnapshot(
                 session_id=session_id,
                 commit_sequence=0,
+                last_entry_sequence=0,
                 entries=(),
                 registers=(),
             )
         return self._snapshot(session_id, session)
+
+    async def refresh(
+        self,
+        session_id: SessionId,
+        *,
+        previous: AgentSessionSnapshot,
+    ) -> AgentSessionSnapshot:
+        """Refresh from exact high-water marks without copying old Entry objects."""
+        if previous.session_id != session_id:
+            raise ValueError("Agent Session refresh snapshot belongs to another Session")
+        session = self._sessions.get(session_id)
+        commit_sequence = 0 if session is None else session.commit_sequence
+        last_entry_sequence = 0 if session is None else session.last_entry_sequence
+        if (
+            commit_sequence < previous.commit_sequence
+            or last_entry_sequence < previous.last_entry_sequence
+        ):
+            raise ValueError("Agent Session refresh cursor regressed")
+        if commit_sequence == previous.commit_sequence:
+            if last_entry_sequence != previous.last_entry_sequence:
+                raise ValueError("Agent Session refresh metadata is inconsistent")
+            return previous
+        if session is None:
+            raise ValueError("Agent Session refresh metadata is inconsistent")
+        delta = tuple(session.entries[previous.last_entry_sequence : last_entry_sequence])
+        expected_count = last_entry_sequence - previous.last_entry_sequence
+        if len(delta) != expected_count or any(
+            entry.sequence != previous.last_entry_sequence + offset
+            for offset, entry in enumerate(delta, start=1)
+        ):
+            raise ValueError("Agent Session refresh Entry delta is not gap-free")
+        # Tuple concatenation reuses every decoded immutable old Entry reference.
+        return AgentSessionSnapshot(
+            session_id=session_id,
+            commit_sequence=commit_sequence,
+            last_entry_sequence=last_entry_sequence,
+            entries=previous.entries + delta,
+            registers=tuple(
+                record
+                for _, record in sorted(
+                    session.registers.items(),
+                    key=lambda item: (item[0].kind, item[0].key),
+                )
+            ),
+            selected_lane_id=previous.selected_lane_id,
+        )
 
     async def transact(
         self,
@@ -176,6 +223,7 @@ class MemoryAgentSessionRepository[HostDeltaT]:
         return AgentSessionSnapshot(
             session_id=session_id,
             commit_sequence=session.commit_sequence,
+            last_entry_sequence=session.last_entry_sequence,
             entries=tuple(session.entries),
             registers=tuple(
                 record

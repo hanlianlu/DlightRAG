@@ -48,10 +48,10 @@ def test_removed_extension_entry_and_store_passthroughs_cannot_return() -> None:
     assert matches == {name: [] for name in forbidden}
 
 
-def test_session_repository_exposes_only_open_and_transaction_primitives() -> None:
+def test_session_repository_exposes_only_snapshot_and_transaction_primitives() -> None:
     public_methods = {
         name
         for name, value in AgentSessionRepository.__dict__.items()
         if callable(value) and not name.startswith("_")
     }
-    assert public_methods == {"load", "transact"}
+    assert public_methods == {"load", "refresh", "transact"}

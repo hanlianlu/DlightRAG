@@ -186,8 +186,7 @@ async def test_research_host_uses_runtime_instead_of_a_second_answer_interpreter
         persist_child_intent=None,
     )
     runtime = AgentSessionRuntime(
-        transactions=store,
-        load=store.load,
+        repository=store,
         effects=effects,
         tools=prepared.tools,
         fencing_epoch=1,
@@ -285,8 +284,7 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
     session_id = SessionId.new()
     store = MemoryAgentSessionRepository[EffectHostUpdate]()
     runtime = AgentSessionRuntime(
-        transactions=store,
-        load=store.load,
+        repository=store,
         effects=ResearchRuntimeEffects(
             orchestrator=orchestrator,
             prepared=prepared,
@@ -402,8 +400,7 @@ async def test_provider_overflow_compacts_shrinks_and_retries_through_host_effec
     session_id = SessionId.new()
     store = MemoryAgentSessionRepository[EffectHostUpdate]()
     runtime = AgentSessionRuntime(
-        transactions=store,
-        load=store.load,
+        repository=store,
         effects=ResearchRuntimeEffects(
             orchestrator=orchestrator,
             prepared=prepared,

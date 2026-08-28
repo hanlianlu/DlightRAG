@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import pytest
 
+import dlightrag.adapters.postgres.answer.session_repository as session_repository_module
 from dlightrag.adapters.postgres.answer.session_repository import PGAgentSessionRepository
 from dlightrag.engine.agent.session.entries import UserMessageEntry
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId
@@ -16,14 +17,74 @@ from dlightrag.engine.agent.session.registers import (
     DeleteRegister,
     LaneHead,
     LaneState,
+    RegisterRecord,
     RegisterRef,
     SetRegister,
 )
+from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.agent.session.transactions import (
     RegisterConflict,
     RegisterExpectation,
     SessionTransaction,
 )
+
+
+class _TransactionContext:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *_args: Any) -> None:
+        return None
+
+
+class _AcquireContext:
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    async def __aenter__(self) -> Any:
+        return self._connection
+
+    async def __aexit__(self, *_args: Any) -> None:
+        return None
+
+
+class _SnapshotPool:
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def acquire(self) -> _AcquireContext:
+        return _AcquireContext(self._connection)
+
+
+class _SnapshotConnection:
+    def __init__(
+        self,
+        *,
+        metadata: dict[str, int] | None,
+        entry_rows: list[dict[str, Any]] | None = None,
+        register_rows: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.metadata = metadata
+        self.entry_rows = entry_rows or []
+        self.register_rows = register_rows or []
+        self.calls: list[tuple[str, str, tuple[Any, ...]]] = []
+        self.transaction_kwargs: list[dict[str, Any]] = []
+
+    def transaction(self, **kwargs: Any) -> _TransactionContext:
+        self.transaction_kwargs.append(kwargs)
+        return _TransactionContext()
+
+    async def fetchrow(self, query: str, *args: Any) -> dict[str, int] | None:
+        self.calls.append(("fetchrow", query, args))
+        return self.metadata
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        self.calls.append(("fetch", query, args))
+        if "sequence > $3 AND sequence <= $4" in query:
+            return self.entry_rows
+        if "FROM dlightrag_agent_session_registers" in query:
+            return self.register_rows
+        raise AssertionError(f"unexpected snapshot fetch: {query}")
 
 
 class _RecordingConnection:
@@ -76,12 +137,137 @@ def _repository() -> PGAgentSessionRepository:
     )
 
 
+def _snapshot_repository(connection: _SnapshotConnection) -> PGAgentSessionRepository:
+    return PGAgentSessionRepository(
+        pool=cast(Any, _SnapshotPool(connection)),
+        owner_id="owner",
+        run_id=uuid.uuid4(),
+        worker_id="worker",
+        lease_owner="worker",
+        fencing_epoch=1,
+    )
+
+
+def _entry_row(entry: UserMessageEntry) -> dict[str, Any]:
+    return {
+        "sequence": entry.sequence,
+        "entry_id": entry.entry_id.value,
+        "parent_entry_id": (
+            entry.parent_entry_id.value if entry.parent_entry_id is not None else None
+        ),
+        "entry_type": entry.entry_type,
+        "schema_version": entry.schema_version,
+        "timestamp": entry.timestamp,
+        "payload_json": entry.canonical_payload(),
+    }
+
+
 def _user(session_id: SessionId, content: str, *, entry_id: EntryId | None = None):
     return UserMessageEntry(
         entry_id=entry_id or EntryId.new(),
         session_id=session_id,
         timestamp=datetime.now(UTC),
         content=content,
+    )
+
+
+async def test_refresh_unchanged_is_metadata_only_and_returns_previous_identity() -> None:
+    session_id = SessionId.new()
+    root = replace(_user(session_id, "root"), sequence=1)
+    previous = AgentSessionSnapshot(
+        session_id=session_id,
+        commit_sequence=1,
+        last_entry_sequence=1,
+        entries=(root,),
+    )
+    connection = _SnapshotConnection(metadata={"commit_sequence": 1, "last_sequence": 1})
+
+    refreshed = await _snapshot_repository(connection).refresh(session_id, previous=previous)
+
+    assert refreshed is previous
+    assert [
+        (method, "SELECT commit_sequence" in query) for method, query, _ in connection.calls
+    ] == [("fetchrow", True)]
+    assert connection.transaction_kwargs == [{"isolation": "repeatable_read", "readonly": True}]
+
+
+async def test_refresh_fetches_and_decodes_only_bounded_suffix_and_replaces_registers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = SessionId.new()
+    root = replace(_user(session_id, "root"), sequence=1)
+    second = replace(
+        _user(session_id, "second"),
+        sequence=2,
+        parent_entry_id=root.entry_id,
+    )
+    third = replace(
+        _user(session_id, "third"),
+        sequence=3,
+        parent_entry_id=second.entry_id,
+    )
+    previous = AgentSessionSnapshot(
+        session_id=session_id,
+        commit_sequence=1,
+        last_entry_sequence=1,
+        entries=(root,),
+        registers=(RegisterRecord(LaneHead(LaneId.main(), root.entry_id), 1),),
+    )
+    connection = _SnapshotConnection(
+        metadata={"commit_sequence": 3, "last_sequence": 3},
+        entry_rows=[_entry_row(second), _entry_row(third)],
+        register_rows=[],
+    )
+    decoded_sequences: list[int] = []
+    original_decode = session_repository_module._decode_entry  # pyright: ignore[reportPrivateUsage]
+
+    def count_decode(row: Any, *, session_id: SessionId):
+        decoded_sequences.append(int(row["sequence"]))
+        return original_decode(row, session_id=session_id)
+
+    monkeypatch.setattr(session_repository_module, "_decode_entry", count_decode)
+
+    refreshed = await _snapshot_repository(connection).refresh(session_id, previous=previous)
+
+    assert [entry.sequence for entry in refreshed.entries] == [1, 2, 3]
+    assert refreshed.entries[0] is root
+    assert refreshed.registers == ()
+    assert decoded_sequences == [2, 3]
+    delta_call = next(call for call in connection.calls if call[0] == "fetch")
+    assert "sequence > $3 AND sequence <= $4" in delta_call[1]
+    assert delta_call[2][2:] == (1, 3)
+    assert connection.transaction_kwargs == [{"isolation": "repeatable_read", "readonly": True}]
+
+
+@pytest.mark.parametrize(
+    ("metadata", "rows", "match"),
+    [
+        ({"commit_sequence": 3, "last_sequence": 3}, [], "not gap-free"),
+        ({"commit_sequence": 3, "last_sequence": 3}, [{"sequence": 3}], "not gap-free"),
+        ({"commit_sequence": 0, "last_sequence": 0}, [], "regressed"),
+    ],
+)
+async def test_refresh_rejects_missing_gapped_or_regressed_rows(
+    metadata: dict[str, int],
+    rows: list[dict[str, Any]],
+    match: str,
+) -> None:
+    session_id = SessionId.new()
+    root = replace(_user(session_id, "root"), sequence=1)
+    previous = AgentSessionSnapshot(
+        session_id=session_id,
+        commit_sequence=1,
+        last_entry_sequence=1,
+        entries=(root,),
+    )
+    connection = _SnapshotConnection(metadata=metadata, entry_rows=rows)
+
+    with pytest.raises(ValueError, match=match):
+        await _snapshot_repository(connection).refresh(session_id, previous=previous)
+
+    assert not any(
+        method == "fetch" and "dlightrag_agent_session_registers" in query
+        for method, query, _ in connection.calls
     )
 
 

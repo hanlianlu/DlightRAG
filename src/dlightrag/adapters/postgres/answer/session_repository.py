@@ -183,7 +183,7 @@ FROM bumped
 """
 
 _SELECT_SESSION_SNAPSHOT = """
-SELECT commit_sequence
+SELECT commit_sequence, last_sequence
 FROM dlightrag_agent_sessions
 WHERE owner_id = $1 AND session_id = $2
 """
@@ -193,6 +193,15 @@ SELECT sequence, entry_id::text, parent_entry_id::text, entry_type,
        schema_version, timestamp, payload_json
 FROM dlightrag_agent_session_entries
 WHERE owner_id = $1 AND session_id = $2
+ORDER BY sequence
+"""
+
+_SELECT_ENTRY_DELTA = """
+SELECT sequence, entry_id::text, parent_entry_id::text, entry_type,
+       schema_version, timestamp, payload_json
+FROM dlightrag_agent_session_entries
+WHERE owner_id = $1 AND session_id = $2
+  AND sequence > $3 AND sequence <= $4
 ORDER BY sequence
 """
 
@@ -354,32 +363,124 @@ class PGAgentSessionRepository:
             yield conn
 
     async def load(self, session_id: SessionId) -> AgentSessionSnapshot:
+        """Fully decode and validate one coherent Session corruption-scrub snapshot."""
         async with self._connection() as conn:
-            session_row = await conn.fetchrow(
-                _SELECT_SESSION_SNAPSHOT, self._owner_id, _uuid(session_id.value)
-            )
-            if session_row is None:
+            async with conn.transaction(isolation="repeatable_read", readonly=True):
+                session_row = await conn.fetchrow(
+                    _SELECT_SESSION_SNAPSHOT, self._owner_id, _uuid(session_id.value)
+                )
+                if session_row is None:
+                    return AgentSessionSnapshot(
+                        session_id=session_id,
+                        commit_sequence=0,
+                        last_entry_sequence=0,
+                        entries=(),
+                        registers=(),
+                    )
+                commit_sequence = int(session_row["commit_sequence"])
+                last_entry_sequence = int(session_row["last_sequence"])
+                entries = await self._load_entries(
+                    conn,
+                    session_id,
+                    expected_last_sequence=last_entry_sequence,
+                )
+                registers = await self._load_registers(conn, session_id)
                 return AgentSessionSnapshot(
                     session_id=session_id,
-                    commit_sequence=0,
-                    entries=(),
-                    registers=(),
+                    commit_sequence=commit_sequence,
+                    last_entry_sequence=last_entry_sequence,
+                    entries=tuple(entries),
+                    registers=tuple(registers),
                 )
-            entries = await self._load_entries(conn, session_id)
-            registers = await self._load_registers(conn, session_id)
-            return AgentSessionSnapshot(
-                session_id=session_id,
-                commit_sequence=int(session_row["commit_sequence"]),
-                entries=tuple(entries),
-                registers=tuple(registers),
-            )
 
-    async def _load_entries(self, conn: Any, session_id: SessionId) -> list[SessionEntry]:
+    async def refresh(
+        self,
+        session_id: SessionId,
+        *,
+        previous: AgentSessionSnapshot,
+    ) -> AgentSessionSnapshot:
+        """Read only the immutable Entry suffix and exact registers after advancement."""
+        if previous.session_id != session_id:
+            raise ValueError("Agent Session refresh snapshot belongs to another Session")
+        async with self._connection() as conn:
+            # Metadata, Entry suffix, and current registers must describe one commit.
+            async with conn.transaction(isolation="repeatable_read", readonly=True):
+                session_row = await conn.fetchrow(
+                    _SELECT_SESSION_SNAPSHOT, self._owner_id, _uuid(session_id.value)
+                )
+                commit_sequence = 0 if session_row is None else int(session_row["commit_sequence"])
+                last_entry_sequence = (
+                    0 if session_row is None else int(session_row["last_sequence"])
+                )
+                if (
+                    commit_sequence < previous.commit_sequence
+                    or last_entry_sequence < previous.last_entry_sequence
+                ):
+                    raise ValueError("Agent Session refresh cursor regressed")
+                if commit_sequence == previous.commit_sequence:
+                    if last_entry_sequence != previous.last_entry_sequence:
+                        raise ValueError("Agent Session refresh metadata is inconsistent")
+                    return previous
+                if session_row is None:
+                    raise ValueError("Agent Session refresh metadata is inconsistent")
+                entries = await self._load_entry_delta(
+                    conn,
+                    session_id,
+                    after_sequence=previous.last_entry_sequence,
+                    through_sequence=last_entry_sequence,
+                )
+                registers = await self._load_registers(conn, session_id)
+                # Tuple concatenation reuses every decoded immutable old Entry reference.
+                return AgentSessionSnapshot(
+                    session_id=session_id,
+                    commit_sequence=commit_sequence,
+                    last_entry_sequence=last_entry_sequence,
+                    entries=previous.entries + tuple(entries),
+                    registers=tuple(registers),
+                    selected_lane_id=previous.selected_lane_id,
+                )
+
+    async def _load_entries(
+        self,
+        conn: Any,
+        session_id: SessionId,
+        *,
+        expected_last_sequence: int,
+    ) -> list[SessionEntry]:
         rows = await conn.fetch(_SELECT_ENTRIES, self._owner_id, _uuid(session_id.value))
-        entries: list[SessionEntry] = []
-        for row in rows:
-            entries.append(_decode_entry(row, session_id=session_id))
+        if len(rows) != expected_last_sequence or any(
+            int(row["sequence"]) != expected for expected, row in enumerate(rows, start=1)
+        ):
+            raise ValueError("Agent Session full Entry rows are not gap-free")
+        entries = [_decode_entry(row, session_id=session_id) for row in rows]
+        if len({entry.entry_id for entry in entries}) != len(entries) or any(
+            entry.session_id != session_id for entry in entries
+        ):
+            raise ValueError("Agent Session full Entry identities are corrupt")
         return entries
+
+    async def _load_entry_delta(
+        self,
+        conn: Any,
+        session_id: SessionId,
+        *,
+        after_sequence: int,
+        through_sequence: int,
+    ) -> list[SessionEntry]:
+        rows = await conn.fetch(
+            _SELECT_ENTRY_DELTA,
+            self._owner_id,
+            _uuid(session_id.value),
+            after_sequence,
+            through_sequence,
+        )
+        expected_count = through_sequence - after_sequence
+        if len(rows) != expected_count or any(
+            int(row["sequence"]) != after_sequence + offset
+            for offset, row in enumerate(rows, start=1)
+        ):
+            raise ValueError("Agent Session refresh Entry delta is not gap-free")
+        return [_decode_entry(row, session_id=session_id) for row in rows]
 
     async def _load_registers(self, conn: Any, session_id: SessionId) -> list[RegisterRecord]:
         rows = await conn.fetch(

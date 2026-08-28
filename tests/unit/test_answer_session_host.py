@@ -433,12 +433,18 @@ async def test_fast_replay_reinstalls_reservation_on_durable_compaction_checkpoi
     assert reinstalled.user_entry_id == accepted.user_entry_id
     assert len((await store.load(session_id)).entries) == 4
 
-    async def load_before_fast_reinstall(_session_id: SessionId):
-        return failed
+    class StaleRepository:
+        async def load(self, _session_id: SessionId):
+            return failed
+
+        async def refresh(self, target: SessionId, *, previous):
+            return await store.refresh(target, previous=previous)
+
+        async def transact(self, **kwargs):
+            return await store.transact(**kwargs)
 
     stale_runtime = AgentSessionRuntime[None](
-        transactions=store,
-        load=load_before_fast_reinstall,
+        repository=StaleRepository(),  # type: ignore[arg-type]
         effects=cast(Any, object()),
         tools=(),
         fencing_epoch=1,
@@ -850,8 +856,7 @@ async def test_runtime_accept_rejects_a_fast_reservation_on_the_same_lane() -> N
         content="fast question",
     )
     runtime = AgentSessionRuntime[None](
-        transactions=store,
-        load=store.load,
+        repository=store,
         effects=cast(Any, object()),
         tools=(),
         fencing_epoch=1,

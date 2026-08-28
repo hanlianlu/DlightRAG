@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Interface-level live, recovery, control, and crash tests for the Runtime."""
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -15,7 +17,7 @@ from dlightrag.engine.agent.session.entries import (
     ToolResultMessageEntry,
     UserMessageEntry,
 )
-from dlightrag.engine.agent.session.ids import AttemptId, LaneId, SessionId
+from dlightrag.engine.agent.session.ids import AttemptId, EntryId, LaneId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.operation import (
     Cancelling,
@@ -26,7 +28,15 @@ from dlightrag.engine.agent.session.operation import (
     ToolEffectPending,
 )
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.session.registers import RequestSnapshot
+from dlightrag.engine.agent.session.registers import (
+    LaneHead,
+    LaneState,
+    OperationStateRegister,
+    RegisterRef,
+    RequestSnapshot,
+    SetRegister,
+)
+from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.agent.session.runtime import (
     AgentSessionEvent,
     AgentSessionRuntime,
@@ -34,8 +44,15 @@ from dlightrag.engine.agent.session.runtime import (
     OperationConflictError,
     ProviderAttemptFailed,
     RuntimeContext,
+    SessionLeaseLostError,
     SteerCommand,
     ToolEffectResult,
+)
+from dlightrag.engine.agent.session.transactions import (
+    RegisterConflict,
+    RegisterExpectation,
+    SessionTransaction,
+    TransactionLeaseLost,
 )
 from dlightrag.engine.agent.tools import AgentTool, ToolResult
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
@@ -193,8 +210,7 @@ def _runtime(
             events.append(event)
 
     return AgentSessionRuntime(
-        transactions=store,
-        load=store.load,
+        repository=store,
         effects=effects,
         tools=[tool],
         fencing_epoch=1,
@@ -466,8 +482,7 @@ async def test_runtime_event_sink_failure_is_observe_only() -> None:
         raise RuntimeError("telemetry unavailable")
 
     runtime = AgentSessionRuntime(
-        transactions=store,
-        load=store.load,
+        repository=store,
         effects=effects,
         tools=[tool],
         fencing_epoch=1,
@@ -667,8 +682,7 @@ async def test_provider_retry_exhaustion_is_typed_operation_failure() -> None:
     effects = UnavailableProvider([])
     store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = AgentSessionRuntime(
-        transactions=store,
-        load=store.load,
+        repository=store,
         effects=effects,
         tools=[tool],
         fencing_epoch=1,
@@ -751,8 +765,7 @@ async def test_plan_denied_tool_is_synthetic_even_when_runtime_can_resolve_it() 
     )
     store = MemoryAgentSessionRepository[dict[str, Any]]()
     runtime = AgentSessionRuntime(
-        transactions=store,
-        load=store.load,
+        repository=store,
         effects=effects,
         tools=[allowed, denied],
         fencing_epoch=1,
@@ -807,3 +820,230 @@ async def test_length_stopped_tool_call_is_never_executed() -> None:
     )
     assert result.result.outcome == "truncated_arguments"
     assert effects.executed_sources == []
+
+
+class _CountingSnapshotRepository(MemoryAgentSessionRepository[dict[str, Any]]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.load_calls = 0
+        self.refresh_calls = 0
+        self.decoded_rows = 0
+        self.refresh_allocations = 0
+        self.loaded_snapshots: list[AgentSessionSnapshot] = []
+
+    async def load(self, session_id: SessionId) -> AgentSessionSnapshot:
+        self.load_calls += 1
+        snapshot = await super().load(session_id)
+        self.decoded_rows += len(snapshot.entries)
+        self.loaded_snapshots.append(snapshot)
+        return snapshot
+
+    async def refresh(
+        self,
+        session_id: SessionId,
+        *,
+        previous: AgentSessionSnapshot,
+    ) -> AgentSessionSnapshot:
+        self.refresh_calls += 1
+        snapshot = await super().refresh(session_id, previous=previous)
+        self.refresh_allocations += int(snapshot is not previous)
+        self.decoded_rows += snapshot.last_entry_sequence - previous.last_entry_sequence
+        return snapshot
+
+    async def authoritative(self, session_id: SessionId) -> AgentSessionSnapshot:
+        return await super().load(session_id)
+
+
+async def test_runtime_cache_decodes_thousand_entry_history_once_across_many_register_actions() -> (
+    None
+):
+    tool = _agent_tool()
+    session_id = SessionId.new()
+    repository = _CountingSnapshotRepository()
+    entries: list[UserMessageEntry] = []
+    parent: EntryId | None = None
+    for index in range(1000):
+        entry = UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.now(UTC),
+            parent_entry_id=parent,
+            content=f"history {index}",
+        )
+        entries.append(entry)
+        parent = entry.entry_id
+    assert parent is not None
+    head = LaneHead(LaneId.main(), parent)
+    lane = LaneState(LaneId.main())
+    await repository.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=entries,
+            register_writes=[SetRegister(head), SetRegister(lane)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(lane.ref, None),
+            ],
+        ),
+    )
+
+    class UnavailableHistory(_Effects):
+        async def call_provider(
+            self,
+            context: RuntimeContext,
+            request: RequestSnapshot,
+            attempt_id: AttemptId,
+            emit_ephemeral: Any,
+        ) -> AssistantTurn:
+            del context, request, attempt_id, emit_ephemeral
+            raise ProviderAttemptFailed("provider unavailable", retryable=True)
+
+    attempts = 50
+    runtime = AgentSessionRuntime(
+        repository=repository,
+        effects=UnavailableHistory([]),
+        tools=[tool],
+        fencing_epoch=1,
+        provider_attempt_limit=attempts,
+    )
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="long-history",
+        content="new question",
+        plan=replace(_plan(tool), provider_attempt_limit=attempts),
+    )
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationFailed)
+    assert repository.load_calls == 1
+    assert repository.refresh_calls == 102
+    assert repository.decoded_rows == 1000
+    assert repository.refresh_allocations == 0
+    initial = repository.loaded_snapshots[0]
+    assert all(
+        final.context.snapshot.entries[index] is initial.entries[index] for index in range(1000)
+    )
+    assert final.context.snapshot.entries[1000].sequence == 1001
+    assert not any(
+        record.ref.kind == "request_snapshot" for record in final.context.snapshot.registers
+    )
+    authoritative = await repository.authoritative(session_id)
+    assert final.context.snapshot.entries == authoritative.entries
+    assert final.context.snapshot.registers == authoritative.registers
+
+    # The former full-load callback would have decoded all 1,001 rows per refresh.
+    legacy_decoded_rows = 1000 + repository.refresh_calls * 1001
+    assert legacy_decoded_rows == 103_102
+
+
+class _ForcedOutcomeRepository(MemoryAgentSessionRepository[dict[str, Any]]):
+    forced: str | None = None
+
+    async def transact(self, **kwargs: Any):
+        if self.forced == "conflict":
+            return RegisterConflict(RegisterRef("operation_state", "forced"), 1, 2)
+        if self.forced == "lease":
+            return TransactionLeaseLost()
+        return await super().transact(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("forced", "error"),
+    [("conflict", OperationConflictError), ("lease", SessionLeaseLostError)],
+)
+async def test_conflict_or_lease_loss_invalidates_without_speculative_cache_publish(
+    forced: str,
+    error: type[Exception],
+) -> None:
+    tool = _agent_tool()
+    repository = _ForcedOutcomeRepository()
+    runtime = _runtime(repository, _Effects([]), tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key=f"forced-{forced}",
+        content="question",
+        plan=_plan(tool),
+    )
+    cached = runtime._snapshots[session_id]  # pyright: ignore[reportPrivateUsage]
+    repository.forced = forced
+
+    with pytest.raises(error):
+        await runtime.steer(
+            session_id=session_id,
+            operation_id=accepted.operation_id,
+            control_id="not-committed",
+            content="speculative",
+        )
+
+    assert session_id not in runtime._snapshots  # pyright: ignore[reportPrivateUsage]
+    durable = await repository.load(session_id)
+    state_record = next(
+        record for record in durable.registers if record.ref.kind == "operation_state"
+    )
+    assert isinstance(state_record.value, OperationStateRegister)
+    assert getattr(state_record.value.state, "steers", ()) == ()
+    assert durable.commit_sequence == cached.commit_sequence
+
+
+class _SlowTransactionRepository(MemoryAgentSessionRepository[dict[str, Any]]):
+    slow = False
+    active_transactions = 0
+    max_active_transactions = 0
+
+    async def transact(self, **kwargs: Any):
+        if not self.slow:
+            return await super().transact(**kwargs)
+        self.active_transactions += 1
+        self.max_active_transactions = max(
+            self.max_active_transactions,
+            self.active_transactions,
+        )
+        try:
+            await asyncio.sleep(0.01)
+            return await super().transact(**kwargs)
+        finally:
+            self.active_transactions -= 1
+
+
+async def test_concurrent_controls_are_serialized_without_cache_regression() -> None:
+    tool = _agent_tool()
+    repository = _SlowTransactionRepository()
+    runtime = _runtime(repository, _Effects([]), tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="concurrent-controls",
+        content="question",
+        plan=_plan(tool),
+    )
+    repository.slow = True
+
+    await asyncio.gather(
+        runtime.steer(
+            session_id=session_id,
+            operation_id=accepted.operation_id,
+            control_id="control-a",
+            content="a",
+        ),
+        runtime.steer(
+            session_id=session_id,
+            operation_id=accepted.operation_id,
+            control_id="control-b",
+            content="b",
+        ),
+    )
+
+    view = await runtime.restore(session_id=session_id, operation_id=accepted.operation_id)
+    authoritative = await repository.load(session_id)
+    assert repository.max_active_transactions == 1
+    assert {steer.control_id for steer in getattr(view.state, "steers", ())} == {
+        "control-a",
+        "control-b",
+    }
+    assert view.context.snapshot.commit_sequence == authoritative.commit_sequence
+    assert view.context.snapshot.registers == authoritative.registers
