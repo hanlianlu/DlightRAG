@@ -3,13 +3,14 @@
 
 from dlightrag.engine.agent.context import ContextContribution, ContextProjector, ProjectedContext
 from dlightrag.engine.agent.events import AgentEvent, AgentEventKind
-from dlightrag.engine.agent.session.runtime import AgentSessionRuntime
+from dlightrag.engine.agent.session.runtime import AgentSessionRuntime, AgentSessionSnapshotSeed
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
 
 __all__ = [
     "AgentEvent",
     "AgentEventKind",
     "AgentSessionRuntime",
+    "AgentSessionSnapshotSeed",
     "ContextContribution",
     "ContextProjector",
     "DuplicateToolError",

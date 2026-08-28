@@ -13,7 +13,10 @@ if TYPE_CHECKING:
         AgentSessionRepository,
         AgentSessionSnapshot,
     )
-    from dlightrag.engine.agent.session.runtime import AgentSessionRuntime
+    from dlightrag.engine.agent.session.runtime import (
+        AgentSessionRuntime,
+        AgentSessionSnapshotSeed,
+    )
     from dlightrag.engine.agent.session.transactions import SessionTransactionPort
     from dlightrag.engine.agent.session.tree import AgentSessionTree
 
@@ -22,16 +25,23 @@ __all__ = [
     "AgentSessionRepository",
     "AgentSessionRuntime",
     "AgentSessionSnapshot",
+    "AgentSessionSnapshotSeed",
     "AgentSessionTree",
     "SessionTransactionPort",
 ]
 
 
 def __getattr__(name: str) -> Any:
-    if name == "AgentSessionRuntime":
-        from dlightrag.engine.agent.session.runtime import AgentSessionRuntime
+    if name in {"AgentSessionRuntime", "AgentSessionSnapshotSeed"}:
+        from dlightrag.engine.agent.session.runtime import (
+            AgentSessionRuntime,
+            AgentSessionSnapshotSeed,
+        )
 
-        return AgentSessionRuntime
+        return {
+            "AgentSessionRuntime": AgentSessionRuntime,
+            "AgentSessionSnapshotSeed": AgentSessionSnapshotSeed,
+        }[name]
     if name in {"AgentSessionCursor", "AgentSessionRepository", "AgentSessionSnapshot"}:
         from dlightrag.engine.agent.session.repository import (
             AgentSessionCursor,

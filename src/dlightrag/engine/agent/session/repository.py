@@ -170,6 +170,34 @@ def project_transaction_commit(
         return None
 
 
+def validate_snapshot_refresh(
+    session_id: SessionId,
+    *,
+    previous: AgentSessionSnapshot,
+    snapshot: AgentSessionSnapshot,
+) -> None:
+    """Reject a refresh that cannot coherently advance its immutable boundary."""
+    if previous.session_id != session_id or snapshot.session_id != session_id:
+        raise ValueError("Agent Session refresh returned another Session")
+    if (
+        snapshot.commit_sequence < previous.commit_sequence
+        or snapshot.last_entry_sequence < previous.last_entry_sequence
+    ):
+        raise ValueError("Agent Session refresh cursor regressed")
+    if snapshot.selected_lane_id != previous.selected_lane_id:
+        raise ValueError("Agent Session refresh changed its selected Lane")
+    if snapshot.commit_sequence == previous.commit_sequence:
+        if snapshot.last_entry_sequence != previous.last_entry_sequence:
+            raise ValueError("Agent Session refresh metadata is inconsistent")
+        if snapshot != previous:
+            raise ValueError("Agent Session refresh changed without commit advancement")
+    elif previous.entries and (
+        snapshot.entries[0] is not previous.entries[0]
+        or snapshot.entries[previous.last_entry_sequence - 1] is not previous.entries[-1]
+    ):
+        raise ValueError("Agent Session refresh replaced its historical Entry prefix")
+
+
 class AgentSessionRepository[HostDeltaT](Protocol):
     """Coherent snapshot reads plus the atomic transaction adapter seam."""
 
@@ -196,4 +224,5 @@ __all__ = [
     "AgentSessionRepository",
     "AgentSessionSnapshot",
     "project_transaction_commit",
+    "validate_snapshot_refresh",
 ]

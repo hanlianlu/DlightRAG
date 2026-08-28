@@ -63,8 +63,10 @@ from dlightrag.engine.agent.session.operation import (
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import ContextProjection
 from dlightrag.engine.agent.session.registers import HostTurnReservation, RegisterRef
+from dlightrag.engine.agent.session.repository import validate_snapshot_refresh
 from dlightrag.engine.agent.session.runtime import (
     AgentSessionRuntime,
+    AgentSessionSnapshotSeed,
     FollowUpCommand,
     OperationConflictError,
     SessionLeaseLostError,
@@ -1015,11 +1017,7 @@ class AnswerExecutor:
         try:
             await ensure_session_lane(
                 repository=repository,
-                snapshot=(
-                    canonical_snapshot
-                    if resolved_mode == "fast"
-                    else await repository.load(agent_session_id)
-                ),
+                snapshot=canonical_snapshot,
                 fencing_epoch=session.execution.fencing_epoch,
                 session_id=agent_session_id,
                 lane_id=agent_lane_id,
@@ -1107,7 +1105,15 @@ class AnswerExecutor:
                 )
                 self.validate_pinned_model_profiles(request)
                 self.validate_pinned_agent_run_plan(request, pin_probe.tools)
-                snapshot = await repository.load(session_id)
+                snapshot = await repository.refresh(
+                    session_id,
+                    previous=canonical_snapshot,
+                )
+                validate_snapshot_refresh(
+                    session_id,
+                    previous=canonical_snapshot,
+                    snapshot=snapshot,
+                )
                 is_new_session = snapshot.commit_sequence == 0
                 memory_text = ""
                 if self._memory is not None and recall_allowed:
@@ -1167,6 +1173,11 @@ class AnswerExecutor:
                     provider_attempt_limit=plan.provider_attempt_limit,
                     event_sink=_answer_runtime_event_sink(session),
                     controls=controls,
+                    initial_snapshot=AgentSessionSnapshotSeed(
+                        repository=repository,
+                        session_id=session_id,
+                        snapshot=snapshot,
+                    ),
                 )
                 accepted = await agent_runtime.accept(
                     session_id=session_id,

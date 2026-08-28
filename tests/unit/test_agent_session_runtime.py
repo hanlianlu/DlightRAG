@@ -40,6 +40,7 @@ from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.agent.session.runtime import (
     AgentSessionEvent,
     AgentSessionRuntime,
+    AgentSessionSnapshotSeed,
     CompactionRequired,
     OperationConflictError,
     ProviderAttemptFailed,
@@ -852,6 +853,230 @@ class _CountingSnapshotRepository(MemoryAgentSessionRepository[dict[str, Any]]):
 
     async def authoritative(self, session_id: SessionId) -> AgentSessionSnapshot:
         return await super().load(session_id)
+
+
+async def _seed_counted_history(
+    repository: _CountingSnapshotRepository,
+    session_id: SessionId,
+    *,
+    count: int,
+) -> None:
+    entries: list[UserMessageEntry] = []
+    parent: EntryId | None = None
+    for index in range(count):
+        entry = UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.now(UTC),
+            parent_entry_id=parent,
+            content=f"seed history {index}",
+        )
+        entries.append(entry)
+        parent = entry.entry_id
+    assert parent is not None
+    head = LaneHead(LaneId.main(), parent)
+    lane = LaneState(LaneId.main())
+    await repository.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=entries,
+            register_writes=[SetRegister(head), SetRegister(lane)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(lane.ref, None),
+            ],
+        ),
+    )
+
+
+async def test_seeded_runtime_first_accept_refreshes_lane_fork_from_canonical_boundary() -> None:
+    from dlightrag.engine.answer.fast import ensure_session_lane
+
+    tool = _agent_tool()
+    repository = _CountingSnapshotRepository()
+    session_id = SessionId.new()
+    await _seed_counted_history(repository, session_id, count=2)
+    canonical = await repository.load(session_id)
+    lane_id = LaneId.new()
+    await ensure_session_lane(
+        repository=repository,
+        snapshot=canonical,
+        fencing_epoch=1,
+        session_id=session_id,
+        lane_id=lane_id,
+        source_lane_id=LaneId.main(),
+    )
+    startup = await repository.refresh(session_id, previous=canonical)
+    runtime = AgentSessionRuntime(
+        repository=repository,
+        effects=_Effects([]),
+        tools=[tool],
+        fencing_epoch=1,
+        initial_snapshot=AgentSessionSnapshotSeed(
+            repository=repository,
+            session_id=session_id,
+            snapshot=startup,
+        ),
+    )
+
+    assert runtime._snapshots[session_id].tree.lane(lane_id).lane_id == lane_id  # pyright: ignore[reportPrivateUsage]
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=lane_id,
+        idempotency_key="seeded-fork",
+        content="branch question",
+        plan=_plan(tool),
+    )
+
+    assert accepted.created is True
+    assert repository.load_calls == 1
+    assert repository.refresh_calls == 2
+    assert repository.decoded_rows == 2
+
+
+async def test_seeded_runtime_observes_two_concurrent_deltas_without_prefix_redecode() -> None:
+    tool = _agent_tool()
+    repository = _CountingSnapshotRepository()
+    session_id = SessionId.new()
+    await _seed_counted_history(repository, session_id, count=1000)
+    canonical = await repository.load(session_id)
+
+    async def append_external(
+        previous: AgentSessionSnapshot,
+        content: str,
+    ) -> UserMessageEntry:
+        lane = previous.tree.lane()
+        entry = UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.now(UTC),
+            parent_entry_id=lane.head_entry_id,
+            content=content,
+        )
+        await repository.transact(
+            session_id=session_id,
+            fencing_epoch=1,
+            transaction=SessionTransaction.from_parts(
+                entries=[entry],
+                register_writes=[SetRegister(LaneHead(LaneId.main(), entry.entry_id))],
+                expectations=[RegisterExpectation(lane.head.ref, lane.head.sequence)],
+            ),
+        )
+        return entry
+
+    first = await append_external(canonical, "between canonical and startup refresh")
+    startup = await repository.refresh(session_id, previous=canonical)
+    second = await append_external(startup, "between startup refresh and accept")
+    runtime = AgentSessionRuntime(
+        repository=repository,
+        effects=_Effects([]),
+        tools=[tool],
+        fencing_epoch=1,
+        initial_snapshot=AgentSessionSnapshotSeed(repository, session_id, startup),
+    )
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="concurrent-deltas",
+        content="current question",
+        plan=_plan(tool),
+    )
+    boundary = runtime._snapshots[session_id]  # pyright: ignore[reportPrivateUsage]
+
+    assert boundary.entries[1000].entry_id == first.entry_id
+    assert boundary.entries[1001].entry_id == second.entry_id
+    assert boundary.entries[-1].parent_entry_id == second.entry_id
+    assert accepted.cursor.last_entry_sequence == 1003
+    assert repository.load_calls == 1
+    assert repository.refresh_calls == 2
+    assert repository.decoded_rows == 1002
+    assert all(boundary.entries[index] is canonical.entries[index] for index in range(1000))
+
+
+class _MalformedSeedRefreshRepository(_CountingSnapshotRepository):
+    def __init__(self, mode: str) -> None:
+        super().__init__()
+        self.mode = mode
+
+    async def refresh(
+        self,
+        session_id: SessionId,
+        *,
+        previous: AgentSessionSnapshot,
+    ) -> AgentSessionSnapshot:
+        self.refresh_calls += 1
+        if self.mode == "failed":
+            raise RuntimeError("seed refresh failed")
+        if self.mode == "regressed":
+            return AgentSessionSnapshot(session_id, 0, 0, ())
+        if self.mode == "wrong-session":
+            return replace(previous, session_id=SessionId.new())
+        if self.mode == "changed-without-commit":
+            return replace(previous, registers=())
+        raise AssertionError(self.mode)
+
+
+@pytest.mark.parametrize(
+    ("mode", "error", "message"),
+    [
+        ("failed", RuntimeError, "seed refresh failed"),
+        ("regressed", ValueError, "cursor regressed"),
+        ("wrong-session", ValueError, "another Session"),
+        ("changed-without-commit", ValueError, "without commit advancement"),
+    ],
+)
+async def test_seeded_runtime_rejects_non_authoritative_first_refresh(
+    mode: str,
+    error: type[Exception],
+    message: str,
+) -> None:
+    tool = _agent_tool()
+    repository = _MalformedSeedRefreshRepository(mode)
+    session_id = SessionId.new()
+    await _seed_counted_history(repository, session_id, count=1)
+    seed = await repository.load(session_id)
+    repository.load_calls = 0
+    runtime = AgentSessionRuntime(
+        repository=repository,
+        effects=_Effects([]),
+        tools=[tool],
+        fencing_epoch=1,
+        initial_snapshot=AgentSessionSnapshotSeed(repository, session_id, seed),
+    )
+
+    with pytest.raises(error, match=message):
+        await runtime.accept(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            idempotency_key=f"malformed-{mode}",
+            content="must not be accepted",
+            plan=_plan(tool),
+        )
+
+    assert session_id not in runtime._snapshots  # pyright: ignore[reportPrivateUsage]
+    assert repository.load_calls == 0
+    assert repository.refresh_calls == 1
+    assert (await repository.authoritative(session_id)).commit_sequence == seed.commit_sequence
+
+
+async def test_runtime_seed_validates_repository_and_session_identity() -> None:
+    tool = _agent_tool()
+    repository = _CountingSnapshotRepository()
+    other_repository = _CountingSnapshotRepository()
+    session_id = SessionId.new()
+    snapshot = await repository.load(session_id)
+
+    with pytest.raises(ValueError, match="another Session"):
+        AgentSessionSnapshotSeed(repository, SessionId.new(), snapshot)
+    with pytest.raises(ValueError, match="another repository"):
+        AgentSessionRuntime(
+            repository=other_repository,
+            effects=_Effects([]),
+            tools=[tool],
+            fencing_epoch=1,
+            initial_snapshot=AgentSessionSnapshotSeed(repository, session_id, snapshot),
+        )
 
 
 async def test_runtime_cache_decodes_thousand_entry_history_once_across_many_register_actions() -> (

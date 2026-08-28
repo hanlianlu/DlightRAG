@@ -25,6 +25,7 @@ import asyncpg
 import pytest
 
 from dlightrag._compose import _compose
+from dlightrag.adapters.postgres.answer import session_repository as pg_session_repository
 from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.answer.session_repository import PGAgentSessionRepository
 from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
@@ -36,9 +37,19 @@ from dlightrag.engine.agent.session.effects import canonical_json
 from dlightrag.engine.agent.session.entries import UserMessageEntry
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.agent.session.fold import WorkingContextProjection as _RunWorking
-from dlightrag.engine.agent.session.ids import SessionId, StageIntentId
+from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId, StageIntentId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.session.registers import HostTurnReservation
+from dlightrag.engine.agent.session.registers import (
+    HostTurnReservation,
+    LaneHead,
+    LaneState,
+    SetRegister,
+)
+from dlightrag.engine.agent.session.transactions import (
+    RegisterExpectation,
+    SessionTransaction,
+    TransactionCommit,
+)
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn
@@ -49,6 +60,7 @@ from dlightrag.engine.answer.execution import (
     AnswerResourceResolver,
     OrchestratorRun,
 )
+from dlightrag.engine.answer.execution import executor as answer_executor_module
 from dlightrag.engine.answer.fast import FastRunBoundaries
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.publication import ArtifactIssue, PublicationPlan
@@ -804,8 +816,15 @@ async def test_publication_correction_is_one_linked_agent_operation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository_calls = {"load": 0, "refresh": 0}
+    decoded_rows = 0
     original_load = PGAgentSessionRepository.load
     original_refresh = PGAgentSessionRepository.refresh
+    original_decode = pg_session_repository._decode_entry
+
+    def counted_decode(*args: Any, **kwargs: Any) -> Any:
+        nonlocal decoded_rows
+        decoded_rows += 1
+        return original_decode(*args, **kwargs)
 
     async def counted_load(
         repository: PGAgentSessionRepository,
@@ -825,6 +844,7 @@ async def test_publication_correction_is_one_linked_agent_operation(
 
     monkeypatch.setattr(PGAgentSessionRepository, "load", counted_load)
     monkeypatch.setattr(PGAgentSessionRepository, "refresh", counted_refresh)
+    monkeypatch.setattr(pg_session_repository, "_decode_entry", counted_decode)
     turns = [
         AssistantTurn(
             text="Draft answer with broken Artifact.",
@@ -931,13 +951,50 @@ async def test_publication_correction_is_one_linked_agent_operation(
     store.load_pending_agent_controls = pending_controls  # type: ignore[method-assign]
     store.acknowledge_agent_controls = acknowledge_controls  # type: ignore[method-assign]
     application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
-    await coordinator.start()
     request = _answer_run_request(mode="research", agent_run_plan=plan)
     creation = await store.create_run(
         owner_id=_OWNER,
         request=request,
         idempotency_fingerprint=answer_run_request_fingerprint(request),
     )
+    claimed = await store.claim_next(worker_id="history-seed")
+    assert claimed is not None
+    session_id = SessionId(_answer_run_input().agent_session_id)
+    history: list[UserMessageEntry] = []
+    parent_id: EntryId | None = None
+    for index in range(1000):
+        entry = UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.datetime.now(datetime.UTC),
+            parent_entry_id=parent_id,
+            content=f"historical question {index}",
+        )
+        history.append(entry)
+        parent_id = entry.entry_id
+    assert parent_id is not None
+    head = LaneHead(LaneId.main(), parent_id)
+    state = LaneState(LaneId.main())
+    seeded = await claimed.execution.session_repository.transact(
+        session_id=session_id,
+        fencing_epoch=claimed.execution.fencing_epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=history,
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(seeded, TransactionCommit)
+    await store.release_for_shutdown(
+        owner_id=_OWNER,
+        run_id=creation.run.run_id,
+        worker_id="history-seed",
+        fencing_epoch=claimed.run.fencing_epoch,
+    )
+    await coordinator.start()
     coordinator.wake()
     try:
         await _settle(_status_is(store, creation.run.run_id, "succeeded"))
@@ -962,7 +1019,9 @@ async def test_publication_correction_is_one_linked_agent_operation(
         {"input_tokens": 5, "output_tokens": 2},
         {"input_tokens": 6, "output_tokens": 2},
     ]
-    assert repository_calls == {"load": 4, "refresh": 26}
+    assert repository_calls == {"load": 1, "refresh": 28}
+    assert decoded_rows == 1000
+    # Detached-parent baseline: load=4, decoded_rows=4,000, refresh=26.
     assert publication_calls == 2
     residual_outcome = {
         "status": "failed",
@@ -993,7 +1052,7 @@ async def test_publication_correction_is_one_linked_agent_operation(
         fencing_epoch=1,
     )
     snapshot = await reader.load(SessionId(routing.agent_session_id))
-    assert [entry.entry_type for entry in snapshot.tree.ancestry()] == [
+    assert [entry.entry_type for entry in snapshot.tree.ancestry()[-8:]] == [
         "user_message",
         "assistant_message",
         "user_message",
@@ -1004,8 +1063,120 @@ async def test_publication_correction_is_one_linked_agent_operation(
         "assistant_message",
     ]
     users = [entry for entry in snapshot.tree.ancestry() if isinstance(entry, UserMessageEntry)]
-    assert users[1].content == "queued follow-up"
-    assert users[2].content == "late steer becomes follow-up"
+    assert users[-3].content == "queued follow-up"
+    assert users[-2].content == "late steer becomes follow-up"
+
+
+async def test_research_empty_canonical_uses_concurrently_advanced_refresh_for_restore(
+    store: FingerprintingAnswerRunStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_load = PGAgentSessionRepository.load
+    original_refresh = PGAgentSessionRepository.refresh
+    original_decode = pg_session_repository._decode_entry
+    original_restore = answer_executor_module._restore_durable_evidence
+    counters = {"load": 0, "refresh": 0, "decoded_rows": 0}
+    injected = False
+    restored: list[SessionId] = []
+
+    async def counted_load(
+        repository: PGAgentSessionRepository,
+        session_id: SessionId,
+    ) -> Any:
+        counters["load"] += 1
+        return await original_load(repository, session_id)
+
+    async def concurrent_refresh(
+        repository: PGAgentSessionRepository,
+        session_id: SessionId,
+        *,
+        previous: Any,
+    ) -> Any:
+        nonlocal injected
+        counters["refresh"] += 1
+        if not injected and previous.commit_sequence == 0:
+            injected = True
+            entry = UserMessageEntry(
+                entry_id=EntryId.new(),
+                session_id=session_id,
+                timestamp=datetime.datetime.now(datetime.UTC),
+                content="concurrently committed history",
+            )
+            head = LaneHead(LaneId.main(), entry.entry_id)
+            state = LaneState(LaneId.main())
+            committed = await repository.transact(
+                session_id=session_id,
+                fencing_epoch=cast(Any, repository)._fencing_epoch,
+                transaction=SessionTransaction.from_parts(
+                    entries=[entry],
+                    register_writes=[SetRegister(head), SetRegister(state)],
+                    expectations=[
+                        RegisterExpectation(head.ref, None),
+                        RegisterExpectation(state.ref, None),
+                    ],
+                ),
+            )
+            assert isinstance(committed, TransactionCommit)
+        return await original_refresh(repository, session_id, previous=previous)
+
+    def counted_decode(*args: Any, **kwargs: Any) -> Any:
+        counters["decoded_rows"] += 1
+        return original_decode(*args, **kwargs)
+
+    async def tracked_restore(prepared: Any, repository: Any, session_id: SessionId) -> None:
+        restored.append(session_id)
+        await original_restore(prepared, repository, session_id)
+
+    monkeypatch.setattr(PGAgentSessionRepository, "load", counted_load)
+    monkeypatch.setattr(PGAgentSessionRepository, "refresh", concurrent_refresh)
+    monkeypatch.setattr(pg_session_repository, "_decode_entry", counted_decode)
+    monkeypatch.setattr(answer_executor_module, "_restore_durable_evidence", tracked_restore)
+
+    async def model(**_kwargs: Any) -> AssistantTurn:
+        return AssistantTurn(
+            text="answer after concurrent history",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"input_tokens": 2, "output_tokens": 1},
+        )
+
+    profile = ModelProfile(context_window_tokens=1_000_000)
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
+        retrieve_knowledge_base=_retrieve_visual,
+        model_func=model,
+        model_profile=profile,
+        telemetry=NOOP_TELEMETRY,
+        text_window_budget=TextWindowBudget(tokens=850_000),
+        resolved_mode="research",
+    )
+    plan = AgentRunPlan.from_tools(
+        orchestrator.prepare_run("why").tools,
+        model_role="query",
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+    )
+    application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
+    await coordinator.start()
+    request = _answer_run_request(mode="research", agent_run_plan=plan)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=request,
+        idempotency_fingerprint=answer_run_request_fingerprint(request),
+    )
+    coordinator.wake()
+    try:
+        await _settle(_status_is(store, creation.run.run_id, "succeeded"))
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    run = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
+    assert run is not None and run.result is not None
+    assert injected is True
+    assert restored == [SessionId(_answer_run_input().agent_session_id)]
+    assert counters["load"] == 1
+    assert counters["decoded_rows"] == 1
+    assert counters["refresh"] > 1
 
 
 def _answer_runtime(

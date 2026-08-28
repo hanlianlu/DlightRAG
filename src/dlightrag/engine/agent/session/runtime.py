@@ -101,6 +101,7 @@ from dlightrag.engine.agent.session.repository import (
     AgentSessionRepository,
     AgentSessionSnapshot,
     project_transaction_commit,
+    validate_snapshot_refresh,
 )
 from dlightrag.engine.agent.session.transactions import (
     HostDeltaSettlement,
@@ -322,6 +323,19 @@ class OperationView:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class AgentSessionSnapshotSeed[HostDeltaT]:
+    """One repository-bound startup snapshot for exactly one Session Runtime."""
+
+    repository: AgentSessionRepository[HostDeltaT]
+    session_id: SessionId
+    snapshot: AgentSessionSnapshot
+
+    def __post_init__(self) -> None:
+        if self.snapshot.session_id != self.session_id:
+            raise ValueError("Agent Session seed snapshot belongs to another Session")
+
+
 class AgentSessionRuntime[HostDeltaT]:
     """Accept, restore, drive, control, and close durable Agent work."""
 
@@ -335,6 +349,7 @@ class AgentSessionRuntime[HostDeltaT]:
         provider_attempt_limit: int = 2,
         event_sink: EventSink | None = None,
         controls: RuntimeControlPort | None = None,
+        initial_snapshot: AgentSessionSnapshotSeed[HostDeltaT] | None = None,
     ) -> None:
         if fencing_epoch < 1:
             raise ValueError("Agent Session Runtime fencing epoch must be positive")
@@ -349,8 +364,16 @@ class AgentSessionRuntime[HostDeltaT]:
         self._provider_attempt_limit = provider_attempt_limit
         self._event_sink = event_sink
         self._controls = controls
-        self._snapshots: dict[SessionId, AgentSessionSnapshot] = {}
-        self._snapshot_locks: dict[SessionId, asyncio.Lock] = {}
+        if initial_snapshot is not None and initial_snapshot.repository is not repository:
+            raise ValueError("Agent Session seed belongs to another repository")
+        self._snapshots: dict[SessionId, AgentSessionSnapshot] = (
+            {initial_snapshot.session_id: initial_snapshot.snapshot}
+            if initial_snapshot is not None
+            else {}
+        )
+        self._snapshot_locks: dict[SessionId, asyncio.Lock] = (
+            {initial_snapshot.session_id: asyncio.Lock()} if initial_snapshot is not None else {}
+        )
 
     async def accept(
         self,
@@ -1607,10 +1630,20 @@ class AgentSessionRuntime[HostDeltaT]:
                     if previous is None
                     else await self._repository.refresh(session_id, previous=previous)
                 )
-            except Exception:
+            except BaseException:
                 self._snapshots.pop(session_id, None)
                 raise
-            if snapshot.session_id != session_id:
+            if previous is not None:
+                try:
+                    validate_snapshot_refresh(
+                        session_id,
+                        previous=previous,
+                        snapshot=snapshot,
+                    )
+                except ValueError:
+                    self._snapshots.pop(session_id, None)
+                    raise
+            elif snapshot.session_id != session_id:
                 self._snapshots.pop(session_id, None)
                 raise ValueError("Agent Session repository returned another Session")
             self._snapshots[session_id] = snapshot
@@ -1623,11 +1656,16 @@ class AgentSessionRuntime[HostDeltaT]:
     ) -> TransactionCommit:
         # The same per-Session lock orders repository outcomes and cache publication.
         async with self._snapshot_lock(session_id):
-            outcome = await self._repository.transact(
-                session_id=session_id,
-                fencing_epoch=self._fencing_epoch,
-                transaction=transaction,
-            )
+            try:
+                outcome = await self._repository.transact(
+                    session_id=session_id,
+                    fencing_epoch=self._fencing_epoch,
+                    transaction=transaction,
+                )
+            except BaseException:
+                # The write may have committed before its acknowledgement was lost.
+                self._snapshots.pop(session_id, None)
+                raise
             if isinstance(outcome, RegisterConflict):
                 self._snapshots.pop(session_id, None)
                 raise OperationConflictError(
@@ -1748,6 +1786,7 @@ __all__ = [
     "AgentSessionEventKind",
     "AgentSessionRuntime",
     "AgentSessionRuntimeError",
+    "AgentSessionSnapshotSeed",
     "CompactionRequired",
     "CompactionResult",
     "EventSink",
