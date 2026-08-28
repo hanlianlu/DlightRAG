@@ -1,8 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Canonical Agent Session repository/store read and transaction contract."""
 
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, replace
+from typing import Any, Protocol
 
 from dlightrag.engine.agent.session.entries import SessionEntry
 from dlightrag.engine.agent.session.graph import AgentSessionGraph
@@ -10,11 +10,17 @@ from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.projection import ContextProjection
 from dlightrag.engine.agent.session.registers import (
     ContextProjectionRegister,
+    DeleteRegister,
     LaneHead,
     LaneState,
     RegisterRecord,
+    SetRegister,
 )
-from dlightrag.engine.agent.session.transactions import SessionTransaction, TransactionOutcome
+from dlightrag.engine.agent.session.transactions import (
+    SessionTransaction,
+    TransactionCommit,
+    TransactionOutcome,
+)
 from dlightrag.engine.agent.session.tree import AgentSessionTree, LaneSnapshot
 
 
@@ -106,6 +112,64 @@ class AgentSessionSnapshot:
         )
 
 
+def project_transaction_commit(
+    snapshot: AgentSessionSnapshot,
+    transaction: SessionTransaction[Any],
+    commit: TransactionCommit,
+) -> AgentSessionSnapshot | None:
+    """Project one contiguous authoritative commit, or require an authoritative reload."""
+    if commit.commit_sequence != snapshot.commit_sequence + 1:
+        return None
+    expected_sequences = tuple(
+        range(
+            snapshot.last_entry_sequence + 1,
+            snapshot.last_entry_sequence + 1 + len(transaction.entries),
+        )
+    )
+    if commit.appended_sequences != expected_sequences:
+        return None
+    expected_register_sequences = tuple(
+        (write.ref, commit.commit_sequence) for write in transaction.register_writes
+    )
+    if commit.register_sequences != expected_register_sequences:
+        return None
+    stamped_entries = tuple(
+        replace(entry, sequence=sequence)
+        for entry, sequence in zip(
+            transaction.entries,
+            commit.appended_sequences,
+            strict=True,
+        )
+    )
+    registers = {record.ref: record for record in snapshot.registers}
+    for write in transaction.register_writes:
+        if isinstance(write, SetRegister):
+            registers[write.ref] = RegisterRecord(
+                value=write.value,
+                sequence=commit.commit_sequence,
+            )
+        elif isinstance(write, DeleteRegister):
+            registers.pop(write.ref, None)
+    try:
+        # Tuple concatenation preserves the identity of every decoded historical Entry.
+        return AgentSessionSnapshot(
+            session_id=snapshot.session_id,
+            commit_sequence=commit.commit_sequence,
+            last_entry_sequence=snapshot.last_entry_sequence + len(stamped_entries),
+            entries=snapshot.entries + stamped_entries,
+            registers=tuple(
+                record
+                for _, record in sorted(
+                    registers.items(),
+                    key=lambda item: (item[0].kind, item[0].key),
+                )
+            ),
+            selected_lane_id=snapshot.selected_lane_id,
+        )
+    except TypeError, ValueError:
+        return None
+
+
 class AgentSessionRepository[HostDeltaT](Protocol):
     """Coherent snapshot reads plus the atomic transaction adapter seam."""
 
@@ -127,4 +191,9 @@ class AgentSessionRepository[HostDeltaT](Protocol):
     ) -> TransactionOutcome: ...
 
 
-__all__ = ["AgentSessionCursor", "AgentSessionRepository", "AgentSessionSnapshot"]
+__all__ = [
+    "AgentSessionCursor",
+    "AgentSessionRepository",
+    "AgentSessionSnapshot",
+    "project_transaction_commit",
+]

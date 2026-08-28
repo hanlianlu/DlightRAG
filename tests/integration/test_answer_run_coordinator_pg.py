@@ -504,8 +504,28 @@ async def test_session_round_trips_through_jsonb(store: FingerprintingAnswerRunS
 
 async def test_accepted_run_executes_and_stores_a_projected_result_without_a_subscriber(
     store: FingerprintingAnswerRunStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A descriptor-only caller still gets a finished run and a safe canonical result."""
+    repository_calls = {"load": 0, "refresh": 0}
+    original_load = PGAgentSessionRepository.load
+    original_refresh = PGAgentSessionRepository.refresh
+
+    async def counted_load(repository: Any, session_id: SessionId) -> Any:
+        repository_calls["load"] += 1
+        return await original_load(repository, session_id)
+
+    async def counted_refresh(
+        repository: Any,
+        session_id: SessionId,
+        *,
+        previous: Any,
+    ) -> Any:
+        repository_calls["refresh"] += 1
+        return await original_refresh(repository, session_id, previous=previous)
+
+    monkeypatch.setattr(PGAgentSessionRepository, "load", counted_load)
+    monkeypatch.setattr(PGAgentSessionRepository, "refresh", counted_refresh)
     finish_success_calls = 0
     original_finish_success = store.finish_success
 
@@ -536,6 +556,7 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert result is not None
     session_snapshot = await store.load_routing(owner_id=_OWNER, run_id=run_id)
     assert session_snapshot is not None
+    assert repository_calls == {"load": 1, "refresh": 2}
     agent_snapshot = await store.claim_next(worker_id="unused")
     assert agent_snapshot is None
     session_id = SessionId(session_snapshot.agent_session_id)
@@ -579,6 +600,25 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
     store: FingerprintingAnswerRunStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    repository_calls = {"load": 0, "refresh": 0}
+    original_load = PGAgentSessionRepository.load
+    original_refresh = PGAgentSessionRepository.refresh
+
+    async def counted_load(repository: Any, session_id: SessionId) -> Any:
+        repository_calls["load"] += 1
+        return await original_load(repository, session_id)
+
+    async def counted_refresh(
+        repository: Any,
+        session_id: SessionId,
+        *,
+        previous: Any,
+    ) -> Any:
+        repository_calls["refresh"] += 1
+        return await original_refresh(repository, session_id, previous=previous)
+
+    monkeypatch.setattr(PGAgentSessionRepository, "load", counted_load)
+    monkeypatch.setattr(PGAgentSessionRepository, "refresh", counted_refresh)
     finish_success_calls = 0
     finish_failure_calls = 0
     original_finish_success = store.finish_success
@@ -655,6 +695,7 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
     assert finish_failure_calls == 0
     routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
     assert routing is not None
+    assert repository_calls == {"load": 2, "refresh": 3}
     reader = PGAgentSessionRepository(
         pool=cast(Any, store)._operation_pool,
         owner_id=_OWNER,
@@ -692,7 +733,28 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
 
 async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
     store: FingerprintingAnswerRunStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    repository_calls = {"load": 0, "refresh": 0}
+    original_load = PGAgentSessionRepository.load
+    original_refresh = PGAgentSessionRepository.refresh
+
+    async def counted_load(repository: Any, session_id: SessionId) -> Any:
+        repository_calls["load"] += 1
+        return await original_load(repository, session_id)
+
+    async def counted_refresh(
+        repository: Any,
+        session_id: SessionId,
+        *,
+        previous: Any,
+    ) -> Any:
+        repository_calls["refresh"] += 1
+        return await original_refresh(repository, session_id, previous=previous)
+
+    monkeypatch.setattr(PGAgentSessionRepository, "load", counted_load)
+    monkeypatch.setattr(PGAgentSessionRepository, "refresh", counted_refresh)
+
     class FailingSynthesizer:
         async def generate_stream(self, *_args: Any, **_kwargs: Any) -> Any:
             raise RuntimeError("generation failed")
@@ -723,6 +785,7 @@ async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
 
     routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
     assert routing is not None
+    assert repository_calls == {"load": 1, "refresh": 2}
     reader = PGAgentSessionRepository(
         pool=cast(Any, store)._operation_pool,
         owner_id=_OWNER,

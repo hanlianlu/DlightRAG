@@ -100,6 +100,7 @@ from dlightrag.engine.agent.session.repository import (
     AgentSessionCursor,
     AgentSessionRepository,
     AgentSessionSnapshot,
+    project_transaction_commit,
 )
 from dlightrag.engine.agent.session.transactions import (
     HostDeltaSettlement,
@@ -1637,7 +1638,7 @@ class AgentSessionRuntime[HostDeltaT]:
                 raise SessionLeaseLostError(session_id.value)
             previous = self._snapshots.get(session_id)
             if previous is not None:
-                projected = _project_commit(previous, transaction, outcome)
+                projected = project_transaction_commit(previous, transaction, outcome)
                 if projected is None:
                     self._snapshots.pop(session_id, None)
                 else:
@@ -1698,64 +1699,6 @@ def _duplicates(values: Iterable[str]) -> list[str]:
             repeated.add(value)
         seen.add(value)
     return sorted(repeated)
-
-
-def _project_commit(
-    snapshot: AgentSessionSnapshot,
-    transaction: SessionTransaction[Any],
-    commit: TransactionCommit,
-) -> AgentSessionSnapshot | None:
-    """Project only a contiguous authoritative commit; otherwise force a full reload."""
-    if commit.commit_sequence != snapshot.commit_sequence + 1:
-        return None
-    expected_sequences = tuple(
-        range(
-            snapshot.last_entry_sequence + 1,
-            snapshot.last_entry_sequence + 1 + len(transaction.entries),
-        )
-    )
-    if commit.appended_sequences != expected_sequences:
-        return None
-    expected_register_sequences = tuple(
-        (write.ref, commit.commit_sequence) for write in transaction.register_writes
-    )
-    if commit.register_sequences != expected_register_sequences:
-        return None
-    stamped_entries = tuple(
-        replace(entry, sequence=sequence)
-        for entry, sequence in zip(
-            transaction.entries,
-            commit.appended_sequences,
-            strict=True,
-        )
-    )
-    registers = {record.ref: record for record in snapshot.registers}
-    for write in transaction.register_writes:
-        if isinstance(write, SetRegister):
-            registers[write.ref] = RegisterRecord(
-                value=write.value,
-                sequence=commit.commit_sequence,
-            )
-        elif isinstance(write, DeleteRegister):
-            registers.pop(write.ref, None)
-    try:
-        # Tuple concatenation preserves the identity of every decoded historical Entry.
-        return AgentSessionSnapshot(
-            session_id=snapshot.session_id,
-            commit_sequence=commit.commit_sequence,
-            last_entry_sequence=snapshot.last_entry_sequence + len(stamped_entries),
-            entries=snapshot.entries + stamped_entries,
-            registers=tuple(
-                record
-                for _, record in sorted(
-                    registers.items(),
-                    key=lambda item: (item[0].kind, item[0].key),
-                )
-            ),
-            selected_lane_id=snapshot.selected_lane_id,
-        )
-    except TypeError, ValueError:
-        return None
 
 
 def _register(snapshot: AgentSessionSnapshot, ref: RegisterRef) -> RegisterRecord | None:

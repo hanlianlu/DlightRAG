@@ -808,7 +808,6 @@ class AnswerExecutor:
     async def _compact_fast_history_if_needed(
         self,
         *,
-        repository: Any,
         host: FastSessionHost,
         session_id: SessionId,
         lane_id: LaneId,
@@ -818,7 +817,7 @@ class AnswerExecutor:
         compaction_model_profile: ModelProfile,
     ) -> tuple[PriorTurns, dict[str, Any], bool]:
         """Commit one canonical projection satisfying every reachable Fast serializer."""
-        snapshot = replace(await repository.load(session_id), selected_lane_id=lane_id)
+        snapshot = await host.snapshot(session_id, selected_lane_id=lane_id)
         coordinator = CompactionCoordinator(
             model_profile=compaction_model_profile,
             context_policy=CONTEXT_POLICY,
@@ -889,7 +888,11 @@ class AnswerExecutor:
                 raise
             except Exception as exc:
                 failures.append(_fast_compaction_failure(attempt, "commit", exc))
-                authoritative = replace(await repository.load(session_id), selected_lane_id=lane_id)
+                authoritative = await host.snapshot(
+                    session_id,
+                    selected_lane_id=lane_id,
+                    force_reload=True,
+                )
                 if _active_fast_compaction(authoritative, projection) is not None:
                     recovered = _project_fast_history_before_current_user(
                         authoritative,
@@ -1011,8 +1014,12 @@ class AnswerExecutor:
         stream: AsyncIterator[str] | None = None
         try:
             await ensure_session_lane(
-                transactions=repository,
-                load=repository.load,
+                repository=repository,
+                snapshot=(
+                    canonical_snapshot
+                    if resolved_mode == "fast"
+                    else await repository.load(agent_session_id)
+                ),
                 fencing_epoch=session.execution.fencing_epoch,
                 session_id=agent_session_id,
                 lane_id=agent_lane_id,
@@ -1248,8 +1255,8 @@ class AnswerExecutor:
                     },
                 )
                 fast_session_host = FastSessionHost(
-                    transactions=repository,
-                    load=repository.load,
+                    repository=repository,
+                    initial_snapshot=canonical_snapshot,
                     load_settled_result=fast_boundaries.load_settled_result,
                     fencing_epoch=session.execution.fencing_epoch,
                 )
@@ -1271,8 +1278,8 @@ class AnswerExecutor:
                     return AlreadyCommittedTerminal(terminal)
                 fast_reservation_active = True
                 if not fast_turn.created:
-                    replay_snapshot = replace(
-                        await repository.load(agent_session_id),
+                    replay_snapshot = await fast_session_host.snapshot(
+                        agent_session_id,
                         selected_lane_id=agent_lane_id,
                     )
                     run.history = _project_fast_history_before_current_user(
@@ -1291,7 +1298,6 @@ class AnswerExecutor:
                         compaction_trace,
                         compacted,
                     ) = await self._compact_fast_history_if_needed(
-                        repository=repository,
                         host=fast_session_host,
                         session_id=agent_session_id,
                         lane_id=agent_lane_id,

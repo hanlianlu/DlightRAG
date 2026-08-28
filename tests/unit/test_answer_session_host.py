@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Fast Host turns share the canonical Agent Session tree without an Operation."""
 
+import asyncio
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -15,19 +17,37 @@ from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import ContextProjection, projection_source_digest
 from dlightrag.engine.agent.session.registers import (
+    DeleteRegister,
     HostTurnReservation,
+    LaneHead,
     LaneState,
+    RegisterRecord,
+    RegisterRef,
     SetRegister,
     decode_register,
 )
-from dlightrag.engine.agent.session.runtime import AgentSessionRuntime, OperationConflictError
-from dlightrag.engine.agent.session.transactions import RegisterExpectation, SessionTransaction
+from dlightrag.engine.agent.session.repository import (
+    AgentSessionSnapshot,
+    project_transaction_commit,
+)
+from dlightrag.engine.agent.session.runtime import (
+    AgentSessionRuntime,
+    OperationConflictError,
+    SessionLeaseLostError,
+)
+from dlightrag.engine.agent.session.transactions import (
+    RegisterConflict,
+    RegisterExpectation,
+    SessionTransaction,
+    TransactionCommit,
+    TransactionLeaseLost,
+)
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.answer.execution.executor import (
     AnswerExecutor,
     _project_fast_history_before_current_user,
 )
-from dlightrag.engine.answer.fast import FastSessionHost
+from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
 from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.runtime import RunExecutionError
 
@@ -43,9 +63,16 @@ class _CompactionFaultTransactions:
         self._store = store
         self._applied = applied
         self.injected = False
+        self.load_calls = 0
+        self.refresh_calls = 0
 
     async def load(self, session_id: SessionId):
+        self.load_calls += 1
         return await self._store.load(session_id)
+
+    async def refresh(self, session_id: SessionId, *, previous):
+        self.refresh_calls += 1
+        return await self._store.refresh(session_id, previous=previous)
 
     async def transact(self, *, session_id, fencing_epoch, transaction):
         if not self.injected and any(
@@ -85,6 +112,122 @@ class _CompactionFaultTransactions:
         )
 
 
+async def _fast_host(
+    repository: Any,
+    session_id: SessionId,
+    *,
+    load_settled_result: Any = _no_settled_result,
+) -> FastSessionHost:
+    return FastSessionHost(
+        repository=repository,
+        initial_snapshot=await repository.load(session_id),
+        load_settled_result=load_settled_result,
+        fencing_epoch=1,
+    )
+
+
+async def _seed_history(
+    repository: MemoryAgentSessionRepository[None],
+    session_id: SessionId,
+    *,
+    count: int,
+) -> tuple[UserMessageEntry, ...]:
+    entries: list[UserMessageEntry] = []
+    parent: EntryId | None = None
+    for index in range(count):
+        entry = UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.now(UTC),
+            parent_entry_id=parent,
+            content=f"history {index}",
+        )
+        entries.append(entry)
+        parent = entry.entry_id
+    head = LaneHead(LaneId.main(), parent)
+    state = LaneState(LaneId.main())
+    await repository.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=entries,
+            register_writes=[SetRegister(head), SetRegister(state)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(state.ref, None),
+            ],
+        ),
+    )
+    return tuple(entries)
+
+
+class _CountingFastRepository(MemoryAgentSessionRepository[None]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.load_calls = 0
+        self.refresh_calls = 0
+        self.decoded_rows = 0
+        self.loaded_snapshots: list[AgentSessionSnapshot] = []
+
+    async def load(self, session_id: SessionId) -> AgentSessionSnapshot:
+        self.load_calls += 1
+        snapshot = await super().load(session_id)
+        self.decoded_rows += len(snapshot.entries)
+        self.loaded_snapshots.append(snapshot)
+        return snapshot
+
+    async def refresh(
+        self,
+        session_id: SessionId,
+        *,
+        previous: AgentSessionSnapshot,
+    ) -> AgentSessionSnapshot:
+        self.refresh_calls += 1
+        snapshot = await super().refresh(session_id, previous=previous)
+        self.decoded_rows += snapshot.last_entry_sequence - previous.last_entry_sequence
+        return snapshot
+
+    async def authoritative(self, session_id: SessionId) -> AgentSessionSnapshot:
+        return await super().load(session_id)
+
+
+class _ForcedFastRepository(_CountingFastRepository):
+    forced: str | None = None
+
+    async def transact(self, **kwargs: Any):
+        if self.forced == "conflict":
+            return RegisterConflict(RegisterRef("lane_head", LaneId.main().value), None, 1)
+        if self.forced == "lease":
+            return TransactionLeaseLost()
+        if self.forced == "exception":
+            raise RuntimeError("transaction acknowledgement lost")
+        outcome = await super().transact(**kwargs)
+        if self.forced == "noncontiguous":
+            assert isinstance(outcome, TransactionCommit)
+            return TransactionCommit(
+                commit_sequence=outcome.commit_sequence + 1,
+                appended_sequences=outcome.appended_sequences,
+                register_sequences=tuple(
+                    (ref, sequence + 1) for ref, sequence in outcome.register_sequences
+                ),
+            )
+        return outcome
+
+
+class _SlowFastRepository(_CountingFastRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.block_transaction = False
+        self.transaction_started = asyncio.Event()
+        self.release_transaction = asyncio.Event()
+
+    async def transact(self, **kwargs: Any):
+        if self.block_transaction:
+            self.transaction_started.set()
+            await self.release_transaction.wait()
+        return await super().transact(**kwargs)
+
+
 class _CountingCompactionModel:
     def __init__(self) -> None:
         self.calls = 0
@@ -97,13 +240,8 @@ class _CountingCompactionModel:
 async def _run_fault_injected_compaction(*, applied: bool):
     store = MemoryAgentSessionRepository[None]()
     transactions = _CompactionFaultTransactions(store, applied=applied)
-    host = FastSessionHost(
-        transactions=transactions,
-        load=transactions.load,
-        load_settled_result=_no_settled_result,
-        fencing_epoch=1,
-    )
     session_id = SessionId.new()
+    host = await _fast_host(transactions, session_id)
     old_question = "question " * 4_000
     old_answer = "answer " * 4_000
     await host.accept(
@@ -143,7 +281,6 @@ async def _run_fault_injected_compaction(*, applied: bool):
     executor._models = cast(Any, _Models())
     profile = ModelProfile(context_window_tokens=100_000)
     compacted, trace, committed = await executor._compact_fast_history_if_needed(
-        repository=transactions,
         host=host,
         session_id=session_id,
         lane_id=LaneId.main(),
@@ -179,6 +316,270 @@ def test_fast_host_turn_reservation_round_trips_closed_register_codec() -> None:
     )
 
 
+def test_transaction_commit_projection_stamps_entries_and_applies_register_writes() -> None:
+    session_id = SessionId.new()
+    lane_id = LaneId.new()
+    user = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        sequence=1,
+        content="question",
+        acceptance_id="run",
+    )
+    reservation = HostTurnReservation(lane_id, "run", "request", user.entry_id)
+    snapshot = AgentSessionSnapshot(
+        session_id=session_id,
+        commit_sequence=1,
+        last_entry_sequence=1,
+        entries=(user,),
+        registers=(
+            RegisterRecord(LaneHead(lane_id, user.entry_id), 1),
+            RegisterRecord(LaneState(lane_id), 1),
+            RegisterRecord(reservation, 1),
+        ),
+        selected_lane_id=lane_id,
+    )
+    assistant = AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        parent_entry_id=user.entry_id,
+        content="answer",
+        stop_reason="stop",
+        acceptance_id="run",
+    )
+    transaction = SessionTransaction.from_parts(
+        entries=[assistant],
+        register_writes=[
+            SetRegister(LaneHead(lane_id, assistant.entry_id)),
+            DeleteRegister(reservation.ref),
+        ],
+        expectations=[
+            RegisterExpectation(LaneHead(lane_id, None).ref, 1),
+            RegisterExpectation(reservation.ref, 1),
+        ],
+    )
+    commit = TransactionCommit(
+        commit_sequence=2,
+        appended_sequences=(2,),
+        register_sequences=(
+            (LaneHead(lane_id, None).ref, 2),
+            (reservation.ref, 2),
+        ),
+    )
+
+    projected = project_transaction_commit(snapshot, transaction, commit)
+
+    assert projected is not None
+    assert projected.selected_lane_id == lane_id
+    assert projected.entries[0] is user
+    assert projected.entries[1].sequence == 2
+    assert projected.entries[1].entry_id == assistant.entry_id
+    assert next(
+        record for record in projected.registers if record.ref == LaneHead(lane_id, None).ref
+    ) == RegisterRecord(LaneHead(lane_id, assistant.entry_id), 2)
+    assert all(record.ref != reservation.ref for record in projected.registers)
+    assert (
+        project_transaction_commit(
+            snapshot,
+            transaction,
+            TransactionCommit(
+                commit_sequence=3,
+                appended_sequences=(2,),
+                register_sequences=commit.register_sequences,
+            ),
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_fast_host_decodes_long_history_once_across_accept_complete_fail_and_replay() -> None:
+    repository = _CountingFastRepository()
+    session_id = SessionId.new()
+    await _seed_history(repository, session_id, count=1000)
+    canonical = await repository.load(session_id)
+    host = FastSessionHost(
+        repository=repository,
+        initial_snapshot=canonical,
+        load_settled_result=_no_settled_result,
+        fencing_epoch=1,
+    )
+
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="completed",
+        idempotency_key="completed-key",
+        content="new question",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="completed",
+        content="new answer",
+    )
+    failed = await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="failed",
+        idempotency_key="failed-key",
+        content="failed question",
+    )
+    await host.fail(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="failed",
+    )
+    replay = await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="failed",
+        idempotency_key="failed-key",
+        content="failed question",
+    )
+    boundary = await host.snapshot(session_id)
+
+    assert failed.created is True
+    assert replay.created is False
+    assert replay.user_entry_id == failed.user_entry_id
+    assert repository.load_calls == 1
+    assert repository.refresh_calls == 6
+    assert repository.decoded_rows == 1000
+    assert all(boundary.entries[index] is canonical.entries[index] for index in range(1000))
+
+    # The replaced raw-load seam decoded the whole growing snapshot at each boundary.
+    legacy_full_loads = 1 + repository.refresh_calls
+    legacy_decoded_rows = 1000 + sum((1000, 1001, 1002, 1003, 1003, 1003))
+    assert legacy_full_loads == 7
+    assert legacy_decoded_rows == 7012
+
+
+@pytest.mark.asyncio
+async def test_first_host_refresh_observes_lane_fork_committed_after_initial_snapshot() -> None:
+    repository = _CountingFastRepository()
+    session_id = SessionId.new()
+    await _seed_history(repository, session_id, count=2)
+    canonical = await repository.load(session_id)
+    lane_id = LaneId.new()
+    await ensure_session_lane(
+        repository=repository,
+        snapshot=canonical,
+        fencing_epoch=1,
+        session_id=session_id,
+        lane_id=lane_id,
+        source_lane_id=LaneId.main(),
+    )
+    host = FastSessionHost(
+        repository=repository,
+        initial_snapshot=canonical,
+        load_settled_result=_no_settled_result,
+        fencing_epoch=1,
+    )
+
+    accepted = await host.accept(
+        session_id=session_id,
+        lane_id=lane_id,
+        reservation_id="branch-run",
+        idempotency_key="branch-key",
+        content="branch question",
+    )
+    boundary = await host.snapshot(session_id, selected_lane_id=lane_id)
+
+    assert accepted.created is True
+    assert boundary.tree.ancestry(lane_id)[-1].entry_id == accepted.user_entry_id
+    assert repository.load_calls == 1
+    assert repository.decoded_rows == 2
+    assert boundary.selected_lane_id == lane_id
+    assert canonical.selected_lane_id == LaneId.main()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("forced", "error"),
+    [
+        ("conflict", OperationConflictError),
+        ("lease", SessionLeaseLostError),
+        ("exception", RuntimeError),
+    ],
+)
+async def test_fast_host_invalidates_cache_on_non_authoritative_transaction_outcome(
+    forced: str,
+    error: type[BaseException],
+) -> None:
+    repository = _ForcedFastRepository()
+    session_id = SessionId.new()
+    host = await _fast_host(repository, session_id)
+    repository.forced = forced
+
+    with pytest.raises(error):
+        await host.accept(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            reservation_id="forced",
+            idempotency_key="forced-key",
+            content="question",
+        )
+
+    assert session_id not in host._snapshots  # pyright: ignore[reportPrivateUsage]
+    repository.forced = None
+    await host.snapshot(session_id)
+    assert repository.load_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_noncontiguous_commit_metadata_invalidates_instead_of_caching_speculation() -> None:
+    repository = _ForcedFastRepository()
+    session_id = SessionId.new()
+    host = await _fast_host(repository, session_id)
+    repository.forced = "noncontiguous"
+
+    accepted = await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="malformed",
+        idempotency_key="malformed-key",
+        content="question",
+    )
+
+    assert session_id not in host._snapshots  # pyright: ignore[reportPrivateUsage]
+    repository.forced = None
+    authoritative = await host.snapshot(session_id)
+    assert authoritative.commit_sequence == 1
+    assert authoritative.entries[-1].entry_id == accepted.user_entry_id
+    assert repository.load_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_host_snapshot_waits_for_commit_projection_without_regression() -> None:
+    repository = _SlowFastRepository()
+    session_id = SessionId.new()
+    host = await _fast_host(repository, session_id)
+    repository.block_transaction = True
+    accepted_task = asyncio.create_task(
+        host.accept(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            reservation_id="concurrent",
+            idempotency_key="concurrent-key",
+            content="question",
+        )
+    )
+    await repository.transaction_started.wait()
+    snapshot_task = asyncio.create_task(host.snapshot(session_id))
+    await asyncio.sleep(0)
+    assert snapshot_task.done() is False
+
+    repository.release_transaction.set()
+    accepted, boundary = await asyncio.gather(accepted_task, snapshot_task)
+
+    assert boundary.commit_sequence == 1
+    assert boundary.entries[-1].entry_id == accepted.user_entry_id
+    assert host._snapshots[session_id] is boundary  # pyright: ignore[reportPrivateUsage]
+    assert repository.load_calls == 1
+
+
 @pytest.mark.asyncio
 async def test_fast_turn_accepts_user_and_reservation_then_settles_assistant() -> None:
     store = MemoryAgentSessionRepository[None]()
@@ -187,13 +588,8 @@ async def test_fast_turn_accepts_user_and_reservation_then_settles_assistant() -
     async def load_settled_result() -> dict[str, Any] | None:
         return settled_result
 
-    host = FastSessionHost(
-        transactions=store,
-        load=store.load,
-        load_settled_result=load_settled_result,
-        fencing_epoch=1,
-    )
     session_id = SessionId.new()
+    host = await _fast_host(store, session_id, load_settled_result=load_settled_result)
 
     accepted = await host.accept(
         session_id=session_id,
@@ -267,13 +663,8 @@ async def test_staged_fast_result_settles_active_reservation_without_regeneratio
     async def load_settled_result() -> dict[str, Any] | None:
         return settled_result
 
-    host = FastSessionHost(
-        transactions=store,
-        load=store.load,
-        load_settled_result=load_settled_result,
-        fencing_epoch=1,
-    )
     session_id = SessionId.new()
+    host = await _fast_host(store, session_id, load_settled_result=load_settled_result)
     await host.accept(
         session_id=session_id,
         lane_id=LaneId.main(),
@@ -329,13 +720,8 @@ async def test_fast_replay_reinstalls_reservation_on_durable_compaction_checkpoi
     async def load_settled_result() -> dict[str, Any] | None:
         return settled_result
 
-    host = FastSessionHost(
-        transactions=store,
-        load=store.load,
-        load_settled_result=load_settled_result,
-        fencing_epoch=1,
-    )
     session_id = SessionId.new()
+    host = await _fast_host(store, session_id, load_settled_result=load_settled_result)
     await host.accept(
         session_id=session_id,
         lane_id=LaneId.main(),
@@ -497,14 +883,9 @@ async def test_fast_replay_reinstalls_reservation_on_durable_compaction_checkpoi
 
 @pytest.mark.asyncio
 async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profiles() -> None:
-    store = MemoryAgentSessionRepository[None]()
-    host = FastSessionHost(
-        transactions=store,
-        load=store.load,
-        load_settled_result=_no_settled_result,
-        fencing_epoch=1,
-    )
+    store = _CountingFastRepository()
     session_id = SessionId.new()
+    host = await _fast_host(store, session_id)
     old_question = "question " * 4_000
     old_answer = "answer " * 4_000
     await host.accept(
@@ -552,7 +933,6 @@ async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profil
     query_profile = ModelProfile(context_window_tokens=1_000_000)
     extract_profile = ModelProfile(context_window_tokens=100_000)
     compacted, trace, committed = await executor._compact_fast_history_if_needed(
-        repository=store,
         host=host,
         session_id=session_id,
         lane_id=LaneId.main(),
@@ -584,9 +964,11 @@ async def test_fast_compaction_satisfies_smaller_extract_and_larger_query_profil
     assert planner_trace["input_tokens_after"] <= planner_trace["input_limit_tokens"]
     assert generation_trace["input_tokens_before"] <= generation_trace["input_limit_tokens"]
     assert all(message.get("content") != "current question" for message in compacted.messages)
-    snapshot = await store.load(session_id)
+    snapshot = await host.snapshot(session_id)
     assert isinstance(snapshot.tree.ancestry()[-1], CompactionEntry)
     assert snapshot.active_projection is not None
+    assert store.load_calls == 1
+    assert store.decoded_rows == 0
 
 
 @pytest.mark.asyncio
@@ -602,6 +984,7 @@ async def test_ambiguous_fast_compaction_commit_recovers_applied_projection() ->
     ) = await _run_fault_injected_compaction(applied=True)
 
     assert transactions.injected is True
+    assert transactions.load_calls == 2
     assert model.calls == 1
     assert committed is True
     assert trace["fast_compaction_recovered"] is True
@@ -624,6 +1007,7 @@ async def test_genuine_fast_compaction_cas_conflict_reprepares_from_reload() -> 
     ) = await _run_fault_injected_compaction(applied=False)
 
     assert transactions.injected is True
+    assert transactions.load_calls == 2
     assert model.calls == 2
     assert committed is True
     assert trace["fast_compaction_attempt"] > 1
@@ -635,13 +1019,8 @@ async def test_genuine_fast_compaction_cas_conflict_reprepares_from_reload() -> 
 @pytest.mark.asyncio
 async def test_failed_fast_compaction_commits_nothing_and_traces_failure(caplog) -> None:
     store = MemoryAgentSessionRepository[None]()
-    host = FastSessionHost(
-        transactions=store,
-        load=store.load,
-        load_settled_result=_no_settled_result,
-        fencing_epoch=1,
-    )
     session_id = SessionId.new()
+    host = await _fast_host(store, session_id)
     old_question = "question " * 4_000
     old_answer = "answer " * 4_000
     await host.accept(
@@ -694,7 +1073,6 @@ async def test_failed_fast_compaction_commits_nothing_and_traces_failure(caplog)
     profile = ModelProfile(context_window_tokens=100_000)
     with pytest.raises(RunExecutionError) as caught:
         await executor._compact_fast_history_if_needed(
-            repository=store,
             host=host,
             session_id=session_id,
             lane_id=LaneId.main(),
@@ -728,13 +1106,8 @@ async def test_staged_fast_result_rejects_an_interleaved_lane_head() -> None:
     async def load_settled_result() -> dict[str, Any] | None:
         return settled_result
 
-    host = FastSessionHost(
-        transactions=store,
-        load=store.load,
-        load_settled_result=load_settled_result,
-        fencing_epoch=1,
-    )
     session_id = SessionId.new()
+    host = await _fast_host(store, session_id, load_settled_result=load_settled_result)
     await host.accept(
         session_id=session_id,
         lane_id=LaneId.main(),
@@ -788,13 +1161,8 @@ async def test_staged_fast_result_rejects_an_interleaved_lane_head() -> None:
 @pytest.mark.asyncio
 async def test_fast_failure_clears_reservation_but_keeps_unanswered_user() -> None:
     store = MemoryAgentSessionRepository[None]()
-    host = FastSessionHost(
-        transactions=store,
-        load=store.load,
-        load_settled_result=_no_settled_result,
-        fencing_epoch=1,
-    )
     session_id = SessionId.new()
+    host = await _fast_host(store, session_id)
     await host.accept(
         session_id=session_id,
         lane_id=LaneId.main(),
@@ -842,12 +1210,7 @@ async def test_fast_failure_clears_reservation_but_keeps_unanswered_user() -> No
 async def test_runtime_accept_rejects_a_fast_reservation_on_the_same_lane() -> None:
     store = MemoryAgentSessionRepository[None]()
     session_id = SessionId.new()
-    host = FastSessionHost(
-        transactions=store,
-        load=store.load,
-        load_settled_result=_no_settled_result,
-        fencing_epoch=1,
-    )
+    host = await _fast_host(store, session_id)
     await host.accept(
         session_id=session_id,
         lane_id=LaneId.main(),

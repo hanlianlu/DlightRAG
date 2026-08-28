@@ -1498,8 +1498,8 @@ async def test_fast_compaction_recovers_between_projection_and_assistant(pool) -
     session_id = SessionId.new()
     first = await _claim(pool, session_id=session_id)
     first_host = FastSessionHost(
-        transactions=first.execution.session_repository,
-        load=first.execution.session_repository.load,
+        repository=first.execution.session_repository,
+        initial_snapshot=await first.execution.session_repository.load(session_id),
         load_settled_result=_no_settled_result,
         fencing_epoch=first.execution.fencing_epoch,
     )
@@ -1532,8 +1532,8 @@ async def test_fast_compaction_recovers_between_projection_and_assistant(pool) -
         return settled_result
 
     second_host = FastSessionHost(
-        transactions=second.execution.session_repository,
-        load=second.execution.session_repository.load,
+        repository=second.execution.session_repository,
+        initial_snapshot=await second.execution.session_repository.load(session_id),
         load_settled_result=load_settled_result,
         fencing_epoch=second.execution.fencing_epoch,
     )
@@ -1544,7 +1544,7 @@ async def test_fast_compaction_recovers_between_projection_and_assistant(pool) -
         idempotency_key="second-compaction-turn",
         content="current question",
     )
-    before = await second.execution.session_repository.load(session_id)
+    before = await second_host.snapshot(session_id)
     ancestry = before.tree.ancestry()
     projection = ContextProjection(
         projection_id=ProjectionId.new(),
@@ -1599,8 +1599,8 @@ async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool
     session_id = SessionId.new()
     first = await _claim(pool, session_id=session_id)
     first_host = FastSessionHost(
-        transactions=first.execution.session_repository,
-        load=first.execution.session_repository.load,
+        repository=first.execution.session_repository,
+        initial_snapshot=await first.execution.session_repository.load(session_id),
         load_settled_result=_no_settled_result,
         fencing_epoch=first.execution.fencing_epoch,
     )
@@ -1628,8 +1628,8 @@ async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool
 
     second = await _claim(pool, session_id=session_id)
     second_host = FastSessionHost(
-        transactions=second.execution.session_repository,
-        load=second.execution.session_repository.load,
+        repository=second.execution.session_repository,
+        initial_snapshot=await second.execution.session_repository.load(session_id),
         load_settled_result=_no_settled_result,
         fencing_epoch=second.execution.fencing_epoch,
     )
@@ -1661,17 +1661,18 @@ async def test_product_session_spans_answer_runs_and_projects_selected_lane(pool
         lane_id=branch_id,
         source_lane_id=LaneId.main(),
     )
+    branch_snapshot = await branch.execution.session_repository.load(session_id)
     await ensure_session_lane(
-        transactions=branch.execution.session_repository,
-        load=branch.execution.session_repository.load,
+        repository=branch.execution.session_repository,
+        snapshot=branch_snapshot,
         fencing_epoch=branch.execution.fencing_epoch,
         session_id=session_id,
         source_lane_id=LaneId.main(),
         lane_id=branch_id,
     )
     branch_host = FastSessionHost(
-        transactions=branch.execution.session_repository,
-        load=branch.execution.session_repository.load,
+        repository=branch.execution.session_repository,
+        initial_snapshot=branch_snapshot,
         load_settled_result=_no_settled_result,
         fencing_epoch=branch.execution.fencing_epoch,
     )
@@ -1740,8 +1741,8 @@ async def test_lane_register_cas_does_not_conflict_across_branches(pool) -> None
     main = initial.tree.lane()
     branch_id = LaneId.new()
     await ensure_session_lane(
-        transactions=store,
-        load=store.load,
+        repository=store,
+        snapshot=initial,
         fencing_epoch=claimed.execution.fencing_epoch,
         session_id=session_id,
         source_lane_id=LaneId.main(),

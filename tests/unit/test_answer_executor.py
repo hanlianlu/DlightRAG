@@ -62,13 +62,14 @@ from tests.unit.conftest import answer_image_policy
 @pytest.mark.asyncio
 async def test_missing_fork_session_is_a_typed_run_conflict() -> None:
     store = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
 
     with pytest.raises(RunExecutionError) as raised:
         await ensure_session_lane(
-            transactions=store,
-            load=store.load,
+            repository=store,
+            snapshot=await store.load(session_id),
             fencing_epoch=1,
-            session_id=SessionId.new(),
+            session_id=session_id,
             lane_id=LaneId.new(),
             source_lane_id=LaneId.main(),
         )

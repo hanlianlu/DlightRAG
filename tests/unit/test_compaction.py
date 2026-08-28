@@ -58,13 +58,13 @@ async def test_coordinator_compacts_direct_fast_pairs_without_a_baseline_registe
     async def no_result() -> None:
         return None
 
+    session_id = SessionId.new()
     host = FastSessionHost(
-        transactions=store,
-        load=store.load,
+        repository=store,
+        initial_snapshot=await store.load(session_id),
         load_settled_result=no_result,
         fencing_epoch=1,
     )
-    session_id = SessionId.new()
     await host.accept(
         session_id=session_id,
         lane_id=LaneId.main(),

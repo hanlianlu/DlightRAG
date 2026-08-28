@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -26,13 +27,16 @@ from dlightrag.engine.agent.session.registers import (
     SessionFault,
     SetRegister,
 )
-from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
+from dlightrag.engine.agent.session.repository import (
+    AgentSessionRepository,
+    AgentSessionSnapshot,
+    project_transaction_commit,
+)
 from dlightrag.engine.agent.session.runtime import OperationConflictError, SessionLeaseLostError
 from dlightrag.engine.agent.session.transactions import (
     RegisterConflict,
     RegisterExpectation,
     SessionTransaction,
-    SessionTransactionPort,
     TransactionCommit,
     TransactionLeaseLost,
 )
@@ -60,15 +64,61 @@ class FastSessionHost:
     def __init__(
         self,
         *,
-        transactions: SessionTransactionPort[Any],
-        load: Any,
+        repository: AgentSessionRepository[Any],
+        initial_snapshot: AgentSessionSnapshot,
         load_settled_result: Callable[[], Awaitable[Mapping[str, Any] | None]],
         fencing_epoch: int,
     ) -> None:
-        self._transactions = transactions
-        self._load = load
+        self._repository = repository
+        self._snapshots = {initial_snapshot.session_id: initial_snapshot}
+        self._snapshot_locks = {initial_snapshot.session_id: asyncio.Lock()}
         self._load_settled_result = load_settled_result
         self._fencing_epoch = fencing_epoch
+
+    async def snapshot(
+        self,
+        session_id: SessionId,
+        *,
+        selected_lane_id: LaneId | None = None,
+        force_reload: bool = False,
+    ) -> AgentSessionSnapshot:
+        """Return one refreshed boundary without re-decoding its historical prefix."""
+        async with self._snapshot_lock(session_id):
+            if force_reload:
+                self._snapshots.pop(session_id, None)
+            previous = self._snapshots.get(session_id)
+            try:
+                snapshot = (
+                    await self._repository.load(session_id)
+                    if previous is None
+                    else await self._repository.refresh(session_id, previous=previous)
+                )
+            except BaseException:
+                self._snapshots.pop(session_id, None)
+                raise
+            if snapshot.session_id != session_id:
+                self._snapshots.pop(session_id, None)
+                raise ValueError("Agent Session repository returned another Session")
+            if previous is not None and (
+                snapshot.commit_sequence < previous.commit_sequence
+                or snapshot.last_entry_sequence < previous.last_entry_sequence
+            ):
+                self._snapshots.pop(session_id, None)
+                raise ValueError("Agent Session refresh cursor regressed")
+            if previous is not None and snapshot.selected_lane_id != previous.selected_lane_id:
+                self._snapshots.pop(session_id, None)
+                raise ValueError("Agent Session refresh changed its selected Lane")
+            self._snapshots[session_id] = snapshot
+            if selected_lane_id is not None and snapshot.selected_lane_id != selected_lane_id:
+                return replace(snapshot, selected_lane_id=selected_lane_id)
+            return snapshot
+
+    def _snapshot_lock(self, session_id: SessionId) -> asyncio.Lock:
+        lock = self._snapshot_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._snapshot_locks[session_id] = lock
+        return lock
 
     async def accept(
         self,
@@ -79,7 +129,7 @@ class FastSessionHost:
         idempotency_key: str,
         content: Any,
     ) -> AcceptedFastTurn:
-        snapshot = await self._load(session_id)
+        snapshot = await self.snapshot(session_id)
         _reject_fault(snapshot)
         settled_payload = await self._load_settled_result()
         reservation_ref = RegisterRef("host_turn_reservation", lane_id.value)
@@ -379,7 +429,7 @@ class FastSessionHost:
         usage: Any | None = None,
         cost: Any | None = None,
     ) -> TransactionCommit | None:
-        snapshot = await self._load(session_id)
+        snapshot = await self.snapshot(session_id)
         _reject_fault(snapshot)
         reservation_record = _reservation(snapshot, lane_id)
         if reservation_record is None:
@@ -464,7 +514,7 @@ class FastSessionHost:
     ) -> TransactionCommit | None:
         if await self._load_settled_result() is not None:
             return None
-        snapshot = await self._load(session_id)
+        snapshot = await self.snapshot(session_id)
         reservation = _reservation(snapshot, lane_id)
         if reservation is None:
             ancestry = snapshot.tree.ancestry(lane_id)
@@ -492,29 +542,48 @@ class FastSessionHost:
         session_id: SessionId,
         transaction: SessionTransaction[Any],
     ) -> TransactionCommit:
-        outcome = await self._transactions.transact(
-            session_id=session_id,
-            fencing_epoch=self._fencing_epoch,
-            transaction=transaction,
-        )
-        if isinstance(outcome, RegisterConflict):
-            raise OperationConflictError(f"register {outcome.ref.kind}:{outcome.ref.key} changed")
-        if isinstance(outcome, TransactionLeaseLost):
-            raise SessionLeaseLostError(session_id.value)
-        return outcome
+        # Repository outcomes and cache publication are ordered per Session.
+        async with self._snapshot_lock(session_id):
+            try:
+                outcome = await self._repository.transact(
+                    session_id=session_id,
+                    fencing_epoch=self._fencing_epoch,
+                    transaction=transaction,
+                )
+            except BaseException:
+                # The write may have committed before its acknowledgement was lost.
+                self._snapshots.pop(session_id, None)
+                raise
+            if isinstance(outcome, RegisterConflict):
+                self._snapshots.pop(session_id, None)
+                raise OperationConflictError(
+                    f"register {outcome.ref.kind}:{outcome.ref.key} changed"
+                )
+            if isinstance(outcome, TransactionLeaseLost):
+                self._snapshots.pop(session_id, None)
+                raise SessionLeaseLostError(session_id.value)
+            previous = self._snapshots.get(session_id)
+            if previous is not None:
+                projected = project_transaction_commit(previous, transaction, outcome)
+                if projected is None:
+                    self._snapshots.pop(session_id, None)
+                else:
+                    self._snapshots[session_id] = projected
+            return outcome
 
 
 async def ensure_session_lane(
     *,
-    transactions: SessionTransactionPort[Any],
-    load: Any,
+    repository: AgentSessionRepository[Any],
+    snapshot: AgentSessionSnapshot,
     fencing_epoch: int,
     session_id: SessionId,
     lane_id: LaneId,
     source_lane_id: LaneId | None,
 ) -> None:
-    """Open an existing Lane or atomically fork it from a stable source Head."""
-    snapshot = await load(session_id)
+    """Open or fork a Lane from the executor's authoritative cold-load boundary."""
+    if snapshot.session_id != session_id:
+        raise ValueError("Agent Session Lane snapshot belongs to another Session")
     try:
         snapshot.tree.lane(lane_id)
         return
@@ -531,7 +600,7 @@ async def ensure_session_lane(
             raise ValueError("source Lane is not a stable fork checkpoint")
         head = LaneHead(lane_id, target)
         state = LaneState(lane_id)
-        outcome = await transactions.transact(
+        outcome = await repository.transact(
             session_id=session_id,
             fencing_epoch=fencing_epoch,
             transaction=SessionTransaction.from_parts(
