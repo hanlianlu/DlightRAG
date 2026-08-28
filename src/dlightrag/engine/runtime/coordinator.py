@@ -51,7 +51,10 @@ _MAINTENANCE_JITTER_FRACTION = 0.1
 _MAINTENANCE_BATCH_PAUSE_SECONDS = 0.05
 #: How long a graceful shutdown waits for writes that were already in flight.
 SHUTDOWN_WRITE_GRACE_SECONDS = 5.0
-#: Coalescing bounds for durable token batches.
+#: Coalescing bounds for durable token batches: a batch is committed as soon
+#: as it reaches the character bound or, via the run's scheduled flush, no
+#: later than the wall-clock bound after its first token even if the provider
+#: stalls.
 TOKEN_BATCH_CHARS = 512
 TOKEN_BATCH_SECONDS = 0.25
 
@@ -118,6 +121,15 @@ class RunSession:
     closed so no later event, settlement, or terminal transition can be written
     by a worker the run no longer belongs to. Checkpoint and artifact methods
     are gone: Session settlements and acceptance carry those facts.
+
+    Token durability: the first buffered token arms one wall-clock flush timer,
+    so a stalled provider's text still lands within ``TOKEN_BATCH_SECONDS``.
+    ``self._lane`` is the one serialization lane for token-buffer mutation,
+    token writes, and control writes; the timer and executor race only through
+    it, which keeps every batch whole and ordered before any control or terminal
+    event. A timer failure is latched and re-raised at the
+    next session boundary; ``aclose`` joins or cancels the timer and is called
+    on every coordinator exit path.
     """
 
     def __init__(
@@ -128,6 +140,7 @@ class RunSession:
         broker: RunEventBroker,
         writes: DurableWrites,
         notify: Callable[[], None] | None = None,
+        _token_flush_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         execution = claimed.execution
         run = claimed.run
@@ -143,11 +156,16 @@ class RunSession:
         self._broker = broker
         self._writes = writes
         self._notify = notify
+        self._token_flush_sleep = _token_flush_sleep
         self._cancel_requested = run.cancel_requested
         self._lease_lost = False
+        self._sealed = False
+        self._lane = asyncio.Lock()
         self._pending_tokens: list[str] = []
         self._pending_chars = 0
         self._flush_deadline: float | None = None
+        self._flush_task: asyncio.Task[None] | None = None
+        self._background_failure: Exception | None = None
         # A run that already committed an event has a partial draft somewhere;
         # regenerated output must clear it before the first new token.
         self._reset_pending = run.next_event_sequence > 1
@@ -176,76 +194,54 @@ class RunSession:
 
     def _guard(self) -> None:
         """Refuse every further durable write once this session lost coherence."""
+        if self._background_failure is not None:
+            raise self._background_failure
         if self._lease_lost:
             raise LeaseLostError
+        if self._sealed:
+            raise RuntimeError("run session is closed")
 
     # -- durable writes -------------------------------------------------
     async def enter_phase(self, phase: AnswerRunPhase) -> None:
-        await self.flush_tokens()
-        await self._fenced(
-            self._store.record_phase(
-                owner_id=self.owner_id,
-                run_id=self.run_id,
-                worker_id=self.worker_id,
-                fencing_epoch=self.fencing_epoch,
-                phase=phase,
+        async with self._lane:
+            self._guard()
+            await self._flush_locked()
+            await self._fenced(
+                self._store.record_phase(
+                    owner_id=self.owner_id,
+                    run_id=self.run_id,
+                    worker_id=self.worker_id,
+                    fencing_epoch=self.fencing_epoch,
+                    phase=phase,
+                )
             )
-        )
 
     async def emit_token(self, text: str) -> None:
-        """Buffer generated text into bounded durable batches."""
+        """Buffer text until its fixed age or size bound is reached."""
         if not text:
             return
-        self._pending_tokens.append(text)
-        self._pending_chars += len(text)
-        now = asyncio.get_running_loop().time()
-        if self._flush_deadline is None:
-            self._flush_deadline = now + TOKEN_BATCH_SECONDS
-        if self._pending_chars >= TOKEN_BATCH_CHARS or now >= self._flush_deadline:
-            await self.flush_tokens()
-            await self.check_cancelled()
+        async with self._lane:
+            # The timer can latch a failure while the executor is idle.  Check
+            # before mutating the buffer so text is never accepted after that.
+            self._guard()
+            self._pending_tokens.append(text)
+            self._pending_chars += len(text)
+            now = asyncio.get_running_loop().time()
+            if self._flush_deadline is None:
+                self._flush_deadline = now + TOKEN_BATCH_SECONDS
+                self._flush_task = asyncio.create_task(
+                    self._flush_timer(self._flush_deadline),
+                    name=f"answer-token-flush:{self.run_id}",
+                )
+            if self._pending_chars >= TOKEN_BATCH_CHARS or now >= self._flush_deadline:
+                await self._flush_locked()
+        await self.check_cancelled()
 
     async def reset_output(self) -> None:
         """Clear the current streamed draft before a linked corrective operation."""
-        await self.flush_tokens()
-        self._reset_pending = False
-        await self._fenced(
-            self._store.append_reset(
-                owner_id=self.owner_id,
-                run_id=self.run_id,
-                worker_id=self.worker_id,
-                fencing_epoch=self.fencing_epoch,
-            )
-        )
-
-    async def emit_tool_event(
-        self,
-        event_type: str,
-        payload: Mapping[str, object],
-    ) -> None:
-        """Commit one metadata-only tool lifecycle event for SSE subscribers."""
-        await self.flush_tokens()
-        await self._fenced(
-            self._store.append_tool_event(
-                owner_id=self.owner_id,
-                run_id=self.run_id,
-                worker_id=self.worker_id,
-                fencing_epoch=self.fencing_epoch,
-                event_type=event_type,
-                payload=payload,
-            )
-        )
-
-    async def flush_tokens(self) -> None:
-        """Commit any buffered text; a reset clears the previous draft first."""
-        if not self._pending_tokens:
-            return
-        text = "".join(self._pending_tokens)
-        self._pending_tokens.clear()
-        self._pending_chars = 0
-        self._flush_deadline = None
-        if self._reset_pending:
-            self._reset_pending = False
+        async with self._lane:
+            self._guard()
+            await self._flush_locked()
             await self._fenced(
                 self._store.append_reset(
                     owner_id=self.owner_id,
@@ -254,15 +250,129 @@ class RunSession:
                     fencing_epoch=self.fencing_epoch,
                 )
             )
-        await self._fenced(
-            self._store.append_token_batch(
-                owner_id=self.owner_id,
-                run_id=self.run_id,
-                worker_id=self.worker_id,
-                fencing_epoch=self.fencing_epoch,
-                text=text,
+            self._reset_pending = False
+
+    async def emit_tool_event(
+        self,
+        event_type: str,
+        payload: Mapping[str, object],
+    ) -> None:
+        """Commit one metadata-only tool lifecycle event for SSE subscribers."""
+        async with self._lane:
+            self._guard()
+            await self._flush_locked()
+            await self._fenced(
+                self._store.append_tool_event(
+                    owner_id=self.owner_id,
+                    run_id=self.run_id,
+                    worker_id=self.worker_id,
+                    fencing_epoch=self.fencing_epoch,
+                    event_type=event_type,
+                    payload=payload,
+                )
             )
-        )
+
+    async def flush_tokens(self) -> None:
+        """Commit any buffered text; a reset clears the previous draft first."""
+        async with self._lane:
+            # Re-check after joining an in-flight scheduled flush: its failure
+            # is latched while this coroutine waits on the lane.
+            self._guard()
+            await self._flush_locked()
+
+    async def _flush_locked(self) -> None:
+        """Commit the buffered batch as one reset+token pair; caller holds ``_lane``."""
+        if not self._pending_tokens:
+            return
+        text = "".join(self._pending_tokens)
+        await self._disarm_timer_locked()
+        try:
+            if self._reset_pending:
+                await self._fenced(
+                    self._store.append_reset(
+                        owner_id=self.owner_id,
+                        run_id=self.run_id,
+                        worker_id=self.worker_id,
+                        fencing_epoch=self.fencing_epoch,
+                    )
+                )
+                self._reset_pending = False
+            await self._fenced(
+                self._store.append_token_batch(
+                    owner_id=self.owner_id,
+                    run_id=self.run_id,
+                    worker_id=self.worker_id,
+                    fencing_epoch=self.fencing_epoch,
+                    text=text,
+                )
+            )
+        except Exception as exc:
+            # The write's commit state is unknown after a storage failure.  Keep
+            # the text for diagnosis and latch the failure rather than retrying
+            # it (which could duplicate an append) or silently dropping it.
+            self._background_failure = exc
+            raise
+        self._pending_tokens.clear()
+        self._pending_chars = 0
+        self._flush_deadline = None
+
+    async def _flush_timer(self, deadline: float) -> None:
+        """Flush one batch at its first-token deadline without a later API call."""
+        try:
+            delay = max(0.0, deadline - asyncio.get_running_loop().time())
+            await self._token_flush_sleep(delay)
+            async with self._lane:
+                self._guard()
+                if self._flush_deadline == deadline and self._pending_tokens:
+                    await self._flush_locked()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Retrieve failures in this owned task and surface them at the next
+            # executor/coordinator boundary; success is then impossible.
+            self._background_failure = exc
+        finally:
+            if self._flush_task is asyncio.current_task():
+                self._flush_task = None
+
+    async def _disarm_timer_locked(self) -> None:
+        """Cancel and reap the sleeping/lock-waiting timer while holding the lane."""
+        task = self._flush_task
+        if task is None or task is asyncio.current_task():
+            return
+        self._flush_task = None
+        task.cancel()
+        # ``return_exceptions`` converts only the child timer's cancellation
+        # into a result. Cancellation of this caller still cancels ``gather``
+        # and propagates, so shutdown cannot be mistaken for timer cleanup.
+        result = (await asyncio.gather(task, return_exceptions=True))[0]
+        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+            raise result
+
+    async def _seal(self, *, flush_tokens: bool) -> None:
+        """Disarm the timer and prevent future writes before terminal/release."""
+        failure: Exception | None = None
+        async with self._lane:
+            if self._sealed:
+                return
+            await self._disarm_timer_locked()
+            if flush_tokens:
+                try:
+                    self._guard()
+                    await self._flush_locked()
+                except Exception as exc:
+                    failure = exc
+            else:
+                self._pending_tokens.clear()
+                self._pending_chars = 0
+                self._flush_deadline = None
+            self._sealed = True
+        if failure is not None:
+            raise failure
+
+    async def aclose(self) -> None:
+        """Disarm this session without flushing; idempotent and join-safe."""
+        await self._seal(flush_tokens=False)
 
     async def _fenced(self, operation: Awaitable[int | None]) -> None:
         self._guard()
@@ -288,6 +398,7 @@ class RunCoordinator:
         heartbeat_seconds: float = RUN_HEARTBEAT_SECONDS,
         sweep_seconds: float = SWEEP_SECONDS,
         maintenance_seconds: float = MAINTENANCE_SECONDS,
+        _token_flush_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if answer_worker_concurrency < 1:
             raise ValueError("answer_worker_concurrency must be positive")
@@ -298,6 +409,9 @@ class RunCoordinator:
         self._heartbeat_seconds = heartbeat_seconds
         self._sweep_seconds = sweep_seconds
         self._maintenance_seconds = maintenance_seconds
+        # Private deterministic test seam; production always uses asyncio.sleep
+        # with the fixed TOKEN_BATCH_SECONDS bound.
+        self._token_flush_sleep = _token_flush_sleep
         self._slots = asyncio.Semaphore(self._answer_worker_concurrency)
         self._broker = RunEventBroker()
         self._writes = DurableWrites()
@@ -479,20 +593,29 @@ class RunCoordinator:
             broker=self._broker,
             writes=self._writes,
             notify=self._wake.set,
+            _token_flush_sleep=self._token_flush_sleep,
         )
         self._sessions[session.run_id] = session
         heartbeat = asyncio.create_task(self._heartbeat_forever(session))
         try:
             outcome = await self._executor.execute(session)
             if isinstance(outcome, CoordinatorOwnedSuccess):
-                await session.flush_tokens()
+                # Sealing flushes pending text and joins/disarms its timer before
+                # the terminal write, leaving one strict event order.
+                await session._seal(flush_tokens=True)
                 await self._finish_success(session, outcome.result)
             elif isinstance(outcome, AlreadyCommittedTerminal):
+                # The executor owns that atomic terminal; it must not leave a
+                # local timer behind after handing control back.
+                await session.aclose()
                 self._broker.notify(session.owner_id, session.run_id)
                 self._wake.set()
             else:
                 assert_never(outcome)
         except asyncio.CancelledError:
+            # Join or cancel the flush timer before the requeue so no token
+            # write can land after this worker released the lease.
+            await session.aclose()
             await self._release(session)
             raise
         except RunCancelledError:
@@ -523,6 +646,7 @@ class RunCoordinator:
                 logger.warning(
                     "Answer run %s heartbeat ended in failure", session.run_id, exc_info=True
                 )
+            await session.aclose()
 
     async def _heartbeat_forever(self, session: RunSession) -> None:
         """Renew an unexpired fenced lease and surface pending cancellation.
@@ -576,10 +700,13 @@ class RunCoordinator:
             session.observe_lease_loss()
 
     async def _finish_failure(self, session: RunSession, kind: str, message: str) -> None:
+        # Failure still preserves text when possible, but a failed/ambiguous
+        # token append is never retried.  Either way the timer is gone before
+        # the terminal transition.
+        with contextlib.suppress(Exception):
+            await session._seal(flush_tokens=True)
         if session.lease_lost:
             return
-        with contextlib.suppress(Exception):
-            await session.flush_tokens()
         with contextlib.suppress(Exception):
             await self._writes.shield(
                 self._store.finish_failure(
@@ -594,10 +721,10 @@ class RunCoordinator:
         self._broker.notify(session.owner_id, session.run_id)
 
     async def _finish_cancelled(self, session: RunSession) -> None:
+        with contextlib.suppress(Exception):
+            await session._seal(flush_tokens=True)
         if session.lease_lost:
             return
-        with contextlib.suppress(Exception):
-            await session.flush_tokens()
         await self._writes.shield(
             self._store.finish_cancelled(
                 owner_id=session.owner_id,

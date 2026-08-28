@@ -9,7 +9,7 @@ event. Subscribers replay durable events and detach without touching the run.
 
 import asyncio
 import datetime
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, cast
 
 import pytest
@@ -57,6 +57,11 @@ class _MemoryStore:
         self.heartbeat_failures = 0
         self.heartbeat_result: Any = None
         self.finish_success_calls = 0
+        self.token_append_calls = 0
+        self.token_append_started = asyncio.Event()
+        self.token_append_gate: asyncio.Event | None = None
+        self.token_append_failure: Exception | None = None
+        self.shutdown_releases = 0
 
     # -- test helpers -------------------------------------------------
     def add_run(self, run_id: str, **overrides: Any) -> None:
@@ -233,6 +238,12 @@ class _MemoryStore:
     async def append_token_batch(
         self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int, text: str
     ) -> int | None:
+        self.token_append_calls += 1
+        self.token_append_started.set()
+        if self.token_append_gate is not None:
+            await self.token_append_gate.wait()
+        if self.token_append_failure is not None:
+            raise self.token_append_failure
         row = self.runs[run_id]
         if not self._owns(row, worker_id, fencing_epoch):
             return None
@@ -347,6 +358,7 @@ class _MemoryStore:
     async def release_for_shutdown(
         self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int
     ) -> ShutdownOutcome:
+        self.shutdown_releases += 1
         row = self.runs[run_id]
         if not self._owns(row, worker_id, fencing_epoch):
             return "lease_lost"
@@ -433,6 +445,52 @@ class _Executor:
         return await self._body(session)
 
 
+class _ControlledTokenSleep:
+    """A manually fired wall-clock wait used without shortening production bounds."""
+
+    def __init__(self) -> None:
+        self.delays: list[float] = []
+        self.waiters: list[asyncio.Future[None]] = []
+        self.armed = asyncio.Event()
+
+    async def __call__(self, delay: float) -> None:
+        waiter = asyncio.get_running_loop().create_future()
+        self.delays.append(delay)
+        self.waiters.append(waiter)
+        self.armed.set()
+        await waiter
+
+    def fire(self, index: int = -1) -> None:
+        waiter = self.waiters[index]
+        if not waiter.done():
+            waiter.set_result(None)
+
+    def fire_all(self) -> None:
+        for waiter in self.waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+
+
+class _CancellationBlockingTokenSleep:
+    """Keep timer cancellation pending so caller cancellation can race with reaping."""
+
+    def __init__(self) -> None:
+        self.armed = asyncio.Event()
+        self.cancellation_seen = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def __call__(self, _delay: float) -> None:
+        self.armed.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancellation_seen.set()
+            try:
+                await self.release.wait()
+            finally:
+                raise
+
+
 async def _settle(predicate: Any, *, timeout: float = 2.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
@@ -442,9 +500,21 @@ async def _settle(predicate: Any, *, timeout: float = 2.0) -> None:
     raise AssertionError("condition never became true")
 
 
-def _coordinator(store: _MemoryStore, executor: _Executor, *, answer_worker_concurrency: int = 2):
+def _coordinator(
+    store: _MemoryStore,
+    executor: _Executor,
+    *,
+    answer_worker_concurrency: int = 2,
+    token_flush_sleep: Callable[[float], Awaitable[None]] | None = None,
+):
+    kwargs: dict[str, Any] = {}
+    if token_flush_sleep is not None:
+        kwargs["_token_flush_sleep"] = token_flush_sleep
     return RunCoordinator(
-        store=store, executor=executor, answer_worker_concurrency=answer_worker_concurrency
+        store=store,
+        executor=executor,
+        answer_worker_concurrency=answer_worker_concurrency,
+        **kwargs,
     )
 
 
@@ -638,6 +708,407 @@ class TestRetentionMaintenance:
         assert store.trims == settled
 
 
+class TestWallClockTokenFlush:
+    async def test_small_token_flushes_while_the_executor_remains_blocked(self) -> None:
+        store = _MemoryStore()
+        scheduler = _ControlledTokenSleep()
+        executor_blocked = asyncio.Event()
+        release = asyncio.Event()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            await session.emit_token("small")
+            executor_blocked.set()
+            await release.wait()
+            return CoordinatorOwnedSuccess({"answer": "small"})
+
+        coordinator = _coordinator(
+            store,
+            _Executor(body),
+            answer_worker_concurrency=1,
+            token_flush_sleep=scheduler,
+        )
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            await executor_blocked.wait()
+            await scheduler.armed.wait()
+            scheduler.fire()
+            await store.token_append_started.wait()
+            await _settle(lambda: len(store.events["run-a"]) == 1)
+
+            assert store.runs["run-a"]["status"] == "running"
+            assert store.events["run-a"][0].payload == {"text": "small"}
+        finally:
+            release.set()
+            await coordinator.aclose()
+
+    async def test_production_timer_observes_the_real_wall_clock_bound(self) -> None:
+        store = _MemoryStore()
+        release = asyncio.Event()
+        started_at = 0.0
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            nonlocal started_at
+            started_at = asyncio.get_running_loop().time()
+            await session.emit_token("clocked")
+            await release.wait()
+            return CoordinatorOwnedSuccess({"answer": "clocked"})
+
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            await asyncio.wait_for(store.token_append_started.wait(), timeout=2.0)
+            elapsed = asyncio.get_running_loop().time() - started_at
+
+            # asyncio timers may wake a few milliseconds early on some event
+            # loops; the broad upper tolerance avoids turning host load into a
+            # flaky test while still rejecting an immediate/no-timer flush.
+            assert elapsed >= coordinator_module.TOKEN_BATCH_SECONDS - 0.05
+            assert elapsed < coordinator_module.TOKEN_BATCH_SECONDS + 1.0
+            assert store.events["run-a"][0].payload == {"text": "clocked"}
+        finally:
+            release.set()
+            await coordinator.aclose()
+
+    async def test_tokens_coalesce_without_sliding_the_first_deadline(self) -> None:
+        store = _MemoryStore()
+        scheduler = _ControlledTokenSleep()
+        buffered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            await session.emit_token("one")
+            await scheduler.armed.wait()
+            await session.emit_token(" two")
+            await session.emit_token(" three")
+            buffered.set()
+            await release.wait()
+            return CoordinatorOwnedSuccess({"answer": "one two three"})
+
+        coordinator = _coordinator(
+            store,
+            _Executor(body),
+            answer_worker_concurrency=1,
+            token_flush_sleep=scheduler,
+        )
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            await buffered.wait()
+            assert len(scheduler.waiters) == 1
+            assert 0.0 <= scheduler.delays[0] <= coordinator_module.TOKEN_BATCH_SECONDS
+
+            scheduler.fire()
+            await _settle(lambda: len(store.events["run-a"]) == 1)
+            assert store.events["run-a"][0].payload == {"text": "one two three"}
+        finally:
+            release.set()
+            await coordinator.aclose()
+
+    @pytest.mark.parametrize("trigger", ["size", "manual"])
+    async def test_size_or_manual_flush_racing_the_timer_appends_exactly_once(
+        self, trigger: str
+    ) -> None:
+        store = _MemoryStore()
+        scheduler = _ControlledTokenSleep()
+        exposed: asyncio.Future[RunSession] = asyncio.get_running_loop().create_future()
+        release = asyncio.Event()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            await session.emit_token("a")
+            exposed.set_result(session)
+            await release.wait()
+            return CoordinatorOwnedSuccess({"answer": "done"})
+
+        coordinator = _coordinator(
+            store,
+            _Executor(body),
+            answer_worker_concurrency=1,
+            token_flush_sleep=scheduler,
+        )
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            session = await exposed
+            await scheduler.armed.wait()
+            async with session._lane:  # noqa: SLF001 - deterministic race setup
+                if trigger == "size":
+                    operation = asyncio.create_task(
+                        session.emit_token("b" * coordinator_module.TOKEN_BATCH_CHARS)
+                    )
+                    expected = "a" + "b" * coordinator_module.TOKEN_BATCH_CHARS
+                else:
+                    operation = asyncio.create_task(session.flush_tokens())
+                    expected = "a"
+                scheduler.fire()
+            await operation
+            await _settle(lambda: len(store.events["run-a"]) == 1)
+
+            assert store.token_append_calls == 1
+            assert store.events["run-a"][0].payload == {"text": expected}
+        finally:
+            release.set()
+            await coordinator.aclose()
+
+    @pytest.mark.parametrize("trigger", ["size", "manual"])
+    async def test_timer_winning_the_race_keeps_exact_text(self, trigger: str) -> None:
+        store = _MemoryStore()
+        scheduler = _ControlledTokenSleep()
+        exposed: asyncio.Future[RunSession] = asyncio.get_running_loop().create_future()
+        release = asyncio.Event()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            await session.emit_token("a")
+            exposed.set_result(session)
+            await release.wait()
+            return CoordinatorOwnedSuccess({"answer": "done"})
+
+        coordinator = _coordinator(
+            store,
+            _Executor(body),
+            answer_worker_concurrency=1,
+            token_flush_sleep=scheduler,
+        )
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            session = await exposed
+            await scheduler.armed.wait()
+            scheduler.fire()
+            await _settle(lambda: store.token_append_calls == 1)
+
+            if trigger == "size":
+                suffix = "b" * coordinator_module.TOKEN_BATCH_CHARS
+                await session.emit_token(suffix)
+                expected_events = [{"text": "a"}, {"text": suffix}]
+            else:
+                await session.flush_tokens()
+                expected_events = [{"text": "a"}]
+
+            assert store.token_append_calls == len(expected_events)
+            assert [event.payload for event in store.events["run-a"]] == expected_events
+        finally:
+            release.set()
+            await coordinator.aclose()
+
+    async def test_control_and_terminal_events_share_the_token_ordering_lane(self) -> None:
+        store = _MemoryStore()
+        scheduler = _ControlledTokenSleep()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            await session.emit_token("before phase")
+            await asyncio.sleep(0)
+            await session.enter_phase("generating")
+            await session.emit_token("before reset")
+            await asyncio.sleep(0)
+            await session.reset_output()
+            await session.emit_token("before tool")
+            await asyncio.sleep(0)
+            await session.emit_tool_event("tool_started", {"name": "search"})
+            await session.emit_token("before terminal")
+            await asyncio.sleep(0)
+            return CoordinatorOwnedSuccess({"answer": "done"})
+
+        coordinator = _coordinator(
+            store,
+            _Executor(body),
+            answer_worker_concurrency=1,
+            token_flush_sleep=scheduler,
+        )
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            await _settle(lambda: store.runs["run-a"]["status"] == "succeeded")
+            before = tuple(store.events["run-a"])
+            scheduler.fire_all()
+            await asyncio.sleep(0)
+
+            assert [event.event_type for event in before] == [
+                "token",
+                "progress",
+                "token",
+                "reset",
+                "token",
+                "tool_started",
+                "token",
+                "done",
+            ]
+            assert tuple(store.events["run-a"]) == before
+            assert all(waiter.done() for waiter in scheduler.waiters)
+            assert not any(
+                task.get_name() == "answer-token-flush:run-a" and not task.done()
+                for task in asyncio.all_tasks()
+            )
+        finally:
+            await coordinator.aclose()
+
+    @pytest.mark.parametrize("failure", ["store", "lease"])
+    async def test_scheduled_flush_failure_or_lease_loss_cannot_commit_success(
+        self, failure: str
+    ) -> None:
+        store = _MemoryStore()
+        scheduler = _ControlledTokenSleep()
+        release = asyncio.Event()
+        rejected_late_token = asyncio.Event()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            await session.emit_token("never successful")
+            await release.wait()
+            try:
+                await session.emit_token(" must be rejected")
+            except Exception:
+                rejected_late_token.set()
+            return CoordinatorOwnedSuccess({"answer": "must not commit"})
+
+        executor = _Executor(body)
+        coordinator = _coordinator(
+            store,
+            executor,
+            answer_worker_concurrency=1,
+            token_flush_sleep=scheduler,
+        )
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            await scheduler.armed.wait()
+            if failure == "store":
+                store.token_append_failure = RuntimeError("token store unavailable")
+            else:
+                store.runs["run-a"]["fencing_epoch"] = 99
+            scheduler.fire()
+            await store.token_append_started.wait()
+            release.set()
+            await _settle(lambda: not coordinator.active_runs)
+
+            assert rejected_late_token.is_set()
+            assert store.finish_success_calls == 0
+            assert executor.sessions[0]._pending_tokens == [  # noqa: SLF001
+                "never successful"
+            ]
+            if failure == "store":
+                assert store.runs["run-a"]["status"] == "failed"
+                assert store.runs["run-a"]["error_kind"] == "run_execution_failed"
+                assert store.events["run-a"][-1].event_type == "error"
+            else:
+                assert store.runs["run-a"]["status"] == "running"
+                assert store.events["run-a"] == []
+        finally:
+            release.set()
+            await coordinator.aclose()
+
+    async def test_shutdown_before_deadline_disarms_without_a_later_write_or_task(self) -> None:
+        store = _MemoryStore()
+        scheduler = _ControlledTokenSleep()
+        blocked = asyncio.Event()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            await session.emit_token("discard on requeue")
+            blocked.set()
+            await asyncio.Event().wait()
+            return CoordinatorOwnedSuccess({"answer": "unreachable"})
+
+        coordinator = _coordinator(
+            store,
+            _Executor(body),
+            answer_worker_concurrency=1,
+            token_flush_sleep=scheduler,
+        )
+        store.add_run("run-a")
+        await coordinator.start()
+        await blocked.wait()
+        await scheduler.armed.wait()
+
+        await coordinator.aclose()
+        scheduler.fire_all()
+        await asyncio.sleep(0)
+
+        assert store.runs["run-a"]["status"] == "queued"
+        assert store.token_append_calls == 0
+        assert store.events["run-a"] == []
+        assert not any(
+            task.get_name() == "answer-token-flush:run-a" and not task.done()
+            for task in asyncio.all_tasks()
+        )
+
+    async def test_shutdown_cancellation_propagates_while_disarming_timer(self) -> None:
+        store = _MemoryStore()
+        sleeper = _CancellationBlockingTokenSleep()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            await session.emit_token("must be discarded")
+            await sleeper.armed.wait()
+            # This boundary cancels and reaps the sleeping timer while holding
+            # the session lane. Shutdown then cancels this caller mid-reap.
+            await session.enter_phase("generating")
+            return CoordinatorOwnedSuccess({"answer": "must not commit"})
+
+        coordinator = _coordinator(
+            store,
+            _Executor(body),
+            answer_worker_concurrency=1,
+            token_flush_sleep=sleeper,
+        )
+        store.add_run("run-a")
+        await coordinator.start()
+        await sleeper.cancellation_seen.wait()
+
+        try:
+            await asyncio.wait_for(coordinator.aclose(), timeout=1.0)
+        finally:
+            sleeper.release.set()
+
+        assert store.runs["run-a"]["status"] == "queued"
+        assert store.finish_success_calls == 0
+        assert store.events["run-a"] == []
+        assert store.shutdown_releases == 1
+
+    async def test_shutdown_joins_an_in_flight_scheduled_write_before_release(self) -> None:
+        store = _MemoryStore()
+        store.token_append_gate = asyncio.Event()
+        scheduler = _ControlledTokenSleep()
+        executor_cancelled = asyncio.Event()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            await session.emit_token("lands before release")
+            try:
+                await asyncio.Event().wait()
+            finally:
+                executor_cancelled.set()
+            return CoordinatorOwnedSuccess({"answer": "unreachable"})
+
+        coordinator = _coordinator(
+            store,
+            _Executor(body),
+            answer_worker_concurrency=1,
+            token_flush_sleep=scheduler,
+        )
+        store.add_run("run-a")
+        await coordinator.start()
+        await scheduler.armed.wait()
+        scheduler.fire()
+        await store.token_append_started.wait()
+
+        closing = asyncio.create_task(coordinator.aclose())
+        await executor_cancelled.wait()
+        assert store.shutdown_releases == 0
+        assert not closing.done()
+        assert store.runs["run-a"]["lease_owner"] == coordinator.worker_id
+
+        store.token_append_gate.set()
+        await closing
+
+        assert store.shutdown_releases == 1
+        assert store.runs["run-a"]["status"] == "queued"
+        assert [event.payload for event in store.events["run-a"]] == [
+            {"text": "lands before release"}
+        ]
+        assert not any(
+            task.get_name() == "answer-token-flush:run-a" and not task.done()
+            for task in asyncio.all_tasks()
+        )
+
+
 class TestDurableProgress:
     @pytest.mark.parametrize("status", ["succeeded", "cancelled"])
     async def test_already_committed_terminal_skips_coordinator_finish_and_notifies(
@@ -646,6 +1117,9 @@ class TestDurableProgress:
         store = _MemoryStore()
 
         async def body(session: RunSession) -> RunExecutionOutcome:
+            # Atomic executor terminals own their answer event; handing that
+            # outcome back must still disarm any local token timer.
+            await session.emit_token("superseded by atomic terminal")
             row = store.runs[session.run_id]
             terminal = store._finish(
                 row,
@@ -673,9 +1147,14 @@ class TestDurableProgress:
                 await coordinator.aclose()
 
         assert store.finish_success_calls == 0
+        assert store.token_append_calls == 0
         assert executor.sessions[0].lease_lost is False
         assert store.runs["run-a"]["status"] == status
         assert [event.event_type for event in store.events["run-a"]] == ["done"]
+        assert not any(
+            task.get_name() == "answer-token-flush:run-a" and not task.done()
+            for task in asyncio.all_tasks()
+        )
 
     async def test_tokens_are_coalesced_in_order_with_one_terminal_event(self) -> None:
         store = _MemoryStore()
