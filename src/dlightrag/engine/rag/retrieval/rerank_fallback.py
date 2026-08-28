@@ -11,6 +11,32 @@ from dlightrag.engine.rag.retrieval import ContextRow
 logger = logging.getLogger(__name__)
 
 
+class RerankBatchError(RuntimeError):
+    """One atomic chat-listwise pass failed at a specific batch."""
+
+    def __init__(
+        self,
+        *,
+        batch_ordinal: int,
+        batch_start: int,
+        error_type: str,
+    ) -> None:
+        if (
+            not isinstance(batch_ordinal, int)
+            or isinstance(batch_ordinal, bool)
+            or batch_ordinal < 1
+        ):
+            raise ValueError("rerank batch ordinal must be a positive integer")
+        if not isinstance(batch_start, int) or isinstance(batch_start, bool) or batch_start < 0:
+            raise ValueError("rerank batch start must be a non-negative integer")
+        if not isinstance(error_type, str) or not error_type.strip():
+            raise ValueError("rerank batch error type must be non-empty")
+        self.batch_ordinal = batch_ordinal
+        self.batch_start = batch_start
+        self.error_type = error_type
+        super().__init__(f"rerank batch {batch_ordinal} failed with {error_type}")
+
+
 @dataclass(frozen=True, slots=True)
 class RerankOutcome:
     """One rerank attempt and its deterministic fallback metadata."""
@@ -18,6 +44,7 @@ class RerankOutcome:
     chunks: list[ContextRow]
     reranked: bool
     error_type: str | None = None
+    failed_batch: int | None = None
 
 
 async def rerank_with_fallback(
@@ -38,7 +65,18 @@ async def rerank_with_fallback(
         raise
     except Exception as exc:
         logger.warning("Rerank failed; returning fused chunks", exc_info=True)
-        return RerankOutcome(list(chunks[:limit]), False, type(exc).__name__)
+        if isinstance(exc, RerankBatchError):
+            error_type = exc.error_type
+            failed_batch = exc.batch_ordinal
+        else:
+            error_type = type(exc).__name__
+            failed_batch = None
+        return RerankOutcome(
+            list(chunks[:limit]),
+            False,
+            error_type,
+            failed_batch,
+        )
 
 
-__all__ = ["RerankOutcome", "rerank_with_fallback"]
+__all__ = ["RerankBatchError", "RerankOutcome", "rerank_with_fallback"]

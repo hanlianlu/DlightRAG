@@ -1529,7 +1529,9 @@ class WorkspaceRag:
             )
             return
         if outcome.error_type:
-            result.trace["rerank_error"] = outcome.error_type
+            result.trace["rerank_error_type"] = outcome.error_type
+            if outcome.failed_batch is not None:
+                result.trace["rerank_failed_batch"] = outcome.failed_batch
             return
         top_score = outcome.chunks[0].get("rerank_score") if outcome.chunks else None
         logger.info(

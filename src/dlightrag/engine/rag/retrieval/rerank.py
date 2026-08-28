@@ -6,12 +6,10 @@ import json
 import logging
 import math
 from collections.abc import Callable
-from contextlib import suppress
 from functools import partial
 from typing import Any
 
 from dlightrag.engine.ai.completion import CompletionModel
-from dlightrag.engine.ai.concurrency import bounded_gather
 from dlightrag.engine.ai.contracts import ResolvedInputModality
 from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS, ImagePayloadBudget
 from dlightrag.engine.ai.providers.rerank_base import (
@@ -22,6 +20,7 @@ from dlightrag.engine.ai.rerank import RerankModel, create_rerank_model, rerank_
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings, RerankSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry, bounded_telemetry_text
+from dlightrag.engine.rag.retrieval.rerank_fallback import RerankBatchError
 
 logger = logging.getLogger(__name__)
 
@@ -114,25 +113,37 @@ def _prepare_documents(
     return prepared
 
 
+class ListwiseScoreValidationError(ValueError):
+    """One chat-listwise batch returned no exact score vector."""
+
+
 def _parse_listwise_scores(text: str, expected: int) -> list[float]:
-    """Parse an exact finite JSON score array or return deterministic zeros."""
-    text = text.strip()
-    with suppress(json.JSONDecodeError, ValueError, TypeError):
-        data = json.loads(text)
+    """Parse one exact finite JSON score vector or fail the atomic pass."""
+    if not isinstance(text, str):
+        raise ListwiseScoreValidationError("listwise response must be JSON text")
+    try:
+        data = json.loads(text.strip())
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        raise ListwiseScoreValidationError("listwise response is not valid JSON") from exc
+    if not isinstance(data, list):
+        raise ListwiseScoreValidationError("listwise response must be an array")
+    if len(data) != expected:
+        raise ListwiseScoreValidationError(
+            f"listwise response has {len(data)} scores; expected {expected}"
+        )
+    scores: list[float] = []
+    for score in data:
         if (
-            isinstance(data, list)
-            and len(data) == expected
-            and all(
-                isinstance(score, int | float)
-                and not isinstance(score, bool)
-                and math.isfinite(float(score))
-                and 0.0 <= float(score) <= 1.0
-                for score in data
-            )
+            not isinstance(score, int | float)
+            or isinstance(score, bool)
+            or not math.isfinite(float(score))
+            or not 0.0 <= float(score) <= 1.0
         ):
-            return [float(score) for score in data]
-    logger.warning("Could not parse listwise scores from: %s", text[:200])
-    return [0.0] * expected
+            raise ListwiseScoreValidationError(
+                "listwise response scores must be finite numbers from 0 to 1"
+            )
+        scores.append(float(score))
+    return scores
 
 
 async def _chat_llm_rerank(
@@ -227,18 +238,37 @@ async def _chat_llm_rerank(
         max(1, max_concurrency),
         min(max(1, max_concurrency), len(batches)),
     )
-    batch_results = await bounded_gather(
-        [score_batch(batch_start, batch) for batch_start, batch in batches],
-        max_concurrent=max(1, max_concurrency),
-        task_name="rerank-batch",
+    semaphore = asyncio.Semaphore(max(1, max_concurrency))
+
+    async def run_batch(
+        batch_start: int,
+        batch: list[dict[str, Any]],
+    ) -> list[tuple[dict[str, Any], float]]:
+        async with semaphore:
+            return await score_batch(batch_start, batch)
+
+    batch_results = await asyncio.gather(
+        *(run_batch(batch_start, batch) for batch_start, batch in batches),
+        return_exceptions=True,
     )
 
-    all_results: list[tuple[dict[str, Any], float]] = []
     for result in batch_results:
-        if not isinstance(result, Exception):
-            all_results.extend(result)
-    if not all_results:
-        raise RuntimeError("All rerank batches failed")
+        if isinstance(result, BaseException) and not isinstance(result, Exception):
+            raise result
+
+    all_results: list[tuple[dict[str, Any], float]] = []
+    for batch_index, result in enumerate(batch_results):
+        if isinstance(result, BaseException):
+            if not isinstance(result, Exception):
+                raise result
+            batch_start = batches[batch_index][0]
+            error = RerankBatchError(
+                batch_ordinal=batch_index + 1,
+                batch_start=batch_start,
+                error_type=type(result).__name__,
+            )
+            raise error from result
+        all_results.extend(result)
 
     scored: list[dict[str, Any]] = []
     for chunk, score in all_results:

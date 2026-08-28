@@ -518,10 +518,17 @@ class TestWorkspaceRagRetrieve:
                 chunk["page_number"] = 7
 
         async def fail_rerank(query: str, chunks: list[dict], top_k: int) -> list[dict]:
+            from dlightrag.engine.rag.retrieval.rerank import RerankBatchError
+
             assert query == "test query"
             assert top_k == 3
             assert all(chunk["page_number"] == 7 for chunk in chunks)
-            raise RuntimeError("provider unavailable")
+            error = RerankBatchError(
+                batch_ordinal=2,
+                batch_start=7,
+                error_type="RuntimeError",
+            )
+            raise error from RuntimeError("provider unavailable")
 
         service._rerank_func = fail_rerank
         monkeypatch.setattr(
@@ -537,7 +544,8 @@ class TestWorkspaceRagRetrieve:
             "c2",
         ]
         assert result.trace["reranked_chunk_count"] == 3
-        assert result.trace["rerank_error"] == "RuntimeError"
+        assert result.trace["rerank_error_type"] == "RuntimeError"
+        assert result.trace["rerank_failed_batch"] == 2
 
     async def test_aretrieve_defers_image_hydration_for_text_reranker(
         self, test_config, monkeypatch: pytest.MonkeyPatch

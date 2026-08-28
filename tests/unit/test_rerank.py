@@ -27,6 +27,8 @@ from dlightrag.engine.ai.rerank import RerankModel
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings, RerankSettings
 from dlightrag.engine.rag.retrieval.rerank import (
+    ListwiseScoreValidationError,
+    RerankBatchError,
     _build_scored_chunks,
     _chat_llm_rerank,
     _parse_listwise_scores,
@@ -177,6 +179,7 @@ async def test_rerank_with_fallback_caps_successful_provider_result() -> None:
     assert [chunk["chunk_id"] for chunk in outcome.chunks] == ["c", "b"]
     assert outcome.reranked is True
     assert outcome.error_type is None
+    assert outcome.failed_batch is None
 
 
 async def test_rerank_with_fallback_truncates_rrf_when_provider_absent() -> None:
@@ -190,6 +193,7 @@ async def test_rerank_with_fallback_truncates_rrf_when_provider_absent() -> None
     assert [chunk["chunk_id"] for chunk in outcome.chunks] == ["a", "b"]
     assert outcome.reranked is False
     assert outcome.error_type is None
+    assert outcome.failed_batch is None
 
 
 async def test_rerank_with_fallback_returns_rrf_top_k_and_logs_failure_once(
@@ -211,6 +215,7 @@ async def test_rerank_with_fallback_returns_rrf_top_k_and_logs_failure_once(
     assert [chunk["chunk_id"] for chunk in outcome.chunks] == ["a", "b"]
     assert outcome.reranked is False
     assert outcome.error_type == "RuntimeError"
+    assert outcome.failed_batch is None
     records = [
         record
         for record in caplog.records
@@ -219,6 +224,61 @@ async def test_rerank_with_fallback_returns_rrf_top_k_and_logs_failure_once(
     assert len(records) == 1
     assert records[0].exc_info is not None
     assert records[0].exc_info[1] is failure
+
+
+async def test_malformed_middle_chat_batch_falls_back_atomically() -> None:
+    call_count = 0
+    chunks = _chunks()
+    original = [dict(chunk) for chunk in chunks]
+
+    async def scoring(messages, **_kwargs):
+        nonlocal call_count
+        current = call_count
+        call_count += 1
+        count = sum("candidate" in item for item in _rerank_user_payloads(messages))
+        return "not-json" if current == 1 else json.dumps([0.9] * count)
+
+    async def rerank(*, query: str, chunks: list[dict[str, Any]], top_k: int):
+        return await _chat_llm_rerank(
+            query,
+            chunks,
+            top_k,
+            scoring_func=scoring,
+            batch_size=1,
+            max_concurrency=1,
+        )
+
+    outcome = await rerank_with_fallback(
+        query="query",
+        chunks=chunks,
+        top_k=2,
+        rerank_func=rerank,
+    )
+
+    assert [chunk["chunk_id"] for chunk in outcome.chunks] == ["a", "b"]
+    assert outcome.reranked is False
+    assert outcome.error_type == "ListwiseScoreValidationError"
+    assert outcome.failed_batch == 2
+    assert chunks == original
+
+
+async def test_generic_exception_metadata_cannot_leak_into_fallback_trace() -> None:
+    class HostileError(RuntimeError):
+        error_type = "secret query text"
+        batch_ordinal = 99
+
+    async def fail(**_kwargs: Any) -> Any:
+        raise HostileError("provider failed")
+
+    outcome = await rerank_with_fallback(
+        query="query",
+        chunks=_chunks(),
+        top_k=2,
+        rerank_func=fail,
+    )
+
+    assert outcome.error_type == "HostileError"
+    assert outcome.failed_batch is None
 
 
 async def test_rerank_with_fallback_propagates_cancellation() -> None:
@@ -246,24 +306,36 @@ def _rerank_user_payloads(messages: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 class TestParseListwiseScores:
-    def test_json_array(self):
+    def test_exact_json_array(self):
         assert _parse_listwise_scores("[0.9, 0.5, 0.3]", 3) == [0.9, 0.5, 0.3]
 
-    def test_non_json_response_returns_zeros(self):
-        text = "Scores: 0.95 for first, 0.40 for second"
-        result = _parse_listwise_scores(text, 2)
-        assert result == [0.0, 0.0]
+    def test_exact_all_zero_array_is_valid(self):
+        assert _parse_listwise_scores("[0, 0]", 2) == [0.0, 0.0]
 
-    @pytest.mark.parametrize("text", ("[1.5, 0.5]", "[-0.3, 0.5]"))
-    def test_out_of_domain_score_invalidates_batch(self, text):
-        assert _parse_listwise_scores(text, 2) == [0.0, 0.0]
+    @pytest.mark.parametrize(
+        "text",
+        (
+            "Scores: 0.95 for first, 0.40 for second",
+            "no numbers here",
+            "[]",
+            "[0.9]",
+            "[0.9, 0.8, 0.7]",
+            "[1.5, 0.5]",
+            "[-0.3, 0.5]",
+            "[true, 0.5]",
+            "[NaN, 0.5]",
+            '[{"index":0,"relevance_score":0.9},{"index":0,"relevance_score":0.8}]',
+            '[{"index":2,"relevance_score":0.9},{"index":0,"relevance_score":0.8}]',
+            '{"scores":[0.9,0.8]}',
+        ),
+    )
+    def test_malformed_or_non_exact_response_fails_batch(self, text):
+        with pytest.raises(ListwiseScoreValidationError):
+            _parse_listwise_scores(text, 2)
 
-    def test_unparseable_returns_zeros(self):
-        assert _parse_listwise_scores("no numbers here", 3) == [0.0, 0.0, 0.0]
-
-    @pytest.mark.parametrize("text", ("[0.9]", "[0.9, 0.8, 0.7]"))
-    def test_wrong_score_count_returns_zeros(self, text):
-        assert _parse_listwise_scores(text, 2) == [0.0, 0.0]
+    def test_non_string_response_fails_batch(self):
+        with pytest.raises(ListwiseScoreValidationError):
+            _parse_listwise_scores(cast(Any, [0.9, 0.8]), 2)
 
 
 class TestBuildScoredChunks:
@@ -594,13 +666,17 @@ class TestChatLlmRerank:
             for payload in _rerank_user_payloads(received_messages[0])
         )
 
-    async def test_fallback_on_error(self):
+    async def test_batch_error_identifies_the_failed_batch(self):
         mock_scoring = AsyncMock(side_effect=RuntimeError("API down"))
         chunks = [{"content": "doc0"}, {"content": "doc1"}]
-        with pytest.raises(RuntimeError, match="All rerank batches failed"):
+        with pytest.raises(RerankBatchError) as caught:
             await _chat_llm_rerank(
                 "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.3
             )
+
+        assert caught.value.batch_ordinal == 1
+        assert caught.value.batch_start == 0
+        assert caught.value.error_type == "RuntimeError"
 
     async def test_empty_chunks(self):
         mock_scoring = AsyncMock()
@@ -648,6 +724,103 @@ class TestChatLlmRerank:
         # 5 chunks, batch_size=2 → 3 batches (2+2+1)
         assert call_count == 3
         assert len(result) == 5
+
+    @pytest.mark.parametrize("failed_call", (0, 1, 2))
+    async def test_any_failed_batch_discards_the_atomic_pass(self, failed_call: int):
+        call_count = 0
+        chunks = [{"chunk_id": str(index), "content": str(index)} for index in range(5)]
+        original = [dict(chunk) for chunk in chunks]
+
+        async def mock_scoring(messages, **_kwargs):
+            nonlocal call_count
+            current = call_count
+            call_count += 1
+            if current == failed_call:
+                raise RuntimeError(f"batch {current + 1} failed")
+            count = sum("candidate" in item for item in _rerank_user_payloads(messages))
+            return json.dumps([0.5] * count)
+
+        with pytest.raises(RerankBatchError) as caught:
+            await _chat_llm_rerank(
+                "query",
+                chunks,
+                top_k=5,
+                scoring_func=mock_scoring,
+                batch_size=2,
+                max_concurrency=1,
+            )
+
+        assert caught.value.batch_ordinal == failed_call + 1
+        assert caught.value.batch_start == failed_call * 2
+        assert caught.value.error_type == "RuntimeError"
+        assert chunks == original
+
+    async def test_valid_zero_scores_preserve_stable_rrf_order(self):
+        async def zero_scores(messages, **_kwargs):
+            count = sum("candidate" in item for item in _rerank_user_payloads(messages))
+            return json.dumps([0.0] * count)
+
+        chunks = [{"chunk_id": str(index), "content": str(index)} for index in range(5)]
+        result = await _chat_llm_rerank(
+            "query",
+            chunks,
+            top_k=5,
+            scoring_func=zero_scores,
+            batch_size=2,
+        )
+
+        assert [chunk["chunk_id"] for chunk in result] == ["0", "1", "2", "3", "4"]
+        assert all(chunk["rerank_score"] == 0.0 for chunk in result)
+
+    async def test_successful_batches_sort_globally_and_stably(self):
+        responses = iter(("[0.1, 0.8]", "[0.7, 0.9]"))
+
+        async def scores(**_kwargs):
+            return next(responses)
+
+        chunks = [{"chunk_id": value, "content": value} for value in ("a", "b", "c", "d")]
+        result = await _chat_llm_rerank(
+            "query",
+            chunks,
+            top_k=4,
+            scoring_func=scores,
+            batch_size=2,
+            max_concurrency=1,
+        )
+
+        assert [chunk["chunk_id"] for chunk in result] == ["d", "b", "c", "a"]
+
+    async def test_scoring_cancellation_propagates(self):
+        async def cancel(**_kwargs):
+            raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await _chat_llm_rerank(
+                "query",
+                [{"content": "a"}, {"content": "b"}],
+                top_k=2,
+                scoring_func=cancel,
+                batch_size=1,
+            )
+
+    async def test_cancellation_wins_over_an_earlier_batch_failure(self):
+        async def mixed_failure(messages, **_kwargs):
+            candidate = next(
+                payload for payload in _rerank_user_payloads(messages) if "candidate" in payload
+            )
+            if candidate["text"] == "ordinary failure":
+                raise RuntimeError("provider failed")
+            raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await _chat_llm_rerank(
+                "query",
+                [{"content": "ordinary failure"}, {"content": "cancelled"}],
+                top_k=2,
+                scoring_func=mixed_failure,
+                batch_size=1,
+                max_concurrency=2,
+            )
 
     async def test_logs_listwise_schedule_summary(self, caplog):
         caplog.set_level(logging.INFO, logger="dlightrag.engine.rag.retrieval.rerank")
@@ -904,6 +1077,22 @@ class TestRunHttpRerank:
         assert result[0]["rerank_score"] == pytest.approx(0.85)
         assert model.documents == [("VLM text description", None)]
         assert raw_image not in str(model.documents)
+
+    async def test_provider_top_n_subset_remains_valid(self):
+        model = _ScoreModel([{"index": 2, "relevance_score": 0.95}])
+
+        result = await _run_http_rerank(
+            "query",
+            [{"content": "a"}, {"content": "b"}, {"content": "c"}],
+            top_k=1,
+            model=cast(Any, model),
+            modality="text",
+            score_threshold=None,
+            budget_factory=_budget_factory(),
+        )
+
+        assert [chunk["content"] for chunk in result] == ["c"]
+        assert model.top_n == 1
 
     async def test_score_threshold_drops_all_results_below_threshold(self):
         model = _ScoreModel(
