@@ -30,6 +30,29 @@ def test_lightrag_stores_validates_required_surfaces() -> None:
     assert stores.full_docs is fake.full_docs
 
 
+async def test_get_full_docs_uses_batch_kv_lookup_and_preserves_alignment() -> None:
+    fake = FakeLightRAG()
+    fake.full_docs = AsyncMock()
+    expected = [{"id": "doc-b"}, None, {"id": "doc-a"}]
+    fake.full_docs.get_by_ids.return_value = expected
+    stores = _stores(fake)
+
+    result = await stores.get_full_docs(["doc-b", "missing", "doc-a"])
+
+    assert result == expected
+    fake.full_docs.get_by_ids.assert_awaited_once_with(["doc-b", "missing", "doc-a"])
+    fake.full_docs.get_by_id.assert_not_awaited()
+
+
+async def test_get_full_docs_empty_input_skips_storage() -> None:
+    fake = FakeLightRAG()
+    fake.full_docs = AsyncMock()
+    stores = _stores(fake)
+
+    assert await stores.get_full_docs([]) == []
+    fake.full_docs.get_by_ids.assert_not_awaited()
+
+
 async def test_overwrite_chunk_vectors_requires_matching_dimension() -> None:
     stores = PGCorpusChunkStore(FakeLightRAG())
 

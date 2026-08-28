@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Single boundary for LightRAG private storage access.
 
-**LightRAG coupling surface (lightrag-hku>=1.5.3):**
+**LightRAG coupling surface (lightrag-hku>=1.5.6):**
 
 This module depends on the following LightRAG internals that are NOT part
 of the public API.  A LightRAG major-version bump may break these:
@@ -51,6 +51,12 @@ class LightRAGStores:
 
     async def get_full_doc(self, doc_id: str) -> dict[str, Any] | None:
         return await self.full_docs.get_by_id(doc_id)
+
+    async def get_full_docs(self, doc_ids: list[str]) -> list[Any]:
+        """Fetch full-document KV rows aligned with the requested ids."""
+        if not doc_ids:
+            return []
+        return await self.full_docs.get_by_ids(doc_ids)
 
     async def get_text_chunks(self, chunk_ids: list[str]) -> list[Any]:
         if not chunk_ids:

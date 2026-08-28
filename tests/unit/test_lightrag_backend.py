@@ -25,6 +25,7 @@ def _stores(
     stores = MagicMock()
     stores.context_chunks_by_ids = AsyncMock(return_value=[])
     stores.get_text_chunks = AsyncMock(return_value=list(raw_chunks or []))
+    stores.get_full_docs = AsyncMock(side_effect=lambda doc_ids: [full_doc for _ in doc_ids])
     stores.get_full_doc = AsyncMock(return_value=full_doc)
     return stores
 
@@ -209,7 +210,7 @@ async def test_sidecar_provenance_index_loading_runs_off_the_event_loop(
 
     async def to_thread(func, *args, **kwargs):  # noqa: ANN001, ANN202
         def observed():
-            if getattr(func, "__name__", "") == "load_block_provenance_index":
+            if getattr(func, "__name__", "") == "_load_sidecar_artifact_index":
                 load_threads.append(threading.get_ident())
             return func(*args, **kwargs)
 

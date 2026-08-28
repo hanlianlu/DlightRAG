@@ -2,7 +2,8 @@
 """LightRAG sidecar provenance helpers shared by ingestion and retrieval."""
 
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,118 @@ class BlockProvenance:
     """Page-level provenance for one LightRAG sidecar block."""
 
     page_number: int | None = None
+
+
+@dataclass(frozen=True)
+class _DrawingCandidate:
+    path: Path
+    page_number: int | None
+
+
+@dataclass(slots=True)
+class SidecarArtifactIndex:
+    """One parsed view of the provenance sidecars in an artifact directory."""
+
+    block_provenance: dict[str, BlockProvenance] = field(default_factory=dict)
+    multimodal_block_ids: dict[tuple[str, str], tuple[str, ...]] = field(default_factory=dict)
+    drawing_candidates: dict[str, list[_DrawingCandidate]] = field(default_factory=dict)
+
+    @classmethod
+    def load(cls, artifact_dir: Path) -> SidecarArtifactIndex:
+        """Parse each supported sidecar file at most once."""
+        root = artifact_dir.resolve()
+        index = cls()
+        index._load_blocks(root)
+        index._load_multimodal_items(root)
+        return index
+
+    def block_ids_for_multimodal_item(self, sidecar: dict[str, Any]) -> list[str]:
+        """Return the source block ids for one table, drawing, or equation item."""
+        kind = sidecar.get("type")
+        item_id = sidecar.get("id")
+        if not isinstance(kind, str) or not isinstance(item_id, str) or not item_id:
+            return []
+        return list(self.multimodal_block_ids.get((kind, item_id), ()))
+
+    def drawing_asset_path(
+        self,
+        drawing_id: str,
+        *,
+        page_number: int | None = None,
+    ) -> Path | None:
+        """Return the deterministic, artifact-contained drawing candidate."""
+        candidates = self.drawing_candidates.get(drawing_id, ())
+        if page_number is not None:
+            for candidate in candidates:
+                if candidate.page_number == page_number:
+                    return candidate.path
+        return candidates[0].path if candidates else None
+
+    def _load_blocks(self, artifact_dir: Path) -> None:
+        for blocks_path in sorted(artifact_dir.glob("*.blocks.jsonl")):
+            try:
+                with blocks_path.open(encoding="utf-8") as blocks_file:
+                    for line in blocks_file:
+                        if not line.strip():
+                            continue
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(row, dict):
+                            continue
+                        block_id = row.get("blockid")
+                        if not isinstance(block_id, str) or not block_id:
+                            continue
+                        provenance = _provenance_from_positions(row.get("positions"))
+                        if provenance.page_number is not None:
+                            self.block_provenance[block_id] = provenance
+            except OSError, UnicodeError:
+                continue
+
+    def _load_multimodal_items(self, artifact_dir: Path) -> None:
+        files: dict[Path, tuple[str, str]] = {}
+        for kind, (glob_pattern, root_key) in _MULTIMODAL_ITEM_FILES.items():
+            for path in artifact_dir.glob(glob_pattern):
+                files[path] = (kind, root_key)
+
+        for path in sorted(files):
+            kind, root_key = files[path]
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError, OSError, UnicodeError:
+                continue
+            items = payload.get(root_key) if isinstance(payload, dict) else None
+            if not isinstance(items, dict):
+                continue
+            for item_id, raw_item in items.items():
+                if not isinstance(item_id, str) or not isinstance(raw_item, dict):
+                    continue
+                block_id = raw_item.get("blockid")
+                if isinstance(block_id, str) and block_id:
+                    self.multimodal_block_ids.setdefault((kind, item_id), (block_id,))
+                if kind == "drawing":
+                    self._add_drawing_candidate(artifact_dir, path, item_id, raw_item)
+
+    def _add_drawing_candidate(
+        self,
+        artifact_dir: Path,
+        drawings_path: Path,
+        item_id: str,
+        item: dict[str, Any],
+    ) -> None:
+        raw_path = _drawing_asset_path(item)
+        if raw_path is None:
+            return
+        candidate = resolve_sidecar_asset_path(artifact_dir, raw_path)
+        if candidate is None:
+            return
+        page_number = explicit_item_page_number(item)
+        if page_number is None:
+            page_number = _page_number_from_filename(drawings_path.stem)
+        self.drawing_candidates.setdefault(item_id, []).append(
+            _DrawingCandidate(path=candidate, page_number=page_number)
+        )
 
 
 def resolve_sidecar_asset_path(artifact_dir: Path, raw_path: str) -> Path | None:
@@ -33,24 +146,7 @@ def resolve_sidecar_asset_path(artifact_dir: Path, raw_path: str) -> Path | None
 
 def load_block_provenance_index(artifact_dir: Path) -> dict[str, BlockProvenance]:
     """Load ``blockid -> BlockProvenance`` from LightRAG ``*.blocks.jsonl`` files."""
-    index: dict[str, BlockProvenance] = {}
-    for blocks_path in sorted(artifact_dir.glob("*.blocks.jsonl")):
-        for line in blocks_path.open(encoding="utf-8"):
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(row, dict):
-                continue
-            block_id = row.get("blockid")
-            if not isinstance(block_id, str) or not block_id:
-                continue
-            provenance = _provenance_from_positions(row.get("positions"))
-            if provenance.page_number is not None:
-                index[block_id] = provenance
-    return index
+    return SidecarArtifactIndex.load(artifact_dir).block_provenance
 
 
 def block_ids_from_sidecar(sidecar: dict[str, Any]) -> list[str]:
@@ -92,29 +188,10 @@ def is_multimodal_sidecar(sidecar: dict[str, Any]) -> bool:
 def block_ids_from_multimodal_item(artifact_dir: Path, sidecar: dict[str, Any]) -> list[str]:
     """Resolve a multimodal chunk's source block id from its sidecar item file.
 
-    The sidecar ``id`` keys the matching ``*.tables.json`` / ``*.drawings.json``
-    / ``*.equations.json`` item, which records the ``blockid`` it was lifted
-    from. Returns an empty list when the sidecar is not multimodal, the item is
-    absent, or no modality file is readable.
+    The compatibility helper keeps the ingestion-facing behavior while retrieval
+    caches the complete :class:`SidecarArtifactIndex` across hydration passes.
     """
-    kind = sidecar.get("type")
-    spec = _MULTIMODAL_ITEM_FILES.get(kind) if isinstance(kind, str) else None
-    item_id = sidecar.get("id")
-    if spec is None or not isinstance(item_id, str) or not item_id:
-        return []
-
-    glob_pattern, root_key = spec
-    for path in sorted(artifact_dir.glob(glob_pattern)):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError, OSError:
-            continue
-        items = payload.get(root_key) if isinstance(payload, dict) else None
-        item = items.get(item_id) if isinstance(items, dict) else None
-        block_id = item.get("blockid") if isinstance(item, dict) else None
-        if isinstance(block_id, str) and block_id:
-            return [block_id]
-    return []
+    return SidecarArtifactIndex.load(artifact_dir).block_ids_for_multimodal_item(sidecar)
 
 
 def first_provenance_for_blocks(
@@ -164,3 +241,16 @@ def _provenance_from_positions(raw_positions: Any) -> BlockProvenance:
             continue
         return BlockProvenance(page_number=page_number)
     return BlockProvenance()
+
+
+def _drawing_asset_path(item: dict[str, Any]) -> str | None:
+    raw = item.get("path") or item.get("img_path") or item.get("image_path")
+    return raw if isinstance(raw, str) and raw.strip() else None
+
+
+def _page_number_from_filename(stem: str) -> int | None:
+    match = re.search(r"(?:^|[_-])p(?:age)?[_-]?(\d+)", stem, re.IGNORECASE)
+    if match is None:
+        return None
+    page_number = int(match.group(1))
+    return page_number if page_number >= 1 else None
