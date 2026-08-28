@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** The shared-control reference page: primitives and tokens, rendered live. */
 
+import {DESIGN_SYSTEM_TOKEN_GROUPS} from '../tokens/design_system_tokens.ts';
 import '../tokens/utopia.css';
 import '../styles/global.css';
 import '../styles/primitives.css';
@@ -132,7 +133,9 @@ const PRIMITIVES: PrimitiveSpec[] = [
     markup:
       '<article class="answer-artifact-card"><div><strong>Quarterly report</strong>' +
       '<span>report.html</span></div><button class="ui-btn" type="button">View report</button></article>' +
-      '<div class="artifact-canvas-actions"><button class="ui-btn" aria-pressed="true">Side</button>' +
+      '<strong id="ds-canvas-title">Canvas controls</strong>' +
+      '<div class="artifact-canvas-layout-actions" role="group" aria-labelledby="ds-canvas-title">' +
+      '<button class="ui-btn" aria-pressed="true">Side</button>' +
       '<button class="ui-btn" aria-pressed="false">Wide</button>' +
       '<button class="ui-btn" aria-pressed="false">Fullscreen</button></div>',
   },
@@ -140,14 +143,6 @@ const PRIMITIVES: PrimitiveSpec[] = [
     name: 'Opaque Artifact frame (dl-active-artifact-frame)',
     markup: '<dl-active-artifact-frame id="ds-artifact-frame"></dl-active-artifact-frame>',
   },
-];
-
-const TOKEN_GROUPS: Array<[string, string[]]> = [
-  ['color-text-primary', ['color-accent-action', 'color-danger-text', 'color-text-muted']],
-  ['color-bg-surface', ['color-bg-hover', 'color-danger-surface', 'color-accent-surface']],
-  ['radius-control', ['radius-dialog', 'radius-docked']],
-  ['font-size-body', ['font-size-detail', 'font-size-caption', 'font-size-subhead']],
-  ['space-section', ['space-component', 'space-tight']],
 ];
 
 function mountPrimitives(): void {
@@ -213,7 +208,7 @@ function mountTokens(): void {
   title.textContent = 'Design tokens';
   card.appendChild(title);
   const root = getComputedStyle(document.documentElement);
-  for (const [primary, rest] of TOKEN_GROUPS) {
+  for (const [primary, rest] of DESIGN_SYSTEM_TOKEN_GROUPS) {
     const group = document.createElement('div');
     group.className = 'ds-token-group';
     for (const name of [primary, ...rest]) {

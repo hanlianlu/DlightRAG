@@ -10,12 +10,19 @@ import {attachmentStore} from '../stores/attachmentStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import type {DlChatComposer} from './chat_composer.ts';
 import './chat_composer.ts';
-import type {DlChatFeature} from './chat_feature.ts';
-import './chat_feature.ts';
-import type {
-  ChatRunActionDetail,
-  ChatTurnView,
-  DlChatMessageList,
+import {
+  ANSWER_PHASE_LABELS,
+  ANSWER_TOOL_EVENT_LABELS,
+  answerPhaseLabel,
+  answerToolEventLabel,
+  type DlChatFeature,
+} from './chat_feature.ts';
+import {
+  ANSWER_RECONNECT_COPY,
+  answerReconnectState,
+  type ChatRunActionDetail,
+  type ChatTurnView,
+  type DlChatMessageList,
 } from './chat_message_list.ts';
 import {webRouter} from './router.ts';
 
@@ -182,6 +189,82 @@ it('renders cancelled history without a simultaneous stopping phase', async () =
 
   expect(feature.textContent).to.contain('Stopped');
   expect(feature.turns[0].progress).to.equal('');
+});
+
+it('maps every server answer phase and tool event to qualitative deterministic copy', () => {
+  expect(ANSWER_PHASE_LABELS).to.deep.equal({
+    routing: 'Routing answer...',
+    planning: 'Planning answer...',
+    searching: 'Searching knowledge base...',
+    researching: 'Researching sources...',
+    generating: 'Generating answer...',
+  });
+  expect(ANSWER_TOOL_EVENT_LABELS).to.deep.equal({
+    tool_start: 'Tool started...',
+    tool_progress: 'Tool working...',
+    tool_end: 'Tool finished...',
+  });
+  for (const [phase, label] of Object.entries(ANSWER_PHASE_LABELS)) {
+    expect(answerPhaseLabel(phase)).to.equal(label);
+  }
+  for (const [eventType, label] of Object.entries(ANSWER_TOOL_EVENT_LABELS)) {
+    expect(answerToolEventLabel(eventType)).to.equal(label);
+  }
+  for (const unknown of ['provider-secret-phase', 'toString', '__proto__']) {
+    expect(answerPhaseLabel(unknown)).to.equal(null);
+  }
+  for (const unknown of ['tool_telemetry', 'toString', 'constructor']) {
+    expect(answerToolEventLabel(unknown)).to.equal(null);
+  }
+  expect(Object.values({...ANSWER_PHASE_LABELS, ...ANSWER_TOOL_EVENT_LABELS}).join(' '))
+    .not.to.match(/\b(?:bytes?|elapsed|model|remaining)\b|\d+\s*(?:ms|%)/i);
+});
+
+it('maps and renders every reconnect state with one visible status and action', async () => {
+  expect(answerReconnectState(false)).to.equal('running');
+  expect(answerReconnectState(true)).to.equal('stopping');
+  expect(ANSWER_RECONNECT_COPY).to.deep.equal({
+    running: {
+      status: 'Connection lost while this answer is running.',
+      action: 'Reconnect',
+    },
+    stopping: {
+      status: 'Connection lost while this answer is stopping.',
+      action: 'Reconnect',
+    },
+  });
+
+  const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
+  const retryable = (cancelRequested: boolean): ChatTurnView => ({
+    id: `turn-${cancelRequested ? 'stopping' : 'running'}`,
+    userText: 'Question',
+    userAttachments: [],
+    runId: `run-${cancelRequested ? 'stopping' : 'running'}`,
+    state: 'retryable',
+    streamText: '',
+    presentation: null,
+    usage: {},
+    evidence: {},
+    error: '',
+    progress: '',
+    liveStatus: '',
+    sawChildren: false,
+    cancelRequested,
+    steeringMessages: [],
+  });
+  list.turns = [retryable(false), retryable(true)];
+  document.body.appendChild(list);
+  await list.updateComplete;
+
+  for (const state of ['running', 'stopping'] as const) {
+    const notice = list.querySelector<HTMLElement>(`[data-reconnect-state="${state}"]`)!;
+    expect(notice.querySelector('[role="status"]')?.textContent?.trim())
+      .to.equal(ANSWER_RECONNECT_COPY[state].status);
+    expect(notice.querySelector('button')?.textContent?.trim())
+      .to.equal(ANSWER_RECONNECT_COPY[state].action);
+    expect(notice.querySelector('button')?.getAttribute('aria-label'))
+      .to.equal('Reconnect to this answer');
+  }
 });
 
 it('forces a submitted turn into view without forcing later stream updates', async () => {
@@ -435,11 +518,13 @@ it('shows cancel-aware reconnect state and preserves stopping when reconnecting'
   const conversationId = 'conversation-stopping';
   const runId = 'run-stopping';
   let eventRequests = 0;
+  let finishFirstEvents!: (response: Response) => void;
+  const firstEvents = new Promise<Response>((resolve) => { finishFirstEvents = resolve; });
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith('/events')) {
       eventRequests += 1;
-      if (eventRequests === 1) return Promise.resolve(new Response('', {status: 410}));
+      if (eventRequests === 1) return firstEvents;
       return new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;
         signal?.addEventListener(
@@ -484,9 +569,19 @@ it('shows cancel-aware reconnect state and preserves stopping when reconnecting'
   };
   document.body.appendChild(feature);
 
+  await waitFor(() => eventRequests === 1 && feature.turns.length === 1);
+  feature.turns = feature.turns.map((turn) => ({
+    ...turn,
+    liveStatus: 'Planning answer...',
+  }));
+  finishFirstEvents(new Response('', {status: 410}));
+
   await waitFor(() => feature.textContent?.includes(
-    'Connection lost. This answer is still stopping.',
+    'Connection lost while this answer is stopping.',
   ) === true);
+  expect(feature.turns[0].liveStatus).to.equal('');
+  expect(feature.querySelectorAll('[data-reconnect-state="stopping"] [role="status"]'))
+    .to.have.length(1);
   feature.querySelector<HTMLButtonElement>('[aria-label="Reconnect to this answer"]')?.click();
   await waitFor(() => eventRequests === 2);
 
@@ -576,8 +671,8 @@ it('Message List exposes child-agent progress and roster intent through public s
     usage: {},
     evidence: {},
     error: '',
-    progress: 'spawn_agent · running',
-    liveStatus: 'spawn_agent · running',
+    progress: 'Tool working...',
+    liveStatus: 'Tool working...',
     sawChildren: true,
     cancelRequested: false,
     steeringMessages: [],
@@ -589,13 +684,13 @@ it('Message List exposes child-agent progress and roster intent through public s
   expect(list.querySelector('[role="log"]')?.getAttribute('aria-label')).to.equal(
     'Conversation messages',
   );
-  expect(list.querySelector('[role="status"]')?.textContent).to.contain('spawn_agent');
+  expect(list.querySelector('[role="status"]')?.textContent).to.contain('Tool working');
   let action: ChatRunActionDetail | null = null;
   list.addEventListener('dl-chat-run-action', (event) => {
     action = (event as CustomEvent<ChatRunActionDetail>).detail;
   });
   Array.from(list.querySelectorAll('button')).find(
-    (button) => button.textContent?.includes('Child agents working'),
+    (button) => button.textContent?.includes('View child agents'),
   )?.click();
   expect(action).to.deep.equal({action: 'children', runId: 'run-with-child'});
 });

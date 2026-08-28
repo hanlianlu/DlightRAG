@@ -86,9 +86,11 @@ it('owns Sources state, selection, commands, and focus restoration through its p
 
   await inspector.openSources(presentation, '1', '1', returnFocus);
   await inspector.updateComplete;
-  const panel = inspector.querySelector<HTMLElement>('aside[aria-label="Sources"]')!;
+  const panel = inspector.querySelector<HTMLElement>('aside[aria-labelledby="panel-title"]')!;
   expect(inspector.open).to.equal(true);
   expect(inspector.kind).to.equal('sources');
+  expect(inspector.querySelector('#panel-title')?.textContent).to.equal('Sources');
+  expect(panel.hasAttribute('aria-label')).to.equal(false);
   expect(panel.hasAttribute('aria-modal')).to.equal(false);
   expect(panel.querySelector('[aria-expanded="true"]')).not.to.equal(null);
 
@@ -131,7 +133,7 @@ it('owns compact dialog semantics, entry focus, Escape, and typed state', async 
   document.body.appendChild(inspector);
 
   await inspector.openSources(presentation);
-  const panel = inspector.querySelector<HTMLElement>('aside[aria-label="Sources"]')!;
+  const panel = inspector.querySelector<HTMLElement>('aside[aria-labelledby="panel-title"]')!;
   expect(panel.getAttribute('role')).to.equal('dialog');
   expect(panel.getAttribute('aria-modal')).to.equal('true');
   expect(document.activeElement).to.equal(buttonNamed(inspector, 'Close panel'));
@@ -161,7 +163,12 @@ it('activates and pauses typed Files content without a legacy element alias', as
   await inspector.openFiles();
   const files = inspector.querySelector('dl-inspector-files')!;
   await waitFor(() => files.loading === false);
-  expect(inspector.querySelector('aside')?.getAttribute('aria-label')).to.equal('Files');
+  const panel = inspector.querySelector('aside')!;
+  const title = inspector.querySelector<HTMLElement>('#panel-title')!;
+  expect(title.textContent).to.equal('Files');
+  expect(title.hidden).to.equal(false);
+  expect(panel.getAttribute('aria-labelledby')).to.equal(title.id);
+  expect(panel.hasAttribute('aria-label')).to.equal(false);
   expect(files.active).to.equal(true);
   expect(buttonNamed(inspector, 'Choose files')).not.to.equal(null);
 

@@ -29,8 +29,10 @@ import type {
 } from './chat_composer.ts';
 import './chat_composer.ts';
 import {
+  ANSWER_RECONNECT_COPY,
   MAX_CHAT_TURNS,
   MAX_STEERING_MESSAGES,
+  answerReconnectState,
   storedTurnView,
   type ChatReconnectDetail,
   type ChatTurnView,
@@ -43,13 +45,31 @@ export type {ChatRunActionDetail, ChatView, ChatViewActionDetail} from './chat_m
 
 const NEW_CHAT_RUN_KEY = '__new_chat__';
 type AnswerPhase = 'routing' | 'planning' | 'searching' | 'researching' | 'generating';
-const PHASE_LABELS: Record<AnswerPhase, string> = {
-  routing: 'Choosing answer mode...',
-  planning: 'Analyzing query...',
+export const ANSWER_PHASE_LABELS = {
+  routing: 'Routing answer...',
+  planning: 'Planning answer...',
   searching: 'Searching knowledge base...',
   researching: 'Researching sources...',
   generating: 'Generating answer...',
-};
+} as const satisfies Record<AnswerPhase, string>;
+
+export type ToolEventType = 'tool_start' | 'tool_progress' | 'tool_end';
+export const ANSWER_TOOL_EVENT_LABELS = {
+  tool_start: 'Tool started...',
+  tool_progress: 'Tool working...',
+  tool_end: 'Tool finished...',
+} as const satisfies Record<ToolEventType, string>;
+
+export function answerPhaseLabel(phase: string): string | null {
+  if (!Object.hasOwn(ANSWER_PHASE_LABELS, phase)) return null;
+  return ANSWER_PHASE_LABELS[phase as AnswerPhase];
+}
+
+export function answerToolEventLabel(eventType: string): string | null {
+  if (!Object.hasOwn(ANSWER_TOOL_EVENT_LABELS, eventType)) return null;
+  return ANSWER_TOOL_EVENT_LABELS[eventType as ToolEventType];
+}
+
 interface DonePayload {
   status: 'succeeded' | 'cancelled';
   presentation: ConversationTurn['presentation'];
@@ -59,11 +79,6 @@ interface DonePayload {
 
 interface ToolProgressPayload {
   tool_name?: string;
-  outcome?: string;
-  elapsed_ms?: number;
-  duration_ms?: number;
-  output_bytes?: number;
-  spill_state?: string;
 }
 
 export interface ChatRunningChangeDetail {
@@ -330,7 +345,7 @@ export class DlChatFeature extends LightElement {
     this.#setTurn(turn.id, {
       state: 'pending',
       error: '',
-      progress: turn.cancelRequested ? 'Stopping...' : 'Generating answer...',
+      progress: turn.cancelRequested ? 'Stopping...' : 'Answer in progress...',
     });
     answerRunStore.trackRun(conversationId, turn.runId);
     if (!this.#runController.beginFollow(turn.runId, turn.cancelRequested)) return;
@@ -473,12 +488,12 @@ export class DlChatFeature extends LightElement {
       finished = true;
     } else if (result.kind === 'retryable') {
       const cancelRequested = result.stored.cancel_requested;
+      const reconnectState = answerReconnectState(cancelRequested);
       this.#setTurn(turnId, {
         state: 'retryable',
-        error: cancelRequested
-          ? 'Connection lost. This answer is still stopping.'
-          : 'Connection lost. This answer is still running.',
+        error: ANSWER_RECONNECT_COPY[reconnectState].status,
         progress: '',
+        liveStatus: '',
         cancelRequested,
       });
     } else if (result.kind === 'error') {
@@ -546,7 +561,8 @@ export class DlChatFeature extends LightElement {
     if (eventType === 'progress') {
       const payload = parseData(data) as {phase?: string};
       const phase = String(payload?.phase || '');
-      const label = PHASE_LABELS[phase as AnswerPhase] || phase;
+      const label = answerPhaseLabel(phase);
+      if (label === null) return;
       this.#setTurn(turnId, {progress: label, liveStatus: label, error: ''});
       return;
     }
@@ -583,24 +599,15 @@ export class DlChatFeature extends LightElement {
     });
   }
 
-  #handleToolProgress(turnId: string, eventType: string, info: ToolProgressPayload): void {
+  #handleToolProgress(turnId: string, eventType: ToolEventType, info: ToolProgressPayload): void {
     if (!info || typeof info.tool_name !== 'string') return;
     const turn = this.turns.find((candidate) => candidate.id === turnId);
     if (!turn) return;
-    const elapsed = typeof info.duration_ms === 'number' ? info.duration_ms : info.elapsed_ms;
-    const status = eventType === 'tool_start'
-      ? 'running'
-      : eventType === 'tool_end' ? (info.outcome || 'complete') : 'working';
-    const metadata = [
-      info.tool_name,
-      status,
-      typeof elapsed === 'number' ? `${Math.round(elapsed)} ms` : '',
-      typeof info.output_bytes === 'number' ? `${info.output_bytes} bytes` : '',
-      info.spill_state && info.spill_state !== 'none' ? `spill: ${info.spill_state}` : '',
-    ].filter(Boolean).join(' · ');
+    const label = answerToolEventLabel(eventType);
+    if (label === null) return;
     this.#setTurn(turnId, {
-      progress: metadata,
-      liveStatus: metadata,
+      progress: label,
+      liveStatus: label,
       sawChildren: turn.sawChildren || info.tool_name === 'spawn_agent',
       error: '',
     });

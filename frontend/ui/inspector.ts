@@ -177,7 +177,7 @@ export class DlInspector extends LightElement {
       <aside
         class="panel inspector-surface${open ? ' open' : ''}"
         id="panel"
-        aria-label=${files ? 'Files' : 'Sources'}
+        aria-labelledby=${open ? 'panel-title' : nothing}
         aria-hidden=${open ? nothing : 'true'}
         role=${open && compact ? 'dialog' : nothing}
         aria-modal=${open && compact ? 'true' : nothing}
@@ -186,7 +186,7 @@ export class DlInspector extends LightElement {
         @keydown=${this.#panelKeydown}
       >
         <div class="panel-header">
-          <span id="panel-title">${sources ? 'Sources' : ''}</span>
+          <h2 id="panel-title">${files ? 'Files' : sources ? 'Sources' : ''}</h2>
           <button
             class="source-toggle-all"
             id="source-toggle-all-btn"

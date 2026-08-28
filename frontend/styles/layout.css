@@ -376,7 +376,7 @@ body.files-panel-open #files-btn {
 }
 
 .composer-mode-trigger:hover {
-    color: var(--color-text);
+    color: var(--color-text-primary);
     background: var(--color-bg-elevated);
 }
 
@@ -402,7 +402,7 @@ body.files-panel-open #files-btn {
 .composer-mode-menu button {
     border: none;
     background: transparent;
-    color: var(--color-text);
+    color: var(--color-text-primary);
     text-align: left;
     font: inherit;
     font-size: 0.8rem;

@@ -274,11 +274,11 @@
 
 :global(#settings-btn:hover),
 :global(#settings-btn:focus-visible) {
-    color: var(--color-text);
+    color: var(--color-text-primary);
 }
 
 :global(#settings-btn .sidebar-action-label) {
-    color: var(--color-text);
+    color: var(--color-text-primary);
     font-weight: 600;
 }
 

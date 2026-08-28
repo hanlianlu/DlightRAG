@@ -312,7 +312,7 @@ mjx-container {
 }
 
 .bootstrap-status--error {
-    color: var(--color-danger-text);
+    color: var(--color-danger);
 }
 
 .bootstrap-status button {

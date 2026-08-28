@@ -63,6 +63,23 @@ export const MAX_CHAT_TURNS = 100;
 export const MAX_STEERING_MESSAGES = 50;
 const STICK_TO_BOTTOM_PX = 160;
 
+export type AnswerReconnectState = 'running' | 'stopping';
+
+export const ANSWER_RECONNECT_COPY = {
+  running: {
+    status: 'Connection lost while this answer is running.',
+    action: 'Reconnect',
+  },
+  stopping: {
+    status: 'Connection lost while this answer is stopping.',
+    action: 'Reconnect',
+  },
+} as const satisfies Record<AnswerReconnectState, {status: string; action: string}>;
+
+export function answerReconnectState(cancelRequested: boolean): AnswerReconnectState {
+  return cancelRequested ? 'stopping' : 'running';
+}
+
 function terminal(state: ChatTurnView['state']): boolean {
   return state === 'succeeded' || state === 'failed' || state === 'cancelled';
 }
@@ -258,7 +275,9 @@ export class DlChatMessageList extends LightElement {
           ${this.#answer(turn)}
         </div>
         ${this.#runActions(turn)}
-        <span class="sr-only" role="status" aria-live="polite">${turn.liveStatus}</span>
+        ${turn.liveStatus ? html`
+          <span class="sr-only" role="status" aria-live="polite">${turn.liveStatus}</span>
+        ` : nothing}
       </article>
       ${turn.steeringMessages.slice(-MAX_STEERING_MESSAGES).map((message) => html`
         <div class=${chatStyles.userMessageWrapper} data-steer="true">
@@ -274,7 +293,7 @@ export class DlChatMessageList extends LightElement {
       return html`
         <button type="button" class=${chatStyles.childAgentChip}
                 @click=${() => this.#runAction('children', turn.runId)}>
-          Child agents working…
+          View child agents
         </button>
         ${this.#answerBody(turn)}
       `;
@@ -295,18 +314,27 @@ export class DlChatMessageList extends LightElement {
       ` : nothing}
       ${turn.state === 'pending' && !turn.progress ? html`
         <span class="${chatStyles.streamingDot} ${chatStyles.progressPhase}"
-              data-phase="Generating answer..."></span>
+              data-phase="Answer in progress..."></span>
       ` : nothing}
-      ${turn.state === 'retryable' ? html`
-        <span class="answer-reconnect">
-          <span role="status">${turn.error}</span>
-          <button type="button" aria-label="Reconnect to this answer"
-                  @click=${() => this.#reconnect(turn.runId)}>Reconnect</button>
-        </span>
-      ` : nothing}
+      ${turn.state === 'retryable' ? this.#reconnectNotice(turn) : nothing}
       ${turn.state === 'cancelled' ? html`
         <div class=${chatStyles.stoppedNote}>Stopped</div>
       ` : nothing}
+    `;
+  }
+
+  #reconnectNotice(turn: ChatTurnView): TemplateResult {
+    const state = answerReconnectState(turn.cancelRequested);
+    const copy = ANSWER_RECONNECT_COPY[state];
+    return html`
+      <div class=${chatStyles.answerReconnect} data-reconnect-state=${state}>
+        <span class=${chatStyles.answerReconnectStatus} role="status">
+          ${turn.error || copy.status}
+        </span>
+        <button class=${chatStyles.answerReconnectAction} type="button"
+                aria-label="Reconnect to this answer"
+                @click=${() => this.#reconnect(turn.runId)}>${copy.action}</button>
+      </div>
     `;
   }
 

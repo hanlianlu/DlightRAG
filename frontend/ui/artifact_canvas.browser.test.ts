@@ -177,6 +177,13 @@ it('requires explicit user intent before creating the active iframe', async () =
 
   expect(canvas.classList.contains('open')).to.equal(true);
   expect(canvas.inert).to.equal(false);
+  expect(canvas.getAttribute('role')).to.equal('dialog');
+  expect(canvas.getAttribute('aria-labelledby')).to.equal('artifact-canvas-title');
+  expect(canvas.querySelector('#artifact-canvas-title')?.textContent?.trim())
+    .to.equal('Interactive report');
+  const layoutGroup = canvas.querySelector<HTMLElement>('.artifact-canvas-layout-actions')!;
+  expect(layoutGroup.getAttribute('role')).to.equal('group');
+  expect(layoutGroup.getAttribute('aria-labelledby')).to.equal('artifact-canvas-title');
   expect(canvas.getAttribute('aria-modal')).to.equal('true');
   expect(canvas.querySelector('dl-active-artifact-frame')).to.equal(null);
   const consent = canvas.querySelector<HTMLButtonElement>('.artifact-active-consent .ui-btn');
@@ -193,6 +200,7 @@ it('requires explicit user intent before creating the active iframe', async () =
   expect(canvas.classList.contains('open')).to.equal(false);
   expect(canvas.inert).to.equal(true);
   expect(canvas.getAttribute('aria-hidden')).to.equal('true');
+  expect(canvas.hasAttribute('aria-labelledby')).to.equal(false);
   expect(canvas.hasAttribute('aria-modal')).to.equal(false);
   expect(document.activeElement).to.equal(returnFocus);
 

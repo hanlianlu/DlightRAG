@@ -49,7 +49,7 @@
 
 /* Destructive text affordance on the shared button geometry. */
 .ui-btn-danger-text {
-    color: var(--color-danger-text);
+    color: var(--color-danger);
 }
 
 .ui-dialog-actions button:disabled {

@@ -125,8 +125,17 @@ dl-artifact-canvas:not(.open) {
 
 .artifact-canvas-heading {
     display: flex;
+    flex: 1 1 auto;
     flex-direction: column;
     min-width: 0;
+    overflow: hidden;
+}
+
+.artifact-canvas-title,
+.artifact-canvas-filename {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .artifact-canvas-title {
@@ -135,10 +144,15 @@ dl-artifact-canvas:not(.open) {
     font-weight: 600;
 }
 
-.artifact-canvas-actions {
+.artifact-canvas-actions,
+.artifact-canvas-layout-actions {
     align-items: center;
     display: flex;
     gap: var(--space-tight);
+}
+
+.artifact-canvas-actions {
+    flex: 0 0 auto;
 }
 
 .artifact-canvas-actions .ui-btn[aria-pressed='true'] {
@@ -190,10 +204,13 @@ dl-artifact-canvas.layout-fullscreen {
         position: fixed;
         z-index: 110;
     }
+
+    .artifact-canvas-layout-actions {
+        display: none;
+    }
 }
 
 @media (width <= 640px) {
-    .artifact-canvas-actions .ui-btn:not([aria-pressed='true']),
     .artifact-canvas-filename {
         display: none;
     }

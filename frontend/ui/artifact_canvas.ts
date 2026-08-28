@@ -99,6 +99,7 @@ export class DlArtifactCanvas extends LightElement {
     this.inert = false;
     this.removeAttribute('aria-hidden');
     this.setAttribute('role', 'dialog');
+    this.setAttribute('aria-labelledby', 'artifact-canvas-title');
     this.#syncModalState();
     await this.updateComplete;
     this.querySelector<HTMLButtonElement>('[data-action="close"]')?.focus();
@@ -128,6 +129,7 @@ export class DlArtifactCanvas extends LightElement {
     this.inert = true;
     this.setAttribute('aria-hidden', 'true');
     this.removeAttribute('role');
+    this.removeAttribute('aria-labelledby');
     this.removeAttribute('aria-modal');
     this.artifact = null;
     this.canvasState = 'idle';
@@ -155,16 +157,19 @@ export class DlArtifactCanvas extends LightElement {
     return html`
       <div class="artifact-canvas-header">
         <div class="artifact-canvas-heading">
-          <span class="artifact-canvas-title">${artifact?.label || 'Artifact'}</span>
+          <h2 class="artifact-canvas-title" id="artifact-canvas-title">${artifact?.label || 'Artifact'}</h2>
           ${artifact ? html`<span class="artifact-canvas-filename">${artifact.filename}</span>` : nothing}
         </div>
         <div class="artifact-canvas-actions">
-          <button class="ui-btn" type="button" @click=${() => this.#setLayout('side')}
-                  aria-pressed=${this.layout === 'side'}>Side</button>
-          <button class="ui-btn" type="button" @click=${() => this.#setLayout('wide')}
-                  aria-pressed=${this.layout === 'wide'}>Wide</button>
-          <button class="ui-btn" type="button" @click=${() => this.#setLayout('fullscreen')}
-                  aria-pressed=${this.layout === 'fullscreen'}>Fullscreen</button>
+          <div class="artifact-canvas-layout-actions" role="group"
+               aria-labelledby="artifact-canvas-title">
+            <button class="ui-btn" type="button" @click=${() => this.#setLayout('side')}
+                    aria-pressed=${this.layout === 'side'}>Side</button>
+            <button class="ui-btn" type="button" @click=${() => this.#setLayout('wide')}
+                    aria-pressed=${this.layout === 'wide'}>Wide</button>
+            <button class="ui-btn" type="button" @click=${() => this.#setLayout('fullscreen')}
+                    aria-pressed=${this.layout === 'fullscreen'}>Fullscreen</button>
+          </div>
           ${artifact?.download_url ? html`
             <a class="ui-btn" href=${safeSameOriginHref(artifact.download_url) || '#'} download>
               Download

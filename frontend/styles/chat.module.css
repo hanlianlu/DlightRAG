@@ -85,7 +85,7 @@
   cursor: pointer;
   font: inherit;
   font-size: var(--font-size-caption);
-  padding: var(--space-tight) var(--space-medium);
+  padding: var(--space-tight) var(--space-component);
   text-align: left;
 }
 
@@ -375,6 +375,53 @@
 
 .textError {
   color: var(--color-danger);
+}
+
+.answerReconnect {
+  align-items: center;
+  background: var(--color-danger-surface);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-control);
+  color: var(--color-text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-size-detail);
+  gap: var(--space-tight);
+  justify-content: space-between;
+  margin-top: var(--space-tight);
+  padding: var(--space-tight) var(--space-component);
+}
+
+.answerReconnect[data-reconnect-state='stopping'] {
+  background: var(--color-accent-ghost);
+  border-color: var(--color-accent-border);
+}
+
+.answerReconnectStatus {
+  flex: 1 1 auto;
+}
+
+.answerReconnectAction {
+  background: var(--color-action-bg-subtle);
+  border: 1px solid var(--color-action-border);
+  border-radius: var(--radius-control);
+  color: var(--color-accent-emphasis);
+  cursor: pointer;
+  flex: 0 0 auto;
+  font: inherit;
+  font-weight: 600;
+  padding: var(--space-inline) var(--space-tight);
+}
+
+.answerReconnectAction:hover {
+  background: var(--color-action-bg-subtle-hover);
+  border-color: var(--color-action-border-hover);
+  color: var(--color-accent-emphasis);
+}
+
+.answerReconnectAction:focus-visible {
+  outline: 2px solid var(--color-accent-emphasis);
+  outline-offset: 2px;
 }
 
 .stoppedNote {
