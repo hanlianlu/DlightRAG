@@ -429,7 +429,7 @@ async def test_structured_output_uses_openai_json_schema(monkeypatch) -> None:
     assert response_format["json_schema"]["strict"] is True
 
 
-async def test_structured_output_auto_uses_json_object_for_compatible_endpoint(
+async def test_structured_output_auto_prefers_json_schema_for_compatible_endpoint(
     monkeypatch,
 ) -> None:
     seen = _capture_provider(monkeypatch)
@@ -448,7 +448,10 @@ async def test_structured_output_auto_uses_json_object_for_compatible_endpoint(
         structured_output=DEMO_STRUCTURED_OUTPUT,
     )
 
-    assert seen["response_format"] == {"type": "json_object"}
+    response_format = seen["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == "demo_plan"
+    assert response_format["json_schema"]["strict"] is True
 
 
 async def test_explicit_json_schema_overrides_custom_endpoint(monkeypatch) -> None:
