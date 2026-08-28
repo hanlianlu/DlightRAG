@@ -49,7 +49,9 @@ def test_packer_skips_image_only_chunks_when_image_budget_is_exhausted() -> None
     assert [c["chunk_id"] for c in packed.contexts["chunks"]] == ["text-1"]
     assert packed.image_blocks_by_context_key == {}
     assert packed.trace["answer_context_images_skipped"] == 1
-    assert packed.contexts["entities"] == []
+    assert packed.contexts["entities"] == [
+        {"entity_name": "Figure", "description": "Skipped", "source_id": "visual-1"}
+    ]
 
 
 def test_packer_keeps_text_when_chunk_image_does_not_fit() -> None:
@@ -169,7 +171,7 @@ def test_federated_same_chunk_id_keeps_distinct_image_blocks() -> None:
     assert packed.trace["answer_context_images_sent"] == 2
 
 
-def test_packer_filters_kg_to_included_chunk_sources() -> None:
+def test_packer_retains_mix_graph_independently_of_chunk_sources() -> None:
     contexts: RetrievalContexts = {
         "chunks": [
             {
@@ -180,14 +182,31 @@ def test_packer_filters_kg_to_included_chunk_sources() -> None:
             },
         ],
         "entities": [
-            {"entity_name": "Kept", "description": "in", "source_id": "kept"},
-            {"entity_name": "Dropped", "description": "out", "source_id": "missing"},
+            {"entity_name": "No source", "description": "corpus synthesis"},
+            {"entity_name": "Other source", "description": "graph", "source_id": "missing"},
+            {
+                "entity_name": "Multi source",
+                "description": "merged graph",
+                "source_id": "missing,also-missing",
+            },
         ],
-        "relationships": [],
+        "relationships": [
+            {"src_id": "A", "tgt_id": "B", "description": "no source"},
+            {"src_id": "C", "tgt_id": "D", "description": "other", "source_id": "missing"},
+            {
+                "src_id": "E",
+                "tgt_id": "F",
+                "description": "multi",
+                "source_id": "kept,missing",
+            },
+        ],
     }
 
     packed = AnswerContextPacker().pack(contexts, image_budget=_budget(max_images=1))
 
-    assert [e["entity_name"] for e in packed.contexts["entities"]] == ["Kept"]
+    assert packed.contexts["entities"] == contexts["entities"]
+    assert packed.contexts["relationships"] == contexts["relationships"]
+    assert packed.contexts["entities"] is not contexts["entities"]
+    assert packed.contexts["relationships"] is not contexts["relationships"]
     assert packed.trace["answer_context_input_chunks"] == 1
     assert packed.trace["answer_context_chunks"] == 1

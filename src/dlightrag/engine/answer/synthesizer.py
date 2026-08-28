@@ -219,8 +219,6 @@ class AnswerSynthesizer:
         def build(
             history: list[dict[str, Any]],
             candidate_contexts: RetrievalContexts,
-            *,
-            filter_graph_by_chunks: bool = True,
         ) -> tuple[_PreparedModelCall, int, int]:
             budget = self._image_policy.new_budget()
             current_image_blocks = self._prepare_current_image_blocks(
@@ -231,7 +229,6 @@ class AnswerSynthesizer:
                 query,
                 candidate_contexts,
                 image_budget=budget,
-                filter_graph_by_chunks=filter_graph_by_chunks,
             )
             no_context = not any(
                 prepared.contexts.get(key) for key in ("chunks", "entities", "relationships")
@@ -289,7 +286,6 @@ class AnswerSynthesizer:
             result, evidence_tokens, total_tokens = build(
                 original_history,
                 candidate_contexts,
-                filter_graph_by_chunks=False,
             )
         if total_tokens > input_limit:
             raise AnswerInputOverflowError(
@@ -425,14 +421,12 @@ class AnswerSynthesizer:
         contexts: RetrievalContexts,
         *,
         image_budget: AnswerImageBudget | None = None,
-        filter_graph_by_chunks: bool = True,
     ) -> _PreparedAnswerPrompt:
         if image_budget is None:
             image_budget = self._image_policy.new_budget()
         packed = AnswerContextPacker().pack(
             contexts,
             image_budget=image_budget,
-            filter_graph_by_chunks=filter_graph_by_chunks,
         )
         # Fast and Research use the same Evidence ledger for citation identity;
         # Fast remains a lightweight invocation and never creates an Agent Session.

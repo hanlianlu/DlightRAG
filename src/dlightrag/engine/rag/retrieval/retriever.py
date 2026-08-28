@@ -145,9 +145,7 @@ class UnifiedRetriever:
             except Exception as exc:
                 bm25_error = exc
                 bm25_chunks = []
-                logger.warning(
-                    "BM25 retrieval failed; falling back to semantic-only", exc_info=True
-                )
+                logger.warning("BM25 retrieval failed; continuing without BM25", exc_info=True)
             visual_chunks = await visual_task if visual_task is not None else []
             if lightrag_error is not None:
                 if bm25_task is None:
@@ -163,9 +161,11 @@ class UnifiedRetriever:
             trace["bm25_error_type"] = type(bm25_error).__name__
         trace["bm25_chunk_count"] = len(bm25_chunks)
         trace["direct_visual_chunk_count"] = len(visual_chunks)
-        semantic_chunks = lightrag_result.contexts.get("chunks", [])
-        trace["semantic_chunk_count"] = len(semantic_chunks)
-        rankings = [ranking for ranking in (semantic_chunks, visual_chunks, bm25_chunks) if ranking]
+        lightrag_mix_chunks = lightrag_result.contexts.get("chunks", [])
+        trace["lightrag_mix_chunk_count"] = len(lightrag_mix_chunks)
+        rankings = [
+            ranking for ranking in (lightrag_mix_chunks, visual_chunks, bm25_chunks) if ranking
+        ]
         fused = rrf_fuse(rankings, k=self._rrf_k)
         lightrag_result.contexts["chunks"] = fused
         trace["fused_chunk_count"] = len(fused)
@@ -188,15 +188,16 @@ class UnifiedRetriever:
         trace["fused_multi_source_count"] = _multi_source_count(rankings)
         logger.info(
             "[Retriever] mix: bm25_enabled=%s bm25_query=%r filter_source=%s "
-            "metadata_scope=%s filter_relaxed=%s kg_chunks_dropped=%d semantic_chunks=%d "
-            "visual_chunks=%d bm25_chunks=%d fused_chunks=%d multi_source=%d bm25_top=%s",
+            "metadata_scope=%s filter_relaxed=%s kg_chunks_dropped=%d "
+            "lightrag_mix_chunks=%d visual_chunks=%d bm25_chunks=%d fused_chunks=%d "
+            "multi_source=%d bm25_top=%s",
             self._bm25 is not None,
             lexical_query if self._bm25 is not None else None,
             metadata_filter_source,
             f"{len(scope.doc_ids)}doc/{scope.chunk_count}chunk" if scope is not None else "all",
             trace.get("metadata_filter_relaxed", False),
             filter_stats.kg_chunks_dropped,
-            trace["semantic_chunk_count"],
+            trace["lightrag_mix_chunk_count"],
             trace["direct_visual_chunk_count"],
             trace["bm25_chunk_count"],
             trace["fused_chunk_count"],

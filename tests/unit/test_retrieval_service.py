@@ -183,6 +183,40 @@ async def test_explicit_filters_and_bm25_override_planner_inference() -> None:
     assert kwargs["bm25_query"] == "caller lexical"
 
 
+async def test_retrieve_projects_lightrag_mix_trace_vocabulary() -> None:
+    runtime = AsyncMock()
+    runtime.aretrieve.return_value = RetrievalResult(trace={"lightrag_mix_chunk_count": 2})
+    pool = AsyncMock()
+    pool.acquire.return_value = runtime
+    projector = Mock(
+        return_value=ProjectedRetrieval(
+            contexts={"chunks": [], "entities": [], "relationships": []},
+            sources=(),
+        )
+    )
+    service = RetrievalService(
+        pool=pool,
+        planners=_Planners(),
+        schema_lookup=AsyncMock(return_value={}),
+        image_preparer=AsyncMock(return_value=[]),
+        projector=projector,
+        settings=RetrievalSettings(
+            default_top_k=8,
+            default_chunk_top_k=5,
+            timeout_seconds=30,
+            query_image_limit=4,
+        ),
+        telemetry=NoopTelemetry(),
+    )
+
+    response = await service.retrieve(
+        RetrieveRequest(query="report", workspaces=("finance",), projection=_PROJECTION)
+    )
+
+    assert response.trace == {"lightrag_mix_chunk_count": 2, "query_image_description_count": 0}
+    assert "semantic_chunk_count" not in response.trace
+
+
 async def test_schema_cache_is_set_keyed_bounded_and_uses_stale_on_refresh_failure() -> None:
     now = 0.0
     lookup = AsyncMock(return_value={"revision": "current"})

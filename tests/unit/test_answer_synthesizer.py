@@ -612,6 +612,19 @@ class TestAnswerSynthesizerCapacity:
         )
         assert prepared.trace["answer_evidence_capacity_tokens"] > 6_000
 
+    def test_empty_retrieval_context_remains_no_context(self) -> None:
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+        )
+        contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
+
+        prepared = synth._prepare_model_call("question", contexts)
+
+        assert prepared.contexts == contexts
+        assert prepared.no_context is True
+        assert prepared.trace["answer_no_context"] is True
+
     def test_oversized_single_chunk_is_removed_whole_without_mutating_input(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

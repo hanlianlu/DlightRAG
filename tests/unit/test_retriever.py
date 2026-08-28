@@ -327,11 +327,14 @@ async def test_unified_retriever_logs_retrieval_mix_summary(
     assert "[Retriever] mix" in caplog.text
     assert "bm25_enabled=True" in caplog.text
     assert "bm25_query='keyword query'" in caplog.text
-    assert "semantic_chunks=2" in caplog.text
+    assert "lightrag_mix_chunks=2" in caplog.text
+    assert "semantic_chunks" not in caplog.text
     assert "bm25_chunks=2" in caplog.text
     assert "fused_chunks=3" in caplog.text
     assert "multi_source=1" in caplog.text
     assert "bm25_top=shared:en:2.000,bm25-b:en:1.000" in caplog.text
+    assert result.trace["lightrag_mix_chunk_count"] == 2
+    assert "semantic_chunk_count" not in result.trace
     assert result.trace["fused_multi_source_count"] == 1
 
 
@@ -358,7 +361,9 @@ async def test_unified_retriever_lightrag_failure_falls_back_to_bm25() -> None:
     assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["bm25-a", "bm25-b"]
 
 
-async def test_unified_retriever_bm25_failure_falls_back_to_semantic() -> None:
+async def test_unified_retriever_bm25_failure_continues_without_bm25(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     from dlightrag.engine.rag.retrieval import RetrievalResult
 
     backend = AsyncMock()
@@ -383,6 +388,7 @@ async def test_unified_retriever_bm25_failure_falls_back_to_semantic() -> None:
     assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["semantic-a"]
     assert result.trace["bm25_error_type"] == "RuntimeError"
     assert result.trace["bm25_chunk_count"] == 0
+    assert "BM25 retrieval failed; continuing without BM25" in caplog.text
 
 
 async def test_unified_retriever_raises_semantic_error_when_both_lanes_fail() -> None:

@@ -420,9 +420,19 @@ async def test_mcp_retrieve_forwards_chunk_top_k(mock_mcp_application) -> None:
 
 
 async def test_mcp_retrieve_uses_service_contract(mock_mcp_application: AsyncMock) -> None:
+    mock_mcp_application.retrieval.retrieve.return_value = ServiceResponse(
+        contexts={"chunks": [], "entities": [], "relationships": []},
+        sources=(),
+        trace={"lightrag_mix_chunk_count": 2},
+        image_descriptions=(),
+    )
+
     result = await mcp_server.mcp_app.call_tool("retrieve", {"query": "x"})
 
-    assert _tool_json(result)["contexts"] == {"chunks": [], "entities": [], "relationships": []}
+    body = _tool_json(result)
+    assert body["contexts"] == {"chunks": [], "entities": [], "relationships": []}
+    assert body["trace"] == {"lightrag_mix_chunk_count": 2}
+    assert "semantic_chunk_count" not in body["trace"]
     request = mock_mcp_application.retrieval.retrieve.await_args.args[0]
     assert request.workspaces == ("default",)
     assert request.projection.include_download_links is False

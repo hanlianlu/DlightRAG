@@ -127,7 +127,11 @@ workspace set, then dispatches that one resolved retrieval request to each
 workspace before round-robin merging.
 
 LightRAG's `hybrid` mode is not used as a public downgrade path; the pipeline
-above is the DlightRAG hybrid layer.
+above is the DlightRAG hybrid layer. In retrieval implementation and log
+vocabulary, `lightrag_mix_chunks` are specifically the chunks returned by that
+LightRAG `mix` call, before direct-visual and BM25 fusion. The retrieval trace
+reports their pre-fusion size as `lightrag_mix_chunk_count`; public
+`contexts.chunks` remains the final fused and reranked chunk list.
 
 BM25 runs against the same LightRAG `LIGHTRAG_DOC_CHUNKS` rows through
 DlightRAG-managed pg_textsearch profiles. During ingest, DlightRAG labels each
@@ -146,10 +150,10 @@ exactly one language; the fallback profile must not declare languages.
 path reads attachments through request-local resources, whose lexical ranking is
 in-memory and has no workspace index or shared configuration.
 
-The semantic and workspace BM25 lanes degrade independently. A BM25 query
-failure retains successful semantic results and records `bm25_error_type` in
-trace; a semantic failure can return BM25-only results and records
-`lightrag_error_type`. If both lanes fail, retrieval raises the semantic error
+The LightRAG mix and workspace BM25 lanes degrade independently. A BM25 query
+failure retains successful LightRAG mix results and records `bm25_error_type`
+in trace; a LightRAG failure can return BM25-only results and records
+`lightrag_error_type`. If both lanes fail, retrieval raises the LightRAG error
 with the BM25 failure chained as its cause.
 
 ## Metadata In-Filtering
@@ -203,7 +207,10 @@ and their descriptions are corpus-level syntheses — one entity's description i
 merged across every document that mentioned it, so there is no per-document
 share of it to keep or drop. Restricting them would not narrow the answer, it
 would replace LightRAG's `mix` mode with a different retrieval semantic.
-DlightRAG keeps the native one.
+DlightRAG keeps the native one. Entities and relationships are therefore
+retained independently of chunk admission and reranking: DlightRAG does not
+post-filter graph rows when `source_id` is absent, does not match a retained
+chunk, or contains multiple chunk ids.
 
 ## Multimodal Queries
 

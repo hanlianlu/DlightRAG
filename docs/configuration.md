@@ -708,9 +708,11 @@ Gemini Embedding 2 one). Result vectors are reassembled in original input order.
 
 BM25 is part of the supported DlightRAG retrieval path. BM25 candidate breadth
 follows the configured chunk candidate budget. `/retrieve` does not re-cap
-fused chunks after semantic/BM25 merge; `/answer` packs final prompt evidence
-against the resolved query model's remaining input capacity. Language profiles
-and scoring constants are advanced index signatures.
+fused chunks after the LightRAG mix/BM25 merge; `/answer` packs final prompt
+evidence against the resolved query model's remaining input capacity. Retrieval
+logs call the pre-fusion LightRAG lane `lightrag_mix_chunks`, and the trace
+reports `lightrag_mix_chunk_count`; neither name changes a retrieval budget.
+Language profiles and scoring constants are advanced index signatures.
 
 Defaults:
 

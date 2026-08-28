@@ -1112,6 +1112,12 @@ class TestRetrieveEndpoint:
     async def test_retrieve_success(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
+        mock_application.retrieval.retrieve.return_value = ServiceResponse(
+            contexts={"chunks": [], "entities": [], "relationships": []},
+            sources=(),
+            trace={"lightrag_mix_chunk_count": 2},
+            image_descriptions=(),
+        )
         app.state.application = mock_application
         resp = await client.post("/retrieve", json={"query": "What is RAG?"})
         assert resp.status_code == 200
@@ -1119,6 +1125,8 @@ class TestRetrieveEndpoint:
         assert "answer" not in body
         assert "contexts" in body
         assert "sources" in body
+        assert body["trace"] == {"lightrag_mix_chunk_count": 2}
+        assert "semantic_chunk_count" not in body["trace"]
         request = mock_application.retrieval.retrieve.await_args.args[0]
         assert request.chunk_top_k is None
 

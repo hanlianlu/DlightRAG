@@ -857,9 +857,12 @@ the successful `done` event and from the status endpoint. A quiet run keeps its
 connection alive with SSE comments, which consume no sequence number.
 
 `bm25_enabled` reports whether the workspace PostgreSQL BM25 lane participated.
-If that lane fails while semantic retrieval succeeds, retrieval continues with
-semantic results and trace includes `bm25_error_type`. Conversely,
-`lightrag_error_type` records semantic-lane degradation to BM25-only results.
+If that lane fails while LightRAG mix retrieval succeeds, retrieval continues
+with the LightRAG results and trace includes `bm25_error_type`. Conversely,
+`lightrag_error_type` records LightRAG-lane degradation to BM25-only results.
+The trace key `lightrag_mix_chunk_count` reports how many chunks the LightRAG
+`mix` call returned before fusion; `contexts.chunks` is the final fused and
+reranked list.
 
 REST uses the same answer and context shapes, while its HTTP adapter projects
 each source's authorized `download_url`. Transport-neutral application/MCP payloads

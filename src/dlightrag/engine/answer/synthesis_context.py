@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from dlightrag.engine.answer.citations.utils import context_chunk_key, split_source_ids
+from dlightrag.engine.answer.citations.utils import context_chunk_key
 from dlightrag.engine.answer.images import AnswerImageBudget
 from dlightrag.engine.rag.retrieval import ContextRow, RetrievalContexts
 
@@ -32,14 +32,12 @@ class AnswerContextPacker:
         contexts: RetrievalContexts,
         *,
         image_budget: AnswerImageBudget,
-        filter_graph_by_chunks: bool = True,
     ) -> PackedAnswerContext:
         """Pack images and rows without mutating the retrieved contexts.
 
-        ``filter_graph_by_chunks=False`` is reserved for exact capacity
-        rebuilds whose graph rows were already admitted before chunk-tail
-        removal; capacity pressure must not silently delete corpus-level graph
-        context.
+        LightRAG mix-mode entities and relationships are independent graph
+        context. Chunk image admission must not remove them based on
+        ``source_id`` provenance.
         """
         chunks = contexts.get("chunks", [])
         image_blocks: dict[str, dict[str, Any]] = {}
@@ -72,11 +70,6 @@ class AnswerContextPacker:
                     packed_chunk["_answer_image_sent"] = False
                 packed_chunks.append(packed_chunk)
 
-        included_chunk_ids = {
-            context_chunk_key(c.get("chunk_id"), workspace=c.get("_workspace"))
-            for c in packed_chunks
-            if c.get("chunk_id")
-        }
         packed_contexts: RetrievalContexts = {
             key: [dict(item) for item in value]
             for key, value in contexts.items()
@@ -87,16 +80,8 @@ class AnswerContextPacker:
         packed_contexts.update(
             {
                 "chunks": packed_chunks,
-                "entities": (
-                    _filter_by_source_ids(entities, included_chunk_ids)
-                    if filter_graph_by_chunks
-                    else [dict(item) for item in entities]
-                ),
-                "relationships": (
-                    _filter_by_source_ids(relationships, included_chunk_ids)
-                    if filter_graph_by_chunks
-                    else [dict(item) for item in relationships]
-                ),
+                "entities": [dict(item) for item in entities],
+                "relationships": [dict(item) for item in relationships],
             }
         )
         trace = {
@@ -110,24 +95,6 @@ class AnswerContextPacker:
             image_blocks_by_context_key=image_blocks,
             trace=trace,
         )
-
-
-def _filter_by_source_ids(
-    items: list[ContextRow],
-    included_chunk_ids: set[str],
-) -> list[ContextRow]:
-    """Keep KG items sourced by chunks included in the final answer context."""
-    if not items:
-        return []
-    filtered: list[ContextRow] = []
-    for item in items:
-        source_ids = split_source_ids(item.get("source_id"))
-        if any(
-            context_chunk_key(source, workspace=item.get("_workspace")) in included_chunk_ids
-            for source in source_ids
-        ):
-            filtered.append(item)
-    return filtered
 
 
 __all__ = ["AnswerContextPacker", "PackedAnswerContext"]

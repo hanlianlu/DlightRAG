@@ -469,6 +469,64 @@ class TestWorkspaceRagRetrieve:
         assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["bm25-visual", "semantic-a"]
         assert result.trace["reranked_chunk_count"] == 2
 
+    async def test_aretrieve_retains_mix_graph_independently_of_reranked_chunks(
+        self, test_config, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.engine.rag.retrieval import RetrievalResult
+
+        service, orchestrator = self._make_retrieval_service(test_config)
+        orchestrator.aretrieve.return_value = RetrievalResult(
+            contexts={
+                "chunks": [
+                    {"chunk_id": "first", "content": "first"},
+                    {"chunk_id": "winner", "content": "winner"},
+                ],
+                "entities": [
+                    {"entity_name": "No source"},
+                    {"entity_name": "Other source", "source_id": "not-retained"},
+                    {"entity_name": "Multi source", "source_id": "first,not-retained"},
+                ],
+                "relationships": [
+                    {"src_id": "A", "tgt_id": "B"},
+                    {"src_id": "C", "tgt_id": "D", "source_id": "not-retained"},
+                    {
+                        "src_id": "E",
+                        "tgt_id": "F",
+                        "source_id": "winner,not-retained",
+                    },
+                ],
+            }
+        )
+
+        async def hydrate(_stores, chunks, *, include_image_data=True, cache=None):
+            return None
+
+        async def rerank_func(query: str, chunks: list[dict], top_k: int) -> list[dict]:
+            assert query == "test query"
+            assert top_k == 1
+            return [chunks[1]]
+
+        service._rerank_func = rerank_func
+        monkeypatch.setattr(
+            "dlightrag.engine.rag.retrieval.provenance.hydrate_lightrag_chunk_provenance",
+            hydrate,
+        )
+
+        result = await service.aretrieve("test query", chunk_top_k=1)
+
+        assert [chunk["chunk_id"] for chunk in result.contexts["chunks"]] == ["winner"]
+        assert [entity["entity_name"] for entity in result.contexts["entities"]] == [
+            "No source",
+            "Other source",
+            "Multi source",
+        ]
+        assert [(row["src_id"], row["tgt_id"]) for row in result.contexts["relationships"]] == [
+            ("A", "B"),
+            ("C", "D"),
+            ("E", "F"),
+        ]
+        assert result.trace["reranked_chunk_count"] == 1
+
     async def test_aretrieve_caps_fused_chunks_when_rerank_disabled(
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):
