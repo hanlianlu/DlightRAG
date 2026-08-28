@@ -366,7 +366,34 @@ class InMemoryMemoryStore:
                 target_id,
             )
 
-        restored: list[MemoryRecord] = []
+        # Preflight the whole target batch before restoring anything: the
+        # persisted journal must be well formed (nonempty, every before record
+        # belongs to this owner, memory ids are unique and, in order, exactly
+        # the target receipt's memory_ids), every target id must still exist
+        # for this owner as a forgotten row, and no currently active record
+        # outside the batch may share a normalized body. Sibling rows inside
+        # the batch may carry duplicate normalized bodies (the batch
+        # compensates an exact prior forget), so they are never conflicts.
+        if (
+            not target.before_records
+            or any(old.owner_id != operation.owner_id for old in target.before_records)
+            or len({old.memory_id for old in target.before_records}) != len(target.before_records)
+            or tuple(old.memory_id for old in target.before_records) != target_receipt.memory_ids
+        ):
+            return (
+                _receipt(
+                    operation,
+                    change_id,
+                    "conflict",
+                    target_change_id=target_id,
+                    now=now,
+                ),
+                (),
+                None,
+            )
+        restored_ids: list[str] = []
+        restored_records: list[MemoryRecord] = []
+        target_bodies: set[str] = set()
         for index, old in enumerate(target.before_records):
             current = rows.get((operation.owner_id, old.memory_id))
             if current is None or current.status != "forgotten":
@@ -381,42 +408,49 @@ class InMemoryMemoryStore:
                     (),
                     None,
                 )
-            if any(
-                record.owner_id == operation.owner_id
-                and record.status == "active"
-                and normalized_body(record.body) == normalized_body(old.body)
-                for record in rows.values()
-            ):
-                return (
-                    _receipt(
-                        operation,
-                        change_id,
-                        "conflict",
-                        target_change_id=target_id,
-                        now=now,
-                    ),
-                    (),
-                    None,
+            restored_ids.append(operation_record_id(operation.owner_id, change_id, index=index))
+            restored_records.append(
+                replace(
+                    old,
+                    memory_id=restored_ids[-1],
+                    provenance=operation.provenance,
+                    status="active",
+                    supersedes_id=old.memory_id,
+                    created_at=now,
+                    updated_at=now,
                 )
-            restored_id = operation_record_id(operation.owner_id, change_id, index=index)
-            record = replace(
-                old,
-                memory_id=restored_id,
-                provenance=operation.provenance,
-                status="active",
-                supersedes_id=old.memory_id,
-                created_at=now,
-                updated_at=now,
             )
-            rows[(operation.owner_id, restored_id)] = record
-            restored.append(record)
-        first = restored[0] if restored else None
+            target_bodies.add(normalized_body(old.body))
+        if any(
+            record.owner_id == operation.owner_id
+            and record.status == "active"
+            and normalized_body(record.body) in target_bodies
+            for record in rows.values()
+        ):
+            return (
+                _receipt(
+                    operation,
+                    change_id,
+                    "conflict",
+                    target_change_id=target_id,
+                    now=now,
+                ),
+                (),
+                None,
+            )
+        for index, record in enumerate(restored_records):
+            key = (operation.owner_id, restored_ids[index])
+            existing = rows.get(key)
+            if existing is not None:
+                raise ValueError("memory id already exists with different content")
+            rows[key] = record
+        first = restored_records[0] if restored_records else None
         return (
             _receipt(
                 operation,
                 change_id,
                 "changed",
-                memory_ids=tuple(record.memory_id for record in restored),
+                memory_ids=tuple(record.memory_id for record in restored_records),
                 kind=None if first is None else first.kind,
                 body="" if first is None else first.body,
                 target_change_id=target_id,

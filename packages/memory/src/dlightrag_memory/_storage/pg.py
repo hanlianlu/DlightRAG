@@ -581,45 +581,91 @@ class PostgresMemoryStore:
                 (current,),
             )
 
+        # Forget target: preflight the full batch set-wise before mutating
+        # anything. The persisted journal must be well formed (nonempty, every
+        # before record belongs to this owner, memory ids are unique and, in
+        # order, exactly the target receipt's memory_ids), every target id
+        # must still exist for this owner as a forgotten row, and no active
+        # record outside the batch may share a normalized body (siblings
+        # inside the batch compensate the exact prior forget and are never
+        # conflicts).
+        if (
+            not before
+            or any(old.owner_id != operation.owner_id for old in before)
+            or len({old.memory_id for old in before}) != len(before)
+            or tuple(old.memory_id for old in before) != target_receipt.memory_ids
+        ):
+            return (
+                _operation_receipt(
+                    operation,
+                    change_id,
+                    "conflict",
+                    target_change_id=target_id,
+                    now=now,
+                ),
+                (),
+            )
+        target_ids = [_uuid(old.memory_id, label="memory_id") for old in before]
+        current_rows = await conn.fetch(_SELECT_IDS_FOR_UPDATE, operation.owner_id, target_ids)
+        current_by_id = {str(row["memory_id"]): row for row in current_rows}
+        if any(
+            current_by_id.get(old.memory_id) is None
+            or str(current_by_id[old.memory_id]["status"]) != "forgotten"
+            for old in before
+        ):
+            return (
+                _operation_receipt(
+                    operation,
+                    change_id,
+                    "conflict",
+                    target_change_id=target_id,
+                    now=now,
+                ),
+                (),
+            )
+        bodies = sorted({normalized_body(old.body) for old in before})
+        if await conn.fetchval(
+            _SELECT_ACTIVE_NORMALIZED_CONFLICT_EXISTS, operation.owner_id, bodies
+        ):
+            return (
+                _operation_receipt(
+                    operation,
+                    change_id,
+                    "conflict",
+                    target_change_id=target_id,
+                    now=now,
+                ),
+                (),
+            )
+
         restored_records: list[MemoryRecord] = []
         for index, old in enumerate(before):
-            current_row = await conn.fetchrow(
-                _SELECT_ONE_FOR_UPDATE,
-                operation.owner_id,
-                _uuid(old.memory_id, label="memory_id"),
-            )
-            duplicate = await conn.fetchrow(
-                _SELECT_ACTIVE_NORMALIZED_FOR_UPDATE,
-                operation.owner_id,
-                normalized_body(old.body),
-            )
-            if (
-                current_row is None
-                or str(current_row["status"]) != "forgotten"
-                or duplicate is not None
-            ):
-                return (
-                    _operation_receipt(
-                        operation,
-                        change_id,
-                        "conflict",
-                        target_change_id=target_id,
-                        now=now,
-                    ),
-                    (),
+            restored_records.append(
+                replace(
+                    old,
+                    memory_id=operation_record_id(operation.owner_id, change_id, index=index),
+                    provenance=operation.provenance,
+                    status="active",
+                    supersedes_id=old.memory_id,
+                    created_at=now,
+                    updated_at=now,
                 )
-            restored_id = operation_record_id(operation.owner_id, change_id, index=index)
-            restored = replace(
-                old,
-                memory_id=restored_id,
-                provenance=operation.provenance,
-                status="active",
-                supersedes_id=old.memory_id,
-                created_at=now,
-                updated_at=now,
             )
-            await _insert_record(self, conn, record=restored, embedding=None)
-            restored_records.append(restored)
+        if restored_records:
+            restored_rows = await conn.fetch(
+                _INSERT_RESTORED_BATCH,
+                operation.owner_id,
+                operation.provenance.origin_kind,
+                operation.provenance.origin_id,
+                self._embedder_fingerprint() if self._dense else None,
+                now,
+                _restore_batch_json(restored_records),
+            )
+            restored_ids = {str(row["memory_id"]) for row in restored_rows}
+            if len(restored_rows) != len(restored_records) or restored_ids != {
+                record.memory_id for record in restored_records
+            }:
+                raise ValueError("memory id already exists with different content")
         first = restored_records[0] if restored_records else None
         return (
             _operation_receipt(
@@ -1029,6 +1075,25 @@ def _insert_params(store: PostgresMemoryStore, *, record: MemoryRecord) -> tuple
     )
 
 
+def _restore_batch_json(records: list[MemoryRecord]) -> str:
+    """Encode one undo restoration batch as a single JSONB recordset parameter."""
+    return json.dumps(
+        [
+            {
+                "body": record.body,
+                "kind": record.kind,
+                "memory_id": record.memory_id,
+                "normalized_body": normalized_body(record.body),
+                "run_id": record.provenance.run_id,
+                "session_id": record.provenance.session_id,
+                "supersedes_id": record.supersedes_id,
+            }
+            for record in records
+        ],
+        ensure_ascii=False,
+    )
+
+
 def _embedding_column_sql(dim: int) -> str:  # noqa: S608 - dim is a validated int
     return f"ALTER TABLE dlightrag_memory_records ADD COLUMN IF NOT EXISTS embedding halfvec({dim})"
 
@@ -1118,6 +1183,46 @@ FROM dlightrag_memory_records
 WHERE owner_id = $1 AND memory_id = $2
 FOR UPDATE
 """  # noqa: S608
+
+_SELECT_IDS_FOR_UPDATE = f"""
+SELECT {_RECORD_COLUMNS}
+FROM dlightrag_memory_records
+WHERE owner_id = $1 AND memory_id = ANY($2::uuid[])
+FOR UPDATE
+"""  # noqa: S608
+
+_SELECT_ACTIVE_NORMALIZED_CONFLICT_EXISTS = """
+SELECT EXISTS (
+    SELECT 1
+    FROM dlightrag_memory_records
+    WHERE owner_id = $1 AND status = 'active' AND normalized_body = ANY($2::text[])
+)
+"""
+
+_INSERT_RESTORED_BATCH = """
+INSERT INTO dlightrag_memory_records (
+    owner_id, memory_id, kind, body, normalized_body, origin_kind, origin_id, run_id,
+    session_id, status, supersedes_id, embedding_fingerprint, created_at, updated_at
+)
+SELECT
+    $1,
+    (record->>'memory_id')::uuid,
+    record->>'kind',
+    record->>'body',
+    record->>'normalized_body',
+    $2,
+    $3,
+    record->>'run_id',
+    record->>'session_id',
+    'active',
+    NULLIF(record->>'supersedes_id', '')::uuid,
+    $4,
+    $5,
+    $5
+FROM jsonb_array_elements($6::jsonb) AS record
+ON CONFLICT (owner_id, memory_id) DO NOTHING
+RETURNING memory_id
+"""
 
 _MARK_FORGOTTEN_IDS = """
 UPDATE dlightrag_memory_records

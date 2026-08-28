@@ -14,6 +14,7 @@ _DURABLE_PG_SUITES = {
     "tests/integration/test_answer_runs_pg.py",
     "tests/integration/test_answer_run_api_pg.py",
     "tests/integration/test_answer_run_coordinator_pg.py",
+    "tests/integration/test_memory_pg.py",
     "tests/integration/test_run_cancellation_pg.py",
 }
 _REQUIRED_ENV = {
