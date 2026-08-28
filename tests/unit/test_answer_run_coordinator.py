@@ -17,15 +17,18 @@ import pytest
 import dlightrag.engine.runtime.coordinator as coordinator_module
 from dlightrag.engine.runtime import (
     MAX_RECLAIMS_WITHOUT_PROGRESS,
+    AlreadyCommittedTerminal,
     AnswerRunEvent,
     AnswerRunRecord,
     ClaimedRun,
+    CoordinatorOwnedSuccess,
     LeaseLostError,
     LeaseRenewal,
     RunCancelledError,
     RunCoordinator,
     RunDeletion,
     RunExecutionError,
+    RunExecutionOutcome,
     RunSession,
     ShutdownOutcome,
     SweepOutcome,
@@ -53,6 +56,7 @@ class _MemoryStore:
         self.heartbeats = 0
         self.heartbeat_failures = 0
         self.heartbeat_result: Any = None
+        self.finish_success_calls = 0
 
     # -- test helpers -------------------------------------------------
     def add_run(self, run_id: str, **overrides: Any) -> None:
@@ -167,6 +171,29 @@ class _MemoryStore:
                         evidence_count=0,
                     )
 
+                async def settle_terminal(self, **kwargs):
+                    from dlightrag.engine.runtime.progress import StageTerminalCommit
+
+                    row = self._store.runs[self._run_id]
+                    row["durable_progress_version"] = int(row["durable_progress_version"]) + 1
+                    sequence = self._store._append(
+                        row,
+                        "done",
+                        {"status": "succeeded", "result": dict(kwargs["result"])},
+                    )
+                    row.update(
+                        status="succeeded",
+                        result=dict(kwargs["result"]),
+                        lease_owner=None,
+                        lease_live=False,
+                    )
+                    return StageTerminalCommit(
+                        progress_version=int(row["durable_progress_version"]),
+                        stage_intent_id=kwargs["stage_intent_id"],
+                        status="succeeded",
+                        terminal_event_sequence=sequence,
+                    )
+
             return ClaimedRun(
                 run=self._record(row),
                 execution=RunExecutionContext(
@@ -246,6 +273,7 @@ class _MemoryStore:
         publications: Sequence[Any] = (),
     ) -> TerminalOutcome:
         del publications
+        self.finish_success_calls += 1
         row = self.runs[run_id]
         if row["cancel_requested"]:
             return await self.finish_cancelled(
@@ -400,7 +428,7 @@ class _Executor:
         self._body = body
         self.sessions: list[RunSession] = []
 
-    async def execute(self, session: RunSession) -> Mapping[str, Any]:
+    async def execute(self, session: RunSession) -> RunExecutionOutcome:
         self.sessions.append(session)
         return await self._body(session)
 
@@ -434,9 +462,9 @@ class TestSchedulingAndLease:
         store.claim_gate = asyncio.Event()
         release = asyncio.Event()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await release.wait()
-            return {"answer": "done"}
+            return CoordinatorOwnedSuccess({"answer": "done"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -459,13 +487,13 @@ class TestSchedulingAndLease:
         store = _MemoryStore()
         stopped = asyncio.Event()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             store.runs["run-a"]["lease_owner"] = "another-worker"
             try:
                 await asyncio.sleep(5)
             finally:
                 stopped.set()
-            return {"answer": "unreachable"}
+            return CoordinatorOwnedSuccess({"answer": "unreachable"})
 
         coordinator = RunCoordinator(
             store=store,
@@ -488,7 +516,7 @@ class TestSchedulingAndLease:
         store = _MemoryStore()
         outcome: dict[str, Any] = {}
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await session.enter_phase("generating")
             store.runs["run-a"]["fencing_epoch"] = 99
             try:
@@ -497,7 +525,7 @@ class TestSchedulingAndLease:
             except LeaseLostError as exc:
                 outcome["raised"] = exc
                 raise
-            return {"answer": "no"}
+            return CoordinatorOwnedSuccess({"answer": "no"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -514,9 +542,9 @@ class TestSchedulingAndLease:
         store = _MemoryStore()
         hold = asyncio.Event()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await hold.wait()
-            return {"answer": "done"}
+            return CoordinatorOwnedSuccess({"answer": "done"})
 
         coordinator = RunCoordinator(
             store=store, executor=_Executor(body), answer_worker_concurrency=1, sweep_seconds=0.01
@@ -537,7 +565,9 @@ class TestRetentionMaintenance:
     async def _running(self, store: _MemoryStore, **kwargs: Any) -> RunCoordinator:
         coordinator = RunCoordinator(
             store=store,
-            executor=_Executor(lambda session: asyncio.sleep(0, {"answer": "x"})),
+            executor=_Executor(
+                lambda session: asyncio.sleep(0, CoordinatorOwnedSuccess({"answer": "x"}))
+            ),
             answer_worker_concurrency=1,
             sweep_seconds=60.0,
             **kwargs,
@@ -559,7 +589,9 @@ class TestRetentionMaintenance:
         store.prune_batches = [200, 0]
         coordinator = RunCoordinator(
             store=store,
-            executor=_Executor(lambda session: asyncio.sleep(0, {"answer": "x"})),
+            executor=_Executor(
+                lambda session: asyncio.sleep(0, CoordinatorOwnedSuccess({"answer": "x"}))
+            ),
             answer_worker_concurrency=1,
         )
 
@@ -607,14 +639,52 @@ class TestRetentionMaintenance:
 
 
 class TestDurableProgress:
+    @pytest.mark.parametrize("status", ["succeeded", "cancelled"])
+    async def test_already_committed_terminal_skips_coordinator_finish_and_notifies(
+        self, status: str
+    ) -> None:
+        store = _MemoryStore()
+
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            row = store.runs[session.run_id]
+            terminal = store._finish(
+                row,
+                session.worker_id,
+                session.fencing_epoch,
+                status=status,
+                result={"answer": "atomic"} if status == "succeeded" else None,
+                event_type="done",
+                payload={
+                    "status": status,
+                    **({"result": {"answer": "atomic"}} if status == "succeeded" else {}),
+                },
+            )
+            return AlreadyCommittedTerminal(terminal)
+
+        executor = _Executor(body)
+        coordinator = _coordinator(store, executor, answer_worker_concurrency=1)
+        store.add_run("run-a")
+        with coordinator._broker.waiter(_OWNER, "run-a") as notified:
+            await coordinator.start()
+            try:
+                await asyncio.wait_for(notified.wait(), timeout=2)
+                await _settle(lambda: not coordinator.active_runs)
+            finally:
+                await coordinator.aclose()
+
+        assert store.finish_success_calls == 0
+        assert executor.sessions[0].lease_lost is False
+        assert store.runs["run-a"]["status"] == status
+        assert [event.event_type for event in store.events["run-a"]] == ["done"]
+
     async def test_tokens_are_coalesced_in_order_with_one_terminal_event(self) -> None:
         store = _MemoryStore()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await session.enter_phase("generating")
             for token in ("alpha ", "beta ", "gamma"):
                 await session.emit_token(token)
-            return {"answer": "alpha beta gamma"}
+            return CoordinatorOwnedSuccess({"answer": "alpha beta gamma"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -628,16 +698,17 @@ class TestDurableProgress:
         assert kinds == ["progress", "token", "done"]
         assert store.events["run-a"][1].payload["text"] == "alpha beta gamma"
         assert kinds.count("done") + kinds.count("error") == 1
+        assert store.finish_success_calls == 1
 
     async def test_durable_progress_survives_a_restart(self) -> None:
         store = _MemoryStore()
         attempts: list[int] = []
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             attempts.append(1)
             if len(attempts) == 1:
                 raise RuntimeError("process died")
-            return {"answer": "resumed"}
+            return CoordinatorOwnedSuccess({"answer": "resumed"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -658,9 +729,9 @@ class TestDurableProgress:
         store.add_run("run-a", next_event_sequence=4)
         store.events["run-a"] = []
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await session.emit_token("fresh draft")
-            return {"answer": "fresh draft"}
+            return CoordinatorOwnedSuccess({"answer": "fresh draft"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         await coordinator.start()
@@ -679,9 +750,9 @@ class TestDurableProgress:
         store = _MemoryStore()
         store.add_run("run-a")
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await session.emit_token("draft")
-            return {"answer": "draft"}
+            return CoordinatorOwnedSuccess({"answer": "draft"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         await coordinator.start()
@@ -695,7 +766,7 @@ class TestDurableProgress:
     async def test_executor_failure_fails_the_run_with_its_public_kind(self) -> None:
         store = _MemoryStore()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             raise RunExecutionError("evidence_settlement_conflict", "conflict")
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
@@ -712,7 +783,7 @@ class TestDurableProgress:
     async def test_an_owner_classified_failure_keeps_its_actionable_message(self) -> None:
         store = _MemoryStore()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             raise RunExecutionError(
                 "CURRENT_DOCUMENT_PARSE_FAILED",
                 "Could not read report.pdf.",
@@ -733,7 +804,7 @@ class TestDurableProgress:
     async def test_an_unclassified_failure_never_leaks_its_exception_text(self) -> None:
         store = _MemoryStore()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             raise RuntimeError("postgres://user:secret@host/db is unreachable")
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
@@ -755,7 +826,7 @@ class TestDurableProgress:
         class _Impostor(RuntimeError):
             public_message = "postgres://user:secret@host/db is unreachable"
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             raise _Impostor("boom")
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
@@ -773,12 +844,12 @@ class TestDurableProgress:
         store.add_run("run-a", prepared_input=None)
         executed = False
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             nonlocal executed
             executed = True
             if session.prepared_input is None:
                 raise RunExecutionError("run_execution_failed", "no prepared input")
-            return {"answer": "never"}
+            return CoordinatorOwnedSuccess({"answer": "never"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         await coordinator.start()
@@ -799,10 +870,10 @@ class TestHeartbeatResilience:
         store.add_run("run-a")
         store.heartbeat_failures = 3
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await _settle(lambda: store.heartbeats >= 5)
             await session.check_cancelled()
-            return {"answer": "survived"}
+            return CoordinatorOwnedSuccess({"answer": "survived"})
 
         coordinator = RunCoordinator(
             store=store,
@@ -823,13 +894,13 @@ class TestHeartbeatResilience:
         store.add_run("run-a")
         store.heartbeat_failures = 2
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await _settle(lambda: store.heartbeats >= 3)
             row = store.runs["run-a"]
             row["lease_owner"] = "another-worker"
             row["fencing_epoch"] = int(row["fencing_epoch"]) + 1
             await asyncio.sleep(5)
-            return {"answer": "never"}
+            return CoordinatorOwnedSuccess({"answer": "never"})
 
         executor = _Executor(body)
         coordinator = RunCoordinator(
@@ -851,12 +922,12 @@ class TestHeartbeatResilience:
         store.heartbeat_result = _UnreadableRenewal()
         executions: list[asyncio.Task[Any]] = []
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             task = asyncio.current_task()
             assert task is not None
             executions.append(task)
             await _settle(lambda: store.heartbeats >= 1)
-            return {"answer": "kept"}
+            return CoordinatorOwnedSuccess({"answer": "kept"})
 
         coordinator = RunCoordinator(
             store=store,
@@ -888,12 +959,12 @@ class TestCancellationAndShutdown:
         store = _MemoryStore()
         entered = asyncio.Event()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             entered.set()
             for _ in range(200):
                 await session.check_cancelled()
                 await asyncio.sleep(0.005)
-            return {"answer": "unreachable"}
+            return CoordinatorOwnedSuccess({"answer": "unreachable"})
 
         coordinator = RunCoordinator(
             store=store,
@@ -915,7 +986,7 @@ class TestCancellationAndShutdown:
     async def test_pending_tokens_are_flushed_before_a_terminal_transition(self) -> None:
         store = _MemoryStore()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await session.emit_token("partial")
             raise RunCancelledError
 
@@ -933,10 +1004,10 @@ class TestCancellationAndShutdown:
         store = _MemoryStore()
         running = asyncio.Event()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             running.set()
             await asyncio.sleep(30)
-            return {"answer": "unreachable"}
+            return CoordinatorOwnedSuccess({"answer": "unreachable"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -953,8 +1024,8 @@ class TestCancellationAndShutdown:
     async def test_shutdown_leaves_no_background_task_running(self) -> None:
         store = _MemoryStore()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
-            return {"answer": "done"}
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            return CoordinatorOwnedSuccess({"answer": "done"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -982,8 +1053,8 @@ class TestCancellationAndShutdown:
 
         store.finish_success = slow_finish  # type: ignore[method-assign]
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
-            return {"answer": "done"}
+        async def body(session: RunSession) -> RunExecutionOutcome:
+            return CoordinatorOwnedSuccess({"answer": "done"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -1003,12 +1074,12 @@ class TestSubscriptions:
         store = _MemoryStore()
         gate = asyncio.Event()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await session.enter_phase("generating")
             await session.emit_token("one")
             await session.flush_tokens()
             await gate.wait()
-            return {"answer": "one"}
+            return CoordinatorOwnedSuccess({"answer": "one"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -1035,11 +1106,11 @@ class TestSubscriptions:
     async def test_reconnect_after_a_cursor_has_no_gap_or_duplicate(self) -> None:
         store = _MemoryStore()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await session.enter_phase("generating")
             await session.emit_token("one")
             await session.flush_tokens()
-            return {"answer": "one"}
+            return CoordinatorOwnedSuccess({"answer": "one"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -1067,10 +1138,10 @@ class TestSubscriptions:
         store = _MemoryStore()
         release = asyncio.Event()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await session.enter_phase("generating")
             await release.wait()
-            return {"answer": "still finished"}
+            return CoordinatorOwnedSuccess({"answer": "still finished"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -1090,9 +1161,9 @@ class TestSubscriptions:
     async def test_two_subscribers_each_see_the_whole_stream(self) -> None:
         store = _MemoryStore()
 
-        async def body(session: RunSession) -> Mapping[str, Any]:
+        async def body(session: RunSession) -> RunExecutionOutcome:
             await session.emit_token("shared")
-            return {"answer": "shared"}
+            return CoordinatorOwnedSuccess({"answer": "shared"})
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -1120,8 +1191,8 @@ class TestSubscriptions:
         assert events == []
 
 
-async def _noop(session: RunSession) -> Mapping[str, Any]:
-    return {"answer": ""}
+async def _noop(session: RunSession) -> RunExecutionOutcome:
+    return CoordinatorOwnedSuccess({"answer": ""})
 
 
 @pytest.mark.parametrize("answer_worker_concurrency", [1, 4])

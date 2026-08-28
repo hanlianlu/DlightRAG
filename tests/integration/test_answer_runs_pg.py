@@ -22,11 +22,13 @@ import asyncpg
 import pytest
 
 from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
+from dlightrag.engine.agent.session.ids import StageIntentId
 from dlightrag.engine.runtime import (
     MAX_RECLAIMS_WITHOUT_PROGRESS,
     IdempotencyKeyConflict,
     PendingArtifact,
     PendingArtifactReference,
+    StageTerminalCommit,
     answer_run_request_fingerprint,
 )
 from tests.conftest import FingerprintingAnswerRunStore
@@ -465,6 +467,69 @@ class TestCancellation:
         assert record.status == "cancelled"
         assert record.result is None
         assert await _event_types(pool, creation.run.run_id) == ["done"]
+
+    async def test_fast_terminal_yields_when_cancellation_commits_first(self, store, pool) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request())
+        claim = await _claimed(store)
+        stage_id = StageIntentId.deterministic(
+            run_id=creation.run.run_id,
+            name="fast:final_generation:2",
+        )
+
+        await store.request_cancellation(owner_id=_OWNER, run_id=creation.run.run_id)
+        outcome = await claim.execution.progress_store.settle_terminal(
+            expected_progress_version=0,
+            stage_intent_id=stage_id,
+            state={"result": {"answer": "withheld"}},
+            result={"answer": "withheld"},
+        )
+
+        assert isinstance(outcome, StageTerminalCommit)
+        assert outcome.status == "cancelled"
+        record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
+        assert record is not None
+        assert record.status == "cancelled"
+        assert record.result is None
+        assert record.durable_progress_version == 0
+        events = await store.read_event_page(owner_id=_OWNER, run_id=creation.run.run_id)
+        assert len(events) == 1
+        assert events[0].event_type == "done"
+        assert events[0].payload == {"status": "cancelled"}
+
+    async def test_fast_terminal_can_win_when_it_holds_the_row_first(self, store, pool) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request())
+        claim = await _claimed(store)
+        stage_id = StageIntentId.deterministic(
+            run_id=creation.run.run_id,
+            name="fast:final_generation:2",
+        )
+
+        outcome = await claim.execution.progress_store.settle_terminal(
+            expected_progress_version=0,
+            stage_intent_id=stage_id,
+            state={"result": {"answer": "winner"}},
+            result={"answer": "winner"},
+        )
+        cancellation = await store.request_cancellation(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+        )
+
+        assert isinstance(outcome, StageTerminalCommit)
+        assert outcome.status == "succeeded"
+        assert cancellation.outcome == "already_terminal"
+        record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
+        assert record is not None
+        assert record.status == "succeeded"
+        assert record.result == {"answer": "winner"}
+        assert record.durable_progress_version == 1
+        events = await store.read_event_page(owner_id=_OWNER, run_id=creation.run.run_id)
+        assert len(events) == 1
+        assert events[0].event_type == "done"
+        assert events[0].payload == {
+            "status": "succeeded",
+            "result": {"answer": "winner"},
+        }
 
 
 # ---------------------------------------------------------------------------

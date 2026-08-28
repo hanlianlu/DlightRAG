@@ -17,7 +17,7 @@ import base64
 import datetime
 import json
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Any, cast
 
@@ -56,7 +56,9 @@ from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime import (
+    CoordinatorOwnedSuccess,
     RunCoordinator,
+    RunExecutionOutcome,
     RunSession,
     answer_run_request_fingerprint,
 )
@@ -167,7 +169,7 @@ class _Executor:
     def __init__(self, body: Any) -> None:
         self._body = body
 
-    async def execute(self, session: RunSession) -> Mapping[str, Any]:
+    async def execute(self, session: RunSession) -> RunExecutionOutcome:
         return await self._body(session)
 
 
@@ -203,7 +205,7 @@ async def test_session_turn_survives_a_new_worker(store: FingerprintingAnswerRun
     from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
     from dlightrag.engine.agent.session.transactions import RegisterExpectation, SessionTransaction
 
-    async def body(session: RunSession) -> Mapping[str, Any]:
+    async def body(session: RunSession) -> RunExecutionOutcome:
         repository = session.execution.session_repository
         assert session.prepared_input is not None
         session_id = SessionId(str(session.prepared_input["agent_session_id"]))
@@ -233,7 +235,9 @@ async def test_session_turn_survives_a_new_worker(store: FingerprintingAnswerRun
             )
             assert committed.__class__.__name__ == "TransactionCommit"
             await asyncio.sleep(30)
-        return {"answer": "second attempt", "turns": snapshot.commit_sequence}
+        return CoordinatorOwnedSuccess(
+            {"answer": "second attempt", "turns": snapshot.commit_sequence}
+        )
 
     first = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
     await first.start()
@@ -298,9 +302,9 @@ async def test_the_coordinator_applies_retention_without_an_execution_slot(
 
     held = asyncio.Event()
 
-    async def body(session: RunSession) -> Mapping[str, Any]:
+    async def body(session: RunSession) -> RunExecutionOutcome:
         await held.wait()
-        return {"answer": "held"}
+        return CoordinatorOwnedSuccess({"answer": "held"})
 
     coordinator = RunCoordinator(
         store=store,
@@ -335,10 +339,10 @@ async def test_graceful_shutdown_requeues_without_crash_recovery(
     run_id = creation.run.run_id
     running = asyncio.Event()
 
-    async def body(session: RunSession) -> Mapping[str, Any]:
+    async def body(session: RunSession) -> RunExecutionOutcome:
         running.set()
         await asyncio.sleep(30)
-        return {"answer": "unreachable"}
+        return CoordinatorOwnedSuccess({"answer": "unreachable"})
 
     coordinator = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
     await coordinator.start()
@@ -362,13 +366,13 @@ async def test_reconnecting_subscriber_replays_without_gaps_or_duplicates(
     )
     run_id = creation.run.run_id
 
-    async def body(session: RunSession) -> Mapping[str, Any]:
+    async def body(session: RunSession) -> RunExecutionOutcome:
         await session.enter_phase("generating")
         await session.emit_token("hello ")
         await session.flush_tokens()
         await session.emit_token("world")
         await session.flush_tokens()
-        return {"answer": "hello world"}
+        return CoordinatorOwnedSuccess({"answer": "hello world"})
 
     coordinator = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
     await coordinator.start()
@@ -405,12 +409,12 @@ async def test_running_run_observes_cancellation_and_commits_cancelled(
     run_id = creation.run.run_id
     started = asyncio.Event()
 
-    async def body(session: RunSession) -> Mapping[str, Any]:
+    async def body(session: RunSession) -> RunExecutionOutcome:
         started.set()
         for _ in range(2000):
             await session.check_cancelled()
             await asyncio.sleep(0.01)
-        return {"answer": "unreachable"}
+        return CoordinatorOwnedSuccess({"answer": "unreachable"})
 
     coordinator = RunCoordinator(
         store=store, executor=_Executor(body), answer_worker_concurrency=1, heartbeat_seconds=0.05
@@ -502,6 +506,15 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     store: FingerprintingAnswerRunStore,
 ) -> None:
     """A descriptor-only caller still gets a finished run and a safe canonical result."""
+    finish_success_calls = 0
+    original_finish_success = store.finish_success
+
+    async def tracked_finish_success(**kwargs: Any) -> Any:
+        nonlocal finish_success_calls
+        finish_success_calls += 1
+        return await original_finish_success(**kwargs)
+
+    store.finish_success = tracked_finish_success  # type: ignore[method-assign]
     application, coordinator = _answer_runtime(store)
     await coordinator.start()
     creation = await store.create_run(
@@ -559,12 +572,31 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert result["evidence_images"][0]["chunk_id"] == "c1"
     assert "answer_images" not in result
     assert result["trace"]["retrieval"] == "ok"
+    assert finish_success_calls == 0
 
 
 async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_interleaving(
     store: FingerprintingAnswerRunStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    finish_success_calls = 0
+    finish_failure_calls = 0
+    original_finish_success = store.finish_success
+    original_finish_failure = store.finish_failure
+
+    async def tracked_finish_success(**kwargs: Any) -> Any:
+        nonlocal finish_success_calls
+        finish_success_calls += 1
+        return await original_finish_success(**kwargs)
+
+    async def tracked_finish_failure(**kwargs: Any) -> Any:
+        nonlocal finish_failure_calls
+        finish_failure_calls += 1
+        return await original_finish_failure(**kwargs)
+
+    store.finish_success = tracked_finish_success  # type: ignore[method-assign]
+    store.finish_failure = tracked_finish_failure  # type: ignore[method-assign]
+
     class CountingSynthesizer(_CitingSynthesizer):
         def __init__(self) -> None:
             self.calls = 0
@@ -598,12 +630,12 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
     async def cancel_at_stage_observation(
         self: FastRunBoundaries,
         committed: Any,
-    ) -> None:
+    ) -> Any:
         nonlocal crashed
         if not crashed and getattr(committed, "stage_intent_id", None) == final_stage_id:
             crashed = True
             raise asyncio.CancelledError
-        await original_observe(self, committed)
+        return await original_observe(self, committed)
 
     monkeypatch.setattr(FastRunBoundaries, "_observe", cancel_at_stage_observation)
     await coordinator.start()
@@ -619,6 +651,8 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
     assert run.result is not None
     assert crashed is True
     assert synthesizer.calls == 1
+    assert finish_success_calls == 0
+    assert finish_failure_calls == 0
     routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
     assert routing is not None
     reader = PGAgentSessionRepository(
@@ -653,6 +687,7 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
     staged = json.loads(state) if isinstance(state, str) else state
     assert staged["result"] == run.result
     assert staged["result_digest"] == canonical_json(run.result)
+    assert finish_success_calls == 0
 
 
 async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(

@@ -18,11 +18,18 @@ import logging
 import random
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
-from typing import Any, Protocol
+from typing import Any, Protocol, assert_never
 
 from dlightrag.engine.runtime.contracts import AnswerRunPhase
 from dlightrag.engine.runtime.errors import RunExecutionError
-from dlightrag.engine.runtime.records import AnswerRunEvent, ClaimedRun, PendingPublication
+from dlightrag.engine.runtime.records import (
+    AlreadyCommittedTerminal,
+    AnswerRunEvent,
+    ClaimedRun,
+    CoordinatorOwnedSuccess,
+    PendingPublication,
+    RunExecutionOutcome,
+)
 from dlightrag.engine.runtime.store import AnswerRunStore
 from dlightrag.engine.runtime.subscription import RunEventBroker, follow_run_events
 
@@ -99,7 +106,7 @@ class DurableWrites:
 class RunExecutor(Protocol):
     """Executes one claimed run or raises an owner-classified failure."""
 
-    async def execute(self, session: RunSession) -> Mapping[str, Any]: ...
+    async def execute(self, session: RunSession) -> RunExecutionOutcome: ...
 
 
 class RunSession:
@@ -476,9 +483,15 @@ class RunCoordinator:
         self._sessions[session.run_id] = session
         heartbeat = asyncio.create_task(self._heartbeat_forever(session))
         try:
-            result = await self._executor.execute(session)
-            await session.flush_tokens()
-            await self._finish_success(session, result)
+            outcome = await self._executor.execute(session)
+            if isinstance(outcome, CoordinatorOwnedSuccess):
+                await session.flush_tokens()
+                await self._finish_success(session, outcome.result)
+            elif isinstance(outcome, AlreadyCommittedTerminal):
+                self._broker.notify(session.owner_id, session.run_id)
+                self._wake.set()
+            else:
+                assert_never(outcome)
         except asyncio.CancelledError:
             await self._release(session)
             raise

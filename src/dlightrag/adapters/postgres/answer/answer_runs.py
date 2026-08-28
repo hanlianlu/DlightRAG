@@ -19,6 +19,7 @@ from typing import Any
 
 import asyncpg
 
+from dlightrag.adapters.postgres.answer._terminal import TerminalStatus, finish_fenced_run
 from dlightrag.adapters.postgres.answer.memory_settings import (
     MEMORY_SETTINGS_DDL,
     MEMORY_SETTINGS_SCHEMA_TABLE,
@@ -1262,38 +1263,6 @@ WITH bumped AS (
         owner_id, run_id, event_sequence, event_type, payload
     )
     SELECT $1, $2, event_sequence, $6::text, $7::jsonb FROM bumped
-    RETURNING event_sequence
-)
-SELECT event_sequence FROM inserted
-"""
-
-# One fenced terminal transition that also appends the run's single terminal
-# event. Prepared input is cleared on every terminal transition.
-_FINISH_RUN = """
-WITH bumped AS (
-    UPDATE dlightrag_answer_runs
-    SET status = $5::text,
-        stop_reason = $6::text,
-        result_json = $7::jsonb,
-        error_kind = $8::text,
-        error_message = $9::text,
-        phase = NULL,
-        prepared_input_json = NULL,
-        lease_owner = NULL,
-        lease_expires_at = NULL,
-        finished_at = NOW(),
-        updated_at = NOW(),
-        next_event_sequence = next_event_sequence + 1
-    WHERE owner_id = $1 AND run_id = $2
-      AND lease_owner = $3 AND fencing_epoch = $4
-      AND status = 'running' AND lease_expires_at > NOW()
-      AND (NOT $12::boolean OR cancel_requested_at IS NULL)
-    RETURNING next_event_sequence - 1 AS event_sequence
-), inserted AS (
-    INSERT INTO dlightrag_answer_run_events (
-        owner_id, run_id, event_sequence, event_type, payload
-    )
-    SELECT $1, $2, event_sequence, $10::text, $11::jsonb FROM bumped
     RETURNING event_sequence
 )
 SELECT event_sequence FROM inserted
@@ -3041,7 +3010,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         run_id: str,
         worker_id: str,
         fencing_epoch: int,
-        status: str,
+        status: TerminalStatus,
         stop_reason: str | None,
         result: Mapping[str, object] | None,
         error_kind: str | None,
@@ -3058,22 +3027,25 @@ class PGAnswerRunStore(PostgresOperationRunner):
 
         async def _operation(conn: Any) -> TerminalOutcome:
             async with conn.transaction():
-                sequence = await conn.fetchval(
-                    _FINISH_RUN,
-                    owner,
-                    run_uuid,
-                    worker_id,
-                    fencing_epoch,
-                    status,
-                    stop_reason,
-                    json.dumps(result, ensure_ascii=False) if result is not None else None,
-                    error_kind,
-                    error_message,
-                    event_type,
-                    json.dumps(dict(payload), ensure_ascii=False),
-                    withhold_on_cancel,
+                outcome = await finish_fenced_run(
+                    conn,
+                    owner_id=owner,
+                    run_id=run_uuid,
+                    lease_owner=worker_id,
+                    fencing_epoch=fencing_epoch,
+                    status=status,
+                    stop_reason=stop_reason,
+                    result=result,
+                    error_kind=error_kind,
+                    error_message=error_message,
+                    event_type=event_type,
+                    payload=payload,
+                    withhold_on_cancel=withhold_on_cancel,
                 )
-                if sequence is not None:
+                # Preserve publication and spill cleanup ownership for the
+                # requested transition; a cancellation that beat success owns
+                # only its terminal row and event.
+                if outcome.committed and outcome.status == status:
                     if status == "succeeded" and publications:
                         await self._write_publications(conn, owner, run_uuid, publications)
                     await conn.execute(
@@ -3088,38 +3060,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
                         owner,
                         run_uuid,
                     )
-                    return TerminalOutcome(
-                        committed=True,
-                        status=status,  # type: ignore[arg-type]
-                        event_sequence=int(sequence),
-                    )
-                if status == "succeeded":
-                    # A pending cancellation won the row: commit the cancelled
-                    # terminal transition instead of leaving the run running.
-                    current = await conn.fetchrow(_SELECT_RUN, owner, run_uuid)
-                    if current is not None and current["cancel_requested_at"] is not None:
-                        cancelled = await conn.fetchval(
-                            _FINISH_RUN,
-                            owner,
-                            run_uuid,
-                            worker_id,
-                            fencing_epoch,
-                            "cancelled",
-                            None,
-                            None,
-                            None,
-                            None,
-                            "done",
-                            json.dumps({"status": "cancelled"}),
-                            False,
-                        )
-                        if cancelled is not None:
-                            return TerminalOutcome(
-                                committed=True,
-                                status="cancelled",
-                                event_sequence=int(cancelled),
-                            )
-                return TerminalOutcome(committed=False, status=None, event_sequence=None)
+                return outcome
 
         return await self._run_write(_operation)
 
@@ -3138,22 +3079,23 @@ class PGAnswerRunStore(PostgresOperationRunner):
                     return "requeued"
                 current = await conn.fetchrow(_SELECT_RUN, owner, run_uuid)
                 if current is not None and current["cancel_requested_at"] is not None:
-                    sequence = await conn.fetchval(
-                        _FINISH_RUN,
-                        owner,
-                        run_uuid,
-                        worker_id,
-                        fencing_epoch,
-                        "cancelled",
-                        None,
-                        None,
-                        None,
-                        None,
-                        "done",
-                        json.dumps({"status": "cancelled"}),
-                        False,
+                    outcome = await finish_fenced_run(
+                        conn,
+                        owner_id=owner,
+                        run_id=run_uuid,
+                        lease_owner=worker_id,
+                        fencing_epoch=fencing_epoch,
+                        status="cancelled",
+                        stop_reason=None,
+                        result=None,
+                        error_kind=None,
+                        error_message=None,
+                        event_type="done",
+                        payload={"status": "cancelled"},
+                        withhold_on_cancel=False,
+                        cancel_requested=True,
                     )
-                    return "cancelled" if sequence is not None else "lease_lost"
+                    return "cancelled" if outcome.committed else "lease_lost"
                 return "lease_lost"
 
         return await self._run_write(_operation)

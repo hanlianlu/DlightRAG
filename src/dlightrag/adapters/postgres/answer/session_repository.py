@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
+from dlightrag.adapters.postgres.answer._terminal import finish_fenced_run
 from dlightrag.adapters.postgres.core._operations import ConnectionPool
 from dlightrag.adapters.postgres.core._pool import pg_pool
 from dlightrag.engine.agent.session.effects import JsonValue
@@ -58,6 +59,8 @@ from dlightrag.engine.runtime.progress import (
     StageLeaseLost,
     StageProgressConflict,
     StageRecord,
+    StageTerminalCommit,
+    StageTerminalCommitResult,
 )
 from dlightrag.engine.runtime.settlements import (
     CompleteBlobDescriptor,
@@ -70,6 +73,16 @@ from dlightrag.engine.runtime.settlements import (
 
 _LEASE_PREDICATE = """
 SELECT 1
+FROM dlightrag_answer_runs
+WHERE owner_id = $1 AND run_id = $2
+  AND lease_owner = $3 AND fencing_epoch = $4
+  AND status = 'running' AND lease_expires_at > NOW()
+FOR UPDATE
+"""
+
+_LOCK_PROGRESS_RUN = """
+SELECT durable_progress_version,
+       cancel_requested_at IS NOT NULL AS cancel_requested
 FROM dlightrag_answer_runs
 WHERE owner_id = $1 AND run_id = $2
   AND lease_owner = $3 AND fencing_epoch = $4
@@ -796,35 +809,6 @@ class PGAgentSessionRepository:
             raise _EvidenceIdentityConflict()
 
 
-_FINISH_TERMINAL = """
-WITH bumped AS (
-    UPDATE dlightrag_answer_runs
-    SET status = 'succeeded',
-        result_json = $5::jsonb,
-        phase = NULL,
-        prepared_input_json = NULL,
-        lease_owner = NULL,
-        lease_expires_at = NULL,
-        finished_at = NOW(),
-        updated_at = NOW(),
-        next_event_sequence = next_event_sequence + 1
-    WHERE owner_id = $1 AND run_id = $2
-      AND lease_owner = $3 AND fencing_epoch = $4
-      AND status = 'running' AND lease_expires_at > NOW()
-    RETURNING next_event_sequence - 1 AS event_sequence
-), inserted AS (
-    INSERT INTO dlightrag_answer_run_events (
-        owner_id, run_id, event_sequence, event_type, payload
-    )
-    SELECT $1, $2, event_sequence, 'done',
-           jsonb_build_object('status', 'succeeded', 'result', $5::jsonb)
-    FROM bumped
-    RETURNING event_sequence
-)
-SELECT event_sequence FROM inserted
-"""
-
-
 class PGProgressStore:
     """One claim-bound RunProgressStore over PostgreSQL."""
 
@@ -881,36 +865,53 @@ class PGProgressStore:
         stage_intent_id: StageIntentId,
         state: JsonValue,
         result: Mapping[str, Any],
-    ) -> StageCommitResult:
-        """Settle the final Fast stage and the run's succeeded terminal in ONE
-        transaction: stage record, result, unique done event, lease release,
-        and one Durable Progress increment.
-        """
+    ) -> StageTerminalCommitResult:
+        """Atomically settle the final Fast stage or an earlier cancellation."""
         async with self._connection() as conn:
             async with conn.transaction():
-                if (
-                    await conn.fetchval(
-                        _LEASE_PREDICATE,
-                        self._owner_id,
-                        self._run_id,
-                        self._lease_owner,
-                        self._fencing_epoch,
-                    )
-                    is None
-                ):
-                    return StageLeaseLost()
-                progress = await conn.fetchval(
-                    "SELECT durable_progress_version FROM dlightrag_answer_runs"
-                    " WHERE owner_id = $1 AND run_id = $2 FOR UPDATE",
+                locked = await conn.fetchrow(
+                    _LOCK_PROGRESS_RUN,
                     self._owner_id,
                     self._run_id,
+                    self._lease_owner,
+                    self._fencing_epoch,
                 )
-                if progress is None:
+                if locked is None:
                     return StageLeaseLost()
-                if int(progress) != expected_progress_version:
+                progress = int(locked["durable_progress_version"])
+                if bool(locked["cancel_requested"]):
+                    terminal = await finish_fenced_run(
+                        conn,
+                        owner_id=self._owner_id,
+                        run_id=self._run_id,
+                        lease_owner=self._lease_owner,
+                        fencing_epoch=self._fencing_epoch,
+                        status="succeeded",
+                        stop_reason=None,
+                        result=result,
+                        error_kind=None,
+                        error_message=None,
+                        event_type="done",
+                        payload={"status": "succeeded", "result": result},
+                        withhold_on_cancel=True,
+                        cancel_requested=True,
+                    )
+                    if (
+                        not terminal.committed
+                        or terminal.status != "cancelled"
+                        or terminal.event_sequence is None
+                    ):
+                        return StageLeaseLost()
+                    return StageTerminalCommit(
+                        progress_version=progress,
+                        stage_intent_id=stage_intent_id,
+                        status="cancelled",
+                        terminal_event_sequence=terminal.event_sequence,
+                    )
+                if progress != expected_progress_version:
                     return StageProgressConflict(
                         expected_progress_version=expected_progress_version,
-                        current_progress_version=int(progress),
+                        current_progress_version=progress,
                     )
                 existing = await conn.fetchrow(
                     "SELECT state_digest FROM dlightrag_answer_run_stages"
@@ -938,15 +939,27 @@ class PGProgressStore:
                         state_json,
                         state_digest,
                     )
-                sequence = await conn.fetchval(
-                    _FINISH_TERMINAL,
-                    self._owner_id,
-                    self._run_id,
-                    self._lease_owner,
-                    self._fencing_epoch,
-                    json.dumps(dict(result), ensure_ascii=False),
+                terminal = await finish_fenced_run(
+                    conn,
+                    owner_id=self._owner_id,
+                    run_id=self._run_id,
+                    lease_owner=self._lease_owner,
+                    fencing_epoch=self._fencing_epoch,
+                    status="succeeded",
+                    stop_reason=None,
+                    result=result,
+                    error_kind=None,
+                    error_message=None,
+                    event_type="done",
+                    payload={"status": "succeeded", "result": result},
+                    withhold_on_cancel=True,
+                    cancel_requested=False,
                 )
-                if sequence is None:
+                if (
+                    not terminal.committed
+                    or terminal.status != "succeeded"
+                    or terminal.event_sequence is None
+                ):
                     return StageLeaseLost()
                 await conn.execute(
                     "UPDATE dlightrag_answer_runs SET"
@@ -955,10 +968,11 @@ class PGProgressStore:
                     self._owner_id,
                     self._run_id,
                 )
-                return StageCommit(
+                return StageTerminalCommit(
                     progress_version=expected_progress_version + 1,
                     stage_intent_id=stage_intent_id,
-                    evidence_count=0,
+                    status="succeeded",
+                    terminal_event_sequence=terminal.event_sequence,
                 )
 
     async def settle_stage(
@@ -972,29 +986,20 @@ class PGProgressStore:
     ) -> StageCommitResult:
         async with self._connection() as conn:
             async with conn.transaction():
-                if (
-                    await conn.fetchval(
-                        _LEASE_PREDICATE,
-                        self._owner_id,
-                        self._run_id,
-                        self._lease_owner,
-                        self._fencing_epoch,
-                    )
-                    is None
-                ):
-                    return StageLeaseLost()
-                progress = await conn.fetchval(
-                    "SELECT durable_progress_version FROM dlightrag_answer_runs"
-                    " WHERE owner_id = $1 AND run_id = $2 FOR UPDATE",
+                locked = await conn.fetchrow(
+                    _LOCK_PROGRESS_RUN,
                     self._owner_id,
                     self._run_id,
+                    self._lease_owner,
+                    self._fencing_epoch,
                 )
-                if progress is None:
+                if locked is None:
                     return StageLeaseLost()
-                if int(progress) != expected_progress_version:
+                progress = int(locked["durable_progress_version"])
+                if progress != expected_progress_version:
                     return StageProgressConflict(
                         expected_progress_version=expected_progress_version,
-                        current_progress_version=int(progress),
+                        current_progress_version=progress,
                     )
                 existing = await conn.fetchrow(
                     "SELECT state_digest FROM dlightrag_answer_run_stages"

@@ -7,7 +7,7 @@ import asyncpg
 import pytest
 
 from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
-from dlightrag.engine.runtime import RunCoordinator
+from dlightrag.engine.runtime import RunCoordinator, RunExecutionOutcome
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -111,7 +111,7 @@ async def test_second_connection_wake_reaches_a_running_coordinator(pool) -> Non
     cancelled: list[str] = []
 
     class _BlockedExecutor:
-        async def execute(self, session: Any) -> dict[str, Any]:
+        async def execute(self, session: Any) -> RunExecutionOutcome:
             while True:
                 await __import__("asyncio").sleep(60)
 

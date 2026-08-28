@@ -6,8 +6,19 @@ from typing import Any
 
 from dlightrag.engine.agent.session.effects import canonical_json
 from dlightrag.engine.agent.session.ids import StageIntentId
-from dlightrag.engine.runtime import LeaseLostError, RunExecutionError, RunSession
-from dlightrag.engine.runtime.progress import RunProgressStore, StageCommit
+from dlightrag.engine.runtime import (
+    LeaseLostError,
+    RunExecutionError,
+    RunSession,
+    TerminalOutcome,
+)
+from dlightrag.engine.runtime.progress import (
+    RunProgressStore,
+    StageCommit,
+    StageCommitResult,
+    StageTerminalCommit,
+    StageTerminalCommitResult,
+)
 
 
 class FastRunBoundaries:
@@ -90,27 +101,19 @@ class FastRunBoundaries:
         )
         await self._observe(committed)
 
-    async def settle_final(self, *, result: Mapping[str, Any], result_digest: str) -> None:
-        stage_id = self._final_stage_id()
-        state = {"result": dict(result), "result_digest": result_digest}
-        terminal = getattr(self._progress, "settle_terminal", None)
-        if terminal is not None:
-            committed = await terminal(
-                expected_progress_version=self._progress_version,
-                stage_intent_id=stage_id,
-                state=state,
-                result=result,
-            )
-            await self._observe(committed)
-            return
-        committed = await self._progress.settle_stage(
+    async def settle_final(
+        self, *, result: Mapping[str, Any], result_digest: str
+    ) -> TerminalOutcome:
+        committed = await self._progress.settle_terminal(
             expected_progress_version=self._progress_version,
-            stage_intent_id=stage_id,
-            stage_name="final_generation",
-            state=state,
-            evidence=(),
+            stage_intent_id=self._final_stage_id(),
+            state={"result": dict(result), "result_digest": result_digest},
+            result=result,
         )
-        await self._observe(committed)
+        terminal = await self._observe(committed)
+        if terminal is None:
+            raise RuntimeError("terminal settlement returned a non-terminal commit")
+        return terminal
 
     def _final_stage_id(self) -> StageIntentId:
         return StageIntentId.deterministic(
@@ -118,10 +121,19 @@ class FastRunBoundaries:
             name="fast:final_generation:2",
         )
 
-    async def _observe(self, committed: Any) -> None:
+    async def _observe(
+        self, committed: StageCommitResult | StageTerminalCommitResult
+    ) -> TerminalOutcome | None:
         if isinstance(committed, StageCommit):
             self._progress_version = committed.progress_version
-            return
+            return None
+        if isinstance(committed, StageTerminalCommit):
+            self._progress_version = committed.progress_version
+            return TerminalOutcome(
+                committed=True,
+                status=committed.status,
+                event_sequence=committed.terminal_event_sequence,
+            )
         raise LeaseLostError
 
 

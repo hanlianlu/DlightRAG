@@ -7,7 +7,7 @@ lease/epoch predicate in the same transaction. Stage outcomes are closed values,
 never database exceptions.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -16,6 +16,7 @@ from dlightrag.engine.agent.session.ids import StageIntentId
 type StageCommitOutcome = Literal[
     "committed", "version_conflict", "lease_lost", "stage_conflict", "evidence_conflict"
 ]
+type StageTerminalStatus = Literal["succeeded", "cancelled"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,29 @@ type StageCommitResult = (
 
 
 @dataclass(frozen=True, slots=True)
+class StageTerminalCommit:
+    """One committed Fast terminal, including its durable event identity."""
+
+    progress_version: int
+    stage_intent_id: StageIntentId
+    status: StageTerminalStatus
+    terminal_event_sequence: int
+
+    def __post_init__(self) -> None:
+        if self.progress_version < 0:
+            raise ValueError("terminal progress version cannot be negative")
+        if self.status not in {"succeeded", "cancelled"}:
+            raise ValueError("terminal stage status must be succeeded or cancelled")
+        if self.terminal_event_sequence < 1:
+            raise ValueError("terminal event sequence must be positive")
+
+
+type StageTerminalCommitResult = (
+    StageTerminalCommit | StageProgressConflict | StageLeaseLost | StageConflict
+)
+
+
+@dataclass(frozen=True, slots=True)
 class StageRecord:
     """One committed Fast stage: identity, name, versioned state, and evidence."""
 
@@ -90,6 +114,15 @@ class RunProgressStore(Protocol):
         evidence: Sequence[Any],
     ) -> StageCommitResult: ...
 
+    async def settle_terminal(
+        self,
+        *,
+        expected_progress_version: int,
+        stage_intent_id: StageIntentId,
+        state: Any,
+        result: Mapping[str, Any],
+    ) -> StageTerminalCommitResult: ...
+
 
 __all__ = [
     "RunProgressStore",
@@ -101,4 +134,7 @@ __all__ = [
     "StageLeaseLost",
     "StageProgressConflict",
     "StageRecord",
+    "StageTerminalCommit",
+    "StageTerminalCommitResult",
+    "StageTerminalStatus",
 ]

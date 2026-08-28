@@ -2,15 +2,23 @@
 """Tests for durable progress arithmetic, bound stores, and host updates (3A)."""
 
 import inspect
+from typing import get_args
 
 import pytest
 
 from dlightrag.engine.agent.session.ids import StageIntentId
-from dlightrag.engine.runtime.progress import RunProgressStore, StageCommitResult
+from dlightrag.engine.runtime.progress import (
+    RunProgressStore,
+    StageCommitResult,
+    StageTerminalCommitResult,
+)
 from dlightrag.engine.runtime.records import (
+    AlreadyCommittedTerminal,
+    CoordinatorOwnedSuccess,
     ReclaimDecision,
     ReclaimState,
     RunExecutionContext,
+    RunExecutionOutcome,
     advance_reclaim,
 )
 from dlightrag.engine.runtime.settlements import (
@@ -85,6 +93,7 @@ class TestBoundStores:
     def test_progress_store_methods_carry_no_fencing_parameters(self) -> None:
         load_params = list(inspect.signature(RunProgressStore.load_stage).parameters)
         settle_params = list(inspect.signature(RunProgressStore.settle_stage).parameters)
+        terminal_params = list(inspect.signature(RunProgressStore.settle_terminal).parameters)
         assert load_params == ["self", "stage_intent_id"]
         assert set(settle_params) == {
             "self",
@@ -94,27 +103,79 @@ class TestBoundStores:
             "state",
             "evidence",
         }
+        assert set(terminal_params) == {
+            "self",
+            "expected_progress_version",
+            "stage_intent_id",
+            "state",
+            "result",
+        }
         for name in ("owner_id", "run_id", "worker_id", "lease_owner", "fencing_epoch"):
             assert name not in settle_params
+            assert name not in terminal_params
 
-    def test_stage_commit_result_is_a_closed_value_union(self) -> None:
+    def test_stage_and_execution_results_are_closed_value_unions(self) -> None:
         from dlightrag.engine.runtime.progress import (
             StageCommit,
             StageConflict,
             StageEvidenceConflict,
             StageLeaseLost,
             StageProgressConflict,
+            StageTerminalCommit,
         )
 
-        outcomes = {
+        assert set(get_args(StageCommitResult.__value__)) == {
             StageCommit,
             StageProgressConflict,
             StageLeaseLost,
             StageConflict,
             StageEvidenceConflict,
         }
-        variants = {StageCommitResult}
-        assert variants and all(issubclass(variant, object) for variant in outcomes)
+        assert set(get_args(StageTerminalCommitResult.__value__)) == {
+            StageTerminalCommit,
+            StageProgressConflict,
+            StageLeaseLost,
+            StageConflict,
+        }
+        assert set(get_args(RunExecutionOutcome.__value__)) == {
+            CoordinatorOwnedSuccess,
+            AlreadyCommittedTerminal,
+        }
+
+    async def test_fast_boundaries_do_not_fall_back_to_stage_settlement(self) -> None:
+        from dlightrag.engine.answer.fast import FastRunBoundaries
+
+        class _LegacyProgress:
+            stage_calls = 0
+
+            async def settle_stage(self, **kwargs):  # type: ignore[no-untyped-def]
+                self.stage_calls += 1
+                return None
+
+        progress = _LegacyProgress()
+        boundaries = FastRunBoundaries(
+            session=None,  # type: ignore[arg-type]
+            progress=progress,  # type: ignore[arg-type]
+            run_id="run",
+            initial_progress_version=0,
+            plan={},
+        )
+
+        with pytest.raises(AttributeError, match="settle_terminal"):
+            await boundaries.settle_final(result={"answer": "x"}, result_digest="digest")
+        assert progress.stage_calls == 0
+
+    def test_already_committed_execution_requires_a_known_terminal(self) -> None:
+        from dlightrag.engine.runtime import AlreadyCommittedTerminal, TerminalOutcome
+
+        for terminal in (
+            TerminalOutcome(committed=False, status=None, event_sequence=None),
+            TerminalOutcome(committed=True, status=None, event_sequence=1),
+            TerminalOutcome(committed=True, status="running", event_sequence=1),
+            TerminalOutcome(committed=True, status="succeeded", event_sequence=None),
+        ):
+            with pytest.raises(ValueError, match="known terminal"):
+                AlreadyCommittedTerminal(terminal)
 
 
 class TestRunExecutionContext:
@@ -126,6 +187,9 @@ class TestRunExecutionContext:
                 return None
 
             async def settle_stage(self, **kwargs):  # type: ignore[no-untyped-def]
+                return None
+
+            async def settle_terminal(self, **kwargs):  # type: ignore[no-untyped-def]
                 return None
 
         context = RunExecutionContext(

@@ -148,9 +148,12 @@ from dlightrag.engine.rag.retrieval import (
 from dlightrag.engine.rag.workspace.lifecycle import defer_cancellation
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.runtime import (
+    AlreadyCommittedTerminal,
+    CoordinatorOwnedSuccess,
     LeaseLostError,
     RunCancelledError,
     RunExecutionError,
+    RunExecutionOutcome,
     RunSession,
 )
 from dlightrag.engine.runtime.records import PendingPublication, artifact_digest
@@ -721,7 +724,7 @@ class AnswerExecutor:
             tools.append(load_skill_tool(SkillCatalog((placeholder,))))
         return ToolRegistry(tools).resolve()
 
-    async def execute(self, session: RunSession) -> Mapping[str, Any]:
+    async def execute(self, session: RunSession) -> RunExecutionOutcome:
         with model_call_scope((session.owner_id, session.run_id)):
             try:
                 return await self._execute(session)
@@ -930,7 +933,7 @@ class AnswerExecutor:
             "Fast Answer could not compact the conversation within model capacity.",
         )
 
-    async def _execute(self, session: RunSession) -> Mapping[str, Any]:
+    async def _execute(self, session: RunSession) -> RunExecutionOutcome:
         request = AnswerRunInput.from_prepared_input(session.prepared_input)
         model_profiles = self.validate_pinned_model_profiles(request)
         await session.enter_phase("routing")
@@ -1265,11 +1268,11 @@ class AnswerExecutor:
                     fast_boundaries.observe_session_progress()
                 if fast_turn.settled_payload is not None:
                     stored = dict(fast_turn.settled_payload)
-                    await fast_boundaries.settle_final(
+                    terminal = await fast_boundaries.settle_final(
                         result=stored,
                         result_digest=canonical_json(stored),
                     )
-                    return stored
+                    return AlreadyCommittedTerminal(terminal)
                 fast_reservation_active = True
                 if not fast_turn.created:
                     replay_snapshot = replace(
@@ -1471,7 +1474,9 @@ class AnswerExecutor:
                     contexts=contexts,
                     require_answer=getattr(prepared_early, "stop_reason", None) == "model_stop",
                 )
-                session.pending_publications = publications
+                # Fast terminal settlement has no publication channel; Research
+                # leaves publication ownership with the coordinator.
+                session.pending_publications = publications if fast_boundaries is None else []
                 stored = store_answer_result(
                     answer=finalized.answer,
                     contexts=project_contexts_for_client(contexts),
@@ -1503,11 +1508,12 @@ class AnswerExecutor:
                     if fast_boundaries is not None and fast_commit is not None:
                         fast_boundaries.observe_session_progress()
                 if fast_boundaries is not None:
-                    await fast_boundaries.settle_final(
+                    terminal = await fast_boundaries.settle_final(
                         result=stored,
                         result_digest=canonical_json(stored),
                     )
-                return stored
+                    return AlreadyCommittedTerminal(terminal)
+                return CoordinatorOwnedSuccess(stored)
         except BaseException:
             if fast_session_host is not None and fast_reservation_active:
                 try:

@@ -49,7 +49,13 @@ from dlightrag.engine.answer.fast import ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
 from dlightrag.engine.answer.resources import ResourceInput
 from dlightrag.engine.answer.resources.models import TextWindowBudget
-from dlightrag.engine.runtime import RunExecutionError, RunSession, artifact_digest
+from dlightrag.engine.runtime import (
+    CoordinatorOwnedSuccess,
+    RunExecutionError,
+    RunExecutionOutcome,
+    RunSession,
+    artifact_digest,
+)
 from tests.unit.conftest import answer_image_policy
 
 
@@ -388,7 +394,7 @@ async def test_child_model_calls_inherit_run_scheduler_ownership() -> None:
             await release_first.wait()
         return label
 
-    async def execute(session: Any) -> Mapping[str, Any]:
+    async def execute(session: Any) -> RunExecutionOutcome:
         if session.run_id == "run-a":
             first = asyncio.create_task(scheduler.run(lambda: operation("a1", block=True)))
             await first_started.wait()
@@ -396,9 +402,9 @@ async def test_child_model_calls_inherit_run_scheduler_ownership() -> None:
             await asyncio.sleep(0)
             second_queued.set()
             await asyncio.gather(first, second)
-            return {"run": "a"}
+            return CoordinatorOwnedSuccess({"run": "a"})
         await scheduler.run(lambda: operation("b1"))
-        return {"run": "b"}
+        return CoordinatorOwnedSuccess({"run": "b"})
 
     executor = _executor()
     executor._execute = execute  # type: ignore[method-assign]
@@ -412,7 +418,10 @@ async def test_child_model_calls_inherit_run_scheduler_ownership() -> None:
     await asyncio.sleep(0)
     release_first.set()
 
-    assert await asyncio.gather(run_a, run_b) == [{"run": "a"}, {"run": "b"}]
+    assert await asyncio.gather(run_a, run_b) == [
+        CoordinatorOwnedSuccess({"run": "a"}),
+        CoordinatorOwnedSuccess({"run": "b"}),
+    ]
     assert order == ["a1", "b1", "a2"]
 
 

@@ -280,6 +280,33 @@ class TerminalOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class CoordinatorOwnedSuccess:
+    """Execution succeeded; the coordinator still owns the terminal write."""
+
+    result: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class AlreadyCommittedTerminal:
+    """Execution atomically committed a known terminal row and event."""
+
+    terminal: TerminalOutcome
+
+    def __post_init__(self) -> None:
+        terminal = self.terminal
+        if (
+            not terminal.committed
+            or terminal.status not in _TERMINAL_STATUSES
+            or terminal.event_sequence is None
+            or terminal.event_sequence < 1
+        ):
+            raise ValueError("already-committed execution outcome requires a known terminal")
+
+
+type RunExecutionOutcome = CoordinatorOwnedSuccess | AlreadyCommittedTerminal
+
+
+@dataclass(frozen=True, slots=True)
 class CancellationOutcome:
     """Result of an owner-scoped cancellation request."""
 
