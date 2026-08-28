@@ -50,36 +50,72 @@ jobs:
       - run: make test-unit
 
   integration:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: ghcr.io/${{ github.repository_owner }}/dlightrag-postgres:pg18
-        credentials:
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          POSTGRES_DB: dlightrag
-          POSTGRES_USER: dlightrag
-          POSTGRES_PASSWORD: dlightrag
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U dlightrag -d dlightrag"
-          --health-interval 15s
-          --health-timeout 10s
-          --health-retries 10
+    env:
+      POSTGRES_IMAGE: ghcr.io/${{ github.repository_owner }}/dlightrag-postgres@sha256:15f4dcf1bb294adc8b8c368776d7040efc730a1c25d82f8f72bbb61b181e66df
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: dlightrag
+      PGPASSWORD: dlightrag
+      PGDATABASE: dlightrag
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
           python-version: "3.14.7"
+      - name: Start clean PostgreSQL
+        run: |
+          docker run --detach --name dlightrag-ci-postgres \
+            --publish 5432:5432 \
+            --env POSTGRES_DB=dlightrag \
+            --env POSTGRES_USER=dlightrag \
+            --env POSTGRES_PASSWORD=dlightrag \
+            --health-cmd "pg_isready -U dlightrag -d dlightrag" \
+            --health-interval 15s \
+            --health-timeout 10s \
+            --health-retries 10 \
+            "$POSTGRES_IMAGE" \
+            postgres -c shared_preload_libraries=pg_textsearch,pg_jieba
+          for _ in {1..120}; do
+            if ! status="$(
+              docker inspect \
+                --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+                dlightrag-ci-postgres 2>/dev/null
+            )"; then
+              echo "PostgreSQL container disappeared during startup" >&2
+              break
+            fi
+            if [ "$status" = "running healthy" ]; then
+              exit 0
+            fi
+            case "$status" in
+              exited*|dead*|*unhealthy)
+                break
+                ;;
+            esac
+            sleep 1
+          done
+          docker logs dlightrag-ci-postgres || true
+          exit 1
       - run: uv sync --group dev
-      - run: uv run pytest tests/integration -q --tb=short
-        env:
-          PGHOST: localhost
-          PGPORT: 5432
-          PGUSER: dlightrag
-          PGPASSWORD: dlightrag
-          PGDATABASE: dlightrag
+      - name: Run deterministic durable PostgreSQL integration tests
+        run: >-
+          uv run pytest
+          tests/integration/test_agent_session_pg.py
+          tests/integration/test_answer_runs_pg.py
+          tests/integration/test_answer_run_api_pg.py
+          tests/integration/test_answer_run_coordinator_pg.py
+          tests/integration/test_run_cancellation_pg.py
+          -q --tb=short --junitxml=.test-results/postgres.xml
+      - name: Reject skipped PostgreSQL integration tests
+        run: >-
+          uv run python -c
+          'import pathlib, xml.etree.ElementTree as ET;
+          suite = ET.parse(pathlib.Path(".test-results/postgres.xml")).getroot().find("testsuite");
+          assert suite is not None;
+          tests, skipped = int(suite.get("tests", "0")), int(suite.get("skipped", "0"));
+          assert tests > 0 and skipped == 0, f"PostgreSQL integration: {tests} tests, {skipped} skipped"'
+      - name: Remove PostgreSQL container
+        if: always()
+        run: docker rm --force dlightrag-ci-postgres 2>/dev/null || true

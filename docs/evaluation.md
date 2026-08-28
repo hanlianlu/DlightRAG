@@ -195,27 +195,15 @@ Min RAGAS Score:           0.8350
 Max RAGAS Score:           0.8656
 ```
 
-## CI Integration
+## Manual release evaluation
 
-Add an evaluation gate to your CI pipeline:
-
-```yaml
-# .github/workflows/eval.yml
-evaluation:
-  runs-on: ubuntu-latest
-  services:
-    postgres:
-      image: dlightrag-postgres:pg18
-      # ... PG config ...
-  steps:
-    - uses: actions/checkout@v6
-    - run: docker compose up -d
-    - run: uv sync --group eval
-    - run: uv run python scripts/ragas_eval.py --api http://localhost:8100 --dataset tests/eval/regression.json
-      env:
-        DLIGHTRAG_API_URL: http://localhost:8100
-        EVAL_LLM_BINDING_API_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
-```
+RAGAS evaluation is release evidence owned by the release operator. It is
+intentionally separate from pull-request CI: it needs an operator-selected
+dataset, a running DlightRAG environment, and evaluator model credentials.
+Operators run `scripts/ragas_eval.py` with the commands above and review the
+result artifacts before release. Do not turn example or synthetic outputs into
+a PR quality gate; RAGAS scores depend on the selected corpus and evaluator
+models and are not deterministic fixtures.
 
 ## Adapter Note
 

@@ -24,10 +24,11 @@ from typing import Any, cast
 import asyncpg
 import pytest
 
+from dlightrag._compose import _compose
 from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.answer.session_repository import PGAgentSessionRepository
 from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
-from dlightrag.application import Application, _compose
+from dlightrag.application import Application
 from dlightrag.application.answer_runs.execution import AnswerRunInput, PinnedModelProfile
 from dlightrag.application.config import DlightragConfig, RuntimeConfig
 from dlightrag.application.settings import answer_executor_settings, answer_resource_settings
@@ -107,6 +108,17 @@ def _answer_run_input() -> AnswerRunInput:
         agent_session_id="00000000-0000-7000-8000-000000000001",
         agent_lane_id="main",
     )
+
+
+def _answer_run_request(
+    *,
+    mode: str = "fast",
+    agent_run_plan: AgentRunPlan | None = None,
+) -> dict[str, Any]:
+    run_input = replace(_answer_run_input(), agent_run_plan=agent_run_plan)
+    request = run_input.as_request()
+    request["mode"] = mode
+    return request
 
 
 async def _pg_available() -> bool:
@@ -494,7 +506,7 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     await coordinator.start()
     creation = await store.create_run(
         owner_id=_OWNER,
-        request=_answer_run_input().as_request(),
+        request=_answer_run_request(),
         idempotency_fingerprint=_REQUEST_FINGERPRINT,
     )
     run_id = creation.run.run_id
@@ -573,7 +585,7 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
     application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
     creation = await store.create_run(
         owner_id=_OWNER,
-        request=_answer_run_input().as_request(),
+        request=_answer_run_request(),
         idempotency_fingerprint=_REQUEST_FINGERPRINT,
     )
     final_stage_id = StageIntentId.deterministic(
@@ -661,7 +673,7 @@ async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
     )
     application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
     await coordinator.start()
-    request = _answer_run_input().as_request()
+    request = _answer_run_request()
     creation = await store.create_run(
         owner_id=_OWNER,
         request=request,
@@ -800,8 +812,7 @@ async def test_publication_correction_is_one_linked_agent_operation(
     store.acknowledge_agent_controls = acknowledge_controls  # type: ignore[method-assign]
     application, coordinator = _answer_runtime(store, orchestrator=orchestrator)
     await coordinator.start()
-    request = replace(_answer_run_input(), agent_run_plan=plan).as_request()
-    request["mode"] = "research"
+    request = _answer_run_request(mode="research", agent_run_plan=plan)
     creation = await store.create_run(
         owner_id=_OWNER,
         request=request,
@@ -879,6 +890,7 @@ def _answer_runtime(
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         answer={
             "runtime": RuntimeConfig(answer_worker_concurrency=1),
+            "agent": {"execution_environment": "disabled"},
         },
     )
     components = _compose(config)
@@ -909,6 +921,7 @@ def _answer_runtime(
         model_fingerprint_for_role=lambda role: ModelFingerprint(
             "openai", f"test-{role}-model", None
         ),
+        execution_environment=config.answer.agent.execution_environment,
     )
 
     async def _prepare(**kwargs: Any) -> OrchestratorRun:
@@ -937,11 +950,11 @@ class _CitingSynthesizer:
         self,
         query: str,
         contexts: Any,
-        *,
         conversation_history: PriorTurns | None = None,
         memory_text: str = "",
+        current_images: list[dict[str, Any]] | None = None,
     ) -> tuple[Any, AsyncIterator[str]]:
-        del memory_text
+        del current_images, memory_text
 
         async def _stream() -> AsyncIterator[str]:
             yield "the drawing shows it [1]"
