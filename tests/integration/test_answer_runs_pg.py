@@ -21,6 +21,11 @@ from typing import Any
 import asyncpg
 import pytest
 
+from dlightrag.adapters.postgres.answer._blobs import (
+    BlobSizeConflict,
+    write_blob_content,
+    write_complete_blob,
+)
 from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
 from dlightrag.engine.agent.session.ids import StageIntentId
 from dlightrag.engine.runtime import (
@@ -31,6 +36,8 @@ from dlightrag.engine.runtime import (
     StageTerminalCommit,
     answer_run_request_fingerprint,
 )
+from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES
+from dlightrag.engine.runtime.records import PendingPublication
 from tests.conftest import FingerprintingAnswerRunStore
 
 pytestmark = [
@@ -1031,6 +1038,292 @@ class TestArtifacts:
         assert await store.load_artifact(owner_id=_OWNER, digest=artifact.digest) == (
             artifact.content
         )
+
+    async def test_multichunk_and_empty_blobs_round_trip_exactly(self, store, pool) -> None:
+        contents = (b"a" * BLOB_CHUNK_BYTES + b"middle" + b"z" * BLOB_CHUNK_BYTES, b"")
+        artifacts = tuple(PendingArtifact(content=content) for content in contents)
+
+        for index, artifact in enumerate(artifacts):
+            await store.create_run(
+                owner_id=_OWNER,
+                request=_request(f"blob-{index}"),
+                artifacts=[artifact],
+                references=[_reference(artifact.digest, resource_id=f"res-{index}")],
+            )
+            assert (
+                await store.load_artifact(owner_id=_OWNER, digest=artifact.digest)
+                == contents[index]
+            )
+
+        async with pool.acquire() as conn:
+            counts = [
+                await conn.fetchval(
+                    "SELECT count(*) FROM dlightrag_blob_chunks"
+                    " WHERE owner_id = $1 AND digest = $2",
+                    _OWNER,
+                    artifact.digest,
+                )
+                for artifact in artifacts
+            ]
+        assert counts == [3, 0]
+
+    async def test_concurrent_same_digest_writers_converge_on_one_ordered_blob(
+        self, store, pool
+    ) -> None:
+        content = b"first" + b"m" * (2 * BLOB_CHUNK_BYTES) + b"last"
+        artifact = PendingArtifact(content=content)
+
+        creations = await asyncio.gather(
+            *(
+                store.create_run(
+                    owner_id=_OWNER,
+                    request=_request(f"concurrent-{index}"),
+                    artifacts=[artifact],
+                    references=[_reference(artifact.digest, resource_id=f"res-{index}")],
+                )
+                for index in range(2)
+            )
+        )
+
+        assert len({creation.run.run_id for creation in creations}) == 2
+        assert await store.load_artifact(owner_id=_OWNER, digest=artifact.digest) == content
+        async with pool.acquire() as conn:
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM dlightrag_blobs WHERE owner_id = $1 AND digest = $2",
+                    _OWNER,
+                    artifact.digest,
+                )
+                == 1
+            )
+            chunk_rows = await conn.fetch(
+                "SELECT chunk_index FROM dlightrag_blob_chunks"
+                " WHERE owner_id = $1 AND digest = $2 ORDER BY chunk_index",
+                _OWNER,
+                artifact.digest,
+            )
+        assert [int(row["chunk_index"]) for row in chunk_rows] == list(range(3))
+
+    async def test_new_blobs_are_acquired_in_canonical_order_across_acceptances(
+        self, store
+    ) -> None:
+        first = PendingArtifact(content=b"new-opposite-order-a")
+        second = PendingArtifact(content=b"new-opposite-order-b")
+
+        creations = await asyncio.wait_for(
+            asyncio.gather(
+                store.create_run(
+                    owner_id=_OWNER,
+                    request=_request("new-order-left"),
+                    artifacts=[first, second],
+                    references=[
+                        _reference(first.digest, resource_id="left-first", ordinal=0),
+                        _reference(second.digest, resource_id="left-second", ordinal=1),
+                    ],
+                ),
+                store.create_run(
+                    owner_id=_OWNER,
+                    request=_request("new-order-right"),
+                    artifacts=[second, first],
+                    references=[
+                        _reference(second.digest, resource_id="right-second", ordinal=0),
+                        _reference(first.digest, resource_id="right-first", ordinal=1),
+                    ],
+                ),
+            ),
+            timeout=5,
+        )
+
+        assert len({creation.run.run_id for creation in creations}) == 2
+        assert await store.load_artifact(owner_id=_OWNER, digest=first.digest) == first.content
+        assert await store.load_artifact(owner_id=_OWNER, digest=second.digest) == second.content
+        left_references = await store.list_run_artifacts(
+            owner_id=_OWNER, run_id=creations[0].run.run_id
+        )
+        right_references = await store.list_run_artifacts(
+            owner_id=_OWNER, run_id=creations[1].run.run_id
+        )
+        assert [reference.resource_id for reference in left_references] == [
+            "left-first",
+            "left-second",
+        ]
+        assert [reference.resource_id for reference in right_references] == [
+            "right-second",
+            "right-first",
+        ]
+
+    async def test_existing_blobs_can_be_reused_in_opposite_order_without_deadlock(
+        self, store, pool
+    ) -> None:
+        first = PendingArtifact(content=b"opposite-order-a")
+        second = PendingArtifact(content=b"opposite-order-b")
+        await store.create_run(
+            owner_id=_OWNER,
+            request=_request("opposite-order-seed"),
+            artifacts=[first, second],
+            references=[
+                _reference(first.digest, resource_id="first", ordinal=0),
+                _reference(second.digest, resource_id="second", ordinal=1),
+            ],
+        )
+
+        async with pool.acquire() as left, pool.acquire() as right:
+            async with left.transaction(), right.transaction():
+                await write_blob_content(
+                    left,
+                    owner_id=_OWNER,
+                    digest=first.digest,
+                    content=first.content,
+                )
+                await write_blob_content(
+                    right,
+                    owner_id=_OWNER,
+                    digest=second.digest,
+                    content=second.content,
+                )
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        write_blob_content(
+                            left,
+                            owner_id=_OWNER,
+                            digest=second.digest,
+                            content=second.content,
+                        ),
+                        write_blob_content(
+                            right,
+                            owner_id=_OWNER,
+                            digest=first.digest,
+                            content=first.content,
+                        ),
+                    ),
+                    timeout=5,
+                )
+
+    async def test_uncommitted_blob_winner_exposes_size_mismatch_after_wait(
+        self, store, pool
+    ) -> None:
+        artifact = PendingArtifact(content=b"uncommitted winner")
+        async with (
+            pool.acquire() as winner,
+            pool.acquire() as contender,
+            pool.acquire() as observer,
+        ):
+            winner_pid = int(await winner.fetchval("SELECT pg_backend_pid()"))
+            contender_pid = int(await contender.fetchval("SELECT pg_backend_pid()"))
+            winner_tx = winner.transaction()
+            contender_tx = contender.transaction()
+            contender_write: asyncio.Task[None] | None = None
+            contender_consumed = False
+            try:
+                await winner_tx.start()
+                await contender_tx.start()
+                await write_blob_content(
+                    winner,
+                    owner_id=_OWNER,
+                    digest=artifact.digest,
+                    content=artifact.content,
+                )
+                contender_write = asyncio.create_task(
+                    write_complete_blob(
+                        contender,
+                        owner_id=_OWNER,
+                        digest=artifact.digest,
+                        total_bytes=len(artifact.content) + 1,
+                        chunks=(artifact.content + b"!",),
+                    )
+                )
+                for _attempt in range(100):
+                    blockers = await observer.fetchval("SELECT pg_blocking_pids($1)", contender_pid)
+                    if winner_pid in blockers:
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    pytest.fail("contender never waited on the uncommitted blob winner")
+                assert not contender_write.done()
+                await winner_tx.commit()
+                with pytest.raises(BlobSizeConflict):
+                    await asyncio.wait_for(contender_write, timeout=5)
+                contender_consumed = True
+            finally:
+                task_error: BaseException | None = None
+                if contender_write is not None and not contender_consumed:
+                    if not contender_write.done():
+                        contender_write.cancel()
+                    try:
+                        await contender_write
+                    except asyncio.CancelledError, BlobSizeConflict:
+                        pass
+                    except BaseException as exc:
+                        task_error = exc
+                rollbacks = []
+                if winner.is_in_transaction():
+                    rollbacks.append(winner_tx.rollback())
+                if contender.is_in_transaction():
+                    rollbacks.append(contender_tx.rollback())
+                if rollbacks:
+                    await asyncio.gather(*rollbacks, return_exceptions=True)
+                if task_error is not None:
+                    raise task_error
+
+        assert (
+            await store.load_artifact(owner_id=_OWNER, digest=artifact.digest) == artifact.content
+        )
+
+    async def test_blob_size_collision_rolls_back_acceptance_and_publication(
+        self, store, pool
+    ) -> None:
+        content = b"collision payload"
+        artifact = PendingArtifact(content=content)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO dlightrag_blobs (owner_id, digest, byte_size) VALUES ($1, $2, $3)",
+                _OWNER,
+                artifact.digest,
+                len(content) + 1,
+            )
+
+        with pytest.raises(ValueError, match="blob digest collision"):
+            await store.create_run(
+                owner_id=_OWNER,
+                request=_request("collision-acceptance"),
+                artifacts=[artifact],
+                references=[_reference(artifact.digest)],
+            )
+
+        creation = await store.create_run(owner_id=_OWNER, request=_request("publication"))
+        claim = await _claimed(store)
+        assert claim.run.run_id == creation.run.run_id
+        publication = PendingPublication(
+            resource_id="published-1",
+            reference_kind="published_artifact",
+            filename="result.txt",
+            mime_type="text/plain",
+            content=content,
+        )
+        with pytest.raises(ValueError, match="blob digest collision"):
+            await store.finish_success(
+                owner_id=_OWNER,
+                run_id=creation.run.run_id,
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+                result={"answer": "not committed"},
+                publications=[publication],
+            )
+
+        record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
+        assert record is not None
+        assert record.status == "running"
+        async with pool.acquire() as conn:
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM dlightrag_blob_chunks"
+                    " WHERE owner_id = $1 AND digest = $2",
+                    _OWNER,
+                    artifact.digest,
+                )
+                == 0
+            )
+            assert await conn.fetchval("SELECT count(*) FROM dlightrag_answer_run_artifacts") == 0
 
     async def test_blobs_deduplicate_within_one_owner_only(self, store, pool) -> None:
         artifact = PendingArtifact(content=b"shared bytes")

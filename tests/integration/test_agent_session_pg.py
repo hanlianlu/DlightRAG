@@ -533,6 +533,14 @@ async def test_fetched_resource_host_delta_writes_complete_blob(pool) -> None:
             _OWNER,
             blob.digest,
         ) == len(body)
+        chunk_rows = await conn.fetch(
+            "SELECT chunk_index, content FROM dlightrag_blob_chunks"
+            " WHERE owner_id = $1 AND digest = $2 ORDER BY chunk_index",
+            _OWNER,
+            blob.digest,
+        )
+        assert [int(row["chunk_index"]) for row in chunk_rows] == [0, 1]
+        assert b"".join(bytes(row["content"]) for row in chunk_rows) == body
         resource = await conn.fetchrow(
             "SELECT kind, blob_digest FROM dlightrag_answer_resources"
             " WHERE owner_id = $1 AND run_id = $2 AND resource_id = 'fetched-1'",
@@ -541,6 +549,76 @@ async def test_fetched_resource_host_delta_writes_complete_blob(pool) -> None:
         )
     assert resource is not None
     assert (resource["kind"], resource["blob_digest"]) == ("fetched_blob", blob.digest)
+
+
+async def test_fetched_blob_size_collision_is_an_evidence_identity_conflict(pool) -> None:
+    from dlightrag.adapters.postgres.answer.session_repository import _EvidenceIdentityConflict
+
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    before = await store.load(session_id)
+    intent_id = IntentId.new()
+    body = b"fetched collision"
+    blob = plan_blob(body)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dlightrag_blobs (owner_id, digest, byte_size) VALUES ($1, $2, $3)",
+            _OWNER,
+            blob.digest,
+            blob.total_bytes + 1,
+        )
+    fetched = FetchedResourceSettlementUpdate(
+        resource=OpaqueFetchedResourceWrite(
+            resource_id="fetched-collision",
+            safe_name="collision.txt",
+            media_type="text/plain",
+            capabilities={},
+            blob_digest=blob.digest,
+            source_locator_digest=hashlib.sha256(b"https://example.test/collision").hexdigest(),
+            source_locator=b"https://example.test/collision",
+            session_id=session_id.value,
+            intent_id=intent_id.value,
+        ),
+        complete_blob=CompleteBlobDescriptor(
+            digest=blob.digest,
+            total_bytes=blob.total_bytes,
+            chunks=(body,),
+        ),
+    )
+
+    with pytest.raises(_EvidenceIdentityConflict):
+        await _append_transaction_entry(
+            store,
+            session_id,
+            _tool_result(session_id, intent_id),
+            fencing_epoch=epoch,
+            intent_id=intent_id,
+            host_delta=EffectHostUpdate(fetched=(fetched,)),
+        )
+
+    after = await store.load(session_id)
+    assert after.commit_sequence == before.commit_sequence
+    assert after.entries == before.entries
+    async with pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_blob_chunks WHERE owner_id = $1 AND digest = $2",
+                _OWNER,
+                blob.digest,
+            )
+            == 0
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_answer_resources"
+                " WHERE owner_id = $1 AND resource_id = 'fetched-collision'",
+                _OWNER,
+            )
+            == 0
+        )
 
 
 async def test_acceptance_registers_attachment_blob_atomically(pool) -> None:

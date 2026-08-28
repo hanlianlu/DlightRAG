@@ -19,6 +19,7 @@ from typing import Any
 
 import asyncpg
 
+from dlightrag.adapters.postgres.answer._blobs import BlobSizeConflict, write_blob_content
 from dlightrag.adapters.postgres.answer._terminal import TerminalStatus, finish_fenced_run
 from dlightrag.adapters.postgres.answer.memory_settings import (
     MEMORY_SETTINGS_DDL,
@@ -1338,18 +1339,6 @@ LIMIT $1
 FOR UPDATE SKIP LOCKED
 """
 
-_INSERT_BLOB_METADATA = """
-INSERT INTO dlightrag_blobs (owner_id, digest, byte_size)
-VALUES ($1, $2, $3)
-ON CONFLICT (owner_id, digest) DO NOTHING
-"""
-
-_INSERT_BLOB_CHUNK = """
-INSERT INTO dlightrag_blob_chunks (owner_id, digest, chunk_index, content)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (owner_id, digest, chunk_index) DO NOTHING
-"""
-
 _INSERT_RESOURCE = """
 INSERT INTO dlightrag_answer_resources (
     owner_id, run_id, resource_id, kind, safe_name, media_type, capabilities,
@@ -1772,8 +1761,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
                             fingerprint=fingerprint,
                             row=replayed,
                         )
-                for blob in blobs:
-                    await self._write_blob(conn, owner, blob)
+                await self._write_blobs(conn, owner, blobs)
                 row = await conn.fetchrow(
                     _INSERT_RUN,
                     owner,
@@ -1826,9 +1814,9 @@ class PGAnswerRunStore(PostgresOperationRunner):
     async def _write_publications(
         self, conn: Any, owner: str, run_uuid: uuid.UUID, publications: Sequence[Any]
     ) -> None:
-        for index, item in enumerate(publications):
-            blob = PendingArtifact(content=item.content)
-            await self._write_blob(conn, owner, blob)
+        planned = tuple((item, PendingArtifact(content=item.content)) for item in publications)
+        await self._write_blobs(conn, owner, tuple(blob for _item, blob in planned))
+        for index, (item, blob) in enumerate(planned):
             await conn.execute(
                 _INSERT_RUN_ARTIFACT,
                 owner,
@@ -1842,16 +1830,21 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 "{}",
             )
 
+    async def _write_blobs(self, conn: Any, owner: str, blobs: Sequence[PendingArtifact]) -> None:
+        """Acquire new blob identities in one canonical order per transaction."""
+        for blob in sorted(blobs, key=lambda item: item.digest):
+            await self._write_blob(conn, owner, blob)
+
     async def _write_blob(self, conn: Any, owner: str, blob: PendingArtifact) -> None:
-        plan = _plan_blob(blob.content)
-        await conn.execute(_INSERT_BLOB_METADATA, owner, blob.digest, plan.total_bytes)
-        existing = await conn.fetchval(_SELECT_BLOB_SIZE, owner, blob.digest)
-        if existing != plan.total_bytes:
-            raise ValueError("blob digest collision with a different byte size")
-        for index in range(plan.chunk_count):
-            await conn.execute(
-                _INSERT_BLOB_CHUNK, owner, blob.digest, index, plan.chunk(blob.content, index)
+        try:
+            await write_blob_content(
+                conn,
+                owner_id=owner,
+                digest=blob.digest,
+                content=blob.content,
             )
+        except BlobSizeConflict as exc:
+            raise ValueError("blob digest collision with a different byte size") from exc
 
     async def create_run_in(
         self,
@@ -1883,8 +1876,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
             accepted_input_envelope(request), ensure_ascii=False, sort_keys=True
         )
         run_uuid = _new_run_id()
-        for blob in artifacts:
-            await self._write_blob(conn, owner, blob)
+        await self._write_blobs(conn, owner, artifacts)
         row = await conn.fetchrow(
             _INSERT_RUN,
             owner,
@@ -3198,12 +3190,6 @@ def _require_replay_match(
             f"owner {owner} reused idempotency key {key} with different normalized input"
         )
     return RunCreation(run=answer_run_record(row), replayed=True)
-
-
-def _plan_blob(content: bytes):
-    from dlightrag.engine.runtime.blob_chunks import plan_blob
-
-    return plan_blob(content)
 
 
 __all__ = [

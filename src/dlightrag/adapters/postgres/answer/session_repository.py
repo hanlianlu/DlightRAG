@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
+from dlightrag.adapters.postgres.answer._blobs import BlobSizeConflict, write_complete_blob
 from dlightrag.adapters.postgres.answer._terminal import finish_fenced_run
 from dlightrag.adapters.postgres.core._operations import ConnectionPool
 from dlightrag.adapters.postgres.core._pool import pg_pool
@@ -220,22 +221,6 @@ SELECT content_digest, locator_digest
 FROM dlightrag_answer_evidence
 WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
   AND intent_id = $4 AND result_ordinal = $5
-"""
-
-_INSERT_BLOB_METADATA = """
-INSERT INTO dlightrag_blobs (owner_id, digest, byte_size)
-VALUES ($1, $2, $3)
-ON CONFLICT (owner_id, digest) DO NOTHING
-"""
-
-_SELECT_BLOB_SIZE = """
-SELECT byte_size FROM dlightrag_blobs WHERE owner_id = $1 AND digest = $2
-"""
-
-_INSERT_BLOB_CHUNK = """
-INSERT INTO dlightrag_blob_chunks (owner_id, digest, chunk_index, content)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (owner_id, digest, chunk_index) DO NOTHING
 """
 
 _INSERT_RESOURCE = """
@@ -657,8 +642,11 @@ class PGAgentSessionRepository:
             await self._write_evidence(conn, write)
         for resource in update.resources:
             await self._write_evidence_resource(conn, resource)
-        for fetched in update.fetched:
+        # New blob identities use one canonical lock order across transactions;
+        # resource/evidence projection retains the Host update's original order.
+        for fetched in sorted(update.fetched, key=lambda item: item.complete_blob.digest):
             await self._write_complete_blob(conn, fetched.complete_blob)
+        for fetched in update.fetched:
             await self._write_fetched_resource(conn, fetched.resource)
             for write in fetched.evidence:
                 await self._write_evidence(conn, write)
@@ -773,12 +761,16 @@ class PGAgentSessionRepository:
             raise _EvidenceIdentityConflict()
 
     async def _write_complete_blob(self, conn: Any, blob: CompleteBlobDescriptor) -> None:
-        await conn.execute(_INSERT_BLOB_METADATA, self._owner_id, blob.digest, blob.total_bytes)
-        existing = await conn.fetchval(_SELECT_BLOB_SIZE, self._owner_id, blob.digest)
-        if existing != blob.total_bytes:
-            raise _EvidenceIdentityConflict()
-        for index, chunk in enumerate(blob.chunks):
-            await conn.execute(_INSERT_BLOB_CHUNK, self._owner_id, blob.digest, index, chunk)
+        try:
+            await write_complete_blob(
+                conn,
+                owner_id=self._owner_id,
+                digest=blob.digest,
+                total_bytes=blob.total_bytes,
+                chunks=blob.chunks,
+            )
+        except BlobSizeConflict as exc:
+            raise _EvidenceIdentityConflict() from exc
 
     async def _write_fetched_resource(self, conn: Any, write: OpaqueFetchedResourceWrite) -> None:
         await conn.execute(
