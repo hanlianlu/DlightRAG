@@ -14,9 +14,12 @@ developer's ``dlightrag`` database is never mutated.
 Requires PostgreSQL at localhost:5432 (dlightrag/dlightrag); skipped otherwise.
 """
 
+from __future__ import annotations
+
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
@@ -37,6 +40,7 @@ from dlightrag.engine.runtime import (
     IdempotencyKeyConflict,
     PendingArtifact,
     PendingArtifactReference,
+    RunDeletion,
     answer_run_request_fingerprint,
     artifact_digest,
 )
@@ -116,6 +120,128 @@ async def store(pool: Any, runs: PGAnswerRunStore) -> PGWebConversationStore:
     created = PGWebConversationStore(pool=pool, run_store=runs)
     await created.initialize()
     return created
+
+
+@dataclass
+class _DeletionMetrics:
+    queries: int = 0
+    outer_transactions: int = 0
+    savepoints: int = 0
+    max_fetched_rows: int = 0
+
+
+class _MeasuredTransaction:
+    def __init__(self, conn: _MeasuredConnection, transaction: Any) -> None:
+        self._conn = conn
+        self._transaction = transaction
+
+    async def __aenter__(self) -> Any:
+        outer = self._conn.transaction_depth == 0
+        entered = await self._transaction.__aenter__()
+        self._conn.transaction_depth += 1
+        if outer:
+            self._conn.metrics.outer_transactions += 1
+        else:
+            self._conn.metrics.savepoints += 1
+        return entered
+
+    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> Any:
+        try:
+            return await self._transaction.__aexit__(exc_type, exc, traceback)
+        finally:
+            self._conn.transaction_depth -= 1
+
+
+class _MeasuredConnection:
+    def __init__(self, conn: Any, metrics: _DeletionMetrics) -> None:
+        self._conn = conn
+        self.metrics = metrics
+        self.transaction_depth = 0
+
+    def transaction(self, *args: Any, **kwargs: Any) -> _MeasuredTransaction:
+        return _MeasuredTransaction(self, self._conn.transaction(*args, **kwargs))
+
+    def _query(self, rows: int = 0) -> None:
+        self.metrics.queries += 1
+        self.metrics.max_fetched_rows = max(self.metrics.max_fetched_rows, rows)
+
+    async def fetch(self, query: str, *args: Any) -> Any:
+        rows = await self._conn.fetch(query, *args)
+        self._query(len(rows))
+        return rows
+
+    async def fetchrow(self, query: str, *args: Any) -> Any:
+        row = await self._conn.fetchrow(query, *args)
+        self._query(1 if row is not None else 0)
+        return row
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        value = await self._conn.fetchval(query, *args)
+        self._query(1 if value is not None else 0)
+        return value
+
+    async def execute(self, query: str, *args: Any) -> Any:
+        value = await self._conn.execute(query, *args)
+        self._query()
+        return value
+
+
+class _MeasuredAcquire:
+    def __init__(self, acquire: Any, metrics: _DeletionMetrics) -> None:
+        self._acquire = acquire
+        self._metrics = metrics
+
+    async def __aenter__(self) -> _MeasuredConnection:
+        conn = await self._acquire.__aenter__()
+        return _MeasuredConnection(conn, self._metrics)
+
+    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> Any:
+        return await self._acquire.__aexit__(exc_type, exc, traceback)
+
+
+class _MeasuredPool:
+    def __init__(self, pool: Any, metrics: _DeletionMetrics) -> None:
+        self._pool = pool
+        self._metrics = metrics
+
+    def acquire(self) -> _MeasuredAcquire:
+        return _MeasuredAcquire(self._pool.acquire(), self._metrics)
+
+
+class _MeasuredRunStore(PGAnswerRunStore):
+    def __init__(self, *, pool: Any, fail_on_call: int | None = None) -> None:
+        super().__init__(pool=pool)
+        self.fail_on_call = fail_on_call
+        self.delete_calls = 0
+        self.max_run_ids = 0
+
+    async def delete_runs_in(
+        self,
+        conn: Any,
+        *,
+        owner_id: str,
+        run_ids: Sequence[str],
+    ) -> RunDeletion:
+        self.delete_calls += 1
+        self.max_run_ids = max(self.max_run_ids, len(run_ids))
+        if self.delete_calls == self.fail_on_call:
+            raise RuntimeError("injected deletion batch failure")
+        return await super().delete_runs_in(conn, owner_id=owner_id, run_ids=run_ids)
+
+
+def _measured_store(
+    pool: Any,
+    *,
+    fail_on_call: int | None = None,
+) -> tuple[PGWebConversationStore, _MeasuredRunStore, _DeletionMetrics]:
+    metrics = _DeletionMetrics()
+    measured_runs = _MeasuredRunStore(pool=pool, fail_on_call=fail_on_call)
+    measured = PGWebConversationStore(
+        pool=_MeasuredPool(pool, metrics),
+        run_store=measured_runs,
+    )
+    measured._initialized = True  # pyright: ignore[reportPrivateUsage]
+    return measured, measured_runs, metrics
 
 
 def _request(query: str = "why", **extra: Any) -> dict[str, Any]:
@@ -203,6 +329,40 @@ async def _count(pool: Any, table: str, **where: Any) -> int:
                 *where.values(),
             )
         )
+
+
+async def _bulk_linked_runs(
+    conn: Any,
+    conversation_id: str,
+    total: int,
+) -> None:
+    await conn.execute(
+        """
+        INSERT INTO dlightrag_answer_runs (
+            owner_id, run_id, prepared_input_json, request_fingerprint
+        )
+        SELECT $1, md5('run:' || series::text)::uuid, '{}'::jsonb,
+               md5('fingerprint:' || series::text)
+        FROM generate_series(1, $2) AS series
+        """,
+        _OWNER,
+        total,
+    )
+    await conn.execute(
+        """
+        INSERT INTO web_conversation_turns (
+            turn_id, principal_id, conversation_id, turn_number,
+            submission_id, answer_run_id
+        )
+        SELECT md5('turn:' || series::text)::uuid, $1, $2::uuid, series,
+               md5('submission:' || series::text)::uuid,
+               md5('run:' || series::text)::uuid
+        FROM generate_series(1, $3) AS series
+        """,
+        _OWNER,
+        conversation_id,
+        total,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -876,6 +1036,27 @@ async def test_deleting_every_conversation_never_orphans_a_turn_committed_behind
     assert await _count(pool, "dlightrag_answer_runs") == 0
 
 
+async def test_two_delete_all_callers_wait_for_a_concurrent_submission_without_deadlock(
+    store: PGWebConversationStore, runs: PGAnswerRunStore, pool: Any
+) -> None:
+    conversation_id = await _conversation(store)
+
+    async with pool.acquire() as holder:
+        transaction = await _hold_conversation_lock(holder, conversation_id)
+        first = asyncio.create_task(store.delete_all_conversations(_OWNER))
+        second = asyncio.create_task(store.delete_all_conversations(_OWNER))
+        await asyncio.sleep(0.2)
+        late_run_id = await _link_turn(holder, runs, conversation_id)
+        await transaction.commit()
+
+    results = await asyncio.wait_for(asyncio.gather(first, second), timeout=10)
+    assert sorted(results) == [0, 1]
+    assert await runs.get_run(owner_id=_OWNER, run_id=late_run_id) is None
+    assert await _count(pool, "web_conversations") == 0
+    assert await _count(pool, "web_conversation_turns") == 0
+    assert await _count(pool, "dlightrag_answer_runs") == 0
+
+
 async def test_deleting_a_conversation_deletes_its_runs_and_frees_its_bytes(
     store: PGWebConversationStore, pool: Any
 ) -> None:
@@ -946,6 +1127,222 @@ async def test_deleting_every_conversation_deletes_every_linked_run(
 
     assert await _count(pool, "dlightrag_answer_runs", owner_id=_OWNER) == 0
     assert await _count(pool, "dlightrag_answer_runs", owner_id=_OTHER_OWNER) == 1
+
+
+async def test_ten_thousand_linked_runs_delete_with_a_bounded_client_working_set(
+    store: PGWebConversationStore,
+    pool: Any,
+) -> None:
+    total = 10_000
+    batch_size = 128
+    batch_count = 79
+    digest = "a" * 64
+    conversation_id = await _conversation(store)
+    async with pool.acquire() as conn:
+        await _bulk_linked_runs(conn, conversation_id, total)
+        await conn.execute(
+            "INSERT INTO dlightrag_blobs (owner_id, digest, byte_size) VALUES ($1, $2, 0)",
+            _OWNER,
+            digest,
+        )
+        await conn.execute(
+            """
+            INSERT INTO dlightrag_answer_run_artifacts (
+                owner_id, run_id, resource_id, reference_kind, ordinal,
+                digest, filename, mime_type
+            )
+            SELECT $1, md5('run:' || series::text)::uuid, 'attachment',
+                   'current_attachment', 0, $2, 'attachment.bin',
+                   'application/octet-stream'
+            FROM generate_series(1, $3) AS series
+            """,
+            _OWNER,
+            digest,
+            total,
+        )
+    measured, measured_runs, metrics = _measured_store(pool)
+
+    assert await measured.delete_conversation(_OWNER, conversation_id) is True
+
+    assert measured_runs.delete_calls == batch_count
+    assert measured_runs.max_run_ids == batch_size
+    assert metrics.max_fetched_rows == batch_size
+    assert metrics.outer_transactions == 1
+    assert metrics.savepoints == batch_count
+    assert metrics.queries == (5 * batch_count) + 4
+    assert await _count(pool, "web_conversations") == 0
+    assert await _count(pool, "web_conversation_turns") == 0
+    assert await _count(pool, "dlightrag_answer_runs") == 0
+    assert await _count(pool, "dlightrag_answer_run_artifacts") == 0
+    assert await _count(pool, "dlightrag_blobs") == 0
+
+
+async def test_ten_thousand_conversations_delete_in_bounded_locked_batches(
+    store: PGWebConversationStore,
+    pool: Any,
+) -> None:
+    total = 10_003
+    foreign_total = 17
+    batch_count = 79
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO web_conversations (
+                principal_id, conversation_id, agent_session_id, agent_lane_id
+            )
+            SELECT $1, md5('delete-all:' || series::text)::uuid,
+                   md5('delete-all:' || series::text)::uuid, 'main'
+            FROM generate_series(1, $2) AS series
+            """,
+            _OWNER,
+            total,
+        )
+        await conn.execute(
+            """
+            INSERT INTO web_conversations (
+                principal_id, conversation_id, agent_session_id, agent_lane_id
+            )
+            SELECT $1, md5('foreign-delete-all:' || series::text)::uuid,
+                   md5('foreign-delete-all:' || series::text)::uuid, 'main'
+            FROM generate_series(1, $2) AS series
+            """,
+            _OTHER_OWNER,
+            foreign_total,
+        )
+    measured, measured_runs, metrics = _measured_store(pool)
+
+    assert await measured.delete_all_conversations(_OWNER) == total
+
+    assert measured_runs.delete_calls == 0
+    assert metrics.max_fetched_rows == 128
+    assert metrics.outer_transactions == 1
+    assert metrics.savepoints == 0
+    assert metrics.queries == (4 * batch_count) + 1
+    assert await _count(pool, "web_conversations", principal_id=_OWNER) == 0
+    assert await _count(pool, "web_conversations", principal_id=_OTHER_OWNER) == foreign_total
+
+
+async def test_failure_after_multiple_batches_rolls_back_runs_blobs_sessions_and_conversation(
+    store: PGWebConversationStore,
+    pool: Any,
+) -> None:
+    total = 300
+    conversation_id = await _conversation(store)
+    async with pool.acquire() as conn:
+        await _bulk_linked_runs(conn, conversation_id, total)
+        await conn.execute(
+            """
+            INSERT INTO dlightrag_blobs (owner_id, digest, byte_size)
+            SELECT $1,
+                   md5('blob-a:' || series::text) || md5('blob-b:' || series::text),
+                   0
+            FROM generate_series(1, $2) AS series
+            """,
+            _OWNER,
+            total,
+        )
+        await conn.execute(
+            """
+            INSERT INTO dlightrag_answer_run_artifacts (
+                owner_id, run_id, resource_id, reference_kind, ordinal,
+                digest, filename, mime_type
+            )
+            SELECT $1, md5('run:' || series::text)::uuid, 'attachment',
+                   'current_attachment', 0,
+                   md5('blob-a:' || series::text) || md5('blob-b:' || series::text),
+                   'attachment.bin', 'application/octet-stream'
+            FROM generate_series(1, $2) AS series
+            """,
+            _OWNER,
+            total,
+        )
+        await conn.execute(
+            """
+            INSERT INTO dlightrag_agent_sessions (
+                owner_id, session_id, lease_run_id, fencing_epoch
+            )
+            SELECT $1, md5('session:' || series::text)::uuid,
+                   md5('run:' || series::text)::uuid, 1
+            FROM generate_series(1, $2) AS series
+            """,
+            _OWNER,
+            total,
+        )
+        await conn.execute(
+            """
+            INSERT INTO dlightrag_answer_run_routing (
+                owner_id, run_id, requested_mode, valid_modes, resolved_mode,
+                context_policy_revision, agent_session_id, agent_lane_id
+            )
+            SELECT $1, md5('run:' || series::text)::uuid, 'fast', ARRAY['fast'],
+                   'fast', 'test', md5('session:' || series::text)::uuid, 'main'
+            FROM generate_series(1, $2) AS series
+            """,
+            _OWNER,
+            total,
+        )
+    measured, measured_runs, metrics = _measured_store(pool, fail_on_call=3)
+
+    with pytest.raises(RuntimeError, match="injected deletion batch failure"):
+        await measured.delete_conversation(_OWNER, conversation_id)
+
+    assert measured_runs.delete_calls == 3
+    assert measured_runs.max_run_ids == 128
+    assert metrics.max_fetched_rows == 128
+    assert metrics.outer_transactions == 1
+    assert await _count(pool, "web_conversations") == 1
+    assert await _count(pool, "web_conversation_turns") == total
+    assert await _count(pool, "dlightrag_answer_runs") == total
+    assert await _count(pool, "dlightrag_answer_run_artifacts") == total
+    assert await _count(pool, "dlightrag_blobs") == total
+    assert await _count(pool, "dlightrag_answer_run_routing") == total
+    assert await _count(pool, "dlightrag_agent_sessions") == total
+
+
+async def test_a_shared_fork_session_is_cleaned_only_after_its_final_routing_reference(
+    store: PGWebConversationStore,
+    pool: Any,
+) -> None:
+    parent_conversation = await _conversation(store)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dlightrag_agent_sessions"
+            " (owner_id, session_id, lease_run_id, commit_sequence, fencing_epoch)"
+            " VALUES ($1, $2, $2, 0, 1)",
+            _OWNER,
+            uuid.UUID(parent_conversation),
+        )
+    parent_creation = await _submit(store, parent_conversation)
+    assert parent_creation is not None
+    fork_conversation = str(uuid.uuid4())
+    fork_lane = str(uuid.uuid4())
+    request = {
+        **_request("fork"),
+        "agent_session_id": parent_conversation,
+        "agent_lane_id": fork_lane,
+        "source_lane_id": "main",
+        "parent_run_id": parent_creation.turn.answer_run_id,
+        "continuation_kind": "fork",
+    }
+    fork_creation = await store.create_answer_turn(
+        principal_id=_OWNER,
+        conversation_id=fork_conversation,
+        submission_id=str(uuid.uuid4()),
+        request=request,
+        idempotency_fingerprint=answer_run_request_fingerprint(request),
+        title_hint="fork",
+        create_conversation=True,
+        forked_from_conversation_id=parent_conversation,
+    )
+    assert fork_creation is not None
+
+    assert await store.delete_conversation(_OWNER, parent_conversation) is True
+    assert await _count(pool, "dlightrag_agent_sessions") == 1
+    assert await _count(pool, "dlightrag_answer_run_routing") == 1
+
+    assert await store.delete_conversation(_OWNER, fork_conversation) is True
+    assert await _count(pool, "dlightrag_agent_sessions") == 0
+    assert await _count(pool, "dlightrag_answer_run_routing") == 0
 
 
 async def test_a_successful_linked_run_prunes_after_the_retention_floor(

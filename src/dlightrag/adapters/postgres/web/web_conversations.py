@@ -51,7 +51,9 @@ from dlightrag.engine.runtime import (
     IdempotencyKeyConflict,
     PendingArtifact,
     PendingArtifactReference,
+    RunDeletion,
     RunSchemaError,
+    parse_run_id,
 )
 
 _CREATE_CONVERSATIONS = """
@@ -261,34 +263,61 @@ WHERE principal_id = $1
 RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
-_SELECT_CONVERSATION_RUNS = """
+_DELETE_BATCH_SIZE = 128
+
+_SELECT_CONVERSATION_RUN_BATCH = """
 SELECT answer_run_id::text AS answer_run_id
 FROM web_conversation_turns
 WHERE principal_id = $1 AND conversation_id = $2::text::uuid
+ORDER BY answer_run_id
+LIMIT $3
 """
 
-_SELECT_PRINCIPAL_RUNS = """
-SELECT answer_run_id::text AS answer_run_id
+# A delete-all caller waits rather than skipping locked rows: returning while a
+# pre-existing owned conversation survives would be a false success. Every
+# caller locks the same UUID order, which also keeps two delete-all callers from
+# deadlocking. Deleted rows fall out of the next first-page query, so no cursor,
+# OFFSET, or transaction-wide identity set is needed.
+_LOCK_PRINCIPAL_CONVERSATION_BATCH = """
+SELECT conversations.conversation_id::text AS conversation_id,
+       conversations.agent_session_id::text AS agent_session_id
+FROM web_conversations AS conversations
+WHERE conversations.principal_id = $1
+ORDER BY conversations.conversation_id
+LIMIT $2
+FOR UPDATE OF conversations
+"""
+
+# This runs as a new READ COMMITTED statement after the conversation locks are
+# acquired. It therefore sees a turn committed by a submitter that held a row
+# lock before delete-all, unlike a projection in the blocking lock statement.
+_SELECT_LINKED_CONVERSATION_BATCH = """
+SELECT DISTINCT conversation_id::text AS conversation_id
 FROM web_conversation_turns
-WHERE principal_id = $1
-"""
-
-# Deletion snapshots run ids under this lock, so a submission that commits its
-# own turn concurrently is either already visible or still waiting behind it.
-# The order matches creation and retention: the conversation first, its runs
-# second. Ordering by conversation_id keeps two owner-wide deletes deadlock-free.
-_LOCK_PRINCIPAL_CONVERSATIONS = """
-SELECT conversation_id, agent_session_id
-FROM web_conversations
-WHERE principal_id = $1
+WHERE principal_id = $1 AND conversation_id = ANY($2::uuid[])
 ORDER BY conversation_id
-FOR UPDATE
+LIMIT $3
 """
 
 _DELETE_CONVERSATION = """
 DELETE FROM web_conversations
 WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
+RETURNING agent_session_id::text
+"""
+
+_DELETE_CONVERSATION_BATCH = """
+WITH deleted AS (
+    DELETE FROM web_conversations AS conversations
+    WHERE conversations.principal_id = $1
+      AND conversations.conversation_id = ANY($2::uuid[])
+    RETURNING conversations.conversation_id, conversations.agent_session_id
+)
+SELECT conversation_id::text AS conversation_id,
+       agent_session_id::text AS agent_session_id
+FROM deleted
+ORDER BY conversation_id
+LIMIT $3
 """
 
 _DELETE_AGENT_SESSION_IF_UNREFERENCED = """
@@ -301,14 +330,14 @@ WHERE sessions.owner_id = $1 AND sessions.session_id = $2::text::uuid
   )
 """
 
-_DELETE_ALL_CONVERSATIONS = """
-WITH deleted AS (
-        DELETE FROM web_conversations
-        WHERE principal_id = $1
-        RETURNING 1
-)
-SELECT count(*)::int AS deleted_count
-FROM deleted
+_DELETE_AGENT_SESSION_BATCH_IF_UNREFERENCED = """
+DELETE FROM dlightrag_agent_sessions AS sessions
+WHERE sessions.owner_id = $1 AND sessions.session_id = ANY($2::uuid[])
+  AND NOT EXISTS (
+      SELECT 1 FROM dlightrag_answer_run_routing AS routing
+      WHERE routing.owner_id = sessions.owner_id
+        AND routing.agent_session_id = sessions.session_id
+  )
 """
 
 _GET_CONVERSATION = """
@@ -623,6 +652,62 @@ class PGWebConversationStore(PostgresOperationRunner):
 
         return await self._run_write(_operation)
 
+    @staticmethod
+    def _canonical_delete_id(value: Any, *, kind: str) -> str:
+        if not isinstance(value, str):
+            raise RuntimeError(f"{kind} deletion row did not contain a text UUID")
+        parsed = parse_run_id(value)
+        if parsed is None or str(parsed) != value:
+            raise RuntimeError(f"{kind} deletion row contained a non-canonical UUID")
+        return value
+
+    async def _delete_linked_runs_in_batches(
+        self,
+        conn: Any,
+        *,
+        principal_id: str,
+        conversation_id: str,
+    ) -> None:
+        """Delete one locked conversation's run links with bounded metadata.
+
+        Run deletion cascades each selected turn, so repeatedly reading the
+        first ordered page advances without OFFSET. Re-reading a selected id is
+        a fail-closed progress violation: it catches a malformed or partial run
+        store result before the conversation row could cascade a leftover turn.
+        """
+        previous_ids: frozenset[str] = frozenset()
+        while True:
+            rows = await conn.fetch(
+                _SELECT_CONVERSATION_RUN_BATCH,
+                principal_id,
+                conversation_id,
+                _DELETE_BATCH_SIZE,
+            )
+            if len(rows) > _DELETE_BATCH_SIZE:
+                raise RuntimeError("conversation run deletion exceeded its batch bound")
+            run_ids = [self._canonical_delete_id(row["answer_run_id"], kind="run") for row in rows]
+            if not run_ids:
+                return
+            if run_ids != sorted(run_ids) or len(set(run_ids)) != len(run_ids):
+                raise RuntimeError("conversation run deletion returned unstable identities")
+            if previous_ids.intersection(run_ids):
+                raise RuntimeError("conversation run deletion made no forward progress")
+
+            deletion = await self._run_store.delete_runs_in(
+                conn,
+                owner_id=principal_id,
+                run_ids=run_ids,
+            )
+            if (
+                not isinstance(deletion, RunDeletion)
+                or type(deletion.runs) is not int
+                or type(deletion.artifacts) is not int
+                or not 0 <= deletion.runs <= len(run_ids)
+                or deletion.artifacts < 0
+            ):
+                raise RuntimeError("run store returned an invalid deletion result")
+            previous_ids = frozenset(run_ids)
+
     async def delete_conversation(
         self,
         principal_id: str,
@@ -647,15 +732,19 @@ class PGWebConversationStore(PostgresOperationRunner):
                 summary_row = await conn.fetchrow(_LOCK_CONVERSATION, principal_id, conversation_id)
                 if summary_row is None:
                     return False
-                run_ids = [
-                    str(row["answer_run_id"])
-                    for row in await conn.fetch(
-                        _SELECT_CONVERSATION_RUNS, principal_id, conversation_id
-                    )
-                ]
-                agent_session_id = str(summary_row["agent_session_id"])
-                await self._run_store.delete_runs_in(conn, owner_id=principal_id, run_ids=run_ids)
-                await conn.execute(_DELETE_CONVERSATION, principal_id, conversation_id)
+                agent_session_id = self._canonical_delete_id(
+                    summary_row["agent_session_id"], kind="Agent Session"
+                )
+                await self._delete_linked_runs_in_batches(
+                    conn,
+                    principal_id=principal_id,
+                    conversation_id=conversation_id,
+                )
+                deleted_session_id = await conn.fetchval(
+                    _DELETE_CONVERSATION, principal_id, conversation_id
+                )
+                if str(deleted_session_id) != agent_session_id:
+                    raise RuntimeError("locked conversation was not deleted exactly once")
                 await conn.execute(
                     _DELETE_AGENT_SESSION_IF_UNREFERENCED,
                     principal_id,
@@ -666,26 +755,94 @@ class PGWebConversationStore(PostgresOperationRunner):
         return await self._run_write(_operation)
 
     async def delete_all_conversations(self, principal_id: str) -> int:
-        """Delete every conversation owned by one principal and its linked runs."""
+        """Delete every owned conversation in bounded locked batches, atomically.
+
+        The outer transaction deliberately spans every batch. A submission to
+        an existing conversation takes the same conversation row lock, so it is
+        either included before that row is drained or observes its deletion;
+        no accepted turn is orphaned. Concurrent owner-wide deleters wait on the
+        first UUID rather than skipping it and all acquire UUIDs in one order.
+        """
         await self._ensure_initialized()
 
         async def _operation(conn: Any) -> int:
             async with conn.transaction():
-                conversations = await conn.fetch(_LOCK_PRINCIPAL_CONVERSATIONS, principal_id)
-                session_ids = {str(row["agent_session_id"]) for row in conversations}
-                run_ids = [
-                    str(row["answer_run_id"])
-                    for row in await conn.fetch(_SELECT_PRINCIPAL_RUNS, principal_id)
-                ]
-                await self._run_store.delete_runs_in(conn, owner_id=principal_id, run_ids=run_ids)
-                row = await conn.fetchrow(_DELETE_ALL_CONVERSATIONS, principal_id)
-                for session_id in session_ids:
-                    await conn.execute(
-                        _DELETE_AGENT_SESSION_IF_UNREFERENCED,
+                deleted_count = 0
+                while True:
+                    rows = await conn.fetch(
+                        _LOCK_PRINCIPAL_CONVERSATION_BATCH,
                         principal_id,
-                        session_id,
+                        _DELETE_BATCH_SIZE,
                     )
-                return int(row["deleted_count"]) if row is not None else 0
+                    if len(rows) > _DELETE_BATCH_SIZE:
+                        raise RuntimeError("conversation deletion exceeded its batch bound")
+                    conversations = [
+                        (
+                            self._canonical_delete_id(row["conversation_id"], kind="conversation"),
+                            self._canonical_delete_id(
+                                row["agent_session_id"], kind="Agent Session"
+                            ),
+                        )
+                        for row in rows
+                    ]
+                    if not conversations:
+                        return deleted_count
+                    conversation_ids = [conversation_id for conversation_id, _ in conversations]
+                    if conversation_ids != sorted(conversation_ids) or len(
+                        set(conversation_ids)
+                    ) != len(conversation_ids):
+                        raise RuntimeError("conversation deletion returned unstable identities")
+                    linked_rows = await conn.fetch(
+                        _SELECT_LINKED_CONVERSATION_BATCH,
+                        principal_id,
+                        conversation_ids,
+                        _DELETE_BATCH_SIZE,
+                    )
+                    if len(linked_rows) > _DELETE_BATCH_SIZE:
+                        raise RuntimeError("linked conversation scan exceeded its batch bound")
+                    linked_conversation_ids = [
+                        self._canonical_delete_id(row["conversation_id"], kind="conversation")
+                        for row in linked_rows
+                    ]
+                    if (
+                        linked_conversation_ids != sorted(linked_conversation_ids)
+                        or len(set(linked_conversation_ids)) != len(linked_conversation_ids)
+                        or not set(linked_conversation_ids).issubset(conversation_ids)
+                    ):
+                        raise RuntimeError("linked conversation scan returned unstable identities")
+
+                    for conversation_id in linked_conversation_ids:
+                        await self._delete_linked_runs_in_batches(
+                            conn,
+                            principal_id=principal_id,
+                            conversation_id=conversation_id,
+                        )
+                    deleted_rows = await conn.fetch(
+                        _DELETE_CONVERSATION_BATCH,
+                        principal_id,
+                        conversation_ids,
+                        _DELETE_BATCH_SIZE,
+                    )
+                    if len(deleted_rows) > _DELETE_BATCH_SIZE:
+                        raise RuntimeError("conversation deletion exceeded its batch bound")
+                    deleted_conversations = [
+                        (
+                            self._canonical_delete_id(row["conversation_id"], kind="conversation"),
+                            self._canonical_delete_id(
+                                row["agent_session_id"], kind="Agent Session"
+                            ),
+                        )
+                        for row in deleted_rows
+                    ]
+                    expected_conversations = conversations
+                    if deleted_conversations != expected_conversations:
+                        raise RuntimeError("locked conversations were not deleted exactly once")
+                    await conn.execute(
+                        _DELETE_AGENT_SESSION_BATCH_IF_UNREFERENCED,
+                        principal_id,
+                        [session_id for _, session_id in deleted_conversations],
+                    )
+                    deleted_count += len(deleted_conversations)
 
         return await self._run_write(_operation)
 
