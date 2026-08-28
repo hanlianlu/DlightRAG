@@ -658,6 +658,27 @@ async def test_live_probe_cannot_widen_profile_declared_image_support(
 ) -> None:
     config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         models={
+            "chat": ModelRoleSettings(
+                roles=ModelRoleOverrides(
+                    query=ModelSettings(
+                        provider="openai",
+                        model="declared-text-only",
+                        base_url="https://example.invalid/v1",
+                        api_key=None,
+                    )
+                )
+            ),
+            "capacity_overrides": [
+                ModelCapacityOverrideSettings(
+                    provider="openai",
+                    model="declared-text-only",
+                    base_url="https://example.invalid/v1",
+                    context_window_tokens=1_048_576,
+                    max_output_tokens=262_144,
+                    supports_images=False,
+                    supports_reasoning=True,
+                )
+            ],
             "embedding": EmbeddingSettings(
                 provider="voyage",
                 model="voyage-multimodal-3.5",
