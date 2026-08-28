@@ -938,6 +938,156 @@ async def test_runtime_cache_decodes_thousand_entry_history_once_across_many_reg
     assert legacy_decoded_rows == 103_102
 
 
+async def test_acceptance_cursors_bound_three_linked_operations_without_history_reloads() -> None:
+    tool = _agent_tool()
+    session_id = SessionId.new()
+    repository = _CountingSnapshotRepository()
+    entries: list[UserMessageEntry] = []
+    parent: EntryId | None = None
+    for index in range(1000):
+        entry = UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.now(UTC),
+            parent_entry_id=parent,
+            content=f"history {index}",
+        )
+        entries.append(entry)
+        parent = entry.entry_id
+    assert parent is not None
+    head = LaneHead(LaneId.main(), parent)
+    lane = LaneState(LaneId.main())
+    await repository.transact(
+        session_id=session_id,
+        fencing_epoch=1,
+        transaction=SessionTransaction.from_parts(
+            entries=entries,
+            register_writes=[SetRegister(head), SetRegister(lane)],
+            expectations=[
+                RegisterExpectation(head.ref, None),
+                RegisterExpectation(lane.ref, None),
+            ],
+        ),
+    )
+    expected_usage = [
+        {"input_tokens": 3, "output_tokens": 1},
+        {"input_tokens": 5, "output_tokens": 2},
+        {"input_tokens": 7, "output_tokens": 3},
+    ]
+    effects = _Effects(
+        [
+            AssistantTurn(
+                text=f"answer {index}",
+                tool_calls=(),
+                stop_reason="stop",
+                usage_details=usage,
+            )
+            for index, usage in enumerate(expected_usage)
+        ]
+    )
+    runtime = _runtime(repository, effects, tool)
+    floors: list[int] = []
+    final_entry_counts: list[int] = []
+    observed_usage: list[dict[str, int]] = []
+    final = None
+
+    for index in range(3):
+        accepted = await runtime.accept(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            idempotency_key=f"linked-{index}",
+            content=f"question {index}",
+            plan=_plan(tool),
+        )
+        floor = accepted.cursor.last_entry_sequence
+        floors.append(floor)
+        loads_before_drive = repository.load_calls
+        final = await runtime.drive(
+            session_id=session_id,
+            operation_id=accepted.operation_id,
+        )
+        assert isinstance(final.state, OperationCompleted)
+        assert repository.load_calls == loads_before_drive
+        final_entry_counts.append(len(final.context.snapshot.entries))
+        usage: dict[str, int] = {}
+        for entry in final.context.snapshot.entries:
+            if entry.sequence <= floor or not isinstance(entry, AssistantMessageEntry):
+                continue
+            for key, value in (entry.usage or {}).items():
+                usage[key] = usage.get(key, 0) + value
+        observed_usage.append(usage)
+
+    assert final is not None
+    replayed = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="linked-0",
+        content="question 0",
+        plan=_plan(tool),
+    )
+
+    assert replayed.created is False
+    assert replayed.cursor == final.context.snapshot.cursor
+    assert floors == [1001, 1003, 1005]
+    assert final_entry_counts == [1002, 1004, 1006]
+    assert observed_usage == expected_usage
+    assert repository.load_calls == 1
+    assert repository.refresh_calls == 18
+    assert repository.decoded_rows == 1000
+    assert repository.refresh_allocations == 0
+    initial = repository.loaded_snapshots[0]
+    assert all(
+        final.context.snapshot.entries[index] is initial.entries[index] for index in range(1000)
+    )
+
+    # The replaced executor boundary performed two full loads per operation.
+    assert sum(floors) + sum(final_entry_counts) == 6021
+
+
+class _RefreshFailureRepository(_CountingSnapshotRepository):
+    fail_refresh = False
+
+    async def refresh(
+        self,
+        session_id: SessionId,
+        *,
+        previous: AgentSessionSnapshot,
+    ) -> AgentSessionSnapshot:
+        if self.fail_refresh:
+            self.refresh_calls += 1
+            raise RuntimeError("refresh failed")
+        return await super().refresh(session_id, previous=previous)
+
+
+async def test_idempotent_accept_refresh_failure_does_not_return_stale_cursor() -> None:
+    tool = _agent_tool()
+    repository = _RefreshFailureRepository()
+    runtime = _runtime(repository, _Effects([]), tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="refresh-boundary",
+        content="question",
+        plan=_plan(tool),
+    )
+    assert accepted.cursor.last_entry_sequence == 1
+    repository.fail_refresh = True
+
+    with pytest.raises(RuntimeError, match="refresh failed"):
+        await runtime.accept(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            idempotency_key="refresh-boundary",
+            content="question",
+            plan=_plan(tool),
+        )
+
+    assert session_id not in runtime._snapshots  # pyright: ignore[reportPrivateUsage]
+    assert repository.load_calls == 1
+    assert repository.refresh_calls == 1
+
+
 class _ForcedOutcomeRepository(MemoryAgentSessionRepository[dict[str, Any]]):
     forced: str | None = None
 
@@ -947,6 +1097,33 @@ class _ForcedOutcomeRepository(MemoryAgentSessionRepository[dict[str, Any]]):
         if self.forced == "lease":
             return TransactionLeaseLost()
         return await super().transact(**kwargs)
+
+
+async def test_acceptance_conflict_does_not_publish_a_cursor() -> None:
+    tool = _agent_tool()
+    repository = _ForcedOutcomeRepository()
+    runtime = _runtime(repository, _Effects([_assistant(text="done")]), tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="accepted",
+        content="question",
+        plan=_plan(tool),
+    )
+    await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+    repository.forced = "conflict"
+
+    with pytest.raises(OperationConflictError):
+        await runtime.accept(
+            session_id=session_id,
+            lane_id=LaneId.main(),
+            idempotency_key="conflicted",
+            content="another question",
+            plan=_plan(tool),
+        )
+
+    assert session_id not in runtime._snapshots  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.parametrize(

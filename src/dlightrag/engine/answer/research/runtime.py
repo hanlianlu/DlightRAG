@@ -610,10 +610,6 @@ def _oldest_pending_input(snapshot: Any, lane_id: LaneId) -> tuple[str, Any] | N
     return None
 
 
-def _last_entry_sequence(snapshot: Any) -> int:
-    return max((entry.sequence for entry in snapshot.entries), default=0)
-
-
 def _bound_child_runner(
     *,
     orchestrator: AnswerOrchestrator,

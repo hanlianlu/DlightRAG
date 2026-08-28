@@ -740,6 +740,28 @@ async def test_publication_correction_is_one_linked_agent_operation(
     store: FingerprintingAnswerRunStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    repository_calls = {"load": 0, "refresh": 0}
+    original_load = PGAgentSessionRepository.load
+    original_refresh = PGAgentSessionRepository.refresh
+
+    async def counted_load(
+        repository: PGAgentSessionRepository,
+        session_id: SessionId,
+    ) -> Any:
+        repository_calls["load"] += 1
+        return await original_load(repository, session_id)
+
+    async def counted_refresh(
+        repository: PGAgentSessionRepository,
+        session_id: SessionId,
+        *,
+        previous: Any,
+    ) -> Any:
+        repository_calls["refresh"] += 1
+        return await original_refresh(repository, session_id, previous=previous)
+
+    monkeypatch.setattr(PGAgentSessionRepository, "load", counted_load)
+    monkeypatch.setattr(PGAgentSessionRepository, "refresh", counted_refresh)
     turns = [
         AssistantTurn(
             text="Draft answer with broken Artifact.",
@@ -871,6 +893,13 @@ async def test_publication_correction_is_one_linked_agent_operation(
         "publication_correction",
     ]
     assert len({item["operation_id"] for item in operations}) == 4
+    assert [item["usage"] for item in operations] == [
+        {"input_tokens": 3, "output_tokens": 2},
+        {"input_tokens": 4, "output_tokens": 2},
+        {"input_tokens": 5, "output_tokens": 2},
+        {"input_tokens": 6, "output_tokens": 2},
+    ]
+    assert repository_calls == {"load": 4, "refresh": 26}
     assert publication_calls == 2
     residual_outcome = {
         "status": "failed",

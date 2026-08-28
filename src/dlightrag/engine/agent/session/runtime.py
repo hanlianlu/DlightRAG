@@ -97,6 +97,7 @@ from dlightrag.engine.agent.session.registers import (
     ToolArguments,
 )
 from dlightrag.engine.agent.session.repository import (
+    AgentSessionCursor,
     AgentSessionRepository,
     AgentSessionSnapshot,
 )
@@ -295,10 +296,13 @@ class RuntimeControlPort(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class AcceptedOperation:
+    """Accepted identity plus the authoritative Session cursor at its boundary."""
+
     session_id: SessionId
     lane_id: LaneId
     operation_id: OperationId
     created: bool
+    cursor: AgentSessionCursor
 
 
 @dataclass(frozen=True, slots=True)
@@ -387,7 +391,13 @@ class AgentSessionRuntime[HostDeltaT]:
                 raise TypeError("Operation Meta register has the wrong value type")
             if value.meta.acceptance_digest != acceptance_digest:
                 raise OperationIdempotencyConflict(idempotency_key)
-            return AcceptedOperation(session_id, lane_id, operation_id, created=False)
+            return AcceptedOperation(
+                session_id,
+                lane_id,
+                operation_id,
+                created=False,
+                cursor=snapshot.cursor,
+            )
 
         meta = OperationMeta(
             operation_id=operation_id,
@@ -479,7 +489,16 @@ class AgentSessionRuntime[HostDeltaT]:
             commit=commit,
             data={"entry_id": message.entry_id.value},
         )
-        return AcceptedOperation(session_id, lane_id, operation_id, created=True)
+        return AcceptedOperation(
+            session_id,
+            lane_id,
+            operation_id,
+            created=True,
+            cursor=AgentSessionCursor(
+                commit_sequence=commit.commit_sequence,
+                last_entry_sequence=commit.appended_sequences[-1],
+            ),
+        )
 
     async def restore(
         self,

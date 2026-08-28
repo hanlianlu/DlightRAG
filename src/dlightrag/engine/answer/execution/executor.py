@@ -108,7 +108,6 @@ from dlightrag.engine.answer.research.runtime import (
     _fenced_child_writer,
     _fenced_control_ack,
     _fenced_control_reader,
-    _last_entry_sequence,
     _oldest_pending_input,
     _restore_durable_evidence,
     _usage_from_snapshot_entries,
@@ -1172,7 +1171,7 @@ class AnswerExecutor:
                 research_operation_id = accepted.operation_id
                 await session.enter_phase("researching")
                 while True:
-                    before = await repository.load(session_id)
+                    usage_floor = accepted.cursor.last_entry_sequence
                     operation = await _drive_answer_operation(
                         agent_runtime,
                         session=session,
@@ -1184,13 +1183,11 @@ class AnswerExecutor:
                             "run_execution_failed",
                             f"Research Agent operation ended as {operation.state.state_type}.",
                         )
-                    snapshot = await repository.load(session_id)
+                    snapshot = operation.context.snapshot
                     operation_usage = (
                         _usage_from_snapshot_entries(
                             snapshot_entries=(
-                                entry
-                                for entry in snapshot.entries
-                                if entry.sequence > _last_entry_sequence(before)
+                                entry for entry in snapshot.entries if entry.sequence > usage_floor
                             )
                         )
                         or {}
@@ -1367,7 +1364,7 @@ class AnswerExecutor:
                         content=publication.correction_feedback(),
                         plan=research_plan,
                     )
-                    before_correction = await repository.load(agent_session_id)
+                    correction_usage_floor = correction.cursor.last_entry_sequence
                     corrected = await _drive_answer_operation(
                         agent_runtime,
                         session=session,
@@ -1379,13 +1376,13 @@ class AnswerExecutor:
                             "run_execution_failed",
                             "Publication correction Agent operation did not complete.",
                         )
-                    corrected_snapshot = await repository.load(agent_session_id)
+                    corrected_snapshot = corrected.context.snapshot
                     correction_usage = (
                         _usage_from_snapshot_entries(
                             snapshot_entries=(
                                 entry
                                 for entry in corrected_snapshot.entries
-                                if entry.sequence > _last_entry_sequence(before_correction)
+                                if entry.sequence > correction_usage_floor
                             )
                         )
                         or {}
