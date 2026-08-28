@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import re
 import shutil
+import stat
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +36,10 @@ class WorkspaceIntegrityError(RuntimeError):
     """Unsupported entries or a stable source/destination digest mismatch."""
 
 
+logger = logging.getLogger(__name__)
+
 _SPILL_RECOVERY_PAGE_SIZE = 128
+_EPOCH_COPY_TEMP_NAME = re.compile(r"\.tmp-([1-9][0-9]*)-[0-9a-f]{32}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,12 +80,16 @@ async def bind_run_workspace(
     adapter = execution_adapter or TrustExecutionAdapter()
     source_epoch = recorded_epoch
     destination = fencing_epoch
+    # This is deliberately claim-local, not a startup sweep: bind's caller already owns
+    # this run's current fenced claim before stale epoch-copy trees may be reclaimed.
+    _cleanup_stale_epoch_copy_temps(root, current_epoch=destination)
     if source_epoch is None:
         workspace, spill = _prepare_epoch_dirs(root, destination)
         if store is not None:
             await store.handoff_epoch(
                 expected_epoch=None, destination_epoch=destination, inventory=()
             )
+        _cleanup_stale_epoch_copy_temps(root, current_epoch=destination)
         return RunWorkspace(
             epoch=destination,
             workspace=workspace,
@@ -95,6 +105,9 @@ async def bind_run_workspace(
             if not isinstance(result, HandoffCommit):
                 raise WorkspaceRecoveryFailed("workspace epoch handoff failed")
         _retire_epoch(root, source_epoch)
+        # Narrow the race in which the fenced-out worker creates its unique temp tree
+        # after the pre-copy cleanup. A later creation remains safe but may survive.
+        _cleanup_stale_epoch_copy_temps(root, current_epoch=destination)
     workspace, spill = epoch_paths(root, destination)
     workspace.mkdir(parents=True, exist_ok=True)
     spill.mkdir(parents=True, exist_ok=True)
@@ -196,6 +209,49 @@ def spill_receipt(resource_id: str, text: str) -> CommittedOutput:
         content_digest=hashlib.sha256(data).hexdigest(),
         size_bytes=len(data),
     )
+
+
+def _cleanup_stale_epoch_copy_temps(root: Path, *, current_epoch: int) -> None:
+    """Best-effort reclaim of older copy temps for one currently claimed run.
+
+    Fencing epochs strictly increase, so a prior worker cannot hand off after the current
+    claim. Its uniquely named temp tree is never committed workspace state. Exact-name
+    symlinks are unlinked rather than traversed, and each failed removal is isolated so
+    an undeletable orphan cannot make otherwise valid recovery unavailable.
+    """
+    epochs = root / "epochs"
+    try:
+        entries = tuple(epochs.iterdir())
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.warning(
+            "Failed to inspect claim-local epoch-copy temps in %s", epochs, exc_info=True
+        )
+        return
+
+    for entry in entries:
+        match = _EPOCH_COPY_TEMP_NAME.fullmatch(entry.name)
+        if match is None:
+            continue
+        try:
+            destination_epoch = int(match.group(1))
+        except ValueError:
+            # An integer too large for Python's conversion limit was not system-created.
+            continue
+        if destination_epoch >= current_epoch:
+            continue
+        try:
+            mode = entry.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                entry.unlink()
+            elif stat.S_ISDIR(mode):
+                # shutil.rmtree unlinks nested symlinks instead of following them.
+                shutil.rmtree(entry)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            logger.warning("Failed to reclaim stale epoch-copy temp %s", entry, exc_info=True)
 
 
 def _prepare_epoch_dirs(root: Path, epoch: int) -> tuple[Path, Path]:

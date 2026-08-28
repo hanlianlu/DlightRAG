@@ -2,7 +2,10 @@
 """Epoch workspace bind creates a rooted environment and can copy a prior epoch."""
 
 import hashlib
+import logging
+import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,6 +15,7 @@ from dlightrag.engine.answer.workspace import (
     bind_run_workspace,
     copy_epoch_verified,
     epoch_paths,
+    run_root,
     write_spill_file,
 )
 from dlightrag.engine.runtime.workspace import CommittedSpillRecord, InMemoryWorkspaceStore
@@ -101,6 +105,59 @@ async def test_first_bind_creates_workspace_and_handoffs(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_first_bind_reclaims_only_exact_older_claim_local_temps(tmp_path: Path) -> None:
+    root = run_root(tmp_path, "owner", "run-temps")
+    epochs = root / "epochs"
+    epochs.mkdir(parents=True)
+    stale_names = [
+        ".tmp-1-00000000000000000000000000000000",
+        ".tmp-2-abcdefabcdefabcdefabcdefabcdefab",
+    ]
+    for name in stale_names:
+        nested = epochs / name / "nested" / "deeper"
+        nested.mkdir(parents=True)
+        (nested / "orphan.txt").write_text("remove", encoding="utf-8")
+
+    preserved_names = [
+        ".tmp-3-11111111111111111111111111111111",
+        ".tmp-4-22222222222222222222222222222222",
+        ".tmp-0-33333333333333333333333333333333",
+        ".tmp-01-44444444444444444444444444444444",
+        ".tmp-1-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ".tmp-1-short",
+        ".tmp-other",
+        ".unrelated",
+        "1",
+    ]
+    for name in preserved_names:
+        preserved = epochs / name
+        preserved.mkdir()
+        (preserved / "keep.txt").write_text("keep", encoding="utf-8")
+
+    other_root = run_root(tmp_path, "owner", "other-run")
+    other_temp = other_root / "epochs" / ".tmp-1-55555555555555555555555555555555"
+    other_temp.mkdir(parents=True)
+    (other_temp / "outside-claim.txt").write_text("keep", encoding="utf-8")
+
+    await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="owner",
+        run_id="run-temps",
+        fencing_epoch=3,
+        recorded_epoch=None,
+        store=InMemoryWorkspaceStore(),
+    )
+
+    assert all(not (epochs / name).exists() for name in stale_names)
+    assert all(
+        (epochs / name / "keep.txt").read_text(encoding="utf-8") == "keep"
+        for name in preserved_names
+    )
+    assert other_temp.is_dir()
+    assert (other_temp / "outside-claim.txt").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.asyncio
 async def test_recover_copies_prior_epoch(tmp_path: Path) -> None:
     store = InMemoryWorkspaceStore(workspace_epoch=1)
     first = await bind_run_workspace(
@@ -112,6 +169,11 @@ async def test_recover_copies_prior_epoch(tmp_path: Path) -> None:
         store=store,
     )
     (first.workspace / "notes.txt").write_text("keep", encoding="utf-8")
+    stale_temp = (
+        run_root(tmp_path, "owner", "run-1") / "epochs" / ".tmp-1-66666666666666666666666666666666"
+    )
+    (stale_temp / "nested").mkdir(parents=True)
+    (stale_temp / "nested" / "orphan.txt").write_text("remove", encoding="utf-8")
     recovered = await bind_run_workspace(
         workspace_root=tmp_path,
         owner_id="owner",
@@ -123,7 +185,79 @@ async def test_recover_copies_prior_epoch(tmp_path: Path) -> None:
     assert recovered.epoch == 2
     assert (recovered.workspace / "notes.txt").read_text(encoding="utf-8") == "keep"
     assert store.workspace_epoch == 2
+    assert not stale_temp.exists()
     assert first.workspace.exists() is False or recovered.workspace != first.workspace
+
+
+@pytest.mark.asyncio
+async def test_stale_temp_symlinks_are_unlinked_without_touching_their_targets(
+    tmp_path: Path,
+) -> None:
+    root = run_root(tmp_path, "owner", "run-symlink-temp")
+    epochs = root / "epochs"
+    epochs.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep", encoding="utf-8")
+    stale_link = epochs / ".tmp-1-77777777777777777777777777777777"
+    stale_link.symlink_to(outside, target_is_directory=True)
+    stale_tree = epochs / ".tmp-2-88888888888888888888888888888888"
+    stale_tree.mkdir()
+    (stale_tree / "outside-link").symlink_to(outside, target_is_directory=True)
+
+    await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="owner",
+        run_id="run-symlink-temp",
+        fencing_epoch=3,
+        recorded_epoch=None,
+        store=InMemoryWorkspaceStore(),
+    )
+
+    assert not stale_link.exists()
+    assert not stale_link.is_symlink()
+    assert not stale_tree.exists()
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.asyncio
+async def test_stale_temp_cleanup_is_best_effort_per_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    root = run_root(tmp_path, "owner", "run-cleanup-failure")
+    epochs = root / "epochs"
+    failed = epochs / ".tmp-1-99999999999999999999999999999999"
+    removable = epochs / ".tmp-2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    (failed / "nested").mkdir(parents=True)
+    removable.mkdir(parents=True)
+    outside = tmp_path / "outside-cleanup-failure"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep", encoding="utf-8")
+    real_rmtree = shutil.rmtree
+
+    def fail_one_tree(path: str | Path, *args: Any, **kwargs: Any) -> None:
+        if Path(path) == failed:
+            raise PermissionError("simulated undeletable temp")
+        real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(workspace_module.shutil, "rmtree", fail_one_tree)
+    with caplog.at_level(logging.WARNING, logger=workspace_module.__name__):
+        bound = await bind_run_workspace(
+            workspace_root=tmp_path,
+            owner_id="owner",
+            run_id="run-cleanup-failure",
+            fencing_epoch=3,
+            recorded_epoch=None,
+            store=InMemoryWorkspaceStore(),
+        )
+
+    assert bound.workspace.is_dir()
+    assert failed.is_dir()
+    assert not removable.exists()
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert "Failed to reclaim stale epoch-copy temp" in caplog.text
 
 
 @pytest.mark.asyncio
