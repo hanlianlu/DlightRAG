@@ -18,7 +18,11 @@ from dlightrag.engine.rag.retrieval import (
 from dlightrag.engine.rag.retrieval.filtering import metadata_filter_scope
 from dlightrag.engine.rag.retrieval.metadata_path import metadata_retrieve
 from dlightrag.engine.rag.retrieval.ports import BM25Search, MetadataChunkStore, RetrievalBackend
-from dlightrag.engine.rag.retrieval.visual import DirectVisualRetriever
+from dlightrag.engine.rag.retrieval.visual import (
+    DirectVisualRetriever,
+    PreparedVisualQuery,
+    VisualEmbeddingDomain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +66,19 @@ class UnifiedRetriever:
         self._stores = stores
         self._rrf_k = rrf_k
 
+    @property
+    def visual_embedding_domain(self) -> VisualEmbeddingDomain | None:
+        """Expose the enabled direct-visual compatibility domain."""
+        return self._visual.embedding_domain if self._visual is not None else None
+
+    async def prepare_visual_query(
+        self, query_image_blocks: list[dict[str, Any]]
+    ) -> PreparedVisualQuery | None:
+        """Prepare query images without touching this workspace's vector store."""
+        if self._visual is None:
+            return None
+        return await self._visual.prepare(query_image_blocks)
+
     async def aretrieve(
         self,
         query: str,
@@ -71,6 +88,7 @@ class UnifiedRetriever:
         bm25_query: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
+        prepared_visual_query: PreparedVisualQuery | None = None,
         query_image_blocks: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
@@ -112,11 +130,16 @@ class UnifiedRetriever:
                 if self._bm25 is not None
                 else None
             )
-            visual_task = (
-                asyncio.create_task(self._visual.search(query_image_blocks))
-                if self._visual is not None and query_image_blocks
-                else None
-            )
+            visual_task: asyncio.Task[list[ContextRow]] | None = None
+            if self._visual is not None:
+                if prepared_visual_query is not None:
+                    visual_task = asyncio.create_task(
+                        self._visual.search_prepared(prepared_visual_query)
+                    )
+                elif query_image_blocks:
+                    # Convenience path below the typed prepared boundary for
+                    # direct engine callers. Application retrieval never uses it.
+                    visual_task = asyncio.create_task(self._visual.search(query_image_blocks))
 
             lightrag_error: Exception | None = None
             try:
@@ -177,6 +200,7 @@ class UnifiedRetriever:
                 bm25_query=bm25_query,
                 top_k=top_k,
                 chunk_top_k=chunk_top_k,
+                prepared_visual_query=prepared_visual_query,
                 query_image_blocks=query_image_blocks,
                 **kwargs,
             )

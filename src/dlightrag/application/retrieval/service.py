@@ -3,18 +3,22 @@
 
 import asyncio
 import copy
+import hashlib
+import json
 import logging
 import time
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from dlightrag.application.errors import CorpusUnavailableError
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
-from dlightrag.engine.rag.retrieval.federation import federated_retrieve
+from dlightrag.engine.rag.retrieval.federation import WorkspaceRetriever, federated_retrieve
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
+from dlightrag.engine.rag.retrieval.visual import PreparedVisualQuery, VisualEmbeddingDomain
 from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup
 from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.rag.workspace.ports import (
@@ -26,6 +30,15 @@ logger = logging.getLogger(__name__)
 type SchemaLookup = Callable[[Sequence[str]], Awaitable[dict[str, Any]]]
 type QueryImagePreparer = Callable[[Sequence[Mapping[str, Any]]], Awaitable[list[str]]]
 type RetrievalProjection = Callable[[RetrievalResult, "RetrieveProjection"], "ProjectedRetrieval"]
+type _VisualPreparationStatus = Literal["cache_hit", "singleflight_hit", "started"]
+
+_VISUAL_QUERY_CACHE_SIZE = 32
+
+
+@dataclass(frozen=True, slots=True)
+class _VisualQueryCacheKey:
+    domain: VisualEmbeddingDomain
+    payload_digest: bytes
 
 
 class RetrievalTimeoutError(RuntimeError):
@@ -110,6 +123,12 @@ class RetrievalService:
         self._clock = clock
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         self._schema_refreshes: dict[tuple[str, ...], asyncio.Task[dict[str, Any]]] = {}
+        self._visual_query_cache: OrderedDict[_VisualQueryCacheKey, PreparedVisualQuery] = (
+            OrderedDict()
+        )
+        self._visual_query_flights: dict[
+            _VisualQueryCacheKey, asyncio.Task[PreparedVisualQuery | None]
+        ] = {}
         self._warmups: set[asyncio.Task[None]] = set()
         self._close_task: asyncio.Task[None] | None = None
         self._closed = False
@@ -186,6 +205,78 @@ class RetrievalService:
             self._schema_refreshes.pop(key, None)
         if not task.cancelled() and task.exception() is not None:
             logger.debug("Schema refresh failed for workspaces %s", key, exc_info=task.exception())
+
+    async def _prepared_visual_query(
+        self,
+        service: WorkspaceRetriever,
+        domain: VisualEmbeddingDomain,
+        blocks: Sequence[Mapping[str, Any]],
+    ) -> tuple[PreparedVisualQuery | None, _VisualPreparationStatus]:
+        if self._closed:
+            raise CorpusUnavailableError("Retrieval service is closed")
+        key = _VisualQueryCacheKey(domain=domain, payload_digest=_query_image_digest(blocks))
+        cached = self._visual_query_cache.get(key)
+        if cached is not None:
+            self._visual_query_cache.move_to_end(key)
+            return cached, "cache_hit"
+
+        task = self._visual_query_flights.get(key)
+        status: _VisualPreparationStatus = "singleflight_hit"
+        if task is None:
+            status = "started"
+            # The owned task retains raw blocks only for the duration of decode
+            # and embedding. Durable cache state contains only the digest and vectors.
+            copied_blocks = [dict(block) for block in blocks]
+            task = asyncio.create_task(
+                self._run_visual_preparation(service, domain, copied_blocks),
+                name="retrieval-visual-prepare",
+            )
+            self._visual_query_flights[key] = task
+            task.add_done_callback(
+                lambda completed, cache_key=key: self._finish_visual_preparation(
+                    cache_key, completed
+                )
+            )
+        return await asyncio.shield(task), status
+
+    async def _run_visual_preparation(
+        self,
+        service: WorkspaceRetriever,
+        domain: VisualEmbeddingDomain,
+        blocks: list[dict[str, Any]],
+    ) -> PreparedVisualQuery | None:
+        try:
+            prepared = await service.prepare_visual_query(blocks)
+        except Exception:
+            logger.warning("Visual query preparation failed", exc_info=True)
+            return None
+        if prepared is None or not prepared.vectors:
+            return None
+        if prepared.domain != domain:
+            logger.warning("Visual query preparation returned a mismatched embedding domain")
+            return None
+        return prepared
+
+    def _finish_visual_preparation(
+        self,
+        key: _VisualQueryCacheKey,
+        task: asyncio.Task[PreparedVisualQuery | None],
+    ) -> None:
+        if self._visual_query_flights.get(key) is task:
+            self._visual_query_flights.pop(key, None)
+        if task.cancelled() or self._closed:
+            return
+        try:
+            prepared = task.result()
+        except Exception:
+            logger.debug("Visual query preparation task failed", exc_info=True)
+            return
+        if prepared is None or not prepared.vectors:
+            return
+        self._visual_query_cache[key] = prepared
+        self._visual_query_cache.move_to_end(key)
+        while len(self._visual_query_cache) > _VISUAL_QUERY_CACHE_SIZE:
+            self._visual_query_cache.popitem(last=False)
 
     async def retrieve(self, request: RetrieveRequest) -> RetrieveResponse:
         if self._closed:
@@ -290,8 +381,27 @@ class RetrievalService:
             "top_k": effective_top_k,
             "chunk_top_k": effective_chunk_top_k,
         }
-        if query_images:
-            kwargs["query_image_blocks"] = [dict(image) for image in query_images]
+        visual_stats = {
+            "visual_preparation_domain_count": 0,
+            "visual_preparation_started_count": 0,
+            "visual_preparation_cache_hit_count": 0,
+            "visual_preparation_singleflight_hit_count": 0,
+            "visual_preparation_failed_count": 0,
+        }
+        visual_blocks = tuple(dict(image) for image in query_images)
+
+        async def _prepare_visual(
+            runtime: WorkspaceRetriever,
+            domain: VisualEmbeddingDomain,
+            blocks: Sequence[Mapping[str, Any]],
+        ) -> PreparedVisualQuery | None:
+            visual_stats["visual_preparation_domain_count"] += 1
+            prepared, status = await self._prepared_visual_query(runtime, domain, blocks)
+            visual_stats[f"visual_preparation_{status}_count"] += 1
+            if prepared is None:
+                visual_stats["visual_preparation_failed_count"] += 1
+            return prepared
+
         effective_filters = filters if filters is not None else plan.metadata_filter
         if effective_filters is not None:
             kwargs["filters"] = effective_filters
@@ -315,6 +425,11 @@ class RetrievalService:
         ) as observation:
             if len(workspaces) == 1:
                 runtime = await self._acquire(workspaces[0])
+                domain = getattr(runtime, "visual_embedding_domain", None)
+                if visual_blocks and isinstance(domain, VisualEmbeddingDomain):
+                    kwargs["prepared_visual_query"] = await _prepare_visual(
+                        runtime, domain, visual_blocks
+                    )
                 result = await runtime.aretrieve(plan.standalone_query, **kwargs)
             else:
                 result = await federated_retrieve(
@@ -322,10 +437,14 @@ class RetrievalService:
                     list(workspaces),
                     self._acquire,
                     max_concurrency=self._settings.workspace_fanout_concurrency,
+                    query_image_blocks=visual_blocks,
+                    prepare_visual_query=_prepare_visual if visual_blocks else None,
                     **kwargs,
                 )
             result.image_descriptions = list(image_descriptions)
             result.trace["query_image_description_count"] = len(image_descriptions)
+            if visual_blocks:
+                result.trace.update(visual_stats)
             observation.update(
                 output={
                     **_context_output(result.contexts),
@@ -348,11 +467,18 @@ class RetrievalService:
             warmup.cancel()
         for refresh in self._schema_refreshes.values():
             refresh.cancel()
+        visual_flights = list(self._visual_query_flights.values())
+        for flight in visual_flights:
+            flight.cancel()
         if self._warmups:
             await asyncio.gather(*self._warmups, return_exceptions=True)
         if self._schema_refreshes:
             await asyncio.gather(*self._schema_refreshes.values(), return_exceptions=True)
             self._schema_refreshes.clear()
+        if visual_flights:
+            await asyncio.gather(*visual_flights, return_exceptions=True)
+        self._visual_query_flights.clear()
+        self._visual_query_cache.clear()
         await self._planners.aclose()
 
     def _observe_warmup(self, task: asyncio.Task[None]) -> None:
@@ -362,6 +488,16 @@ class RetrievalService:
         error = task.exception()
         if error is not None:
             logger.debug("Workspace warm-up failed", exc_info=error)
+
+
+def _query_image_digest(blocks: Sequence[Mapping[str, Any]]) -> bytes:
+    payload = json.dumps(
+        [dict(block) for block in blocks],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).digest()
 
 
 def _positive_int_or_none(value: int | None) -> int | None:

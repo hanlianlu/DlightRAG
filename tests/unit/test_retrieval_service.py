@@ -583,7 +583,7 @@ async def test_concurrent_service_close_callers_join_the_same_cleanup() -> None:
     await asyncio.gather(first, second)
 
 
-async def test_query_images_are_limited_described_and_forwarded() -> None:
+async def test_visual_disabled_does_not_receive_raw_query_images() -> None:
     images = ({"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},)
     image_preparer = AsyncMock(return_value=["Image 1: chart"])
     runtime = AsyncMock()
@@ -617,7 +617,8 @@ async def test_query_images_are_limited_described_and_forwarded() -> None:
     )
 
     image_preparer.assert_awaited_once_with(images)
-    assert runtime.aretrieve.await_args.kwargs["query_image_blocks"] == list(images)
+    assert "query_image_blocks" not in runtime.aretrieve.await_args.kwargs
+    assert "prepared_visual_query" not in runtime.aretrieve.await_args.kwargs
     assert response.image_descriptions == ("Image 1: chart",)
     with pytest.raises(ValueError, match="at most 1 current images"):
         await service.retrieve(

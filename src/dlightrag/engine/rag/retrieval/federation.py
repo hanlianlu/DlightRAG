@@ -3,17 +3,25 @@
 
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 from dlightrag.engine.ai.concurrency import bounded_gather
 from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval.visual import PreparedVisualQuery, VisualEmbeddingDomain
 
 logger = logging.getLogger(__name__)
 
 
 class WorkspaceRetriever(Protocol):
+    @property
+    def visual_embedding_domain(self) -> VisualEmbeddingDomain | None: ...
+
+    async def prepare_visual_query(
+        self, query_image_blocks: list[dict[str, Any]]
+    ) -> PreparedVisualQuery | None: ...
+
     async def aretrieve(
         self,
         query: str,
@@ -22,6 +30,12 @@ class WorkspaceRetriever(Protocol):
         chunk_top_k: int | None = None,
         **kwargs: Any,
     ) -> RetrievalResult: ...
+
+
+type FederatedVisualPreparer = Callable[
+    [WorkspaceRetriever, VisualEmbeddingDomain, Sequence[Mapping[str, Any]]],
+    Awaitable[PreparedVisualQuery | None],
+]
 
 
 def merge_results(
@@ -45,7 +59,6 @@ def merge_results(
             tagged.append(c)
         per_ws_chunks.append(tagged)
 
-    # Round-robin interleave
     merged_chunks: list[dict[str, Any]] = []
     max_len = max((len(cs) for cs in per_ws_chunks), default=0)
     for i in range(max_len):
@@ -125,67 +138,115 @@ async def federated_retrieve(
     top_k: int | None = None,
     chunk_top_k: int | None = None,
     max_concurrency: int = 8,
+    query_image_blocks: Sequence[Mapping[str, Any]] = (),
+    prepare_visual_query: FederatedVisualPreparer | None = None,
     **kwargs: Any,
 ) -> RetrievalResult:
-    """Execute federated retrieval across multiple workspaces.
+    """Execute bounded federated retrieval over already-authorized workspaces.
 
-    Args:
-        query: The search query.
-        workspaces: List of workspace names to search.
-        get_service: Async callable that returns a WorkspaceRag for a workspace id.
-        top_k: Per-workspace top_k for vector search.
-        chunk_top_k: Final merged chunk count limit.
-        max_concurrency: Maximum concurrent workspace queries (default 8).
-        **kwargs: Additional kwargs passed to each WorkspaceRag.aretrieve().
-
-    The caller owns empty/single-workspace routing and authorization; this
-    function receives two or more already-authorized workspaces.
+    Services are acquired first so compatible visual domains can share one
+    preparation. Only typed prepared vectors cross into workspace retrieval;
+    raw query-image blocks are never fanned out to workspace ``aretrieve``.
     """
     if len(workspaces) < 2:
         raise ValueError("federated_retrieve requires at least two workspaces")
 
-    async def _query_workspace(ws: str) -> RetrievalResult:
-        start = time.monotonic()
-        svc = await get_service(ws)
-        result = await svc.aretrieve(
+    starts = {workspace: time.monotonic() for workspace in workspaces}
+
+    async def _acquire_workspace(workspace: str) -> WorkspaceRetriever:
+        return await get_service(workspace)
+
+    raw_services = await bounded_gather(
+        [_acquire_workspace(workspace) for workspace in workspaces],
+        max_concurrent=max_concurrency,
+        task_name="federation-acquire",
+    )
+
+    services: dict[str, WorkspaceRetriever] = {}
+    failures_by_workspace: dict[str, Exception] = {}
+    for workspace, service in zip(workspaces, raw_services, strict=True):
+        if isinstance(service, Exception):
+            failures_by_workspace[workspace] = service
+        else:
+            services[workspace] = service
+
+    prepared_by_domain: dict[VisualEmbeddingDomain, PreparedVisualQuery | None] = {}
+    if query_image_blocks and prepare_visual_query is not None and services:
+        representatives: dict[VisualEmbeddingDomain, WorkspaceRetriever] = {}
+        for service in services.values():
+            domain = getattr(service, "visual_embedding_domain", None)
+            if isinstance(domain, VisualEmbeddingDomain):
+                representatives.setdefault(domain, service)
+
+        domains = list(representatives)
+
+        async def _prepare_domain(domain: VisualEmbeddingDomain) -> PreparedVisualQuery | None:
+            return await prepare_visual_query(representatives[domain], domain, query_image_blocks)
+
+        raw_prepared = await bounded_gather(
+            [_prepare_domain(domain) for domain in domains],
+            max_concurrent=max_concurrency,
+            task_name="federation-visual-prepare",
+        )
+        for domain, prepared in zip(domains, raw_prepared, strict=True):
+            if isinstance(prepared, Exception):
+                logger.warning("Federated visual query preparation failed", exc_info=prepared)
+                prepared_by_domain[domain] = None
+            elif prepared is not None and prepared.domain != domain:
+                logger.warning("Federated visual query preparation returned a mismatched domain")
+                prepared_by_domain[domain] = None
+            else:
+                prepared_by_domain[domain] = prepared
+
+    async def _query_workspace(workspace: str) -> RetrievalResult:
+        service = services[workspace]
+        call_kwargs = dict(kwargs)
+        domain = getattr(service, "visual_embedding_domain", None)
+        if isinstance(domain, VisualEmbeddingDomain) and domain in prepared_by_domain:
+            # Passing None is intentional after a failed/empty attempt: the
+            # workspace must not fall back to embedding the raw blocks itself.
+            call_kwargs["prepared_visual_query"] = prepared_by_domain[domain]
+        result = await service.aretrieve(
             query=query,
             top_k=top_k,
             chunk_top_k=chunk_top_k,
-            **kwargs,
+            **call_kwargs,
         )
-        elapsed = time.monotonic() - start
+        elapsed = time.monotonic() - starts[workspace]
         logger.info(
             "Federation workspace '%s' retrieved %d chunks in %.2fs",
-            safe_log_text(ws),
+            safe_log_text(workspace),
             len(result.contexts.get("chunks", [])),
             elapsed,
         )
         return result
 
-    coros = [_query_workspace(ws) for ws in workspaces]
+    query_workspaces = [workspace for workspace in workspaces if workspace in services]
     raw_results = await bounded_gather(
-        coros, max_concurrent=max_concurrency, task_name="federation"
+        [_query_workspace(workspace) for workspace in query_workspaces],
+        max_concurrent=max_concurrency,
+        task_name="federation",
     )
+    for workspace, result in zip(query_workspaces, raw_results, strict=True):
+        if isinstance(result, Exception):
+            failures_by_workspace[workspace] = result
 
-    # Filter out failed workspaces (errors, timeouts) — partial result is
-    # returned to the caller rather than raising.
     successful_results: list[RetrievalResult] = []
     successful_workspaces: list[str] = []
-    failed_workspaces: list[str] = []
-    failures: list[Exception] = []
-    for ws, result in zip(workspaces, raw_results, strict=True):
+    for workspace, result in zip(query_workspaces, raw_results, strict=True):
         if isinstance(result, Exception):
             logger.warning(
                 "Federated retrieval failed for workspace '%s': %s",
-                safe_log_text(ws),
+                safe_log_text(workspace),
                 safe_log_text(result),
             )
-            failed_workspaces.append(ws)
-            failures.append(result)
             continue
         successful_results.append(result)
-        successful_workspaces.append(ws)
+        successful_workspaces.append(workspace)
 
+    failed_workspaces = [
+        workspace for workspace in workspaces if workspace in failures_by_workspace
+    ]
     if failed_workspaces:
         logger.warning(
             "Federated query partial: %d/%d workspaces failed (%s)",
@@ -195,9 +256,17 @@ async def federated_retrieve(
         )
 
     if not successful_results:
-        raise failures[0]
+        raise failures_by_workspace[failed_workspaces[0]]
 
     merged = merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)
     if failed_workspaces:
         merged.trace["failed_workspaces"] = failed_workspaces
     return merged
+
+
+__all__ = [
+    "FederatedVisualPreparer",
+    "WorkspaceRetriever",
+    "federated_retrieve",
+    "merge_results",
+]

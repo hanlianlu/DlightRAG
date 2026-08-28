@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 from PIL import Image
 
-from dlightrag.engine.rag.retrieval.visual import DirectVisualRetriever
+from dlightrag.engine.rag.retrieval.visual import (
+    DirectVisualRetriever,
+    PreparedVisualQuery,
+    VisualEmbeddingDomain,
+)
 
 
 def _image_block(*, size: tuple[int, int] = (2, 2), mode: str = "RGB") -> dict[str, Any]:
@@ -16,6 +20,20 @@ def _image_block(*, size: tuple[int, int] = (2, 2), mode: str = "RGB") -> dict[s
     Image.new(mode, size, "white").save(buf, format="PNG")
     payload = base64.b64encode(buf.getvalue()).decode("ascii")
     return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}}
+
+
+def _embedder(vectors: Any = None, *, error: Exception | None = None) -> MagicMock:
+    embedder = MagicMock()
+    embedder.model = "visual-model"
+    embedder.dim = 3
+    embedder.input_modality = "multimodal"
+    embedder.provider = "test-provider"
+    embedder.request_url = "https://embed.example.test/v1/images"
+    if error is not None:
+        embedder.embed_query_images = AsyncMock(side_effect=error)
+    else:
+        embedder.embed_query_images = AsyncMock(return_value=vectors)
+    return embedder
 
 
 def _stores(vector_results: Any) -> MagicMock:
@@ -30,8 +48,7 @@ def _stores(vector_results: Any) -> MagicMock:
 
 async def test_visual_leg_embeds_and_searches() -> None:
     stores = _stores([{"id": "img1", "content": "visual", "file_path": "a.pdf", "distance": 0.12}])
-    embedder = MagicMock()
-    embedder.embed_query_images = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+    embedder = _embedder([[0.1, 0.2, 0.3]])
 
     retriever = DirectVisualRetriever(embedder=embedder, stores=stores, top_k=2)
     chunks = await retriever.search([_image_block()])
@@ -48,8 +65,8 @@ async def test_visual_leg_batches_query_images_in_one_embedding_request() -> Non
             [{"id": "img-b", "content": "b", "file_path": "b", "distance": 0.1}],
         ]
     )
-    embedder = MagicMock()
-    embedder.embed_query_images = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+    embedder = _embedder([[0.1, 0.2], [0.3, 0.4]])
+    embedder.dim = 2
 
     retriever = DirectVisualRetriever(embedder=embedder, stores=stores, top_k=5)
     chunks = await retriever.search([_image_block(), _image_block()])
@@ -66,8 +83,8 @@ async def test_visual_leg_dedup_keeps_closest_distance() -> None:
             [{"id": "dup", "content": "near", "file_path": "a", "distance": 0.1}],
         ]
     )
-    embedder = MagicMock()
-    embedder.embed_query_images = AsyncMock(return_value=[[0.1], [0.2]])
+    embedder = _embedder([[0.1], [0.2]])
+    embedder.dim = 1
 
     retriever = DirectVisualRetriever(embedder=embedder, stores=stores, top_k=5)
     chunks = await retriever.search([_image_block(), _image_block()])
@@ -78,8 +95,7 @@ async def test_visual_leg_dedup_keeps_closest_distance() -> None:
 
 async def test_visual_leg_degrades_to_empty_when_embedding_fails() -> None:
     stores = _stores([])
-    embedder = MagicMock()
-    embedder.embed_query_images = AsyncMock(side_effect=RuntimeError("provider down"))
+    embedder = _embedder(error=RuntimeError("provider down"))
 
     retriever = DirectVisualRetriever(embedder=embedder, stores=stores, top_k=5)
 
@@ -89,8 +105,8 @@ async def test_visual_leg_degrades_to_empty_when_embedding_fails() -> None:
 
 async def test_visual_leg_rejects_images_above_decode_pixel_ceiling() -> None:
     stores = _stores([])
-    embedder = MagicMock()
-    embedder.embed_query_images = AsyncMock(return_value=[[0.1]])
+    embedder = _embedder([[0.1]])
+    embedder.dim = 1
     retriever = DirectVisualRetriever(embedder=embedder, stores=stores, top_k=5)
 
     assert await retriever.search([_image_block(size=(8_000, 5_001), mode="1")]) == []
@@ -99,10 +115,41 @@ async def test_visual_leg_rejects_images_above_decode_pixel_ceiling() -> None:
 
 async def test_visual_leg_disabled_by_zero_top_k() -> None:
     stores = _stores([])
-    embedder = MagicMock()
-    embedder.embed_query_images = AsyncMock()
+    embedder = _embedder()
 
     retriever = DirectVisualRetriever(embedder=embedder, stores=stores, top_k=0)
 
+    assert retriever.embedding_domain is None
     assert await retriever.search([_image_block()]) == []
+    embedder.embed_query_images.assert_not_awaited()
+
+
+async def test_prepared_query_is_immutable_and_search_does_not_reembed() -> None:
+    stores = _stores([{"id": "img1", "distance": 0.1}])
+    embedder = _embedder([[0.1, 0.2, 0.3]])
+    retriever = DirectVisualRetriever(embedder=embedder, stores=stores, top_k=2)
+
+    prepared = await retriever.prepare([_image_block()])
+
+    assert prepared is not None
+    assert prepared.vectors == ((0.1, 0.2, 0.3),)
+    assert await retriever.search_prepared(prepared)
+    embedder.embed_query_images.assert_awaited_once()
+
+
+async def test_prepared_query_domain_mismatch_degrades_without_wrong_vdb_query() -> None:
+    stores = _stores([])
+    embedder = _embedder([[0.1, 0.2, 0.3]])
+    retriever = DirectVisualRetriever(embedder=embedder, stores=stores, top_k=2)
+    wrong_domain = VisualEmbeddingDomain(
+        provider="other-provider",
+        model="visual-model",
+        endpoint_fingerprint=None,
+        dimension=3,
+        input_modality="multimodal",
+    )
+    prepared = PreparedVisualQuery(domain=wrong_domain, vectors=((0.1, 0.2, 0.3),))
+
+    assert await retriever.search_prepared(prepared) == []
+    stores.chunks_vdb.query.assert_not_awaited()
     embedder.embed_query_images.assert_not_awaited()

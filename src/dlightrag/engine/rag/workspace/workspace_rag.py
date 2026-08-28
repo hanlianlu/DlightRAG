@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from dlightrag.engine.rag.retrieval.ports import BM25Search, RetrievalBackend
     from dlightrag.engine.rag.retrieval.provenance import ProvenanceCache
     from dlightrag.engine.rag.retrieval.retriever import UnifiedRetriever
+    from dlightrag.engine.rag.retrieval.visual import PreparedVisualQuery, VisualEmbeddingDomain
 
 logger = logging.getLogger(__name__)
 
@@ -1395,6 +1396,22 @@ class WorkspaceRag:
         raise RuntimeError("Ingestion engine not initialized")
 
     # === RETRIEVAL API ===
+
+    @property
+    def visual_embedding_domain(self) -> VisualEmbeddingDomain | None:
+        """Return the enabled direct-visual vector compatibility domain."""
+        orchestrator = self._retrieval_orchestrator
+        return orchestrator.visual_embedding_domain if orchestrator is not None else None
+
+    async def prepare_visual_query(
+        self, query_image_blocks: list[dict[str, Any]]
+    ) -> PreparedVisualQuery | None:
+        """Prepare query-image vectors without searching this workspace."""
+        self._ensure_initialized()
+        orchestrator = self._retrieval_orchestrator
+        if orchestrator is None:
+            raise RuntimeError("Retrieval orchestrator not initialized")
+        return await orchestrator.prepare_visual_query(query_image_blocks)
 
     async def aretrieve(
         self,
