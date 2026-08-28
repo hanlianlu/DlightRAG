@@ -5,7 +5,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import pytest
-from playwright.sync_api import Page, Route
+from playwright.sync_api import Page, Route, expect
 
 
 @pytest.mark.e2e
@@ -402,7 +402,7 @@ def test_a_second_failed_reconnect_replaces_the_offer_instead_of_stacking_it(
     page.wait_for_selector(".composer-input", timeout=10000)
     # Six barren attempts exhaust the budget, so the first twelve strand the run
     # twice; the thirteenth delivers the run's terminal event.
-    _install_event_transport(
+    transport = _install_event_transport(
         page, [*([[]] * 12), [_PROGRESS, _DONE_RENDERED]], e2e_conversation_service
     )
 
@@ -413,8 +413,11 @@ def test_a_second_failed_reconnect_replaces_the_offer_instead_of_stacking_it(
     reconnect.click()
     page.wait_for_selector(".composer-send.is-stop", timeout=10000)
     page.wait_for_selector(".composer-send:not(.is-stop)", timeout=20000)
-    assert reconnect.count() == 1
-    assert page.get_by_text("Connection lost. This answer is still running.").count() == 1
+    assert transport["attempts"] == 12
+    expect(reconnect).to_have_count(1)
+    expect(
+        page.get_by_text("Connection lost while this answer is running.", exact=True)
+    ).to_have_count(1)
 
     reconnect.click()
     page.wait_for_function(
@@ -424,5 +427,8 @@ def test_a_second_failed_reconnect_replaces_the_offer_instead_of_stacking_it(
         """,
         timeout=20000,
     )
-    assert page.get_by_role("button", name="Reconnect").count() == 0
-    assert page.get_by_text("Connection lost. This answer is still running.").count() == 0
+    assert transport["attempts"] == 13
+    expect(page.get_by_role("button", name="Reconnect")).to_have_count(0)
+    expect(
+        page.get_by_text("Connection lost while this answer is running.", exact=True)
+    ).to_have_count(0)
