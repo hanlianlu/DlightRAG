@@ -589,6 +589,146 @@ it('shows cancel-aware reconnect state and preserves stopping when reconnecting'
   expect(feature.turns[0].progress).to.equal('Stopping...');
 });
 
+it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updates', async () => {
+  const originalRequestFrame = window.requestAnimationFrame;
+  const originalCancelFrame = window.cancelAnimationFrame;
+  let nextFrame = 1;
+  const frames = new Map<number, FrameRequestCallback>();
+  window.requestAnimationFrame = (callback: FrameRequestCallback): number => {
+    const id = nextFrame;
+    nextFrame += 1;
+    frames.set(id, callback);
+    return id;
+  };
+  window.cancelAnimationFrame = (id: number): void => {
+    frames.delete(id);
+  };
+  const runFrames = (): void => {
+    const pending = [...frames.values()];
+    frames.clear();
+    pending.forEach((callback) => callback(performance.now()));
+  };
+
+  const conversationId = 'conversation-frame-batching';
+  const runId = 'run-frame-batching';
+  const expected = Array.from(
+    {length: 2_000},
+    (_, index) => String.fromCharCode(97 + (index % 26)),
+  ).join('');
+  const chunks: string[] = [];
+  let sequence = 1;
+  chunks.push(`id: ${sequence}\nevent: progress\ndata: {"phase":"planning"}\n\n`);
+  sequence += 1;
+  for (let index = 0; index < expected.length; index += 1) {
+    chunks.push(
+      `id: ${sequence}\nevent: token\ndata: ${JSON.stringify(expected[index])}\n\n`,
+    );
+    sequence += 1;
+    if (index === 499 || index === 1_499) {
+      chunks.push(
+        `id: ${sequence}\nevent: memory_operation_settled\n`
+        + `data: {"operation":"remember","intent_id":"memory-${index}"}\n\n`,
+      );
+      sequence += 1;
+    }
+  }
+  chunks.push(
+    `id: ${sequence}\nevent: done\n`
+    + 'data: {"status":"cancelled","presentation":null}\n\n',
+  );
+  const encoder = new TextEncoder();
+  let chunkIndex = 0;
+  let releaseEvents!: (response: Response) => void;
+  const eventResponse = new Promise<Response>((resolve) => { releaseEvents = resolve; });
+  window.fetch = ((input: RequestInfo | URL) => {
+    if (String(input).endsWith('/events')) return eventResponse;
+    return Promise.resolve(new Response('{}', {status: 503}));
+  }) as typeof fetch;
+  conversationStore.adoptCreatedConversation({
+    conversation_id: conversationId,
+    title: 'Frame batching',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  });
+
+  try {
+    const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+    feature.view = {
+      kind: 'ready',
+      conversationId,
+      lineage: null,
+      history: [{
+        ...storedTurn(),
+        answer_run_id: runId,
+        turn_id: 'turn-frame-batching',
+        status: 'running',
+        presentation: null,
+      }],
+    };
+    const memoryOperations: string[] = [];
+    feature.addEventListener('dl-chat-memory-operation', (event) => {
+      const detail = (event as CustomEvent<{intent_id?: string}>).detail;
+      memoryOperations.push(detail.intent_id ?? '');
+    });
+    document.body.appendChild(feature);
+    await waitFor(() => feature.querySelector('dl-chat-message-list') !== null);
+    await settle(feature);
+    runFrames();
+
+    const turnsProperty = Object.getOwnPropertyDescriptor(
+      Object.getPrototypeOf(feature) as object,
+      'turns',
+    );
+    if (!turnsProperty?.get || !turnsProperty.set) throw new Error('turns accessor unavailable');
+    let turnAssignments = 0;
+    Object.defineProperty(feature, 'turns', {
+      configurable: true,
+      get: () => turnsProperty.get!.call(feature) as readonly ChatTurnView[],
+      set: (value: readonly ChatTurnView[]) => {
+        turnAssignments += 1;
+        turnsProperty.set!.call(feature, value);
+      },
+    });
+    const list = feature.querySelector('dl-chat-message-list') as DlChatMessageList;
+    const instrumentedList = list as unknown as {
+      updated: (changed: Map<PropertyKey, unknown>) => void;
+    };
+    const originalUpdated = instrumentedList.updated.bind(list);
+    let listTurnsUpdates = 0;
+    instrumentedList.updated = (changed) => {
+      if (changed.has('turns')) listTurnsUpdates += 1;
+      originalUpdated(changed);
+    };
+
+    releaseEvents(new Response(new ReadableStream<Uint8Array>({
+      pull(controller): void {
+        if (chunkIndex === chunks.length) {
+          controller.close();
+          return;
+        }
+        if (chunkIndex > 0 && chunkIndex % 500 === 0) runFrames();
+        controller.enqueue(encoder.encode(chunks[chunkIndex]));
+        chunkIndex += 1;
+      },
+    }), {status: 200, headers: {'Content-Type': 'text/event-stream'}}));
+
+    await waitFor(() => feature.turns[0]?.state === 'cancelled');
+    await settle(feature);
+    runFrames();
+
+    expect(feature.turns[0].streamText).to.equal(expected);
+    expect(feature.turns[0].liveStatus).to.equal('Answer stopped');
+    expect(memoryOperations).to.deep.equal(['memory-499', 'memory-1499']);
+    expect(turnAssignments).to.equal(6);
+    expect(listTurnsUpdates).to.equal(5);
+    expect(feature.querySelectorAll('[role="status"]')).to.have.length(1);
+    expect(feature.textContent).to.contain('Stopped');
+  } finally {
+    window.requestAnimationFrame = originalRequestFrame;
+    window.cancelAnimationFrame = originalCancelFrame;
+  }
+});
+
 it('Message List anchors the completed turn at its latest user question', async () => {
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   const earlier: ChatTurnView = {

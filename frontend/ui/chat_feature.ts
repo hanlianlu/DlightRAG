@@ -13,8 +13,11 @@ import {
 import {buildAnswerRequest} from '../lib/answer_request.ts';
 import {answerErrorMessage} from '../lib/errors.ts';
 import {conversationRoute} from '../lib/router.ts';
-import {RunController, type FollowResult} from '../lib/run_controller.ts';
-import {parseData} from '../lib/sse.ts';
+import {
+  RunController,
+  type AnswerRunEvent,
+  type FollowResult,
+} from '../lib/run_controller.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {answerRunStore, payloadFingerprint} from '../stores/answerRunStore.ts';
 import {attachmentStore} from '../stores/attachmentStore.ts';
@@ -475,7 +478,7 @@ export class DlChatFeature extends LightElement {
       result = await this.#runController.follow(
         conversationId,
         runId,
-        (eventType, data) => this.#handleRunEvent(turnId, eventType, data),
+        (events) => this.#handleRunBatch(turnId, events),
       );
     } catch {
       result = {kind: 'error', message: 'Connection error. Please try again.'};
@@ -530,87 +533,97 @@ export class DlChatFeature extends LightElement {
     if (composer?.clearSubmittedText(query)) composer.focusInput();
   }
 
-  #handleRunEvent(turnId: string, eventType: string, data: string): void {
-    if (eventType === 'memory_operation_settled') {
-      const operation = parseData(data);
-      if (isMemoryOperation(operation)) {
-        this.dispatchEvent(new CustomEvent<ChatMemoryOperationDetail>(
-          'dl-chat-memory-operation',
-          {bubbles: true, composed: true, detail: operation},
-        ));
-      }
-      return;
-    }
-    const turn = this.turns.find((candidate) => candidate.id === turnId);
-    if (!turn) return;
-    if (eventType === 'token') {
-      const parsed = parseData(data);
-      const token = typeof parsed === 'string' ? parsed : String(parsed);
-      this.#setTurn(turnId, {
-        state: 'streaming',
-        streamText: turn.streamText + token,
-        progress: turn.streamText ? turn.progress : '',
-        error: '',
-      });
-      return;
-    }
-    if (eventType === 'reset') {
-      this.#setTurn(turnId, {state: 'pending', streamText: '', progress: '', error: ''});
-      return;
-    }
-    if (eventType === 'progress') {
-      const payload = parseData(data) as {phase?: string};
-      const phase = String(payload?.phase || '');
-      const label = answerPhaseLabel(phase);
-      if (label === null) return;
-      this.#setTurn(turnId, {progress: label, liveStatus: label, error: ''});
-      return;
-    }
-    if (eventType === 'tool_start' || eventType === 'tool_progress' || eventType === 'tool_end') {
-      this.#handleToolProgress(turnId, eventType, parseData(data) as ToolProgressPayload);
-      return;
-    }
-    if (eventType === 'error') {
-      this.#setTurnError(turnId, answerErrorMessage(parseData(data)));
-      return;
-    }
-    if (eventType !== 'done') return;
-    const payload = parseData(data);
-    if (!isDonePayload(payload)) {
-      this.#setTurnError(turnId, 'Service error. Please try again.');
-      return;
-    }
-    if (payload.status === 'cancelled') {
-      this.#setTurn(turnId, {state: 'cancelled', progress: '', liveStatus: 'Answer stopped'});
-      return;
-    }
-    if (!payload.presentation) {
-      this.#setTurnError(turnId, 'Service error. Please try again.');
-      return;
-    }
-    this.#setTurn(turnId, {
-      state: 'succeeded',
-      presentation: payload.presentation,
-      streamText: payload.presentation.answer_text,
-      usage: payload.usage ?? {},
-      evidence: payload.evidence ?? {},
-      progress: '',
-      liveStatus: 'Answer ready',
-    });
-  }
+  #handleRunBatch(turnId: string, events: readonly AnswerRunEvent[]): void {
+    const turns = this.turns;
+    const turnIndex = turns.findIndex((candidate) => candidate.id === turnId);
+    const turn = turns[turnIndex];
+    let nextTurn: ChatTurnView | null = null;
+    const currentTurn = (): ChatTurnView => nextTurn ?? turn;
+    const apply = (patch: Partial<ChatTurnView>): void => {
+      if (!nextTurn) nextTurn = {...turn};
+      Object.assign(nextTurn, patch);
+    };
 
-  #handleToolProgress(turnId: string, eventType: ToolEventType, info: ToolProgressPayload): void {
-    if (!info || typeof info.tool_name !== 'string') return;
-    const turn = this.turns.find((candidate) => candidate.id === turnId);
-    if (!turn) return;
-    const label = answerToolEventLabel(eventType);
-    if (label === null) return;
-    this.#setTurn(turnId, {
-      progress: label,
-      liveStatus: label,
-      sawChildren: turn.sawChildren || info.tool_name === 'spawn_agent',
-      error: '',
-    });
+    for (const event of events) {
+      if (event.kind === 'memory') {
+        if (isMemoryOperation(event.payload)) {
+          this.dispatchEvent(new CustomEvent<ChatMemoryOperationDetail>(
+            'dl-chat-memory-operation',
+            {bubbles: true, composed: true, detail: event.payload},
+          ));
+        }
+        continue;
+      }
+      if (!turn) continue;
+      if (event.kind === 'token') {
+        const current = currentTurn();
+        apply({
+          state: 'streaming',
+          streamText: current.streamText + event.text,
+          progress: current.streamText ? current.progress : '',
+          error: '',
+        });
+        continue;
+      }
+      if (event.kind === 'reset') {
+        apply({state: 'pending', streamText: '', progress: '', error: ''});
+        continue;
+      }
+      if (event.kind === 'progress') {
+        const payload = event.payload as {phase?: string};
+        const phase = String(payload?.phase || '');
+        const label = answerPhaseLabel(phase);
+        if (label !== null) apply({progress: label, liveStatus: label, error: ''});
+        continue;
+      }
+      if (event.kind === 'tool') {
+        const info = event.payload as ToolProgressPayload;
+        if (!info || typeof info.tool_name !== 'string') continue;
+        const label = answerToolEventLabel(event.eventType);
+        if (label === null) continue;
+        apply({
+          progress: label,
+          liveStatus: label,
+          sawChildren: currentTurn().sawChildren || info.tool_name === 'spawn_agent',
+          error: '',
+        });
+        continue;
+      }
+      if (event.kind === 'error') {
+        const message = answerErrorMessage(event.payload);
+        apply({state: 'failed', error: message, progress: '', liveStatus: message});
+        continue;
+      }
+      const payload = event.payload;
+      if (!isDonePayload(payload)) {
+        const message = 'Service error. Please try again.';
+        apply({state: 'failed', error: message, progress: '', liveStatus: message});
+        continue;
+      }
+      if (payload.status === 'cancelled') {
+        apply({state: 'cancelled', progress: '', liveStatus: 'Answer stopped'});
+        continue;
+      }
+      if (!payload.presentation) {
+        const message = 'Service error. Please try again.';
+        apply({state: 'failed', error: message, progress: '', liveStatus: message});
+        continue;
+      }
+      apply({
+        state: 'succeeded',
+        presentation: payload.presentation,
+        streamText: payload.presentation.answer_text,
+        usage: payload.usage ?? {},
+        evidence: payload.evidence ?? {},
+        progress: '',
+        liveStatus: 'Answer ready',
+      });
+    }
+
+    if (!nextTurn) return;
+    const nextTurns = [...turns];
+    nextTurns[turnIndex] = nextTurn;
+    this.turns = nextTurns;
   }
 
   #replaceStoredTurn(turnId: string, stored: ConversationTurn): void {
