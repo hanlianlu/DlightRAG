@@ -20,7 +20,7 @@ from dlightrag.adapters.http.browser.attachment_models import (
 from dlightrag.adapters.http.browser.requests import WebAnswerRequest
 from dlightrag.application.answer_runs.capability import (
     AnswerImageCapability,
-    check_answer_image_capability,
+    check_answer_image_count,
 )
 
 # Bound the multipart parse *before* buffering any bodies so a client cannot
@@ -138,12 +138,16 @@ async def parse_web_answer_request(
                     detail="Attachments exceed the total size limit",
                 )
             attachment_inputs.append((str(item.filename), item.content_type, payload))
-        check_answer_image_capability(
+        check_answer_image_count(
             image_count=sum(
                 classify_web_attachment(filename, mime_type) == "image"
                 for filename, mime_type, _payload in attachment_inputs
             ),
-            capability=answer_image_capability,
+            configured_ceiling=(
+                answer_image_capability.configured_ceiling
+                if answer_image_capability is not None
+                else 0
+            ),
         )
         try:
             attachments = await asyncio.to_thread(

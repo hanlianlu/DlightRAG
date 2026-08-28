@@ -17,8 +17,10 @@ from dlightrag.application.answer_runs import (
     AnswerService,
 )
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities, RequestModelContext
+from dlightrag.application.answer_runs.capability import AnswerImageCapability
 from dlightrag.application.answer_runs.errors import (
     AnswerInputOverflowError,
+    CurrentImagePayloadError,
     UnsupportedAnswerModeError,
 )
 from dlightrag.application.answer_runs.execution import AnswerRunInput, AnswerRunRequest
@@ -27,6 +29,7 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.answer.execution import AnswerResourceResolver, AnswerResourceSettings
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.runtime import (
     AnswerRunCancelledError,
@@ -39,6 +42,7 @@ from dlightrag.engine.runtime import (
     RunArtifactReference,
     RunCreation,
 )
+from tests.unit.conftest import answer_image_policy
 
 _OWNER = "owner-1"
 _NOW = datetime.datetime(2026, 8, 17, tzinfo=datetime.UTC)
@@ -293,6 +297,56 @@ class _Capabilities:
         return models, None
 
 
+class _TextQueryInspectCapabilities(_Capabilities):
+    def __init__(self, *, configured_ceiling: int = 3, query_status: str = "unsupported") -> None:
+        super().__init__()
+        self._answer = AnswerImageCapability(
+            status=query_status,  # type: ignore[arg-type]
+            configured_ceiling=configured_ceiling,
+            effective_max_images=configured_ceiling if query_status == "supported" else 0,
+            provider="test",
+            base_url=None,
+            model="text-query",
+            failure_kind=None,
+        )
+
+    async def refresh_answer(self) -> AnswerCapabilities:
+        return AnswerCapabilities(answer=self._answer, vlm_status="supported")
+
+    async def refresh_vlm(self) -> AnswerCapabilities:
+        self.vlm_refreshes += 1
+        return AnswerCapabilities(answer=self._answer, vlm_status="supported")
+
+    def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+        profiles = super().current_profiles()
+        profiles["query"] = ModelProfile(
+            context_window_tokens=_PROFILE.context_window_tokens,
+            max_input_tokens=_PROFILE.max_input_tokens,
+            supports_images=False,
+        )
+        profiles["vlm"] = ModelProfile(
+            context_window_tokens=_PROFILE.context_window_tokens,
+            max_input_tokens=_PROFILE.max_input_tokens,
+            supports_images=True,
+        )
+        return profiles
+
+    def answer_image_policy(self, profile: ModelProfile, /) -> Any:
+        return answer_image_policy(
+            max_images=self._answer.configured_ceiling if profile.supports_images else 0
+        )
+
+    def vlm_image_policy(self, profile: ModelProfile, /) -> Any:
+        return answer_image_policy(
+            max_images=self._answer.configured_ceiling if profile.supports_images else 0
+        )
+
+    async def confirmed_live_answer_context(
+        self, models: RequestModelContext, /
+    ) -> tuple[RequestModelContext, AnswerImageCapability]:
+        return models, self._answer
+
+
 class _SmallProfileCapabilities(_Capabilities):
     """A profile whose physical input cannot preserve Fast's full 40K reserve."""
 
@@ -459,6 +513,207 @@ async def test_fast_acceptance_never_enters_profile_memory_capability() -> None:
     assert prepared["profile_memory_epoch"] == 0
 
 
+async def test_explicit_fast_with_text_query_and_current_image_creates_no_run() -> None:
+    store = _Store()
+    resources = _Resources()
+    service = _service(
+        store=store,
+        capabilities=_TextQueryInspectCapabilities(),
+        resources=resources,
+    )
+
+    with pytest.raises(UnsupportedAnswerModeError):
+        await service.create(
+            request=_request(
+                mode="fast",
+                resources=(
+                    ResourceInput(
+                        filename="chart.png",
+                        content=b"image",
+                        declared_mime="image/png",
+                    ),
+                ),
+            ),
+            owner_id=_OWNER,
+        )
+
+    assert store.created == []
+    assert resources.calls == ["pin_current_image_links"]
+
+
+async def test_auto_text_query_with_inspect_persists_research_only() -> None:
+    store = _Store()
+    service = _service(
+        store=store,
+        capabilities=_TextQueryInspectCapabilities(),
+    )
+
+    await service.create(
+        request=_request(
+            mode="auto",
+            resources=(
+                ResourceInput(
+                    filename="chart.png",
+                    content=b"image",
+                    declared_mime="image/png",
+                ),
+            ),
+        ),
+        owner_id=_OWNER,
+    )
+
+    assert store.created[0]["routing"].valid_modes == ("research",)
+
+
+@pytest.mark.parametrize("mode", ["auto", "fast"])
+async def test_capability_recovered_while_pinning_is_not_rejected_early(mode: str) -> None:
+    class RecoveringCapabilities(_Capabilities):
+        def __init__(self) -> None:
+            super().__init__()
+            self.recovered = False
+
+        def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+            profiles = super().current_profiles()
+            profiles["query"] = ModelProfile(
+                context_window_tokens=_PROFILE.context_window_tokens,
+                max_input_tokens=_PROFILE.max_input_tokens,
+                supports_images=self.recovered,
+            )
+            profiles["vlm"] = ModelProfile(
+                context_window_tokens=_PROFILE.context_window_tokens,
+                max_input_tokens=_PROFILE.max_input_tokens,
+                supports_images=self.recovered,
+            )
+            return profiles
+
+    class RecoveringResources(_Resources):
+        async def pin_current_image_links(
+            self, request: AnswerRunRequest, attachment_bytes: Sequence[bytes], /
+        ) -> tuple[AnswerRunRequest, list[bytes]]:
+            self.calls.append("pin_current_image_links")
+            capabilities.recovered = True
+            return request, list(attachment_bytes)
+
+    store = _Store()
+    capabilities = RecoveringCapabilities()
+    resources = RecoveringResources()
+    service = _service(store=store, capabilities=capabilities, resources=resources)
+
+    await service.create(
+        request=_request(
+            mode=mode,
+            resources=(
+                ResourceInput(
+                    filename="chart.png",
+                    content=b"image",
+                    declared_mime="image/png",
+                ),
+            ),
+        ),
+        owner_id=_OWNER,
+    )
+
+    assert store.created[0]["routing"].valid_modes == ("fast", "research")
+    assert resources.calls[0] == "pin_current_image_links"
+    assert capabilities.vlm_refreshes == 1
+
+
+@pytest.mark.parametrize("mode", ["auto", "fast"])
+async def test_capability_narrowed_while_pinning_recomputes_valid_modes(mode: str) -> None:
+    class NarrowingCapabilities(_Capabilities):
+        def __init__(self) -> None:
+            super().__init__()
+            self.query_narrowed = False
+
+        def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+            profiles = super().current_profiles()
+            profiles["query"] = ModelProfile(
+                context_window_tokens=_PROFILE.context_window_tokens,
+                max_input_tokens=_PROFILE.max_input_tokens,
+                supports_images=not self.query_narrowed,
+            )
+            profiles["vlm"] = ModelProfile(
+                context_window_tokens=_PROFILE.context_window_tokens,
+                max_input_tokens=_PROFILE.max_input_tokens,
+                supports_images=True,
+            )
+            return profiles
+
+    class NarrowingResources(_Resources):
+        async def pin_current_image_links(
+            self, request: AnswerRunRequest, attachment_bytes: Sequence[bytes], /
+        ) -> tuple[AnswerRunRequest, list[bytes]]:
+            self.calls.append("pin_current_image_links")
+            capabilities.query_narrowed = True
+            return request, list(attachment_bytes)
+
+    store = _Store()
+    capabilities = NarrowingCapabilities()
+    resources = NarrowingResources()
+    service = _service(store=store, capabilities=capabilities, resources=resources)
+    request = _request(
+        mode=mode,
+        resources=(
+            ResourceInput(
+                filename="chart.png",
+                content=b"image",
+                declared_mime="image/png",
+            ),
+        ),
+    )
+
+    if mode == "fast":
+        with pytest.raises(UnsupportedAnswerModeError):
+            await service.create(request=request, owner_id=_OWNER)
+        assert store.created == []
+    else:
+        await service.create(request=request, owner_id=_OWNER)
+        assert store.created[0]["routing"].valid_modes == ("research",)
+
+    assert resources.calls[0] == "pin_current_image_links"
+    assert capabilities.vlm_refreshes == 1
+
+
+async def test_service_enforces_image_ceiling_on_text_query_inspect_path() -> None:
+    store = _Store()
+    capabilities = _TextQueryInspectCapabilities(configured_ceiling=1)
+    runtime_models = MagicMock()
+    resolver = AnswerResourceResolver(
+        settings=AnswerResourceSettings(
+            max_attachments=6,
+            max_attachment_bytes=10_000,
+            max_total_attachment_bytes=20_000,
+            image_max_bytes=5_000,
+            image_max_pixels=4_000_000,
+        ),
+        models=runtime_models,
+        capabilities=capabilities,  # type: ignore[arg-type]
+    )
+    service = _service(store=store, capabilities=capabilities, resources=resolver)
+
+    with pytest.raises(CurrentImagePayloadError, match="at most 1"):
+        await service.create(
+            request=_request(
+                mode="auto",
+                resources=(
+                    ResourceInput(
+                        filename="one.png",
+                        content=b"one",
+                        declared_mime="image/png",
+                    ),
+                    ResourceInput(
+                        filename="two.png",
+                        content=b"two",
+                        declared_mime="image/png",
+                    ),
+                ),
+            ),
+            owner_id=_OWNER,
+        )
+
+    assert store.created == []
+
+
 async def test_auto_removes_fast_before_persisting_routing_when_40k_cannot_fit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -585,6 +840,37 @@ async def test_idempotent_replay_returns_before_preparation_and_materialization(
     assert creation is replayed
     assert resources.calls == []
     assert retrieval.calls == []
+    assert store.created == []
+    assert store.replay_calls == 1
+
+
+async def test_idempotent_replay_precedes_live_multimodal_capability_validation() -> None:
+    replayed = RunCreation(run=_record(status="running"), replayed=True)
+    store = _Store(replay=replayed)
+    resources = _Resources()
+    service = _service(
+        store=store,
+        capabilities=_TextQueryInspectCapabilities(),
+        resources=resources,
+    )
+
+    creation = await service.create(
+        request=_request(
+            mode="fast",
+            resources=(
+                ResourceInput(
+                    filename="chart.png",
+                    content=b"image",
+                    declared_mime="image/png",
+                ),
+            ),
+        ),
+        owner_id=_OWNER,
+        idempotency_key="key-image",
+    )
+
+    assert creation is replayed
+    assert resources.calls == []
     assert store.created == []
     assert store.replay_calls == 1
 

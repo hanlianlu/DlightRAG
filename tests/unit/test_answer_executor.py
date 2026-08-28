@@ -11,9 +11,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image
 
-from dlightrag.application.answer_runs.capabilities import AnswerCapabilities
+from dlightrag.application.answer_runs.capabilities import (
+    AnswerCapabilities,
+    RequestModelContext,
+)
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
-from dlightrag.application.answer_runs.errors import CurrentDocumentParseError
+from dlightrag.application.answer_runs.errors import (
+    CurrentDocumentParseError,
+    CurrentImagePayloadError,
+)
 from dlightrag.application.answer_runs.execution import (
     AnswerRunRequest,
     AttachmentReference,
@@ -41,7 +47,10 @@ from dlightrag.engine.answer.execution.executor import (
 )
 from dlightrag.engine.answer.fast import ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
+from dlightrag.engine.answer.resources import ResourceInput
+from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.runtime import RunExecutionError, RunSession, artifact_digest
+from tests.unit.conftest import answer_image_policy
 
 
 @pytest.mark.asyncio
@@ -284,10 +293,65 @@ def _resource_resolver() -> AnswerResourceResolver:
     )
 
 
-def _png_bytes() -> bytes:
+def _png_bytes(color: str = "white") -> bytes:
     buffer = io.BytesIO()
-    Image.new("RGB", (2, 2), "white").save(buffer, format="PNG")
+    Image.new("RGB", (2, 2), color).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def _multimodal_resolver(
+    capability: AnswerImageCapability,
+    *,
+    policy_overrides: Mapping[str, int] | None = None,
+) -> AnswerResourceResolver:
+    models = MagicMock()
+    models.web_search.return_value = None
+    models.vlm_func.return_value = AsyncMock()
+    capabilities = MagicMock()
+    overrides = dict(policy_overrides or {})
+    capabilities.answer_image_policy.side_effect = lambda profile: answer_image_policy(
+        max_images=capability.configured_ceiling if profile.supports_images else 0,
+        **overrides,
+    )
+    capabilities.vlm_image_policy.side_effect = lambda profile: answer_image_policy(
+        max_images=capability.configured_ceiling if profile.supports_images else 0,
+        **overrides,
+    )
+    return AnswerResourceResolver(
+        settings=AnswerResourceSettings(
+            max_attachments=6,
+            max_attachment_bytes=10_000_000,
+            max_total_attachment_bytes=20_000_000,
+            image_max_bytes=5_000_000,
+            image_max_pixels=4_000_000,
+        ),
+        models=models,
+        capabilities=capabilities,
+    )
+
+
+def _image_capability(
+    status: str,
+    *,
+    configured_ceiling: int = 3,
+) -> AnswerImageCapability:
+    return AnswerImageCapability(
+        status=cast(Any, status),
+        configured_ceiling=configured_ceiling,
+        effective_max_images=configured_ceiling if status == "supported" else 0,
+        provider="test",
+        base_url=None,
+        model="test-model",
+        failure_kind=None,
+    )
+
+
+def _request_models(*, query_images: bool, vlm_images: bool) -> RequestModelContext:
+    return RequestModelContext(
+        extract=ModelProfile(context_window_tokens=100_000),
+        query=ModelProfile(context_window_tokens=100_000, supports_images=query_images),
+        vlm=ModelProfile(context_window_tokens=100_000, supports_images=vlm_images),
+    )
 
 
 async def test_memory_recall_allowed_gating() -> None:
@@ -395,7 +459,7 @@ async def test_url_current_image_is_pinned_once_for_durable_replay() -> None:
                 url="https://example.com/chart.png",
                 filename="chart.png",
                 ordinal=0,
-                mime_type="image/png",
+                mime_type=None,
             ),
         ),
         attachments=(
@@ -431,7 +495,124 @@ async def test_url_current_image_is_pinned_once_for_durable_replay() -> None:
     resolver.materialize_link_image.assert_not_awaited()  # type: ignore[attr-defined]
 
 
-async def test_unavailable_url_image_is_durably_demoted_to_an_ordinary_link() -> None:
+async def test_research_multimodal_query_gets_all_raw_images_and_resource_handles() -> None:
+    capability = _image_capability("supported", configured_ceiling=2)
+    resolver = _multimodal_resolver(capability)
+    models = _request_models(query_images=True, vlm_images=True)
+    resources = [
+        ResourceInput(filename="white.png", content=_png_bytes("white"), declared_mime="image/png"),
+        ResourceInput(filename="black.png", content=_png_bytes("black"), declared_mime="image/png"),
+    ]
+
+    resolved = await resolver.resolve(
+        resources,
+        models=models,
+        text_window_budget=TextWindowBudget(10_000),
+        confirm_image_context=AsyncMock(return_value=(models, capability)),
+        resolved_mode="research",
+    )
+
+    try:
+        assert [block["type"] for block in resolved.query_images or ()] == [
+            "text",
+            "image_url",
+            "text",
+            "image_url",
+        ]
+        assert len(resolved.resource_manifest) == 2
+        assert all(
+            entry.resource_id in str(resolved.query_images) for entry in resolved.resource_manifest
+        )
+    finally:
+        assert resolved.registry is not None
+        await resolved.registry.aclose()
+
+
+@pytest.mark.parametrize("query_status", ["unsupported", "unknown"])
+async def test_research_text_query_with_inspect_gets_zero_raw_and_all_handles(
+    query_status: str,
+) -> None:
+    capability = _image_capability(query_status, configured_ceiling=2)
+    resolver = _multimodal_resolver(capability)
+    models = _request_models(query_images=False, vlm_images=True)
+    resources = [
+        ResourceInput(filename="white.png", content=_png_bytes("white"), declared_mime="image/png"),
+        ResourceInput(filename="black.png", content=_png_bytes("black"), declared_mime="image/png"),
+    ]
+
+    resolved = await resolver.resolve(
+        resources,
+        models=models,
+        text_window_budget=TextWindowBudget(10_000),
+        confirm_image_context=AsyncMock(return_value=(models, capability)),
+        resolved_mode="research",
+    )
+
+    try:
+        assert resolved.query_images is None
+        assert len(resolved.resource_manifest) == 2
+        assert "inspect" in {tool.name for tool in resolved.resource_tools}
+    finally:
+        assert resolved.registry is not None
+        await resolved.registry.aclose()
+
+
+async def test_research_inspect_still_enforces_configured_image_count() -> None:
+    capability = _image_capability("unsupported", configured_ceiling=1)
+    resolver = _multimodal_resolver(capability)
+    models = _request_models(query_images=False, vlm_images=True)
+
+    with pytest.raises(CurrentImagePayloadError, match="at most 1"):
+        await resolver.resolve(
+            [
+                ResourceInput(
+                    filename="white.png",
+                    content=_png_bytes("white"),
+                    declared_mime="image/png",
+                ),
+                ResourceInput(
+                    filename="black.png",
+                    content=_png_bytes("black"),
+                    declared_mime="image/png",
+                ),
+            ],
+            models=models,
+            text_window_budget=TextWindowBudget(10_000),
+            confirm_image_context=AsyncMock(return_value=(models, capability)),
+            resolved_mode="research",
+        )
+
+
+async def test_research_current_image_budget_is_all_or_error() -> None:
+    first = _png_bytes("white")
+    capability = _image_capability("supported", configured_ceiling=2)
+    resolver = _multimodal_resolver(
+        capability,
+        policy_overrides={
+            "max_total_bytes": len(first),
+            "max_bytes_per_image": len(first),
+        },
+    )
+    models = _request_models(query_images=True, vlm_images=True)
+
+    with pytest.raises(CurrentImagePayloadError, match="query_image_2"):
+        await resolver.resolve(
+            [
+                ResourceInput(filename="one.png", content=first, declared_mime="image/png"),
+                ResourceInput(
+                    filename="two.png",
+                    content=_png_bytes("black"),
+                    declared_mime="image/png",
+                ),
+            ],
+            models=models,
+            text_window_budget=TextWindowBudget(10_000),
+            confirm_image_context=AsyncMock(return_value=(models, capability)),
+            resolved_mode="research",
+        )
+
+
+async def test_unavailable_url_image_rejects_the_whole_current_request() -> None:
     resolver = _resource_resolver()
     materialize = AsyncMock(return_value=None)
     resolver.materialize_link_image = materialize  # type: ignore[method-assign]
@@ -439,25 +620,17 @@ async def test_unavailable_url_image_is_durably_demoted_to_an_ordinary_link() ->
         query="inspect",
         links=(
             LinkReference(
-                url="https://example.com/chart.png",
-                filename="chart.png",
+                url="https://example.com/chart.png?version=1",
+                filename=None,
                 ordinal=0,
-                mime_type="image/png",
+                mime_type=None,
             ),
         ),
     )
 
-    pinned, artifacts = await resolver.pin_current_image_links(request, ())
-    resources = await build_current_answer_resources(
-        links=pinned.links,
-        attachments=pinned.attachments,
-        attachment_loaders=(),
-    )
-    images, _remaining, _image_resources = await resolver.prepare_current_images(resources)
+    with pytest.raises(CurrentImagePayloadError, match="could not be fetched and verified"):
+        await resolver.pin_current_image_links(request, ())
 
-    assert artifacts == []
-    assert pinned.links[0].mime_type is None
-    assert images == []
     materialize.assert_awaited_once()
 
 

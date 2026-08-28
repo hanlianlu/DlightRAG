@@ -27,6 +27,7 @@ from dlightrag.application.answer_runs.mode import (
     ModeCapability,
     ModeResource,
     ResolvedMode,
+    canonical_answer_mode,
     require_supported_mode,
     resource_role,
     valid_modes,
@@ -531,7 +532,10 @@ class AnswerService:
         fingerprint = idempotency_fingerprint or answer_run_request_fingerprint(
             run_request.as_request()
         )
-        requested_mode, allowed_modes = self._reject_unsupported_mode(run_request)
+        # Canonical mode syntax is capability-independent and may be checked
+        # before replay. Live capability validation must wait until after the
+        # answer/VLM refreshes below because an unknown probe can recover.
+        requested_mode = canonical_answer_mode(run_request.mode)
         if idempotency_key is not None:
             replay = await acceptor.replay_run(
                 owner_id=owner_id,
@@ -546,6 +550,12 @@ class AnswerService:
             run_request,
             _attachment_bytes(request.resources),
         )
+        if run_request.links or run_request.attachments or run_request.history_attachments:
+            await self._capabilities.refresh_vlm()
+        # Pinning may narrow the live query profile, and the VLM refresh may
+        # remove inspect. This is the authoritative Valid Mode Set persisted
+        # with the run; the earlier check only avoids needless acceptance I/O.
+        requested_mode, allowed_modes = self._reject_unsupported_mode(run_request)
         acceptance_resources = await build_current_answer_resources(
             links=run_request.links,
             attachments=run_request.attachments,
@@ -1149,8 +1159,6 @@ class AnswerService:
         memory_enabled: bool = True,
     ) -> _AcceptanceProjection:
         """Resolve the exact shared-history envelopes without building the run rig."""
-        if resources:
-            await self._capabilities.refresh_vlm()
         model_profiles = self._capabilities.current_profiles()
         models = self._capabilities.request_model_context(model_profiles)
         planner = self._retrieval.planner_for(models.extract)
@@ -1203,15 +1211,25 @@ class AnswerService:
                     context_policy=CONTEXT_POLICY,
                     model_func=None,
                 )
+                fast_generation_measure = (
+                    synthesizer.history_input_measure(
+                        request.query,
+                        memory_text="",
+                        episodic_summary=request.episodic_summary,
+                        current_images=resolved.current_images,
+                    )
+                    if resolved.current_images
+                    else synthesizer.history_input_measure(
+                        request.query,
+                        memory_text="",
+                        episodic_summary=request.episodic_summary,
+                    )
+                )
                 fast_targets.append(
                     HistoryProjectionTarget(
                         "fast_generation",
                         models.query,
-                        synthesizer.history_input_measure(
-                            request.query,
-                            memory_text="",
-                            episodic_summary=request.episodic_summary,
-                        ),
+                        fast_generation_measure,
                         proactive_compaction=True,
                         require_full_dynamic_reserve=True,
                     )

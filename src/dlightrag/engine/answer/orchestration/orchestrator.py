@@ -300,11 +300,10 @@ class AnswerOrchestrator:
         if self._resolved_mode != "fast":
             raise RuntimeError("Research must be driven by AgentSessionRuntime")
         limits = boundaries or _NoPhaseBoundaries()
-        if query_images:
-            raise RuntimeError("Current images require request resources")
         return await self._fast_answer_stream(
             query,
             conversation_history=conversation_history,
+            query_images=query_images,
             boundaries=limits,
         )
 
@@ -317,6 +316,7 @@ class AnswerOrchestrator:
         query: str,
         *,
         conversation_history: PriorTurns | None,
+        query_images: list[dict[str, Any]] | None,
         boundaries: PhaseBoundaries,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         await boundaries.enter_phase("searching")
@@ -328,6 +328,7 @@ class AnswerOrchestrator:
             retrieval.contexts,
             conversation_history=conversation_history,
             memory_text=self._memory_text,
+            current_images=query_images,
         )
         if stream is not None:
             existing = getattr(stream, "trace", None)

@@ -6,11 +6,13 @@ import pytest
 from dlightrag.application.answer_runs.capability import (
     AnswerImageCapability,
     check_answer_image_capability,
+    check_answer_image_count,
 )
 from dlightrag.application.answer_runs.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,
+    CurrentImagePayloadError,
 )
 from dlightrag.engine.ai.vision import ImageCapabilityStatus
 
@@ -66,3 +68,8 @@ class TestAnswerImageCapabilityGuard:
                 capability=None,
             )
         assert exc.value.error_kind == ANSWER_IMAGE_CAPABILITY_UNKNOWN
+
+    def test_configured_ceiling_is_independent_of_query_model_support(self) -> None:
+        check_answer_image_count(image_count=1, configured_ceiling=1)
+        with pytest.raises(CurrentImagePayloadError, match="at most 1"):
+            check_answer_image_count(image_count=2, configured_ceiling=1)

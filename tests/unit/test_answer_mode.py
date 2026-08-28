@@ -14,6 +14,7 @@ from dlightrag.application.answer_runs.mode import (
     ModeResource,
     canonical_answer_mode,
     require_supported_mode,
+    resource_role,
     valid_modes,
 )
 from dlightrag.engine.runtime import answer_run_request_fingerprint
@@ -29,6 +30,16 @@ def test_omitted_mode_canonicalizes_to_auto_and_matches_explicit_auto_fingerprin
     )
     assert AnswerRequestContract(query="q").mode is None
     assert AnswerRequestContract(query="q", mode="research").mode == "research"
+
+
+def test_image_url_path_is_classified_without_a_declared_mime() -> None:
+    assert (
+        resource_role(
+            filename="https://example.com/chart.PNG?version=1",
+            mime_type=None,
+        )
+        == "image"
+    )
 
 
 def test_explicit_fast_with_pdf_is_unsupported_answer_mode() -> None:

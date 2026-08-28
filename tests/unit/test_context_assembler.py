@@ -14,6 +14,7 @@ from dlightrag.engine.answer.execution import research_history_input_measure
 from dlightrag.engine.answer.memory import reserved_auto_recall_text
 from dlightrag.engine.answer.prompts import CONTROL_TURN_INSTRUCTION
 from dlightrag.engine.answer.research.context import ContextAssembler
+from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 
 _WINDOW = 80_000
 _RETAINED_TAIL = 13_600
@@ -27,6 +28,34 @@ def _assembler(history: list[dict[str, Any]]) -> ContextAssembler:
         query_images=None,
         resource_manifest=(),
     )
+
+
+async def test_research_question_keeps_all_raw_current_images_and_resource_handles() -> None:
+    images = [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AQ=="}},
+    ]
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW),
+        query="Compare the images",
+        history=PriorTurns(),
+        query_images=images,
+        resource_manifest=(
+            ResourceManifestEntry("resource_one", "one.png", "image/png", "bytes", 1),
+            ResourceManifestEntry("resource_two", "two.png", "image/png", "bytes", 1),
+        ),
+    )
+
+    messages = await assembler.control_turn(
+        evidence=EvidenceLedger(),
+        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        tool_schema_tokens=0,
+    )
+
+    question = messages[1]["content"]
+    assert [block["type"] for block in question] == ["text", "text", "image_url", "image_url"]
+    assert "resource_one" in question[1]["text"]
+    assert "resource_two" in question[1]["text"]
 
 
 def _long_history(turns: int, *, chars: int = 4_000) -> list[dict[str, Any]]:

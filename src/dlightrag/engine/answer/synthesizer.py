@@ -23,7 +23,10 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
+from dlightrag.application.answer_runs.errors import (
+    AnswerInputOverflowError,
+    CurrentImagePayloadError,
+)
 from dlightrag.engine.agent.context import ContextContribution, ContextProjector
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
@@ -68,8 +71,8 @@ class AnswerSynthesizer:
     """Mode-agnostic final answer generator with citation support.
 
     Accepts a single ``model_func`` that speaks the messages-first interface.
-    Images found in chunks are inlined as ``image_url`` content blocks -- no
-    separate VLM routing is needed.
+    Current-request and chunk images are inlined as ``image_url`` content blocks
+    under one budget -- no separate VLM routing is needed.
 
     ``generate_stream()`` uses the unified freetext system prompt and identical
     evidence preparation. Sources are projected from validated inline ``[n]``
@@ -94,6 +97,7 @@ class AnswerSynthesizer:
         query: str,
         memory_text: str = "",
         episodic_summary: str = "",
+        current_images: list[dict[str, Any]] | None = None,
     ) -> Callable[..., int]:
         """Return the exact zero-evidence final-call serializer for history fitting."""
 
@@ -102,6 +106,10 @@ class AnswerSynthesizer:
             projected_summary: str = "",
         ) -> int:
             budget = self._image_policy.new_budget()
+            current_image_blocks = self._prepare_current_image_blocks(
+                current_images,
+                image_budget=budget,
+            )
             empty_contexts: RetrievalContexts = {
                 "chunks": [],
                 "entities": [],
@@ -121,6 +129,7 @@ class AnswerSynthesizer:
                 answer_core(),
                 prepared.user_prompt,
                 excerpt_blocks,
+                current_image_blocks=current_image_blocks,
                 history_messages=history,
                 episodic_summary="\n\n".join(
                     part for part in (episodic_summary, projected_summary) if part.strip()
@@ -141,6 +150,7 @@ class AnswerSynthesizer:
         contexts: RetrievalContexts,
         conversation_history: PriorTurns | None = None,
         memory_text: str = "",
+        current_images: list[dict[str, Any]] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming final answer generation.
 
@@ -158,6 +168,7 @@ class AnswerSynthesizer:
             contexts,
             conversation_history=conversation_history,
             memory_text=memory_text,
+            current_images=current_images,
         )
 
         logger.info(
@@ -200,6 +211,7 @@ class AnswerSynthesizer:
         *,
         conversation_history: PriorTurns | None = None,
         memory_text: str = "",
+        current_images: list[dict[str, Any]] | None = None,
     ) -> _PreparedModelCall:
         prior_turns = conversation_history or PriorTurns()
         original_history = list(prior_turns.messages)
@@ -211,6 +223,10 @@ class AnswerSynthesizer:
             filter_graph_by_chunks: bool = True,
         ) -> tuple[_PreparedModelCall, int, int]:
             budget = self._image_policy.new_budget()
+            current_image_blocks = self._prepare_current_image_blocks(
+                current_images,
+                image_budget=budget,
+            )
             prepared = self._prepare_prompt_context(
                 query,
                 candidate_contexts,
@@ -222,7 +238,11 @@ class AnswerSynthesizer:
             )
             if no_context:
                 prepared.trace["answer_no_context"] = True
-            self._apply_image_trace(prepared.trace, budget=budget)
+            self._apply_image_trace(
+                prepared.trace,
+                budget=budget,
+                current_image_count=len(current_images or ()),
+            )
             excerpt_blocks = self._build_excerpt_blocks(
                 prepared.contexts,
                 prepared.indexer,
@@ -232,6 +252,7 @@ class AnswerSynthesizer:
                 answer_core(),
                 prepared.user_prompt,
                 excerpt_blocks,
+                current_image_blocks=current_image_blocks,
                 history_messages=history,
                 episodic_summary=prior_turns.episodic_summary,
                 memory_text=memory_text,
@@ -306,6 +327,7 @@ class AnswerSynthesizer:
         user_prompt: str,
         excerpt_blocks: list[dict[str, Any]],
         *,
+        current_image_blocks: list[dict[str, Any]] | None = None,
         history_messages: list[dict[str, Any]],
         episodic_summary: str = "",
         memory_text: str = "",
@@ -316,6 +338,7 @@ class AnswerSynthesizer:
         current request — never inside the system prompt (Pi/Kimi convention).
         """
         content: list[dict[str, Any]] = []
+        content.extend(current_image_blocks or ())
         content.extend(excerpt_blocks)
         content.append({"type": "text", "text": user_prompt})
         contributions = [
@@ -363,15 +386,37 @@ class AnswerSynthesizer:
         return list(ContextProjector().project(contributions).messages)
 
     @staticmethod
+    def _prepare_current_image_blocks(
+        current_images: list[dict[str, Any]] | None,
+        *,
+        image_budget: AnswerImageBudget,
+    ) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        for index, image in enumerate(current_images or (), start=1):
+            bounded = image_budget.add_user_image(image, label=f"current_image_{index}")
+            if bounded is None:
+                raise CurrentImagePayloadError(
+                    f"current image current_image_{index} could not fit the answer image budget"
+                )
+            blocks.extend(
+                (
+                    {"type": "text", "text": f"[current image {index}]"},
+                    bounded,
+                )
+            )
+        return blocks
+
+    @staticmethod
     def _apply_image_trace(
         trace: dict[str, Any],
         *,
         budget: AnswerImageBudget,
+        current_image_count: int,
     ) -> None:
         rag_context = int(trace.get("answer_context_images_sent", 0))
-        trace["answer_images_current"] = 0
+        trace["answer_images_current"] = current_image_count
         trace["answer_images_rag"] = rag_context
-        trace["answer_images_total"] = rag_context
+        trace["answer_images_total"] = current_image_count + rag_context
         trace["answer_image_budget_used_bytes"] = budget.used_bytes
 
     def _prepare_prompt_context(

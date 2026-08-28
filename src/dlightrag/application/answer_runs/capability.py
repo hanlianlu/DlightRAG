@@ -2,9 +2,10 @@
 """Answer-model image capability, discovered at startup (never persisted).
 
 The startup probe records whether the *query-role* answer model accepts
-``image_url`` blocks and how many, as a genuine tri-state.  This drives the
-unified answer image transport budget and the Web upload gate; it is
-re-validated every process start rather than cached in any store.
+``image_url`` blocks as a genuine tri-state. The configured ceiling remains a
+request-ingress fact even when Research routes images through inspect instead;
+raw query-model transport additionally requires confirmed query-role support.
+Capability is re-validated every process start rather than cached in any store.
 """
 
 from __future__ import annotations
@@ -56,12 +57,19 @@ class AnswerImageCapability:
     failure_kind: str | None
 
 
+def check_answer_image_count(*, image_count: int, configured_ceiling: int) -> None:
+    """Enforce deployment image admission independently of model capability."""
+    ceiling = max(0, configured_ceiling)
+    if image_count > ceiling:
+        raise CurrentImagePayloadError(f"at most {ceiling} current images are allowed")
+
+
 def check_answer_image_capability(
     *,
     image_count: int,
     capability: AnswerImageCapability | None,
 ) -> None:
-    """Reject images unless the query-role answer model is confirmed to accept them."""
+    """Reject raw images unless the query-role model is confirmed to accept them."""
     if image_count <= 0:
         return
     if capability is None or capability.status == "unknown":
@@ -73,10 +81,6 @@ def check_answer_image_capability(
         raise AnswerImageError(
             f"[IMAGES_NOT_SUPPORTED_BY_MODEL] {_ERROR_IMAGES_NOT_SUPPORTED}",
             error_kind=CURRENT_IMAGES_UNSUPPORTED,
-        )
-    if image_count > capability.effective_max_images:
-        raise CurrentImagePayloadError(
-            f"at most {capability.effective_max_images} current images are allowed"
         )
 
 
@@ -109,5 +113,6 @@ __all__ = [
     "AnswerImageCapability",
     "answer_image_capability_summary",
     "check_answer_image_capability",
+    "check_answer_image_count",
     "derive_effective_max_images",
 ]

@@ -18,6 +18,7 @@ from dlightrag.application.answer_runs.capabilities import (
 from dlightrag.application.answer_runs.capability import (
     AnswerImageCapability,
     check_answer_image_capability,
+    check_answer_image_count,
 )
 from dlightrag.application.answer_runs.errors import (
     AnswerInputError,
@@ -267,39 +268,48 @@ class AnswerResourceResolver:
         if len(request.attachments) != len(attachment_bytes):
             raise ValueError("current attachment references and bytes must have equal length")
         image_count = sum(
-            1
+            resource_role(filename=attachment.filename, mime_type=attachment.mime_type) == "image"
             for attachment in request.attachments
-            if attachment.mime_type.strip().casefold().startswith("image/")
         ) + sum(
-            1
+            resource_role(filename=link.filename or link.url, mime_type=link.mime_type) == "image"
             for link in request.links
-            if (link.mime_type or "").strip().casefold().startswith("image/")
         )
         if image_count:
             capabilities = await self._capabilities.refresh_answer()
-            check_answer_image_capability(
+            check_answer_image_count(
                 image_count=image_count,
-                capability=capabilities.answer,
+                configured_ceiling=(
+                    capabilities.answer.configured_ceiling if capabilities.answer is not None else 0
+                ),
             )
         links: list[LinkReference] = []
         pinned_link_attachments: list[AttachmentReference] = []
         pinned_link_bytes: list[bytes] = []
         for link in request.links:
-            if not (link.mime_type or "").strip().casefold().startswith("image/"):
+            if (
+                resource_role(
+                    filename=link.filename or link.url,
+                    mime_type=link.mime_type,
+                )
+                != "image"
+            ):
                 links.append(link)
                 continue
             data = await self.materialize_link_image(link.url)
+            if data is None:
+                raise CurrentImagePayloadError(
+                    f"current image {link.filename or link.url} could not be fetched and verified"
+                )
             try:
-                if data is None:
-                    raise ValueError("image link did not materialize")
                 mime_type, _data_uri = await asyncio.to_thread(
                     _verified_current_image_data_uri,
                     data,
                     max_pixels=self._settings.image_max_pixels,
                 )
-            except ValueError:
-                links.append(replace(link, mime_type=None))
-                continue
+            except ValueError as exc:
+                raise CurrentImagePayloadError(
+                    f"current image {link.filename or link.url} {exc}"
+                ) from exc
             pinned_link_attachments.append(
                 AttachmentReference(
                     digest=artifact_digest(data),
@@ -345,14 +355,20 @@ class AnswerResourceResolver:
             1
             for resource in resources or ()
             if resource.loader is None
-            and (resource.declared_mime or "").lower().startswith("image/")
+            and resource_role(
+                filename=resource.filename or resource.url,
+                mime_type=resource.declared_mime,
+            )
+            == "image"
         )
         image_capability: AnswerImageCapability | None = None
         if declared_image_count:
             models, image_capability = await confirm_image_context(models)
-            check_answer_image_capability(
+            self._check_current_image_admission(
                 image_count=declared_image_count,
                 capability=image_capability,
+                models=models,
+                resolved_mode=resolved_mode,
             )
         (
             current_images,
@@ -361,9 +377,11 @@ class AnswerResourceResolver:
         ) = await self.prepare_current_images(resources)
         if current_images and not declared_image_count:
             models, image_capability = await confirm_image_context(models)
-        check_answer_image_capability(
+        self._check_current_image_admission(
             image_count=len(current_images),
             capability=image_capability,
+            models=models,
+            resolved_mode=resolved_mode,
         )
 
         web_search = self._models.web_search()
@@ -385,14 +403,19 @@ class AnswerResourceResolver:
             query_images: list[dict[str, Any]] | None = current_images or None
             if resolved_mode == "research":
                 image_budget = self._capabilities.answer_image_policy(models.query).new_budget()
-                query_images = (
-                    await self.budget_agent_images(
-                        current_images,
-                        image_budget,
-                        current_image_resource_ids,
+                if image_capability is not None and image_capability.status == "supported":
+                    query_images = (
+                        await self.budget_agent_images(
+                            current_images,
+                            image_budget,
+                            current_image_resource_ids,
+                        )
+                        or None
                     )
-                    or None
-                )
+                else:
+                    inspect_budget = self._capabilities.vlm_image_policy(models.vlm).new_budget()
+                    await self.budget_agent_images(current_images, inspect_budget)
+                    query_images = None
             return ResolvedAnswerResources(
                 models=models,
                 web_search=web_search,
@@ -426,11 +449,28 @@ class AnswerResourceResolver:
                 continue
             if resource.content is not None:
                 data = resource.content
-            elif resource.url is not None and (resource.declared_mime or "").lower().startswith(
-                "image/"
+            elif (
+                resource.url is not None
+                and resource_role(
+                    filename=resource.filename or resource.url,
+                    mime_type=resource.declared_mime,
+                )
+                == "image"
             ):
                 data = await self.materialize_link_image(resource.url)
             if data is None:
+                if (
+                    resource.url is not None
+                    and resource_role(
+                        filename=resource.filename or resource.url,
+                        mime_type=resource.declared_mime,
+                    )
+                    == "image"
+                ):
+                    raise CurrentImagePayloadError(
+                        f"current image {resource.filename or resource.url} "
+                        "could not be fetched and verified"
+                    )
                 remaining.append(resource)
                 continue
             try:
@@ -439,7 +479,17 @@ class AnswerResourceResolver:
                     data,
                     max_pixels=self._settings.image_max_pixels,
                 )
-            except ValueError:
+            except ValueError as exc:
+                if (
+                    resource_role(
+                        filename=resource.filename or resource.url,
+                        mime_type=resource.declared_mime,
+                    )
+                    == "image"
+                ):
+                    raise CurrentImagePayloadError(
+                        f"current image {resource.filename or len(images) + 1} {exc}"
+                    ) from exc
                 remaining.append(resource)
                 continue
             images.append({"type": "image_url", "image_url": {"url": data_uri}})
@@ -451,6 +501,29 @@ class AnswerResourceResolver:
             remaining.append(image_resource)
             image_resources.append(image_resource)
         return images, remaining, image_resources
+
+    @staticmethod
+    def _check_current_image_admission(
+        *,
+        image_count: int,
+        capability: AnswerImageCapability | None,
+        models: RequestModelContext,
+        resolved_mode: ResolvedMode,
+    ) -> None:
+        if image_count <= 0:
+            return
+        if capability is None:
+            check_answer_image_capability(image_count=image_count, capability=None)
+            return
+        check_answer_image_count(
+            image_count=image_count,
+            configured_ceiling=capability.configured_ceiling,
+        )
+        if resolved_mode == "fast" or not models.vlm.supports_images:
+            check_answer_image_capability(
+                image_count=image_count,
+                capability=capability,
+            )
 
     async def materialize_link_image(self, url: str) -> bytes | None:
         """Fetch one current-image link under SSRF revalidation."""
@@ -1262,6 +1335,7 @@ class AnswerExecutor:
                     contexts, stream = await run.orchestrator.answer_stream(
                         request.query,
                         conversation_history=run.history,
+                        query_images=run.query_images,
                         boundaries=fast_boundaries,
                     )
                 answer_parts: list[str] = []
@@ -1493,6 +1567,15 @@ class AnswerExecutor:
                     current_image_descriptions=image_descriptions,
                     preserve_query=None,
                 )
+                synthesizer = self._models.answer_synthesizer(models.query)
+                generation_measure = (
+                    synthesizer.history_input_measure(
+                        query,
+                        current_images=resolved.current_images,
+                    )
+                    if resolved.current_images
+                    else synthesizer.history_input_measure(query)
+                )
                 fast_history_targets = (
                     HistoryProjectionTarget(
                         "planner",
@@ -1504,7 +1587,7 @@ class AnswerExecutor:
                     HistoryProjectionTarget(
                         "fast_generation",
                         models.query,
-                        self._models.answer_synthesizer(models.query).history_input_measure(query),
+                        generation_measure,
                         proactive_compaction=True,
                         require_full_dynamic_reserve=True,
                     ),

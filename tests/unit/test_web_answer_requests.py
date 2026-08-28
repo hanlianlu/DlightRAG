@@ -35,6 +35,18 @@ def _supported_capability() -> AnswerImageCapability:
     )
 
 
+def _text_only_capability() -> AnswerImageCapability:
+    return AnswerImageCapability(
+        status="unsupported",
+        configured_ceiling=8,
+        effective_max_images=0,
+        provider="test",
+        base_url=None,
+        model="text-test",
+        failure_kind="profile_declared_unsupported",
+    )
+
+
 def _multipart_payload(
     *,
     boundary: str,
@@ -183,6 +195,37 @@ async def test_parse_multipart_web_answer_request_reads_ordered_attachments() ->
             {"filename": "report.pdf", "kind": "document"},
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_research_image_ingress_does_not_require_query_model_raw_support() -> None:
+    app = FastAPI()
+
+    @app.post("/probe")
+    async def probe(request: Request):
+        body = await parse_web_answer_request(
+            request,
+            max_attachments=6,
+            max_attachment_bytes=_IMAGE_MAX_BYTES,
+            max_total_attachment_bytes=128 * 1024 * 1024,
+            image_max_pixels=40_000_000,
+            answer_image_capability=_text_only_capability(),
+        )
+        return {"attachments": len(body.attachments), "mode": body.mode}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/probe",
+            data={
+                "query": "inspect this",
+                "submission_id": str(uuid4()),
+                "mode": "research",
+            },
+            files=[("attachments", ("chart.png", _png_bytes(), "image/png"))],
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"attachments": 1, "mode": "research"}
 
 
 @pytest.mark.asyncio

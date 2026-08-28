@@ -56,12 +56,17 @@ async def test_fast_path_retrieves_then_streams_one_synthesis() -> None:
     synthesizer = MagicMock(spec=AnswerSynthesizer)
     synthesizer.generate_stream = AsyncMock(return_value=(retrieval.contexts, Stream()))
     orchestrator = _orchestrator(mode="fast", retrieve=retrieve, synthesizer=synthesizer)
-    contexts, stream = await orchestrator.answer_stream("question")
+    query_images = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]
+    contexts, stream = await orchestrator.answer_stream(
+        "question",
+        query_images=query_images,
+    )
     assert contexts == retrieval.contexts
     assert stream is not None
     assert [chunk async for chunk in stream] == ["answer"]
     assert retrieve_calls == 1
     synthesizer.generate_stream.assert_awaited_once()
+    assert synthesizer.generate_stream.await_args.kwargs["current_images"] == query_images
 
 
 @pytest.mark.asyncio

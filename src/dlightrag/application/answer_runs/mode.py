@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from urllib.parse import urlsplit
 
 from dlightrag.application.answer_runs.errors import (
     UnsupportedAnswerModeError,
@@ -47,7 +48,7 @@ def canonical_answer_mode(mode: str | None) -> AnswerMode:
 def resource_role(*, filename: str | None, mime_type: str | None) -> ResourceRole:
     """Classify one attachment or link for Fast representability."""
     mime = (mime_type or "").lower()
-    name = (filename or "").lower()
+    name = urlsplit(filename or "").path.lower()
     if mime.startswith(_IMAGE_PREFIX) or name.endswith(_IMAGE_SUFFIXES):
         return "image"
     if filename or mime:

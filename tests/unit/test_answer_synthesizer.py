@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
+from dlightrag.application.answer_runs.errors import (
+    AnswerInputOverflowError,
+    CurrentImagePayloadError,
+)
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.engine.ai.scheduler import ModelScheduler
@@ -239,6 +242,96 @@ class TestAnswerSynthesizerPolicy:
         user_content = model_func.call_args.kwargs["messages"][1]["content"]
         assert any(item.get("type") == "image_url" for item in user_content)
         assert any(item.get("type") == "text" for item in user_content)
+
+    @pytest.mark.asyncio
+    async def test_current_images_share_the_final_serializer_budget_and_trace(self) -> None:
+        model_func = _stream_func("ok")
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(max_images=3),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
+        current_images = [_image_block(), _image_block()]
+
+        _, stream = await synth.generate_stream(
+            "describe",
+            _image_contexts(),
+            conversation_history=PriorTurns(
+                [{"role": "user", "content": "Earlier text-only question"}]
+            ),
+            current_images=current_images,
+        )
+
+        messages = model_func.call_args.kwargs["messages"]
+        image_blocks = [
+            block
+            for message in messages
+            for block in (
+                message.get("content") if isinstance(message.get("content"), list) else []
+            )
+            if block.get("type") == "image_url"
+        ]
+        current_message = messages[-1]["content"]
+        assert len(image_blocks) == 3
+        assert [block["text"] for block in current_message if block.get("type") == "text"][:2] == [
+            "[current image 1]",
+            "[current image 2]",
+        ]
+        assert (
+            sum(
+                "## Question\ndescribe" in str(block.get("text", ""))
+                for message in messages
+                for block in (
+                    message.get("content") if isinstance(message.get("content"), list) else []
+                )
+            )
+            == 1
+        )
+        assert cast(Any, stream).trace["answer_images_current"] == 2
+        assert cast(Any, stream).trace["answer_images_rag"] == 1
+        assert cast(Any, stream).trace["answer_images_total"] == 3
+
+    def test_history_measure_uses_the_exact_current_image_serializer(self) -> None:
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(max_images=2),
+            model_profile=answer_model_profile(),
+        )
+        current_images = [_image_block(), _image_block()]
+
+        measured = synth.history_input_measure(
+            "question",
+            current_images=current_images,
+        )([])
+        prepared = synth._prepare_model_call(
+            "question",
+            {"chunks": [], "entities": [], "relationships": []},
+            current_images=current_images,
+        )
+
+        assert measured == prepared.trace["answer_input_tokens"]
+        assert [
+            block["type"]
+            for block in prepared.messages[-1]["content"]
+            if block.get("type") in {"text", "image_url"}
+        ][:4] == ["text", "image_url", "text", "image_url"]
+
+    @pytest.mark.asyncio
+    async def test_current_images_are_all_or_error_before_provider_output(self) -> None:
+        model_func = _stream_func("must not run")
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(max_images=1),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
+
+        with pytest.raises(CurrentImagePayloadError, match="current_image_2"):
+            await synth.generate_stream(
+                "describe",
+                {"chunks": [], "entities": [], "relationships": []},
+                current_images=[_image_block(), _image_block()],
+            )
+
+        model_func.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_each_call_gets_a_fresh_budget_from_one_policy(self) -> None:
