@@ -364,12 +364,10 @@ class EvidenceLedger:
 
 
 def _chunk_evidence_cost(row: ContextRow) -> int:
+    """Measure text only; image capacity is governed by resolved image policy."""
     from dlightrag.engine.ai.tokens import estimate_tokens
 
-    cost = estimate_tokens(str(row.get("content") or ""))
-    if row.get("image_data"):
-        cost += 85
-    return cost
+    return estimate_tokens(str(row.get("content") or ""))
 
 
 def _collapsed_handle_block(collapsed: list[ContextRow]) -> dict[str, Any] | None:

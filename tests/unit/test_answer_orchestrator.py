@@ -38,7 +38,11 @@ async def test_fast_path_retrieves_then_streams_one_synthesis() -> None:
         trace={"retrieval": True},
     )
 
+    retrieve_calls = 0
+
     async def retrieve(query: str):
+        nonlocal retrieve_calls
+        retrieve_calls += 1
         assert query == "question"
         return retrieval
 
@@ -56,6 +60,8 @@ async def test_fast_path_retrieves_then_streams_one_synthesis() -> None:
     assert contexts == retrieval.contexts
     assert stream is not None
     assert [chunk async for chunk in stream] == ["answer"]
+    assert retrieve_calls == 1
+    synthesizer.generate_stream.assert_awaited_once()
 
 
 @pytest.mark.asyncio

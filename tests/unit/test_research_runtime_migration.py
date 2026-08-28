@@ -6,22 +6,34 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel
 
 from dlightrag.engine.agent.session.entries import CompactionEntry, ToolResultMessageEntry
-from dlightrag.engine.agent.session.ids import LaneId, SessionId
+from dlightrag.engine.agent.session.ids import (
+    AttemptId,
+    EntryId,
+    IntentId,
+    LaneId,
+    OperationId,
+    SessionId,
+)
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
-from dlightrag.engine.agent.session.operation import OperationCompleted
+from dlightrag.engine.agent.session.operation import OperationCompleted, ToolBatchItem
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.runtime import AgentSessionRuntime
 from dlightrag.engine.agent.tools import (
+    AgentTool,
     EvidenceSourceFact,
     ResourceAttachmentBytes,
     ToolEffects,
     ToolResult,
+    ToolResultCapacityError,
 )
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
+from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
@@ -43,6 +55,94 @@ class _Session:
 
     async def emit_tool_event(self, _kind: str, _payload: object) -> None:
         return None
+
+
+class _EmptyToolInput(BaseModel):
+    pass
+
+
+async def _settle_bounded_research_tool(
+    profile: ModelProfile,
+    text: str,
+) -> tuple[Any, Any]:
+    async def execute(_input: BaseModel, _runtime: Any) -> ToolResult:
+        return ToolResult.text(text)
+
+    tool = AgentTool("bounded", "Return bounded text.", _EmptyToolInput, execute)
+    prepared = SimpleNamespace(
+        tools=(tool,),
+        model_profile=profile,
+        trace={"tool_observations": []},
+        evidence=SimpleNamespace(ledger_state_json=lambda: "{}"),
+    )
+    effects = ResearchRuntimeEffects(
+        orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+    )
+    item = ToolBatchItem(
+        source_index=0,
+        call_id="bounded-call",
+        tool_name=tool.name,
+        disposition="executable",
+        result_entry_id=EntryId.new(),
+        intent_id=IntentId.new(),
+        replay_policy=tool.replay_policy,
+        contract_version=tool.contract_version,
+        input_schema_digest=tool.input_schema_digest,
+        effective_input_digest="0" * 64,
+    )
+
+    async def emit_ephemeral(_event: object) -> None:
+        return None
+
+    context = SimpleNamespace(
+        session_id=SessionId.new(),
+        lane_id=LaneId.main(),
+        operation_id=OperationId.new(),
+    )
+    settled = await effects.execute_tool(
+        cast(Any, context),
+        item,
+        {},
+        AttemptId.new(),
+        emit_ephemeral,
+    )
+    return settled, prepared
+
+
+@pytest.mark.asyncio
+async def test_research_tool_settlement_uses_small_profile_dynamic_residual() -> None:
+    profile = ModelProfile(context_window_tokens=18_484)
+
+    settled, prepared = await _settle_bounded_research_tool(profile, "x" * 400)
+
+    assert estimate_tokens(settled.result.text_content) <= 52
+    assert settled.result.text_content != "x" * 400
+    assert prepared.trace["tool_observations"][0]["capacity_tokens"] == 52
+
+
+@pytest.mark.asyncio
+async def test_research_tool_settlement_preserves_40k_on_large_profile() -> None:
+    settled, prepared = await _settle_bounded_research_tool(
+        answer_model_profile(),
+        "large profile result",
+    )
+
+    assert settled.result.text_content == "large profile result"
+    assert prepared.trace["tool_observations"][0]["capacity_tokens"] == 40_000
+
+
+@pytest.mark.asyncio
+async def test_research_tool_settlement_rejects_nonempty_result_with_zero_residual() -> None:
+    profile = ModelProfile(context_window_tokens=18_432)
+    assert CONTEXT_POLICY.hard_input_limit(profile) == CONTEXT_POLICY.compaction_trigger(profile)
+
+    with pytest.raises(ToolResultCapacityError, match="no residual"):
+        await _settle_bounded_research_tool(profile, "cannot fit")
 
 
 @pytest.mark.asyncio

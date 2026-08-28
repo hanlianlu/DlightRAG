@@ -23,6 +23,7 @@ from dlightrag.application.answer_runs.execution import (
     in_memory_attachment_loader,
 )
 from dlightrag.application.answer_runs.mode import (
+    AnswerMode,
     ModeCapability,
     ModeResource,
     ResolvedMode,
@@ -312,6 +313,7 @@ class _AcceptanceProjection:
     image_descriptions: tuple[str, ...]
     pinned_models: tuple[PinnedModelProfile, ...]
     agent_run_plan: AgentRunPlan | None
+    valid_modes: frozenset[ResolvedMode]
 
 
 def _attachment_bytes(resources: Sequence[ResourceInput]) -> list[bytes]:
@@ -563,7 +565,7 @@ class AnswerService:
         memory_epoch = 0
         if memory_enabled and self._memory_capability is not None:
             memory_enabled, memory_epoch = await self._memory_capability(owner_id=owner_id)
-        run_input = await self._prepare_input(
+        run_input, allowed_modes = await self._prepare_input(
             run_request,
             resources=acceptance_resources or None,
             idempotency_fingerprint=fingerprint,
@@ -613,7 +615,9 @@ class AnswerService:
                 self._coordinator.wake()
         return accepted
 
-    def _reject_unsupported_mode(self, request: AnswerRunRequest) -> tuple[str, frozenset[str]]:
+    def _reject_unsupported_mode(
+        self, request: AnswerRunRequest
+    ) -> tuple[AnswerMode, frozenset[ResolvedMode]]:
         """Fail closed before a run row exists when the requested mode cannot resolve."""
         profiles = self._capabilities.current_profiles()
         query = profiles["query"]
@@ -1095,12 +1099,12 @@ class AnswerService:
         *,
         resources: list[ResourceInput] | None,
         idempotency_fingerprint: str,
-        requested_mode: str,
-        allowed_modes: frozenset[str],
+        requested_mode: AnswerMode,
+        allowed_modes: frozenset[ResolvedMode],
         auth_mode: str = "none",
         memory_enabled: bool = True,
-    ) -> AnswerRunInput:
-        """Resolve one normalized request into immutable durable run input."""
+    ) -> tuple[AnswerRunInput, frozenset[ResolvedMode]]:
+        """Resolve one normalized request and its capacity-narrowed mode set."""
         projection = await self._project_acceptance(
             request,
             resources=resources,
@@ -1132,15 +1136,15 @@ class AnswerService:
             agent_session_id=request.agent_session_id or SessionId.new().value,
             agent_lane_id=request.agent_lane_id,
             source_lane_id=request.source_lane_id,
-        )
+        ), projection.valid_modes
 
     async def _project_acceptance(
         self,
         request: AnswerRunRequest,
         *,
         resources: list[ResourceInput] | None,
-        requested_mode: str,
-        allowed_modes: frozenset[str],
+        requested_mode: AnswerMode,
+        allowed_modes: frozenset[ResolvedMode],
         auth_mode: str = "none",
         memory_enabled: bool = True,
     ) -> _AcceptanceProjection:
@@ -1176,8 +1180,56 @@ class AnswerService:
             )
             schema = await self._retrieval.schema_for(workspaces)
             memory_text = standing_memory_for_acceptance(auth_mode) if memory_enabled else ""
+            effective_modes = allowed_modes
+            fast_targets: list[HistoryProjectionTarget] = []
+            if "fast" in effective_modes:
+                fast_targets.append(
+                    HistoryProjectionTarget(
+                        "fast_planner",
+                        models.extract,
+                        planner.history_input_measure(
+                            request.query,
+                            schema=schema,
+                            current_image_descriptions=list(image_descriptions) or None,
+                            preserve_query=None,
+                        ),
+                        proactive_compaction=True,
+                        require_full_dynamic_reserve=True,
+                    )
+                )
+                synthesizer = AnswerSynthesizer(
+                    image_policy=self._capabilities.answer_image_policy(models.query),
+                    model_profile=models.query,
+                    context_policy=CONTEXT_POLICY,
+                    model_func=None,
+                )
+                fast_targets.append(
+                    HistoryProjectionTarget(
+                        "fast_generation",
+                        models.query,
+                        synthesizer.history_input_measure(
+                            request.query,
+                            memory_text="",
+                            episodic_summary=request.episodic_summary,
+                        ),
+                        proactive_compaction=True,
+                        require_full_dynamic_reserve=True,
+                    )
+                )
+                try:
+                    project_history([], targets=fast_targets)
+                except HistoryProjectionOverflowError as exc:
+                    if requested_mode == "fast":
+                        raise AnswerInputOverflowError(str(exc)) from exc
+                    effective_modes = cast(
+                        frozenset[ResolvedMode],
+                        frozenset(mode for mode in effective_modes if mode != "fast"),
+                    )
+                    if not effective_modes:
+                        raise UnsupportedAnswerModeError(requested_mode) from exc
+
             targets: list[HistoryProjectionTarget] = []
-            if "research" in allowed_modes:
+            if "research" in effective_modes:
                 targets.append(
                     HistoryProjectionTarget(
                         "research_planner",
@@ -1190,21 +1242,6 @@ class AnswerService:
                         ),
                     )
                 )
-            if "fast" in allowed_modes:
-                targets.append(
-                    HistoryProjectionTarget(
-                        "fast_planner",
-                        models.extract,
-                        planner.history_input_measure(
-                            request.query,
-                            schema=schema,
-                            current_image_descriptions=list(image_descriptions) or None,
-                            preserve_query=None,
-                        ),
-                        proactive_compaction=True,
-                    )
-                )
-            if "research" in allowed_modes:
                 evidence = EvidenceLedger(image_budget=resolved.image_budget)
 
                 async def unused_retrieve(_query: str) -> RetrievalResult:
@@ -1262,26 +1299,9 @@ class AnswerService:
                         proactive_compaction=True,
                     )
                 )
-            if "fast" in allowed_modes:
-                synthesizer = AnswerSynthesizer(
-                    image_policy=self._capabilities.answer_image_policy(models.query),
-                    model_profile=models.query,
-                    context_policy=CONTEXT_POLICY,
-                    model_func=None,
-                )
-                targets.append(
-                    HistoryProjectionTarget(
-                        "fast_generation",
-                        models.query,
-                        synthesizer.history_input_measure(
-                            request.query,
-                            memory_text=memory_text,
-                            episodic_summary=request.episodic_summary,
-                        ),
-                        proactive_compaction=True,
-                    )
-                )
-            if requested_mode == "auto" and allowed_modes >= {"fast", "research"}:
+            if "fast" in effective_modes:
+                targets.extend(fast_targets)
+            if requested_mode == "auto" and effective_modes >= {"fast", "research"}:
                 from dlightrag.engine.answer.router import AnswerModeRouter
 
                 async def _unused_router(**_kwargs: Any) -> str:
@@ -1301,7 +1321,7 @@ class AnswerService:
                         router.history_input_measure(
                             request.query,
                             resources=mode_resources,
-                            valid_modes=tuple(sorted(allowed_modes)),
+                            valid_modes=tuple(sorted(effective_modes)),
                         ),
                     )
                 )
@@ -1325,6 +1345,7 @@ class AnswerService:
                 image_descriptions=image_descriptions,
                 pinned_models=self._pin_model_profiles(model_profiles),
                 agent_run_plan=agent_run_plan,
+                valid_modes=effective_modes,
             )
         finally:
             if resolved.registry is not None:

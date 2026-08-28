@@ -29,10 +29,13 @@ class HistoryProjectionTarget:
     profile: ModelProfile
     measure_input: HistoryInputMeasure
     proactive_compaction: bool = False
+    require_full_dynamic_reserve: bool = False
 
     def __post_init__(self) -> None:
         if not self.name.strip():
             raise ValueError("history projection target name must be non-empty")
+        if self.require_full_dynamic_reserve and not self.proactive_compaction:
+            raise ValueError("a full dynamic reserve requires proactive compaction")
 
 
 class HistoryProjectionOverflowError(ValueError):
@@ -94,7 +97,10 @@ def _resolve_target(
 ) -> _ResolvedTarget:
     hard_limit = context_policy.hard_input_limit(target.profile)
     acceptance_limit = (
-        context_policy.compaction_trigger(target.profile)
+        context_policy.compaction_trigger(
+            target.profile,
+            require_full_dynamic_reserve=target.require_full_dynamic_reserve,
+        )
         if target.proactive_compaction
         else hard_limit
     )
@@ -108,7 +114,10 @@ def _resolve_target(
     allowance = max(
         0,
         min(
-            context_policy.history_allowance_cap(target.profile),
+            context_policy.history_allowance_cap(
+                target.profile,
+                require_full_dynamic_reserve=target.require_full_dynamic_reserve,
+            ),
             acceptance_limit - fixed_input,
         ),
     )

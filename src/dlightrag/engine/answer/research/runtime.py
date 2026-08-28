@@ -34,7 +34,7 @@ from dlightrag.engine.agent.session.runtime import (
     ToolEffectResult,
 )
 from dlightrag.engine.agent.tools import ToolEffects, ToolResult, ToolRuntime, fit_tool_result
-from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION
+from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.providers.base import is_provider_context_overflow
 from dlightrag.engine.answer.evidence import EvidenceDelta
@@ -72,6 +72,13 @@ from dlightrag.engine.runtime.settlements import (
 
 logger = logging.getLogger(__name__)
 _CHILD_LEASE_HEARTBEAT_SECONDS = ANSWER_RUN_LEASE_SECONDS / 3
+
+
+def _research_dynamic_context_reserve(profile: ModelProfile) -> int:
+    """Return the pinned profile's effective Research observation capacity."""
+    hard_limit = CONTEXT_POLICY.hard_input_limit(profile)
+    trigger = CONTEXT_POLICY.compaction_trigger(profile)
+    return max(0, hard_limit - trigger)
 
 
 class IncompatibleActiveRunError(RuntimeError):
@@ -437,9 +444,10 @@ class ResearchRuntimeEffects:
             _update_sink=update,
         )
         result = await tool.execute(validated, runtime)
+        observation_capacity = _research_dynamic_context_reserve(self._prepared.model_profile)
         fitted = fit_tool_result(
             result,
-            max_tokens=CONTEXT_POLICY.observation_reserve_tokens,
+            max_tokens=observation_capacity,
         )
         outcome = "failed" if fitted.is_error else "succeeded"
         durable = ToolResultEntry(
@@ -458,6 +466,7 @@ class ResearchRuntimeEffects:
                 "cached": fitted.cached,
                 "is_error": fitted.is_error,
                 "content_chars": len(fitted.text_content),
+                "capacity_tokens": observation_capacity,
             }
         )
         intent = EffectIntent(

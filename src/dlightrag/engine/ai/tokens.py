@@ -80,8 +80,9 @@ def estimate_content_tokens(content: Any) -> int:
             elif isinstance(block, dict):
                 text = str(block.get("text", ""))
                 total += estimate_tokens(text)
-                if block.get("type") == "image_url":
-                    total += 85  # low-res image ≈ 85 tokens
+                # Image token accounting is provider/model-specific. Without a
+                # resolved model fact, count/byte budgets govern image blocks and
+                # this text estimator deliberately adds no guessed token charge.
             # Skip unknown types
         return total
     return estimate_tokens(str(content))

@@ -291,6 +291,19 @@ def test_transform_keeps_recent_evidence_and_collapses_older_to_handles() -> Non
     assert indexer.get_max_chunk_idx("1") > 0
 
 
+def test_transform_does_not_guess_an_image_token_cost() -> None:
+    ledger = EvidenceLedger()
+    visual = _corpus_row(chunk="visual", content="")
+    visual["image_data"] = "AAAA"
+    ledger.add_rows([visual])
+
+    blocks, indexer = ledger.transform(residual_tokens=0)
+
+    text = "\n".join(str(block["text"]) for block in blocks if block["type"] == "text")
+    assert "Retained evidence (re-read for detail)" not in text
+    assert indexer.get_chunk_id("1", 1) == "visual"
+
+
 def test_transform_keeps_a_collapsed_web_resource_re_readable() -> None:
     ledger = EvidenceLedger()
     ledger.add_rows(

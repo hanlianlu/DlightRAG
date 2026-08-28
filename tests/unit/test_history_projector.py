@@ -27,7 +27,7 @@ def _measure(fixed: int, *, pinned_summary: str = ""):
 
 _POLICY = ContextPolicy(
     requested_output_reserve_tokens=0,
-    observation_reserve_tokens=13,
+    dynamic_context_reserve_tokens=13,
     safety_reserve_tokens=15,
     minimum_input_tokens=0,
 )
@@ -112,6 +112,7 @@ def test_new_fast_session_projects_external_history_to_compaction_trigger() -> N
                 profile,
                 _measure(20),
                 proactive_compaction=True,
+                require_full_dynamic_reserve=True,
             ),
         ),
         context_policy=_POLICY,

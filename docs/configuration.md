@@ -432,12 +432,15 @@ trusted endpoint documentation. Duplicate normalized endpoint identities and
 an input limit greater than the context window are configuration errors.
 
 Capacity arithmetic is owned by one immutable, revisioned policy. It applies
-explicit output (16,384), observation (32,768), safety (1,024), retained-tail
-(20,000), episodic-summary (8,000), and minimum-input (1,024) token reserves,
-clamped for small profiles. The provider input limit and physical context remain
-independent ceilings; a known output limit is capped by physical context left.
-Capacity is not configured under `answer`, and there are no nested percentages
-or independent evidence ratios.
+explicit output (16,384), dynamic-context (40,000), safety (1,024), retained-tail
+(20,000), episodic-summary (8,000), and minimum-input (1,024) token reserves.
+Research may clamp its dynamic reserve for small profiles; Fast requires the
+full 40,000-token reserve and is removed from automatic routing (or rejected
+when explicitly requested) when its fixed envelope cannot preserve it. The
+provider input limit and physical context remain independent ceilings; a known
+output limit is capped by physical context left. Capacity is not configured
+under `answer`, and there are no nested percentages or independent evidence
+ratios.
 
 ### LLM Structured Output
 

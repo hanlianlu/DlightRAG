@@ -28,10 +28,13 @@ def test_context_policy_applies_explicit_model_aware_reserves() -> None:
     )
     policy = ContextPolicy()
 
-    assert policy.revision == "agent-v3-reserves"
+    assert policy.revision == "agent-v4-dynamic-context"
+    assert policy.dynamic_context_reserve_tokens == 40_000
+    assert not hasattr(policy, "observation_reserve_tokens")
     assert policy.hard_input_limit(profile) == 180_000
-    assert policy.compaction_trigger(profile) == 147_232
-    assert policy.history_allowance_cap(profile) == 147_232
+    assert policy.compaction_trigger(profile) == 140_000
+    assert policy.history_allowance_cap(profile) == 140_000
+    assert policy.compaction_trigger(profile, require_full_dynamic_reserve=True) == 140_000
     assert policy.retained_tail_target(profile) == 20_000
     with pytest.raises(FrozenInstanceError):
         profile.context_window_tokens = 1  # type: ignore[misc]
@@ -88,6 +91,19 @@ def test_unknown_model_resolves_to_the_fallback_profile() -> None:
     assert not hasattr(resolved, "supports_tools")
 
 
+def test_fast_full_dynamic_reserve_is_not_clamped_on_small_profiles() -> None:
+    profile = ModelProfile(context_window_tokens=30_000)
+    policy = ContextPolicy(
+        requested_output_reserve_tokens=0,
+        dynamic_context_reserve_tokens=40_000,
+        safety_reserve_tokens=0,
+        minimum_input_tokens=1_024,
+    )
+
+    assert policy.compaction_trigger(profile) == 1_024
+    assert policy.compaction_trigger(profile, require_full_dynamic_reserve=True) == -10_000
+
+
 def test_policy_classifies_overflow_and_caps_required_output_to_physical_remainder() -> None:
     profile = ModelProfile(
         context_window_tokens=1_000,
@@ -96,7 +112,7 @@ def test_policy_classifies_overflow_and_caps_required_output_to_physical_remaind
     )
     policy = ContextPolicy(
         requested_output_reserve_tokens=0,
-        observation_reserve_tokens=0,
+        dynamic_context_reserve_tokens=0,
         safety_reserve_tokens=0,
         minimum_input_tokens=0,
     )

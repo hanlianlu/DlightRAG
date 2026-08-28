@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-CONTEXT_POLICY_REVISION = "agent-v3-reserves"
+CONTEXT_POLICY_REVISION = "agent-v4-dynamic-context"
 type ModelInputOverflowKind = Literal[
     "hard_input_limit_exceeded",
     "context_exhausted",
@@ -62,15 +62,16 @@ class ModelProfile:
 
 @dataclass(frozen=True, slots=True)
 class ContextPolicy:
-    """Explicit model input/output/observation reserves.
+    """Explicit model input, output, and dynamic-context reserves.
 
     Provider limits remain physical facts. Absolute reserves express the
-    product request instead of multiplying opaque percentages; small profiles
-    clamp reserves so a usable minimum input remains.
+    product request instead of multiplying opaque percentages. Research may
+    clamp the dynamic reserve on small profiles; Fast explicitly requests the
+    full reserve and is rejected when the resolved profile cannot preserve it.
     """
 
     requested_output_reserve_tokens: int = 16_384
-    observation_reserve_tokens: int = 32_768
+    dynamic_context_reserve_tokens: int = 40_000
     safety_reserve_tokens: int = 1_024
     retained_tail_tokens: int = 20_000
     episodic_summary_tokens: int = 8_000
@@ -80,7 +81,7 @@ class ContextPolicy:
     def __post_init__(self) -> None:
         for name in (
             "requested_output_reserve_tokens",
-            "observation_reserve_tokens",
+            "dynamic_context_reserve_tokens",
             "safety_reserve_tokens",
             "retained_tail_tokens",
             "episodic_summary_tokens",
@@ -107,16 +108,36 @@ class ContextPolicy:
         context_input_limit = max(1, context - output - safety)
         return min(provider_limit, context_input_limit)
 
-    def compaction_trigger(self, profile: ModelProfile) -> int:
-        """Reserve room for the next model/tool observation batch."""
+    def compaction_trigger(
+        self,
+        profile: ModelProfile,
+        *,
+        require_full_dynamic_reserve: bool = False,
+    ) -> int:
+        """Return the proactive input ceiling before dynamic context is added.
+
+        Fast passes ``require_full_dynamic_reserve=True``: a negative or tiny
+        ceiling is intentional and makes its fixed envelope fail admission
+        instead of silently shrinking the 40K product reserve.
+        """
         hard_limit = self.hard_input_limit(profile)
+        if require_full_dynamic_reserve:
+            return hard_limit - self.dynamic_context_reserve_tokens
         floor = min(self.minimum_input_tokens, hard_limit)
-        reserve = min(self.observation_reserve_tokens, max(0, hard_limit - floor))
+        reserve = min(self.dynamic_context_reserve_tokens, max(0, hard_limit - floor))
         return hard_limit - reserve
 
-    def history_allowance_cap(self, profile: ModelProfile) -> int:
+    def history_allowance_cap(
+        self,
+        profile: ModelProfile,
+        *,
+        require_full_dynamic_reserve: bool = False,
+    ) -> int:
         """Let each reachable call allocate history from its actual residual."""
-        return self.compaction_trigger(profile)
+        return self.compaction_trigger(
+            profile,
+            require_full_dynamic_reserve=require_full_dynamic_reserve,
+        )
 
     def retained_tail_target(self, profile: ModelProfile) -> int:
         """Return the absolute recent Research exchange target retained verbatim."""

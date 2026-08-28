@@ -11,8 +11,9 @@ import pytest
 
 from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
 from dlightrag.engine.agent.session.fold import PriorTurns
-from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.answer.citations.finalization import finalize_answer
 from dlightrag.engine.answer.citations.streaming import AnswerStream
 from dlightrag.engine.answer.memory import reserved_auto_recall_text
 from dlightrag.engine.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
@@ -119,6 +120,63 @@ def _multi_doc_contexts() -> RetrievalContexts:
     }
 
 
+def _capacity_contexts(
+    count: int,
+    *,
+    graph_source: str | None = None,
+) -> RetrievalContexts:
+    chunks = [
+        {
+            "chunk_id": f"capacity-{index}",
+            "reference_id": "1",
+            "file_path": "/docs/capacity.pdf",
+            "content": f"CAPACITY-MARKER-{index}",
+            "_workspace": "default",
+            "metadata": _source_metadata("/docs/capacity.pdf"),
+        }
+        for index in range(1, count + 1)
+    ]
+    source = graph_source or (str(chunks[0]["chunk_id"]) if chunks else "")
+    return {
+        "chunks": chunks,
+        "entities": [
+            {
+                "entity_name": "Capacity",
+                "description": "Graph context remains corpus-level during tail admission.",
+                "source_id": source,
+                "_workspace": "default",
+            }
+        ],
+        "relationships": [
+            {
+                "src_id": "Capacity",
+                "tgt_id": "Reserve",
+                "description": "Uses",
+                "source_id": source,
+                "_workspace": "default",
+            }
+        ],
+    }
+
+
+def _capacity_marker_count(messages: object) -> int:
+    rendered = repr(messages)
+    return sum(rendered.count(f"CAPACITY-MARKER-{index}") for index in range(1, 10))
+
+
+def _capacity_synthesizer() -> AnswerSynthesizer:
+    return AnswerSynthesizer(
+        image_policy=answer_image_policy(),
+        model_profile=ModelProfile(context_window_tokens=101, max_input_tokens=100),
+        context_policy=ContextPolicy(
+            requested_output_reserve_tokens=0,
+            dynamic_context_reserve_tokens=40,
+            safety_reserve_tokens=0,
+            minimum_input_tokens=0,
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # TestAnswerSynthesizerPolicy
 # ---------------------------------------------------------------------------
@@ -199,7 +257,7 @@ class TestAnswerSynthesizerPolicy:
         assert policy.max_images == 1
 
     @pytest.mark.asyncio
-    async def test_returns_answer_packed_contexts(self) -> None:
+    async def test_image_budget_omission_is_not_reported_as_capacity_drop(self) -> None:
         synth = AnswerSynthesizer(
             image_policy=answer_image_policy(max_images=0),
             model_profile=answer_model_profile(),
@@ -226,7 +284,11 @@ class TestAnswerSynthesizerPolicy:
 
         assert packed is not contexts
         assert [c["chunk_id"] for c in packed["chunks"]] == ["c1"]
-        assert cast(Any, token_iter).trace["answer_context_images_skipped"] == 1
+        trace = cast(Any, token_iter).trace
+        assert trace["answer_context_images_skipped"] == 1
+        assert trace["answer_retrieved_chunk_count"] == 2
+        assert trace["answer_capacity_admitted_chunk_count"] == 1
+        assert trace["answer_capacity_dropped_chunk_count"] == 0
 
     @pytest.mark.asyncio
     async def test_the_settled_answer_drops_a_model_generated_references_tail(self) -> None:
@@ -451,35 +513,153 @@ class TestAnswerSynthesizerCapacity:
         )
 
         assert prepared.trace["answer_input_limit_tokens"] == 7_976
-        assert prepared.trace["context_policy_revision"] == "agent-v3-reserves"
+        assert prepared.trace["context_policy_revision"] == "agent-v4-dynamic-context"
         assert prepared.trace["answer_evidence_capacity_tokens"] == 7_976 - (
             prepared.trace["answer_input_tokens"] - prepared.trace["answer_evidence_tokens"]
         )
         assert prepared.trace["answer_evidence_capacity_tokens"] > 6_000
 
-    def test_fixed_evidence_overflow_raises_without_trimming_evidence(self) -> None:
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {
-                    "chunk_id": "rag-large",
-                    "reference_id": "rag-doc",
-                    "file_path": "rag.pdf",
-                    "content": "immutable workspace evidence " * 50,
-                }
-            ],
-            "entities": [],
-            "relationships": [],
-        }
+    def test_oversized_single_chunk_is_removed_whole_without_mutating_input(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dlightrag.engine.answer.synthesizer as answer_module
+
+        contexts = _capacity_contexts(1)
         original_content = contexts["chunks"][0]["content"]
-        synth = AnswerSynthesizer(
-            image_policy=answer_image_policy(),
-            model_profile=answer_model_profile(context_window_tokens=200),
+        monkeypatch.setattr(
+            answer_module,
+            "estimate_messages_tokens",
+            lambda messages: 90 + 20 * _capacity_marker_count(messages),
+        )
+        synth = _capacity_synthesizer()
+
+        prepared = synth._prepare_model_call(
+            "question", contexts, conversation_history=PriorTurns()
         )
 
-        with pytest.raises(AnswerInputOverflowError):
-            synth._prepare_model_call("question", contexts, conversation_history=PriorTurns())
-
+        assert prepared.contexts["chunks"] == []
+        assert prepared.trace["answer_retrieved_chunk_count"] == 1
+        assert prepared.trace["answer_capacity_admitted_chunk_count"] == 0
+        assert prepared.trace["answer_capacity_dropped_chunk_count"] == 1
         assert contexts["chunks"][0]["content"] == original_content
+
+    @pytest.mark.parametrize(
+        ("fixed_tokens", "expected_ids"),
+        [(50, ["capacity-1", "capacity-2"]), (70, ["capacity-1"])],
+    )
+    def test_exact_tail_admission_drops_one_or_multiple_whole_chunks(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        fixed_tokens: int,
+        expected_ids: list[str],
+    ) -> None:
+        import dlightrag.engine.answer.synthesizer as answer_module
+
+        contexts = _capacity_contexts(3, graph_source="capacity-3")
+        original_chunks = [dict(chunk) for chunk in contexts["chunks"]]
+        monkeypatch.setattr(
+            answer_module,
+            "estimate_messages_tokens",
+            lambda messages: fixed_tokens + 20 * _capacity_marker_count(messages),
+        )
+
+        prepared = _capacity_synthesizer()._prepare_model_call("question", contexts)
+
+        assert [chunk["chunk_id"] for chunk in prepared.contexts["chunks"]] == expected_ids
+        assert [chunk["content"] for chunk in prepared.contexts["chunks"]] == [
+            chunk["content"] for chunk in original_chunks[: len(expected_ids)]
+        ]
+        assert prepared.indexer.get_max_chunk_idx("1") == len(expected_ids)
+        assert prepared.indexer.get_chunk_id("1", len(expected_ids)) == expected_ids[-1]
+        assert prepared.indexer.get_chunk_id("1", len(expected_ids) + 1) is None
+        finalized = finalize_answer(
+            "Grounded in the first survivor [1-1].",
+            prepared.contexts,
+            indexer=prepared.indexer,
+        )
+        assert len(finalized.sources) == 1
+        assert finalized.sources[0].cited_chunk_ids == ["capacity-1"]
+        assert prepared.contexts["entities"][0]["source_id"] == "capacity-3"
+        assert prepared.contexts["relationships"][0]["source_id"] == "capacity-3"
+        assert prepared.trace["answer_retrieved_chunk_count"] == 3
+        assert prepared.trace["answer_capacity_admitted_chunk_count"] == len(expected_ids)
+        assert prepared.trace["answer_capacity_dropped_chunk_count"] == 3 - len(expected_ids)
+        assert contexts["chunks"] == original_chunks
+
+    def test_exact_boundary_fit_does_not_drop_a_chunk(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dlightrag.engine.answer.synthesizer as answer_module
+
+        contexts = _capacity_contexts(3)
+        monkeypatch.setattr(
+            answer_module,
+            "estimate_messages_tokens",
+            lambda messages: 40 + 20 * _capacity_marker_count(messages),
+        )
+
+        prepared = _capacity_synthesizer()._prepare_model_call("question", contexts)
+
+        assert prepared.trace["answer_input_tokens"] == 100
+        assert prepared.trace["answer_capacity_admitted_chunk_count"] == 3
+        assert prepared.trace["answer_capacity_dropped_chunk_count"] == 0
+
+    def test_image_block_does_not_change_exact_text_capacity(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import dlightrag.engine.answer.excerpts as excerpts_module
+
+        monkeypatch.setattr(excerpts_module, "build_image_label", lambda **_kwargs: "")
+        policy = ContextPolicy(
+            requested_output_reserve_tokens=0,
+            dynamic_context_reserve_tokens=0,
+            safety_reserve_tokens=0,
+            minimum_input_tokens=0,
+        )
+        plain_contexts = _text_contexts()
+        image_contexts: RetrievalContexts = {
+            key: [dict(item) for item in value] for key, value in plain_contexts.items()
+        }
+        image_contexts["chunks"][0]["image_data"] = _PNG_B64
+        probe = AnswerSynthesizer(
+            image_policy=answer_image_policy(max_images=6),
+            model_profile=ModelProfile(context_window_tokens=10_000),
+            context_policy=policy,
+        )
+
+        plain = probe._prepare_model_call("question", plain_contexts)
+        with_image = probe._prepare_model_call("question", image_contexts)
+
+        assert with_image.trace["answer_context_images_sent"] == 1
+        assert with_image.trace["answer_input_tokens"] == plain.trace["answer_input_tokens"]
+        exact_input = with_image.trace["answer_input_tokens"]
+        exact = AnswerSynthesizer(
+            image_policy=answer_image_policy(max_images=6),
+            model_profile=ModelProfile(
+                context_window_tokens=exact_input + 1,
+                max_input_tokens=exact_input,
+            ),
+            context_policy=policy,
+        )._prepare_model_call("question", image_contexts)
+        assert [chunk["chunk_id"] for chunk in exact.contexts["chunks"]] == ["c1"]
+        assert exact.trace["answer_capacity_dropped_chunk_count"] == 0
+
+    def test_non_chunk_context_overflow_after_all_chunks_are_removed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dlightrag.engine.answer.synthesizer as answer_module
+
+        contexts = _capacity_contexts(2)
+        monkeypatch.setattr(answer_module, "estimate_messages_tokens", lambda _messages: 101)
+
+        with pytest.raises(AnswerInputOverflowError, match="retained non-chunk context"):
+            _capacity_synthesizer()._prepare_model_call("question", contexts)
+
+        assert [chunk["chunk_id"] for chunk in contexts["chunks"]] == [
+            "capacity-1",
+            "capacity-2",
+        ]
 
     def test_pinned_history_is_not_locally_trimmed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import dlightrag.engine.answer.synthesizer as answer_module

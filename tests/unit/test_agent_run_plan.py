@@ -26,7 +26,7 @@ def test_agent_run_plan_round_trips_one_canonical_payload() -> None:
     plan = AgentRunPlan.from_tools(
         tools,
         model_role="query",
-        context_policy_revision="agent-v3-reserves",
+        context_policy_revision="agent-v4-dynamic-context",
         model_identity={"provider": "openai", "model": "query"},
         model_profile={"context_window_tokens": 100000},
     )
@@ -38,7 +38,7 @@ def test_agent_run_plan_round_trips_one_canonical_payload() -> None:
         AgentRunPlan.from_tools(
             tuple(reversed(tools)),
             model_role="query",
-            context_policy_revision="agent-v3-reserves",
+            context_policy_revision="agent-v4-dynamic-context",
             model_identity={"provider": "openai", "model": "query"},
             model_profile={"context_window_tokens": 100000},
         ).digest

@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for dlightrag.engine.ai.tokens."""
 
-from dlightrag.engine.ai.tokens import estimate_tokens
+from dlightrag.engine.ai.tokens import estimate_content_tokens, estimate_tokens
 
 
 class TestEstimateTokens:
@@ -46,3 +46,12 @@ class TestEstimateTokens:
         # "åäö" — all latin-ext
         result = estimate_tokens("åäö")
         assert result == 1  # ceil(3/3) = 1
+
+    def test_image_blocks_add_no_provider_independent_token_guess(self) -> None:
+        image = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,AAAA"},
+        }
+
+        assert estimate_content_tokens([image]) == 0
+        assert estimate_content_tokens([image, {"type": "text", "text": "abcd"}]) == 1

@@ -1499,12 +1499,14 @@ class AnswerExecutor:
                         models.extract,
                         planner_measure,
                         proactive_compaction=True,
+                        require_full_dynamic_reserve=True,
                     ),
                     HistoryProjectionTarget(
                         "fast_generation",
                         models.query,
                         self._models.answer_synthesizer(models.query).history_input_measure(query),
                         proactive_compaction=True,
+                        require_full_dynamic_reserve=True,
                     ),
                 )
             orchestrated_run: OrchestratorRun | None = None
@@ -1710,7 +1712,10 @@ def _measure_fast_history_targets(
         if target.name in measured:
             raise ValueError(f"duplicate Fast history target: {target.name}")
         limit = (
-            CONTEXT_POLICY.compaction_trigger(target.profile)
+            CONTEXT_POLICY.compaction_trigger(
+                target.profile,
+                require_full_dynamic_reserve=target.require_full_dynamic_reserve,
+            )
             if target.proactive_compaction
             else CONTEXT_POLICY.hard_input_limit(target.profile)
         )

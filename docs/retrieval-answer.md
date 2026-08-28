@@ -320,7 +320,7 @@ context — only bounded text windows, capped tool observations, and budgeted im
 blocks do.
 
 Each model call uses the immutable profile pinned for its normalized endpoint.
-The Context Policy reserves output, observations, safety, retained tail,
+The Context Policy reserves output, dynamic context, safety, retained tail,
 episodic continuation, and minimum input directly; a provider input limit is
 respected independently rather than nested under percentages. Evidence,
 resource reads, schemas, history, and parallel observations share the measured
@@ -421,11 +421,14 @@ entity/relationship breadth. Retrieved
 visual chunks are admitted in reranked order within the answer image
 budget. Pure visual chunks whose image cannot be sent are removed from the
 answer context and the packer backfills from later candidates; mixed text+image
-chunks keep their text even if the image is skipped. KG entities and
-relationships are filtered to the packed chunk ids, so citation indexes,
-streamed contexts, and returned sources describe the material
-the answer model actually saw. Use `retrieve` when callers need the broader
-pre-answer retrieval set.
+chunks keep their text even if the image is skipped. The final exact serializer
+then removes whole chunks from the reranked tail and rebuilds the complete
+prompt and citation index until the request fits; it never truncates a chunk,
+reorders survivors, or retrieves again. Initial image packing filters KG rows
+to its packed chunk set, but exact token-capacity tail removal does not further
+prune those already-admitted corpus-level entity and relationship summaries.
+Streamed contexts and returned sources use the final admitted chunk set. Use
+`retrieve` when callers need the broader pre-answer retrieval set.
 
 DlightRAG does not use LightRAG `aquery_llm()` for final answer generation
 because post-LightRAG context can include BM25 results, direct image matches,

@@ -204,9 +204,19 @@ class AnswerSynthesizer:
         prior_turns = conversation_history or PriorTurns()
         original_history = list(prior_turns.messages)
 
-        def build(history: list[dict[str, Any]]) -> tuple[_PreparedModelCall, int, int]:
+        def build(
+            history: list[dict[str, Any]],
+            candidate_contexts: RetrievalContexts,
+            *,
+            filter_graph_by_chunks: bool = True,
+        ) -> tuple[_PreparedModelCall, int, int]:
             budget = self._image_policy.new_budget()
-            prepared = self._prepare_prompt_context(query, contexts, image_budget=budget)
+            prepared = self._prepare_prompt_context(
+                query,
+                candidate_contexts,
+                image_budget=budget,
+                filter_graph_by_chunks=filter_graph_by_chunks,
+            )
             no_context = not any(
                 prepared.contexts.get(key) for key in ("chunks", "entities", "relationships")
             )
@@ -241,12 +251,32 @@ class AnswerSynthesizer:
             return call, evidence_tokens, total_tokens
 
         input_limit = self._context_policy.hard_input_limit(self._model_profile)
-        result, evidence_tokens, total_tokens = build(original_history)
+        retrieved_chunk_count = len(contexts.get("chunks", []))
+        result, evidence_tokens, total_tokens = build(original_history, contexts)
+        capacity_chunks = [dict(chunk) for chunk in result.contexts.get("chunks", [])]
+        base_contexts: RetrievalContexts = {
+            key: [dict(item) for item in value] for key, value in result.contexts.items()
+        }
+        capacity_dropped_chunk_count = 0
+        while total_tokens > input_limit and capacity_chunks:
+            capacity_chunks.pop()
+            capacity_dropped_chunk_count += 1
+            candidate_contexts: RetrievalContexts = {
+                key: [dict(item) for item in value] for key, value in base_contexts.items()
+            }
+            candidate_contexts["chunks"] = [dict(chunk) for chunk in capacity_chunks]
+            result, evidence_tokens, total_tokens = build(
+                original_history,
+                candidate_contexts,
+                filter_graph_by_chunks=False,
+            )
         if total_tokens > input_limit:
             raise AnswerInputOverflowError(
-                "Fixed answer input exceeds the resolved model input limit: "
-                f"{total_tokens} > {input_limit} estimated input tokens"
+                "Answer input exceeds the resolved model input limit after all whole "
+                "capacity-adjustable chunks were removed; the retained non-chunk context "
+                f"and fixed envelope use {total_tokens} > {input_limit} estimated input tokens"
             )
+        admitted_chunk_count = len(result.contexts.get("chunks", []))
         overhead_tokens = total_tokens - evidence_tokens
         evidence_capacity = max(0, input_limit - overhead_tokens)
         result.max_output_tokens = self._context_policy.output_allowance(
@@ -261,6 +291,9 @@ class AnswerSynthesizer:
                 "answer_evidence_capacity_tokens": evidence_capacity,
                 "answer_input_tokens": total_tokens,
                 "answer_history_messages": len(original_history),
+                "answer_retrieved_chunk_count": retrieved_chunk_count,
+                "answer_capacity_admitted_chunk_count": admitted_chunk_count,
+                "answer_capacity_dropped_chunk_count": capacity_dropped_chunk_count,
             }
         )
         if result.max_output_tokens is not None:
@@ -347,10 +380,15 @@ class AnswerSynthesizer:
         contexts: RetrievalContexts,
         *,
         image_budget: AnswerImageBudget | None = None,
+        filter_graph_by_chunks: bool = True,
     ) -> _PreparedAnswerPrompt:
         if image_budget is None:
             image_budget = self._image_policy.new_budget()
-        packed = AnswerContextPacker().pack(contexts, image_budget=image_budget)
+        packed = AnswerContextPacker().pack(
+            contexts,
+            image_budget=image_budget,
+            filter_graph_by_chunks=filter_graph_by_chunks,
+        )
         # Fast and Research use the same Evidence ledger for citation identity;
         # Fast remains a lightweight invocation and never creates an Agent Session.
         from dlightrag.engine.answer.evidence import EvidenceLedger

@@ -32,7 +32,15 @@ class AnswerContextPacker:
         contexts: RetrievalContexts,
         *,
         image_budget: AnswerImageBudget,
+        filter_graph_by_chunks: bool = True,
     ) -> PackedAnswerContext:
+        """Pack images and rows without mutating the retrieved contexts.
+
+        ``filter_graph_by_chunks=False`` is reserved for exact capacity
+        rebuilds whose graph rows were already admitted before chunk-tail
+        removal; capacity pressure must not silently delete corpus-level graph
+        context.
+        """
         chunks = contexts.get("chunks", [])
         image_blocks: dict[str, dict[str, Any]] = {}
         images_sent = 0
@@ -74,16 +82,20 @@ class AnswerContextPacker:
             for key, value in contexts.items()
             if key not in {"chunks", "entities", "relationships"}
         }
+        entities = contexts.get("entities", [])
+        relationships = contexts.get("relationships", [])
         packed_contexts.update(
             {
                 "chunks": packed_chunks,
-                "entities": _filter_by_source_ids(
-                    contexts.get("entities", []),
-                    included_chunk_ids,
+                "entities": (
+                    _filter_by_source_ids(entities, included_chunk_ids)
+                    if filter_graph_by_chunks
+                    else [dict(item) for item in entities]
                 ),
-                "relationships": _filter_by_source_ids(
-                    contexts.get("relationships", []),
-                    included_chunk_ids,
+                "relationships": (
+                    _filter_by_source_ids(relationships, included_chunk_ids)
+                    if filter_graph_by_chunks
+                    else [dict(item) for item in relationships]
                 ),
             }
         )

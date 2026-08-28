@@ -17,8 +17,12 @@ from dlightrag.application.answer_runs import (
     AnswerService,
 )
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities, RequestModelContext
-from dlightrag.application.answer_runs.errors import UnsupportedAnswerModeError
+from dlightrag.application.answer_runs.errors import (
+    AnswerInputOverflowError,
+    UnsupportedAnswerModeError,
+)
 from dlightrag.application.answer_runs.execution import AnswerRunInput, AnswerRunRequest
+from dlightrag.application.answer_runs.routing import decide_resolved_mode
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
@@ -289,6 +293,22 @@ class _Capabilities:
         return models, None
 
 
+class _SmallProfileCapabilities(_Capabilities):
+    """A profile whose physical input cannot preserve Fast's full 40K reserve."""
+
+    def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+        profile = ModelProfile(context_window_tokens=30_000)
+        return {role: profile for role in MODEL_ROLE_NAMES}
+
+
+class _FastMemoryBoundaryCapabilities(_Capabilities):
+    """A profile with exactly 100 tokens before Fast's full dynamic reserve."""
+
+    def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+        profile = ModelProfile(context_window_tokens=57_508)
+        return {role: profile for role in MODEL_ROLE_NAMES}
+
+
 class _Registry:
     def __init__(self) -> None:
         self.closed = False
@@ -437,6 +457,83 @@ async def test_fast_acceptance_never_enters_profile_memory_capability() -> None:
     prepared = store.created[0]["prepared_input"]
     assert prepared["profile_memory_enabled"] is False
     assert prepared["profile_memory_epoch"] == 0
+
+
+async def test_auto_removes_fast_before_persisting_routing_when_40k_cannot_fit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dlightrag.application.answer_runs.service as service_module
+
+    monkeypatch.setattr(
+        service_module,
+        "research_history_input_measure",
+        lambda **_kwargs: lambda _history, _summary="": 0,
+    )
+    store = _Store()
+    service = _service(store=store, capabilities=_SmallProfileCapabilities())
+
+    await service.create(request=_request(mode="auto"), owner_id=_OWNER)
+
+    routing = store.created[0]["routing"]
+    assert routing.valid_modes == ("research",)
+    assert (
+        decide_resolved_mode(
+            requested_mode=routing.requested_mode,
+            valid_modes=frozenset(routing.valid_modes),
+        )
+        == "research"
+    )
+
+
+async def test_auto_fast_capacity_excludes_research_only_profile_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dlightrag.application.answer_runs.service as service_module
+
+    observed_fast_memory: list[str] = []
+
+    def history_measure(
+        _self: object,
+        _query: str,
+        memory_text: str = "",
+        episodic_summary: str = "",
+    ) -> Any:
+        del episodic_summary
+        observed_fast_memory.append(memory_text)
+        return lambda _history, _summary="": 50 + len(memory_text)
+
+    monkeypatch.setattr(service_module, "standing_memory_for_acceptance", lambda _auth: "m" * 100)
+    monkeypatch.setattr(
+        service_module.AnswerSynthesizer,
+        "history_input_measure",
+        history_measure,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "research_history_input_measure",
+        lambda **_kwargs: lambda _history, _summary="": 0,
+    )
+    store = _Store()
+    service = _service(store=store, capabilities=_FastMemoryBoundaryCapabilities())
+
+    await service.create(
+        request=_request(mode="auto"),
+        owner_id=_OWNER,
+        auth_mode="jwt",
+    )
+
+    assert observed_fast_memory == [""]
+    assert store.created[0]["routing"].valid_modes == ("fast", "research")
+
+
+async def test_explicit_fast_rejects_when_40k_cannot_fit() -> None:
+    store = _Store()
+    service = _service(store=store, capabilities=_SmallProfileCapabilities())
+
+    with pytest.raises(AnswerInputOverflowError, match="fast_planner fixed input"):
+        await service.create(request=_request(mode="fast"), owner_id=_OWNER)
+
+    assert store.created == []
 
 
 async def test_explicit_fast_with_pdf_creates_no_run() -> None:

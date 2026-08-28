@@ -93,7 +93,7 @@ async def test_coordinator_compacts_direct_fast_pairs_without_a_baseline_registe
         model_profile=ModelProfile(context_window_tokens=100_000),
         context_policy=ContextPolicy(
             requested_output_reserve_tokens=1_000,
-            observation_reserve_tokens=1_000,
+            dynamic_context_reserve_tokens=1_000,
             safety_reserve_tokens=100,
             retained_tail_tokens=0,
         ),
