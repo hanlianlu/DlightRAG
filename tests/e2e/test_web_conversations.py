@@ -623,7 +623,7 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
     assert closed_panel.get_attribute("aria-hidden") is None
     assert closed_panel.evaluate("element => element.inert") is False
     assert page.get_by_text("Files in:", exact=True).is_visible()
-    assert page.locator("#panel-title").inner_text() == ""
+    expect(page.get_by_role("heading", name="Files", exact=True)).to_be_visible()
     assert page.get_by_role("button", name="Choose folder").is_visible()
     assert page.get_by_role("button", name="Upload files").count() == 0
     assert not files_trigger.is_visible()

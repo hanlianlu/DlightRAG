@@ -2,6 +2,7 @@
 """E2E tests for file ingestion flow via the UI."""
 
 import pytest
+from playwright.sync_api import expect
 
 
 @pytest.mark.e2e
@@ -13,7 +14,7 @@ def test_ingestion_panel_opens(page):
     page.click("#files-btn")
 
     page.wait_for_function("document.querySelector('#panel').classList.contains('open')")
-    assert page.locator("#panel-title").text_content() == ""
+    expect(page.get_by_role("heading", name="Files", exact=True)).to_be_visible()
     assert page.locator(".ingest-target-label").text_content() == "Files in:"
     assert not page.locator("#files-btn").is_visible()
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
