@@ -8,6 +8,14 @@ so a stale or lost lease changes zero rows.
 
 Runtime transitions atomically commit HostDelta, ordered Entries, exact typed
 registers, Session commit sequence, and durable run progress.
+
+Session mutation is repository-exclusive and validated inductively: every
+committed state was produced by this adapter while holding the Session row lock,
+so a new transaction validates its delta plus the affected Lane pairs rather
+than rescanning immutable history or unrelated register payloads. Out-of-band
+row edits and pre-existing unrelated corruption are outside the transaction
+interface; full snapshot loading still decodes every persisted Entry/register
+and fails when a caller explicitly reads corrupt state.
 """
 
 from __future__ import annotations
@@ -39,6 +47,7 @@ from dlightrag.engine.agent.session.registers import (
     LaneState,
     RegisterRecord,
     RegisterRef,
+    RegisterWrite,
     SetRegister,
     decode_register,
 )
@@ -122,12 +131,22 @@ WHERE owner_id = $1 AND run_id = $2
   AND status = 'running' AND lease_expires_at > NOW()
 """
 
-_INSERT_ENTRY = """
+_INSERT_ENTRIES = """
 INSERT INTO dlightrag_agent_session_entries (
     owner_id, session_id, sequence, entry_id, parent_entry_id,
     entry_type, schema_version, timestamp, payload_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+SELECT $1, $2, input.sequence, input.entry_id, input.parent_entry_id,
+       input.entry_type, input.schema_version, input.entry_timestamp, input.payload_json
+FROM jsonb_to_recordset($3::jsonb) AS input(
+    sequence BIGINT,
+    entry_id UUID,
+    parent_entry_id UUID,
+    entry_type TEXT,
+    schema_version INTEGER,
+    entry_timestamp TIMESTAMPTZ,
+    payload_json JSONB
+)
 """
 
 _ADVANCE_SESSION = """
@@ -184,27 +203,60 @@ WHERE owner_id = $1 AND session_id = $2
 ORDER BY register_kind, register_key
 """
 
-_SELECT_REGISTER_FOR_UPDATE = """
-SELECT sequence, payload_json
-FROM dlightrag_agent_session_registers
-WHERE owner_id = $1 AND session_id = $2
-  AND register_kind = $3 AND register_key = $4
-FOR UPDATE
+_SELECT_EXPECTED_REGISTERS = """
+WITH expected(register_kind, register_key, ordinal) AS (
+    SELECT *
+    FROM unnest($3::text[], $4::text[]) WITH ORDINALITY
+)
+SELECT expected.ordinal, expected.register_kind, expected.register_key, stored.sequence
+FROM expected
+LEFT JOIN dlightrag_agent_session_registers AS stored
+  ON stored.owner_id = $1 AND stored.session_id = $2
+ AND stored.register_kind = expected.register_kind
+ AND stored.register_key = expected.register_key
+ORDER BY expected.ordinal
 """
 
-_SET_REGISTER = """
+_SELECT_ENTRY_IDENTITIES = """
+SELECT entry_id::text
+FROM dlightrag_agent_session_entries
+WHERE owner_id = $1 AND session_id = $2
+  AND entry_id = ANY($3::uuid[])
+"""
+
+_SELECT_AFFECTED_LANES = """
+SELECT register_kind, register_key,
+       CASE
+           WHEN register_kind = 'lane_state' AND register_key = ANY($4::text[])
+           THEN payload_json
+           ELSE NULL
+       END AS payload_json
+FROM dlightrag_agent_session_registers
+WHERE owner_id = $1 AND session_id = $2
+  AND register_kind IN ('lane_head', 'lane_state')
+  AND register_key = ANY($3::text[])
+"""
+
+_SET_REGISTERS = """
 INSERT INTO dlightrag_agent_session_registers (
     owner_id, session_id, register_kind, register_key, sequence, payload_json
 )
-VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+SELECT $1, $2, input.register_kind, input.register_key, $3, input.payload_json
+FROM jsonb_to_recordset($4::jsonb) AS input(
+    register_kind TEXT,
+    register_key TEXT,
+    payload_json JSONB
+)
 ON CONFLICT (owner_id, session_id, register_kind, register_key)
 DO UPDATE SET sequence = EXCLUDED.sequence, payload_json = EXCLUDED.payload_json
 """
 
-_DELETE_REGISTER = """
-DELETE FROM dlightrag_agent_session_registers
-WHERE owner_id = $1 AND session_id = $2
-  AND register_kind = $3 AND register_key = $4
+_DELETE_REGISTERS = """
+DELETE FROM dlightrag_agent_session_registers AS stored
+USING unnest($3::text[], $4::text[]) AS input(register_kind, register_key)
+WHERE stored.owner_id = $1 AND stored.session_id = $2
+  AND stored.register_kind = input.register_kind
+  AND stored.register_key = input.register_key
 """
 
 _INSERT_EVIDENCE = """
@@ -249,7 +301,15 @@ def _uuid(value: Any) -> Any:
 
 
 class PGAgentSessionRepository:
-    """One claim-bound Agent Session Repository over PostgreSQL."""
+    """One claim-bound Agent Session Repository over PostgreSQL.
+
+    All Session writes must cross :meth:`transact`. The locked Session row is
+    the serialization point, and each successful transaction preserves the
+    Entry-tree and Lane-pair invariants. Validation therefore probes only
+    incoming Entry identities/external parents and main/touched Lane pairs;
+    this hot path is deliberately not a scrubber for unrelated out-of-band
+    database corruption.
+    """
 
     def __init__(
         self,
@@ -407,22 +467,15 @@ class PGAgentSessionRepository:
                         fencing_epoch,
                     )
                 current_sequence = int(session_row["commit_sequence"])
-                for expectation in transaction.expectations:
-                    row = await conn.fetchrow(
-                        _SELECT_REGISTER_FOR_UPDATE,
-                        self._owner_id,
-                        _uuid(session_id.value),
-                        expectation.ref.kind,
-                        expectation.ref.key,
-                    )
-                    actual = int(row["sequence"]) if row is not None else None
-                    if actual != expectation.sequence:
-                        return RegisterConflict(
-                            ref=expectation.ref,
-                            expected_sequence=expectation.sequence,
-                            current_sequence=actual,
-                        )
-                await self._validate_transaction_entries(conn, session_id, transaction.entries)
+                conflict = await self._check_register_expectations(conn, session_id, transaction)
+                if conflict is not None:
+                    return conflict
+                await self._validate_transaction_entries(
+                    conn,
+                    session_id,
+                    transaction.entries,
+                    last_sequence=int(session_row["last_sequence"]),
+                )
                 await self._validate_transaction_registers(conn, session_id, transaction)
                 next_sequence = current_sequence + 1
                 last_entry_sequence = int(session_row["last_sequence"])
@@ -456,29 +509,16 @@ class PGAgentSessionRepository:
                                 ensure_ascii=False,
                             ),
                         )
-                for entry, sequence in zip(transaction.entries, entry_sequences, strict=True):
-                    await self._insert_entry(conn, session_id, entry, sequence)
-                register_sequences: list[tuple[RegisterRef, int]] = []
-                for write in transaction.register_writes:
-                    if isinstance(write, SetRegister):
-                        await conn.execute(
-                            _SET_REGISTER,
-                            self._owner_id,
-                            _uuid(session_id.value),
-                            write.ref.kind,
-                            write.ref.key,
-                            next_sequence,
-                            json.dumps(write.value.canonical_payload(), ensure_ascii=False),
-                        )
-                    elif isinstance(write, DeleteRegister):
-                        await conn.execute(
-                            _DELETE_REGISTER,
-                            self._owner_id,
-                            _uuid(session_id.value),
-                            write.ref.kind,
-                            write.ref.key,
-                        )
-                    register_sequences.append((write.ref, next_sequence))
+                await self._insert_entries(conn, session_id, transaction.entries, entry_sequences)
+                await self._write_registers(
+                    conn,
+                    session_id,
+                    transaction.register_writes,
+                    sequence=next_sequence,
+                )
+                register_sequences = tuple(
+                    (write.ref, next_sequence) for write in transaction.register_writes
+                )
                 await conn.execute(
                     _ADVANCE_SESSION,
                     self._owner_id,
@@ -490,8 +530,35 @@ class PGAgentSessionRepository:
                 return TransactionCommit(
                     commit_sequence=next_sequence,
                     appended_sequences=entry_sequences,
-                    register_sequences=tuple(register_sequences),
+                    register_sequences=register_sequences,
                 )
+
+    async def _check_register_expectations(
+        self,
+        conn: Any,
+        session_id: SessionId,
+        transaction: SessionTransaction[EffectHostUpdate],
+    ) -> RegisterConflict | None:
+        if not transaction.expectations:
+            return None
+        rows = await conn.fetch(
+            _SELECT_EXPECTED_REGISTERS,
+            self._owner_id,
+            _uuid(session_id.value),
+            [expectation.ref.kind for expectation in transaction.expectations],
+            [expectation.ref.key for expectation in transaction.expectations],
+        )
+        if len(rows) != len(transaction.expectations):
+            raise ValueError("Agent Session register expectation query returned incomplete results")
+        for expectation, row in zip(transaction.expectations, rows, strict=True):
+            actual = int(row["sequence"]) if row["sequence"] is not None else None
+            if actual != expectation.sequence:
+                return RegisterConflict(
+                    ref=expectation.ref,
+                    expected_sequence=expectation.sequence,
+                    current_sequence=actual,
+                )
+        return None
 
     async def _validate_transaction_registers(
         self,
@@ -499,93 +566,185 @@ class PGAgentSessionRepository:
         session_id: SessionId,
         transaction: SessionTransaction[EffectHostUpdate],
     ) -> None:
+        main_lane = LaneId.main().value
+        touched_lanes = {
+            write.ref.key
+            for write in transaction.register_writes
+            if write.ref.kind in {"lane_head", "lane_state"}
+        }
+        affected_lanes = [main_lane, *sorted(touched_lanes - {main_lane})]
+        advanced_lanes = {
+            write.value.lane_id.value
+            for write in transaction.register_writes
+            if transaction.entries
+            and isinstance(write, SetRegister)
+            and isinstance(write.value, LaneHead)
+            and write.value.entry_id == transaction.entries[-1].entry_id
+        }
         rows = await conn.fetch(
-            "SELECT register_kind, register_key, payload_json"
-            " FROM dlightrag_agent_session_registers"
-            " WHERE owner_id = $1 AND session_id = $2",
+            _SELECT_AFFECTED_LANES,
             self._owner_id,
             _uuid(session_id.value),
+            affected_lanes,
+            sorted(advanced_lanes),
         )
-        values = {}
+        refs: set[RegisterRef] = set()
+        advanced_states: dict[str, LaneState] = {}
         for row in rows:
             ref = RegisterRef(
                 kind=str(row["register_kind"]),  # type: ignore[arg-type]
                 key=str(row["register_key"]),
             )
-            values[ref] = decode_register(
-                kind=ref.kind,
-                payload=_json_payload(row["payload_json"]),
-            )
+            refs.add(ref)
+            if ref.kind == "lane_state" and ref.key in advanced_lanes:
+                state = decode_register(
+                    kind=ref.kind,
+                    payload=_json_payload(row["payload_json"]),
+                )
+                if not isinstance(state, LaneState) or state.ref != ref:
+                    raise ValueError("Agent Session Lane State payload identity is corrupt")
+                advanced_states[ref.key] = state
         for write in transaction.register_writes:
+            if write.ref.kind not in {"lane_head", "lane_state"}:
+                continue
             if isinstance(write, SetRegister):
-                values[write.ref] = write.value
+                refs.add(write.ref)
+                if isinstance(write.value, LaneState) and write.ref.key in advanced_lanes:
+                    advanced_states[write.ref.key] = write.value
             elif isinstance(write, DeleteRegister):
-                values.pop(write.ref, None)
-        refs = set(values)
-        heads = {ref.key for ref in refs if ref.kind == "lane_head"}
-        states = {ref.key for ref in refs if ref.kind == "lane_state"}
-        if heads != states or LaneId.main().value not in heads:
-            raise ValueError("Session registers require complete main and Lane pairs")
-        if transaction.entries:
-            advanced_lanes = {
-                write.value.lane_id
-                for write in transaction.register_writes
-                if isinstance(write, SetRegister)
-                and isinstance(write.value, LaneHead)
-                and write.value.entry_id == transaction.entries[-1].entry_id
-            }
-            for advanced_lane_id in advanced_lanes:
-                state = values.get(LaneState(advanced_lane_id).ref)
-                if isinstance(state, LaneState) and state.archived:
-                    raise ValueError("an archived Lane is not writable")
+                refs.discard(write.ref)
+                if write.ref.kind == "lane_state":
+                    advanced_states.pop(write.ref.key, None)
+        for lane_id in affected_lanes:
+            has_head = RegisterRef("lane_head", lane_id) in refs
+            has_state = RegisterRef("lane_state", lane_id) in refs
+            if has_head != has_state or (lane_id == main_lane and not has_head):
+                raise ValueError("Session registers require complete main and Lane pairs")
+        for lane_id in advanced_lanes:
+            state = advanced_states.get(lane_id)
+            if state is not None and state.archived:
+                raise ValueError("an archived Lane is not writable")
 
     async def _validate_transaction_entries(
         self,
         conn: Any,
         session_id: SessionId,
         entries: Sequence[SessionEntry],
+        *,
+        last_sequence: int,
     ) -> None:
-        rows = await conn.fetch(
-            "SELECT entry_id::text, parent_entry_id::text"
-            " FROM dlightrag_agent_session_entries"
-            " WHERE owner_id = $1 AND session_id = $2",
-            self._owner_id,
-            _uuid(session_id.value),
-        )
-        known = {EntryId(str(row["entry_id"])) for row in rows}
-        roots = sum(row["parent_entry_id"] is None for row in rows)
+        if not entries:
+            return
+        incoming: list[EntryId] = []
+        incoming_set: set[EntryId] = set()
+        roots = 1 if last_sequence > 0 else 0
         for entry in entries:
             if entry.session_id != session_id:
                 raise ValueError("transaction Entry belongs to another Session")
-            if entry.entry_id in known:
+            if entry.entry_id in incoming_set:
                 raise ValueError("transaction Entry identity already exists")
             if entry.parent_entry_id is None:
-                if known or roots:
+                if incoming or roots:
                     raise ValueError("only the first Session Entry can be a root")
                 roots += 1
-            elif entry.parent_entry_id not in known:
+            incoming.append(entry.entry_id)
+            incoming_set.add(entry.entry_id)
+        external_parents: list[EntryId] = []
+        probed: set[EntryId] = set()
+        known_local: set[EntryId] = set()
+        for entry in entries:
+            parent_id = entry.parent_entry_id
+            if parent_id is not None:
+                if parent_id in incoming_set and parent_id not in known_local:
+                    raise ValueError("transaction Entry parent is missing")
+                if parent_id not in incoming_set and parent_id not in probed:
+                    external_parents.append(parent_id)
+                    probed.add(parent_id)
+            known_local.add(entry.entry_id)
+        probe_ids = [*incoming, *external_parents]
+        rows = await conn.fetch(
+            _SELECT_ENTRY_IDENTITIES,
+            self._owner_id,
+            _uuid(session_id.value),
+            [_uuid(entry_id.value) for entry_id in probe_ids],
+        )
+        stored = {EntryId(str(row["entry_id"])) for row in rows}
+        known_local = set()
+        for entry in entries:
+            if entry.entry_id in stored:
+                raise ValueError("transaction Entry identity already exists")
+            if (
+                entry.parent_entry_id is not None
+                and entry.parent_entry_id not in known_local
+                and entry.parent_entry_id not in stored
+            ):
                 raise ValueError("transaction Entry parent is missing")
-            known.add(entry.entry_id)
+            known_local.add(entry.entry_id)
 
-    async def _insert_entry(
+    async def _insert_entries(
         self,
         conn: Any,
         session_id: SessionId,
-        entry: SessionEntry,
-        sequence: int,
+        entries: Sequence[SessionEntry],
+        sequences: Sequence[int],
     ) -> None:
+        if not entries:
+            return
+        payload = [
+            {
+                "sequence": sequence,
+                "entry_id": entry.entry_id.value,
+                "parent_entry_id": (
+                    entry.parent_entry_id.value if entry.parent_entry_id is not None else None
+                ),
+                "entry_type": entry.entry_type,
+                "schema_version": entry.schema_version,
+                "entry_timestamp": entry.timestamp.isoformat(),
+                "payload_json": entry.canonical_payload(),
+            }
+            for entry, sequence in zip(entries, sequences, strict=True)
+        ]
         await conn.execute(
-            _INSERT_ENTRY,
+            _INSERT_ENTRIES,
             self._owner_id,
             _uuid(session_id.value),
-            sequence,
-            _uuid(entry.entry_id.value),
-            (_uuid(entry.parent_entry_id.value) if entry.parent_entry_id is not None else None),
-            entry.entry_type,
-            entry.schema_version,
-            entry.timestamp,
-            json.dumps(entry.canonical_payload(), ensure_ascii=False),
+            json.dumps(payload, ensure_ascii=False),
         )
+
+    async def _write_registers(
+        self,
+        conn: Any,
+        session_id: SessionId,
+        writes: Sequence[RegisterWrite],
+        *,
+        sequence: int,
+    ) -> None:
+        sets = [write for write in writes if isinstance(write, SetRegister)]
+        deletes = [write for write in writes if isinstance(write, DeleteRegister)]
+        if sets:
+            payload = [
+                {
+                    "register_kind": write.ref.kind,
+                    "register_key": write.ref.key,
+                    "payload_json": write.value.canonical_payload(),
+                }
+                for write in sets
+            ]
+            await conn.execute(
+                _SET_REGISTERS,
+                self._owner_id,
+                _uuid(session_id.value),
+                sequence,
+                json.dumps(payload, ensure_ascii=False),
+            )
+        if deletes:
+            await conn.execute(
+                _DELETE_REGISTERS,
+                self._owner_id,
+                _uuid(session_id.value),
+                [write.ref.kind for write in deletes],
+                [write.ref.key for write in deletes],
+            )
 
     async def _hold_lease(self, conn: Any) -> Any:
         if self._child_session_id is not None:

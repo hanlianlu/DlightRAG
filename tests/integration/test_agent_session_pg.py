@@ -5,6 +5,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -29,20 +30,28 @@ from dlightrag.engine.agent.session.ids import (
     EntryId,
     IntentId,
     LaneId,
+    OperationId,
     ProjectionId,
     SessionId,
     StageIntentId,
 )
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
-from dlightrag.engine.agent.session.operation import OperationCompleted, ToolBatchItem
+from dlightrag.engine.agent.session.operation import (
+    OperationCompleted,
+    OperationMeta,
+    ToolBatchItem,
+)
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import ContextProjection, projection_source_digest
 from dlightrag.engine.agent.session.registers import (
+    DeleteRegister,
     LaneHead,
     LaneState,
+    OperationMetaRegister,
     RegisterRecord,
     RequestSnapshot,
     SetRegister,
+    ToolArguments,
 )
 from dlightrag.engine.agent.session.runtime import (
     AgentSessionRuntime,
@@ -87,6 +96,46 @@ _ADMIN: dict[str, Any] = dict(
 _TEST_DATABASE = "dlightrag_agent_session_test"
 _OWNER = "owner-alpha"
 _WORKER = "worker-1"
+
+
+class _CountingConnection:
+    def __init__(self, connection: Any, calls: list[tuple[str, str, int]]) -> None:
+        self._connection = connection
+        self._calls = calls
+
+    def transaction(self):
+        return self._connection.transaction()
+
+    async def execute(self, query: str, *args: Any) -> str:
+        result = await self._connection.execute(query, *args)
+        self._calls.append(("execute", query, 0))
+        return result
+
+    async def fetch(self, query: str, *args: Any):
+        rows = await self._connection.fetch(query, *args)
+        self._calls.append(("fetch", query, len(rows)))
+        return rows
+
+    async def fetchrow(self, query: str, *args: Any):
+        row = await self._connection.fetchrow(query, *args)
+        self._calls.append(("fetchrow", query, int(row is not None)))
+        return row
+
+    async def fetchval(self, query: str, *args: Any):
+        value = await self._connection.fetchval(query, *args)
+        self._calls.append(("fetchval", query, int(value is not None)))
+        return value
+
+
+class _CountingPool:
+    def __init__(self, pool: Any, calls: list[tuple[str, str, int]]) -> None:
+        self._pool = pool
+        self._calls = calls
+
+    @asynccontextmanager
+    async def acquire(self):
+        async with self._pool.acquire() as connection:
+            yield _CountingConnection(connection, self._calls)
 
 
 async def _pg_available() -> bool:
@@ -418,6 +467,356 @@ async def test_agent_session_runtime_memory_and_pg_have_atomic_state_parity(pool
     assert len(memory.applied_host_deltas(memory_id)) == 1
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT count(*) FROM dlightrag_answer_evidence") == 1
+
+
+async def test_transact_query_work_is_constant_with_large_retained_session(pool) -> None:
+    claimed = await _claim(pool)
+    epoch = claimed.execution.fencing_epoch
+    run_id = uuid.UUID(claimed.run.run_id)
+
+    def repository(operation_pool: Any) -> PGAgentSessionRepository:
+        return PGAgentSessionRepository(
+            pool=operation_pool,
+            owner_id=_OWNER,
+            run_id=run_id,
+            worker_id=_WORKER,
+            lease_owner=_WORKER,
+            fencing_epoch=epoch,
+        )
+
+    store = repository(pool)
+    small_id = SessionId.new()
+    large_id = SessionId.new()
+    small_root = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=small_id,
+        timestamp=datetime.now(UTC),
+        content="small root",
+    )
+    small_head = LaneHead(LaneId.main(), small_root.entry_id)
+    small_seed = await store.transact(
+        session_id=small_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=[small_root],
+            register_writes=[SetRegister(small_head), SetRegister(LaneState(LaneId.main()))],
+            expectations=[
+                RegisterExpectation(small_head.ref, None),
+                RegisterExpectation(LaneState(LaneId.main()).ref, None),
+            ],
+        ),
+    )
+    assert isinstance(small_seed, TransactionCommit)
+
+    large_entries: list[UserMessageEntry] = []
+    parent_id: EntryId | None = None
+    for index in range(1000):
+        entry = UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=large_id,
+            timestamp=datetime.now(UTC),
+            content=f"retained {index}",
+            parent_entry_id=parent_id,
+        )
+        large_entries.append(entry)
+        parent_id = entry.entry_id
+    assert parent_id is not None
+    large_head = LaneHead(LaneId.main(), parent_id)
+    large_seed = await store.transact(
+        session_id=large_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=large_entries,
+            register_writes=[SetRegister(large_head), SetRegister(LaneState(LaneId.main()))],
+            expectations=[
+                RegisterExpectation(large_head.ref, None),
+                RegisterExpectation(LaneState(LaneId.main()).ref, None),
+            ],
+        ),
+    )
+    assert isinstance(large_seed, TransactionCommit)
+    assert large_seed.appended_sequences == tuple(range(1, 1001))
+
+    large_payload = "x" * 250_000
+    operation_id = OperationId.new()
+    operation = OperationMetaRegister(
+        OperationMeta(
+            operation_id=operation_id,
+            lane_id=LaneId.main(),
+            idempotency_key="large-operation",
+            acceptance_digest="a" * 64,
+            plan_json=json.dumps({"payload": large_payload}),
+            plan_digest="b" * 64,
+        )
+    )
+    request = RequestSnapshot.from_values(
+        operation_id=operation_id,
+        turn_number=1,
+        plan_digest="b" * 64,
+        model_role="query",
+        messages=[{"role": "user", "content": large_payload}],
+        tools=[{"name": "large", "description": large_payload}],
+        tool_choice="auto",
+        max_tokens=1,
+    )
+    tool_arguments = ToolArguments(
+        intent_id=IntentId.new(),
+        canonical_input=json.dumps(
+            {"payload": large_payload}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ),
+    )
+    unrelated = await store.transact(
+        session_id=large_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[
+                SetRegister(operation),
+                SetRegister(request),
+                SetRegister(tool_arguments),
+            ],
+            expectations=[
+                RegisterExpectation(operation.ref, None),
+                RegisterExpectation(request.ref, None),
+                RegisterExpectation(tool_arguments.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(unrelated, TransactionCommit)
+
+    async def measured_append(
+        session_id: SessionId, parent: EntryId, expected_head_sequence: int
+    ) -> tuple[list[tuple[str, str, int]], TransactionCommit]:
+        calls: list[tuple[str, str, int]] = []
+        measured = repository(cast(Any, _CountingPool(pool, calls)))
+        entry = UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.now(UTC),
+            content="one delta",
+            parent_entry_id=parent,
+        )
+        outcome = await measured.transact(
+            session_id=session_id,
+            fencing_epoch=epoch,
+            transaction=SessionTransaction.from_parts(
+                entries=[entry],
+                register_writes=[SetRegister(LaneHead(LaneId.main(), entry.entry_id))],
+                expectations=[RegisterExpectation(small_head.ref, expected_head_sequence)],
+            ),
+        )
+        assert isinstance(outcome, TransactionCommit)
+        return calls, outcome
+
+    small_calls, small_commit = await measured_append(small_id, small_root.entry_id, 1)
+    large_calls, large_commit = await measured_append(large_id, parent_id, 1)
+
+    assert len(small_calls) == len(large_calls) == 10
+    assert sum(rows for _method, _query, rows in small_calls) == 6
+    assert sum(rows for _method, _query, rows in large_calls) == 6
+    assert small_commit.appended_sequences == (2,)
+    assert large_commit.appended_sequences == (1001,)
+    for method, query, _rows in large_calls:
+        if method == "fetch" and "dlightrag_agent_session_entries" in query:
+            assert "entry_id = ANY($3::uuid[])" in query
+        if method == "fetch" and "dlightrag_agent_session_registers" in query:
+            assert "register_key = ANY($3::text[])" in query or "WITH expected" in query
+
+
+async def test_pg_entry_delta_validation_regressions(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    snapshot = await store.load(session_id)
+    root = snapshot.entries[0]
+    main = snapshot.tree.lane().head
+
+    first = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="first",
+        parent_entry_id=root.entry_id,
+    )
+    second = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="second",
+        parent_entry_id=first.entry_id,
+    )
+    chain = await store.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=[first, second],
+            register_writes=[SetRegister(LaneHead(LaneId.main(), second.entry_id))],
+            expectations=[RegisterExpectation(main.ref, main.sequence)],
+        ),
+    )
+    assert isinstance(chain, TransactionCommit)
+    assert chain.appended_sequences == (2, 3)
+    pg_snapshot = await store.load(session_id)
+    current_head = pg_snapshot.tree.lane().head
+
+    memory = MemoryAgentSessionRepository[EffectHostUpdate](fencing_epoch=epoch)
+    memory_seed = await memory.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=[root],
+            register_writes=[
+                SetRegister(LaneHead(LaneId.main(), root.entry_id)),
+                SetRegister(LaneState(LaneId.main())),
+            ],
+            expectations=[
+                RegisterExpectation(LaneHead(LaneId.main(), root.entry_id).ref, None),
+                RegisterExpectation(LaneState(LaneId.main()).ref, None),
+            ],
+        ),
+    )
+    assert isinstance(memory_seed, TransactionCommit)
+    memory_chain = await memory.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            entries=[first, second],
+            register_writes=[SetRegister(LaneHead(LaneId.main(), second.entry_id))],
+            expectations=[RegisterExpectation(main.ref, main.sequence)],
+        ),
+    )
+    assert isinstance(memory_chain, TransactionCommit)
+    assert await memory.load(session_id) == pg_snapshot
+
+    missing = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="missing",
+        parent_entry_id=EntryId.new(),
+    )
+    with pytest.raises(ValueError, match="parent is missing"):
+        await store.transact(
+            session_id=session_id,
+            fencing_epoch=epoch,
+            transaction=SessionTransaction.from_parts(
+                entries=[missing],
+                register_writes=[SetRegister(LaneHead(LaneId.main(), missing.entry_id))],
+                expectations=[RegisterExpectation(current_head.ref, current_head.sequence)],
+            ),
+        )
+
+    later_root = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="second root",
+    )
+    with pytest.raises(ValueError, match="only the first Session Entry can be a root"):
+        await store.transact(
+            session_id=session_id,
+            fencing_epoch=epoch,
+            transaction=SessionTransaction.from_parts(
+                entries=[later_root],
+                register_writes=[SetRegister(LaneHead(LaneId.main(), later_root.entry_id))],
+                expectations=[RegisterExpectation(current_head.ref, current_head.sequence)],
+            ),
+        )
+
+    duplicate_id = EntryId.new()
+    duplicate_first = replace(first, entry_id=duplicate_id, parent_entry_id=second.entry_id)
+    duplicate_second = replace(second, entry_id=duplicate_id, parent_entry_id=duplicate_id)
+    with pytest.raises(ValueError, match="identity already exists"):
+        await store.transact(
+            session_id=session_id,
+            fencing_epoch=epoch,
+            transaction=SessionTransaction.from_parts(
+                entries=[duplicate_first, duplicate_second],
+                register_writes=[SetRegister(LaneHead(LaneId.main(), duplicate_id))],
+                expectations=[RegisterExpectation(current_head.ref, current_head.sequence)],
+            ),
+        )
+
+    existing = replace(first, entry_id=root.entry_id, parent_entry_id=second.entry_id)
+    with pytest.raises(ValueError, match="identity already exists"):
+        await store.transact(
+            session_id=session_id,
+            fencing_epoch=epoch,
+            transaction=SessionTransaction.from_parts(
+                entries=[existing],
+                register_writes=[SetRegister(LaneHead(LaneId.main(), existing.entry_id))],
+                expectations=[RegisterExpectation(current_head.ref, current_head.sequence)],
+            ),
+        )
+
+
+async def test_pg_lane_pair_create_delete_and_archived_advance(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+    snapshot = await store.load(session_id)
+    root_id = snapshot.entries[0].entry_id
+    branch_id = LaneId.new()
+    branch_head = LaneHead(branch_id, root_id)
+    branch_state = LaneState(branch_id, archived=True)
+    with pytest.raises(ValueError, match="complete main and Lane pairs"):
+        await store.transact(
+            session_id=session_id,
+            fencing_epoch=epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(branch_head)],
+                expectations=[RegisterExpectation(branch_head.ref, None)],
+            ),
+        )
+
+    created = await store.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[SetRegister(branch_head), SetRegister(branch_state)],
+            expectations=[
+                RegisterExpectation(branch_head.ref, None),
+                RegisterExpectation(branch_state.ref, None),
+            ],
+        ),
+    )
+    assert isinstance(created, TransactionCommit)
+
+    branch_entry = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=datetime.now(UTC),
+        content="archived write",
+        parent_entry_id=root_id,
+    )
+    with pytest.raises(ValueError, match="archived Lane"):
+        await store.transact(
+            session_id=session_id,
+            fencing_epoch=epoch,
+            transaction=SessionTransaction.from_parts(
+                entries=[branch_entry],
+                register_writes=[SetRegister(LaneHead(branch_id, branch_entry.entry_id))],
+                expectations=[RegisterExpectation(branch_head.ref, created.commit_sequence)],
+            ),
+        )
+
+    deleted = await store.transact(
+        session_id=session_id,
+        fencing_epoch=epoch,
+        transaction=SessionTransaction.from_parts(
+            register_writes=[DeleteRegister(branch_head.ref), DeleteRegister(branch_state.ref)],
+            expectations=[
+                RegisterExpectation(branch_head.ref, created.commit_sequence),
+                RegisterExpectation(branch_state.ref, created.commit_sequence),
+            ],
+        ),
+    )
+    assert isinstance(deleted, TransactionCommit)
+    after = await store.load(session_id)
+    assert all(record.ref.key != branch_id.value for record in after.registers)
 
 
 async def test_host_delta_identity_conflict_rolls_back_entry_and_register(pool) -> None:
