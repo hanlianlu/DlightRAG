@@ -37,6 +37,22 @@ def _python_files() -> list[Path]:
     return [path for root in _SOURCE_ROOTS for path in root.rglob("*.py")]
 
 
+def test_web_conversation_page_query_matches_the_covering_index_contract() -> None:
+    from dlightrag.adapters.postgres.web import web_conversations
+
+    first = " ".join(web_conversations._LIST_CONVERSATIONS_FIRST_PAGE.split())
+    after = " ".join(web_conversations._LIST_CONVERSATIONS_AFTER.split())
+    index = " ".join(web_conversations._CREATE_CONVERSATION_INDEXES[0].split())
+
+    assert "(principal_id, updated_at DESC, conversation_id DESC)" in index
+    assert "WHERE principal_id = $1" in first
+    assert "ORDER BY updated_at DESC, conversation_id DESC LIMIT $2" in first
+    assert "(updated_at, conversation_id) < ($2::timestamptz, $3::uuid)" in after
+    assert "ORDER BY updated_at DESC, conversation_id DESC LIMIT $4" in after
+    assert "OFFSET" not in first.upper()
+    assert "OFFSET" not in after.upper()
+
+
 def test_asyncpg_is_private_to_the_postgres_adapter() -> None:
     offenders: list[Path] = []
     for path in _python_files():

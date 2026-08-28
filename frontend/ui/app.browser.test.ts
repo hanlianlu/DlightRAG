@@ -74,7 +74,9 @@ function response(body: unknown, status = 200): Response {
 }
 
 function bootstrapResponse(input: RequestInfo | URL): Response {
-  return String(input) === '/web/api/conversations' ? response([]) : response(bootstrap);
+  return String(input) === '/web/api/conversations'
+    ? response({items: [], next_cursor: null})
+    : response(bootstrap);
 }
 
 function dialogNamed(root: ParentNode, name: string): HTMLDialogElement | null {
@@ -539,7 +541,9 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
 it('fails closed and resolves the same ready promise after an explicit retry', async () => {
   let attempts = 0;
   window.fetch = async (input) => {
-    if (String(input) === '/web/api/conversations') return response([]);
+    if (String(input) === '/web/api/conversations') {
+      return response({items: [], next_cursor: null});
+    }
     attempts += 1;
     return attempts === 1 ? response({detail: 'down'}, 503) : response(bootstrap);
   };

@@ -8,18 +8,20 @@ import {
   listConversations,
   renameConversation,
   type ConversationHistory,
+  type ConversationPage,
   type ConversationSummary,
 } from '../api/conversations.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {Store} from './base.ts';
 
 export type ConversationListState = 'loading' | 'ready' | 'error' | 'empty-error';
+export type ConversationLoadMoreState = 'idle' | 'loading' | 'error';
 export type ConversationViewState = 'new' | 'loading' | 'ready' | 'unavailable' | 'error';
 export type ConversationOpenResult = 'ready' | 'unavailable' | 'error' | 'stale';
 export type ConversationMutationResult = 'ok' | 'missing' | 'error';
 
 export interface ConversationApi {
-  list(signal?: AbortSignal): Promise<ConversationSummary[]>;
+  list(cursor: string | null, signal?: AbortSignal): Promise<ConversationPage>;
   history(conversationId: string, signal?: AbortSignal): Promise<ConversationHistory>;
   rename(
     conversationId: string,
@@ -45,6 +47,9 @@ export class ConversationStore extends Store {
   #activeConversationId: string | null = null;
   #history: ConversationHistory | null = null;
   #listState: ConversationListState = 'loading';
+  #loadMoreState: ConversationLoadMoreState = 'idle';
+  #nextCursor: string | null = null;
+  #loadMoreFlight: Promise<void> | null = null;
   #viewState: ConversationViewState = 'new';
   #viewRevision = 0;
   #mutationPending = false;
@@ -72,6 +77,14 @@ export class ConversationStore extends Store {
 
   get listState(): ConversationListState {
     return this.#listState;
+  }
+
+  get loadMoreState(): ConversationLoadMoreState {
+    return this.#loadMoreState;
+  }
+
+  get hasOlderConversations(): boolean {
+    return this.#nextCursor !== null;
   }
 
   get viewState(): ConversationViewState {
@@ -103,17 +116,53 @@ export class ConversationStore extends Store {
     const controller = new AbortController();
     const generation = ++this.#listGeneration;
     this.#listController = controller;
+    this.#loadMoreFlight = null;
+    this.#loadMoreState = 'idle';
     this.#listState = 'loading';
     this.changed();
     try {
-      const conversations = await this.#api.list(controller.signal);
+      const page = await this.#api.list(null, controller.signal);
       if (generation !== this.#listGeneration) return;
-      this.#conversations = this.#sort(conversations);
+      this.#conversations = this.#merge([], page.items);
+      this.#nextCursor = page.next_cursor;
       this.#listState = 'ready';
       this.changed();
     } catch (error) {
       if (isAbortError(error) || generation !== this.#listGeneration) return;
       this.#listState = this.#conversations.length > 0 ? 'error' : 'empty-error';
+      this.changed();
+    } finally {
+      if (this.#listController === controller) this.#listController = null;
+    }
+  }
+
+  loadOlder(): Promise<void> {
+    if (this.#loadMoreFlight !== null) return this.#loadMoreFlight;
+    if (this.#nextCursor === null || this.#listState === 'loading') return Promise.resolve();
+    const flight = this.#loadOlderPage(this.#nextCursor, this.#listGeneration);
+    this.#loadMoreFlight = flight;
+    void flight.finally(() => {
+      if (this.#loadMoreFlight === flight) this.#loadMoreFlight = null;
+    });
+    return flight;
+  }
+
+  async #loadOlderPage(cursor: string, generation: number): Promise<void> {
+    this.#listController?.abort();
+    const controller = new AbortController();
+    this.#listController = controller;
+    this.#loadMoreState = 'loading';
+    this.changed();
+    try {
+      const page = await this.#api.list(cursor, controller.signal);
+      if (generation !== this.#listGeneration) return;
+      this.#conversations = this.#merge(this.#conversations, page.items);
+      this.#nextCursor = page.next_cursor;
+      this.#loadMoreState = 'idle';
+      this.changed();
+    } catch (error) {
+      if (isAbortError(error) || generation !== this.#listGeneration) return;
+      this.#loadMoreState = 'error';
       this.changed();
     } finally {
       if (this.#listController === controller) this.#listController = null;
@@ -249,6 +298,10 @@ export class ConversationStore extends Store {
 
   dispose(): void {
     this.#listController?.abort();
+    this.#listController = null;
+    this.#listGeneration += 1;
+    this.#loadMoreFlight = null;
+    this.#loadMoreState = 'idle';
     this.#abortView();
   }
 
@@ -278,11 +331,7 @@ export class ConversationStore extends Store {
   }
 
   #upsert(summary: ConversationSummary): void {
-    const next = this.#conversations.filter(
-      (conversation) => conversation.conversation_id !== summary.conversation_id,
-    );
-    next.push(summary);
-    this.#conversations = this.#sort(next);
+    this.#conversations = this.#merge(this.#conversations, [summary]);
   }
 
   #removeSummary(conversationId: string): void {
@@ -291,8 +340,33 @@ export class ConversationStore extends Store {
     );
   }
 
+  #merge(
+    existing: readonly ConversationSummary[],
+    incoming: readonly ConversationSummary[],
+  ): ConversationSummary[] {
+    const byId = new Map(existing.map((conversation) => [
+      conversation.conversation_id,
+      conversation,
+    ]));
+    for (const conversation of incoming) byId.set(conversation.conversation_id, conversation);
+    return this.#sort([...byId.values()]);
+  }
+
   #sort(conversations: readonly ConversationSummary[]): ConversationSummary[] {
-    return [...conversations].sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+    return [...conversations].sort((left, right) => {
+      const leftMillis = Date.parse(left.updated_at);
+      const rightMillis = Date.parse(right.updated_at);
+      if (leftMillis !== rightMillis) return rightMillis - leftMillis;
+      const microsecondOrder = this.#microsecondRemainder(right.updated_at)
+        - this.#microsecondRemainder(left.updated_at);
+      if (microsecondOrder !== 0) return microsecondOrder;
+      return right.conversation_id.localeCompare(left.conversation_id);
+    });
+  }
+
+  #microsecondRemainder(timestamp: string): number {
+    const fraction = /\.(\d+)(?:Z|[+-]\d\d:\d\d)$/.exec(timestamp)?.[1] ?? '';
+    return Number(fraction.padEnd(6, '0').slice(3, 6) || 0);
   }
 
   #isMissing(error: unknown): boolean {

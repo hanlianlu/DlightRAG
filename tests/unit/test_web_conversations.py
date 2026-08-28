@@ -13,7 +13,14 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.adapters.http.server import create_app
 from dlightrag.application.config import DlightragConfig
-from dlightrag.application.web_conversations import ConversationSnapshot
+from dlightrag.application.web_conversations import (
+    ConversationCursor,
+    ConversationCursorCodec,
+    ConversationPage,
+    ConversationPageRequest,
+    ConversationSnapshot,
+    ConversationSummary,
+)
 from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
 from tests.unit.web.answer_run_fixtures import FakeAnswers, web_answer_submission
@@ -37,7 +44,19 @@ def conversation_service() -> AsyncMock:
         "updated_at": now,
     }
     service.create.return_value = summary
-    service.list.return_value = [summary]
+    service.cursor_codec = ConversationCursorCodec(b"unit-test-cursor-secret")
+    service.list.return_value = ConversationPage(
+        items=(
+            ConversationSummary(
+                conversation_id=_CID,
+                title=None,
+                created_at=now,
+                updated_at=now,
+            ),
+        ),
+        next_cursor=None,
+        fetched_rows=1,
+    )
     service.snapshot.return_value = ConversationSnapshot(
         principal_id="anonymous",
         conversation_id=_CID,
@@ -122,8 +141,81 @@ async def test_list_returns_only_service_projection(
     response = await conversation_client.get("/web/api/conversations")
 
     assert response.status_code == 200
-    assert len(response.json()) == 1
+    assert response.json()["next_cursor"] is None
+    assert len(response.json()["items"]) == 1
     conversation_service.list.assert_awaited_once()
+
+
+async def test_list_cursor_round_trips_as_paired_ordering_facts(
+    conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+) -> None:
+    updated_at = datetime.datetime(2026, 7, 12, 3, 4, 5, 123456, tzinfo=datetime.UTC)
+    next_cursor = ConversationCursor(updated_at=updated_at, conversation_id=UUID(_CID))
+    conversation_service.list.return_value = ConversationPage(
+        items=(),
+        next_cursor=next_cursor,
+        fetched_rows=2,
+    )
+    first = await conversation_client.get("/web/api/conversations?limit=1")
+    token = first.json()["next_cursor"]
+    assert isinstance(token, str)
+
+    conversation_service.list.return_value = ConversationPage(
+        items=(),
+        next_cursor=None,
+        fetched_rows=0,
+    )
+    second = await conversation_client.get(
+        "/web/api/conversations",
+        params={"limit": 1, "cursor": token},
+    )
+
+    assert second.status_code == 200
+    request = conversation_service.list.await_args.kwargs["page"]
+    assert request == ConversationPageRequest(limit=1, cursor=next_cursor)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_status"),
+    (
+        pytest.param("limit=0", 422, id="limit-too-small"),
+        pytest.param("limit=101", 422, id="limit-too-large"),
+        pytest.param("limit=all", 422, id="limit-not-integer"),
+        pytest.param("cursor=not-a-cursor", 422, id="malformed-cursor"),
+    ),
+)
+async def test_invalid_page_inputs_are_422_before_the_service_runs(
+    conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+    query: str,
+    expected_status: int,
+) -> None:
+    response = await conversation_client.get(f"/web/api/conversations?{query}")
+
+    assert response.status_code == expected_status
+    conversation_service.list.assert_not_awaited()
+
+
+async def test_tampered_cursor_is_422_before_the_service_runs(
+    conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+) -> None:
+    cursor = conversation_service.cursor_codec.encode(
+        ConversationCursor(
+            updated_at=datetime.datetime(2026, 7, 12, tzinfo=datetime.UTC),
+            conversation_id=UUID(_CID),
+        )
+    )
+    replacement = "A" if cursor[-1] != "A" else "B"
+
+    response = await conversation_client.get(
+        "/web/api/conversations",
+        params={"cursor": f"{cursor[:-1]}{replacement}"},
+    )
+
+    assert response.status_code == 422
+    conversation_service.list.assert_not_awaited()
 
 
 async def test_history_of_other_principal_is_404(
@@ -483,6 +575,65 @@ async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailabi
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         with pytest.raises(type(store_error), match=str(store_error)):
             await client.get("/web/api/conversations")
+
+
+async def test_application_page_uses_extra_row_proof_and_last_returned_item_cursor() -> None:
+    from dlightrag.application.access import owner_id_from_user
+    from dlightrag.application.web_conversations import (
+        ConversationRowPage,
+        WebConversationService,
+    )
+
+    now = datetime.datetime(2026, 7, 12, tzinfo=datetime.UTC)
+    rows = tuple(
+        {
+            "conversation_id": f"00000000-0000-0000-0000-{index:012d}",
+            "title": None,
+            "created_at": now,
+            "updated_at": now - datetime.timedelta(seconds=index),
+        }
+        for index in range(1, 3)
+    )
+    store = AsyncMock()
+    store.list_conversations.return_value = ConversationRowPage(
+        items=rows,
+        has_more=True,
+        fetched_rows=3,
+    )
+    service = WebConversationService(store=store, answers=FakeAnswers(), max_attachments=6)
+
+    result = await service.list(None, page=ConversationPageRequest(limit=2))
+
+    assert len(result.items) == 2
+    assert result.fetched_rows == 3
+    assert result.next_cursor == ConversationCursor(
+        updated_at=rows[-1]["updated_at"],
+        conversation_id=UUID(str(rows[-1]["conversation_id"])),
+    )
+    store.list_conversations.assert_awaited_once_with(
+        owner_id_from_user(None),
+        page=ConversationPageRequest(limit=2),
+    )
+
+
+def test_cursor_codec_rejects_tampering_and_round_trips_canonical_facts() -> None:
+    codec = ConversationCursorCodec(b"unit-test-cursor-secret")
+    cursor = ConversationCursor(
+        updated_at=datetime.datetime(2026, 7, 12, 3, 4, 5, 123456, tzinfo=datetime.UTC),
+        conversation_id=UUID(_CID),
+    )
+    encoded = codec.encode(cursor)
+
+    assert codec.decode(encoded) == cursor
+    replacement = "A" if encoded[-1] != "A" else "B"
+    with pytest.raises(ValueError, match="invalid conversation page cursor"):
+        codec.decode(f"{encoded[:-1]}{replacement}")
+
+
+@pytest.mark.parametrize("limit", [0, 101, True, 1.5])
+def test_application_page_limit_is_hard_bounded(limit: object) -> None:
+    with pytest.raises(ValueError, match="conversation page limit"):
+        ConversationPageRequest(limit=limit)  # type: ignore[arg-type]
 
 
 def test_browser_contracts_forbid_extra_fields_and_normalize_titles() -> None:

@@ -32,6 +32,10 @@ from dlightrag.engine.runtime import (
 
 from .models import (
     AnswerTurnCreation,
+    ConversationCursor,
+    ConversationCursorCodec,
+    ConversationPage,
+    ConversationPageRequest,
     ConversationSnapshot,
     ConversationSummary,
     LinkedTurn,
@@ -164,11 +168,18 @@ class WebConversationService:
         store: WebConversationStore,
         answers: AnswerService,
         max_attachments: int,
+        cursor_secret: bytes | None = None,
     ) -> None:
         self._store = store
         self._answers = answers
         self._max_attachments = max_attachments
+        self._cursor_codec = ConversationCursorCodec(cursor_secret)
         self._prune_task: asyncio.Task[None] | None = None
+
+    @property
+    def cursor_codec(self) -> ConversationCursorCodec:
+        """Return the codec shared by this service and its HTTP adapter."""
+        return self._cursor_codec
 
     async def start_retention(self) -> None:
         """Start the empty-conversation sweep after schema composition."""
@@ -208,10 +219,38 @@ class WebConversationService:
         row = await self._store_call(self._store.create_conversation(principal_id))
         return _conversation_summary(row)
 
-    async def list(self, user: UserContext | None) -> list[ConversationSummary]:
+    async def list(
+        self,
+        user: UserContext | None,
+        *,
+        page: ConversationPageRequest | None = None,
+    ) -> ConversationPage:
+        """Return one newest-first keyset page scoped to the authenticated principal.
+
+        This is standard keyset pagination rather than a snapshot: conversations
+        created or touched above the supplied cursor after an earlier page are not
+        pulled into the older traversal. Already returned rows never repeat.
+        """
         principal_id = owner_id_from_user(user)
-        rows = await self._store_call(self._store.list_conversations(principal_id))
-        return [_conversation_summary(row) for row in rows]
+        requested_page = page or ConversationPageRequest()
+        result = await self._store_call(
+            self._store.list_conversations(principal_id, page=requested_page)
+        )
+        items = tuple(_conversation_summary(row) for row in result.items)
+        next_cursor = None
+        if result.has_more:
+            if not items:
+                raise RuntimeError("conversation store reported more rows after an empty page")
+            last = items[-1]
+            next_cursor = ConversationCursor(
+                updated_at=last.updated_at,
+                conversation_id=UUID(last.conversation_id),
+            )
+        return ConversationPage(
+            items=items,
+            next_cursor=next_cursor,
+            fetched_rows=result.fetched_rows,
+        )
 
     async def rename(
         self,

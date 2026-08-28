@@ -48,7 +48,7 @@ def _install_conversation_routes(page: Page) -> ConversationRouteState:
         path = urlparse(request.url).path
         method = request.method
         if path == "/web/api/conversations" and method == "GET":
-            route.fulfill(json=state.conversations)
+            route.fulfill(json={"items": state.conversations, "next_cursor": None})
             return
         if path == "/web/api/conversations" and method == "POST":
             item = summary(str(uuid4()))

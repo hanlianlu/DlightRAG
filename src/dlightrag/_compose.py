@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -316,6 +317,16 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             store=web_store,
             answers=answers,
             max_attachments=config.answer.generation.max_attachments,
+            # Stable across workers sharing the operational database. Cursors
+            # carry no authorization state and naturally expire on credential rotation.
+            cursor_secret=hashlib.sha256(
+                (
+                    "dlightrag-web-conversation-cursor\0"
+                    f"{config.storage.postgres.host}\0"
+                    f"{config.storage.postgres.database}\0"
+                    f"{config.storage.postgres.password}"
+                ).encode()
+            ).digest(),
         ),
         initialize_process=_initialize_process,
         close_process=_close_process,

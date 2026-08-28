@@ -11,6 +11,11 @@ export interface ConversationSummary {
   forked_from_title?: string | null;
 }
 
+export interface ConversationPage {
+  items: ConversationSummary[];
+  next_cursor: string | null;
+}
+
 export interface ConversationAttachmentReference {
   attachment_id: string;
   ordinal: number;
@@ -160,9 +165,13 @@ async function responseJson<T>(response: Response, fallback: string): Promise<T>
   return await response.json() as T;
 }
 
-export async function listConversations(signal?: AbortSignal): Promise<ConversationSummary[]> {
-  const response = await fetch('/web/api/conversations', {signal});
-  return responseJson<ConversationSummary[]>(response, 'Failed to load conversations');
+export async function listConversations(
+  cursor: string | null = null,
+  signal?: AbortSignal,
+): Promise<ConversationPage> {
+  const query = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
+  const response = await fetch(`/web/api/conversations${query}`, {signal});
+  return responseJson<ConversationPage>(response, 'Failed to load conversations');
 }
 
 export async function createConversation(signal?: AbortSignal): Promise<ConversationSummary> {

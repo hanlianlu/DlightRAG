@@ -94,7 +94,7 @@ def _install_history(page: Page, presentation: dict[str, object]) -> None:
     def handle(route: Route) -> None:
         path = urlparse(route.request.url).path
         if path == "/web/api/conversations":
-            route.fulfill(json=[_CONVERSATION])
+            route.fulfill(json={"items": [_CONVERSATION], "next_cursor": None})
             return
         if path == f"/web/api/conversations/{_CONVERSATION_ID}/history":
             route.fulfill(json={"conversation": _CONVERSATION, "turns": [_turn(presentation)]})

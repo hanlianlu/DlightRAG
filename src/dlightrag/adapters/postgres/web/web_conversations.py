@@ -38,6 +38,9 @@ from dlightrag.adapters.postgres.core._operations import ConnectionPool, Postgre
 from dlightrag.application.answer_runs.routing import RoutingAcceptance
 from dlightrag.application.web_conversations import (
     AnswerTurnCreation,
+    ConversationCursor,
+    ConversationPageRequest,
+    ConversationRowPage,
     ConversationSnapshot,
     ConversationSubmissionConflict,
     LinkedTurn,
@@ -207,11 +210,21 @@ ON CONFLICT (principal_id, conversation_id) DO NOTHING
 RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
-_LIST_CONVERSATIONS = f"""
+_LIST_CONVERSATIONS_FIRST_PAGE = f"""
 SELECT {_SUMMARY_COLUMNS}
 FROM web_conversations
 WHERE principal_id = $1
 ORDER BY updated_at DESC, conversation_id DESC
+LIMIT $2
+"""  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
+
+_LIST_CONVERSATIONS_AFTER = f"""
+SELECT {_SUMMARY_COLUMNS}
+FROM web_conversations
+WHERE principal_id = $1
+  AND (updated_at, conversation_id) < ($2::timestamptz, $3::uuid)
+ORDER BY updated_at DESC, conversation_id DESC
+LIMIT $4
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
 _RENAME_CONVERSATION = f"""
@@ -549,13 +562,40 @@ class PGWebConversationStore(PostgresOperationRunner):
     async def list_conversations(
         self,
         principal_id: str,
-    ) -> list[dict[str, Any]]:
-        """List one principal's conversations."""
+        *,
+        page: ConversationPageRequest,
+    ) -> ConversationRowPage:
+        """Fetch one hard-bounded principal page through the covering order index."""
+        if not isinstance(page, ConversationPageRequest):
+            raise ValueError("conversation page request is required")
+        validated_page = ConversationPageRequest(limit=page.limit, cursor=page.cursor)
+        cursor = validated_page.cursor
+        if cursor is not None and not isinstance(cursor, ConversationCursor):
+            raise ValueError("conversation cursor must contain paired ordering fields")
         await self._ensure_initialized()
+        fetch_limit = validated_page.limit + 1
 
-        async def _select(conn: Any) -> list[dict[str, Any]]:
-            rows = await conn.fetch(_LIST_CONVERSATIONS, principal_id)
-            return [_row_dict(row) for row in rows]
+        async def _select(conn: Any) -> ConversationRowPage:
+            if cursor is None:
+                rows = await conn.fetch(
+                    _LIST_CONVERSATIONS_FIRST_PAGE,
+                    principal_id,
+                    fetch_limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    _LIST_CONVERSATIONS_AFTER,
+                    principal_id,
+                    cursor.updated_at,
+                    cursor.conversation_id,
+                    fetch_limit,
+                )
+            fetched_rows = len(rows)
+            return ConversationRowPage(
+                items=tuple(_row_dict(row) for row in rows[: validated_page.limit]),
+                has_more=fetched_rows > validated_page.limit,
+                fetched_rows=fetched_rows,
+            )
 
         return await self._run_read(_select)
 

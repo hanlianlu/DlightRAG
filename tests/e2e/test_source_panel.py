@@ -216,7 +216,7 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
     def handle_conversations(route):
         path = urlparse(route.request.url).path
         if path == "/web/api/conversations":
-            route.fulfill(json=[conversation])
+            route.fulfill(json={"items": [conversation], "next_cursor": None})
             return
         if path == "/web/api/conversations/public-source-history/history":
             route.fulfill(

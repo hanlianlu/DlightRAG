@@ -296,11 +296,34 @@ export class DlConversationList extends LightElement {
       ${listState === 'empty-error'
         ? this.#renderStatus('No conversation is open.', 'Retry New chat', 'new')
         : nothing}
-      ${repeat(
-        conversations,
-        (conversation) => conversation.conversation_id,
-        (conversation) => this.#renderRow(conversation),
-      )}
+      <div class="conversation-items" role="list" aria-live="polite">
+        ${repeat(
+          conversations,
+          (conversation) => conversation.conversation_id,
+          (conversation) => this.#renderRow(conversation),
+        )}
+      </div>
+      ${conversationStore.loadMoreState === 'error'
+        ? html`
+          <div class="conversation-list-status" role="status">
+            <span>Could not load older conversations.</span>
+            <button type="button" @click=${() => {
+              void conversationStore.loadOlder();
+            }}>Retry loading older conversations</button>
+          </div>
+        `
+        : nothing}
+      ${conversationStore.hasOlderConversations && conversationStore.loadMoreState !== 'error'
+        ? html`
+          <button
+            type="button"
+            class="conversation-load-older"
+            ?disabled=${conversationStore.loadMoreState === 'loading'}
+            aria-label="Load older conversations"
+            @click=${() => { void conversationStore.loadOlder(); }}
+          >${conversationStore.loadMoreState === 'loading' ? 'Loading older…' : 'Load older'}</button>
+        `
+        : nothing}
     `;
   }
 }

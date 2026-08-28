@@ -1,13 +1,15 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Web-only durable conversation lifecycle routes."""
 
+from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from dlightrag.adapters.http.browser.conversation_models import (
     ConversationHistory,
+    ConversationPage,
     ConversationSummary,
     RenameConversationRequest,
 )
@@ -21,7 +23,13 @@ from dlightrag.adapters.http.browser.deps import (
     get_web_conversation_service,
 )
 from dlightrag.application.access import AccessAction, owner_id_from_user
-from dlightrag.application.web_conversations import WebConversationService
+from dlightrag.application.web_conversations import (
+    CONVERSATION_PAGE_DEFAULT_LIMIT,
+    CONVERSATION_PAGE_MAX_LIMIT,
+    ConversationCursorError,
+    ConversationPageRequest,
+    WebConversationService,
+)
 
 router = APIRouter()
 
@@ -46,12 +54,30 @@ def _attachment_content_disposition(filename: str) -> str:
     return f'attachment; filename="{filename}"'
 
 
-@router.get("/conversations", response_model=list[ConversationSummary])
+@router.get("/conversations", response_model=ConversationPage)
 async def list_conversations(
     request: Request,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=CONVERSATION_PAGE_MAX_LIMIT),
+    ] = CONVERSATION_PAGE_DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=512)] = None,
     service: WebConversationService = Depends(get_web_conversation_service),
-) -> list[ConversationSummary]:
-    return [project_conversation_summary(summary) for summary in await service.list(_user(request))]
+) -> ConversationPage:
+    try:
+        decoded_cursor = service.cursor_codec.decode(cursor) if cursor is not None else None
+    except ConversationCursorError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    page = await service.list(
+        _user(request),
+        page=ConversationPageRequest(limit=limit, cursor=decoded_cursor),
+    )
+    return ConversationPage(
+        items=[project_conversation_summary(summary) for summary in page.items],
+        next_cursor=(
+            service.cursor_codec.encode(page.next_cursor) if page.next_cursor is not None else None
+        ),
+    )
 
 
 @router.post(

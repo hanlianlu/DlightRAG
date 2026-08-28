@@ -9,6 +9,40 @@ from playwright.sync_api import Page, Route
 
 
 @pytest.mark.e2e
+def test_conversation_list_endpoint_returns_two_exact_keyset_pages(
+    page: Page,
+    e2e_conversation_service: Any,
+) -> None:
+    expected_ids = e2e_conversation_service.seed_conversations(count=10)
+    page.goto("/web/")
+
+    result = page.evaluate(
+        """
+        async () => {
+          const firstResponse = await fetch('/web/api/conversations?limit=7');
+          const first = await firstResponse.json();
+          const secondResponse = await fetch(
+            `/web/api/conversations?limit=7&cursor=${encodeURIComponent(first.next_cursor)}`
+          );
+          return {
+            firstStatus: firstResponse.status,
+            secondStatus: secondResponse.status,
+            first,
+            second: await secondResponse.json(),
+          };
+        }
+        """
+    )
+
+    assert result["firstStatus"] == 200
+    assert result["secondStatus"] == 200
+    assert [item["conversation_id"] for item in result["first"]["items"]] == expected_ids[:7]
+    assert isinstance(result["first"]["next_cursor"], str)
+    assert [item["conversation_id"] for item in result["second"]["items"]] == expected_ids[7:]
+    assert result["second"]["next_cursor"] is None
+
+
+@pytest.mark.e2e
 def test_chat_submit_streams_answer(page):
     """Submit a query via the composer and verify the AI response appears in the DOM.
 
@@ -157,7 +191,7 @@ def test_a_replayed_submission_never_creates_a_second_turn(page, e2e_base_url):
         """
         async () => {
           const history = await (await fetch('/web/api/conversations')).json();
-          const conversation = history[0].conversation_id;
+          const conversation = history.items[0].conversation_id;
           const turns = await (
             await fetch(`/web/api/conversations/${conversation}/history`)
           ).json();

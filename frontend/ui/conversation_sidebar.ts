@@ -633,8 +633,6 @@ export class DlConversationSidebar extends LightElement {
           </button>
         </div>
         <dl-conversation-list
-          role="list"
-          aria-live="polite"
           .busy=${this.#busy}
           @dl-conversation-select=${this.#selectConversation}
           @dl-conversation-delete=${this.#deleteConversation}

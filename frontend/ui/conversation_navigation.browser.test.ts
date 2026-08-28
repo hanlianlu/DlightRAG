@@ -48,6 +48,10 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
+function conversationPage(items: ConversationSummary[], nextCursor: string | null = null): Response {
+  return response({items, next_cursor: nextCursor});
+}
+
 function button(root: ParentNode, name: string): HTMLButtonElement {
   const match = [...root.querySelectorAll<HTMLButtonElement>('button')].find((candidate) => {
     return candidate.getAttribute('aria-label') === name || candidate.textContent?.trim() === name;
@@ -87,7 +91,7 @@ afterEach(async () => {
 });
 
 it('publishes list item intent and owns menu keyboard behavior through ARIA', async () => {
-  window.fetch = async () => response([first]);
+  window.fetch = async () => conversationPage([first]);
   await conversationStore.loadList();
   const list = document.createElement('dl-conversation-list') as DlConversationList;
   document.body.appendChild(list);
@@ -116,8 +120,52 @@ it('publishes list item intent and owns menu keyboard behavior through ARIA', as
   expect(customElements.get('conversation-list')).to.equal(undefined);
 });
 
+it('keeps accessible Load older and retry controls outside list ownership', async () => {
+  const older = {...first, conversation_id: 'conversation-older', title: 'Older notes'};
+  const urls: string[] = [];
+  let olderAttempts = 0;
+  window.fetch = async (input) => {
+    const url = String(input);
+    urls.push(url);
+    if (!url.includes('?cursor=')) return conversationPage([first], 'opaque-next');
+    olderAttempts += 1;
+    return olderAttempts === 1
+      ? response({detail: 'temporarily unavailable'}, 503)
+      : conversationPage([older]);
+  };
+  await conversationStore.loadList();
+  const list = document.createElement('dl-conversation-list') as DlConversationList;
+  document.body.appendChild(list);
+  await list.updateComplete;
+
+  const loadOlder = button(list, 'Load older conversations');
+  const ownedList = list.querySelector<HTMLElement>('[role="list"]')!;
+  expect(list.getAttribute('role')).to.equal(null);
+  expect([...ownedList.children].every(
+    (child) => child.getAttribute('role') === 'listitem',
+  )).to.equal(true);
+  expect(loadOlder.closest('[role="list"]')).to.equal(null);
+  expect(urls).to.deep.equal(['/web/api/conversations']);
+  loadOlder.click();
+  await waitFor(() => list.textContent?.includes('Could not load older conversations.') ?? false);
+  const retry = button(list, 'Retry loading older conversations');
+  expect(retry.closest('[role="list"]')).to.equal(null);
+  expect([...ownedList.children].every(
+    (child) => child.getAttribute('role') === 'listitem',
+  )).to.equal(true);
+  retry.click();
+  await waitFor(() => list.textContent?.includes('Older notes') ?? false);
+
+  expect(urls).to.deep.equal([
+    '/web/api/conversations',
+    '/web/api/conversations?cursor=opaque-next',
+    '/web/api/conversations?cursor=opaque-next',
+  ]);
+  expect(list.querySelector('[aria-label="Load older conversations"]')).to.equal(null);
+});
+
 it('restores row focus after keyboard rename completion and cancellation', async () => {
-  window.fetch = async () => response([first]);
+  window.fetch = async () => conversationPage([first]);
   await conversationStore.loadList();
   const list = document.createElement('dl-conversation-list') as DlConversationList;
   document.body.appendChild(list);
@@ -273,7 +321,7 @@ it('owns list loading and route selection while exposing only typed Shell intent
   window.matchMedia = media(true);
   window.fetch = async (input) => {
     const url = String(input);
-    if (url === '/web/api/conversations') return response([first]);
+    if (url === '/web/api/conversations') return conversationPage([first]);
     if (url.endsWith(`/${first.conversation_id}/history`)) {
       return response({conversation: first, turns: []});
     }
@@ -321,7 +369,7 @@ it('keeps route navigation available while an independent rename settles', async
   let resolveRename: ((response: Response) => void) | undefined;
   window.fetch = async (input, init) => {
     const url = String(input);
-    if (url === '/web/api/conversations') return response([first]);
+    if (url === '/web/api/conversations') return conversationPage([first]);
     if (url.endsWith(`/${first.conversation_id}/history`)) {
       return response({conversation: first, turns: []});
     }
@@ -372,7 +420,7 @@ it('publishes a route reset after delete-all succeeds on the new route', async (
     if (String(input) === '/web/api/conversations' && init?.method === 'DELETE') {
       return new Response(null, {status: 204});
     }
-    if (String(input) === '/web/api/conversations') return response([]);
+    if (String(input) === '/web/api/conversations') return conversationPage([]);
     return response({detail: 'not found'}, 404);
   };
   const chat: ConversationChat = {
@@ -420,7 +468,7 @@ it('aborts a confirmed mutation and ignores its result after disconnect', async 
         }, {once: true});
       });
     }
-    if (String(input) === '/web/api/conversations') return response([]);
+    if (String(input) === '/web/api/conversations') return conversationPage([]);
     return response({detail: 'not found'}, 404);
   };
   let draftClears = 0;
@@ -473,7 +521,7 @@ it('aborts optional memory clearing and ignores its result after disconnect', as
         }, {once: true});
       });
     }
-    if (url === '/web/api/conversations') return response([]);
+    if (url === '/web/api/conversations') return conversationPage([]);
     return response({detail: 'not found'}, 404);
   };
   let draftClears = 0;
@@ -526,7 +574,7 @@ it('cancels a pending draft dialog on disconnect without wedging later navigatio
   window.matchMedia = media(true);
   window.fetch = async (input) => {
     const url = String(input);
-    if (url === '/web/api/conversations') return response([first]);
+    if (url === '/web/api/conversations') return conversationPage([first]);
     if (url.endsWith(`/${first.conversation_id}/history`)) {
       return response({conversation: first, turns: []});
     }

@@ -20,6 +20,11 @@ class ConversationSummary(ClientContractModel):
     forked_from_title: str | None = None
 
 
+class ConversationPage(ClientContractModel):
+    items: list[ConversationSummary]
+    next_cursor: str | None = None
+
+
 class ConversationAttachmentReference(ClientContractModel):
     attachment_id: str
     ordinal: int
@@ -88,6 +93,7 @@ __all__ = [
     "AnswerRunDescriptor",
     "ConversationAttachmentReference",
     "ConversationHistory",
+    "ConversationPage",
     "ConversationSummary",
     "ConversationTurn",
     "RenameConversationRequest",

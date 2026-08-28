@@ -18,11 +18,11 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Generator, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
@@ -43,6 +43,10 @@ from dlightrag.application.answer_runs.execution import (
 )
 from dlightrag.application.config import DlightragConfig, set_config
 from dlightrag.application.web_conversations import (
+    ConversationCursor,
+    ConversationCursorCodec,
+    ConversationPage,
+    ConversationPageRequest,
     ConversationSnapshot,
     LinkedTurn,
     WebAnswerSubmission,
@@ -166,6 +170,7 @@ class E2EConversationService:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self.cursor_codec = ConversationCursorCodec(b"dlightrag-e2e-conversation-cursor")
         self.reset()
 
     def reset(self) -> None:
@@ -198,14 +203,63 @@ class E2EConversationService:
             self._conversations[value["conversation_id"]] = value
         return self._summary(value)
 
-    async def list(self, _user: Any) -> list[ApplicationConversationSummary]:
+    async def list(
+        self,
+        _user: Any,
+        *,
+        page: ConversationPageRequest,
+    ) -> ConversationPage:
+        """Return an exact in-memory equivalent of the PostgreSQL keyset page."""
         with self._lock:
             values = sorted(
                 self._conversations.values(),
                 key=lambda value: (value["updated_at"], value["conversation_id"]),
                 reverse=True,
             )
-            return [self._summary(value) for value in values]
+            if page.cursor is not None:
+                cursor_key = (
+                    page.cursor.updated_at,
+                    str(page.cursor.conversation_id),
+                )
+                values = [
+                    value
+                    for value in values
+                    if (value["updated_at"], value["conversation_id"]) < cursor_key
+                ]
+            fetched = values[: page.limit + 1]
+            returned = fetched[: page.limit]
+            next_cursor = None
+            if len(fetched) > page.limit:
+                last = returned[-1]
+                next_cursor = ConversationCursor(
+                    updated_at=last["updated_at"],
+                    conversation_id=UUID(last["conversation_id"]),
+                )
+            return ConversationPage(
+                items=tuple(self._summary(value) for value in returned),
+                next_cursor=next_cursor,
+                fetched_rows=len(fetched),
+            )
+
+    def seed_conversations(self, *, count: int) -> list[str]:
+        """Seed deterministic newest-first rows for HTTP pagination coverage."""
+        newest = datetime(2026, 8, 28, tzinfo=UTC)
+        values: list[dict[str, Any]] = []
+        for index in range(count):
+            conversation_id = str(UUID(int=index + 1))
+            updated_at = newest - timedelta(microseconds=index)
+            values.append(
+                {
+                    "conversation_id": conversation_id,
+                    "title": f"Seeded conversation {index + 1}",
+                    "created_at": updated_at,
+                    "updated_at": updated_at,
+                    "turns": [],
+                }
+            )
+        with self._lock:
+            self._conversations.update((value["conversation_id"], value) for value in values)
+        return [value["conversation_id"] for value in values]
 
     async def history(
         self, _user: Any, conversation_id: str, **_: Any

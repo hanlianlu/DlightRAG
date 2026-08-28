@@ -2,7 +2,12 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {ConversationApiError, type ConversationHistory, type ConversationSummary} from '../api/conversations.ts';
+import {
+  ConversationApiError,
+  type ConversationHistory,
+  type ConversationPage,
+  type ConversationSummary,
+} from '../api/conversations.ts';
 import {ConversationStore, type ConversationApi} from './conversationStore.ts';
 
 function summary(id: string, updated = '2026-08-20T00:00:00Z'): ConversationSummary {
@@ -18,6 +23,10 @@ function history(id: string): ConversationHistory {
   return {conversation: summary(id), turns: []};
 }
 
+function page(items: ConversationSummary[], nextCursor: string | null = null): ConversationPage {
+  return {items, next_cursor: nextCursor};
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -27,7 +36,7 @@ function deferred<T>() {
 
 function api(overrides: Partial<ConversationApi> = {}): ConversationApi {
   return {
-    list: async () => [],
+    list: async () => page([]),
     history: async (id) => history(id),
     rename: async (id, title) => ({...summary(id), title}),
     delete: async () => {},
@@ -49,7 +58,10 @@ test('new chat is answerable without inventing or restoring a conversation id', 
 
 test('list loading is server-owned, sorted, and observable', async () => {
   const store = new ConversationStore(api({
-    list: async () => [summary('older'), summary('newer', '2026-08-21T00:00:00Z')],
+    list: async () => page([
+      summary('older'),
+      summary('newer', '2026-08-21T00:00:00Z'),
+    ]),
   }));
   let changes = 0;
   store.subscribe(() => { changes += 1; });
@@ -59,6 +71,135 @@ test('list loading is server-owned, sorted, and observable', async () => {
   assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['newer', 'older']);
   assert.equal(store.listState, 'ready');
   assert.ok(changes >= 2);
+});
+
+test('load older coalesces overlap and appends deduped deterministic pages', async () => {
+  const older = deferred<ConversationPage>();
+  const cursors: Array<string | null> = [];
+  const store = new ConversationStore(api({
+    list: async (cursor) => {
+      cursors.push(cursor);
+      if (cursor === null) {
+        return page([
+          summary('00000000-0000-0000-0000-000000000002'),
+          summary('00000000-0000-0000-0000-000000000001'),
+        ], 'older-cursor');
+      }
+      return older.promise;
+    },
+  }));
+  await store.loadList();
+
+  const firstFlight = store.loadOlder();
+  const overlappingFlight = store.loadOlder();
+  assert.equal(firstFlight, overlappingFlight);
+  assert.equal(store.loadMoreState, 'loading');
+  older.resolve(page([
+    summary('00000000-0000-0000-0000-000000000001'),
+    summary('00000000-0000-0000-0000-000000000003', '2026-08-19T00:00:00Z'),
+  ]));
+  await firstFlight;
+
+  assert.deepEqual(cursors, [null, 'older-cursor']);
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), [
+    '00000000-0000-0000-0000-000000000002',
+    '00000000-0000-0000-0000-000000000001',
+    '00000000-0000-0000-0000-000000000003',
+  ]);
+  assert.equal(store.hasOlderConversations, false);
+  assert.equal(store.loadMoreState, 'idle');
+});
+
+test('load older errors preserve loaded rows and remain retryable', async () => {
+  let olderAttempts = 0;
+  const store = new ConversationStore(api({
+    list: async (cursor) => {
+      if (cursor === null) return page([summary('new')], 'older-cursor');
+      olderAttempts += 1;
+      if (olderAttempts === 1) throw new ConversationApiError(503, 'down');
+      return page([summary('old', '2026-08-19T00:00:00Z')]);
+    },
+  }));
+  await store.loadList();
+
+  await store.loadOlder();
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['new']);
+  assert.equal(store.loadMoreState, 'error');
+  await store.loadOlder();
+
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['new', 'old']);
+  assert.equal(store.loadMoreState, 'idle');
+});
+
+test('reload cancels an older-page request and replaces it with a fresh first page', async () => {
+  let firstPages = 0;
+  let olderAborted = false;
+  const store = new ConversationStore(api({
+    list: async (cursor, signal) => {
+      if (cursor === null) {
+        firstPages += 1;
+        return firstPages === 1
+          ? page([summary('first')], 'older-cursor')
+          : page([summary('reloaded')]);
+      }
+      return await new Promise<ConversationPage>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => {
+          olderAborted = true;
+          reject(new DOMException('Aborted', 'AbortError'));
+        }, {once: true});
+      });
+    },
+  }));
+  await store.loadList();
+  const older = store.loadOlder();
+
+  await store.loadList();
+  await older;
+
+  assert.equal(olderAborted, true);
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['reloaded']);
+  assert.equal(store.loadMoreState, 'idle');
+});
+
+test('dispose aborts a pending page without applying late state', async () => {
+  let aborted = false;
+  const store = new ConversationStore(api({
+    list: async (cursor, signal) => {
+      if (cursor === null) return page([summary('first')], 'older-cursor');
+      return await new Promise<ConversationPage>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(new DOMException('Aborted', 'AbortError'));
+        }, {once: true});
+      });
+    },
+  }));
+  await store.loadList();
+  const older = store.loadOlder();
+
+  store.dispose();
+  await older;
+
+  assert.equal(aborted, true);
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['first']);
+});
+
+test('microsecond timestamps and UUID ties retain exact newest-first order', async () => {
+  const store = new ConversationStore(api({
+    list: async () => page([
+      summary('00000000-0000-0000-0000-000000000001', '2026-08-20T00:00:00Z'),
+      summary('00000000-0000-0000-0000-000000000002', '2026-08-20T00:00:00.000001Z'),
+      summary('00000000-0000-0000-0000-000000000003', '2026-08-20T00:00:00.000001Z'),
+    ]),
+  }));
+
+  await store.loadList();
+
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), [
+    '00000000-0000-0000-0000-000000000003',
+    '00000000-0000-0000-0000-000000000002',
+    '00000000-0000-0000-0000-000000000001',
+  ]);
 });
 
 test('opening a route drops a superseded history response', async () => {
@@ -123,9 +264,27 @@ test('background refresh preserves visible history on transient failure', async 
   assert.equal(store.viewRevision, before);
 });
 
+test('rename updates and reorders an already loaded summary', async () => {
+  const store = new ConversationStore(api({
+    list: async () => page([
+      summary('one', '2026-08-19T00:00:00Z'),
+      summary('two', '2026-08-20T00:00:00Z'),
+    ]),
+    rename: async (id, title) => ({
+      ...summary(id, '2026-08-21T00:00:00Z'),
+      title,
+    }),
+  }));
+  await store.loadList();
+
+  assert.equal(await store.rename('one', 'renamed'), 'ok');
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['one', 'two']);
+  assert.equal(store.conversations[0]?.title, 'renamed');
+});
+
 test('rename validation errors do not masquerade as missing conversations', async () => {
   const store = new ConversationStore(api({
-    list: async () => [summary('one')],
+    list: async () => page([summary('one')]),
     rename: async () => { throw new ConversationApiError(422, 'invalid title'); },
   }));
   await store.loadList();
@@ -137,7 +296,7 @@ test('rename validation errors do not masquerade as missing conversations', asyn
 test('an aborted mutation settles pending state without applying local changes', async () => {
   let receivedSignal: AbortSignal | undefined;
   const store = new ConversationStore(api({
-    list: async () => [summary('one')],
+    list: async () => page([summary('one')]),
     deleteAll: async (signal) => {
       receivedSignal = signal;
       await new Promise<void>((_resolve, reject) => {
@@ -163,7 +322,7 @@ test('an aborted mutation settles pending state without applying local changes',
 test('delete mutates the server before removing the local summary', async () => {
   const calls: string[] = [];
   const store = new ConversationStore(api({
-    list: async () => [summary('one')],
+    list: async () => page([summary('one')]),
     delete: async (id) => { calls.push(id); },
   }));
   await store.loadList();

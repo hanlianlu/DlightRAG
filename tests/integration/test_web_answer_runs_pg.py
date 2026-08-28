@@ -28,7 +28,11 @@ from dlightrag.adapters.postgres.answer.answer_runs import (
 from dlightrag.adapters.postgres.web.web_conversations import (
     PGWebConversationStore,
 )
-from dlightrag.application.web_conversations import ConversationSubmissionConflict
+from dlightrag.application.web_conversations import (
+    ConversationCursor,
+    ConversationPageRequest,
+    ConversationSubmissionConflict,
+)
 from dlightrag.engine.runtime import (
     IdempotencyKeyConflict,
     PendingArtifact,
@@ -561,6 +565,213 @@ async def test_a_run_created_outside_a_conversation_keeps_the_same_key_namespace
 # ---------------------------------------------------------------------------
 # Reads
 # ---------------------------------------------------------------------------
+
+
+async def test_keyset_pages_traverse_ten_thousand_rows_once_with_bounded_fetches(
+    store: PGWebConversationStore,
+    pool: Any,
+) -> None:
+    total = 10_037
+    foreign_total = 137
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO web_conversations (
+                principal_id, conversation_id, agent_session_id, agent_lane_id,
+                created_at, updated_at
+            )
+            SELECT
+                $1,
+                md5($1 || ':' || series::text)::uuid,
+                md5($1 || ':' || series::text)::uuid,
+                'main',
+                TIMESTAMPTZ '2025-01-01 00:00:00+00',
+                TIMESTAMPTZ '2026-01-01 00:00:00+00'
+                    - ((series - 1) * INTERVAL '1 microsecond')
+            FROM generate_series(1, $2) AS series
+            """,
+            _OWNER,
+            total,
+        )
+        await conn.execute(
+            """
+            INSERT INTO web_conversations (
+                principal_id, conversation_id, agent_session_id, agent_lane_id,
+                created_at, updated_at
+            )
+            SELECT
+                $1,
+                md5($1 || ':' || series::text)::uuid,
+                md5($1 || ':' || series::text)::uuid,
+                'main',
+                TIMESTAMPTZ '2025-01-01 00:00:00+00',
+                TIMESTAMPTZ '2027-01-01 00:00:00+00'
+                    - (series * INTERVAL '1 microsecond')
+            FROM generate_series(1, $2) AS series
+            """,
+            _OTHER_OWNER,
+            foreign_total,
+        )
+        expected_owner = [
+            str(row["conversation_id"])
+            for row in await conn.fetch(
+                "SELECT conversation_id FROM web_conversations "
+                "WHERE principal_id = $1 "
+                "ORDER BY updated_at DESC, conversation_id DESC",
+                _OWNER,
+            )
+        ]
+
+    limit = 73
+    request = ConversationPageRequest(limit=limit)
+    seen: list[str] = []
+    fetched_counts: list[int] = []
+    page_sizes: list[int] = []
+    while True:
+        result = await store.list_conversations(_OWNER, page=request)
+        fetched_counts.append(result.fetched_rows)
+        page_sizes.append(len(result.items))
+        seen.extend(str(row["conversation_id"]) for row in result.items)
+        assert len(result.items) <= limit
+        assert result.fetched_rows <= limit + 1
+        if not result.has_more:
+            break
+        last = result.items[-1]
+        request = ConversationPageRequest(
+            limit=limit,
+            cursor=ConversationCursor(
+                updated_at=last["updated_at"],
+                conversation_id=uuid.UUID(str(last["conversation_id"])),
+            ),
+        )
+
+    assert seen == expected_owner
+    assert len(seen) == total
+    assert len(set(seen)) == total
+    assert page_sizes[0] == limit
+    assert page_sizes[len(page_sizes) // 2] == limit
+    assert 0 < page_sizes[-1] <= limit
+    assert fetched_counts[0] == limit + 1
+    assert fetched_counts[len(fetched_counts) // 2] == limit + 1
+    assert fetched_counts[-1] == page_sizes[-1]
+    foreign = await store.list_conversations(
+        _OTHER_OWNER,
+        page=ConversationPageRequest(limit=100),
+    )
+    assert len(foreign.items) == 100
+    assert not set(seen).intersection(str(row["conversation_id"]) for row in foreign.items)
+
+
+async def test_identical_timestamp_ties_paginate_by_uuid_desc_exactly_once(
+    store: PGWebConversationStore,
+    pool: Any,
+) -> None:
+    total = 1_001
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO web_conversations (
+                principal_id, conversation_id, agent_session_id, agent_lane_id,
+                created_at, updated_at
+            )
+            SELECT
+                $1,
+                md5('tie:' || series::text)::uuid,
+                md5('tie:' || series::text)::uuid,
+                'main',
+                TIMESTAMPTZ '2026-01-01 00:00:00+00',
+                TIMESTAMPTZ '2026-01-02 00:00:00+00'
+            FROM generate_series(1, $2) AS series
+            """,
+            _OWNER,
+            total,
+        )
+        expected = [
+            str(row["conversation_id"])
+            for row in await conn.fetch(
+                "SELECT conversation_id FROM web_conversations "
+                "WHERE principal_id = $1 ORDER BY conversation_id DESC",
+                _OWNER,
+            )
+        ]
+
+    seen: list[str] = []
+    request = ConversationPageRequest(limit=37)
+    while True:
+        result = await store.list_conversations(_OWNER, page=request)
+        seen.extend(str(row["conversation_id"]) for row in result.items)
+        assert result.fetched_rows <= 38
+        if not result.has_more:
+            break
+        last = result.items[-1]
+        request = ConversationPageRequest(
+            limit=37,
+            cursor=ConversationCursor(
+                updated_at=last["updated_at"],
+                conversation_id=uuid.UUID(str(last["conversation_id"])),
+            ),
+        )
+
+    assert seen == expected
+    assert len(set(seen)) == total
+
+
+async def test_keyset_traversal_has_standard_concurrent_touch_and_create_semantics(
+    store: PGWebConversationStore,
+    pool: Any,
+) -> None:
+    """Rows moved above an established cursor are skipped, never duplicated."""
+    ids = [str(uuid.uuid4()) for _ in range(3)]
+    async with pool.acquire() as conn:
+        for position, conversation_id in enumerate(ids):
+            await conn.execute(
+                "INSERT INTO web_conversations ("
+                "principal_id, conversation_id, agent_session_id, agent_lane_id, updated_at"
+                ") VALUES ($1, $2::uuid, $2::uuid, 'main', "
+                "TIMESTAMPTZ '2026-01-03 00:00:00+00' - ($3 * INTERVAL '1 day'))",
+                _OWNER,
+                conversation_id,
+                position,
+            )
+
+    first = await store.list_conversations(
+        _OWNER,
+        page=ConversationPageRequest(limit=2),
+    )
+    assert first.has_more
+    first_ids = [str(row["conversation_id"]) for row in first.items]
+    last = first.items[-1]
+    cursor = ConversationCursor(
+        updated_at=last["updated_at"],
+        conversation_id=uuid.UUID(str(last["conversation_id"])),
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE web_conversations SET updated_at = "
+            "TIMESTAMPTZ '2027-01-01 00:00:00+00' "
+            "WHERE principal_id = $1 AND conversation_id = $2::uuid",
+            _OWNER,
+            ids[-1],
+        )
+        created = str(uuid.uuid4())
+        await conn.execute(
+            "INSERT INTO web_conversations ("
+            "principal_id, conversation_id, agent_session_id, agent_lane_id, updated_at"
+            ") VALUES ($1, $2::uuid, $2::uuid, 'main', "
+            "TIMESTAMPTZ '2027-01-02 00:00:00+00')",
+            _OWNER,
+            created,
+        )
+
+    second = await store.list_conversations(
+        _OWNER,
+        page=ConversationPageRequest(limit=2, cursor=cursor),
+    )
+    second_ids = [str(row["conversation_id"]) for row in second.items]
+
+    assert not set(first_ids).intersection(second_ids)
+    assert ids[-1] not in second_ids
+    assert created not in second_ids
 
 
 async def test_a_snapshot_projects_each_turn_from_its_run(

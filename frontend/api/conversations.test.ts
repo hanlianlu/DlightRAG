@@ -2,7 +2,12 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {continueAnswerRun, getAnswerRunChildren, steerAnswerRun} from './conversations.ts';
+import {
+  continueAnswerRun,
+  getAnswerRunChildren,
+  listConversations,
+  steerAnswerRun,
+} from './conversations.ts';
 
 const originalFetch = globalThis.fetch;
 const originalDocument = globalThis.document;
@@ -20,6 +25,24 @@ test.afterEach(() => {
     configurable: true,
     value: originalDocument,
   });
+});
+
+test('conversation pages use the bounded route and encode an opaque continuation', async () => {
+  const seen: string[] = [];
+  globalThis.fetch = async (input) => {
+    seen.push(String(input));
+    return new Response(JSON.stringify({items: [], next_cursor: null}), {
+      headers: {'Content-Type': 'application/json'},
+    });
+  };
+
+  assert.deepEqual(await listConversations(), {items: [], next_cursor: null});
+  await listConversations('facts/signature + padding');
+
+  assert.deepEqual(seen, [
+    '/web/api/conversations',
+    '/web/api/conversations?cursor=facts%2Fsignature%20%2B%20padding',
+  ]);
 });
 
 test('continuation posts one submission id to the selected branch operation', async () => {
