@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from heapq import nsmallest
 from typing import Literal, Protocol
 
 from dlightrag.engine.runtime.settlements import InventoryPathRecord
@@ -64,7 +65,9 @@ class WorkspaceStore(Protocol):
 
     async def register_spill(self, spill: CommittedSpillRecord) -> InventoryReplaceResult: ...
 
-    async def load_spills(self) -> tuple[CommittedSpillRecord, ...]: ...
+    async def load_spills_page(
+        self, *, after_resource_id: str | None, limit: int
+    ) -> tuple[CommittedSpillRecord, ...]: ...
 
     async def clear_spills(self) -> InventoryReplaceResult: ...
 
@@ -122,14 +125,30 @@ class InMemoryWorkspaceStore:
         self.spills.append(spill)
         return "committed"
 
-    async def load_spills(self) -> tuple[CommittedSpillRecord, ...]:
-        return tuple(self.spills)
+    async def load_spills_page(
+        self, *, after_resource_id: str | None, limit: int
+    ) -> tuple[CommittedSpillRecord, ...]:
+        _validate_spill_page_limit(limit)
+        matching = (
+            spill
+            for spill in self.spills
+            if after_resource_id is None or spill.resource_id > after_resource_id
+        )
+        return tuple(nsmallest(limit, matching, key=lambda spill: spill.resource_id))
 
     async def clear_spills(self) -> InventoryReplaceResult:
         if not self.live:
             return "lease_lost"
         self.spills = []
         return "committed"
+
+
+_MAX_SPILL_PAGE_LIMIT = 1_000
+
+
+def _validate_spill_page_limit(limit: int) -> None:
+    if limit < 1 or limit > _MAX_SPILL_PAGE_LIMIT:
+        raise ValueError(f"spill page limit must be between 1 and {_MAX_SPILL_PAGE_LIMIT}")
 
 
 __all__ = [

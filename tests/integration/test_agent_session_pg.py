@@ -1084,15 +1084,17 @@ async def test_host_delta_commits_workspace_inventory_and_spill(pool) -> None:
     session_id = _claimed_session(claimed)
     await _seed_transaction_session(store, session_id, epoch)
     intent_id = IntentId.new()
+    spill_ids = ("spill-3", "spill-1", "spill-5", "spill-2", "spill-4")
     update = EffectHostUpdate(
-        committed_outputs=(
+        committed_outputs=tuple(
             CommittedSpillUpdate(
-                resource_id="spill-1",
+                resource_id=resource_id,
                 content_digest="c" * 64,
                 size_bytes=12,
                 session_id=session_id.value,
                 intent_id=intent_id.value,
-            ),
+            )
+            for resource_id in spill_ids
         ),
         workspace_inventory=WorkspaceInventoryUpdate(
             upserts=(
@@ -1118,11 +1120,22 @@ async def test_host_delta_commits_workspace_inventory_and_spill(pool) -> None:
     workspace = claimed.execution.workspace_store
     assert workspace is not None
     inventory = await workspace.load_inventory()
-    spills = await workspace.load_spills()
+    first = await workspace.load_spills_page(after_resource_id=None, limit=2)
+    second = await workspace.load_spills_page(after_resource_id=first[-1].resource_id, limit=2)
+    third = await workspace.load_spills_page(after_resource_id=second[-1].resource_id, limit=2)
+    spills = (*first, *second, *third)
     assert [(item.relative_path, item.content_digest) for item in inventory] == [
         ("notes/a.md", "d" * 64)
     ]
-    assert [(item.resource_id, item.content_digest) for item in spills] == [("spill-1", "c" * 64)]
+    assert [item.resource_id for item in spills] == [
+        "spill-1",
+        "spill-2",
+        "spill-3",
+        "spill-4",
+        "spill-5",
+    ]
+    assert len({item.resource_id for item in spills}) == len(spills)
+    assert all(item.content_digest == "c" * 64 for item in spills)
 
 
 async def test_memory_operation_event_is_exactly_once_with_transaction(pool) -> None:

@@ -18,7 +18,11 @@ from dlightrag.engine.agent.environment import (
 )
 from dlightrag.engine.agent.tools.contracts import CommittedOutput
 from dlightrag.engine.agent.tools.output import OutputStage
-from dlightrag.engine.runtime.workspace import HandoffCommit, WorkspaceStore
+from dlightrag.engine.runtime.workspace import (
+    CommittedSpillRecord,
+    HandoffCommit,
+    WorkspaceStore,
+)
 
 
 class WorkspaceRecoveryFailed(RuntimeError):
@@ -27,6 +31,9 @@ class WorkspaceRecoveryFailed(RuntimeError):
 
 class WorkspaceIntegrityError(RuntimeError):
     """Unsupported entries or a stable source/destination digest mismatch."""
+
+
+_SPILL_RECOVERY_PAGE_SIZE = 128
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +109,7 @@ async def bind_run_workspace(
 async def copy_epoch_verified(
     root: Path, source_epoch: int, destination: int, store: WorkspaceStore | None
 ) -> None:
-    """Copy a stable observation of the source epoch; never execute in the old one."""
+    """Copy a stable source; the one fenced claimed run keeps spills immutable while paging."""
     source_ws, source_spill = epoch_paths(root, source_epoch)
     dest_parent = root / "epochs" / str(destination)
     temp_parent = root / "epochs" / f".tmp-{destination}-{uuid.uuid4().hex}"
@@ -120,7 +127,7 @@ async def copy_epoch_verified(
         if _workspace_manifest(temp_ws) != manifest_a:
             raise WorkspaceIntegrityError("copied workspace does not match the source manifest")
         if store is not None:
-            _copy_committed_spills(source_spill, temp_spill, await store.load_spills())
+            await _copy_committed_spills_paged(source_spill, temp_spill, store)
         if dest_parent.exists():
             shutil.rmtree(dest_parent)
         temp_parent.rename(dest_parent)
@@ -130,6 +137,9 @@ async def copy_epoch_verified(
     except OSError as exc:
         shutil.rmtree(temp_parent, ignore_errors=True)
         raise WorkspaceRecoveryFailed(str(exc)) from exc
+    except BaseException:
+        shutil.rmtree(temp_parent, ignore_errors=True)
+        raise
 
 
 class FileOutputStage(OutputStage):
@@ -231,23 +241,43 @@ def _copy_tree_regular_files(source: Path, dest: Path) -> None:
             shutil.copy2(src, target_dir / name)
 
 
-def _copy_committed_spills(source_dir: Path, dest_dir: Path, spills: object) -> None:
+async def _copy_committed_spills_paged(
+    source_dir: Path, dest_dir: Path, store: WorkspaceStore
+) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
-    for spill in spills:  # type: ignore[attr-defined]
-        name = f"{spill.resource_id}.txt"
-        src = source_dir / name
-        if not src.is_file():
-            raise WorkspaceIntegrityError(f"committed spill {spill.resource_id} is missing")
-        data = src.read_bytes()
-        digest = hashlib.sha256(data).hexdigest()
-        if digest != spill.content_digest or len(data) != spill.size_bytes:
-            raise WorkspaceIntegrityError(
-                f"committed spill {spill.resource_id} failed digest check"
-            )
-        dest = dest_dir / name
-        dest.write_bytes(data)
-        if hashlib.sha256(dest.read_bytes()).hexdigest() != digest:
-            raise WorkspaceIntegrityError(f"copied spill {spill.resource_id} does not match")
+    cursor: str | None = None
+    while True:
+        page = await store.load_spills_page(
+            after_resource_id=cursor, limit=_SPILL_RECOVERY_PAGE_SIZE
+        )
+        if len(page) > _SPILL_RECOVERY_PAGE_SIZE:
+            raise WorkspaceIntegrityError("committed spill page exceeded the requested limit")
+        if not page:
+            return
+        for spill in page:
+            if cursor is not None and spill.resource_id <= cursor:
+                raise WorkspaceIntegrityError(
+                    "committed spill pages are not strictly ordered by resource_id"
+                )
+            _copy_committed_spill(source_dir, dest_dir, spill)
+            cursor = spill.resource_id
+        if len(page) < _SPILL_RECOVERY_PAGE_SIZE:
+            return
+
+
+def _copy_committed_spill(source_dir: Path, dest_dir: Path, spill: CommittedSpillRecord) -> None:
+    name = f"{spill.resource_id}.txt"
+    src = source_dir / name
+    if not src.is_file():
+        raise WorkspaceIntegrityError(f"committed spill {spill.resource_id} is missing")
+    data = src.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != spill.content_digest or len(data) != spill.size_bytes:
+        raise WorkspaceIntegrityError(f"committed spill {spill.resource_id} failed digest check")
+    dest = dest_dir / name
+    dest.write_bytes(data)
+    if hashlib.sha256(dest.read_bytes()).hexdigest() != digest:
+        raise WorkspaceIntegrityError(f"copied spill {spill.resource_id} does not match")
 
 
 def _retire_epoch(root: Path, epoch: int) -> None:

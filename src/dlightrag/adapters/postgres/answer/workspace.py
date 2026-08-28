@@ -18,6 +18,7 @@ from dlightrag.engine.runtime.workspace import (
     HandoffLeaseLost,
     HandoffResult,
     InventoryReplaceResult,
+    _validate_spill_page_limit,
 )
 
 _LEASE = """
@@ -139,15 +140,32 @@ class PGWorkspaceStore:
                 await _upsert_spill(conn, self._owner_id, self._run_id, spill)
                 return "committed"
 
-    async def load_spills(self) -> tuple[CommittedSpillRecord, ...]:
+    async def load_spills_page(
+        self, *, after_resource_id: str | None, limit: int
+    ) -> tuple[CommittedSpillRecord, ...]:
+        _validate_spill_page_limit(limit)
         async with self._connection() as conn:
-            rows = await conn.fetch(
-                "SELECT resource_id, content_digest, size_bytes, session_id::text, intent_id::text"
-                " FROM dlightrag_answer_committed_spills"
-                " WHERE owner_id = $1 AND run_id = $2",
-                self._owner_id,
-                self._run_id,
-            )
+            if after_resource_id is None:
+                rows = await conn.fetch(
+                    "SELECT resource_id, content_digest, size_bytes, session_id::text,"
+                    " intent_id::text FROM dlightrag_answer_committed_spills"
+                    " WHERE owner_id = $1 AND run_id = $2"
+                    " ORDER BY resource_id LIMIT $3",
+                    self._owner_id,
+                    self._run_id,
+                    limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT resource_id, content_digest, size_bytes, session_id::text,"
+                    " intent_id::text FROM dlightrag_answer_committed_spills"
+                    " WHERE owner_id = $1 AND run_id = $2 AND resource_id > $3"
+                    " ORDER BY resource_id LIMIT $4",
+                    self._owner_id,
+                    self._run_id,
+                    after_resource_id,
+                    limit,
+                )
         return tuple(
             CommittedSpillRecord(
                 resource_id=str(row["resource_id"]),

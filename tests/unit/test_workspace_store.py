@@ -82,18 +82,43 @@ async def test_inventory_replace_is_all_or_nothing() -> None:
     assert paths == ["c"]
 
 
+def _spill(resource_id: str) -> CommittedSpillRecord:
+    return CommittedSpillRecord(
+        resource_id=resource_id,
+        content_digest="b" * 64,
+        size_bytes=8,
+        session_id="s",
+        intent_id="i",
+    )
+
+
+@pytest.mark.asyncio
+async def test_spill_pages_are_ordered_and_use_an_exclusive_cursor() -> None:
+    store = InMemoryWorkspaceStore()
+    for resource_id in ("res_3", "res_1", "res_4", "res_2"):
+        await store.register_spill(_spill(resource_id))
+
+    first = await store.load_spills_page(after_resource_id=None, limit=2)
+    second = await store.load_spills_page(after_resource_id="res_2", limit=2)
+    empty = await store.load_spills_page(after_resource_id="res_4", limit=2)
+
+    assert [spill.resource_id for spill in first] == ["res_1", "res_2"]
+    assert [spill.resource_id for spill in second] == ["res_3", "res_4"]
+    assert empty == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [0, -1, 1_001])
+async def test_spill_page_rejects_invalid_limit(limit: int) -> None:
+    store = InMemoryWorkspaceStore()
+    with pytest.raises(ValueError, match="spill page limit"):
+        await store.load_spills_page(after_resource_id=None, limit=limit)
+
+
 @pytest.mark.asyncio
 async def test_spill_register_and_clear() -> None:
     store = InMemoryWorkspaceStore()
-    await store.register_spill(
-        CommittedSpillRecord(
-            resource_id="res_1",
-            content_digest="b" * 64,
-            size_bytes=8,
-            session_id="s",
-            intent_id="i",
-        )
-    )
-    assert len(await store.load_spills()) == 1
+    await store.register_spill(_spill("res_1"))
+    assert len(await store.load_spills_page(after_resource_id=None, limit=1)) == 1
     await store.clear_spills()
-    assert await store.load_spills() == ()
+    assert await store.load_spills_page(after_resource_id=None, limit=1) == ()
