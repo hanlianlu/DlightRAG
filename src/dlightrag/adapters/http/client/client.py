@@ -426,12 +426,29 @@ class AnswerRunClient:
         response.raise_for_status()
         return dict(response.json())
 
-    async def children(self, run_id: str) -> list[dict[str, Any]]:
+    async def children(
+        self, run_id: str, *, cursor: str | None = None, limit: int = 50
+    ) -> dict[str, Any]:
+        """Return one bounded newest-first child-roster page for an owned run.
+
+        The roster endpoint pages newest-first, so without ``cursor`` this reads
+        only the newest ``limit`` children. The returned ``next_cursor`` is the
+        opaque continuation, or ``None`` once the traversal is exhausted.
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if cursor is not None:
+            params["cursor"] = cursor
         response = await self._client.get(
-            self._url(f"/answer/{run_id}/children"), headers=self._headers
+            self._url(f"/answer/{run_id}/children"),
+            params=params,
+            headers=self._headers,
         )
         response.raise_for_status()
-        return list(response.json().get("children") or [])
+        payload = response.json()
+        return {
+            "children": list(payload.get("children") or []),
+            "next_cursor": payload.get("next_cursor") or None,
+        }
 
     async def cancel(self, run_id: str) -> dict[str, Any]:
         """Request cancellation; repeating it on a terminal run is a no-op."""
@@ -541,11 +558,25 @@ class AnswerRunClient:
         payload = response.json()
         return list(payload.get("runs") or [])
 
-    async def list_memories(self) -> list[dict[str, Any]]:
-        response = await self._client.get(self._url("/memory"), headers=self._headers)
+    async def list_memories(self, *, cursor: str | None = None, limit: int = 50) -> dict[str, Any]:
+        """Return one bounded newest-first page of active Profile Memories.
+
+        Without ``cursor`` this reads only the newest ``limit`` memories. The
+        returned ``next_cursor`` is the opaque continuation, or ``None`` once
+        the traversal is exhausted.
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = await self._client.get(
+            self._url("/memory"), params=params, headers=self._headers
+        )
         response.raise_for_status()
         payload = response.json()
-        return list(payload.get("memories") or [])
+        return {
+            "memories": list(payload.get("memories") or []),
+            "next_cursor": payload.get("next_cursor") or None,
+        }
 
     async def remember_memory(
         self,

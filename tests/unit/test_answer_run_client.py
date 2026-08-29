@@ -383,7 +383,10 @@ async def test_agent_control_methods_project_the_shared_rest_contract() -> None:
         await runs.transcript("run-1")
         children = await runs.children("run-1")
 
-    assert children == [{"child_session_id": "c"}]
+    assert children == {
+        "children": [{"child_session_id": "c"}],
+        "next_cursor": None,
+    }
     assert seen == [
         ("POST", "/answer/run-1/steer"),
         ("POST", "/answer/run-1/follow-up"),
@@ -392,6 +395,95 @@ async def test_agent_control_methods_project_the_shared_rest_contract() -> None:
         ("GET", "/answer/run-1/transcript"),
         ("GET", "/answer/run-1/children"),
     ]
+
+
+async def test_children_page_forwards_cursor_and_limit_and_returns_continuation() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "children": [{"child_session_id": "c1"}],
+                "next_cursor": "older-cursor",
+            },
+        )
+
+    http, runs = _client(handler)
+    async with http:
+        first = await runs.children("run-1", limit=10)
+        older = await runs.children("run-1", cursor="older-cursor", limit=10)
+
+    assert first == {
+        "children": [{"child_session_id": "c1"}],
+        "next_cursor": "older-cursor",
+    }
+    assert older["next_cursor"] == "older-cursor"
+    assert requests[0].url.params["limit"] == "10"
+    assert "cursor" not in requests[0].url.params
+    assert requests[1].url.params["cursor"] == "older-cursor"
+    assert requests[1].url.params["limit"] == "10"
+
+
+async def test_children_page_normalizes_an_absent_continuation() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"children": [{"child_session_id": "c1"}]})
+
+    http, runs = _client(handler)
+    async with http:
+        page = await runs.children("run-1")
+
+    assert page == {
+        "children": [{"child_session_id": "c1"}],
+        "next_cursor": None,
+    }
+
+
+async def test_list_memories_forwards_cursor_and_limit_and_returns_continuation() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "memories": [{"memory_id": "m1", "kind": "preference", "body": "Use Chinese."}],
+                "next_cursor": "older-cursor",
+            },
+        )
+
+    http, client = _client(handler)
+    async with http:
+        first = await client.list_memories(limit=10)
+        older = await client.list_memories(cursor="older-cursor", limit=10)
+
+    assert first == {
+        "memories": [{"memory_id": "m1", "kind": "preference", "body": "Use Chinese."}],
+        "next_cursor": "older-cursor",
+    }
+    assert older["next_cursor"] == "older-cursor"
+    assert requests[0].url.path == "/memory"
+    assert requests[0].url.params["limit"] == "10"
+    assert "cursor" not in requests[0].url.params
+    assert requests[1].url.params["cursor"] == "older-cursor"
+
+
+async def test_list_memories_normalizes_an_absent_continuation() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"memories": [{"memory_id": "m1", "kind": "preference", "body": "Use Chinese."}]},
+        )
+
+    http, client = _client(handler)
+    async with http:
+        page = await client.list_memories()
+
+    assert page == {
+        "memories": [{"memory_id": "m1", "kind": "preference", "body": "Use Chinese."}],
+        "next_cursor": None,
+    }
 
 
 async def test_profile_memory_sdk_projects_receipts_settings_and_retry_keys() -> None:
