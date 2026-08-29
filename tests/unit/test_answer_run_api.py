@@ -15,6 +15,7 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.server import create_app
 from dlightrag.application.access import UserContext
+from dlightrag.application.answer_runs import ChildRosterCursorCodec, ChildRosterPage
 from dlightrag.application.config import DlightragConfig
 from dlightrag.engine.runtime import (
     AnswerRunEvent,
@@ -77,6 +78,7 @@ class _RunApplication:
             alist_workspace_records=AsyncMock(return_value=[{"workspace": "default"}])
         )
         self.answers = self
+        self.child_roster_cursor_codec = ChildRosterCursorCodec(b"run-api-test")
         self.created: list[dict[str, Any]] = []
         self.cancelled: list[str] = []
         self.subscriptions: list[dict[str, Any]] = []
@@ -170,9 +172,19 @@ class _RunApplication:
             messages=({"role": "user", "content": "hi"},),
         )
 
-    async def children(self, *, owner_id: str, run_id: str) -> tuple[dict[str, Any], ...]:
-        del owner_id, run_id
-        return ({"child_session_id": "child-1", "status": "running"},)
+    async def children(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        page: Any = None,
+    ) -> Any:
+        del owner_id, run_id, page
+        return ChildRosterPage(
+            children=(({"child_session_id": "child-1", "status": "running"},)),
+            next_cursor=None,
+            fetched_rows=1,
+        )
 
     async def resume(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
         del owner_id, run_id

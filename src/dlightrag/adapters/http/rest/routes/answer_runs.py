@@ -11,9 +11,9 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -33,12 +33,16 @@ from dlightrag.adapters.http.streaming.answer_stream import (
     sse_frame,
 )
 from dlightrag.application.access import AccessAction, UserContext, owner_id_from_user
-from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
 from dlightrag.application.answer_runs import (
+    CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
+    CHILD_ROSTER_PAGE_MAX_LIMIT,
     AnswerRunEvent,
     AnswerRunRecord,
+    ChildRosterCursorError,
+    ChildRosterPageRequest,
     IdempotencyKeyConflict,
 )
+from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
 from dlightrag.application.answer_runs.client_contracts import conversation_history_as_dicts
 from dlightrag.application.answer_runs.execution import ResourceInput
 from dlightrag.application.answer_runs.resource_links import answer_link_resources
@@ -665,13 +669,36 @@ async def answer_run_children(
     run_id: str,
     request: Request,
     user: UserContext = Depends(get_current_user),
+    limit: Annotated[
+        int,
+        Query(ge=1, le=CHILD_ROSTER_PAGE_MAX_LIMIT),
+    ] = CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
 ) -> dict[str, Any]:
-    children = await get_application(request).answers.children(
-        owner_id=owner_id_from_user(user), run_id=run_id
+    answers = get_application(request).answers
+    try:
+        decoded_cursor = (
+            answers.child_roster_cursor_codec.decode(cursor) if cursor is not None else None
+        )
+        if decoded_cursor is not None and str(decoded_cursor.run_id) != run_id:
+            raise ChildRosterCursorError("child-roster cursor belongs to another run")
+        page_request = ChildRosterPageRequest(limit=limit, cursor=decoded_cursor)
+    except (ChildRosterCursorError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    page = await answers.children(
+        owner_id=owner_id_from_user(user), run_id=run_id, page=page_request
     )
-    if children is None:
+    if page is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
-    return {"run_id": run_id, "children": [dict(child) for child in children]}
+    return {
+        "run_id": run_id,
+        "children": [dict(child) for child in page.children],
+        "next_cursor": (
+            answers.child_roster_cursor_codec.encode(page.next_cursor)
+            if page.next_cursor is not None
+            else None
+        ),
+    }
 
 
 @router.post("/answer/{run_id}/resume")

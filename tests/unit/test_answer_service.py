@@ -15,6 +15,9 @@ from dlightrag.application.answer_runs import (
     AnswerRequest,
     AnswerRuntimeUnavailableError,
     AnswerService,
+    ChildRosterCursor,
+    ChildRosterPageRequest,
+    ChildRosterRowPage,
 )
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
@@ -110,6 +113,8 @@ class _Store:
         self.artifact_reads: list[tuple[str, str]] = []
         self.controls: list[dict[str, Any]] = []
         self.child_rows: tuple[Mapping[str, Any], ...] = ()
+        self.child_page_rows: tuple[Mapping[str, Any], ...] = ()
+        self.child_page_has_more = False
         self.transcript_rows: tuple[Mapping[str, Any], ...] = ()
 
     async def create_run(
@@ -185,6 +190,22 @@ class _Store:
         if owner_id != _OWNER or run_id != self._run.run_id:
             return ()
         return self.child_rows
+
+    async def list_child_sessions_page(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        page: ChildRosterPageRequest,
+    ) -> ChildRosterRowPage:
+        del page
+        if owner_id != _OWNER or run_id != self._run.run_id:
+            return ChildRosterRowPage(children=(), has_more=False, fetched_rows=0)
+        return ChildRosterRowPage(
+            children=self.child_page_rows,
+            has_more=self.child_page_has_more,
+            fetched_rows=len(self.child_page_rows),
+        )
 
     async def load_agent_transcript(
         self, *, owner_id: str, run_id: str, session_id: str, limit: int
@@ -1257,12 +1278,75 @@ async def test_transcript_and_child_roster_are_owner_scoped() -> None:
     service = _service(store=store)
 
     transcript = await service.transcript_tail(owner_id=_OWNER, run_id="run-1")
+    store.child_page_rows = store.child_rows
     children = await service.children(owner_id=_OWNER, run_id="run-1")
 
     assert transcript is not None
     assert transcript.messages == store.transcript_rows
-    assert children == store.child_rows
+    assert children is not None
+    assert children.children == store.child_rows
+    assert children.next_cursor is None
     assert await service.children(owner_id="other", run_id="run-1") is None
+
+
+async def test_child_roster_page_derives_a_run_bound_cursor_from_the_last_row() -> None:
+    run_id = "0199a0a0-0000-7000-8000-000000000077"
+    child_id = "0199a0a0-0000-7000-8000-000000000088"
+    store = _Store(run=_record(run_id=run_id, status="succeeded"))
+    store.child_page_rows = (
+        {
+            "child_session_id": child_id,
+            "created_at": datetime.datetime(2026, 3, 4, 5, 6, 7, 123456, tzinfo=datetime.UTC),
+            "status": "succeeded",
+        },
+    )
+    store.child_page_has_more = True
+    service = _service(store=store)
+
+    page = await service.children(
+        owner_id=_OWNER, run_id=run_id, page=ChildRosterPageRequest(limit=1)
+    )
+
+    assert page is not None
+    assert page.next_cursor is not None
+    assert str(page.next_cursor.run_id) == run_id
+    assert str(page.next_cursor.child_session_id) == child_id
+    assert page.next_cursor.created_at == datetime.datetime(
+        2026, 3, 4, 5, 6, 7, 123456, tzinfo=datetime.UTC
+    )
+    token = service.child_roster_cursor_codec.encode(page.next_cursor)
+    assert service.child_roster_cursor_codec.decode(token) == page.next_cursor
+
+
+async def test_child_roster_rejects_a_cursor_from_another_run_before_storage() -> None:
+    from uuid import UUID as _UUID
+
+    run_id = "0199a0a0-0000-7000-8000-000000000077"
+    other_run = "0199a0a0-0000-7000-8000-000000000078"
+    store = _Store(run=_record(run_id=run_id, status="succeeded"))
+    service = _service(store=store)
+    cursor = ChildRosterCursor(
+        run_id=_UUID(other_run),
+        created_at=datetime.datetime(2026, 3, 4, tzinfo=datetime.UTC),
+        child_session_id=_UUID("0199a0a0-0000-7000-8000-000000000088"),
+    )
+
+    with pytest.raises(ValueError, match="another run"):
+        await service.children(
+            owner_id=_OWNER,
+            run_id=run_id,
+            page=ChildRosterPageRequest(cursor=cursor),
+        )
+
+
+async def test_child_roster_empty_page_has_no_continuation() -> None:
+    service = _service(store=_Store(run=_record(status="succeeded")))
+
+    page = await service.children(owner_id=_OWNER, run_id="run-1")
+
+    assert page is not None
+    assert page.children == ()
+    assert page.next_cursor is None
 
 
 async def test_continuation_content_limit_is_transport_neutral() -> None:

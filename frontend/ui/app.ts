@@ -452,8 +452,10 @@ export class DlApp extends LightElement {
     const chat = this.querySelector<DlChatFeature>('dl-chat-feature');
     if (!chat) return;
     if (event.detail.action === 'children') {
+      const runId = event.detail.runId;
       this.querySelector<DlChildrenRoster>('dl-children-roster')?.open(
-        () => chat.loadRunChildren(event.detail.runId),
+        () => chat.loadRunChildren(runId),
+        (cursor, signal) => chat.loadRunChildrenPage(runId, cursor, signal),
       );
       return;
     }

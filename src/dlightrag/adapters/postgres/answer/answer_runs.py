@@ -39,6 +39,10 @@ from dlightrag.adapters.postgres.core._migrations import (
 )
 from dlightrag.adapters.postgres.core._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.adapters.postgres.core._pool import pg_pool
+from dlightrag.application.answer_runs import (
+    ChildRosterPageRequest,
+    ChildRosterRowPage,
+)
 from dlightrag.application.answer_runs.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.engine.agent.session.ids import SessionId
 from dlightrag.engine.agent.tool_content import decode_tool_content, tool_content_message_fields
@@ -458,6 +462,10 @@ _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_resources_blob "
     "ON dlightrag_answer_resources (owner_id, blob_digest) "
     "WHERE blob_digest IS NOT NULL",
+    # Newest-first bounded child-roster keyset pages ride one exact order.
+    "CREATE INDEX IF NOT EXISTS idx_answer_child_sessions_roster "
+    "ON dlightrag_answer_child_sessions "
+    "(owner_id, run_id, created_at DESC, child_session_id DESC)",
 )
 
 _CREATE_WORKSPACE_INVENTORY = """
@@ -516,6 +524,15 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_WORKSPACE_INVENTORY,
             _CREATE_COMMITTED_SPILLS,
             *MEMORY_SETTINGS_DDL,
+        ),
+    ),
+    Migration(
+        "child_roster_index",
+        "Index child sessions for bounded newest-first roster pages",
+        (
+            "CREATE INDEX IF NOT EXISTS idx_answer_child_sessions_roster "
+            "ON dlightrag_answer_child_sessions "
+            "(owner_id, run_id, created_at DESC, child_session_id DESC)",
         ),
     ),
 )
@@ -878,6 +895,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
                 columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
             ),
         ),
+        indexes=("idx_answer_child_sessions_roster",),
         checks=(
             "dlightrag_answer_child_sessions_status_check",
             "dlightrag_answer_child_sessions_depth_check",
@@ -1135,6 +1153,31 @@ FROM dlightrag_answer_child_sessions
 WHERE owner_id = $1 AND run_id = $2
 ORDER BY created_at, child_session_id
 """
+
+_CHILD_ROSTER_COLUMNS = """
+child_session_id, parent_session_id, parent_call_id, parent_intent_id,
+status, summary, objective, context_mode, model_role, tools_json, usage_json,
+depth, context_snapshot_json, plan_json, budget_json, host_state_json,
+lease_owner, lease_expires_at, fencing_epoch, created_at, updated_at
+"""
+
+_SELECT_CHILD_SESSIONS_FIRST_PAGE = f"""
+SELECT {_CHILD_ROSTER_COLUMNS}
+FROM dlightrag_answer_child_sessions
+WHERE owner_id = $1 AND run_id = $2
+ORDER BY created_at DESC, child_session_id DESC
+LIMIT $3
+"""  # noqa: S608 - interpolates only the trusted column constant
+
+_SELECT_CHILD_SESSIONS_AFTER = f"""
+SELECT {_CHILD_ROSTER_COLUMNS}
+FROM dlightrag_answer_child_sessions
+WHERE owner_id = $1 AND run_id = $2
+  AND (created_at < $3::timestamptz
+       OR (created_at = $3::timestamptz AND child_session_id < $4::uuid))
+ORDER BY created_at DESC, child_session_id DESC
+LIMIT $5
+"""  # noqa: S608 - interpolates only the trusted column constant
 
 _SELECT_AGENT_TRANSCRIPT = """
 WITH RECURSIVE authorized AS (
@@ -1567,6 +1610,32 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, str):
         return json.loads(value)
     return value
+
+
+def _child_roster_row(row: Any) -> dict[str, Any]:
+    return {
+        "child_session_id": str(row["child_session_id"]),
+        "parent_session_id": str(row["parent_session_id"]),
+        "parent_call_id": str(row["parent_call_id"]),
+        "parent_intent_id": (
+            str(row["parent_intent_id"]) if row["parent_intent_id"] is not None else None
+        ),
+        "status": str(row["status"]),
+        "summary": row["summary"],
+        "objective": row["objective"],
+        "context": row["context_mode"],
+        "model_role": row["model_role"],
+        "tools": _json_value(row["tools_json"]),
+        "usage": _json_value(row["usage_json"]),
+        "depth": int(row["depth"]),
+        "context_snapshot": _json_value(row["context_snapshot_json"]),
+        "plan": _json_value(row["plan_json"]),
+        "budget": _json_value(row["budget_json"]),
+        "host_state": _json_value(row["host_state_json"]),
+        "fencing_epoch": int(row["fencing_epoch"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 def _optional_int(row: Any, name: str) -> int | None:
@@ -2163,33 +2232,50 @@ class PGAnswerRunStore(PostgresOperationRunner):
 
         async def _operation(conn: Any) -> tuple[dict[str, Any], ...]:
             rows = await conn.fetch(_SELECT_CHILD_SESSIONS, owner, run_uuid)
-            return tuple(
-                {
-                    "child_session_id": str(row["child_session_id"]),
-                    "parent_session_id": str(row["parent_session_id"]),
-                    "parent_call_id": str(row["parent_call_id"]),
-                    "parent_intent_id": (
-                        str(row["parent_intent_id"])
-                        if row["parent_intent_id"] is not None
-                        else None
-                    ),
-                    "status": str(row["status"]),
-                    "summary": row["summary"],
-                    "objective": row["objective"],
-                    "context": row["context_mode"],
-                    "model_role": row["model_role"],
-                    "tools": _json_value(row["tools_json"]),
-                    "usage": _json_value(row["usage_json"]),
-                    "depth": int(row["depth"]),
-                    "context_snapshot": _json_value(row["context_snapshot_json"]),
-                    "plan": _json_value(row["plan_json"]),
-                    "budget": _json_value(row["budget_json"]),
-                    "host_state": _json_value(row["host_state_json"]),
-                    "fencing_epoch": int(row["fencing_epoch"]),
-                    "created_at": row["created_at"],
-                    "updated_at": row["updated_at"],
-                }
-                for row in rows
+            return tuple(_child_roster_row(row) for row in rows)
+
+        return await self._run_read(_operation)
+
+    async def list_child_sessions_page(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        page: ChildRosterPageRequest,
+    ) -> ChildRosterRowPage:
+        """Return one physical limit+1 newest-first keyset roster page."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        validated = ChildRosterPageRequest(limit=page.limit, cursor=page.cursor)
+        cursor = validated.cursor
+        if run_uuid is None:
+            return ChildRosterRowPage(children=(), has_more=False, fetched_rows=0)
+        if cursor is not None and cursor.run_id != run_uuid:
+            raise ValueError("child-roster cursor belongs to another run")
+        fetch_limit = validated.limit + 1
+
+        async def _operation(conn: Any) -> ChildRosterRowPage:
+            if cursor is None:
+                rows = await conn.fetch(
+                    _SELECT_CHILD_SESSIONS_FIRST_PAGE,
+                    owner,
+                    run_uuid,
+                    fetch_limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    _SELECT_CHILD_SESSIONS_AFTER,
+                    owner,
+                    run_uuid,
+                    cursor.created_at,
+                    cursor.child_session_id,
+                    fetch_limit,
+                )
+            fetched_rows = len(rows)
+            return ChildRosterRowPage(
+                children=tuple(_child_roster_row(row) for row in rows[: validated.limit]),
+                has_more=fetched_rows > validated.limit,
+                fetched_rows=fetched_rows,
             )
 
         return await self._run_read(_operation)

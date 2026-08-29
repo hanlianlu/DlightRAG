@@ -316,6 +316,16 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         ),
         research_tool_supplements=answer_executor.acceptance_research_tools,
         memory_capability=memory.execution_capability,
+        # Stable across workers sharing the operational database. Cursors
+        # carry no authorization state and expire on credential rotation.
+        child_roster_cursor_secret=hashlib.sha256(
+            (
+                "dlightrag-child-roster-cursor\0"
+                f"{config.storage.postgres.host}\0"
+                f"{config.storage.postgres.database}\0"
+                f"{config.storage.postgres.password}"
+            ).encode()
+        ).digest(),
     )
     web_store = PGWebConversationStore(run_store=run_store)
     return _ApplicationComponents(

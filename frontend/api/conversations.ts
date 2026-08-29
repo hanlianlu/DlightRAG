@@ -282,17 +282,36 @@ export async function steerAnswerRun(
   return responseJson<Record<string, unknown>>(response, 'Failed to steer the answer');
 }
 
+export interface AgentChildRosterPage {
+  children: AgentChildStatus[];
+  next_cursor: string | null;
+}
+
 export async function getAnswerRunChildren(
   runId: string,
   signal?: AbortSignal,
 ): Promise<AgentChildStatus[]> {
+  const page = await getAnswerRunChildrenPage(runId, null, signal);
+  return page.children;
+}
+
+export async function getAnswerRunChildrenPage(
+  runId: string,
+  cursor: string | null = null,
+  signal?: AbortSignal,
+): Promise<AgentChildRosterPage> {
   const id = encodeURIComponent(runId);
-  const response = await fetch(`/web/api/answer/${id}/children`, {signal});
-  const payload = await responseJson<{children: AgentChildStatus[]}>(
+  const query = new URLSearchParams();
+  if (cursor !== null) query.set('cursor', cursor);
+  const suffix = query.size > 0 ? `?${query.toString()}` : '';
+  const response = await fetch(`/web/api/answer/${id}/children${suffix}`, {signal});
+  const payload = await responseJson<Omit<AgentChildRosterPage, 'next_cursor'> & {
+    next_cursor?: string | null;
+  }>(
     response,
     'Failed to load child agents',
   );
-  return payload.children;
+  return {children: payload.children, next_cursor: payload.next_cursor ?? null};
 }
 
 export async function continueAnswerRun(

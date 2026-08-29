@@ -96,6 +96,29 @@ def test_metadata_search_page_sql_matches_the_doc_id_keyset_contract() -> None:
     assert "OFFSET" not in after.upper()
 
 
+def test_child_roster_page_queries_match_the_exact_roster_index_contract() -> None:
+    from dlightrag.adapters.postgres.answer import answer_runs
+
+    first = " ".join(answer_runs._SELECT_CHILD_SESSIONS_FIRST_PAGE.split())
+    after = " ".join(answer_runs._SELECT_CHILD_SESSIONS_AFTER.split())
+    index_statements = [
+        " ".join(statement.split())
+        for statement in answer_runs._CREATE_INDEXES
+        if "idx_answer_child_sessions_roster" in statement
+    ]
+
+    assert index_statements, "roster index must be declared in _CREATE_INDEXES"
+    assert "(owner_id, run_id, created_at DESC, child_session_id DESC)" in index_statements[0]
+    assert "WHERE owner_id = $1 AND run_id = $2" in first
+    assert "ORDER BY created_at DESC, child_session_id DESC LIMIT $3" in first
+    assert (
+        "created_at < $3::timestamptz" in after
+        and "created_at = $3::timestamptz AND child_session_id < $4::uuid" in after
+    )
+    assert "ORDER BY created_at DESC, child_session_id DESC LIMIT $5" in after
+    assert all("OFFSET" not in query.upper() for query in (first, after))
+
+
 def test_web_turn_pages_select_limit_plus_one_identities_before_run_joins() -> None:
     from dlightrag.adapters.postgres.web import web_conversations
 

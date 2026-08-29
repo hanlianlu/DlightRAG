@@ -31,6 +31,17 @@ _SERVICE_EXPORTS = {
     "AnswerService",
 }
 
+_CONTRACT_EXPORTS = {
+    "CHILD_ROSTER_PAGE_DEFAULT_LIMIT",
+    "CHILD_ROSTER_PAGE_MAX_LIMIT",
+    "ChildRosterCursor",
+    "ChildRosterCursorCodec",
+    "ChildRosterCursorError",
+    "ChildRosterPage",
+    "ChildRosterPageRequest",
+    "ChildRosterRowPage",
+}
+
 __all__ = [
     "AgentControlReceipt",
     "AgentTranscriptTail",
@@ -46,11 +57,41 @@ __all__ = [
     "AnswerRunStatus",
     "AnswerRuntimeUnavailableError",
     "AnswerService",
+    "CHILD_ROSTER_PAGE_DEFAULT_LIMIT",
+    "CHILD_ROSTER_PAGE_MAX_LIMIT",
+    "ChildRosterCursor",
+    "ChildRosterCursorCodec",
+    "ChildRosterCursorError",
+    "ChildRosterPage",
+    "ChildRosterPageRequest",
+    "ChildRosterRowPage",
     "IdempotencyKeyConflict",
 ]
 
 
 def __getattr__(name: str) -> Any:
+    if name in _CONTRACT_EXPORTS:
+        from .child_roster import (
+            CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
+            CHILD_ROSTER_PAGE_MAX_LIMIT,
+            ChildRosterCursor,
+            ChildRosterCursorCodec,
+            ChildRosterCursorError,
+            ChildRosterPage,
+            ChildRosterPageRequest,
+            ChildRosterRowPage,
+        )
+
+        return {
+            "CHILD_ROSTER_PAGE_DEFAULT_LIMIT": CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
+            "CHILD_ROSTER_PAGE_MAX_LIMIT": CHILD_ROSTER_PAGE_MAX_LIMIT,
+            "ChildRosterCursor": ChildRosterCursor,
+            "ChildRosterCursorCodec": ChildRosterCursorCodec,
+            "ChildRosterCursorError": ChildRosterCursorError,
+            "ChildRosterPage": ChildRosterPage,
+            "ChildRosterPageRequest": ChildRosterPageRequest,
+            "ChildRosterRowPage": ChildRosterRowPage,
+        }[name]
     if name in _SERVICE_EXPORTS:
         from .service import (
             AgentControlReceipt,

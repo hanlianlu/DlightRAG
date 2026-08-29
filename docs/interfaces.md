@@ -407,7 +407,7 @@ ephemeral answer mode and no `stream` request field.
 | `POST /answer/{run_id}/fork` | Start a sibling branch from the selected run's accepted context. |
 | `POST /answer/{run_id}/resume` | Return current state before reattaching to events. |
 | `GET /answer/{run_id}/transcript` | Return the bounded canonical ancestry selected by that run's Agent Session/Lane routing row. ToolResult content is projected transport-neutrally. |
-| `GET /answer/{run_id}/children` | Return foreground Child Session lineage, status, depth, pinned context/model/tools, and usage. |
+| `GET /answer/{run_id}/children` | Return one bounded newest-first page of the foreground Child Session roster. `limit` (1-100, default 50) and the opaque `cursor` continuation are query parameters. The response adds `next_cursor` to the existing `run_id`/`children` fields; the cursor is signed, run-bound, and rejected with 422 before storage when malformed, tampered, or from another run. The REST endpoint validates the cursor (422) before the unknown-run existence check; the Web endpoint returns 404 first. |
 | `DELETE /answer/{run_id}` | Explicit cancellation. 200 when complete/terminal, 202 while a worker must observe it. |
 
 An Answer Run is not an Agent Operation identity. Fast records zero Operations;
@@ -712,7 +712,8 @@ async for event in application.answers.answer_stream(
 ):
     print(event.event_type, event.payload)
 
-# The same AnswerService owns controls and lineage.
+# The same AnswerService owns controls and lineage. The roster is a bounded
+# newest-first keyset page; pass the returned cursor for the older page.
 await application.answers.steer(
     owner_id=DEPLOYMENT_OWNER_ID, run_id=run_id, instruction="Focus on risks"
 )

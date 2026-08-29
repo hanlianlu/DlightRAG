@@ -19,7 +19,12 @@ from dlightrag.adapters.http.server import create_app
 from dlightrag.application import ApplicationClosedError
 from dlightrag.application.access import AuthenticationError, UserContext, authenticate_bearer_token
 from dlightrag.application.access import authentication as authentication_module
-from dlightrag.application.answer_runs import AnswerRuntimeUnavailableError
+from dlightrag.application.answer_runs import (
+    AnswerRuntimeUnavailableError,
+    ChildRosterCursor,
+    ChildRosterCursorCodec,
+    ChildRosterPage,
+)
 from dlightrag.application.answer_runs.citations import SourceReference
 from dlightrag.application.answer_runs.errors import AnswerInputOverflowError
 from dlightrag.application.answer_runs.results import AnswerResult
@@ -192,6 +197,10 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
         get=AsyncMock(return_value=_queued_run_record()),
         cancel=AsyncMock(),
         subscribe=MagicMock(),
+        children=AsyncMock(
+            return_value=ChildRosterPage(children=(), next_cursor=None, fetched_rows=0)
+        ),
+        child_roster_cursor_codec=ChildRosterCursorCodec(b"api-server-children"),
     )
     corpora.cancel_ingest_job = AsyncMock()
     corpora.list_ingested_files = mock_service.alist_ingested_files
@@ -2305,6 +2314,112 @@ class TestMetadataAPI:
 
         assert resp.status_code == 403
         mock_application.corpora.search_metadata.assert_not_awaited()
+
+
+class TestAnswerRunChildren:
+    @pytest.mark.usefixtures("_patch_application")
+    async def test_children_default_page_and_additive_shape(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+    ) -> None:
+        from uuid import UUID
+
+        run_id = "0199a0a0-0000-7000-8000-000000000077"
+        codec = mock_application.answers.child_roster_cursor_codec
+        continuation = ChildRosterCursor(
+            run_id=UUID(run_id),
+            created_at=datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.UTC),
+            child_session_id=UUID("0199a0a0-0000-7000-8000-000000000088"),
+        )
+        captured = []
+
+        def children_side_effect(owner_id, run_id, *, page=None):
+            captured.append((owner_id, run_id, page))
+            return ChildRosterPage(
+                children=({"child_session_id": "0199a0a0-0000-7000-8000-000000000088"},),
+                next_cursor=continuation,
+                fetched_rows=2,
+            )
+
+        mock_application.answers.children = AsyncMock(side_effect=children_side_effect)
+        app.state.application = mock_application
+
+        first = await client.get(f"/answer/{run_id}/children")
+
+        assert first.status_code == 200
+        body = first.json()
+        assert body["run_id"] == run_id
+        assert body["children"] == [{"child_session_id": "0199a0a0-0000-7000-8000-000000000088"}]
+        assert body["next_cursor"] == codec.encode(continuation)
+        assert captured[-1][2].limit == 50
+        assert captured[-1][2].cursor is None
+
+        second = await client.get(
+            f"/answer/{run_id}/children",
+            params={"cursor": body["next_cursor"], "limit": 25},
+        )
+        assert second.status_code == 200
+        assert captured[-1][2].limit == 25
+        assert captured[-1][2].cursor == continuation
+
+    @pytest.mark.usefixtures("_patch_application")
+    async def test_children_limit_bounds_and_malformed_cursor_are_422(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+    ) -> None:
+        run_id = "0199a0a0-0000-7000-8000-000000000077"
+        app.state.application = mock_application
+
+        for params in ({"limit": 0}, {"limit": 101}, {"limit": "abc"}):
+            resp = await client.get(f"/answer/{run_id}/children", params=params)
+            assert resp.status_code == 422
+        resp = await client.get(f"/answer/{run_id}/children", params={"cursor": "AAAA.BBBB"})
+        assert resp.status_code == 422
+        mock_application.answers.children.assert_not_awaited()
+
+    @pytest.mark.usefixtures("_patch_application")
+    async def test_children_cross_run_cursor_is_422_before_storage(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+    ) -> None:
+        from uuid import UUID
+
+        run_id = "0199a0a0-0000-7000-8000-000000000077"
+        codec = mock_application.answers.child_roster_cursor_codec
+        foreign = codec.encode(
+            ChildRosterCursor(
+                run_id=UUID("0199a0a0-0000-7000-8000-000000000080"),
+                created_at=datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.UTC),
+                child_session_id=UUID("0199a0a0-0000-7000-8000-000000000088"),
+            )
+        )
+        app.state.application = mock_application
+
+        resp = await client.get(f"/answer/{run_id}/children", params={"cursor": foreign})
+
+        assert resp.status_code == 422
+        mock_application.answers.children.assert_not_awaited()
+
+    @pytest.mark.usefixtures("_patch_application")
+    async def test_children_unknown_run_is_404(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+    ) -> None:
+        run_id = "0199a0a0-0000-7000-8000-000000000077"
+        mock_application.answers.children = AsyncMock(return_value=None)
+        app.state.application = mock_application
+
+        resp = await client.get(f"/answer/{run_id}/children")
+
+        assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

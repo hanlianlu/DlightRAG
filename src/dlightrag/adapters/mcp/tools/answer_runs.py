@@ -281,18 +281,26 @@ async def get_answer_transcript_tool(
 
 @mcp_app.tool(
     name="list_answer_children",
-    description="Return the foreground child roster for one owned run.",
+    description=(
+        "Return at most the newest 50 children of one owned run's foreground "
+        "roster. has_more=true marks additional older children that are only "
+        "available through the Web/REST children endpoints with cursor paging."
+    ),
     annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
 )
 async def list_answer_children_tool(
     run_id: Annotated[str, Field(description="Run id")],
 ) -> dict[str, Any]:
-    children = await (await mcp_server._ensure_application()).answers.children(
+    page = await (await mcp_server._ensure_application()).answers.children(
         owner_id=mcp_server._owner_id(), run_id=run_id
     )
-    if children is None:
+    if page is None:
         raise ValueError(f"Answer run not found: {run_id}")
-    return {"run_id": run_id, "children": [dict(child) for child in children]}
+    return {
+        "run_id": run_id,
+        "children": [dict(child) for child in page.children],
+        "has_more": page.next_cursor is not None,
+    }
 
 
 @mcp_app.tool(

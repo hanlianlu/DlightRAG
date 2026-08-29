@@ -23,6 +23,12 @@ from dlightrag.adapters.http.browser.routes import chat as chat_routes
 from dlightrag.adapters.http.server import create_app
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames
 from dlightrag.application.access import owner_id_from_user
+from dlightrag.application.answer_runs import (
+    ChildRosterCursor,
+    ChildRosterCursorCodec,
+    ChildRosterPage,
+    ChildRosterPageRequest,
+)
 from dlightrag.application.web_conversations import (
     CarriedAttachment,
     ConversationHead,
@@ -99,7 +105,10 @@ def application_double() -> AsyncMock:
         steer=AsyncMock(
             return_value=SimpleNamespace(run_id=RUN_ID, control_sequence=1, kind="steer")
         ),
-        children=AsyncMock(return_value=()),
+        children=AsyncMock(
+            return_value=ChildRosterPage(children=(), next_cursor=None, fetched_rows=0)
+        ),
+        child_roster_cursor_codec=ChildRosterCursorCodec(b"web-children-test"),
         subscribe=MagicMock(),
     )
     created.corpora = SimpleNamespace(
@@ -469,8 +478,76 @@ async def test_web_projects_resume_steer_and_child_roster(
 
     children = await client.get(f"/web/api/answer/{RUN_ID}/children")
     assert children.status_code == 200
-    assert children.json() == {"run_id": RUN_ID, "children": []}
+    assert children.json() == {"run_id": RUN_ID, "children": [], "next_cursor": None}
     application_double.answers.steer.assert_awaited_once()
+
+
+async def test_web_child_roster_passes_a_validated_page_request(
+    client: AsyncClient, application_double: AsyncMock
+) -> None:
+    from uuid import UUID
+
+    codec = application_double.answers.child_roster_cursor_codec
+    cursor = ChildRosterCursor(
+        run_id=UUID(RUN_ID),
+        created_at=datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.UTC),
+        child_session_id=UUID("0199a0a0-0000-7000-8000-000000000099"),
+    )
+    token = codec.encode(cursor)
+
+    resp = await client.get(
+        f"/web/api/answer/{RUN_ID}/children",
+        params={"limit": 10, "cursor": token},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["next_cursor"] is None
+    kwargs = application_double.answers.children.await_args.kwargs
+    page = kwargs["page"]
+    assert isinstance(page, ChildRosterPageRequest)
+    assert page.limit == 10
+    assert page.cursor == cursor
+
+
+async def test_web_child_roster_rejects_invalid_limit_and_malformed_cursor(
+    client: AsyncClient,
+) -> None:
+    for params in ({"limit": 0}, {"limit": 101}, {"limit": "abc"}):
+        resp = await client.get(f"/web/api/answer/{RUN_ID}/children", params=params)
+        assert resp.status_code == 422
+
+    resp = await client.get(f"/web/api/answer/{RUN_ID}/children", params={"cursor": "not-a-token"})
+    assert resp.status_code == 422
+
+
+async def test_web_child_roster_rejects_a_cursor_from_another_run(
+    client: AsyncClient, application_double: AsyncMock
+) -> None:
+    from uuid import UUID
+
+    codec = application_double.answers.child_roster_cursor_codec
+    foreign = ChildRosterCursor(
+        run_id=UUID("0199a0a0-0000-7000-8000-000000000080"),
+        created_at=datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.UTC),
+        child_session_id=UUID("0199a0a0-0000-7000-8000-000000000099"),
+    )
+    token = codec.encode(foreign)
+
+    resp = await client.get(f"/web/api/answer/{RUN_ID}/children", params={"cursor": token})
+
+    assert resp.status_code == 422
+    application_double.answers.children.assert_not_awaited()
+
+
+async def test_web_child_roster_unknown_run_is_404_before_cursor_validation(
+    client: AsyncClient, application_double: AsyncMock
+) -> None:
+    application_double.web_conversations.turn_for_run.return_value = None
+
+    resp = await client.get(f"/web/api/answer/{RUN_ID}/children", params={"cursor": "not-a-token"})
+
+    assert resp.status_code == 404
+    application_double.answers.children.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

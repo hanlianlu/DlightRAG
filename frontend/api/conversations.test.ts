@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   continueAnswerRun,
   getAnswerRunChildren,
+  getAnswerRunChildrenPage,
   getConversationHistory,
   listConversations,
   steerAnswerRun,
@@ -121,4 +122,34 @@ test('steer and child roster use their shared run routes', async () => {
     '/web/api/answer/run-1/children',
   ]);
   assert.equal(children[0]?.status, 'running');
+});
+
+test('child roster pages encode the opaque cursor and normalize the continuation', async () => {
+  const requests: string[] = [];
+  globalThis.fetch = async (input) => {
+    const request = new Request(new URL(String(input), 'http://localhost'));
+    requests.push(request.url);
+    if (request.url.includes('cursor')) {
+      return new Response(JSON.stringify({
+        children: [{child_session_id: 'child-2', status: 'succeeded'}],
+      }));
+    }
+    return new Response(JSON.stringify({
+      children: [{child_session_id: 'child-1', status: 'running'}],
+      next_cursor: 'opaque-token',
+    }));
+  };
+
+  const first = await getAnswerRunChildrenPage('run-1');
+  assert.deepEqual(first.children.map((child) => child.child_session_id), ['child-1']);
+  assert.equal(first.next_cursor, 'opaque-token');
+  assert.equal(requests[0], 'http://localhost/web/api/answer/run-1/children');
+
+  const older = await getAnswerRunChildrenPage('run-1', 'opaque-token');
+  assert.deepEqual(older.children.map((child) => child.child_session_id), ['child-2']);
+  assert.equal(older.next_cursor, null);
+  assert.equal(
+    requests[1],
+    'http://localhost/web/api/answer/run-1/children?cursor=opaque-token',
+  );
 });

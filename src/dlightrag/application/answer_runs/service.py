@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from contextlib import AbstractAsyncContextManager, aclosing
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
+from uuid import UUID
 
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
@@ -81,6 +82,14 @@ from dlightrag.engine.runtime import (
     RunCreation,
     answer_run_request_fingerprint,
     artifact_digest,
+)
+
+from .child_roster import (
+    ChildRosterCursor,
+    ChildRosterCursorCodec,
+    ChildRosterPage,
+    ChildRosterPageRequest,
+    ChildRosterRowPage,
 )
 
 #: Accepted input uploads, in the precedence one ordinal resolves against.
@@ -214,6 +223,14 @@ class _AnswerRunRepository(AnswerRunAcceptor[RunCreation], Protocol):
     async def list_child_sessions(
         self, *, owner_id: str, run_id: str
     ) -> tuple[Mapping[str, Any], ...]: ...
+
+    async def list_child_sessions_page(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        page: ChildRosterPageRequest,
+    ) -> ChildRosterRowPage: ...
 
     async def load_agent_transcript(
         self, *, owner_id: str, run_id: str, session_id: str, limit: int
@@ -466,6 +483,7 @@ class AnswerService:
         model_fingerprint_for_role: Callable[[ModelRole], ModelFingerprint],
         research_tool_supplements: Callable[[], Sequence[AgentTool]] | None = None,
         memory_capability: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
+        child_roster_cursor_secret: bytes | None = None,
     ) -> None:
         self._store = store
         self._coordinator = coordinator
@@ -477,6 +495,7 @@ class AnswerService:
         self._model_fingerprint_for_role = model_fingerprint_for_role
         self._research_tool_supplements = research_tool_supplements or (lambda: ())
         self._memory_capability = memory_capability
+        self._child_roster_codec = ChildRosterCursorCodec(child_roster_cursor_secret)
 
     async def create(
         self,
@@ -781,11 +800,44 @@ class AnswerService:
             kind=str(row["kind"]),
         )
 
-    async def children(self, *, owner_id: str, run_id: str) -> tuple[Mapping[str, Any], ...] | None:
-        """Return the foreground child roster, or None for an unknown run."""
+    async def children(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        page: ChildRosterPageRequest | None = None,
+    ) -> ChildRosterPage | None:
+        """Return one bounded newest-first child-roster page, or None if unknown."""
         if await self.get(owner_id=owner_id, run_id=run_id) is None:
             return None
-        return await self._store.list_child_sessions(owner_id=owner_id, run_id=run_id)
+        requested = page or ChildRosterPageRequest()
+        if requested.cursor is not None and str(requested.cursor.run_id) != run_id:
+            raise ValueError("child-roster cursor belongs to another run")
+        result = await self._store.list_child_sessions_page(
+            owner_id=owner_id,
+            run_id=run_id,
+            page=requested,
+        )
+        next_cursor = None
+        if result.has_more:
+            if not result.children:
+                raise RuntimeError("child-roster store reported more rows after an empty page")
+            last = result.children[-1]
+            next_cursor = ChildRosterCursor(
+                run_id=UUID(run_id),
+                created_at=last["created_at"],
+                child_session_id=UUID(str(last["child_session_id"])),
+            )
+        return ChildRosterPage(
+            children=result.children,
+            next_cursor=next_cursor,
+            fetched_rows=result.fetched_rows,
+        )
+
+    @property
+    def child_roster_cursor_codec(self) -> ChildRosterCursorCodec:
+        """Return the codec shared with the answer-runs HTTP adapters."""
+        return self._child_roster_codec
 
     async def transcript_tail(
         self, *, owner_id: str, run_id: str, limit: int = 20

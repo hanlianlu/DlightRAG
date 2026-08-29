@@ -5,10 +5,10 @@ import logging
 from collections.abc import Mapping
 from dataclasses import replace
 from functools import partial
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -38,7 +38,13 @@ from dlightrag.adapters.http.browser.presentation import (
 )
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames, resume_cursor
 from dlightrag.application.access import AccessAction, owner_id_from_user
-from dlightrag.application.answer_runs import IdempotencyKeyConflict
+from dlightrag.application.answer_runs import (
+    CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
+    CHILD_ROSTER_PAGE_MAX_LIMIT,
+    ChildRosterCursorError,
+    ChildRosterPageRequest,
+    IdempotencyKeyConflict,
+)
 from dlightrag.application.answer_runs.results import project_answer_result, project_report_sources
 from dlightrag.application.answer_runs.sources import SourceDownloadLinkBuilder
 from dlightrag.application.corpus_admin import normalize_workspace_ids
@@ -194,16 +200,41 @@ async def answer_run_children(
     run_id: str,
     request: Request,
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
+    limit: Annotated[
+        int,
+        Query(ge=1, le=CHILD_ROSTER_PAGE_MAX_LIMIT),
+    ] = CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
 ) -> dict[str, Any]:
     user = getattr(request.state, "user_context", None)
     if await conversation_service.turn_for_run(user, run_id) is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
-    children = await get_application(request).answers.children(
-        owner_id=owner_id_from_user(user), run_id=run_id
+    answers = get_application(request).answers
+    try:
+        decoded_cursor = (
+            answers.child_roster_cursor_codec.decode(cursor) if cursor is not None else None
+        )
+        if decoded_cursor is not None and str(decoded_cursor.run_id) != run_id:
+            raise ChildRosterCursorError("child-roster cursor belongs to another run")
+        page_request = ChildRosterPageRequest(limit=limit, cursor=decoded_cursor)
+    except (ChildRosterCursorError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    page = await answers.children(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        page=page_request,
     )
-    if children is None:
+    if page is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
-    return {"run_id": run_id, "children": [dict(child) for child in children]}
+    return {
+        "run_id": run_id,
+        "children": [dict(child) for child in page.children],
+        "next_cursor": (
+            answers.child_roster_cursor_codec.encode(page.next_cursor)
+            if page.next_cursor is not None
+            else None
+        ),
+    }
 
 
 async def _continue_answer_run(

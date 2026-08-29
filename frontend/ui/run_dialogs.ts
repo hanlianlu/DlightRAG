@@ -1,8 +1,9 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Run continuation and child-roster dialogs as first-class Lit components. */
 
-import {html} from 'lit';
+import {html, nothing} from 'lit';
 import {LightElement} from '../lib/lit_host.ts';
+import {isAbortError} from '../lib/errors.ts';
 import {publishModalState, showOwnedModal} from './modal.ts';
 
 export type ContinuationKind = 'follow-up' | 'fork';
@@ -84,11 +85,30 @@ export interface ChildRosterEntry {
   child_session_id?: string;
 }
 
+export type ChildRosterPageFetcher = (
+  cursor: string | null,
+  signal?: AbortSignal,
+) => Promise<{children: ChildRosterEntry[]; next_cursor: string | null}>;
+
 export class DlChildrenRoster extends LightElement {
   fetcher: (() => Promise<ChildRosterEntry[]>) | null = null;
+  #pageFetcher: ChildRosterPageFetcher | null = null;
+  #entries: ChildRosterEntry[] = [];
+  #nextCursor: string | null = null;
+  #loadMoreState: 'idle' | 'loading' | 'error' = 'idle';
+  #empty = true;
+  #failed = false;
+  #announcement = '';
+  #controller: AbortController | null = null;
+  #generation = 0;
+  #flight: Promise<void> | null = null;
 
-  open(fetcher: () => Promise<ChildRosterEntry[]>): void {
+  open(
+    fetcher: () => Promise<ChildRosterEntry[]>,
+    pageFetcher?: ChildRosterPageFetcher,
+  ): void {
     this.fetcher = fetcher;
+    this.#pageFetcher = pageFetcher ?? null;
     void this.updateComplete.then(() => {
       const dialog = this.querySelector<HTMLDialogElement>('dialog');
       if (dialog) showOwnedModal(this, dialog);
@@ -97,9 +117,15 @@ export class DlChildrenRoster extends LightElement {
   }
 
   async refresh(): Promise<void> {
-    const list = this.querySelector<HTMLUListElement>('ul');
-    if (!list) return;
-    list.replaceChildren();
+    this.#invalidate();
+    this.#entries = [];
+    this.#nextCursor = null;
+    this.#empty = true;
+    this.#failed = false;
+    if (this.#pageFetcher) {
+      await this.#loadFirstPage();
+      return;
+    }
     let children: ChildRosterEntry[] = [];
     if (this.fetcher) {
       try {
@@ -108,26 +134,148 @@ export class DlChildrenRoster extends LightElement {
         children = [];
       }
     }
-    if (children.length === 0) {
-      const empty = document.createElement('li');
-      empty.textContent = 'No child agents were started.';
-      list.appendChild(empty);
-      return;
-    }
-    for (const child of children) {
-      const item = document.createElement('li');
-      item.textContent = `${child.status}: ${child.objective || child.child_session_id || ''}`;
-      list.appendChild(item);
+    this.#entries = children;
+    this.#empty = children.length === 0;
+    this.requestUpdate();
+  }
+
+  async #loadFirstPage(): Promise<void> {
+    const controller = new AbortController();
+    this.#controller = controller;
+    const generation = this.#generation;
+    try {
+      const page = await this.#pageFetcher!(null, controller.signal);
+      if (controller !== this.#controller || generation !== this.#generation) return;
+      this.#entries = page.children;
+      this.#nextCursor = page.next_cursor;
+      this.#empty = page.children.length === 0;
+      this.#failed = false;
+      this.requestUpdate();
+    } catch (error) {
+      if (controller !== this.#controller || generation !== this.#generation) return;
+      if (isAbortError(error)) return;
+      this.#empty = false;
+      this.#failed = true;
+      this.requestUpdate();
+    } finally {
+      if (this.#controller === controller) this.#controller = null;
     }
   }
 
+  loadOlderChildren(): Promise<void> {
+    if (this.#flight !== null) return this.#flight;
+    if (!this.#pageFetcher || this.#nextCursor === null) return Promise.resolve();
+    const flight = this.#loadOlderPage(this.#nextCursor);
+    this.#flight = flight;
+    void flight.finally(() => {
+      if (this.#flight === flight) this.#flight = null;
+    });
+    return flight;
+  }
+
+  async #loadOlderPage(cursor: string): Promise<void> {
+    this.#controller?.abort();
+    const controller = new AbortController();
+    this.#controller = controller;
+    const generation = this.#generation;
+    this.#loadMoreState = 'loading';
+    this.#announcement = 'Loading older children…';
+    this.requestUpdate();
+    try {
+      const page = await this.#pageFetcher!(cursor, controller.signal);
+      if (
+        controller !== this.#controller
+        || generation !== this.#generation
+        || this.#nextCursor !== cursor
+      ) {
+        if (controller === this.#controller) {
+          this.#loadMoreState = 'idle';
+          this.#announcement = '';
+        }
+        return;
+      }
+      const known = new Set(this.#entries.map((entry) => entry.child_session_id).filter(Boolean));
+      const appended = page.children.filter((entry) => {
+        if (!entry.child_session_id || known.has(entry.child_session_id)) return false;
+        known.add(entry.child_session_id);
+        return true;
+      });
+      this.#entries = [...this.#entries, ...appended];
+      this.#nextCursor = page.next_cursor;
+      this.#loadMoreState = 'idle';
+      this.#announcement = appended.length === 1
+        ? 'Loaded 1 older child.'
+        : `Loaded ${appended.length} older children.`;
+      this.requestUpdate();
+    } catch (error) {
+      if (controller !== this.#controller || generation !== this.#generation) return;
+      if (isAbortError(error)) return;
+      this.#loadMoreState = 'error';
+      this.#announcement = 'Older children could not be loaded.';
+      this.requestUpdate();
+    } finally {
+      if (this.#controller === controller) this.#controller = null;
+    }
+  }
+
+  #invalidate(): void {
+    this.#controller?.abort();
+    this.#controller = null;
+    this.#generation += 1;
+    this.#flight = null;
+    this.#loadMoreState = 'idle';
+    this.#announcement = '';
+  }
+
+  #loadOlder = (): void => {
+    void this.loadOlderChildren();
+  };
+
+  #close(): void {
+    publishModalState(this);
+    this.#invalidate();
+    this.#entries = [];
+    this.#nextCursor = null;
+    this.#empty = true;
+    this.#failed = false;
+    this.requestUpdate();
+  }
+
   override render() {
+    const entries = this.#entries;
+    const showEmpty = !this.#failed && this.#empty;
     return html`
       <dialog class="confirm-dialog" aria-labelledby="dl-roster-title"
-              @close=${() => publishModalState(this)}>
+              @close=${() => this.#close()}>
         <form method="dialog">
           <h2 id="dl-roster-title">Child agents</h2>
-          <ul class="roster-list"></ul>
+          <ul class="roster-list" role="list">
+            ${this.#failed ? html`
+              <li class="roster-error" role="alert">Child agents could not be loaded.</li>
+            ` : nothing}
+            ${showEmpty ? html`
+              <li>No child agents were started.</li>
+            ` : entries.map((child) => html`
+              <li role="listitem">
+                ${child.status}: ${child.objective || child.child_session_id || ''}
+              </li>
+            `)}
+          </ul>
+          ${this.#nextCursor !== null && !showEmpty ? html`
+            <div class="roster-page-control">
+              <button type="button" data-load-older-children
+                      aria-busy=${this.#loadMoreState === 'loading' ? 'true' : 'false'}
+                      ?disabled=${this.#loadMoreState === 'loading'}
+                      @click=${this.#loadOlder}>
+                ${this.#loadMoreState === 'error'
+                  ? 'Retry loading older children'
+                  : 'Load older children'}
+              </button>
+            </div>
+          ` : nothing}
+          <span class="sr-only" data-roster-status role="status" aria-live="polite">
+            ${this.#announcement}
+          </span>
           <div class="ui-dialog-actions">
             <button type="button" class="ui-btn" @click=${() => void this.refresh()}>Refresh</button>
             <button type="submit" value="close">Close</button>

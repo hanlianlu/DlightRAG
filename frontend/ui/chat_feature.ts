@@ -5,6 +5,7 @@ import {csrfHeaders} from '../api/csrf.ts';
 import {
   continueAnswerRun,
   getAnswerRunChildren,
+  getAnswerRunChildrenPage,
   steerAnswerRun,
   type AnswerRunDescriptor,
   type ConversationAttachmentReference,
@@ -209,6 +210,10 @@ export class DlChatFeature extends LightElement {
     } catch {
       return [];
     }
+  }
+
+  async loadRunChildrenPage(runId: string, cursor: string | null, signal?: AbortSignal) {
+    return getAnswerRunChildrenPage(runId, cursor, signal);
   }
 
   async continueRun(

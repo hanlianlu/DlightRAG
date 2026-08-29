@@ -432,3 +432,206 @@ async def test_metadata_search_traverses_contains_fallback_without_gaps() -> Non
                 [workspace, other_workspace],
             )
         await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# Child roster - bounded newest-first keyset traversal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("pg_check")
+async def test_child_roster_traverses_newest_first_with_timestamp_ties() -> None:
+    import uuid
+
+    import asyncpg
+
+    from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
+    from dlightrag.application.answer_runs import (
+        ChildRosterCursor,
+        ChildRosterPageRequest,
+    )
+
+    owner = "test_pg_child_roster"
+    run_id = str(uuid.uuid4())
+    pool = await asyncpg.create_pool(
+        host=str(_PG_CONN_KWARGS["host"]),
+        port=int(_PG_CONN_KWARGS["port"]),
+        user=str(_PG_CONN_KWARGS["user"]),
+        password=str(_PG_CONN_KWARGS["password"]),
+        database=str(_PG_CONN_KWARGS["database"]),
+        min_size=1,
+        max_size=1,
+    )
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dlightrag_answer_child_sessions (
+                    owner_id TEXT NOT NULL,
+                    run_id UUID NOT NULL,
+                    child_session_id UUID NOT NULL,
+                    parent_session_id UUID NOT NULL,
+                    parent_call_id TEXT NOT NULL,
+                    parent_intent_id UUID,
+                    status TEXT NOT NULL,
+                    summary TEXT,
+                    objective TEXT,
+                    context_mode TEXT,
+                    model_role TEXT,
+                    tools_json JSONB,
+                    usage_json JSONB,
+                    depth INTEGER NOT NULL,
+                    context_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    plan_json JSONB,
+                    budget_json JSONB,
+                    host_state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    lease_owner TEXT,
+                    lease_expires_at TIMESTAMPTZ,
+                    fencing_epoch BIGINT NOT NULL DEFAULT 0,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (owner_id, run_id, child_session_id)
+                )
+                """
+            )
+            await conn.execute(
+                "DELETE FROM dlightrag_answer_child_sessions WHERE owner_id = $1",
+                owner,
+            )
+            # The local development database already owns the real schema with
+            # its run foreign key; insert one minimal parent run for the FK.
+            await conn.execute(
+                "DELETE FROM dlightrag_answer_runs WHERE owner_id = $1 AND run_id = $2::uuid",
+                owner,
+                run_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO dlightrag_answer_runs (
+                    owner_id, run_id, request_fingerprint, prepared_input_json, status
+                ) VALUES ($1, $2::uuid, 'child-roster-test', '{}'::jsonb, 'queued')
+                """,
+                owner,
+                run_id,
+            )
+            # 120 children across three timestamp groups so the newest-first
+            # traversal must break ties on child_session_id DESC. The page
+            # limit of 30 is deliberately not a divisor of 40, so every
+            # continuation lands inside a same-timestamp group and the
+            # equality-tie branch (created_at = cursor AND child_session_id <
+            # cursor) is exercised on a real page boundary.
+            base = datetime.datetime(2026, 3, 4, 5, 6, 7, tzinfo=datetime.UTC)
+            rows: list[tuple[Any, ...]] = []
+            for index in range(120):
+                child_id = uuid.uuid4()
+                timestamp = base + datetime.timedelta(days=index // 40)
+                rows.append(
+                    (
+                        owner,
+                        run_id,
+                        child_id,
+                        uuid.uuid4(),
+                        f"call-{index}",
+                        None,
+                        "succeeded",
+                        None,
+                        f"objective {index}",
+                        None,
+                        "query",
+                        None,
+                        None,
+                        1,
+                        "{}",
+                        None,
+                        None,
+                        "{}",
+                        None,
+                        None,
+                        0,
+                        timestamp,
+                        timestamp,
+                    )
+                )
+            await conn.executemany(
+                """
+                INSERT INTO dlightrag_answer_child_sessions (
+                    owner_id, run_id, child_session_id, parent_session_id, parent_call_id,
+                    parent_intent_id, status, summary, objective, context_mode, model_role,
+                    tools_json, usage_json, depth, context_snapshot_json, plan_json,
+                    budget_json, host_state_json, lease_owner, lease_expires_at,
+                    fencing_epoch, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                          $15, $16, $17, $18, $19, $20, $21, $22, $23)
+                """,
+                rows,
+            )
+
+        store = PGAnswerRunStore(pool=pool)
+        cursor: ChildRosterCursor | None = None
+        observed: list[str] = []
+        tie_continuations = 0
+        previous_last_created_at = None
+        while True:
+            page = await store.list_child_sessions_page(
+                owner_id=owner,
+                run_id=run_id,
+                page=ChildRosterPageRequest(limit=30, cursor=cursor),
+            )
+            assert len(page.children) <= 30
+            assert page.fetched_rows <= 31
+            if previous_last_created_at is not None and page.children:
+                first_created_at = page.children[0]["created_at"]
+                if first_created_at == previous_last_created_at:
+                    # The continuation resumed inside the previous page's
+                    # timestamp group: the equality-tie branch fired.
+                    tie_continuations += 1
+            observed.extend(str(row["child_session_id"]) for row in page.children)
+            if not page.has_more:
+                break
+            assert page.children
+            last = page.children[-1]
+            previous_last_created_at = last["created_at"]
+            cursor = ChildRosterCursor(
+                run_id=uuid.UUID(run_id),
+                created_at=last["created_at"],
+                child_session_id=uuid.UUID(str(last["child_session_id"])),
+            )
+
+        assert len(observed) == 120
+        assert len(set(observed)) == 120
+        # Every one of the three continuations resumes inside a same-timestamp
+        # group, so the equality-tie predicate must have fired at least once.
+        assert tie_continuations == 3
+
+        # The traversal order is newest-first with id ties descending: group 2
+        # (latest timestamps) before group 1, then group 0.
+        expected = [
+            str(child_id)
+            for child_id, _timestamp in sorted(
+                ((row[2], row[21]) for row in rows),
+                key=lambda pair: (pair[1], pair[0]),
+                reverse=True,
+            )
+        ]
+        assert observed == expected
+
+        # A foreign owner sees nothing through the same bounded store path.
+        foreign = await store.list_child_sessions_page(
+            owner_id="someone-else",
+            run_id=run_id,
+            page=ChildRosterPageRequest(limit=10),
+        )
+        assert foreign.children == ()
+        assert foreign.has_more is False
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM dlightrag_answer_child_sessions WHERE owner_id = $1",
+                owner,
+            )
+            await conn.execute(
+                "DELETE FROM dlightrag_answer_runs WHERE owner_id = $1 AND run_id = $2::uuid",
+                owner,
+                run_id,
+            )
+        await pool.close()
