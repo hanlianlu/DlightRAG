@@ -1,5 +1,5 @@
 {
-  "revision": "2026-08-23",
+  "revision": "sha256:6c9444ad9888d78c0fe69c3ebfdcff34473402e40411d745810812732d0cc5d9",
   "models": [
     {
       "provider": "openai",
