@@ -11,6 +11,9 @@ Usage (opt-in, requires Playwright)::
 """
 
 import base64
+import hashlib
+import os
+import re
 import socket
 import tempfile
 import threading
@@ -19,13 +22,22 @@ import urllib.error
 import urllib.request
 from collections.abc import Generator, Mapping
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
-from playwright.sync_api import Browser, Page, sync_playwright
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    Page,
+    sync_playwright,
+)
+from playwright.sync_api import (
+    Error as PlaywrightError,
+)
 
 from dlightrag.adapters.http.browser.conversation_models import ConversationHistory
 from dlightrag.adapters.http.browser.conversations import (
@@ -713,6 +725,27 @@ def e2e_base_url(
     working_directory.cleanup()
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item) -> Generator[None, Any]:
+    outcome = yield
+    report = outcome.get_result()
+    setattr(item, f"rep_{report.when}", report)
+
+
+def _test_failed(item: pytest.Item) -> bool:
+    for phase in ("setup", "call"):
+        report = getattr(item, f"rep_{phase}", None)
+        if report is not None and report.failed:
+            return True
+    return False
+
+
+def _failure_artifact_stem(nodeid: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", nodeid).strip("-")[:96] or "e2e"
+    digest = hashlib.sha256(nodeid.encode("utf-8")).hexdigest()[:12]
+    return f"{slug}-{digest}"
+
+
 @pytest.fixture(scope="session")
 def browser() -> Generator[Browser, Any]:
     """Session-scoped browser — reuse across tests for speed."""
@@ -725,15 +758,65 @@ def browser() -> Generator[Browser, Any]:
 
 
 @pytest.fixture
-def page(
+def e2e_browser_context(
     browser: Browser,
     e2e_base_url: str,
     e2e_conversation_service: E2EConversationService,
-) -> Generator[Page, Any]:
-    """Fresh page per test, already pointed at the running server."""
+    request: pytest.FixtureRequest,
+) -> Generator[BrowserContext, Any]:
+    """Create a context that retains diagnostics only for failed CI tests."""
     e2e_conversation_service.reset()
     context = browser.new_context(base_url=e2e_base_url)
-    page_obj = context.new_page()
+    artifact_dir_value = os.getenv("DLIGHTRAG_E2E_ARTIFACT_DIR")
+    artifact_dir = Path(artifact_dir_value) if artifact_dir_value else None
+    tracing_started = False
+
+    if artifact_dir is not None:
+        try:
+            context.tracing.start(screenshots=True, snapshots=True, sources=True)
+            tracing_started = True
+        except PlaywrightError:
+            pass
+
+    try:
+        yield context
+    finally:
+        failed = _test_failed(request.node)
+        stem = _failure_artifact_stem(request.node.nodeid)
+        writable_artifact_dir: Path | None = None
+        if artifact_dir is not None and failed:
+            try:
+                artifact_dir.mkdir(parents=True, exist_ok=True)
+                writable_artifact_dir = artifact_dir
+            except OSError:
+                pass
+
+        if writable_artifact_dir is not None:
+            for index, candidate in enumerate(context.pages, start=1):
+                if candidate.is_closed():
+                    continue
+                try:
+                    candidate.screenshot(
+                        path=writable_artifact_dir / f"{stem}-page-{index}.png",
+                        full_page=True,
+                    )
+                except OSError, PlaywrightError:
+                    pass
+
+        if tracing_started:
+            try:
+                if writable_artifact_dir is not None:
+                    context.tracing.stop(path=writable_artifact_dir / f"{stem}-trace.zip")
+                else:
+                    context.tracing.stop()
+            except OSError, PlaywrightError:
+                pass
+        context.close()
+
+
+@pytest.fixture
+def page(e2e_browser_context: BrowserContext) -> Generator[Page, Any]:
+    """Fresh page per test, already pointed at the running server."""
+    page_obj = e2e_browser_context.new_page()
     page_obj.set_default_timeout(10000)
     yield page_obj
-    context.close()

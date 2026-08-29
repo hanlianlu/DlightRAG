@@ -2,7 +2,7 @@
 """E2E tests for web appearance menu and runtime theme behavior."""
 
 import pytest
-from playwright.sync_api import Browser, Page, expect
+from playwright.sync_api import BrowserContext, Page, expect
 
 
 def _open_theme_menu(page: Page) -> None:
@@ -116,10 +116,9 @@ def test_theme_menu_keyboard_navigation_and_escape_focus_restore(page: Page) -> 
 
 @pytest.mark.e2e
 def test_theme_selection_works_when_local_storage_unavailable(
-    browser: Browser,
-    e2e_base_url: str,
+    e2e_browser_context: BrowserContext,
 ) -> None:
-    context = browser.new_context(base_url=e2e_base_url)
+    context = e2e_browser_context
     context.add_init_script(
         """
         Object.defineProperty(window, 'localStorage', {
@@ -141,12 +140,12 @@ def test_theme_selection_works_when_local_storage_unavailable(
     expect(root).to_have_attribute("data-theme", "light")
     expect(root).to_have_attribute("data-color-mode", "light")
 
-    context.close()
-
 
 @pytest.mark.e2e
-def test_theme_storage_event_syncs_across_tabs(browser: Browser, e2e_base_url: str) -> None:
-    context = browser.new_context(base_url=e2e_base_url)
+def test_theme_storage_event_syncs_across_tabs(
+    e2e_browser_context: BrowserContext,
+) -> None:
+    context = e2e_browser_context
     first = context.new_page()
     second = context.new_page()
 
@@ -159,8 +158,6 @@ def test_theme_storage_event_syncs_across_tabs(browser: Browser, e2e_base_url: s
     second_root = second.locator("html")
     expect(second_root).to_have_attribute("data-theme", "light")
     expect(second_root).to_have_attribute("data-color-mode", "light")
-
-    context.close()
 
 
 @pytest.mark.e2e

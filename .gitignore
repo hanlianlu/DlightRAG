@@ -70,6 +70,7 @@ src/dlightrag/adapters/http/browser/static/app/
 
 # Testing
 .pytest_cache/
+.test-results/
 htmlcov/
 .coverage
 coverage.xml

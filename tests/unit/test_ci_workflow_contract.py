@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Contracts for the automatic durable PostgreSQL pull-request gate."""
+"""Contracts for automatic pull-request CI gates."""
 
 import json
 import re
@@ -29,6 +29,11 @@ _REQUIRED_ENV = {
 def _integration_job() -> dict[str, Any]:
     workflow = yaml.safe_load(_CI_WORKFLOW.read_text(encoding="utf-8"))
     return workflow["jobs"]["integration"]
+
+
+def _browser_e2e_job() -> dict[str, Any]:
+    workflow = yaml.safe_load(_CI_WORKFLOW.read_text(encoding="utf-8"))
+    return workflow["jobs"]["browser-e2e"]
 
 
 def _workflow_triggers() -> set[str]:
@@ -91,3 +96,78 @@ def test_pg_integration_job_rejects_skips_without_external_evaluation() -> None:
         "anthropic",
     ):
         assert forbidden not in serialized_job
+
+
+def test_browser_e2e_job_is_automatic_local_and_builds_the_frontend() -> None:
+    job = _browser_e2e_job()
+    steps = job["steps"]
+    commands = [step["run"] for step in steps if "run" in step]
+    test_step = _named_step(job, "Run mocked browser E2E tests")
+    test_command = test_step["run"]
+    serialized_job = json.dumps(job).lower()
+    expected_setup = [
+        "make sync-dev",
+        "make frontend-install",
+        "uv run playwright install --with-deps chromium",
+        "make frontend-build",
+    ]
+
+    assert {"pull_request", "push", "workflow_dispatch"} <= _workflow_triggers()
+    assert "if" not in job
+    assert "needs" not in job
+    assert "services" not in job
+    assert "env" not in job
+    assert any(str(step.get("uses", "")).startswith("actions/setup-node@") for step in steps)
+    assert [commands.index(command) for command in expected_setup] == sorted(
+        commands.index(command) for command in expected_setup
+    )
+    assert "tests/e2e" in test_command
+    assert re.search(r"(?:^|\s)-m\s+e2e(?:\s|$)", test_command)
+    assert "e2e_pg18" not in test_command
+    assert "--junitxml=.test-results/browser-e2e.xml" in test_command
+    assert test_step["env"] == {"DLIGHTRAG_E2E_ARTIFACT_DIR": ".test-results/browser-e2e"}
+    for forbidden in (
+        "postgres",
+        "e2e_pg18",
+        "dlightrag_run_e2e_pg18",
+        "credentials",
+        "secrets.",
+        "github_token",
+        "api_key",
+        "openai",
+        "anthropic",
+    ):
+        assert forbidden not in serialized_job
+
+
+def test_browser_e2e_job_rejects_empty_or_skipped_results_and_uploads_diagnostics() -> None:
+    job = _browser_e2e_job()
+    guard = _named_step(job, "Reject empty or skipped browser E2E results")
+    upload = _named_step(job, "Upload browser E2E diagnostics")
+    guard_command = guard["run"]
+
+    assert guard["if"] == "${{ always() && steps.browser-tests.outcome != 'skipped' }}"
+    assert ".test-results/browser-e2e.xml" in guard_command
+    assert "tests > 0" in guard_command
+    assert "skipped == 0" in guard_command
+    assert upload["if"] == "always()"
+    assert str(upload["uses"]).startswith("actions/upload-artifact@")
+    assert upload["with"]["path"] == ".test-results"
+    assert upload["with"]["if-no-files-found"] == "warn"
+    assert upload["with"]["include-hidden-files"] is True
+    assert upload["with"]["retention-days"] == 14
+
+
+def test_browser_e2e_harness_retains_failed_context_diagnostics() -> None:
+    harness = Path("tests/e2e/conftest.py").read_text(encoding="utf-8")
+    theme_tests = Path("tests/e2e/test_web_theme.py").read_text(encoding="utf-8")
+    gitignore = Path(".gitignore").read_text(encoding="utf-8")
+
+    assert "def e2e_browser_context(" in harness
+    assert 'os.getenv("DLIGHTRAG_E2E_ARTIFACT_DIR")' in harness
+    assert "context.tracing.start(" in harness
+    assert "candidate.screenshot(" in harness
+    assert "context.tracing.stop(" in harness
+    assert "e2e_browser_context: BrowserContext" in theme_tests
+    assert "browser.new_context(" not in theme_tests
+    assert ".test-results/" in gitignore
