@@ -15,7 +15,10 @@ import pytest
 from pydantic import BaseModel
 
 from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
-from dlightrag.adapters.postgres.answer.session_repository import PGAgentSessionRepository
+from dlightrag.adapters.postgres.answer.session_repository import (
+    PGAgentSessionRepository,
+    PGProgressStore,
+)
 from dlightrag.application.answer_runs import AnswerService
 from dlightrag.engine.agent.session.effects import ToolResultEntry
 from dlightrag.engine.agent.session.entries import (
@@ -70,6 +73,7 @@ from dlightrag.engine.agent.tools import AgentTool, ToolResult
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
 from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
+from dlightrag.engine.runtime.progress import StageCommit, StageEvidenceConflict
 from dlightrag.engine.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
 from dlightrag.engine.runtime.settlements import (
     CommittedSpillUpdate,
@@ -959,11 +963,33 @@ async def test_host_delta_identity_conflict_rolls_back_entry_and_register(pool) 
     assert isinstance(first, TransactionCommit)
     before = await store.load(session_id)
 
+    prefix = replace(write, result_ordinal=4)
     changed_content = b"changed"
     different = replace(
         write,
         content=changed_content,
         content_digest=hashlib.sha256(changed_content).hexdigest(),
+    )
+    rolled_back_body = b"rolled back fetched host effect"
+    rolled_back_blob = plan_blob(rolled_back_body)
+    fetched = FetchedResourceSettlementUpdate(
+        resource=OpaqueFetchedResourceWrite(
+            resource_id="rolled-back-fetched",
+            safe_name="rolled-back.txt",
+            media_type="text/plain",
+            capabilities={},
+            blob_digest=rolled_back_blob.digest,
+            source_locator_digest=hashlib.sha256(b"https://example.test/rollback").hexdigest(),
+            source_locator=b"https://example.test/rollback",
+            session_id=session_id.value,
+            intent_id=intent_id.value,
+        ),
+        complete_blob=CompleteBlobDescriptor(
+            digest=rolled_back_blob.digest,
+            total_bytes=rolled_back_blob.total_bytes,
+            chunks=(rolled_back_body,),
+        ),
+        evidence=(different,),
     )
     second_intent = IntentId.new()
     with pytest.raises(_EvidenceIdentityConflict):
@@ -973,22 +999,52 @@ async def test_host_delta_identity_conflict_rolls_back_entry_and_register(pool) 
             _tool_result(session_id, second_intent),
             fencing_epoch=epoch,
             intent_id=second_intent,
-            host_delta=EffectHostUpdate(evidence=(different,)),
+            host_delta=EffectHostUpdate(evidence=(prefix,), fetched=(fetched,)),
         )
     after = await store.load(session_id)
     assert after.commit_sequence == before.commit_sequence
     assert after.entries == before.entries
     assert after.tree.lane().head == before.tree.lane().head
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT content_digest, content FROM dlightrag_answer_evidence"
+        rows = await conn.fetch(
+            "SELECT result_ordinal, content_digest, content"
+            " FROM dlightrag_answer_evidence"
             " WHERE owner_id = $1 AND run_id = $2",
             _OWNER,
             uuid.UUID(claimed.run.run_id),
         )
-    assert row is not None
+    assert len(rows) == 1
+    row = rows[0]
+    assert int(row["result_ordinal"]) == write.result_ordinal
     assert row["content_digest"] == write.content_digest
     assert bytes(row["content"]) == content
+    async with pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_blobs WHERE owner_id = $1 AND digest = $2",
+                _OWNER,
+                rolled_back_blob.digest,
+            )
+            == 0
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_blob_chunks WHERE owner_id = $1 AND digest = $2",
+                _OWNER,
+                rolled_back_blob.digest,
+            )
+            == 0
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_answer_resources"
+                " WHERE owner_id = $1 AND run_id = $2"
+                " AND resource_id = 'rolled-back-fetched'",
+                _OWNER,
+                uuid.UUID(claimed.run.run_id),
+            )
+            == 0
+        )
 
 
 async def test_fetched_resource_host_delta_writes_complete_blob(pool) -> None:
@@ -1403,6 +1459,194 @@ async def test_fast_stage_progress_never_creates_agent_session(pool) -> None:
             )
             == 0
         )
+
+
+async def test_fast_stage_evidence_conflict_rolls_back_batch_prefix(pool) -> None:
+    claimed = await _claim(pool)
+    stage_id = StageIntentId.deterministic(
+        run_id=claimed.run.run_id,
+        name="fast:retrieval:0",
+    )
+    identity_session = SessionId.new()
+    intent_id = IntentId.new()
+    first_content = b"first"
+    first = OpaqueEvidenceWrite(
+        session_id=identity_session.value,
+        intent_id=intent_id.value,
+        result_ordinal=0,
+        content_digest=hashlib.sha256(first_content).hexdigest(),
+        locator_digest=hashlib.sha256(b"locator").hexdigest(),
+        content=first_content,
+        locator=b"locator",
+    )
+    changed_content = b"changed"
+    conflicting = replace(
+        first,
+        content=changed_content,
+        content_digest=hashlib.sha256(changed_content).hexdigest(),
+    )
+
+    settled = await claimed.execution.progress_store.settle_stage(
+        expected_progress_version=0,
+        stage_intent_id=stage_id,
+        stage_name="retrieval",
+        state={"results": []},
+        evidence=(first, conflicting),
+    )
+
+    assert isinstance(settled, StageEvidenceConflict)
+    assert await _progress(pool, claimed.run.run_id) == 0
+    assert await claimed.execution.progress_store.load_stage(stage_id) is None
+    async with pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_answer_evidence"
+                " WHERE owner_id = $1 AND run_id = $2",
+                _OWNER,
+                uuid.UUID(claimed.run.run_id),
+            )
+            == 0
+        )
+
+
+async def test_fast_stage_exact_duplicate_evidence_is_idempotent(pool) -> None:
+    claimed = await _claim(pool)
+    first_stage_id = StageIntentId.deterministic(
+        run_id=claimed.run.run_id,
+        name="fast:retrieval:duplicates",
+    )
+    content = b"same evidence"
+    locator = b"same locator"
+    write = OpaqueEvidenceWrite(
+        session_id=SessionId.new().value,
+        intent_id=IntentId.new().value,
+        result_ordinal=0,
+        content_digest=hashlib.sha256(content).hexdigest(),
+        locator_digest=hashlib.sha256(locator).hexdigest(),
+        content=content,
+        locator=locator,
+    )
+
+    first = await claimed.execution.progress_store.settle_stage(
+        expected_progress_version=0,
+        stage_intent_id=first_stage_id,
+        stage_name="retrieval",
+        state={"results": ["same"]},
+        evidence=(write, write),
+    )
+
+    assert isinstance(first, StageCommit)
+    assert first.evidence_count == 2
+    assert await _progress(pool, claimed.run.run_id) == 1
+    async with pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_answer_evidence"
+                " WHERE owner_id = $1 AND run_id = $2",
+                _OWNER,
+                uuid.UUID(claimed.run.run_id),
+            )
+            == 1
+        )
+
+    replay_stage_id = StageIntentId.deterministic(
+        run_id=claimed.run.run_id,
+        name="fast:retrieval:identity-replay",
+    )
+    identity_replay = await claimed.execution.progress_store.settle_stage(
+        expected_progress_version=1,
+        stage_intent_id=replay_stage_id,
+        stage_name="retrieval",
+        state={"results": ["replayed identity"]},
+        evidence=(write,),
+    )
+    assert isinstance(identity_replay, StageCommit)
+    assert identity_replay.evidence_count == 1
+    assert await _progress(pool, claimed.run.run_id) == 2
+
+    stage_replay = await claimed.execution.progress_store.settle_stage(
+        expected_progress_version=2,
+        stage_intent_id=replay_stage_id,
+        stage_name="retrieval",
+        state={"results": ["replayed identity"]},
+        evidence=(write,),
+    )
+    assert isinstance(stage_replay, StageCommit)
+    assert stage_replay.evidence_count == 0
+    assert await _progress(pool, claimed.run.run_id) == 2
+    async with pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM dlightrag_answer_evidence"
+                " WHERE owner_id = $1 AND run_id = $2",
+                _OWNER,
+                uuid.UUID(claimed.run.run_id),
+            )
+            == 1
+        )
+
+
+async def test_fast_evidence_write_statement_count_is_constant_for_1_and_1000_rows(pool) -> None:
+    statement_counts: list[int] = []
+    for count in (1, 1000):
+        claimed = await _claim(pool)
+        calls: list[tuple[str, str, int]] = []
+        measured = PGProgressStore(
+            pool=cast(Any, _CountingPool(pool, calls)),
+            owner_id=_OWNER,
+            run_id=uuid.UUID(claimed.run.run_id),
+            worker_id=_WORKER,
+            lease_owner=_WORKER,
+            fencing_epoch=claimed.execution.fencing_epoch,
+        )
+        content = b"counted evidence"
+        locator = b"counted locator"
+        identity_session = SessionId.new().value
+        intent_id = IntentId.new().value
+        evidence = tuple(
+            OpaqueEvidenceWrite(
+                session_id=identity_session,
+                intent_id=intent_id,
+                result_ordinal=ordinal,
+                content_digest=hashlib.sha256(content).hexdigest(),
+                locator_digest=hashlib.sha256(locator).hexdigest(),
+                content=content,
+                locator=locator,
+            )
+            for ordinal in range(count)
+        )
+
+        settled = await measured.settle_stage(
+            expected_progress_version=0,
+            stage_intent_id=StageIntentId.deterministic(
+                run_id=claimed.run.run_id,
+                name="fast:retrieval:statement-count",
+            ),
+            stage_name="retrieval",
+            state={"count": count},
+            evidence=evidence,
+        )
+
+        assert isinstance(settled, StageCommit)
+        assert settled.evidence_count == count
+        evidence_calls = [call for call in calls if "dlightrag_answer_evidence" in call[1]]
+        assert [method for method, _query, _rows in evidence_calls] == [
+            "execute",
+            "fetchval",
+        ]
+        statement_counts.append(len(evidence_calls))
+        async with pool.acquire() as conn:
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM dlightrag_answer_evidence"
+                    " WHERE owner_id = $1 AND run_id = $2",
+                    _OWNER,
+                    uuid.UUID(claimed.run.run_id),
+                )
+                == count
+            )
+
+    assert statement_counts == [2, 2]
 
 
 async def test_postgres_and_service_transcript_project_typed_tool_result_parts(pool) -> None:

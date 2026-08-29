@@ -273,15 +273,33 @@ INSERT INTO dlightrag_answer_evidence (
     owner_id, run_id, session_id, intent_id, result_ordinal,
     content_digest, locator_digest, content, locator
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+SELECT $1, $2, input.session_id, input.intent_id, input.result_ordinal,
+       input.content_digest, input.locator_digest, input.content, input.locator
+FROM unnest(
+    $3::uuid[], $4::uuid[], $5::integer[],
+    $6::text[], $7::text[], $8::bytea[], $9::bytea[]
+) WITH ORDINALITY AS input(
+    session_id, intent_id, result_ordinal,
+    content_digest, locator_digest, content, locator, ordinality
+)
+ORDER BY input.ordinality
 ON CONFLICT (owner_id, run_id, session_id, intent_id, result_ordinal) DO NOTHING
 """
 
-_SELECT_EVIDENCE_DIGESTS = """
-SELECT content_digest, locator_digest
-FROM dlightrag_answer_evidence
-WHERE owner_id = $1 AND run_id = $2 AND session_id = $3
-  AND intent_id = $4 AND result_ordinal = $5
+_SELECT_EVIDENCE_CONFLICT = """
+SELECT 1
+FROM unnest(
+    $3::uuid[], $4::uuid[], $5::integer[], $6::text[], $7::text[]
+) AS input(session_id, intent_id, result_ordinal, content_digest, locator_digest)
+LEFT JOIN dlightrag_answer_evidence AS stored
+  ON stored.owner_id = $1 AND stored.run_id = $2
+ AND stored.session_id = input.session_id
+ AND stored.intent_id = input.intent_id
+ AND stored.result_ordinal = input.result_ordinal
+WHERE stored.content_digest IS NULL
+   OR stored.content_digest IS DISTINCT FROM input.content_digest
+   OR stored.locator_digest IS DISTINCT FROM input.locator_digest
+LIMIT 1
 """
 
 _INSERT_RESOURCE = """
@@ -307,6 +325,49 @@ class _EvidenceIdentityConflict(Exception):
 def _uuid(value: Any) -> Any:
     """Coerce a canonical id value to a PostgreSQL UUID parameter."""
     return uuid.UUID(str(value))
+
+
+async def _write_evidence_identities(
+    conn: Any,
+    *,
+    owner_id: str,
+    run_id: Any,
+    writes: Sequence[OpaqueEvidenceWrite],
+) -> None:
+    """Insert and verify one ordered evidence identity batch in two statements."""
+    if not writes:
+        return
+    session_ids = [_uuid(write.session_id) for write in writes]
+    intent_ids = [_uuid(write.intent_id) for write in writes]
+    ordinals = [write.result_ordinal for write in writes]
+    content_digests = [write.content_digest for write in writes]
+    locator_digests = [write.locator_digest for write in writes]
+    await conn.execute(
+        _INSERT_EVIDENCE,
+        owner_id,
+        run_id,
+        session_ids,
+        intent_ids,
+        ordinals,
+        content_digests,
+        locator_digests,
+        [write.content for write in writes],
+        [write.locator for write in writes],
+    )
+    if (
+        await conn.fetchval(
+            _SELECT_EVIDENCE_CONFLICT,
+            owner_id,
+            run_id,
+            session_ids,
+            intent_ids,
+            ordinals,
+            content_digests,
+            locator_digests,
+        )
+        is not None
+    ):
+        raise _EvidenceIdentityConflict()
 
 
 class PGAgentSessionRepository:
@@ -898,8 +959,12 @@ class PGAgentSessionRepository:
         intent_id: IntentId,
         update: EffectHostUpdate,
     ) -> str:
-        for write in update.evidence:
-            await self._write_evidence(conn, write)
+        await _write_evidence_identities(
+            conn,
+            owner_id=self._owner_id,
+            run_id=self._run_id,
+            writes=update.evidence,
+        )
         for resource in update.resources:
             await self._write_evidence_resource(conn, resource)
         # New blob identities use one canonical lock order across transactions;
@@ -908,8 +973,12 @@ class PGAgentSessionRepository:
             await self._write_complete_blob(conn, fetched.complete_blob)
         for fetched in update.fetched:
             await self._write_fetched_resource(conn, fetched.resource)
-            for write in fetched.evidence:
-                await self._write_evidence(conn, write)
+        await _write_evidence_identities(
+            conn,
+            owner_id=self._owner_id,
+            run_id=self._run_id,
+            writes=tuple(write for fetched in update.fetched for write in fetched.evidence),
+        )
 
         if update.committed_outputs:
             from dlightrag.adapters.postgres.answer.workspace import _upsert_spill
@@ -964,34 +1033,6 @@ class PGAgentSessionRepository:
                     record.content_digest,
                 )
         return _host_update_digest(update)
-
-    async def _write_evidence(self, conn: Any, write: OpaqueEvidenceWrite) -> None:
-        await conn.execute(
-            _INSERT_EVIDENCE,
-            self._owner_id,
-            self._run_id,
-            write.session_id,
-            write.intent_id,
-            write.result_ordinal,
-            write.content_digest,
-            write.locator_digest,
-            write.content,
-            write.locator,
-        )
-        row = await conn.fetchrow(
-            _SELECT_EVIDENCE_DIGESTS,
-            self._owner_id,
-            self._run_id,
-            write.session_id,
-            write.intent_id,
-            write.result_ordinal,
-        )
-        if (
-            row is None
-            or row["content_digest"] != write.content_digest
-            or row["locator_digest"] != write.locator_digest
-        ):
-            raise _EvidenceIdentityConflict()
 
     async def _write_evidence_resource(self, conn: Any, write: OpaqueEvidenceResourceWrite) -> None:
         await conn.execute(
@@ -1237,71 +1278,47 @@ class PGProgressStore:
         evidence: Sequence[Any],
     ) -> StageCommitResult:
         async with self._connection() as conn:
-            async with conn.transaction():
-                locked = await conn.fetchrow(
-                    _LOCK_PROGRESS_RUN,
-                    self._owner_id,
-                    self._run_id,
-                    self._lease_owner,
-                    self._fencing_epoch,
-                )
-                if locked is None:
-                    return StageLeaseLost()
-                progress = int(locked["durable_progress_version"])
-                if progress != expected_progress_version:
-                    return StageProgressConflict(
-                        expected_progress_version=expected_progress_version,
-                        current_progress_version=progress,
+            try:
+                async with conn.transaction():
+                    locked = await conn.fetchrow(
+                        _LOCK_PROGRESS_RUN,
+                        self._owner_id,
+                        self._run_id,
+                        self._lease_owner,
+                        self._fencing_epoch,
                     )
-                existing = await conn.fetchrow(
-                    "SELECT state_digest FROM dlightrag_answer_run_stages"
-                    " WHERE owner_id = $1 AND run_id = $2 AND stage_intent_id = $3"
-                    " FOR UPDATE",
-                    self._owner_id,
-                    self._run_id,
-                    _uuid(stage_intent_id.value),
-                )
-                state_json = json.dumps(state, ensure_ascii=False, sort_keys=True)
-                state_digest = _sha256(state_json)
-                if existing is not None:
-                    if existing["state_digest"] != state_digest:
-                        return StageConflict(stage_intent_id=stage_intent_id)
-                    return StageCommit(
-                        progress_version=expected_progress_version,
-                        stage_intent_id=stage_intent_id,
-                        evidence_count=0,
+                    if locked is None:
+                        return StageLeaseLost()
+                    progress = int(locked["durable_progress_version"])
+                    if progress != expected_progress_version:
+                        return StageProgressConflict(
+                            expected_progress_version=expected_progress_version,
+                            current_progress_version=progress,
+                        )
+                    existing = await conn.fetchrow(
+                        "SELECT state_digest FROM dlightrag_answer_run_stages"
+                        " WHERE owner_id = $1 AND run_id = $2 AND stage_intent_id = $3"
+                        " FOR UPDATE",
+                        self._owner_id,
+                        self._run_id,
+                        _uuid(stage_intent_id.value),
                     )
-                try:
-                    evidence_count = 0
-                    for write in evidence:
-                        evidence_count += 1
-                        # Fast evidence uses the synthetic UUIDv5 fast namespace.
-                        await conn.execute(
-                            _INSERT_EVIDENCE,
-                            self._owner_id,
-                            self._run_id,
-                            write.session_id,
-                            write.intent_id,
-                            write.result_ordinal,
-                            write.content_digest,
-                            write.locator_digest,
-                            write.content,
-                            write.locator,
+                    state_json = json.dumps(state, ensure_ascii=False, sort_keys=True)
+                    state_digest = _sha256(state_json)
+                    if existing is not None:
+                        if existing["state_digest"] != state_digest:
+                            return StageConflict(stage_intent_id=stage_intent_id)
+                        return StageCommit(
+                            progress_version=expected_progress_version,
+                            stage_intent_id=stage_intent_id,
+                            evidence_count=0,
                         )
-                        row = await conn.fetchrow(
-                            _SELECT_EVIDENCE_DIGESTS,
-                            self._owner_id,
-                            self._run_id,
-                            write.session_id,
-                            write.intent_id,
-                            write.result_ordinal,
-                        )
-                        if (
-                            row is None
-                            or row["content_digest"] != write.content_digest
-                            or row["locator_digest"] != write.locator_digest
-                        ):
-                            return StageEvidenceConflict()
+                    await _write_evidence_identities(
+                        conn,
+                        owner_id=self._owner_id,
+                        run_id=self._run_id,
+                        writes=evidence,
+                    )
                     await conn.execute(
                         "INSERT INTO dlightrag_answer_run_stages ("
                         " owner_id, run_id, stage_intent_id, stage_name,"
@@ -1319,10 +1336,10 @@ class PGProgressStore:
                     return StageCommit(
                         progress_version=expected_progress_version + 1,
                         stage_intent_id=stage_intent_id,
-                        evidence_count=evidence_count,
+                        evidence_count=len(evidence),
                     )
-                except _EvidenceIdentityConflict:
-                    return StageEvidenceConflict()
+            except _EvidenceIdentityConflict:
+                return StageEvidenceConflict()
 
 
 def _sha256(text: str) -> str:

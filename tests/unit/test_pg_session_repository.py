@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Delta-bounded recording-connection tests for PostgreSQL Session transactions."""
 
+import hashlib
 import json
 import uuid
 from dataclasses import replace
@@ -12,7 +13,7 @@ import pytest
 import dlightrag.adapters.postgres.answer.session_repository as session_repository_module
 from dlightrag.adapters.postgres.answer.session_repository import PGAgentSessionRepository
 from dlightrag.engine.agent.session.entries import UserMessageEntry
-from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId
+from dlightrag.engine.agent.session.ids import EntryId, IntentId, LaneId, SessionId
 from dlightrag.engine.agent.session.registers import (
     DeleteRegister,
     LaneHead,
@@ -27,6 +28,7 @@ from dlightrag.engine.agent.session.transactions import (
     RegisterExpectation,
     SessionTransaction,
 )
+from dlightrag.engine.runtime.settlements import EffectHostUpdate, OpaqueEvidenceWrite
 
 
 class _TransactionContext:
@@ -99,6 +101,7 @@ class _RecordingConnection:
         self.entry_ids = entry_ids or set()
         self.lane_rows = lane_rows or []
         self.fetches: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetchvals: list[tuple[str, tuple[Any, ...]]] = []
         self.executes: list[tuple[str, tuple[Any, ...]]] = []
 
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
@@ -120,6 +123,12 @@ class _RecordingConnection:
         if "register_kind IN ('lane_head', 'lane_state')" in query:
             return self.lane_rows
         raise AssertionError(f"unexpected fetch: {query}")
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        self.fetchvals.append((query, args))
+        if "LEFT JOIN dlightrag_answer_evidence" in query:
+            return None
+        raise AssertionError(f"unexpected fetchval: {query}")
 
     async def execute(self, query: str, *args: Any) -> str:
         self.executes.append((query, args))
@@ -447,6 +456,44 @@ async def test_register_validation_rejects_one_sided_lane_pairs(
         await _repository()._validate_transaction_registers(  # pyright: ignore[reportPrivateUsage]
             cast(Any, connection), SessionId.new(), transaction
         )
+
+
+@pytest.mark.parametrize("count", [1, 1000])
+async def test_agent_evidence_write_uses_two_statements_regardless_of_count(count: int) -> None:
+    repository = _repository()
+    connection = _RecordingConnection()
+    content = b"evidence"
+    locator = b"locator"
+    session_id = SessionId.new()
+    intent_id = IntentId.new()
+    evidence = tuple(
+        OpaqueEvidenceWrite(
+            session_id=session_id.value,
+            intent_id=intent_id.value,
+            result_ordinal=ordinal,
+            content_digest=hashlib.sha256(content).hexdigest(),
+            locator_digest=hashlib.sha256(locator).hexdigest(),
+            content=content,
+            locator=locator,
+        )
+        for ordinal in range(count)
+    )
+
+    await repository._write_host_update(  # pyright: ignore[reportPrivateUsage]
+        cast(Any, connection),
+        session_id,
+        intent_id,
+        EffectHostUpdate(evidence=evidence),
+    )
+
+    assert len(connection.executes) == 1
+    assert len(connection.fetchvals) == 1
+    insert, insert_args = connection.executes[0]
+    probe, probe_args = connection.fetchvals[0]
+    assert "INSERT INTO dlightrag_answer_evidence" in insert
+    assert "LEFT JOIN dlightrag_answer_evidence" in probe
+    assert all(len(values) == count for values in insert_args[2:])
+    assert all(len(values) == count for values in probe_args[2:])
 
 
 async def test_entry_and_register_mutations_are_one_statement_per_nonempty_category() -> None:
