@@ -997,6 +997,7 @@ def _smoke_root_interfaces() -> None:
             maintenance=cast(Any, maintenance),
             ingest_jobs=cast(Any, jobs),
             file_panel=cast(Any, SimpleNamespace()),
+            metadata_search=cast(Any, SimpleNamespace()),
             source_download_for=cast(Any, lambda _workspace: SimpleNamespace()),
         )
         if await service.list_workspaces() != ["installed", "default"]:

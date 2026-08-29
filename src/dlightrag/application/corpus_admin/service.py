@@ -78,6 +78,13 @@ from .file_panel import (
     FilePanelPageRequest,
     FilePanelRowPage,
 )
+from .metadata_search import (
+    MetadataMatchRowPage,
+    MetadataSearchCursor,
+    MetadataSearchCursorCodec,
+    MetadataSearchPage,
+    MetadataSearchPageRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -404,6 +411,16 @@ class FilePanelStore(Protocol):
     ) -> FilePanelRowPage: ...
 
 
+class MetadataSearchStore(Protocol):
+    async def search_metadata_page(
+        self,
+        workspace: str,
+        filters: MetadataFilter,
+        *,
+        page: MetadataSearchPageRequest,
+    ) -> MetadataMatchRowPage: ...
+
+
 class UploadReader(Protocol):
     """Minimal async reader contract for one streamed upload."""
 
@@ -428,16 +445,22 @@ class CorpusAdmin:
         maintenance: CorpusMaintenanceStore,
         ingest_jobs: IngestJobs,
         file_panel: FilePanelStore,
+        metadata_search: MetadataSearchStore,
         source_download_for: SourceDownloadFactory,
         file_panel_cursor_secret: bytes | None = None,
+        metadata_search_cursor_secret: bytes | None = None,
     ) -> None:
         self._settings = settings
         self._pool = pool
         self._maintenance = maintenance
         self._ingest_jobs = ingest_jobs
         self._file_panel = file_panel
+        self._metadata_search = metadata_search
         self._source_download_for = source_download_for
         self._file_panel_cursor_codec = FilePanelCursorCodec(file_panel_cursor_secret)
+        self._metadata_search_cursor_codec = MetadataSearchCursorCodec(
+            metadata_search_cursor_secret
+        )
 
     async def initialize(self) -> None:
         default_workspace = require_canonical_workspace_id(self._settings.default_workspace_id)
@@ -492,6 +515,11 @@ class CorpusAdmin:
     def file_panel_cursor_codec(self) -> FilePanelCursorCodec:
         """Return the cursor codec shared with the browser Files adapter."""
         return self._file_panel_cursor_codec
+
+    @property
+    def metadata_search_cursor_codec(self) -> MetadataSearchCursorCodec:
+        """Return the cursor codec shared with the REST metadata adapter."""
+        return self._metadata_search_cursor_codec
 
     async def workspace_exists(self, workspace_id: str) -> bool:
         """Perform one bounded catalog lookup without warming a workspace runtime."""
@@ -760,9 +788,33 @@ class CorpusAdmin:
         self,
         workspace_id: str,
         filters: MetadataFilter,
-    ) -> list[str]:
-        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
-        return await runtime.asearch_metadata(filters)
+        *,
+        page: MetadataSearchPageRequest | None = None,
+    ) -> MetadataSearchPage:
+        """Return one bounded matching document-id page without warming a runtime."""
+        workspace = require_canonical_workspace_id(workspace_id)
+        requested = page or MetadataSearchPageRequest()
+        if requested.cursor is not None and requested.cursor.workspace != workspace:
+            raise ValueError("metadata-search cursor belongs to another workspace")
+        result = await self._metadata_search.search_metadata_page(
+            workspace,
+            filters,
+            page=requested,
+        )
+        next_cursor = None
+        if result.has_more:
+            if not result.document_ids:
+                raise RuntimeError("metadata-search store reported more rows after an empty page")
+            next_cursor = MetadataSearchCursor(
+                workspace=workspace,
+                after_doc_id=result.document_ids[-1],
+                mode=result.mode,
+            )
+        return MetadataSearchPage(
+            document_ids=result.document_ids,
+            next_cursor=next_cursor,
+            fetched_rows=result.fetched_rows,
+        )
 
     async def reset(
         self,

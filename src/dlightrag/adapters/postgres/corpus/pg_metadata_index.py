@@ -269,6 +269,70 @@ _FILENAME_EXACT_CONDITION = (
 # search. ILIKE would mean escaping %, _ and \ back out of the pattern language.
 _FILENAME_CONTAINS_CONDITION = "STRPOS(LOWER(TRIM(filename)), LOWER(TRIM(${idx}))) > 0"
 
+_FILENAME_MODES = frozenset({"exact", "contains"})
+
+
+def _match_conditions(
+    workspace: str,
+    filters: MetadataFilter,
+    *,
+    filename_mode: str = "exact",
+) -> tuple[list[str], list[Any]]:
+    """Build the shared workspace-and-filter conditions for one metadata match.
+
+    ``filename_mode`` selects the filename clause: ``exact`` (name or stem
+    equality) or ``contains`` (literal substring). The widened clause is chosen
+    once by the caller, so the internal full-set query and a paged traversal
+    share identical SQL semantics instead of drifting apart.
+    """
+    if filename_mode not in _FILENAME_MODES:
+        raise ValueError("metadata match filename mode is invalid")
+    conditions: list[str] = ["workspace = $1"]
+    params: list[Any] = [workspace]
+    idx = 2
+
+    for attr in ("file_extension", "title", "author"):
+        value = getattr(filters, attr, None)
+        if value is None:
+            continue
+        conditions.append(f"{_canonical(attr)} = {_canonical(f'${idx}')}")
+        params.append(value)
+        idx += 1
+
+    if filters.filename:
+        template = (
+            _FILENAME_CONTAINS_CONDITION
+            if filename_mode == "contains"
+            else _FILENAME_EXACT_CONDITION
+        )
+        conditions.append(template.format(idx=idx))
+        params.append(filters.filename)
+        idx += 1
+
+    # Date range
+    if filters.creation_date_from:
+        conditions.append(f"creation_date >= ${idx}")
+        params.append(filters.creation_date_from)
+        idx += 1
+    if filters.creation_date_to:
+        conditions.append(f"creation_date <= ${idx}")
+        params.append(filters.creation_date_to)
+        idx += 1
+
+    # JSONB values are stored verbatim, so the canonical fold happens here
+    # rather than being baked into what was written. Keys were folded on the
+    # way in, so the same fold applies to the key the caller filters on.
+    for key, value in (filters.custom or {}).items():
+        conditions.append(
+            f"{_canonical(f'custom_metadata ->> ${idx}')} = {_canonical(f'${idx + 1}')}"
+        )
+        params.append(canonical_metadata_key(key))
+        params.append(value if isinstance(value, str) else json.dumps(value))
+        idx += 2
+
+    return conditions, params
+
+
 # Deletion resolves a name, so it matches the full name only, never the stem.
 _FIND_BY_FILENAME = (
     "SELECT doc_id FROM dlightrag_doc_metadata "  # noqa: S608 - fixed text; only $-params
@@ -337,56 +401,23 @@ class PGMetadataIndex(PostgresOperationRunner):
 
     async def query(self, filters: MetadataFilter) -> list[str]:
         """Query for doc_ids matching the given filters."""
-        conditions: list[str] = ["workspace = $1"]
-        params: list[Any] = [self._workspace]
-        idx = 2
-
-        for attr in ("file_extension", "title", "author"):
-            value = getattr(filters, attr, None)
-            if value is None:
-                continue
-            conditions.append(f"{_canonical(attr)} = {_canonical(f'${idx}')}")
-            params.append(value)
-            idx += 1
-
-        filename_slot: tuple[int, int] | None = None
-        if filters.filename:
-            filename_slot = (len(conditions), len(params))
-            conditions.append(_FILENAME_EXACT_CONDITION.format(idx=idx))
-            params.append(filters.filename)
-            idx += 1
-
-        # Date range
-        if filters.creation_date_from:
-            conditions.append(f"creation_date >= ${idx}")
-            params.append(filters.creation_date_from)
-            idx += 1
-        if filters.creation_date_to:
-            conditions.append(f"creation_date <= ${idx}")
-            params.append(filters.creation_date_to)
-            idx += 1
-
-        # JSONB values are stored verbatim, so the canonical fold happens here
-        # rather than being baked into what was written. Keys were folded on the
-        # way in, so the same fold applies to the key the caller filters on.
-        for key, value in (filters.custom or {}).items():
-            conditions.append(
-                f"{_canonical(f'custom_metadata ->> ${idx}')} = {_canonical(f'${idx + 1}')}"
-            )
-            params.append(canonical_metadata_key(key))
-            params.append(value if isinstance(value, str) else json.dumps(value))
-            idx += 2
-
+        conditions, params = _match_conditions(
+            self._workspace,
+            filters,
+            filename_mode="exact",
+        )
         doc_ids = await self._select_doc_ids(conditions, params)
-        if doc_ids or filename_slot is None:
+        if doc_ids or not filters.filename:
             return doc_ids
 
         # The caller named a file the corpus does not carry verbatim. A planner
         # cannot know whether a name is complete, and a human rarely types one,
         # so widen that single clause rather than returning nothing.
-        condition_slot, param_slot = filename_slot
-        conditions[condition_slot] = _FILENAME_CONTAINS_CONDITION.format(idx=param_slot + 1)
-        params[param_slot] = str(filters.filename)
+        conditions, params = _match_conditions(
+            self._workspace,
+            filters,
+            filename_mode="contains",
+        )
         return await self._select_doc_ids(conditions, params)
 
     async def _select_doc_ids(self, conditions: list[str], params: list[Any]) -> list[str]:

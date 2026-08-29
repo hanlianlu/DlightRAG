@@ -74,6 +74,28 @@ def test_web_conversation_page_query_matches_the_covering_index_contract() -> No
     assert "OFFSET" not in after.upper()
 
 
+def test_metadata_search_page_sql_matches_the_doc_id_keyset_contract() -> None:
+    from dlightrag.adapters.postgres.corpus import pg_metadata_search
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import _match_conditions
+    from dlightrag.engine.rag.retrieval import MetadataFilter
+
+    conditions, params = _match_conditions(
+        "finance",
+        MetadataFilter(filename="Report", file_extension=".pdf"),
+        filename_mode="exact",
+    )
+    first = " ".join(pg_metadata_search._paged_sql(conditions, params, after_doc_id=None).split())
+    after = " ".join(
+        pg_metadata_search._paged_sql(conditions, params, after_doc_id="doc-9").split()
+    )
+
+    assert "ORDER BY doc_id ASC LIMIT $4" in first
+    assert "doc_id > $4" in after
+    assert "ORDER BY doc_id ASC LIMIT $5" in after
+    assert "OFFSET" not in first.upper()
+    assert "OFFSET" not in after.upper()
+
+
 def test_web_turn_pages_select_limit_plus_one_identities_before_run_joins() -> None:
     from dlightrag.adapters.postgres.web import web_conversations
 

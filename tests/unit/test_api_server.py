@@ -32,6 +32,9 @@ from dlightrag.application.config import (
 from dlightrag.application.corpus_admin import (
     FilePanelCursorCodec,
     IngestSpec,
+    MetadataSearchCursor,
+    MetadataSearchCursorCodec,
+    MetadataSearchPage,
     MetadataValidationError,
 )
 from dlightrag.application.health import ApplicationHealth
@@ -213,8 +216,11 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
     corpora.get_visual_asset = AsyncMock()
     corpora.get_metadata = AsyncMock(return_value={})
     corpora.update_metadata = AsyncMock()
-    corpora.search_metadata = AsyncMock(return_value=[])
+    corpora.search_metadata = AsyncMock(
+        return_value=MetadataSearchPage(document_ids=(), next_cursor=None, fetched_rows=0)
+    )
     corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"api-server-test")
+    corpora.metadata_search_cursor_codec = MetadataSearchCursorCodec(b"api-server-test")
     corpora.workspace_exists = AsyncMock(return_value=True)
     corpora.file_panel_snapshot = AsyncMock(
         return_value={
@@ -2148,7 +2154,13 @@ class TestMetadataAPI:
         mock_application,
     ) -> None:
         """`/metadata/search` is a literal path, so it must be declared first."""
-        mock_application.corpora.search_metadata = AsyncMock(return_value=["doc-1"])
+        mock_application.corpora.search_metadata = AsyncMock(
+            return_value=MetadataSearchPage(
+                document_ids=("doc-1",),
+                next_cursor=None,
+                fetched_rows=1,
+            )
+        )
         app.state.application = mock_application
 
         resp = await client.post("/metadata/search", json={"custom": {"department": "legal"}})
@@ -2164,12 +2176,134 @@ class TestMetadataAPI:
         mock_application,
     ) -> None:
         """A dropped filter name would match every document instead of failing."""
-        mock_application.corpora.search_metadata = AsyncMock(return_value=["doc-1"])
         app.state.application = mock_application
 
         resp = await client.post("/metadata/search", json={"nonsense": "x"})
 
         assert resp.status_code == 422
+        mock_application.corpora.search_metadata.assert_not_awaited()
+
+    @pytest.mark.usefixtures("_patch_application")
+    async def test_search_pages_by_doc_id_with_an_opaque_round_tripped_cursor(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+    ) -> None:
+        codec = MetadataSearchCursorCodec(b"api-server-test")
+        continuation = MetadataSearchCursor(
+            workspace="default",
+            after_doc_id="doc-40",
+            mode="exact",
+        )
+
+        def search_side_effect(workspace, _filters, *, page):
+            captured.append(page)
+            return MetadataSearchPage(
+                document_ids=("doc-41", "doc-42"),
+                next_cursor=continuation,
+                fetched_rows=3,
+            )
+
+        captured = []
+        mock_application.corpora.search_metadata = AsyncMock(side_effect=search_side_effect)
+        app.state.application = mock_application
+
+        first = await client.post("/metadata/search", json={"filename": "Report"})
+        assert first.status_code == 200
+        body = first.json()
+        assert body["document_ids"] == ["doc-41", "doc-42"]
+        assert body["count"] == 2
+        assert body["workspace"] == "default"
+        assert body["next_cursor"] == codec.encode(continuation)
+        assert captured[-1].limit == 50
+        assert captured[-1].cursor is None
+
+        second = await client.post(
+            "/metadata/search",
+            params={"cursor": body["next_cursor"], "limit": 25},
+            json={"filename": "Report"},
+        )
+        assert second.status_code == 200
+        assert captured[-1].limit == 25
+        assert captured[-1].cursor == continuation
+
+    @pytest.mark.usefixtures("_patch_application")
+    async def test_search_limit_bounds_are_enforced_before_storage(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+    ) -> None:
+        app.state.application = mock_application
+
+        for limit in (0, 101):
+            resp = await client.post(
+                "/metadata/search",
+                params={"limit": limit},
+                json={"filename": "Report"},
+            )
+            assert resp.status_code == 422
+
+        resp = await client.post(
+            "/metadata/search",
+            params={"limit": "abc"},
+            json={"filename": "Report"},
+        )
+        assert resp.status_code == 422
+        mock_application.corpora.search_metadata.assert_not_awaited()
+
+    @pytest.mark.usefixtures("_patch_application")
+    async def test_search_rejects_tampered_and_cross_workspace_cursors_before_storage(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+    ) -> None:
+        codec = MetadataSearchCursorCodec(b"api-server-test")
+        foreign = codec.encode(
+            MetadataSearchCursor(
+                workspace="other_ws",
+                after_doc_id="doc-1",
+                mode="exact",
+            )
+        )
+        app.state.application = mock_application
+
+        for bad_cursor in ("AAAA.BBBB", foreign):
+            resp = await client.post(
+                "/metadata/search",
+                params={"cursor": bad_cursor},
+                json={"filename": "Report"},
+            )
+            assert resp.status_code == 422
+        mock_application.corpora.search_metadata.assert_not_awaited()
+
+    @pytest.mark.usefixtures("_patch_application")
+    async def test_search_enforces_authorization_before_filter_validation(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+    ) -> None:
+        from dlightrag.application.access import AccessDeniedError
+
+        class DenyAllAccess:
+            async def check(self, user, action, *, workspace=None):
+                raise AccessDeniedError("denied")
+
+            async def filter_workspaces(self, user, action, workspaces):
+                return []
+
+        app.state.application = mock_application
+        app.state.access_control = DenyAllAccess()
+
+        try:
+            resp = await client.post("/metadata/search", json={"nonsense": "x"})
+        finally:
+            del app.state.access_control
+
+        assert resp.status_code == 403
         mock_application.corpora.search_metadata.assert_not_awaited()
 
 

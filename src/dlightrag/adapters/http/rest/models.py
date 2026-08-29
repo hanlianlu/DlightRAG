@@ -279,6 +279,7 @@ class SearchMetadataResponse(ClientContractModel):
     document_ids: list[str]
     count: int
     workspace: str
+    next_cursor: str | None = None
 
 
 class MetadataUpdateResponse(ClientContractModel):

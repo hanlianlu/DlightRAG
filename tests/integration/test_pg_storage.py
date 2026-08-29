@@ -97,6 +97,7 @@ def _corpus_admin(config: Any) -> Any:
         maintenance=backend.maintenance,
         ingest_jobs=cast(Any, SimpleNamespace()),
         file_panel=cast(Any, SimpleNamespace()),
+        metadata_search=cast(Any, SimpleNamespace()),
         source_download_for=cast(Any, lambda _workspace: SimpleNamespace()),
     )
 
@@ -306,3 +307,128 @@ class TestPGWorkspaceDiscovery:
         finally:
             await _delete_test_workspaces(registry, "test-fallback-ws")
             await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# Metadata search - bounded doc_id keyset traversal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("pg_check")
+async def test_metadata_search_traverses_contains_fallback_without_gaps() -> None:
+    import asyncpg
+
+    from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
+    from dlightrag.application.corpus_admin import (
+        MetadataSearchCursor,
+        MetadataSearchPageRequest,
+    )
+    from dlightrag.engine.rag.retrieval import MetadataFilter
+
+    workspace = "test_pg_metadata_search"
+    other_workspace = "test_pg_metadata_search_other"
+    pool = await asyncpg.create_pool(
+        host=str(_PG_CONN_KWARGS["host"]),
+        port=int(_PG_CONN_KWARGS["port"]),
+        user=str(_PG_CONN_KWARGS["user"]),
+        password=str(_PG_CONN_KWARGS["password"]),
+        database=str(_PG_CONN_KWARGS["database"]),
+        min_size=1,
+        max_size=1,
+    )
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (
+                    workspace VARCHAR(255) NOT NULL,
+                    doc_id VARCHAR(255) NOT NULL,
+                    filename VARCHAR(512),
+                    filename_stem VARCHAR(512),
+                    PRIMARY KEY (workspace, doc_id)
+                )
+                """
+            )
+            await conn.execute(
+                "DELETE FROM dlightrag_doc_metadata WHERE workspace = ANY($1::text[])",
+                [workspace, other_workspace],
+            )
+            rows: list[tuple[str, str, str, str]] = []
+            # 120 contains-only matches: no filename or stem equals the filter.
+            for index in range(120):
+                rows.append(
+                    (
+                        workspace,
+                        f"doc-{index:03d}",
+                        f"Quarterly Report draft {index}.pdf",
+                        f"Quarterly Report draft {index}",
+                    )
+                )
+            # Three exact stem matches; the widened fallback must not run.
+            for index in range(3):
+                rows.append((workspace, f"exact-{index:03d}", "Exact Doc.pdf", "Exact Doc"))
+            # Contains-only matches for the exact filter.
+            for index in range(5):
+                rows.append(
+                    (workspace, f"copy-{index:03d}", "Exact Doc copy.pdf", "Exact Doc copy")
+                )
+            for index in range(7):
+                rows.append(
+                    (
+                        other_workspace,
+                        f"foreign-{index:03d}",
+                        "Quarterly Report draft.pdf",
+                        "Quarterly Report draft",
+                    )
+                )
+            await conn.executemany(
+                """
+                INSERT INTO dlightrag_doc_metadata (workspace, doc_id, filename, filename_stem)
+                VALUES ($1, $2, $3, $4)
+                """,
+                rows,
+            )
+
+        store = PGMetadataSearchStore(pool=pool)
+        filters = MetadataFilter(filename="Quarterly Report")
+        cursor: MetadataSearchCursor | None = None
+        observed: list[str] = []
+        while True:
+            page = await store.search_metadata_page(
+                workspace,
+                filters,
+                page=MetadataSearchPageRequest(limit=40, cursor=cursor),
+            )
+            assert len(page.document_ids) <= 40
+            assert page.fetched_rows <= 41
+            observed.extend(page.document_ids)
+            if not page.has_more:
+                break
+            assert page.document_ids
+            cursor = MetadataSearchCursor(
+                workspace=workspace,
+                after_doc_id=page.document_ids[-1],
+                mode=page.mode,
+            )
+        assert len(observed) == 120
+        assert len(set(observed)) == 120
+        assert page.mode == "contains"
+
+        # A filter with exact matches stays exact: the contains-only rows must
+        # never enter the traversal.
+        exact_page = await store.search_metadata_page(
+            workspace,
+            MetadataFilter(filename="Exact Doc"),
+            page=MetadataSearchPageRequest(limit=50),
+        )
+        assert exact_page.mode == "exact"
+        assert exact_page.has_more is False
+        assert exact_page.fetched_rows == 3
+        assert sorted(exact_page.document_ids) == ["exact-000", "exact-001", "exact-002"]
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM dlightrag_doc_metadata WHERE workspace = ANY($1::text[])",
+                [workspace, other_workspace],
+            )
+        await pool.close()

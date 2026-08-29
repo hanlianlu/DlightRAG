@@ -18,9 +18,13 @@ from dlightrag.application.corpus_admin import (
     FilePanelPageRequest,
     FilePanelRowPage,
     IngestSpec,
+    MetadataMatchRowPage,
+    MetadataSearchCursor,
+    MetadataSearchPageRequest,
     ProcessedFileRow,
     RedirectDownloadTarget,
 )
+from dlightrag.engine.rag.retrieval import MetadataFilter
 
 
 def _settings(
@@ -44,6 +48,7 @@ def _admin(
     read_only: bool = False,
     input_root: str | Path = "/tmp/inputs",
     default_workspace_id: str = "default",
+    metadata_search: Any | None = None,
 ) -> tuple[CorpusAdmin, Any, Any, Any, Any, Any]:
     runtime = AsyncMock()
     pool = SimpleNamespace(
@@ -74,6 +79,16 @@ def _admin(
             return_value=FilePanelRowPage(items=(), has_more=False, fetched_rows=0)
         )
     )
+    metadata_store = metadata_search or SimpleNamespace(
+        search_metadata_page=AsyncMock(
+            return_value=MetadataMatchRowPage(
+                document_ids=(),
+                has_more=False,
+                fetched_rows=0,
+                mode="exact",
+            )
+        )
+    )
     download = SimpleNamespace(prepare=AsyncMock())
     admin = CorpusAdmin(
         settings=_settings(
@@ -85,6 +100,7 @@ def _admin(
         maintenance=cast(Any, maintenance),
         ingest_jobs=cast(Any, jobs),
         file_panel=cast(Any, file_panel),
+        metadata_search=cast(Any, metadata_store),
         source_download_for=MagicMock(return_value=download),
     )
     return admin, pool, maintenance, jobs, file_panel, download
@@ -532,3 +548,81 @@ async def test_workspace_exists_uses_default_fast_path_and_bounded_maintenance_l
     with pytest.raises(RuntimeError, match="registry unavailable"):
         await admin.workspace_exists("research")
     pool.acquire.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Metadata search — bounded cold path
+# ---------------------------------------------------------------------------
+
+
+async def test_search_metadata_never_warms_a_runtime_and_derives_next_cursor() -> None:
+    admin, pool, _, _, _, _ = _admin(
+        metadata_search=SimpleNamespace(
+            search_metadata_page=AsyncMock(
+                return_value=MetadataMatchRowPage(
+                    document_ids=("doc-b", "doc-c"),
+                    has_more=True,
+                    fetched_rows=3,
+                    mode="contains",
+                )
+            )
+        )
+    )
+
+    page = await admin.search_metadata("finance", MetadataFilter(filename="Quarterly"))
+
+    assert page.document_ids == ("doc-b", "doc-c")
+    assert page.fetched_rows == 3
+    assert page.next_cursor == MetadataSearchCursor(
+        workspace="finance",
+        after_doc_id="doc-c",
+        mode="contains",
+    )
+    pool.acquire.assert_not_awaited()
+    pool.get_pipeline_status.assert_not_awaited()
+
+
+async def test_search_metadata_has_no_cursor_when_the_page_is_exhausted() -> None:
+    store = SimpleNamespace(
+        search_metadata_page=AsyncMock(
+            return_value=MetadataMatchRowPage(
+                document_ids=("doc-z",),
+                has_more=False,
+                fetched_rows=1,
+                mode="exact",
+            )
+        )
+    )
+    admin, pool, _, _, _, _ = _admin(metadata_search=store)
+
+    page = await admin.search_metadata(
+        "finance",
+        MetadataFilter(filename="Report"),
+        page=MetadataSearchPageRequest(limit=25),
+    )
+
+    assert page.next_cursor is None
+    called = store.search_metadata_page.await_args
+    assert called.kwargs["page"].limit == 25
+    assert called.args[0] == "finance"
+    pool.acquire.assert_not_awaited()
+
+
+async def test_search_metadata_rejects_cross_workspace_cursor_before_storage() -> None:
+    store = SimpleNamespace(search_metadata_page=AsyncMock())
+    admin, _, _, _, _, _ = _admin(metadata_search=store)
+
+    with pytest.raises(ValueError, match="another workspace"):
+        await admin.search_metadata(
+            "finance",
+            MetadataFilter(filename="Report"),
+            page=MetadataSearchPageRequest(
+                cursor=MetadataSearchCursor(
+                    workspace="legal",
+                    after_doc_id="doc-1",
+                    mode="exact",
+                )
+            ),
+        )
+
+    store.search_metadata_page.assert_not_awaited()

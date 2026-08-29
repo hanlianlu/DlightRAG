@@ -239,6 +239,18 @@ offset is converted to UTC and a bare value is read as UTC. Anything else is
 rejected at ingest rather than stored unfiltered. Filter it with
 `creation_date_from` / `creation_date_to`.
 
+### Metadata Search Pagination
+
+`POST /metadata/search` returns one bounded page of matching document
+ids ordered by `doc_id` ascending. Filters stay in the JSON body; `limit`
+(1-100, default 50) and the opaque `cursor` continuation are query parameters.
+The response keeps `document_ids`, `count` (this page's length), and
+`workspace`, plus `next_cursor`, which is signed, workspace-bound, and only
+valid with the same request filters. A filename filter that matches nothing
+verbatim falls back to a literal substring match for the entire traversal; the
+chosen match mode is bound into the cursor. Malformed, tampered, or
+cross-workspace cursors are rejected with 422 before any storage read.
+
 ### Ingestion Response
 
 Single-file ingestion returns the concrete file result from the unified

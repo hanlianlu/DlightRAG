@@ -79,6 +79,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe, build_pg_corpus_backend
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+    from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
     from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.answer_runs.capabilities import (
@@ -177,6 +178,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             store=corpus_backend.ingest_jobs,
         ),
         file_panel=PGFilePanelStore(),
+        metadata_search=PGMetadataSearchStore(),
         source_download_for=lambda workspace: SourceDownloadService(
             settings=source_download_settings,
             metadata_index=PGMetadataIndex(workspace=workspace),
@@ -187,6 +189,14 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         file_panel_cursor_secret=hashlib.sha256(
             (
                 "dlightrag-file-panel-cursor\0"
+                f"{config.storage.postgres.host}\0"
+                f"{config.storage.postgres.database}\0"
+                f"{config.storage.postgres.password}"
+            ).encode()
+        ).digest(),
+        metadata_search_cursor_secret=hashlib.sha256(
+            (
+                "dlightrag-metadata-search-cursor\0"
                 f"{config.storage.postgres.host}\0"
                 f"{config.storage.postgres.database}\0"
                 f"{config.storage.postgres.password}"
