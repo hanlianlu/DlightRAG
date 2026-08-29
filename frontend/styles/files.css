@@ -160,6 +160,34 @@
     width: var(--size-icon-sm);
 }
 
+.file-page-control {
+    display: flex;
+    justify-content: center;
+    padding: var(--space-tight) var(--space-component);
+}
+
+.file-page-control button {
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    padding: var(--space-tight) var(--space-related);
+}
+
+.file-page-control button:hover,
+.file-page-control button:focus-visible {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-strong);
+}
+
+.file-page-control button:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
 /* === Progress Bar === */
 
 .progress-bar-track {

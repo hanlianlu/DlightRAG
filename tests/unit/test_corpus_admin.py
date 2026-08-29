@@ -14,7 +14,11 @@ from dlightrag.application.corpus_admin import (
     CorpusAdmin,
     CorpusAdminSettings,
     CorpusIngestError,
+    FilePanelCursor,
+    FilePanelPageRequest,
+    FilePanelRowPage,
     IngestSpec,
+    ProcessedFileRow,
     RedirectDownloadTarget,
 )
 
@@ -52,6 +56,7 @@ def _admin(
         initialize=AsyncMock(),
         register_workspace=AsyncMock(),
         list_workspace_records=AsyncMock(return_value=[]),
+        workspace_exists=AsyncMock(return_value=True),
     )
     jobs = SimpleNamespace(
         start_recovery=AsyncMock(),
@@ -64,7 +69,11 @@ def _admin(
         attach_reset_result=AsyncMock(),
         close=AsyncMock(),
     )
-    file_panel = SimpleNamespace(list_processed_files=AsyncMock(return_value=[]))
+    file_panel = SimpleNamespace(
+        list_processed_files=AsyncMock(
+            return_value=FilePanelRowPage(items=(), has_more=False, fetched_rows=0)
+        )
+    )
     download = SimpleNamespace(prepare=AsyncMock())
     admin = CorpusAdmin(
         settings=_settings(
@@ -423,7 +432,17 @@ async def test_file_panel_and_source_download_do_not_warm_cold_runtime() -> None
     )
 
     admin, pool, _, jobs, file_panel, download = _admin()
-    file_panel.list_processed_files.return_value = [{"doc_id": "doc-1"}]
+    file_panel.list_processed_files.return_value = FilePanelRowPage(
+        items=(
+            ProcessedFileRow(
+                doc_id="doc-1",
+                file_path="/files/doc-1.pdf",
+                updated_at=datetime(2026, 3, 4, 5, 6, 7),
+            ),
+        ),
+        has_more=False,
+        fetched_rows=1,
+    )
     jobs.has_active_workspace_job.return_value = True
     target = RagRedirectDownloadTarget(url="https://cdn.example.com/report.pdf")
     download.prepare.return_value = target
@@ -432,13 +451,84 @@ async def test_file_panel_and_source_download_do_not_warm_cold_runtime() -> None
     prepared = await admin.prepare_source_download("finance", "doc-1")
 
     assert snapshot == {
-        "files": [{"doc_id": "doc-1"}],
+        "files": [
+            {
+                "doc_id": "doc-1",
+                "file_path": "/files/doc-1.pdf",
+                "status": "processed",
+                "updated_at": "2026-03-04T05:06:07.000000",
+            }
+        ],
         "pipeline_status": {
             "busy": True,
             "pending_enqueues": 0,
             "latest_message": "Starting ingest...",
         },
+        "next_cursor": None,
+        "fetched_rows": 1,
     }
     assert isinstance(prepared, RedirectDownloadTarget)
     assert prepared.url == "https://cdn.example.com/report.pdf"
+    pool.acquire.assert_not_awaited()
+
+
+async def test_file_panel_snapshot_derives_bounded_cursor_and_rejects_foreign_cursor() -> None:
+    admin, pool, _, _, file_panel, _ = _admin()
+    timestamp = datetime(2026, 3, 4, 5, 6, 7, 123456)
+    file_panel.list_processed_files.return_value = FilePanelRowPage(
+        items=(
+            ProcessedFileRow(doc_id="doc-a", file_path="/a", updated_at=timestamp),
+            ProcessedFileRow(doc_id="doc-b", file_path="/b", updated_at=timestamp),
+        ),
+        has_more=True,
+        fetched_rows=3,
+    )
+
+    snapshot = await admin.file_panel_snapshot(
+        "finance",
+        page=FilePanelPageRequest(limit=2),
+    )
+
+    assert snapshot["next_cursor"] == FilePanelCursor(
+        workspace="finance",
+        updated_at=timestamp,
+        doc_id="doc-b",
+    )
+    assert snapshot["fetched_rows"] == 3
+    file_panel.list_processed_files.assert_awaited_once_with(
+        "finance",
+        page=FilePanelPageRequest(limit=2),
+    )
+    pool.acquire.assert_not_awaited()
+
+    file_panel.list_processed_files.reset_mock()
+    with pytest.raises(ValueError, match="another workspace"):
+        await admin.file_panel_snapshot(
+            "finance",
+            page=FilePanelPageRequest(
+                cursor=FilePanelCursor(
+                    workspace="legal",
+                    updated_at=None,
+                    doc_id="doc-z",
+                )
+            ),
+        )
+    file_panel.list_processed_files.assert_not_awaited()
+
+
+async def test_workspace_exists_uses_default_fast_path_and_bounded_maintenance_lookup() -> None:
+    admin, pool, maintenance, _, _, _ = _admin()
+    maintenance.workspace_exists.side_effect = [True, False]
+
+    assert await admin.workspace_exists("default") is True
+    assert await admin.workspace_exists("finance") is True
+    assert await admin.workspace_exists("legal") is False
+
+    assert [item.args for item in maintenance.workspace_exists.await_args_list] == [
+        ("finance",),
+        ("legal",),
+    ]
+    maintenance.workspace_exists.side_effect = RuntimeError("registry unavailable")
+    with pytest.raises(RuntimeError, match="registry unavailable"):
+        await admin.workspace_exists("research")
     pool.acquire.assert_not_awaited()

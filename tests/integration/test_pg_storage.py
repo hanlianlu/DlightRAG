@@ -8,6 +8,7 @@ Tests:
 - CorpusAdmin.list_workspaces() PG workspace discovery
 """
 
+import datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -98,6 +99,118 @@ def _corpus_admin(config: Any) -> Any:
         file_panel=cast(Any, SimpleNamespace()),
         source_download_for=cast(Any, lambda _workspace: SimpleNamespace()),
     )
+
+
+# ---------------------------------------------------------------------------
+# File panel - bounded mixed-direction keyset traversal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("pg_check")
+async def test_file_panel_traverses_null_and_timestamp_groups_without_gaps() -> None:
+    import asyncpg
+
+    from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
+    from dlightrag.application.corpus_admin import (
+        FilePanelCursor,
+        FilePanelPageRequest,
+    )
+
+    workspace = "test_pg_file_panel"
+    other_workspace = "test_pg_file_panel_other"
+    pool = await asyncpg.create_pool(
+        host=str(_PG_CONN_KWARGS["host"]),
+        port=int(_PG_CONN_KWARGS["port"]),
+        user=str(_PG_CONN_KWARGS["user"]),
+        password=str(_PG_CONN_KWARGS["password"]),
+        database=str(_PG_CONN_KWARGS["database"]),
+        min_size=1,
+        max_size=1,
+    )
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS LIGHTRAG_DOC_STATUS (
+                    workspace varchar(255) NOT NULL,
+                    id varchar(255) NOT NULL,
+                    status varchar(64),
+                    file_path TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT LIGHTRAG_DOC_STATUS_PK PRIMARY KEY (workspace, id)
+                )
+                """
+            )
+            await conn.execute(
+                "DELETE FROM LIGHTRAG_DOC_STATUS WHERE workspace = ANY($1::varchar[])",
+                [workspace, other_workspace],
+            )
+            timestamp = datetime.datetime(2026, 3, 4, 5, 6, 7, 123456)
+            rows = [
+                (workspace, "null-a", "processed", "/null-a", None),
+                (workspace, "null-b", "processed", "/null-b", None),
+                (workspace, "same-a", "processed", "/same-a", timestamp),
+                (workspace, "same-b", "processed", "/same-b", timestamp),
+                (
+                    workspace,
+                    "older",
+                    "processed",
+                    "/older",
+                    timestamp - datetime.timedelta(days=1),
+                ),
+                (workspace, "ignored", "pending", "/ignored", timestamp),
+                (other_workspace, "foreign", "processed", "/foreign", timestamp),
+            ]
+            await conn.executemany(
+                """
+                INSERT INTO LIGHTRAG_DOC_STATUS (
+                    workspace, id, status, file_path, updated_at
+                ) VALUES ($1, $2, $3, $4, $5)
+                """,
+                rows,
+            )
+
+        store = PGFilePanelStore(pool=pool)
+        await store.ensure_page_index()
+        cursor: FilePanelCursor | None = None
+        observed: list[str] = []
+        while True:
+            page = await store.list_processed_files(
+                workspace,
+                page=FilePanelPageRequest(limit=2, cursor=cursor),
+            )
+            assert len(page.items) <= 2
+            assert page.fetched_rows <= 3
+            observed.extend(item.doc_id for item in page.items)
+            if not page.has_more:
+                break
+            assert page.items
+            last = page.items[-1]
+            cursor = FilePanelCursor(
+                workspace=workspace,
+                updated_at=last.updated_at,
+                doc_id=last.doc_id,
+            )
+
+        assert observed == ["null-a", "null-b", "same-a", "same-b", "older"]
+        assert len(observed) == len(set(observed))
+        async with pool.acquire() as conn:
+            indexdef = await conn.fetchval(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = $1",
+                "idx_dlightrag_file_panel_processed_updated_id",
+            )
+            assert indexdef is not None
+            normalized = " ".join(str(indexdef).split()).lower()
+            assert "workspace, updated_at desc, id" in normalized
+            assert "where" in normalized and "status" in normalized and "processed" in normalized
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM LIGHTRAG_DOC_STATUS WHERE workspace = ANY($1::varchar[])",
+                [workspace, other_workspace],
+            )
+        await pool.close()
 
 
 # ---------------------------------------------------------------------------

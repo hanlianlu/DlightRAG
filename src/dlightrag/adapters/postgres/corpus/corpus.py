@@ -26,6 +26,7 @@ from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
 )
 from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
 from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
 from dlightrag.adapters.postgres.corpus.ingest_jobs import PGIngestJobStore
 from dlightrag.adapters.postgres.corpus.lightrag_contract import PGLightRAGContractGuard
 from dlightrag.adapters.postgres.corpus.lightrag_readonly import (
@@ -260,6 +261,9 @@ class PGCorpusMaintenanceStore:
     async def list_workspace_records(self) -> tuple[dict[str, Any], ...]:
         return tuple(await self._workspace_registry.list())
 
+    async def workspace_exists(self, workspace: str) -> bool:
+        return await self._workspace_registry.exists(workspace)
+
     async def register_workspace(
         self,
         *,
@@ -323,6 +327,10 @@ class PGCorpusRuntimeBinder:
         else:
             await lightrag.initialize_storages()
         await guard.verify_all()
+        if not config.is_reader:
+            # LightRAG owns the table; DlightRAG adds its derived presentation
+            # index only after the writer has established the upstream schema.
+            await PGFilePanelStore().ensure_page_index()
 
         metadata_index = PGMetadataIndex(workspace=config.deployment.workspace)
         await metadata_index.initialize(validate_only=config.is_reader)

@@ -140,7 +140,14 @@ health checks, and managed-service maintenance.
 DlightRAG-owned PostgreSQL tables use `dlightrag_schema_migrations` as a small
 ledger for domain schema changes. This applies to DlightRAG tables such as
 `dlightrag_doc_metadata` and `dlightrag_workspace_meta`; LightRAG-owned tables
-remain managed by LightRAG.
+remain managed by LightRAG. One explicitly derived exception is the
+DlightRAG-owned partial index
+`idx_dlightrag_file_panel_processed_updated_id` on the LightRAG-owned
+`LIGHTRAG_DOC_STATUS` table. It covers the bounded Files presentation order
+`(workspace, updated_at DESC NULLS FIRST, id ASC) WHERE status = 'processed'`.
+A writer creates it only after LightRAG has established that table; readers
+issue no DDL. During a rolling upgrade, start an upgraded writer before readers
+serve file pages that rely on this index.
 
 DlightRAG ensures the current idempotent DDL baseline on writer startup and
 records its versions in the ledger; readers validate the same versions without

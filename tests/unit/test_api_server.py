@@ -29,7 +29,11 @@ from dlightrag.application.config import (
     DlightragConfig,
     set_config,
 )
-from dlightrag.application.corpus_admin import IngestSpec, MetadataValidationError
+from dlightrag.application.corpus_admin import (
+    FilePanelCursorCodec,
+    IngestSpec,
+    MetadataValidationError,
+)
 from dlightrag.application.health import ApplicationHealth
 from dlightrag.application.retrieval import CorpusUnavailableError, RetrievalTimeoutError
 from dlightrag.application.retrieval import RetrieveResponse as ServiceResponse
@@ -210,8 +214,15 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
     corpora.get_metadata = AsyncMock(return_value={})
     corpora.update_metadata = AsyncMock()
     corpora.search_metadata = AsyncMock(return_value=[])
+    corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"api-server-test")
+    corpora.workspace_exists = AsyncMock(return_value=True)
     corpora.file_panel_snapshot = AsyncMock(
-        return_value={"files": [], "pipeline_status": {"busy": False}}
+        return_value={
+            "files": [],
+            "pipeline_status": {"busy": False},
+            "next_cursor": None,
+            "fetched_rows": 0,
+        }
     )
     corpora.get_pipeline_status = AsyncMock(return_value={"busy": False})
     application.corpora = corpora

@@ -38,11 +38,16 @@ def _maintenance_store(config: MagicMock, conn: object) -> PGCorpusMaintenanceSt
 class _Conn:
     def __init__(self) -> None:
         self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self.fetchvals: list[tuple[str, tuple[object, ...]]] = []
         self.closed = False
 
     async def execute(self, query: str, *args: object) -> str:
         self.executed.append((query, args))
         return "DELETE 1"
+
+    async def fetchval(self, query: str, *args: object) -> bool:
+        self.fetchvals.append((query, args))
+        return True
 
     async def close(self) -> None:
         self.closed = True
@@ -75,6 +80,24 @@ async def test_delete_workspace_record_uses_the_operational_registry(monkeypatch
     ]
     connect.assert_not_awaited()
     assert conn.closed is False
+
+
+async def test_workspace_exists_uses_the_operational_registry_point_lookup(
+    monkeypatch, config
+) -> None:
+    conn = _Conn()
+    connect = AsyncMock(side_effect=AssertionError("registry operations must not connect directly"))
+    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", connect)
+
+    store = _maintenance_store(config, conn)
+    assert await store.workspace_exists("research") is True
+
+    assert len(conn.fetchvals) == 1
+    query, args = conn.fetchvals[0]
+    assert "SELECT EXISTS" in query
+    assert "WHERE workspace = $1" in query
+    assert args == ("research",)
+    connect.assert_not_awaited()
 
 
 async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, config) -> None:

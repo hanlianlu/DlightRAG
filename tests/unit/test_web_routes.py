@@ -15,6 +15,11 @@ from dlightrag.adapters.http.browser.attachment_models import SUPPORTED_DOCUMENT
 from dlightrag.adapters.http.server import create_app
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
 from dlightrag.application.config import DlightragConfig
+from dlightrag.application.corpus_admin import (
+    FilePanelCursor,
+    FilePanelCursorCodec,
+    FilePanelPageRequest,
+)
 from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
 
@@ -52,6 +57,8 @@ def mock_application():
     application_double.answers = SimpleNamespace(capabilities=capability_view.read)
     corpora = SimpleNamespace()
     corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
+    corpora.workspace_exists = AsyncMock(return_value=True)
+    corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"web-file-panel-test-secret")
     corpora.alist_workspace_records = AsyncMock(
         return_value=[
             {
@@ -76,6 +83,8 @@ def mock_application():
         return_value={
             "files": [{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}],
             "pipeline_status": {"busy": False, "pending_enqueues": 0, "latest_message": ""},
+            "next_cursor": None,
+            "fetched_rows": 1,
         }
     )
     corpora.delete_files = AsyncMock(return_value=[])
@@ -569,7 +578,10 @@ class TestWebFiles:
     """Tests for GET /web/api/files and DELETE /web/api/files."""
 
     async def test_file_list_returns_typed_json(
-        self, client: AsyncClient, test_config: DlightragConfig
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        mock_application,
     ) -> None:
         resp = await client.get("/web/api/files")
 
@@ -578,6 +590,98 @@ class TestWebFiles:
         assert resp.json()["workspace"] == "default"
         assert resp.json()["files"] == [{"file_name": "test.pdf", "file_path": "/tmp/test.pdf"}]
         assert resp.json()["ingest"]["busy"] is False
+        assert resp.json()["next_cursor"] is None
+        mock_application.corpora.file_panel_snapshot.assert_awaited_once_with(
+            "default", page=FilePanelPageRequest()
+        )
+        mock_application.corpora.workspace_exists.assert_awaited_once_with("default")
+        mock_application.corpora.list_workspaces.assert_not_awaited()
+
+    @pytest.mark.parametrize("limit", [1, 100])
+    async def test_file_list_accepts_bounded_explicit_limits(
+        self,
+        client: AsyncClient,
+        mock_application,
+        limit: int,
+    ) -> None:
+        response = await client.get("/web/api/files", params={"limit": limit})
+
+        assert response.status_code == 200
+        mock_application.corpora.file_panel_snapshot.assert_awaited_once_with(
+            "default", page=FilePanelPageRequest(limit=limit)
+        )
+
+    @pytest.mark.parametrize("limit", ["0", "101", "not-an-int"])
+    async def test_file_list_rejects_invalid_limits_before_route_storage(
+        self,
+        client: AsyncClient,
+        mock_application,
+        limit: str,
+    ) -> None:
+        response = await client.get("/web/api/files", params={"limit": limit})
+
+        assert response.status_code == 422
+        mock_application.corpora.workspace_exists.assert_not_awaited()
+        mock_application.corpora.file_panel_snapshot.assert_not_awaited()
+
+    async def test_file_list_cursor_round_trip_and_cross_workspace_rejection(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        timestamp = datetime.datetime(2026, 3, 4, 5, 6, 7, 123456)
+        continuation = FilePanelCursor(
+            workspace="default",
+            updated_at=timestamp,
+            doc_id="doc-50",
+        )
+        mock_application.corpora.file_panel_snapshot.return_value = {
+            "files": [],
+            "pipeline_status": {"busy": False},
+            "next_cursor": continuation,
+            "fetched_rows": 51,
+        }
+
+        first = await client.get("/web/api/files")
+        token = first.json()["next_cursor"]
+        assert isinstance(token, str)
+
+        mock_application.corpora.file_panel_snapshot.reset_mock()
+        second = await client.get("/web/api/files", params={"cursor": token})
+        assert second.status_code == 200
+        mock_application.corpora.file_panel_snapshot.assert_awaited_once_with(
+            "default",
+            page=FilePanelPageRequest(cursor=continuation),
+        )
+
+        mock_application.corpora.file_panel_snapshot.reset_mock()
+        foreign = mock_application.corpora.file_panel_cursor_codec.encode(
+            FilePanelCursor(workspace="finance", updated_at=None, doc_id="doc")
+        )
+        response = await client.get("/web/api/files", params={"cursor": foreign})
+        assert response.status_code == 422
+        mock_application.corpora.file_panel_snapshot.assert_not_awaited()
+
+    async def test_file_list_rejects_tampered_cursor_before_storage(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        token = mock_application.corpora.file_panel_cursor_codec.encode(
+            FilePanelCursor(workspace="default", updated_at=None, doc_id="doc")
+        )
+
+        response = await client.get("/web/api/files", params={"cursor": token + "x"})
+
+        assert response.status_code == 422
+        mock_application.corpora.file_panel_snapshot.assert_not_awaited()
+
+    async def test_file_workspace_registry_outage_fails_open_without_catalog_scan(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        mock_application.corpora.workspace_exists.side_effect = RuntimeError("registry down")
+
+        response = await client.get("/web/api/files", params={"workspace": "cold-ws"})
+
+        assert response.status_code == 200
+        mock_application.corpora.file_panel_snapshot.assert_awaited_once()
+        mock_application.corpora.list_workspaces.assert_not_awaited()
 
     async def test_file_list_fails_closed_when_snapshot_is_unavailable(
         self, client: AsyncClient, mock_application
@@ -612,7 +716,7 @@ class TestWebFiles:
     async def test_file_list_uses_file_panel_snapshot_for_cold_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default", "cold_ws"])
+        mock_application.corpora.workspace_exists = AsyncMock(return_value=True)
         mock_application.corpora.file_panel_snapshot = AsyncMock(
             return_value={
                 "files": [
@@ -630,14 +734,16 @@ class TestWebFiles:
         assert resp.json()["files"] == [
             {"file_name": "report.pdf", "file_path": "/tmp/cold/report.pdf"}
         ]
-        mock_application.corpora.file_panel_snapshot.assert_awaited_once_with("cold_ws")
+        mock_application.corpora.file_panel_snapshot.assert_awaited_once_with(
+            "cold_ws", page=FilePanelPageRequest()
+        )
         mock_application.corpora.list_ingested_files.assert_not_awaited()
         mock_application.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
 
         resp = await client.get("/web/api/files", params={"workspace": "deleted_ws"})
 
@@ -650,7 +756,7 @@ class TestWebFiles:
     async def test_file_list_rejects_stale_workspace_even_with_registered_cookie(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
+        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
         client.cookies.set("dlightrag_workspace", "test_ws")
 
         resp = await client.get("/web/api/files", params={"workspace": "deleted_ws"})
@@ -664,19 +770,19 @@ class TestWebFiles:
     async def test_file_list_canonicalizes_requested_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.list_workspaces = AsyncMock(
-            return_value=["default", "test_fallback_ws"]
-        )
+        mock_application.corpora.workspace_exists = AsyncMock(return_value=True)
 
         resp = await client.get("/web/api/files", params={"workspace": "test-fallback-ws"})
 
         assert resp.status_code == 200
-        mock_application.corpora.file_panel_snapshot.assert_awaited_once_with("test_fallback_ws")
+        mock_application.corpora.file_panel_snapshot.assert_awaited_once_with(
+            "test_fallback_ws", page=FilePanelPageRequest()
+        )
 
     async def test_file_list_rejects_stale_workspace_without_default(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.list_workspaces = AsyncMock(return_value=["other_ws"])
+        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
 
         resp = await client.get("/web/api/files", params={"workspace": "deleted_ws"})
 
@@ -688,7 +794,7 @@ class TestWebFiles:
     async def test_ingest_status_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
 
         resp = await client.get("/web/api/ingest-status", params={"workspace": "deleted_ws"})
 
@@ -697,7 +803,10 @@ class TestWebFiles:
         mock_application.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_ingest_status_returns_typed_idle_state(
-        self, client: AsyncClient, test_config: DlightragConfig
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        mock_application,
     ) -> None:
         resp = await client.get("/web/api/ingest-status", params={"workspace": "default"})
 
@@ -713,6 +822,8 @@ class TestWebFiles:
         }
         assert "hx-retarget" not in resp.headers
         assert "hx-reswap" not in resp.headers
+        mock_application.corpora.workspace_exists.assert_awaited_once_with("default")
+        mock_application.corpora.list_workspaces.assert_not_awaited()
 
     async def test_ingest_status_normalizes_progress_and_queue(
         self, client: AsyncClient, mock_application
@@ -780,11 +891,13 @@ class TestWebFiles:
         upload_dir = Path(ingest_spec.path)
         assert upload_dir.is_dir()
         assert (upload_dir / "report.pdf").read_bytes() == b"%PDF-fake"
+        mock_application.corpora.workspace_exists.assert_awaited_once_with("default")
+        mock_application.corpora.list_workspaces.assert_not_awaited()
 
     async def test_upload_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
 
         resp = await client.post(
             "/web/api/files/upload",
@@ -823,12 +936,18 @@ class TestWebFiles:
         assert resp.status_code == 200
         assert resp.json()["workspace"] == "default"
         assert resp.json()["files"] == [{"file_name": "test.pdf", "file_path": "/tmp/test.pdf"}]
+        assert resp.json()["next_cursor"] is None
         mock_application.corpora.delete_files.assert_awaited_once()
+        mock_application.corpora.file_panel_snapshot.assert_awaited_once_with(
+            "default", page=FilePanelPageRequest()
+        )
+        mock_application.corpora.workspace_exists.assert_awaited_once_with("default")
+        mock_application.corpora.list_workspaces.assert_not_awaited()
 
     async def test_delete_files_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.workspace_exists = AsyncMock(return_value=False)
 
         resp = await client.request(
             "DELETE",

@@ -4,7 +4,7 @@
 import logging
 import shutil
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Annotated, Any, NoReturn
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
@@ -18,6 +18,10 @@ from dlightrag.adapters.http.browser.file_models import (
 )
 from dlightrag.application.access import AccessAction
 from dlightrag.application.corpus_admin import (
+    FILE_PANEL_PAGE_DEFAULT_LIMIT,
+    FILE_PANEL_PAGE_MAX_LIMIT,
+    FilePanelCursorError,
+    FilePanelPageRequest,
     IngestSpec,
     LocalDownloadTarget,
     RedirectDownloadTarget,
@@ -102,37 +106,16 @@ async def _resolve_registered_workspace(
     request: Request,
     workspace: str,
 ) -> str | None:
-    """Return the requested workspace when it is registered."""
-    from dlightrag.application.corpus_admin import normalize_workspace
-
-    application = get_application(request)
-    try:
-        known = {
-            normalized
-            for item in await application.corpora.list_workspaces()
-            if (normalized := normalize_workspace(item))
-        }
-    except Exception:
-        return workspace
-    if workspace in known:
-        return workspace
-    return None
+    """Return the requested workspace after one bounded registry lookup."""
+    return workspace if await _workspace_is_registered(request, workspace) else None
 
 
 async def _workspace_is_registered(request: Request, workspace: str) -> bool:
     """Return whether a workspace is registered; fail open on registry outages."""
-    from dlightrag.application.corpus_admin import normalize_workspace
-
-    application = get_application(request)
     try:
-        known = {
-            normalized
-            for item in await application.corpora.list_workspaces()
-            if (normalized := normalize_workspace(item))
-        }
+        return bool(await get_application(request).corpora.workspace_exists(workspace))
     except Exception:
         return True
-    return workspace in known
 
 
 def _stale_workspace() -> NoReturn:
@@ -183,6 +166,10 @@ async def file_list(
     request: Request,
     workspace: str = Depends(get_workspace),
     workspace_name: str | None = Query(default=None, alias="workspace"),
+    limit: Annotated[int, Query(ge=1, le=FILE_PANEL_PAGE_MAX_LIMIT)] = (
+        FILE_PANEL_PAGE_DEFAULT_LIMIT
+    ),
+    cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
 ) -> WebFilePanelSnapshot:
     """Return one typed Files panel snapshot."""
     selected_workspace = _resolve_workspace(workspace_name, workspace)
@@ -190,22 +177,46 @@ async def file_list(
     if selected_workspace is None:
         _stale_workspace()
     await enforce_web_access(request, AccessAction.WORKSPACE_LIST_FILES, selected_workspace)
-    return await _file_panel_snapshot(request, selected_workspace)
-
-
-async def _file_panel_snapshot(request: Request, workspace: str) -> WebFilePanelSnapshot:
+    application = get_application(request)
     try:
-        snapshot = await get_application(request).corpora.file_panel_snapshot(workspace)
+        decoded_cursor = (
+            application.corpora.file_panel_cursor_codec.decode(cursor)
+            if cursor is not None
+            else None
+        )
+        if decoded_cursor is not None and decoded_cursor.workspace != selected_workspace:
+            raise FilePanelCursorError("file-panel cursor belongs to another workspace")
+        page = FilePanelPageRequest(limit=limit, cursor=decoded_cursor)
+    except (FilePanelCursorError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return await _file_panel_snapshot(request, selected_workspace, page=page)
+
+
+async def _file_panel_snapshot(
+    request: Request,
+    workspace: str,
+    *,
+    page: FilePanelPageRequest | None = None,
+) -> WebFilePanelSnapshot:
+    application = get_application(request)
+    try:
+        snapshot = await application.corpora.file_panel_snapshot(workspace, page=page)
     except Exception:
         logger.exception(
             "Could not read Files panel snapshot for workspace %s",
             safe_log_text(workspace),
         )
         raise HTTPException(status_code=503, detail="Files are temporarily unavailable") from None
+    next_cursor = snapshot.get("next_cursor")
     return WebFilePanelSnapshot(
         workspace=workspace,
         files=_file_view_models(list(snapshot.get("files") or [])),
         ingest=_ingest_status(dict(snapshot.get("pipeline_status") or {})),
+        next_cursor=(
+            application.corpora.file_panel_cursor_codec.encode(next_cursor)
+            if next_cursor is not None
+            else None
+        ),
     )
 
 
@@ -363,4 +374,8 @@ async def delete_files(
         logger.exception("Delete failed")
         raise HTTPException(status_code=500, detail="Delete failed. Please try again.") from None
 
-    return await _file_panel_snapshot(request, selected_workspace)
+    return await _file_panel_snapshot(
+        request,
+        selected_workspace,
+        page=FilePanelPageRequest(),
+    )

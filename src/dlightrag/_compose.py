@@ -182,6 +182,16 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             metadata_index=PGMetadataIndex(workspace=workspace),
             workspace_id=workspace,
         ),
+        # Stable across workers sharing the operational database. The cursor
+        # carries no authorization state and expires on credential rotation.
+        file_panel_cursor_secret=hashlib.sha256(
+            (
+                "dlightrag-file-panel-cursor\0"
+                f"{config.storage.postgres.host}\0"
+                f"{config.storage.postgres.database}\0"
+                f"{config.storage.postgres.password}"
+            ).encode()
+        ).digest(),
     )
 
     models = AnswerModelRuntime(

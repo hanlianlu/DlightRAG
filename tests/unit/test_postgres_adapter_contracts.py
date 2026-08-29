@@ -40,6 +40,24 @@ def _python_files() -> list[Path]:
     return [path for root in _SOURCE_ROOTS for path in root.rglob("*.py")]
 
 
+def test_file_panel_page_queries_match_the_exact_partial_index_contract() -> None:
+    from dlightrag.adapters.postgres.corpus import file_panel
+
+    index = " ".join(file_panel._CREATE_PAGE_INDEX.split())
+    first = " ".join(file_panel._LIST_FIRST_PAGE.split())
+    after_null = " ".join(file_panel._LIST_AFTER_NULL.split())
+    after_timestamp = " ".join(file_panel._LIST_AFTER_TIMESTAMP.split())
+
+    assert "(workspace, updated_at DESC NULLS FIRST, id ASC)" in index
+    assert "WHERE status = 'processed'" in index
+    assert "ORDER BY updated_at DESC NULLS FIRST, id ASC LIMIT $2" in first
+    assert "(updated_at IS NULL AND id > $2) OR updated_at IS NOT NULL" in after_null
+    assert "updated_at < $2::timestamp" in after_timestamp
+    assert "updated_at = $2::timestamp AND id > $3" in after_timestamp
+    assert "ORDER BY updated_at DESC NULLS FIRST, id ASC" in after_timestamp
+    assert all("OFFSET" not in query.upper() for query in (first, after_null, after_timestamp))
+
+
 def test_web_conversation_page_query_matches_the_covering_index_contract() -> None:
     from dlightrag.adapters.postgres.web import web_conversations
 

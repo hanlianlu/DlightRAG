@@ -42,6 +42,12 @@ FROM dlightrag_workspace_meta
 ORDER BY workspace
 """
 
+_EXISTS = """
+SELECT EXISTS (
+    SELECT 1 FROM dlightrag_workspace_meta WHERE workspace = $1
+)
+"""
+
 _DELETE = "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1"
 
 _SCHEMA_MIGRATIONS = (
@@ -110,6 +116,15 @@ class PGWorkspaceRegistry(PostgresOperationRunner):
 
         rows = await self._run(_operation)
         return [dict(row) for row in rows]
+
+    async def exists(self, workspace: str) -> bool:
+        """Return whether one canonical workspace registry row exists."""
+        workspace_id = _workspace_id(workspace)
+
+        async def _operation(conn: Any) -> bool:
+            return bool(await conn.fetchval(_EXISTS, workspace_id))
+
+        return await self._run(_operation)
 
     async def delete(self, workspace: str) -> bool:
         """Delete one workspace registry row."""

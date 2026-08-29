@@ -72,6 +72,8 @@ class _Conn:
         return self.rows
 
     async def fetchval(self, query: str, *args: Any) -> Any:
+        if "SELECT EXISTS" in query and "dlightrag_workspace_meta" in query:
+            return any(row["workspace"] == str(args[0]) for row in self.rows)
         return True
 
     async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
@@ -122,10 +124,20 @@ async def test_workspace_registry_upserts_lists_and_deletes() -> None:
     assert ("old_workspace",) in [args for _, args in conn.executed]
 
 
+async def test_workspace_registry_exists_uses_one_primary_key_point_lookup() -> None:
+    conn = _Conn()
+    registry = PGWorkspaceRegistry(pool=_Pool(conn))
+
+    assert await registry.exists("research") is True
+    assert await registry.exists("missing") is False
+
+
 async def test_workspace_registry_rejects_an_empty_workspace() -> None:
     conn = _Conn()
     registry = PGWorkspaceRegistry(pool=_Pool(conn))
 
+    with pytest.raises(ValueError, match="workspace cannot be empty"):
+        await registry.exists("  ")
     with pytest.raises(ValueError, match="workspace cannot be empty"):
         await registry.upsert(
             workspace="  ",

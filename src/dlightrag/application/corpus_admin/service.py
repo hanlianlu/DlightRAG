@@ -72,6 +72,12 @@ from .errors import (
     UnsafeUploadNameError,
     UploadTooLargeError,
 )
+from .file_panel import (
+    FilePanelCursor,
+    FilePanelCursorCodec,
+    FilePanelPageRequest,
+    FilePanelRowPage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +334,8 @@ class CorpusIngestError(RuntimeError):
 class FilePanelSnapshot(TypedDict):
     files: list[dict[str, Any]]
     pipeline_status: dict[str, Any]
+    next_cursor: FilePanelCursor | None
+    fetched_rows: int
 
 
 class CorpusResetResult(TypedDict):
@@ -388,7 +396,12 @@ class IngestJobs(Protocol):
 
 
 class FilePanelStore(Protocol):
-    async def list_processed_files(self, workspace: str) -> list[dict[str, Any]]: ...
+    async def list_processed_files(
+        self,
+        workspace: str,
+        *,
+        page: FilePanelPageRequest,
+    ) -> FilePanelRowPage: ...
 
 
 class UploadReader(Protocol):
@@ -416,6 +429,7 @@ class CorpusAdmin:
         ingest_jobs: IngestJobs,
         file_panel: FilePanelStore,
         source_download_for: SourceDownloadFactory,
+        file_panel_cursor_secret: bytes | None = None,
     ) -> None:
         self._settings = settings
         self._pool = pool
@@ -423,6 +437,7 @@ class CorpusAdmin:
         self._ingest_jobs = ingest_jobs
         self._file_panel = file_panel
         self._source_download_for = source_download_for
+        self._file_panel_cursor_codec = FilePanelCursorCodec(file_panel_cursor_secret)
 
     async def initialize(self) -> None:
         default_workspace = require_canonical_workspace_id(self._settings.default_workspace_id)
@@ -472,6 +487,18 @@ class CorpusAdmin:
 
     async def list_workspaces(self) -> list[str]:
         return [record["workspace"] for record in await self.alist_workspace_records()]
+
+    @property
+    def file_panel_cursor_codec(self) -> FilePanelCursorCodec:
+        """Return the cursor codec shared with the browser Files adapter."""
+        return self._file_panel_cursor_codec
+
+    async def workspace_exists(self, workspace_id: str) -> bool:
+        """Perform one bounded catalog lookup without warming a workspace runtime."""
+        workspace = require_canonical_workspace_id(workspace_id)
+        if workspace == require_canonical_workspace_id(self._settings.default_workspace_id):
+            return True
+        return await self._maintenance.workspace_exists(workspace)
 
     async def create_workspace(
         self,
@@ -534,9 +561,27 @@ class CorpusAdmin:
         await self._ingest_jobs.cancel_job(job_id, workspace=workspace)
         return await self._ingest_jobs.get_job(job_id)
 
-    async def file_panel_snapshot(self, workspace_id: str) -> FilePanelSnapshot:
+    async def file_panel_snapshot(
+        self,
+        workspace_id: str,
+        *,
+        page: FilePanelPageRequest | None = None,
+    ) -> FilePanelSnapshot:
         workspace = require_canonical_workspace_id(workspace_id)
-        files = await self._file_panel.list_processed_files(workspace)
+        requested = page or FilePanelPageRequest()
+        if requested.cursor is not None and requested.cursor.workspace != workspace:
+            raise ValueError("file-panel cursor belongs to another workspace")
+        result = await self._file_panel.list_processed_files(workspace, page=requested)
+        next_cursor = None
+        if result.has_more:
+            if not result.items:
+                raise RuntimeError("file-panel store reported more rows after an empty page")
+            last = result.items[-1]
+            next_cursor = FilePanelCursor(
+                workspace=workspace,
+                updated_at=last.updated_at,
+                doc_id=last.doc_id,
+            )
         loaded_status = await self._pool.get_pipeline_status(workspace)
         if loaded_status is not None:
             pipeline_status = loaded_status
@@ -552,7 +597,12 @@ class CorpusAdmin:
                 "pending_enqueues": 0,
                 "latest_message": "",
             }
-        return {"files": files, "pipeline_status": pipeline_status}
+        return {
+            "files": [item.presentation() for item in result.items],
+            "pipeline_status": pipeline_status,
+            "next_cursor": next_cursor,
+            "fetched_rows": result.fetched_rows,
+        }
 
     async def prepare_source_download(
         self,

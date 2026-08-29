@@ -23,6 +23,7 @@ class WebFilePanelSnapshot(ClientContractModel):
     workspace: str
     files: list[WebFileItem]
     ingest: WebIngestStatus
+    next_cursor: str | None = None
 
 
 class WebUploadReceipt(ClientContractModel):

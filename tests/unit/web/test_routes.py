@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from dlightrag.application.corpus_admin import FilePanelCursorCodec
 from tests.unit.conftest import answer_capability_view
 
 
@@ -17,6 +18,8 @@ def app(test_config):
 
     mock_application = MagicMock()
     mock_application.config = test_config
+    mock_application.corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"route-test")
+    mock_application.corpora.workspace_exists = AsyncMock(return_value=True)
     mock_application.corpora.file_panel_snapshot = AsyncMock(
         return_value={
             "files": [
@@ -24,6 +27,8 @@ def app(test_config):
                 {"file_path": "/data/analysis.xlsx", "file_name": "analysis.xlsx"},
             ],
             "pipeline_status": {"busy": False, "pending_enqueues": 0},
+            "next_cursor": None,
+            "fetched_rows": 2,
         }
     )
     mock_application.corpora.list_workspaces = AsyncMock(return_value=["default", "finance"])

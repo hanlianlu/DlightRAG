@@ -128,6 +128,10 @@ _Avoid_: deadline, SLA, per-aggregate TTL, inactivity expiry
 One signed turn-number keyset page returned by the Web history endpoint: 40 recent turns by default and at most 100 per request. It is a UI and payload bound, not retention or model recovery: older turns stay durable until the Retention Floor reclaims their runs.
 _Avoid_: snapshot, max_turns, trim window, retention window
 
+**File Panel Page**:
+One workspace-bound signed keyset page of processed files, ordered by `updated_at DESC, id ASC`: 50 files by default and at most 100. It is a presentation/read-work bound rather than an inventory snapshot; upload and delete settle by replacing traversal state with a fresh first page.
+_Avoid_: full file snapshot, OFFSET page, workspace catalog scan, retention window
+
 ## Session Entries And Effects
 
 **Session Entry**:

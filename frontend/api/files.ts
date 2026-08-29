@@ -21,6 +21,7 @@ export interface WebFilePanelSnapshot {
   workspace: string;
   files: WebFileItem[];
   ingest: WebIngestStatus;
+  next_cursor: string | null;
 }
 
 export interface WebUploadReceipt {
@@ -68,10 +69,16 @@ async function json<T>(response: Response, fallback: string): Promise<T> {
 
 export async function getFilePanel(
   workspace: string,
+  cursor: string | null = null,
   signal?: AbortSignal,
 ): Promise<WebFilePanelSnapshot> {
-  const response = await fetch(url('/web/api/files', workspace), {signal});
-  return json(response, 'Failed to load files');
+  const target = new URL(url('/web/api/files', workspace), window.location.origin);
+  if (cursor !== null) target.searchParams.set('cursor', cursor);
+  const response = await fetch(target.pathname + target.search, {signal});
+  const snapshot = await json<Omit<WebFilePanelSnapshot, 'next_cursor'> & {
+    next_cursor?: string | null;
+  }>(response, 'Failed to load files');
+  return {...snapshot, next_cursor: snapshot.next_cursor ?? null};
 }
 
 export async function getIngestStatus(
@@ -115,5 +122,8 @@ export async function deleteFileRequest(
     headers: csrfHeaders(),
     signal,
   });
-  return json(response, 'Deletion failed');
+  const snapshot = await json<Omit<WebFilePanelSnapshot, 'next_cursor'> & {
+    next_cursor?: string | null;
+  }>(response, 'Deletion failed');
+  return {...snapshot, next_cursor: snapshot.next_cursor ?? null};
 }

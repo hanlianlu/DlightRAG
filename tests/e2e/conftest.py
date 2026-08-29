@@ -49,6 +49,7 @@ from dlightrag.application.answer_runs.execution import (
     PinnedModelProfile,
 )
 from dlightrag.application.config import DlightragConfig, set_config
+from dlightrag.application.corpus_admin import FilePanelCursorCodec
 from dlightrag.application.web_conversations import (
     ConversationCursor,
     ConversationCursorCodec,
@@ -673,6 +674,9 @@ def e2e_base_url(
     async def _list_workspace_records() -> list[dict[str, str]]:
         return [dict(record) for record in workspace_records]
 
+    async def _workspace_exists(workspace: str) -> bool:
+        return any(str(record["workspace"]) == workspace for record in workspace_records)
+
     async def _create_workspace(workspace: str, *, display_name: str) -> None:
         workspace_records.append(
             {
@@ -690,6 +694,8 @@ def e2e_base_url(
 
     application_double.corpora.list_workspaces.side_effect = _list_workspaces
     application_double.corpora.alist_workspace_records.side_effect = _list_workspace_records
+    application_double.corpora.workspace_exists.side_effect = _workspace_exists
+    application_double.corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"e2e-files")
     application_double.corpora.create_workspace.side_effect = _create_workspace
     application_double.corpora.reset.side_effect = _reset_workspaces
     application_double.corpora.list_ingested_files.return_value = []
@@ -700,6 +706,8 @@ def e2e_base_url(
     application_double.corpora.file_panel_snapshot.return_value = {
         "files": [],
         "pipeline_status": {"busy": False, "pending_enqueues": 0},
+        "next_cursor": None,
+        "fetched_rows": 0,
     }
     application_double.corpora.delete_files.return_value = {"deleted_count": 0}
     application_double.web_conversations = e2e_conversation_service

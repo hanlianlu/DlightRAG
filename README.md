@@ -226,7 +226,10 @@ durable resume/cancel, Research steering and child status, and minimal
 follow-up/fork controls. Its recent-turn read window is not retention: linked
 runs follow the configured retention floor. `Search in: All authorized
 workspaces` is the answer default; the independent `Files in` selector remains a
-single-workspace file-management target.
+single-workspace file-management target. That Files panel loads 50 processed
+files initially and exposes an accessible **Load older files** control backed by
+signed workspace-bound keyset pages (maximum 100 per request), rather than
+materializing the full workspace inventory.
 
 REST, MCP, and Python answer/retrieve calls require no Web conversation ID.
 Answer calls accept optional caller-supplied `history`; an independent request

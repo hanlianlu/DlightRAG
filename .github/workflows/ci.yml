@@ -156,6 +156,7 @@ jobs:
           tests/integration/test_answer_run_coordinator_pg.py
           tests/integration/test_memory_pg.py
           tests/integration/test_run_cancellation_pg.py
+          tests/integration/test_pg_storage.py
           -q --tb=short --junitxml=.test-results/postgres.xml
       - name: Reject skipped PostgreSQL integration tests
         run: >-

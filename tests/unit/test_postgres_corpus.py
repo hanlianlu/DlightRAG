@@ -94,11 +94,13 @@ async def test_runtime_binder_composes_workspace_stores(
     metadata = SimpleNamespace(initialize=AsyncMock())
     chunks = object()
     vectors = SimpleNamespace(ensure_document_scope_index=AsyncMock())
+    file_panel = SimpleNamespace(ensure_page_index=AsyncMock())
     bm25 = object()
     profiles = (BM25Profile(name="en", text_config="english", languages=("en",)),)
     metadata_constructor = MagicMock(return_value=metadata)
     chunk_constructor = MagicMock(return_value=chunks)
     vector_constructor = MagicMock(return_value=vectors)
+    file_panel_constructor = MagicMock(return_value=file_panel)
     create_bm25 = AsyncMock(return_value=bm25)
     guard = SimpleNamespace(
         verify_surface=MagicMock(),
@@ -110,6 +112,7 @@ async def test_runtime_binder_composes_workspace_stores(
     monkeypatch.setattr(corpus_module, "PGMetadataIndex", metadata_constructor)
     monkeypatch.setattr(corpus_module, "PGCorpusChunkStore", chunk_constructor)
     monkeypatch.setattr(corpus_module, "PGFilteredVectorSearch", vector_constructor)
+    monkeypatch.setattr(corpus_module, "PGFilePanelStore", file_panel_constructor)
     monkeypatch.setattr(corpus_module, "profiles_from_config", MagicMock(return_value=profiles))
     monkeypatch.setattr(corpus_module, "create_postgres_bm25", create_bm25)
     monkeypatch.setattr(corpus_module, "PGLightRAGContractGuard", guard_constructor)
@@ -124,10 +127,13 @@ async def test_runtime_binder_composes_workspace_stores(
     guard.verify_surface.assert_called_once_with()
     guard.verify_all.assert_awaited_once_with()
     if is_reader:
+        file_panel_constructor.assert_not_called()
         guard.verify_read_only_attach_contract.assert_called_once_with()
         attach_read_only.assert_awaited_once_with(lightrag, config=config)
         lightrag.initialize_storages.assert_not_awaited()
     else:
+        file_panel_constructor.assert_called_once_with()
+        file_panel.ensure_page_index.assert_awaited_once_with()
         guard.verify_read_only_attach_contract.assert_not_called()
         attach_read_only.assert_not_awaited()
         lightrag.initialize_storages.assert_awaited_once_with()

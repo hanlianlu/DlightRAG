@@ -461,6 +461,17 @@ cancelling its run, closes conversation-scoped Sources/Artifact Canvas, and keep
 the workspace-scoped Files panel. An unsent draft guards click, programmatic,
 and browser-history navigation through the same confirmation.
 
+`GET /web/api/files` returns one processed-file keyset page for the selected
+workspace: 50 files by default and at most 100, ordered by the durable
+`updated_at DESC, id ASC` key. Its signed opaque cursor is bound to that
+workspace; malformed, tampered, and cross-workspace tokens return 422. The
+Files Feature appends older pages on demand, preserves server order, and resets
+to a fresh first page after upload completion or deletion. The response keeps
+its existing `workspace`, `files`, and `ingest` fields and adds
+`next_cursor`. Workspace validation for Files, upload, delete, and ingest-status
+uses one catalog point lookup and never enumerates the workspace catalog or
+warms a cold `WorkspaceRag` runtime.
+
 The Web-only conversation lifecycle is server-owned and principal-scoped. The
 browser creates, lists, selects, renames, deletes, and reloads conversations
 through `/web/api/conversations`; it sends the optional `conversation_id`, the

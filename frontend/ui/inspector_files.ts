@@ -35,6 +35,7 @@ export class DlInspectorFiles extends LightElement {
     error: {state: true},
     uploading: {state: true},
     acceptedFiles: {state: true},
+    filesLoadMoreState: {state: true},
   };
 
   declare active: boolean;
@@ -43,11 +44,17 @@ export class DlInspectorFiles extends LightElement {
   declare error: string | null;
   declare uploading: boolean;
   declare acceptedFiles: number;
+  declare filesLoadMoreState: 'idle' | 'loading' | 'error';
 
   #workspace = '';
   #request: AbortController | null = null;
   #pollController: AbortController | null = null;
   #pollTimer: number | null = null;
+  #olderFilesController: AbortController | null = null;
+  #olderFilesGeneration = 0;
+  #olderFilesFlight: Promise<void> | null = null;
+  #olderFilesAnnouncement = '';
+  #restoreOlderFocus = false;
   #activeMutations = 0;
   #releaseWorkspaceEvents: (() => void)[] = [];
 
@@ -59,6 +66,7 @@ export class DlInspectorFiles extends LightElement {
     this.error = null;
     this.uploading = false;
     this.acceptedFiles = 0;
+    this.filesLoadMoreState = 'idle';
     this.#workspace = ingestStore.workspace;
     new StoreController(this, ingestStore);
   }
@@ -103,6 +111,11 @@ export class DlInspectorFiles extends LightElement {
 
   async reload(showLoading = true): Promise<void> {
     const workspace = ingestStore.workspace;
+    this.#invalidateOlderFiles();
+    if (this.snapshot !== null && this.snapshot.workspace !== workspace) {
+      this.snapshot = null;
+      this.acceptedFiles = 0;
+    }
     this.#workspace = workspace;
     this.uploading = false;
     const controller = this.#startRequest();
@@ -110,7 +123,7 @@ export class DlInspectorFiles extends LightElement {
     if (showLoading) this.loading = true;
     this.error = null;
     try {
-      const snapshot = await getFilePanel(workspace, controller.signal);
+      const snapshot = await getFilePanel(workspace, null, controller.signal);
       if (!this.#isCurrent(controller, workspace)) return;
       this.snapshot = snapshot;
       this.acceptedFiles = 0;
@@ -126,9 +139,93 @@ export class DlInspectorFiles extends LightElement {
     }
   }
 
+  loadOlderFiles(): Promise<void> {
+    if (this.#olderFilesFlight !== null) return this.#olderFilesFlight;
+    const workspace = ingestStore.workspace;
+    const cursor = this.snapshot?.workspace === workspace
+      ? this.snapshot.next_cursor
+      : null;
+    if (!cursor || this.loading || this.#request !== null || !this.active) {
+      return Promise.resolve();
+    }
+    const flight = this.#loadOlderFilesPage(
+      workspace,
+      cursor,
+      this.#olderFilesGeneration,
+    );
+    this.#olderFilesFlight = flight;
+    void flight.finally(() => {
+      if (this.#olderFilesFlight === flight) this.#olderFilesFlight = null;
+    });
+    return flight;
+  }
+
+  async #loadOlderFilesPage(
+    workspace: string,
+    cursor: string,
+    generation: number,
+  ): Promise<void> {
+    this.#olderFilesController?.abort();
+    const controller = new AbortController();
+    this.#olderFilesController = controller;
+    this.filesLoadMoreState = 'loading';
+    this.#olderFilesAnnouncement = 'Loading older files…';
+    try {
+      const older = await getFilePanel(workspace, cursor, controller.signal);
+      const current = this.snapshot;
+      if (
+        controller !== this.#olderFilesController
+        || generation !== this.#olderFilesGeneration
+        || workspace !== ingestStore.workspace
+        || current?.workspace !== workspace
+        || current.next_cursor !== cursor
+      ) {
+        if (controller === this.#olderFilesController) {
+          this.filesLoadMoreState = 'idle';
+          this.#olderFilesAnnouncement = '';
+        }
+        return;
+      }
+      if (older.workspace !== workspace) {
+        throw new Error('older file page changed workspace identity');
+      }
+      const paths = new Set(current.files.map((file) => file.file_path));
+      const appended = older.files.filter((file) => {
+        if (paths.has(file.file_path)) return false;
+        paths.add(file.file_path);
+        return true;
+      });
+      this.snapshot = {
+        ...current,
+        files: [...current.files, ...appended],
+        next_cursor: older.next_cursor,
+      };
+      this.filesLoadMoreState = 'idle';
+      this.#olderFilesAnnouncement = appended.length === 1
+        ? 'Loaded 1 older file.'
+        : `Loaded ${appended.length} older files.`;
+      if (older.next_cursor === null && this.#restoreOlderFocus) {
+        this.#restoreOlderFocus = false;
+        await this.updateComplete;
+        this.querySelector<HTMLElement>('#file-list')?.focus({preventScroll: true});
+      }
+    } catch (error) {
+      if (
+        isAbortError(error)
+        || controller !== this.#olderFilesController
+        || generation !== this.#olderFilesGeneration
+      ) return;
+      this.filesLoadMoreState = 'error';
+      this.#olderFilesAnnouncement = 'Older files could not be loaded.';
+    } finally {
+      if (this.#olderFilesController === controller) this.#olderFilesController = null;
+    }
+  }
+
   async upload(files: readonly File[], label?: string | null): Promise<void> {
     if (files.length === 0) return;
     const workspace = ingestStore.workspace;
+    this.#invalidateOlderFiles();
     this.#workspace = workspace;
     const controller = this.#startRequest();
     this.#stopPolling();
@@ -144,6 +241,9 @@ export class DlInspectorFiles extends LightElement {
         workspace,
         files: this.snapshot?.workspace === workspace ? this.snapshot.files : [],
         ingest: receipt.ingest,
+        next_cursor: this.snapshot?.workspace === workspace
+          ? this.snapshot.next_cursor
+          : null,
       };
       this.acceptedFiles = receipt.file_count;
       this.#requestToast({message: 'Files received — processing in background', duration: 3000});
@@ -158,11 +258,13 @@ export class DlInspectorFiles extends LightElement {
       if (this.#request === controller) {
         this.#request = null;
         this.uploading = false;
+        this.loading = false;
       }
     }
   }
 
   pause(): void {
+    this.#invalidateOlderFiles();
     this.#request?.abort();
     this.#request = null;
     this.uploading = false;
@@ -174,6 +276,7 @@ export class DlInspectorFiles extends LightElement {
     const filename = filePath.split('/').pop() || filePath;
     if (!window.confirm(`Delete ${filename}?`)) return;
     const workspace = ingestStore.workspace;
+    this.#invalidateOlderFiles();
     this.#stopPolling();
     const controller = this.#startRequest();
     this.#beginMutation();
@@ -191,7 +294,10 @@ export class DlInspectorFiles extends LightElement {
       this.#requestToast({message, duration: 3000});
     } finally {
       this.#finishMutation();
-      if (this.#request === controller) this.#request = null;
+      if (this.#request === controller) {
+        this.#request = null;
+        this.loading = false;
+      }
     }
   }
 
@@ -222,6 +328,9 @@ export class DlInspectorFiles extends LightElement {
       workspace,
       files: this.snapshot?.workspace === workspace ? this.snapshot.files : [],
       ingest,
+      next_cursor: this.snapshot?.workspace === workspace
+        ? this.snapshot.next_cursor
+        : null,
     };
   }
 
@@ -231,6 +340,16 @@ export class DlInspectorFiles extends LightElement {
       this.#pollTimer = null;
       void this.#poll(workspace);
     }, POLL_INTERVAL_MS);
+  }
+
+  #invalidateOlderFiles(): void {
+    this.#olderFilesController?.abort();
+    this.#olderFilesController = null;
+    this.#olderFilesGeneration += 1;
+    this.#olderFilesFlight = null;
+    this.filesLoadMoreState = 'idle';
+    this.#olderFilesAnnouncement = '';
+    this.#restoreOlderFocus = false;
   }
 
   #stopPolling(): void {
@@ -287,6 +406,12 @@ export class DlInspectorFiles extends LightElement {
     });
     void this.upload(files, folderName);
   }
+
+  #loadOlderFiles = (event: Event): void => {
+    const button = event.currentTarget as HTMLButtonElement;
+    this.#restoreOlderFocus = document.activeElement === button;
+    void this.loadOlderFiles();
+  };
 
   #requestToast(detail: ToastRequestDetail): void {
     this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
@@ -345,23 +470,43 @@ export class DlInspectorFiles extends LightElement {
       ${this.loading ? html`
         <div class="file-status file-status--loading"><div class="spinner"></div><span>Loading files...</span></div>
       ` : nothing}
-      ${!this.loading ? repeat(
-        files,
-        (file) => file.file_path,
-        (file) => html`
-          <div class="file-item">
-            <span class="file-name" title=${file.file_path}>${file.file_name}</span>
-            <button class="file-delete" type="button" aria-label=${`Delete ${file.file_name}`}
-                    @click=${() => { void this.#deleteFile(file.file_path); }}>
-              <svg class="file-delete-icon" width="14" height="14" viewBox="0 0 24 24"
-                   fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </svg>
+      ${!this.loading ? html`
+        <div id="file-list" role="list" aria-label="Processed files" tabindex="-1">
+          ${repeat(
+            files,
+            (file) => file.file_path,
+            (file) => html`
+              <div class="file-item" role="listitem">
+                <span class="file-name" title=${file.file_path}>${file.file_name}</span>
+                <button class="file-delete" type="button" aria-label=${`Delete ${file.file_name}`}
+                        @click=${() => { void this.#deleteFile(file.file_path); }}>
+                  <svg class="file-delete-icon" width="14" height="14" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+            `,
+          )}
+        </div>
+        ${snapshot?.next_cursor ? html`
+          <div class="file-page-control">
+            <button type="button" data-load-older-files
+                    aria-busy=${this.filesLoadMoreState === 'loading' ? 'true' : 'false'}
+                    ?disabled=${this.filesLoadMoreState === 'loading'}
+                    @click=${this.#loadOlderFiles}>
+              ${this.filesLoadMoreState === 'error'
+                ? 'Retry loading older files'
+                : 'Load older files'}
             </button>
           </div>
-        `,
-      ) : nothing}
+        ` : nothing}
+        <span class="sr-only" data-older-files-status role="status" aria-live="polite">
+          ${this.#olderFilesAnnouncement}
+        </span>
+      ` : nothing}
       ${!this.loading && !this.error && files.length === 0 && !snapshot?.ingest.busy ? html`
         <div class="empty-state">No files ingested in workspace “${this.#workspace}”.</div>
       ` : nothing}
