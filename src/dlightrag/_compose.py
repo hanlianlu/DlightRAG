@@ -250,6 +250,16 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         memory_store,
         settings_store=memory_settings,
         superseded_retention_days=config.answer.runtime.answer_run_retention_days,
+        # Stable across workers sharing the operational database. Cursors
+        # carry no authorization state and expire on credential rotation.
+        memory_list_cursor_secret=hashlib.sha256(
+            (
+                "dlightrag-memory-list-cursor\0"
+                f"{config.storage.postgres.host}\0"
+                f"{config.storage.postgres.database}\0"
+                f"{config.storage.postgres.password}"
+            ).encode()
+        ).digest(),
     )
     from dlightrag.adapters.mcp.outbound import OutboundMcpServer, outbound_mcp_tools
 

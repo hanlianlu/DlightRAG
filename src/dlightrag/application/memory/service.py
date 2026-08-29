@@ -3,6 +3,7 @@
 
 from dataclasses import dataclass
 from typing import Any, Protocol
+from uuid import UUID
 
 from dlightrag_memory import (
     Memory,
@@ -18,6 +19,13 @@ from dlightrag.engine.answer.memory import (
     MEMORY_SUPERSEDE_RETENTION_DAYS,
     MemoryCapability,
     memory_owner_allowed,
+)
+
+from .memory_list import (
+    MemoryListCursor,
+    MemoryListCursorCodec,
+    MemoryListPage,
+    MemoryListPageRequest,
 )
 
 
@@ -97,10 +105,12 @@ class MemoryService:
         *,
         settings_store: MemorySettingsStore | None = None,
         superseded_retention_days: int = MEMORY_SUPERSEDE_RETENTION_DAYS,
+        memory_list_cursor_secret: bytes | None = None,
     ) -> None:
         self._memory = Memory(store)
         self._settings = settings_store or NoopMemorySettingsStore()
         self._retention_days = superseded_retention_days
+        self._memory_list_codec = MemoryListCursorCodec(memory_list_cursor_secret)
 
     async def capability(self, *, owner_id: str) -> MemoryCapability:
         return await self._settings.state(owner_id=owner_id)
@@ -125,6 +135,39 @@ class MemoryService:
     async def list_active(self, *, owner_id: str, auth_mode: str) -> tuple[MemoryRecord, ...]:
         await self._require_enabled(owner_id=owner_id, auth_mode=auth_mode)
         return await self._memory.list_active(owner_id=owner_id)
+
+    @property
+    def memory_list_cursor_codec(self) -> MemoryListCursorCodec:
+        """Return the codec shared with the REST and MCP memory adapters."""
+        return self._memory_list_codec
+
+    async def list_active_page(
+        self,
+        *,
+        owner_id: str,
+        auth_mode: str,
+        page: MemoryListPageRequest | None = None,
+    ) -> MemoryListPage:
+        """Return one bounded newest-first active-memory page."""
+        await self._require_enabled(owner_id=owner_id, auth_mode=auth_mode)
+        requested = page or MemoryListPageRequest()
+        after = None
+        if requested.cursor is not None:
+            after = (requested.cursor.updated_at, str(requested.cursor.memory_id))
+        records, next_after = await self._memory.browse(
+            owner_id=owner_id,
+            cursor=after,
+            limit=requested.limit,
+        )
+        next_cursor = None
+        if next_after is not None:
+            if not records:
+                raise RuntimeError("memory store reported a continuation after an empty page")
+            next_cursor = MemoryListCursor(
+                updated_at=next_after[0],
+                memory_id=UUID(str(next_after[1])),
+            )
+        return MemoryListPage(records=records, next_cursor=next_cursor)
 
     async def remember(
         self,

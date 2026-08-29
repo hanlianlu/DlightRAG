@@ -4,7 +4,7 @@
 from typing import Annotated, Any, Literal
 
 from dlightrag_memory import MemoryOperationReceipt, MemoryProvenance
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.adapters.http.rest.auth import get_current_user
@@ -14,7 +14,13 @@ from dlightrag.application.answer_runs.errors import (
     MemoryUnavailableError,
     MemoryWriteRejectedError,
 )
-from dlightrag.application.memory import MemorySettings
+from dlightrag.application.memory import (
+    MEMORY_LIST_PAGE_DEFAULT_LIMIT,
+    MEMORY_LIST_PAGE_MAX_LIMIT,
+    MemoryListCursorError,
+    MemoryListPageRequest,
+    MemorySettings,
+)
 
 from .deps import get_application
 
@@ -38,19 +44,41 @@ class MemorySettingsInput(BaseModel):
 
 @router.get("/memory")
 async def list_memories(
-    request: Request, user: UserContext = Depends(get_current_user)
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+    limit: Annotated[
+        int,
+        Query(ge=1, le=MEMORY_LIST_PAGE_MAX_LIMIT),
+    ] = MEMORY_LIST_PAGE_DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
 ) -> dict[str, Any]:
     application = get_application(request)
     try:
-        rows = await application.memory.list_active(
-            owner_id=owner_id_from_user(user), auth_mode=user.auth_mode
+        decoded_cursor = (
+            application.memory.memory_list_cursor_codec.decode(cursor)
+            if cursor is not None
+            else None
+        )
+        page_request = MemoryListPageRequest(limit=limit, cursor=decoded_cursor)
+    except (MemoryListCursorError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    try:
+        page = await application.memory.list_active_page(
+            owner_id=owner_id_from_user(user),
+            auth_mode=user.auth_mode,
+            page=page_request,
         )
     except (MemoryUnavailableError, MemoryDisabledError) as exc:
         raise _memory_http_error(exc) from exc
     return {
         "memories": [
-            {"memory_id": row.memory_id, "kind": row.kind, "body": row.body} for row in rows
-        ]
+            {"memory_id": row.memory_id, "kind": row.kind, "body": row.body} for row in page.records
+        ],
+        "next_cursor": (
+            application.memory.memory_list_cursor_codec.encode(page.next_cursor)
+            if page.next_cursor is not None
+            else None
+        ),
     }
 
 

@@ -417,6 +417,15 @@ per-operation plus child-inclusive usage in the result trace. Fork creates a new
 Lane in the same Agent Session and a new Product Conversation projection when
 called through Web.
 
+Profile Memory is listed through `GET /memory`, which returns one bounded
+newest-first page of active records (`updated_at DESC, memory_id DESC`).
+`limit` (1-100, default 50) and the opaque `cursor` continuation are query
+parameters. The response keeps the `memories` projection and adds
+`next_cursor`, which is signed, owner-free (ownership stays an
+authentication-derived query predicate), and rejected with 422 before any
+storage read when malformed or tampered. Disabled and unavailable mapping is
+unchanged.
+
 Durable event types are exactly `progress`, `token`, `reset`, `tool_start`,
 `tool_progress`, `tool_end`, `done`, and `error`. Tool events carry only safe
 execution metadata: tool name, status, elapsed time, output byte count, spill

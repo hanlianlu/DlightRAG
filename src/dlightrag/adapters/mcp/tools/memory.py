@@ -23,21 +23,26 @@ from dlightrag.application.answer_runs.errors import (
 
 @mcp_app.tool(
     name="list_memories",
-    description="List this caller's active Profile Memories. Not evidence.",
+    description=(
+        "List this caller's active Profile Memories, newest first, bounded to the "
+        "first 50. `has_more` marks additional older memories, available only "
+        "through the REST memory endpoint with cursor paging. Not evidence."
+    ),
     annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
 )
 async def list_memories_tool() -> dict[str, Any]:
     application = await mcp_server._ensure_application()
     try:
-        rows = await application.memory.list_active(
+        page = await application.memory.list_active_page(
             owner_id=mcp_server._owner_id(), auth_mode=current_request_scope().auth_mode
         )
     except (MemoryUnavailableError, MemoryDisabledError) as exc:
         raise ValueError(exc.public_message) from exc
     return {
         "memories": [
-            {"memory_id": row.memory_id, "kind": row.kind, "body": row.body} for row in rows
-        ]
+            {"memory_id": row.memory_id, "kind": row.kind, "body": row.body} for row in page.records
+        ],
+        "has_more": page.next_cursor is not None,
     }
 
 

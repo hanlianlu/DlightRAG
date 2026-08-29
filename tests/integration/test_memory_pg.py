@@ -920,3 +920,66 @@ async def test_pg_concurrent_multi_row_undo_has_one_winner(store: PostgresMemory
     # A later repeated undo still conflicts via the undone_by mark.
     third = await _undo(memory, forgotten.change_id, key="undo-c")
     assert third.outcome == "conflict"
+
+
+async def test_pg_list_active_page_traverses_ties_and_over_hundred_rows(
+    store: PostgresMemoryStore,
+) -> None:
+    """Full newest-first traversal: same-timestamp ties, owner isolation, bounds."""
+    anchor = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
+    records: list[MemoryRecord] = []
+    for index in range(60):
+        records.append(
+            MemoryRecord(
+                owner_id="alpha",
+                memory_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"tie-a-{index}")),
+                kind="preference",
+                body=f"Tie A {index}.",
+                provenance=_provenance(),
+                created_at=anchor,
+                updated_at=anchor,
+            )
+        )
+    for index in range(50):
+        records.append(
+            MemoryRecord(
+                owner_id="alpha",
+                memory_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"tie-b-{index}")),
+                kind="preference",
+                body=f"Tie B {index}.",
+                provenance=_provenance(),
+                created_at=anchor - timedelta(hours=1),
+                updated_at=anchor - timedelta(hours=1),
+            )
+        )
+    for record in records:
+        await store.insert(record)
+    await store.insert(_record(owner="beta", body="Foreign."))
+
+    def _key(record: MemoryRecord) -> tuple[datetime, str]:
+        assert record.updated_at is not None
+        return (record.updated_at, record.memory_id)
+
+    expected = [_key(record) for record in sorted(records, key=_key, reverse=True)]
+    observed: list[tuple[datetime, str]] = []
+    after: tuple[datetime, str] | None = None
+    while True:
+        page, next_after = await store.list_active_page(owner_id="alpha", after=after, limit=40)
+        assert len(page) <= 40
+        observed.extend(_key(record) for record in page)
+        if next_after is None:
+            break
+        assert page
+        after = next_after
+    assert observed == expected
+    assert len(observed) == 110
+    assert len(set(observed)) == 110
+
+    # The exact paged-read index exists and matches the mixed-direction order.
+    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+        indexdef = await conn.fetchval(
+            "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_dlightrag_memory_records_list'"
+        )
+        assert indexdef is not None
+        normalized = " ".join(str(indexdef).split()).lower()
+        assert "(owner_id, status, updated_at desc, memory_id desc)" in normalized

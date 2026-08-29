@@ -129,6 +129,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_memory_operations (
 _RECORD_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_recall "
     "ON dlightrag_memory_records (owner_id, status, updated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_list "
+    "ON dlightrag_memory_records (owner_id, status, updated_at DESC, memory_id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_exact "
     "ON dlightrag_memory_records (owner_id, normalized_body)",
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_memory_records_purge "
