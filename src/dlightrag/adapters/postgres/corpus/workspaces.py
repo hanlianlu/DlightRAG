@@ -15,7 +15,12 @@ from dlightrag.adapters.postgres.core._migrations import (
     verify_migrations,
 )
 from dlightrag.adapters.postgres.core._operations import PostgresOperationRunner
+from dlightrag.application.corpus_admin import (
+    WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
+    WorkspaceCatalogRowPage,
+)
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
+from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 
 _CREATE = """
 CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
@@ -40,6 +45,17 @@ _LIST = """
 SELECT workspace, display_name, embedding_model, created_at, updated_at
 FROM dlightrag_workspace_meta
 ORDER BY workspace
+"""
+
+# The empty string is the before-first key: every canonical workspace id is
+# non-empty ASCII, so "" < workspace for every row. The cursor predicate rides
+# the table primary key; no OFFSET is ever used.
+_LIST_PAGE = """
+SELECT workspace, display_name, embedding_model, created_at, updated_at
+FROM dlightrag_workspace_meta
+WHERE workspace > $1
+ORDER BY workspace ASC
+LIMIT $2
 """
 
 _EXISTS = """
@@ -116,6 +132,39 @@ class PGWorkspaceRegistry(PostgresOperationRunner):
 
         rows = await self._run(_operation)
         return [dict(row) for row in rows]
+
+    async def list_page(
+        self,
+        *,
+        after_workspace: str | None,
+        limit: int,
+    ) -> WorkspaceCatalogRowPage:
+        """Return one bounded ascending workspace-keyset page via the primary key."""
+        if after_workspace is None:
+            after = ""
+        else:
+            after = after_workspace.strip()
+            canonical = require_canonical_workspace_id(after)
+            if canonical != after:
+                raise ValueError("workspace-catalog cursor workspace must be canonical")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= WORKSPACE_CATALOG_PAGE_MAX_LIMIT
+        ):
+            raise ValueError("workspace-catalog page limit must be between 1 and 100")
+        fetch_limit = limit + 1
+
+        async def _operation(conn: Any) -> WorkspaceCatalogRowPage:
+            rows = await conn.fetch(_LIST_PAGE, after, fetch_limit)
+            fetched_rows = len(rows)
+            return WorkspaceCatalogRowPage(
+                items=tuple(dict(row) for row in rows[:limit]),
+                has_more=fetched_rows > limit,
+                fetched_rows=fetched_rows,
+            )
+
+        return await self._run(_operation)
 
     async def exists(self, workspace: str) -> bool:
         """Return whether one canonical workspace registry row exists."""

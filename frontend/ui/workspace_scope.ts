@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {html, svg, type TemplateResult} from 'lit';
+import {html, nothing, svg, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {WorkspaceApiError, deleteWorkspaceRequest} from '../api/workspaces.ts';
 import type {WorkspaceRecord} from '../events/bus.ts';
@@ -31,6 +31,10 @@ export class DlWorkspaceScope extends LightElement {
 
   #deleteOperation: AbortController | null = null;
   #deleteReturnFocus: HTMLElement | null = null;
+  #restoreLoadMoreFocus = false;
+  #settledFocusRestore = false;
+  #loadMoreAnnouncement = '';
+  #lastLoadMoreState: 'idle' | 'loading' | 'error' = 'idle';
   readonly #dismiss = createAutoDismiss({
     getAnchor: () => this,
     isOpen: () => this.open,
@@ -65,10 +69,31 @@ export class DlWorkspaceScope extends LightElement {
     this.open = false;
   }
 
+  protected override willUpdate(_changed: PropertyValues<this>): void {
+    const state = workspaceStore.workspaceLoadMoreState;
+    const previous = this.#lastLoadMoreState;
+    if (state === previous) return;
+    this.#lastLoadMoreState = state;
+    if (state === 'loading') this.#loadMoreAnnouncement = 'Loading workspaces…';
+    else if (state === 'error') this.#loadMoreAnnouncement = 'Workspaces could not be loaded.';
+    else if (previous === 'loading') {
+      this.#loadMoreAnnouncement = 'Loaded more workspaces.';
+      this.#settledFocusRestore = true;
+    }
+  }
+
   protected override updated(): void {
     this.classList.toggle('open', this.open);
     if (this.open) this.#dismiss.activate();
     else this.#dismiss.deactivate();
+    if (this.#settledFocusRestore) {
+      this.#settledFocusRestore = false;
+      if (this.#restoreLoadMoreFocus) {
+        this.#restoreLoadMoreFocus = false;
+        const control = this.querySelector<HTMLButtonElement>('[data-load-more-workspaces]');
+        if (control) control.focus({preventScroll: true});
+      }
+    }
   }
 
   protected override render(): TemplateResult {
@@ -115,13 +140,13 @@ export class DlWorkspaceScope extends LightElement {
   }
 
   get #allSelected(): boolean {
-    const records = workspaceStore.records;
-    return records.length > 0
-      && records.every((record) => workspaceStore.active.includes(record.workspace));
+    const known = workspaceStore.knownWorkspaces;
+    const active = workspaceStore.active;
+    return known.length > 0 && known.every((workspace) => active.includes(workspace));
   }
 
   get #label(): string {
-    const total = workspaceStore.records.length;
+    const total = workspaceStore.knownWorkspaces.length;
     const active = workspaceStore.active;
     if (active.length === 0 || this.#allSelected) {
       return total > 0 ? `All workspaces (${total})` : 'All workspaces';
@@ -149,10 +174,34 @@ export class DlWorkspaceScope extends LightElement {
            @dl-workspace-created=${this.#workspaceCreated}>
         ${this.#allOption()}
         ${repeat(sorted, (record) => record.workspace, (record) => this.#option(record))}
+        ${this.#loadMoreControl()}
+        <span class="sr-only" data-workspaces-status role="status" aria-live="polite">
+          ${this.#loadMoreAnnouncement}
+        </span>
         <dl-workspace-create></dl-workspace-create>
       </div>
     `;
   }
+
+  #loadMoreControl(): TemplateResult | typeof nothing {
+    if (!workspaceStore.hasMoreWorkspaces) return nothing;
+    const state = workspaceStore.workspaceLoadMoreState;
+    return html`
+      <div class="workspace-load-more">
+        <button type="button" data-load-more-workspaces class="ui-popover-item"
+                aria-busy=${state === 'loading' ? 'true' : 'false'}
+                ?disabled=${state === 'loading'} @click=${this.#loadMore}>
+          ${state === 'error' ? 'Retry loading workspaces' : 'Load more workspaces'}
+        </button>
+      </div>
+    `;
+  }
+
+  #loadMore = (event: Event): void => {
+    const button = event.currentTarget as HTMLButtonElement;
+    this.#restoreLoadMoreFocus = document.activeElement === button;
+    void workspaceStore.loadMoreWorkspaces();
+  };
 
   #allOption(): TemplateResult {
     const selected = this.#allSelected;

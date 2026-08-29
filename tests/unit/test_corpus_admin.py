@@ -23,6 +23,8 @@ from dlightrag.application.corpus_admin import (
     MetadataSearchPageRequest,
     ProcessedFileRow,
     RedirectDownloadTarget,
+    WorkspaceCatalogCursor,
+    WorkspaceCatalogPageRequest,
 )
 from dlightrag.engine.rag.retrieval import MetadataFilter
 
@@ -61,6 +63,7 @@ def _admin(
         initialize=AsyncMock(),
         register_workspace=AsyncMock(),
         list_workspace_records=AsyncMock(return_value=[]),
+        list_workspace_records_page=AsyncMock(return_value=([], False)),
         workspace_exists=AsyncMock(return_value=True),
     )
     jobs = SimpleNamespace(
@@ -626,3 +629,73 @@ async def test_search_metadata_rejects_cross_workspace_cursor_before_storage() -
         )
 
     store.search_metadata_page.assert_not_awaited()
+
+
+async def test_workspace_catalog_page_delegates_and_derives_next_cursor() -> None:
+    admin, pool, maintenance, _, _, _ = _admin()
+    maintenance.list_workspace_records_page = AsyncMock(
+        return_value=(
+            [
+                {
+                    "workspace": "finance",
+                    "display_name": "Finance",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ],
+            True,
+        )
+    )
+
+    page = await admin.list_workspace_records_page(
+        page=WorkspaceCatalogPageRequest(
+            limit=50,
+            cursor=WorkspaceCatalogCursor(after_workspace="default"),
+        )
+    )
+
+    maintenance.list_workspace_records_page.assert_awaited_once_with(
+        after_workspace="default",
+        limit=50,
+    )
+    assert [item["workspace"] for item in page.items] == ["finance"]
+    assert page.next_cursor == WorkspaceCatalogCursor(after_workspace="finance")
+    assert page.fetched_rows == 2
+    pool.acquire.assert_not_awaited()
+
+
+async def test_workspace_catalog_page_rejects_empty_page_with_continuation() -> None:
+    admin, _, maintenance, _, _, _ = _admin()
+    maintenance.list_workspace_records_page = AsyncMock(return_value=([], True))
+
+    with pytest.raises(RuntimeError, match="empty page"):
+        await admin.list_workspace_records_page()
+
+
+async def test_workspace_catalog_full_reads_remain_full() -> None:
+    admin, _, maintenance, _, _, _ = _admin()
+    maintenance.list_workspace_records.return_value = [
+        {
+            "workspace": "default",
+            "display_name": "Default",
+            "embedding_model": "voyage-multimodal-3.5",
+            "created_at": None,
+            "updated_at": None,
+        }
+    ]
+
+    records = await admin.alist_workspace_records()
+    workspaces = await admin.list_workspaces()
+
+    assert [record["workspace"] for record in records] == ["default"]
+    assert workspaces == ["default"]
+    maintenance.list_workspace_records_page.assert_not_awaited()
+
+
+async def test_workspace_catalog_cursor_codec_is_exposed() -> None:
+    from dlightrag.application.corpus_admin import WorkspaceCatalogCursorCodec
+
+    admin, _, _, _, _, _ = _admin()
+
+    assert isinstance(admin.workspace_catalog_cursor_codec, WorkspaceCatalogCursorCodec)

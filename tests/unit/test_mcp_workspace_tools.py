@@ -23,7 +23,7 @@ from dlightrag.application.config import (
     AccessControlRuleConfig,
     DlightragConfig,
 )
-from dlightrag.application.corpus_admin import IngestSpec
+from dlightrag.application.corpus_admin import IngestSpec, WorkspaceCatalogPage
 from dlightrag.application.retrieval import RetrieveResponse as ServiceResponse
 from dlightrag.engine.runtime import AnswerRunRecord
 from tests.config_helpers import mutate_config, replace_config
@@ -56,6 +56,21 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
     application.corpora = SimpleNamespace(
         list_workspaces=AsyncMock(return_value=["default"]),
         alist_workspace_records=AsyncMock(return_value=[{"workspace": "default"}]),
+        list_workspace_records_page=AsyncMock(
+            return_value=WorkspaceCatalogPage(
+                items=(
+                    {
+                        "workspace": "default",
+                        "display_name": "default",
+                        "embedding_model": "voyage-multimodal-3.5",
+                        "created_at": None,
+                        "updated_at": None,
+                    },
+                ),
+                next_cursor=None,
+                fetched_rows=1,
+            )
+        ),
         create_workspace=AsyncMock(),
         reset=AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0}),
         ingest=AsyncMock(),
@@ -266,7 +281,7 @@ async def test_mcp_v2_client_lists_and_calls_tools(mock_mcp_application: AsyncMo
 
 
 async def test_mcp_internal_errors_do_not_leak_details(mock_mcp_application: AsyncMock) -> None:
-    mock_mcp_application.corpora.alist_workspace_records.side_effect = RuntimeError(
+    mock_mcp_application.corpora.list_workspace_records_page.side_effect = RuntimeError(
         "database-secret"
     )
 
@@ -1129,3 +1144,37 @@ async def test_mcp_ingest_job_tools_canonicalize_stored_workspace_before_access(
         "finance_reports",
         "finance_reports",
     ]
+
+
+async def test_mcp_list_workspaces_returns_the_bounded_first_page(
+    mock_mcp_application: AsyncMock,
+) -> None:
+    from dlightrag.application.corpus_admin import (
+        WorkspaceCatalogCursor,
+        WorkspaceCatalogPage,
+    )
+
+    mock_mcp_application.corpora.list_workspace_records_page = AsyncMock(
+        return_value=WorkspaceCatalogPage(
+            items=(
+                {
+                    "workspace": "default",
+                    "display_name": "default",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ),
+            next_cursor=WorkspaceCatalogCursor(after_workspace="default"),
+            fetched_rows=2,
+        )
+    )
+
+    result = await mcp_server.mcp_app.call_tool("list_workspaces", {})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is False
+    payload = _tool_json(result)
+    assert payload["workspaces"] == ["default"]
+    assert payload["has_more"] is True
+    assert payload["records"][0]["display_name"] == "default"

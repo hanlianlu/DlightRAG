@@ -85,6 +85,12 @@ from .metadata_search import (
     MetadataSearchPage,
     MetadataSearchPageRequest,
 )
+from .workspace_catalog import (
+    WorkspaceCatalogCursor,
+    WorkspaceCatalogCursorCodec,
+    WorkspaceCatalogPage,
+    WorkspaceCatalogPageRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -449,6 +455,7 @@ class CorpusAdmin:
         source_download_for: SourceDownloadFactory,
         file_panel_cursor_secret: bytes | None = None,
         metadata_search_cursor_secret: bytes | None = None,
+        workspace_catalog_cursor_secret: bytes | None = None,
     ) -> None:
         self._settings = settings
         self._pool = pool
@@ -461,6 +468,7 @@ class CorpusAdmin:
         self._metadata_search_cursor_codec = MetadataSearchCursorCodec(
             metadata_search_cursor_secret
         )
+        self._workspace_catalog_codec = WorkspaceCatalogCursorCodec(workspace_catalog_cursor_secret)
 
     async def initialize(self) -> None:
         default_workspace = require_canonical_workspace_id(self._settings.default_workspace_id)
@@ -510,6 +518,39 @@ class CorpusAdmin:
 
     async def list_workspaces(self) -> list[str]:
         return [record["workspace"] for record in await self.alist_workspace_records()]
+
+    async def list_workspace_records_page(
+        self,
+        *,
+        page: WorkspaceCatalogPageRequest | None = None,
+    ) -> WorkspaceCatalogPage:
+        """Return one bounded ascending catalog page without touching the pool.
+
+        Authorization gates apply per call over the returned page; the catalog
+        itself is paged over its full ordering because the gate is per-user and
+        per-request, never over a pre-filtered set.
+        """
+        requested = page or WorkspaceCatalogPageRequest()
+        after_workspace = requested.cursor.after_workspace if requested.cursor is not None else None
+        rows, has_more = await self._maintenance.list_workspace_records_page(
+            after_workspace=after_workspace,
+            limit=requested.limit,
+        )
+        next_cursor = None
+        if has_more:
+            if not rows:
+                raise RuntimeError("workspace-catalog store reported more rows after an empty page")
+            next_cursor = WorkspaceCatalogCursor(after_workspace=str(rows[-1]["workspace"]))
+        return WorkspaceCatalogPage(
+            items=tuple(_workspace_record(row) for row in rows),
+            next_cursor=next_cursor,
+            fetched_rows=len(rows) + (1 if has_more else 0),
+        )
+
+    @property
+    def workspace_catalog_cursor_codec(self) -> WorkspaceCatalogCursorCodec:
+        """Return the codec shared with the REST, Web, and MCP adapters."""
+        return self._workspace_catalog_codec
 
     @property
     def file_panel_cursor_codec(self) -> FilePanelCursorCodec:

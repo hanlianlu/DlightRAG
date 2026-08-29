@@ -38,6 +38,13 @@ class CorpusMaintenanceStore(Protocol):
 
     async def list_workspace_records(self) -> tuple[dict[str, Any], ...]: ...
 
+    async def list_workspace_records_page(
+        self,
+        *,
+        after_workspace: str | None,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], bool]: ...
+
     async def workspace_exists(self, workspace: str) -> bool: ...
 
     async def register_workspace(

@@ -2,6 +2,7 @@
 
 import {html, type TemplateResult} from 'lit';
 import {getWebBootstrap, type WebBootstrap} from '../api/bootstrap.ts';
+import {getWorkspacesPage} from '../api/workspaces.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
@@ -169,6 +170,9 @@ export class DlApp extends LightElement {
         })),
         bootstrap.active_workspaces,
         bootstrap.primary_workspace,
+        (cursor, signal) => getWorkspacesPage(cursor, signal),
+        bootstrap.workspaces_next_cursor ?? null,
+        bootstrap.known_workspaces ?? null,
       );
       this.bootState = 'ready';
       await this.updateComplete;

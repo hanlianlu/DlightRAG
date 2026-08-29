@@ -253,3 +253,16 @@ def test_callers_take_web_records_from_the_application_owner() -> None:
             )
 
     assert offenders == []
+
+
+def test_workspace_catalog_page_query_rides_the_primary_key_without_offset() -> None:
+    from dlightrag.adapters.postgres.corpus import workspaces
+
+    query = " ".join(workspaces._LIST_PAGE.split())
+
+    assert "SELECT workspace, display_name, embedding_model, created_at, updated_at" in query
+    assert "FROM dlightrag_workspace_meta" in query
+    assert "WHERE workspace > $1" in query
+    assert "ORDER BY workspace ASC" in query
+    assert "LIMIT $2" in query
+    assert "OFFSET" not in query.upper()

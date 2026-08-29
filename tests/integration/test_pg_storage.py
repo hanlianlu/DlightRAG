@@ -635,3 +635,69 @@ async def test_child_roster_traverses_newest_first_with_timestamp_ties() -> None
                 run_id,
             )
         await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# Workspace catalog - bounded ascending keyset traversal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("pg_check")
+async def test_workspace_catalog_traverses_ascending_pages_without_gaps() -> None:
+    import asyncpg
+
+    from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
+
+    prefix = "test_pg_catalog_"
+    workspaces = [f"{prefix}{index:03d}" for index in range(1, 121)]
+    pool = await asyncpg.create_pool(
+        host=str(_PG_CONN_KWARGS["host"]),
+        port=int(_PG_CONN_KWARGS["port"]),
+        user=str(_PG_CONN_KWARGS["user"]),
+        password=str(_PG_CONN_KWARGS["password"]),
+        database=str(_PG_CONN_KWARGS["database"]),
+        min_size=1,
+        max_size=1,
+    )
+    registry = PGWorkspaceRegistry(pool=pool)
+    await registry.initialize()
+    try:
+        async with pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO dlightrag_workspace_meta (workspace, display_name, embedding_model)
+                VALUES ($1, $1, 'voyage-multimodal-3.5')
+                ON CONFLICT (workspace) DO NOTHING
+                """,
+                [(workspace,) for workspace in workspaces],
+            )
+
+        observed: list[str] = []
+        after: str | None = None
+        pages = 0
+        while True:
+            page = await registry.list_page(after_workspace=after, limit=40)
+            assert len(page.items) <= 40
+            assert page.fetched_rows <= 41
+            pages += 1
+            observed.extend(str(item["workspace"]) for item in page.items)
+            if not page.has_more:
+                break
+            assert page.items
+            after = str(page.items[-1]["workspace"])
+
+        # The shared local registry carries other workspaces; assert the
+        # traversal only on the rows this test inserted, and that the global
+        # ordering never violates ascending workspace order.
+        inserted = [workspace for workspace in observed if workspace.startswith(prefix)]
+        assert inserted == sorted(workspaces)
+        assert len(inserted) == len(set(inserted))
+        assert observed == sorted(observed)
+        assert pages >= 4
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM dlightrag_workspace_meta WHERE workspace LIKE $1",
+                f"{prefix}%",
+            )
+        await pool.close()

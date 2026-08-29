@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Workspace lifecycle API routes."""
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -13,7 +13,14 @@ from dlightrag.adapters.http.rest.models import (
     WorkspacesResponse,
 )
 from dlightrag.application.access import AccessAction, UserContext
-from dlightrag.application.corpus_admin import normalize_workspace, validate_workspace_name
+from dlightrag.application.corpus_admin import (
+    WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
+    WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
+    WorkspaceCatalogCursorError,
+    WorkspaceCatalogPageRequest,
+    normalize_workspace,
+    validate_workspace_name,
+)
 
 from .deps import enforce_access, filter_workspace_records, get_application
 
@@ -32,15 +39,44 @@ def _normalize_create_body(body: WorkspaceCreateRequest) -> tuple[str, str]:
 
 @router.get("/workspaces", response_model=WorkspacesResponse)
 async def list_workspaces(
-    request: Request, user: UserContext = Depends(get_current_user)
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+    limit: Annotated[
+        int,
+        Query(ge=1, le=WORKSPACE_CATALOG_PAGE_MAX_LIMIT),
+    ] = WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
 ) -> dict[str, Any]:
-    """List all registered workspaces."""
+    """Return one bounded page of registered workspaces.
+
+    The catalog is paged over its full ascending workspace ordering, and the
+    caller's access gate filters the returned page afterwards. The gate is
+    per-request user-dependent, so paging over a pre-filtered set would leak
+    ordering state across principals; paging the full catalog keeps the cursor
+    a pure ordering fact.
+    """
     application = get_application(request)
-    records = await application.corpora.alist_workspace_records()
-    records = await filter_workspace_records(request, user, AccessAction.WORKSPACE_QUERY, records)
+    try:
+        decoded_cursor = (
+            application.corpora.workspace_catalog_cursor_codec.decode(cursor)
+            if cursor is not None
+            else None
+        )
+        page_request = WorkspaceCatalogPageRequest(limit=limit, cursor=decoded_cursor)
+    except (WorkspaceCatalogCursorError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    page = await application.corpora.list_workspace_records_page(page=page_request)
+    records = await filter_workspace_records(
+        request, user, AccessAction.WORKSPACE_QUERY, list(page.items)
+    )
     return {
         "workspaces": [row["workspace"] for row in records],
         "records": records,
+        "next_cursor": (
+            application.corpora.workspace_catalog_cursor_codec.encode(page.next_cursor)
+            if page.next_cursor is not None
+            else None
+        ),
     }
 
 

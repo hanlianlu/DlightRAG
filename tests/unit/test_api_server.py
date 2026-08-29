@@ -41,6 +41,9 @@ from dlightrag.application.corpus_admin import (
     MetadataSearchCursorCodec,
     MetadataSearchPage,
     MetadataValidationError,
+    WorkspaceCatalogCursor,
+    WorkspaceCatalogCursorCodec,
+    WorkspaceCatalogPage,
 )
 from dlightrag.application.health import ApplicationHealth
 from dlightrag.application.retrieval import CorpusUnavailableError, RetrievalTimeoutError
@@ -190,6 +193,22 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
                 trace={},
                 image_descriptions=(),
             )
+        )
+    )
+    corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(b"api-test")
+    corpora.list_workspace_records_page = AsyncMock(
+        return_value=WorkspaceCatalogPage(
+            items=(
+                {
+                    "workspace": "default",
+                    "display_name": "default",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ),
+            next_cursor=None,
+            fetched_rows=1,
         )
     )
     application.answers = SimpleNamespace(
@@ -355,7 +374,104 @@ class TestWorkspaceLifecycleAPI:
         body = resp.json()
         assert body["workspaces"] == ["default"]
         assert body["records"][0]["display_name"] == "default"
-        mock_application.corpora.alist_workspace_records.assert_awaited_once()
+        assert body["next_cursor"] is None
+        page_call = mock_application.corpora.list_workspace_records_page.await_args
+        assert page_call is not None
+        page_request = page_call.kwargs["page"]
+        assert page_request.limit == 50
+        assert page_request.cursor is None
+
+    async def test_list_workspaces_returns_an_opaque_continuation(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
+    ) -> None:
+        app.state.application = mock_application
+        mock_application.corpora.list_workspace_records_page = AsyncMock(
+            return_value=WorkspaceCatalogPage(
+                items=(
+                    {
+                        "workspace": "finance",
+                        "display_name": "Finance",
+                        "embedding_model": "voyage-multimodal-3.5",
+                        "created_at": None,
+                        "updated_at": None,
+                    },
+                ),
+                next_cursor=WorkspaceCatalogCursor(after_workspace="finance"),
+                fetched_rows=2,
+            )
+        )
+
+        resp = await client.get("/workspaces")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["next_cursor"] is not None
+        assert "workspace-catalog" not in body["next_cursor"]  # opaque token
+
+        second = await client.get("/workspaces", params={"cursor": body["next_cursor"]})
+        assert second.status_code == 200
+        assert second.json()["workspaces"] == ["finance"]
+
+    async def test_list_workspaces_rejects_tampered_cursor_before_storage(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
+    ) -> None:
+        app.state.application = mock_application
+        mock_application.corpora.list_workspace_records_page = AsyncMock()
+
+        resp = await client.get("/workspaces", params={"cursor": "AAAA.tampered"})
+
+        assert resp.status_code == 422
+        mock_application.corpora.list_workspace_records_page.assert_not_awaited()
+
+    @pytest.mark.parametrize("limit", ["0", "101", "abc"])
+    async def test_list_workspaces_rejects_out_of_range_limits_before_storage(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_application,
+        limit: str,
+    ) -> None:
+        app.state.application = mock_application
+        mock_application.corpora.list_workspace_records_page = AsyncMock()
+
+        resp = await client.get("/workspaces", params={"limit": limit})
+
+        assert resp.status_code == 422
+        mock_application.corpora.list_workspace_records_page.assert_not_awaited()
+
+    async def test_list_workspaces_honors_explicit_limit_and_applies_the_access_gate(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
+    ) -> None:
+        app.state.application = mock_application
+        mock_application.corpora.list_workspace_records_page = AsyncMock(
+            return_value=WorkspaceCatalogPage(
+                items=(
+                    {
+                        "workspace": "default",
+                        "display_name": "default",
+                        "embedding_model": "voyage-multimodal-3.5",
+                        "created_at": None,
+                        "updated_at": None,
+                    },
+                    {
+                        "workspace": "finance",
+                        "display_name": "Finance",
+                        "embedding_model": "voyage-multimodal-3.5",
+                        "created_at": None,
+                        "updated_at": None,
+                    },
+                ),
+                next_cursor=None,
+                fetched_rows=2,
+            )
+        )
+
+        resp = await client.get("/workspaces", params={"limit": "1"})
+
+        assert resp.status_code == 200
+        page_call = mock_application.corpora.list_workspace_records_page.await_args
+        assert page_call is not None
+        assert page_call.kwargs["page"].limit == 1
 
     async def test_create_workspace_registers_empty_workspace(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application

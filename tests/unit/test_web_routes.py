@@ -19,6 +19,8 @@ from dlightrag.application.corpus_admin import (
     FilePanelCursor,
     FilePanelCursorCodec,
     FilePanelPageRequest,
+    WorkspaceCatalogCursorCodec,
+    WorkspaceCatalogPage,
 )
 from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
@@ -72,6 +74,31 @@ def mock_application():
                 "embedding_model": "voyage-multimodal-3.5",
             },
         ]
+    )
+    corpora.list_workspace_records_page = AsyncMock(
+        return_value=WorkspaceCatalogPage(
+            items=(
+                {
+                    "workspace": "default",
+                    "display_name": "Default",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": None,
+                    "updated_at": None,
+                },
+                {
+                    "workspace": "test_ws",
+                    "display_name": "Test Workspace",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ),
+            next_cursor=None,
+            fetched_rows=2,
+        )
+    )
+    corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(
+        b"web-workspace-catalog-test-secret"
     )
     corpora.list_ingested_files = AsyncMock(
         return_value=[{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}]
@@ -504,8 +531,10 @@ class TestWebBootstrap:
                     "embedding_model": "voyage-multimodal-3.5",
                 },
             ],
+            "workspaces_next_cursor": None,
             "primary_workspace": "default",
             "active_workspaces": ["default", "test_ws"],
+            "known_workspaces": ["default", "test_ws"],
             "answer_attachments": {
                 "count_limit": 6,
                 "image_max_bytes": 104_857_600,

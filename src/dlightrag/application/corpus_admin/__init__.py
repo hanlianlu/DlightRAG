@@ -62,6 +62,16 @@ from .service import (
     safe_upload_basename,
     validate_workspace_name,
 )
+from .workspace_catalog import (
+    WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
+    WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
+    WorkspaceCatalogCursor,
+    WorkspaceCatalogCursorCodec,
+    WorkspaceCatalogCursorError,
+    WorkspaceCatalogPage,
+    WorkspaceCatalogPageRequest,
+    WorkspaceCatalogRowPage,
+)
 
 __all__ = [
     "CorpusAdmin",
@@ -102,6 +112,14 @@ __all__ = [
     "UnsafeUploadNameError",
     "UploadReader",
     "UploadTooLargeError",
+    "WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT",
+    "WORKSPACE_CATALOG_PAGE_MAX_LIMIT",
+    "WorkspaceCatalogCursor",
+    "WorkspaceCatalogCursorCodec",
+    "WorkspaceCatalogCursorError",
+    "WorkspaceCatalogPage",
+    "WorkspaceCatalogPageRequest",
+    "WorkspaceCatalogRowPage",
     "ingest_kwargs_from_spec",
     "ingest_spec_from_payload",
     "managed_local_ingest_documents",

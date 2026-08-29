@@ -40,6 +40,7 @@ from playwright.sync_api import (
 )
 
 from dlightrag.adapters.http.server import create_app
+from dlightrag.application.access import WorkspaceRecord
 from dlightrag.application.answer_runs import AnswerInputArtifact
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
@@ -49,7 +50,13 @@ from dlightrag.application.answer_runs.execution import (
     PinnedModelProfile,
 )
 from dlightrag.application.config import DlightragConfig, set_config
-from dlightrag.application.corpus_admin import FilePanelCursorCodec
+from dlightrag.application.corpus_admin import (
+    FilePanelCursorCodec,
+    WorkspaceCatalogCursor,
+    WorkspaceCatalogCursorCodec,
+    WorkspaceCatalogPage,
+    WorkspaceCatalogPageRequest,
+)
 from dlightrag.application.web_conversations import (
     ConversationCursor,
     ConversationCursorCodec,
@@ -674,6 +681,37 @@ def e2e_base_url(
     async def _list_workspace_records() -> list[dict[str, str]]:
         return [dict(record) for record in workspace_records]
 
+    async def _list_workspace_records_page(
+        page: WorkspaceCatalogPageRequest | None = None,
+    ) -> WorkspaceCatalogPage:
+        requested = page or WorkspaceCatalogPageRequest()
+        ordered = sorted(workspace_records, key=lambda record: str(record["workspace"]))
+        cursor = requested.cursor
+        if cursor is not None:
+            ordered = [
+                record for record in ordered if str(record["workspace"]) > cursor.after_workspace
+            ]
+        rows = ordered[: requested.limit]
+        next_cursor = None
+        if len(ordered) > requested.limit:
+            next_cursor = WorkspaceCatalogCursor(after_workspace=str(rows[-1]["workspace"]))
+
+        def _to_record(record: dict[str, str]) -> WorkspaceRecord:
+            workspace = str(record["workspace"])
+            return {
+                "workspace": workspace,
+                "display_name": str(record.get("display_name") or workspace),
+                "embedding_model": str(record.get("embedding_model") or ""),
+                "created_at": None,
+                "updated_at": None,
+            }
+
+        return WorkspaceCatalogPage(
+            items=tuple(_to_record(record) for record in rows),
+            next_cursor=next_cursor,
+            fetched_rows=min(len(ordered), requested.limit + 1),
+        )
+
     async def _workspace_exists(workspace: str) -> bool:
         return any(str(record["workspace"]) == workspace for record in workspace_records)
 
@@ -694,8 +732,14 @@ def e2e_base_url(
 
     application_double.corpora.list_workspaces.side_effect = _list_workspaces
     application_double.corpora.alist_workspace_records.side_effect = _list_workspace_records
+    application_double.corpora.list_workspace_records_page.side_effect = (
+        _list_workspace_records_page
+    )
     application_double.corpora.workspace_exists.side_effect = _workspace_exists
     application_double.corpora.file_panel_cursor_codec = FilePanelCursorCodec(b"e2e-files")
+    application_double.corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(
+        b"e2e-workspaces"
+    )
     application_double.corpora.create_workspace.side_effect = _create_workspace
     application_double.corpora.reset.side_effect = _reset_workspaces
     application_double.corpora.list_ingested_files.return_value = []

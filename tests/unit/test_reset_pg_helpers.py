@@ -212,3 +212,36 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
     ]
     assert not any("DROP TABLE" in query for query, _ in conn.executed)
     assert conn.closed is True
+
+
+async def test_list_workspace_records_page_delegates_to_the_operational_registry(
+    monkeypatch, config
+) -> None:
+    conn = _Conn()
+    connect = AsyncMock(side_effect=AssertionError("registry operations must not connect directly"))
+    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.corpus.asyncpg.connect", connect)
+    monkeypatch.setattr(
+        PGWorkspaceRegistry,
+        "list_page",
+        AsyncMock(
+            return_value=type(
+                "Page",
+                (),
+                {"items": ({"workspace": "finance"},), "has_more": False, "fetched_rows": 1},
+            )()
+        ),
+    )
+
+    store = _maintenance_store(config, conn)
+    rows, has_more = await store.list_workspace_records_page(
+        after_workspace="default",
+        limit=50,
+    )
+
+    PGWorkspaceRegistry.list_page.assert_awaited_once_with(  # type: ignore[attr-defined]
+        after_workspace="default",
+        limit=50,
+    )
+    assert rows == [{"workspace": "finance"}]
+    assert has_more is False
+    connect.assert_not_awaited()

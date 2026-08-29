@@ -390,3 +390,144 @@ it('restores workspace-selector trigger focus when deletion is cancelled', async
   expect(scope.querySelector<HTMLDialogElement>('dialog')?.open).to.equal(false);
   expect(document.activeElement).to.equal(trigger);
 });
+
+it('loads more workspaces with coalescing, dedup, retry, and exhaustion', async () => {
+  let olderRequests = 0;
+  const loader = async (cursor: string | null) => {
+    if (cursor === null) throw new Error('unexpected first-page fetch');
+    olderRequests += 1;
+    if (olderRequests === 1) {
+      throw new Error('transient failure');
+    }
+    return {
+      workspaces: [
+        {workspace: 'default', display_name: 'Default', embedding_model: 'embed'},
+        {workspace: 'finance', display_name: 'Finance', embedding_model: 'embed'},
+        {workspace: 'research', display_name: 'Research', embedding_model: 'embed'},
+      ],
+      next_cursor: olderRequests === 2 ? 'cursor-2' : null,
+    };
+  };
+  workspaceStore.init(
+    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],
+    ['default'],
+    'default',
+    loader,
+    'cursor-1',
+  );
+  expect(workspaceStore.hasMoreWorkspaces).to.equal(true);
+
+  const flight = workspaceStore.loadMoreWorkspaces();
+  expect(workspaceStore.loadMoreWorkspaces()).to.equal(flight);
+  await flight;
+  expect(workspaceStore.workspaceLoadMoreState).to.equal('error');
+  expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal(['default']);
+
+  await workspaceStore.loadMoreWorkspaces();
+  expect(workspaceStore.workspaceLoadMoreState).to.equal('idle');
+  expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal([
+    'default', 'finance', 'research',
+  ]);
+  expect(workspaceStore.hasMoreWorkspaces).to.equal(true);
+
+  await workspaceStore.loadMoreWorkspaces();
+  expect(workspaceStore.hasMoreWorkspaces).to.equal(false);
+  expect(workspaceStore.records).to.have.length(3);
+  expect(olderRequests).to.equal(3);
+});
+
+it('rejects stale load-more pages after a fresh init invalidates the flight', async () => {
+  let resolve!: (page: {workspaces: {workspace: string; display_name: string; embedding_model: string}[]; next_cursor: string | null}) => void;
+  const pending = new Promise<{workspaces: {workspace: string; display_name: string; embedding_model: string}[]; next_cursor: string | null}>((done) => {
+    resolve = done;
+  });
+  const loader = async () => await pending;
+  workspaceStore.init(
+    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],
+    ['default'],
+    'default',
+    loader,
+    'cursor-1',
+  );
+
+  const flight = workspaceStore.loadMoreWorkspaces();
+  workspaceStore.init(
+    [{workspace: 'fresh', displayName: 'Fresh', embeddingModel: 'embed'}],
+    ['fresh'],
+    'fresh',
+    loader,
+    'cursor-fresh',
+  );
+  resolve({workspaces: [{workspace: 'stale', display_name: 'Stale', embedding_model: 'e'}],
+    next_cursor: null});
+  await flight;
+
+  expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal(['fresh']);
+  expect(workspaceStore.hasMoreWorkspaces).to.equal(true);
+  expect(workspaceStore.workspaceLoadMoreState).to.equal('idle');
+});
+
+it('renders an accessible load-more workspaces control in the picker', async () => {
+  const loader = async () => ({
+    workspaces: [{workspace: 'finance', display_name: 'Finance', embedding_model: 'embed'}],
+    next_cursor: null,
+  });
+  workspaceStore.init(
+    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],
+    ['default'],
+    'default',
+    loader,
+    'cursor-1',
+  );
+  const scope = mountScope();
+  await scope.updateComplete;
+  scope.querySelector<HTMLButtonElement>('#workspace-trigger')!.click();
+  await scope.updateComplete;
+
+  const control = scope.querySelector<HTMLButtonElement>('[data-load-more-workspaces]');
+  expect(control).not.to.equal(null);
+  expect(control!.type).to.equal('button');
+  expect(control!.textContent?.trim()).to.equal('Load more workspaces');
+
+  control!.click();
+  await waitFor(() => scope.querySelector('[data-load-more-workspaces]') === null);
+  await waitFor(() => scope.querySelector('[data-workspaces-status]')?.textContent
+    ?.includes('Loaded more workspaces.') ?? false);
+
+  expect(scope.querySelector('[data-load-more-workspaces]')).to.equal(null);
+  expect(scope.querySelector('[data-workspaces-status]')?.textContent).to.contain(
+    'Loaded more workspaces.',
+  );
+  expect([...scope.querySelectorAll('[data-workspace-choice]:not([data-workspace-all])')]
+    .map((item) => item.textContent?.trim())).to.contain('Finance');
+});
+
+it('preserves server-validated active and primary beyond the first display page', async () => {
+  const loader = async () => ({
+    workspaces: [{workspace: 'archive', display_name: 'Archive', embedding_model: 'embed'}],
+    next_cursor: null,
+  });
+  document.cookie = 'dlightrag_workspace_ids=;path=/;SameSite=Lax;Max-Age=0';
+  document.cookie = 'dlightrag_workspace=;path=/;SameSite=Lax;Max-Age=0';
+  workspaceStore.init(
+    [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],
+    ['default', 'finance', 'research'],
+    'finance',
+    loader,
+    'cursor-1',
+    ['default', 'finance', 'research'],
+  );
+
+  expect(workspaceStore.active).to.deep.equal(['default', 'finance', 'research']);
+  expect(workspaceStore.primary).to.equal('finance');
+  expect(document.cookie).to.contain('dlightrag_workspace_ids=default%2Cfinance%2Cresearch');
+  expect(document.cookie).to.contain('dlightrag_workspace=finance');
+
+  // Select-all stays complete over the full known set, not the loaded page.
+  workspaceStore.selectAll();
+  expect(workspaceStore.active).to.deep.equal(['default', 'finance', 'research']);
+
+  const scope = mountScope();
+  await scope.updateComplete;
+  expect(scope.querySelector('#workspace-label')?.textContent).to.equal('All workspaces (3)');
+});

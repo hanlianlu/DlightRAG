@@ -19,8 +19,10 @@ const bootstrap = {
   workspaces: [
     {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test'},
   ],
+  workspaces_next_cursor: null,
   primary_workspace: 'default',
   active_workspaces: ['default'],
+  known_workspaces: ['default'],
   answer_attachments: {
     count_limit: 6,
     image_max_bytes: 1024,

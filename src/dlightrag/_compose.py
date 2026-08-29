@@ -202,6 +202,14 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
                 f"{config.storage.postgres.password}"
             ).encode()
         ).digest(),
+        workspace_catalog_cursor_secret=hashlib.sha256(
+            (
+                "dlightrag-workspace-catalog-cursor\0"
+                f"{config.storage.postgres.host}\0"
+                f"{config.storage.postgres.database}\0"
+                f"{config.storage.postgres.password}"
+            ).encode()
+        ).digest(),
     )
 
     models = AnswerModelRuntime(

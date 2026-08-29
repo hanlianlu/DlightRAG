@@ -12,11 +12,38 @@ export interface DeletedWorkspace {
   next_workspace: string;
 }
 
+export interface WorkspacePageItem {
+  workspace: string;
+  display_name: string;
+  embedding_model: string;
+}
+
+export interface WorkspacePage {
+  workspaces: WorkspacePageItem[];
+  next_cursor: string | null;
+}
+
 export class WorkspaceApiError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
     this.name = 'WorkspaceApiError';
   }
+}
+
+export async function getWorkspacesPage(
+  cursor: string | null,
+  signal?: AbortSignal,
+): Promise<WorkspacePage> {
+  const query = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
+  const response = await fetch(`/web/api/workspaces${query}`, {signal});
+  if (!response.ok) {
+    throw new WorkspaceApiError(response.status, 'Failed to load workspaces');
+  }
+  const payload = await response.json() as {
+    workspaces: WorkspacePageItem[];
+    next_cursor?: string | null;
+  };
+  return {workspaces: payload.workspaces ?? [], next_cursor: payload.next_cursor ?? null};
 }
 
 async function post<T>(

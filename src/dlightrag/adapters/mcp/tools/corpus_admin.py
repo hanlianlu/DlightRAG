@@ -24,6 +24,7 @@ from dlightrag.application.access import AccessAction
 from dlightrag.application.answer_runs.capability import answer_image_capability_summary
 from dlightrag.application.corpus_admin import (
     SourceType,
+    WorkspaceCatalogPageRequest,
     ingest_spec_from_payload,
     managed_local_ingest_documents,
     managed_local_ingest_path,
@@ -35,19 +36,25 @@ from dlightrag.application.corpus_admin import (
 @mcp_app.tool(
     name="list_workspaces",
     description=(
-        "List workspaces visible to the current user. Returns workspace ids plus "
-        "records containing workspace, display_name, embedding_model, created_at, "
-        "and updated_at. Use display_name as the user-facing workspace label."
+        "List workspaces visible to the current user, ascending by workspace id, "
+        "bounded to the first 50. Records contain workspace, display_name, "
+        "embedding_model, created_at, and updated_at. `has_more` marks "
+        "additional workspaces, available only through the REST workspace "
+        "endpoint with cursor paging. Use display_name as the user-facing "
+        "workspace label."
     ),
     annotations=ToolAnnotations(read_only_hint=True),
 )
 async def list_workspaces_tool() -> dict[str, Any]:
     application = await mcp_server._ensure_application()
-    records = await application.corpora.alist_workspace_records()
-    records = await mcp_server._filter_workspace_records(records, application=application)
+    page = await application.corpora.list_workspace_records_page(
+        page=WorkspaceCatalogPageRequest(),
+    )
+    records = await mcp_server._filter_workspace_records(list(page.items), application=application)
     return {
         "workspaces": [row["workspace"] for row in records],
         "records": records,
+        "has_more": page.next_cursor is not None,
     }
 
 

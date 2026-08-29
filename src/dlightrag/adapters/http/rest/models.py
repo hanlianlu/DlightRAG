@@ -256,6 +256,7 @@ class WorkspaceRecord(ClientContractModel):
 class WorkspacesResponse(ClientContractModel):
     workspaces: list[str]
     records: list[WorkspaceRecord]
+    next_cursor: str | None = None
 
 
 class WorkspaceCreateResponse(ClientContractModel):

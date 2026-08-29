@@ -261,6 +261,18 @@ class PGCorpusMaintenanceStore:
     async def list_workspace_records(self) -> tuple[dict[str, Any], ...]:
         return tuple(await self._workspace_registry.list())
 
+    async def list_workspace_records_page(
+        self,
+        *,
+        after_workspace: str | None,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        page = await self._workspace_registry.list_page(
+            after_workspace=after_workspace,
+            limit=limit,
+        )
+        return [dict(item) for item in page.items], page.has_more
+
     async def workspace_exists(self, workspace: str) -> bool:
         return await self._workspace_registry.exists(workspace)
 

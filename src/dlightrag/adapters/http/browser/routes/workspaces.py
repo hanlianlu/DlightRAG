@@ -2,9 +2,9 @@
 """Web routes for workspace management."""
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Any
 
-from fastapi import APIRouter, Form, Request, Response
+from fastapi import APIRouter, Form, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from dlightrag.adapters.http.browser.deps import (
@@ -12,8 +12,19 @@ from dlightrag.adapters.http.browser.deps import (
     filter_web_workspace_records,
     get_application,
 )
+from dlightrag.adapters.http.browser.workspace_models import (
+    WebBootstrapWorkspace,
+    project_workspace_record,
+)
 from dlightrag.application.access import AccessAction, WorkspaceRecord
-from dlightrag.application.corpus_admin import normalize_workspace
+from dlightrag.application.answer_runs.client_contracts import ClientContractModel
+from dlightrag.application.corpus_admin import (
+    WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
+    WORKSPACE_CATALOG_PAGE_MAX_LIMIT,
+    WorkspaceCatalogCursorError,
+    WorkspaceCatalogPageRequest,
+    normalize_workspace,
+)
 
 if TYPE_CHECKING:
     from dlightrag.application import Application
@@ -117,6 +128,47 @@ def _set_workspace_cookies(
 
 def _error(message: str, status_code: int = 400) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status_code)
+
+
+class WebWorkspacesPage(ClientContractModel):
+    workspaces: list[WebBootstrapWorkspace]
+    next_cursor: str | None = None
+
+
+@router.get("/workspaces", response_model=WebWorkspacesPage)
+async def list_workspaces_page(
+    request: Request,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=WORKSPACE_CATALOG_PAGE_MAX_LIMIT),
+    ] = WORKSPACE_CATALOG_PAGE_DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
+) -> dict[str, Any]:
+    """Return one bounded ascending workspace-catalog page for the picker."""
+    application = get_application(request)
+    try:
+        decoded_cursor = (
+            application.corpora.workspace_catalog_cursor_codec.decode(cursor)
+            if cursor is not None
+            else None
+        )
+        page_request = WorkspaceCatalogPageRequest(limit=limit, cursor=decoded_cursor)
+    except (WorkspaceCatalogCursorError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    page = await application.corpora.list_workspace_records_page(page=page_request)
+    records = await filter_web_workspace_records(
+        request,
+        AccessAction.WORKSPACE_QUERY,
+        list(page.items),
+    )
+    return {
+        "workspaces": [project_workspace_record(record) for record in records],
+        "next_cursor": (
+            application.corpora.workspace_catalog_cursor_codec.encode(page.next_cursor)
+            if page.next_cursor is not None
+            else None
+        ),
+    }
 
 
 @router.post("/workspaces/create")

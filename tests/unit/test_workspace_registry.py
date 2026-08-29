@@ -38,6 +38,7 @@ class _Pool:
 class _Conn:
     def __init__(self) -> None:
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetched: list[tuple[str, tuple[Any, ...]]] = []
         self.applied: set[tuple[str, str]] = set()
         self.rows: list[dict[str, Any]] = [
             {
@@ -62,6 +63,14 @@ class _Conn:
             self.applied.add((str(args[0]), str(args[1])))
 
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        self.fetched.append((query, args))
+        if "workspace > $1" in query:
+            after = str(args[0] or "")
+            limit = int(args[-1])
+            return sorted(
+                (row for row in self.rows if row["workspace"] > after),
+                key=lambda row: row["workspace"],
+            )[:limit]
         if "dlightrag_schema_migrations" in query and "version" in query:
             scope = str(args[0])
             versions = sorted(
@@ -138,6 +147,40 @@ async def test_workspace_registry_rejects_an_empty_workspace() -> None:
 
     with pytest.raises(ValueError, match="workspace cannot be empty"):
         await registry.exists("  ")
+
+
+async def test_workspace_registry_list_page_uses_ascending_keyset_without_offset() -> None:
+    conn = _Conn()
+    registry = PGWorkspaceRegistry(pool=_Pool(conn))
+
+    first = await registry.list_page(after_workspace=None, limit=1)
+
+    assert [item["workspace"] for item in first.items] == ["default"]
+    assert first.has_more is True
+    assert first.fetched_rows == 2
+    page_sql, page_args = conn.fetched[-1]
+    assert "ORDER BY workspace ASC" in page_sql
+    assert "OFFSET" not in page_sql
+    assert int(page_args[-1]) == 2  # limit + 1
+    assert str(page_args[0]) == ""  # before-first key
+
+    second = await registry.list_page(after_workspace="default", limit=1)
+
+    assert [item["workspace"] for item in second.items] == ["research"]
+    assert second.has_more is False
+    assert second.fetched_rows == 1
+
+
+async def test_workspace_registry_list_page_rejects_invalid_inputs() -> None:
+    conn = _Conn()
+    registry = PGWorkspaceRegistry(pool=_Pool(conn))
+
+    with pytest.raises(ValueError, match="canonical"):
+        await registry.list_page(after_workspace="Finance!", limit=1)
+    with pytest.raises(ValueError, match="limit"):
+        await registry.list_page(after_workspace=None, limit=0)
+    with pytest.raises(ValueError, match="limit"):
+        await registry.list_page(after_workspace=None, limit=101)
     with pytest.raises(ValueError, match="workspace cannot be empty"):
         await registry.upsert(
             workspace="  ",

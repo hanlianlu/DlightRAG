@@ -482,6 +482,14 @@ cancelling its run, closes conversation-scoped Sources/Artifact Canvas, and keep
 the workspace-scoped Files panel. An unsent draft guards click, programmatic,
 and browser-history navigation through the same confirmation.
 
+The bootstrap `workspaces` array is a bounded first page of the workspace
+catalog (at most 100 records, ascending by workspace id) with an additive
+`workspaces_next_cursor`; `GET /web/api/workspaces?cursor=...` returns older
+catalog pages for the picker's Load more workspaces control. The
+`primary_workspace`, `active_workspaces`, and cookie-validation inputs keep
+the full authorized catalog, so authorization is never truncated by display
+paging.
+
 `GET /web/api/files` returns one processed-file keyset page for the selected
 workspace: 50 files by default and at most 100, ordered by the durable
 `updated_at DESC, id ASC` key. Its signed opaque cursor is bound to that
@@ -814,6 +822,14 @@ paths without deleting LightRAG rows, metadata, or local files.
 
 **Workspace list response:**
 
+`GET /workspaces` pages the full workspace catalog ascending by workspace id:
+50 records by default and at most 100, with `limit`/`cursor` query parameters.
+The caller's access gate filters each returned page after paging; the signed
+opaque continuation is an ordering fact over the full catalog, never over a
+per-user filtered set. Malformed, tampered, and oversized cursors return 422
+before any storage read. The response keeps `workspaces` and `records` and
+adds `next_cursor`.
+
 ```json
 {
   "workspaces": ["default", "research_notes"],
@@ -825,9 +841,14 @@ paths without deleting LightRAG rows, metadata, or local files.
       "created_at": "2026-05-25T19:22:22.788620+00:00",
       "updated_at": "2026-05-25T19:42:08.781671+00:00"
     }
-  ]
+  ],
+  "next_cursor": null
 }
 ```
+
+The MCP `list_workspaces` tool returns the bounded first page (50 records) with
+an additive `has_more`; older pages are available only through the REST
+endpoint with cursor paging.
 
 **Canonical answer result** (the `result` field of a succeeded run's status
 response, and the payload embedded in its terminal `done` event):

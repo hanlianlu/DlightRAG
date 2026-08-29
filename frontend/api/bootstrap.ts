@@ -21,8 +21,10 @@ export interface AnswerAttachmentBootstrap {
 export interface WebBootstrap {
   contract_version: 1;
   workspaces: BootstrapWorkspace[];
+  workspaces_next_cursor?: string | null;
   primary_workspace: string;
   active_workspaces: string[];
+  known_workspaces?: string[] | null;
   answer_attachments: AnswerAttachmentBootstrap;
   active_html_preview_enabled: boolean;
 }
@@ -41,7 +43,12 @@ export async function getWebBootstrap(signal?: AbortSignal): Promise<WebBootstra
   const response = await fetch('/web/api/bootstrap', {signal});
   if (!response.ok) throw new BootstrapApiError(response.status);
   try {
-    return await response.json() as WebBootstrap;
+    const data = await response.json() as WebBootstrap;
+    return {
+      ...data,
+      workspaces_next_cursor: data.workspaces_next_cursor ?? null,
+      known_workspaces: data.known_workspaces ?? null,
+    };
   } catch {
     throw new BootstrapApiError(response.status);
   }

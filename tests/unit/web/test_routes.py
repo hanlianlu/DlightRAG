@@ -79,3 +79,123 @@ async def test_file_list(client):
         "report.pdf",
         "analysis.xlsx",
     ]
+
+
+async def test_web_workspaces_page_roundtrips_an_opaque_cursor(app, client) -> None:
+    from dlightrag.application.corpus_admin import (
+        WorkspaceCatalogCursor,
+        WorkspaceCatalogCursorCodec,
+        WorkspaceCatalogPage,
+    )
+
+    application = app.state.application
+    codec = WorkspaceCatalogCursorCodec(b"web-route-test")
+    application.corpora.workspace_catalog_cursor_codec = codec
+    application.corpora.list_workspace_records_page = AsyncMock(
+        return_value=WorkspaceCatalogPage(
+            items=(
+                {
+                    "workspace": "finance",
+                    "display_name": "Finance",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ),
+            next_cursor=WorkspaceCatalogCursor(after_workspace="finance"),
+            fetched_rows=2,
+        )
+    )
+
+    resp = await client.get("/web/api/workspaces")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["workspaces"] == [
+        {
+            "workspace": "finance",
+            "display_name": "Finance",
+            "embedding_model": "voyage-multimodal-3.5",
+        }
+    ]
+    assert body["next_cursor"] is not None
+
+    second = await client.get("/web/api/workspaces", params={"cursor": body["next_cursor"]})
+    assert second.status_code == 200
+    assert second.json()["workspaces"][0]["workspace"] == "finance"
+
+
+async def test_web_workspaces_page_rejects_tampered_cursor_before_storage(app, client) -> None:
+    from dlightrag.application.corpus_admin import WorkspaceCatalogCursorCodec
+
+    application = app.state.application
+    application.corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(
+        b"web-route-test"
+    )
+    application.corpora.list_workspace_records_page = AsyncMock()
+
+    resp = await client.get("/web/api/workspaces", params={"cursor": "AAAA.tampered"})
+
+    assert resp.status_code == 422
+    application.corpora.list_workspace_records_page.assert_not_awaited()
+
+
+async def test_bootstrap_bounds_the_visible_array_but_keeps_full_authorization_inputs(
+    app, client
+) -> None:
+    from dlightrag.application.corpus_admin import (
+        WorkspaceCatalogCursor,
+        WorkspaceCatalogCursorCodec,
+        WorkspaceCatalogPage,
+    )
+
+    application = app.state.application
+    application.corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(
+        b"web-route-test"
+    )
+    application.corpora.list_workspace_records_page = AsyncMock(
+        return_value=WorkspaceCatalogPage(
+            items=(
+                {
+                    "workspace": "default",
+                    "display_name": "Default",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ),
+            next_cursor=WorkspaceCatalogCursor(after_workspace="default"),
+            fetched_rows=2,
+        )
+    )
+    application.corpora.alist_workspace_records = AsyncMock(
+        return_value=[
+            {
+                "workspace": "default",
+                "display_name": "Default",
+                "embedding_model": "voyage-multimodal-3.5",
+            },
+            {
+                "workspace": "finance",
+                "display_name": "Finance",
+                "embedding_model": "voyage-multimodal-3.5",
+            },
+            {
+                "workspace": "research",
+                "display_name": "Research",
+                "embedding_model": "voyage-multimodal-3.5",
+            },
+        ]
+    )
+
+    resp = await client.get("/web/api/bootstrap")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [item["workspace"] for item in body["workspaces"]] == ["default"]
+    assert body["workspaces_next_cursor"] is not None
+    # The full catalog still powers the authorization inputs: without cookies,
+    # every visible workspace is active, not just the bounded display page.
+    assert body["active_workspaces"] == ["default", "finance", "research"]
+    assert body["known_workspaces"] == ["default", "finance", "research"]
+    assert body["primary_workspace"] == "default"
