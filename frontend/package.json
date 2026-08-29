@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.4.0",
+    "@lit/localize": "^0.12.2",
     "dompurify": "^3.4.12",
     "lit": "^3.3.3",
     "mermaid": "^11.16.0",

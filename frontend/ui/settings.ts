@@ -1,7 +1,13 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Settings Dialog Feature: memory state, conversation commands, and dialog lifecycle. */
 
+import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
+import {
+  currentLanguagePreference,
+  setLanguagePreference,
+} from '../i18n/locale.ts';
+import {parseLanguagePreference, type LanguagePreference} from '../lib/language.ts';
 import {
   clearMemory,
   getMemorySettings,
@@ -36,12 +42,14 @@ export class DlSettingsDialog extends LightElement {
     memory: {state: true},
     memoryLoading: {state: true},
     memoryPending: {state: true},
+    language: {state: true},
   };
 
   declare deleteAllConversations: (returnFocus?: HTMLElement | null) => Promise<boolean>;
   declare memory: MemorySettings | null;
   declare memoryLoading: boolean;
   declare memoryPending: boolean;
+  declare language: LanguagePreference;
 
   #events: AbortController | null = null;
   #returnFocus: HTMLElement | null = null;
@@ -50,10 +58,12 @@ export class DlSettingsDialog extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.deleteAllConversations = async () => false;
     this.memory = null;
     this.memoryLoading = false;
     this.memoryPending = false;
+    this.language = currentLanguagePreference();
     /** Store reads: conversations.length. */
     new StoreController(this, conversationStore);
   }
@@ -173,6 +183,29 @@ export class DlSettingsDialog extends LightElement {
                         @click=${this.#deleteAll}>Delete all conversations</button>
               </div>
             </section>
+            <section class="settings-section">
+              <h3 id="settings-language">${msg('Language', {id: 'settings.language'})}</h3>
+              <div id="language-options" role="radiogroup" aria-labelledby="settings-language">
+                <label class="ui-dialog-checkbox">
+                  <input type="radio" name="language" value="auto"
+                         .checked=${this.language === 'auto'}
+                         @change=${this.#setLanguage}>
+                  ${msg('Automatic', {id: 'settings.language.automatic'})}
+                </label>
+                <label class="ui-dialog-checkbox">
+                  <input type="radio" name="language" value="en"
+                         .checked=${this.language === 'en'}
+                         @change=${this.#setLanguage}>
+                  ${msg('English', {id: 'settings.language.english'})}
+                </label>
+                <label class="ui-dialog-checkbox">
+                  <input type="radio" name="language" value="zh"
+                         .checked=${this.language === 'zh'}
+                         @change=${this.#setLanguage}>
+                  中文
+                </label>
+              </div>
+            </section>
           </div>
         </form>
       </dialog>
@@ -250,6 +283,13 @@ export class DlSettingsDialog extends LightElement {
   #deleteAll = async (event: Event): Promise<void> => {
     const returnFocus = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     if (await this.deleteAllConversations(returnFocus)) this.#dialog()?.close();
+  };
+
+  #setLanguage = (event: Event): void => {
+    const input = event.currentTarget as HTMLInputElement;
+    const preference = parseLanguagePreference(input.value);
+    this.language = preference;
+    void setLanguagePreference(preference);
   };
 
   #requestToast(detail: ToastRequestDetail): void {
