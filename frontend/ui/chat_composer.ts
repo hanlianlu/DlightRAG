@@ -99,6 +99,7 @@ export class DlChatComposer extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    // Attachment store reads: list(), size, imageCount.
     this.#unsubscribe ??= attachmentStore.subscribe(() => {
       this.attachments = [...attachmentStore.list()];
     });

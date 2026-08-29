@@ -39,6 +39,7 @@ export class DlConversationList extends LightElement {
     this.busy = false;
     this.openMenuId = null;
     this.renameId = null;
+    /** Store reads: conversations, listState, loadMoreState, hasOlderConversations, activeConversationId. */
     new StoreController(this, conversationStore);
   }
 

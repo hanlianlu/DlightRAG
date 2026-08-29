@@ -47,6 +47,7 @@ export class DlWorkspaceScope extends LightElement {
     this.deleteWorkspace = null;
     this.deletePending = false;
     this.deleteConfirmed = false;
+    /** Store reads: records, active, primary. */
     new StoreController(this, workspaceStore);
   }
 

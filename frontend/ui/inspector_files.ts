@@ -16,6 +16,7 @@ import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {bus} from '../events/bus.ts';
+import {modalResult} from './modal.ts';
 import {withRelativePath} from './folder-upload.ts';
 import type {ToastRequestDetail} from './toast.ts';
 
@@ -56,6 +57,7 @@ export class DlInspectorFiles extends LightElement {
   #olderFilesAnnouncement = '';
   #restoreOlderFocus = false;
   #activeMutations = 0;
+  #deleteTrigger: HTMLElement | null = null;
   #releaseWorkspaceEvents: (() => void)[] = [];
 
   constructor() {
@@ -68,6 +70,7 @@ export class DlInspectorFiles extends LightElement {
     this.acceptedFiles = 0;
     this.filesLoadMoreState = 'idle';
     this.#workspace = ingestStore.workspace;
+    /** Store reads: ingestStore.workspace. */
     new StoreController(this, ingestStore);
   }
 
@@ -274,7 +277,11 @@ export class DlInspectorFiles extends LightElement {
   async #deleteFile(filePath: string): Promise<void> {
     if (!filePath) return;
     const filename = filePath.split('/').pop() || filePath;
-    if (!window.confirm(`Delete ${filename}?`)) return;
+    const dialog = this.querySelector<HTMLDialogElement>('#delete-file-dialog');
+    const message = this.querySelector<HTMLElement>('#delete-file-message');
+    if (!dialog || !message) return;
+    message.textContent = `${filename} will be permanently removed from this workspace.`;
+    if (await modalResult(this, dialog, () => this.#restoreDeleteTrigger()) !== 'confirm') return;
     const workspace = ingestStore.workspace;
     this.#invalidateOlderFiles();
     this.#stopPolling();
@@ -421,6 +428,28 @@ export class DlInspectorFiles extends LightElement {
     }));
   }
 
+  #restoreDeleteTrigger(): void {
+    const trigger = this.#deleteTrigger;
+    this.#deleteTrigger = null;
+    if (trigger?.isConnected) trigger.focus();
+  }
+
+  #deleteDialog(): TemplateResult {
+    return html`
+      <dialog id="delete-file-dialog" class="confirm-dialog"
+              aria-labelledby="delete-file-title" aria-describedby="delete-file-message">
+        <form method="dialog">
+          <h2 id="delete-file-title">Delete file</h2>
+          <p id="delete-file-message"></p>
+          <div class="ui-dialog-actions">
+            <button type="submit" value="cancel">Cancel</button>
+            <button type="submit" value="confirm" class="ui-dialog-danger">Delete</button>
+          </div>
+        </form>
+      </dialog>
+    `;
+  }
+
   #progress(status: WebIngestStatus): TemplateResult | typeof nothing {
     if (!status.busy) return nothing;
     return html`
@@ -479,7 +508,10 @@ export class DlInspectorFiles extends LightElement {
               <div class="file-item" role="listitem">
                 <span class="file-name" title=${file.file_path}>${file.file_name}</span>
                 <button class="file-delete" type="button" aria-label=${`Delete ${file.file_name}`}
-                        @click=${() => { void this.#deleteFile(file.file_path); }}>
+                        @click=${(event: Event) => {
+                          this.#deleteTrigger = event.currentTarget as HTMLElement;
+                          void this.#deleteFile(file.file_path);
+                        }}>
                   <svg class="file-delete-icon" width="14" height="14" viewBox="0 0 24 24"
                        fill="none" stroke="currentColor" stroke-width="2"
                        stroke-linecap="round">
@@ -515,6 +547,7 @@ export class DlInspectorFiles extends LightElement {
           ${this.acceptedFiles} new file(s) accepted for ingest
         </div>
       ` : nothing}
+      ${this.#deleteDialog()}
     `;
   }
 }

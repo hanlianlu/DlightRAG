@@ -80,6 +80,7 @@ export class DlConversationSidebar extends LightElement {
     this.desktop = window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
     this.pendingLifecycleAction = false;
     this.shellInert = false;
+    /** Store reads: activeConversationId, fallbackConversationId, mutationPending. */
     new StoreController(this, conversationStore);
   }
 

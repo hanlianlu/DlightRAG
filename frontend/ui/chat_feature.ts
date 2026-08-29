@@ -42,6 +42,7 @@ import {
   type ChatView,
 } from './chat_message_list.ts';
 import './chat_message_list.ts';
+import type {ToastRequestDetail} from './toast.ts';
 import {webRouter} from './router.ts';
 
 export type {ChatRunActionDetail, ChatView, ChatViewActionDetail} from './chat_message_list.ts';
@@ -244,7 +245,7 @@ export class DlChatFeature extends LightElement {
       }
     } catch {
       if (!controller.signal.aborted && this.#continuationController === controller) {
-        window.alert('The continuation could not be started.');
+        this.#requestToast({message: 'The continuation could not be started.', duration: 3000});
       }
     } finally {
       if (this.#continuationController === controller) this.#continuationController = null;
@@ -360,6 +361,14 @@ export class DlChatFeature extends LightElement {
 
   #composer(): DlChatComposer | null {
     return this.querySelector<DlChatComposer>('dl-chat-composer');
+  }
+
+  #requestToast(detail: ToastRequestDetail): void {
+    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
+      detail,
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   #submit = (event: CustomEvent<ComposerSubmitDetail>): void => {
@@ -555,7 +564,7 @@ export class DlChatFeature extends LightElement {
       await steerAnswerRun(runId, query, signal);
     } catch {
       if (!signal.aborted && this.#runController.runId === runId) {
-        window.alert('This run can no longer be steered.');
+        this.#requestToast({message: 'This run can no longer be steered.', duration: 3000});
       }
       return;
     }

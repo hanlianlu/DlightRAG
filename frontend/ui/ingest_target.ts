@@ -32,6 +32,7 @@ export class DlIngestTarget extends LightElement {
         super();
         this.active = false;
         this.open = false;
+        /** Store reads: workspaceStore.records, ingestStore.workspace. */
         new StoreController(this, workspaceStore, ingestStore);
     }
 

@@ -54,6 +54,7 @@ export class DlSettingsDialog extends LightElement {
     this.memory = null;
     this.memoryLoading = false;
     this.memoryPending = false;
+    /** Store reads: conversations.length. */
     new StoreController(this, conversationStore);
   }
 

@@ -517,6 +517,90 @@ it('detaching invalidates delayed follow-up and fork continuations', async () =>
   }
 });
 
+it('continuation start failure raises a toast intent instead of a blocking alert', async () => {
+  const alerts: string[] = [];
+  const originalAlert = window.alert;
+  window.alert = (message?: string) => { alerts.push(message ?? ''); };
+  const toasts: Array<{message?: string}> = [];
+  const onToast = (event: Event): void => {
+    toasts.push((event as CustomEvent<{message?: string}>).detail);
+  };
+  document.addEventListener('dl-toast-request', onToast);
+  window.fetch = (() => Promise.resolve(new Response('unavailable', {status: 503}))) as typeof fetch;
+
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  document.body.appendChild(feature);
+  await settle(feature);
+
+  try {
+    await feature.continueRun('follow-up', 'run-old', 'Continue');
+    await waitFor(() => toasts.length === 1);
+    expect(toasts[0].message).to.equal('The continuation could not be started.');
+    expect(alerts).to.deep.equal([]);
+  } finally {
+    document.removeEventListener('dl-toast-request', onToast);
+    window.alert = originalAlert;
+  }
+});
+
+it('failed steering raises a toast intent instead of a blocking alert', async () => {
+  const alerts: string[] = [];
+  const originalAlert = window.alert;
+  window.alert = (message?: string) => { alerts.push(message ?? ''); };
+  const toasts: Array<{message?: string}> = [];
+  const onToast = (event: Event): void => {
+    toasts.push((event as CustomEvent<{message?: string}>).detail);
+  };
+  document.addEventListener('dl-toast-request', onToast);
+  window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/steer')) {
+      return Promise.resolve(new Response('gone', {status: 410}));
+    }
+    if (url.endsWith('/events')) {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          {once: true},
+        );
+      });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.view = {
+    kind: 'ready',
+    conversationId: 'conversation-steer-failure',
+    lineage: null,
+    history: [{
+      ...storedTurn(),
+      answer_run_id: 'run-steer-failure',
+      turn_id: 'turn-steer-failure',
+      status: 'running',
+      presentation: null,
+    }],
+  };
+  document.body.appendChild(feature);
+  await waitFor(() => feature.querySelector('dl-chat-composer')?.running === true);
+  const steerInput = feature.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  steerInput.value = 'steer instruction';
+  steerInput.dispatchEvent(new Event('input', {bubbles: true}));
+  await feature.querySelector('dl-chat-composer')?.updateComplete;
+  feature.querySelector<HTMLButtonElement>('[aria-label="Steer"]')?.click();
+
+  try {
+    await waitFor(() => toasts.length === 1);
+    expect(toasts[0].message).to.equal('This run can no longer be steered.');
+    expect(alerts).to.deep.equal([]);
+  } finally {
+    document.removeEventListener('dl-toast-request', onToast);
+    window.alert = originalAlert;
+  }
+});
+
 it('shows cancel-aware reconnect state and preserves stopping when reconnecting', async () => {
   const conversationId = 'conversation-stopping';
   const runId = 'run-stopping';
