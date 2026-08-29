@@ -25,9 +25,10 @@ REST, MCP, and Python answer/retrieve calls require no client-managed conversati
 Each accepted Answer run durably pins its query, bounded caller-supplied history,
 resources, search scope, and execution facts so recovery and server-owned
 follow-up/fork remain equivalent. The Web conversation lifecycle is a
-principal-scoped adapter around the same Answer pipeline. It loads server-owned
-text history and run-owned attachments; its 100-turn snapshot is a read window,
-while run retention follows the shared configured floor.
+principal-scoped adapter around the same Answer pipeline. Its history endpoint
+returns signed keyset pages (40 turns by default, at most 100 per request), while
+exact accepted-run recovery scans bounded durable batches until the reachable
+model envelopes are full. Run retention follows the shared configured floor.
 
 ## Ingestion Shape
 

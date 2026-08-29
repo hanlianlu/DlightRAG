@@ -27,6 +27,26 @@ function page(items: ConversationSummary[], nextCursor: string | null = null): C
   return {items, next_cursor: nextCursor};
 }
 
+function turn(number: number) {
+  return {
+    turn_id: `turn-${number}`,
+    turn_number: number,
+    answer_run_id: `run-${number}`,
+    submission_id: `submission-${number}`,
+    status: 'succeeded' as const,
+    cancel_requested: false,
+    user_text: `Question ${number}`,
+    assistant_text: `Answer ${number}`,
+    user_attachments: [],
+    presentation: null,
+    usage: {},
+    evidence: {},
+    error_kind: null,
+    error_message: null,
+    created_at: '2026-08-20T00:00:00Z',
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -218,6 +238,69 @@ test('opening a route drops a superseded history response', async () => {
   assert.equal(await openingSecond, 'ready');
   assert.equal(store.activeConversationId, 'second');
   assert.equal(store.history?.conversation.conversation_id, 'second');
+});
+
+test('message history traverses 205 turns by prepend with coalescing and overlap dedup', async () => {
+  const calls: Array<string | null> = [];
+  const store = new ConversationStore(api({
+    history: async (id, cursor) => {
+      calls.push(cursor ?? null);
+      const pages: Record<string, {start: number; end: number; next: string | null}> = {
+        recent: {start: 166, end: 205, next: 'before-166'},
+        'before-166': {start: 126, end: 166, next: 'before-126'},
+        'before-126': {start: 86, end: 125, next: 'before-86'},
+        'before-86': {start: 46, end: 85, next: 'before-46'},
+        'before-46': {start: 1, end: 45, next: null},
+      };
+      const page = pages[cursor ?? 'recent']!;
+      return {
+        conversation: summary(id),
+        turns: Array.from(
+          {length: page.end - page.start + 1},
+          (_, index) => turn(page.start + index),
+        ),
+        next_cursor: page.next,
+      };
+    },
+  }));
+  await store.open('one');
+
+  const first = store.loadOlderMessages();
+  const coalesced = store.loadOlderMessages();
+  assert.equal(first, coalesced);
+  await first;
+  while (store.hasOlderMessages) await store.loadOlderMessages();
+
+  assert.equal(store.history?.turns.length, 205);
+  assert.deepEqual(store.history?.turns.map((item) => item.turn_number),
+    Array.from({length: 205}, (_, index) => index + 1));
+  assert.deepEqual(calls, [null, 'before-166', 'before-126', 'before-86', 'before-46']);
+});
+
+test('a recent refresh replaces a disconnected loaded range and restores its older cursor', async () => {
+  let request = 0;
+  const store = new ConversationStore(api({
+    history: async (id) => {
+      request += 1;
+      return {
+        conversation: summary(id),
+        turns: request === 1
+          ? Array.from({length: 40}, (_, index) => turn(index + 1))
+          : Array.from({length: 40}, (_, index) => turn(index + 51)),
+        next_cursor: request === 1 ? null : 'before-51',
+      };
+    },
+  }));
+  await store.open('one');
+
+  await store.refreshActive();
+
+  assert.deepEqual(
+    store.history?.turns.map((item) => item.turn_number),
+    Array.from({length: 40}, (_, index) => index + 51),
+  );
+  assert.equal(store.hasOlderMessages, true);
+  assert.equal(store.history?.next_cursor, 'before-51');
 });
 
 test('missing and malformed route ids share one unavailable state', async () => {

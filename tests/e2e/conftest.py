@@ -39,11 +39,6 @@ from playwright.sync_api import (
     Error as PlaywrightError,
 )
 
-from dlightrag.adapters.http.browser.conversation_models import ConversationHistory
-from dlightrag.adapters.http.browser.conversations import (
-    project_conversation_summary,
-    project_conversation_turn,
-)
 from dlightrag.adapters.http.server import create_app
 from dlightrag.application.answer_runs import AnswerInputArtifact
 from dlightrag.application.answer_runs.capabilities import AnswerCapabilities
@@ -57,9 +52,13 @@ from dlightrag.application.config import DlightragConfig, set_config
 from dlightrag.application.web_conversations import (
     ConversationCursor,
     ConversationCursorCodec,
+    ConversationHead,
+    ConversationHistoryCursor,
+    ConversationHistoryCursorCodec,
+    ConversationHistoryPage,
+    ConversationHistoryPageRequest,
     ConversationPage,
     ConversationPageRequest,
-    ConversationSnapshot,
     LinkedTurn,
     WebAnswerSubmission,
 )
@@ -183,6 +182,7 @@ class E2EConversationService:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self.cursor_codec = ConversationCursorCodec(b"dlightrag-e2e-conversation-cursor")
+        self.history_cursor_codec = ConversationHistoryCursorCodec(b"dlightrag-e2e-history-cursor")
         self.reset()
 
     def reset(self) -> None:
@@ -274,34 +274,43 @@ class E2EConversationService:
         return [value["conversation_id"] for value in values]
 
     async def history(
-        self, _user: Any, conversation_id: str, **_: Any
-    ) -> ConversationHistory | None:
+        self,
+        _user: Any,
+        conversation_id: str,
+        *,
+        page: ConversationHistoryPageRequest,
+    ) -> ConversationHistoryPage | None:
         with self._lock:
             value = self._conversations.get(conversation_id)
             if value is None:
                 return None
-            return ConversationHistory(
-                conversation=project_conversation_summary(self._summary(value)),
-                turns=[project_conversation_turn(turn) for turn in value["turns"]],
-            )
-
-    async def snapshot(
-        self, _principal_id: str, conversation_id: str
-    ) -> ConversationSnapshot | None:
-        with self._lock:
-            value = self._conversations.get(conversation_id)
-            if value is None:
-                return None
-            return ConversationSnapshot(
-                principal_id=_principal_id,
-                conversation_id=conversation_id,
-                content_revision=len(value["turns"]),
-                title=value["title"],
-                created_at=value["created_at"],
-                updated_at=value["updated_at"],
-                agent_session_id=conversation_id,
-                agent_lane_id="main",
-                turns=tuple(value["turns"]),
+            turns = sorted(value["turns"], key=lambda turn: turn.turn_number, reverse=True)
+            if page.cursor is not None:
+                turns = [
+                    turn for turn in turns if turn.turn_number < page.cursor.before_turn_number
+                ]
+            fetched = turns[: page.limit + 1]
+            returned = fetched[: page.limit]
+            next_cursor = None
+            if len(fetched) > page.limit:
+                next_cursor = ConversationHistoryCursor(
+                    conversation_id=UUID(conversation_id),
+                    before_turn_number=returned[-1].turn_number,
+                )
+            return ConversationHistoryPage(
+                conversation=ConversationHead(
+                    principal_id="e2e",
+                    conversation_id=conversation_id,
+                    content_revision=len(value["turns"]),
+                    title=value["title"],
+                    created_at=value["created_at"],
+                    updated_at=value["updated_at"],
+                    agent_session_id=conversation_id,
+                    agent_lane_id="main",
+                ),
+                turns=tuple(reversed(returned)),
+                next_cursor=next_cursor,
+                fetched_rows=len(fetched),
             )
 
     async def rename(

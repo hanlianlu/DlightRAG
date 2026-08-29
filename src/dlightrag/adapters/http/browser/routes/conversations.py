@@ -22,11 +22,14 @@ from dlightrag.adapters.http.browser.deps import (
     get_web_access_gate,
     get_web_conversation_service,
 )
-from dlightrag.application.access import AccessAction, owner_id_from_user
+from dlightrag.application.access import AccessAction
 from dlightrag.application.web_conversations import (
+    CONVERSATION_HISTORY_PAGE_DEFAULT_LIMIT,
+    CONVERSATION_HISTORY_PAGE_MAX_LIMIT,
     CONVERSATION_PAGE_DEFAULT_LIMIT,
     CONVERSATION_PAGE_MAX_LIMIT,
     ConversationCursorError,
+    ConversationHistoryPageRequest,
     ConversationPageRequest,
     WebConversationService,
 )
@@ -111,6 +114,11 @@ async def delete_all_conversations(
 async def conversation_history(
     conversation_id: UUID,
     request: Request,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=CONVERSATION_HISTORY_PAGE_MAX_LIMIT),
+    ] = CONVERSATION_HISTORY_PAGE_DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=512)] = None,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> ConversationHistory:
     records = await get_application(request).corpora.alist_workspace_records()
@@ -123,14 +131,32 @@ async def conversation_history(
         AccessAction.WORKSPACE_READ_VISUAL_ASSET,
         records,
     )
-    snapshot = await service.snapshot(
-        owner_id_from_user(_user(request)),
+    try:
+        decoded_cursor = service.history_cursor_codec.decode(cursor) if cursor is not None else None
+        if decoded_cursor is not None and decoded_cursor.conversation_id != conversation_id:
+            raise ConversationCursorError(
+                "conversation history cursor belongs to another conversation"
+            )
+        page_request = ConversationHistoryPageRequest(
+            limit=limit,
+            cursor=decoded_cursor,
+        )
+    except (ConversationCursorError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    page = await service.history(
+        _user(request),
         str(conversation_id),
+        page=page_request,
     )
-    if snapshot is None:
+    if page is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return project_conversation_history(
-        snapshot,
+        page,
+        next_cursor=(
+            service.history_cursor_codec.encode(page.next_cursor)
+            if page.next_cursor is not None
+            else None
+        ),
         downloadable_workspaces={record["workspace"] for record in downloadable},
         visual_workspaces={record["workspace"] for record in visual},
     )

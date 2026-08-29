@@ -16,9 +16,13 @@ from dlightrag.application.config import DlightragConfig
 from dlightrag.application.web_conversations import (
     ConversationCursor,
     ConversationCursorCodec,
+    ConversationHead,
+    ConversationHistoryCursor,
+    ConversationHistoryCursorCodec,
+    ConversationHistoryPage,
+    ConversationHistoryPageRequest,
     ConversationPage,
     ConversationPageRequest,
-    ConversationSnapshot,
     ConversationSummary,
 )
 from tests.config_helpers import mutate_config
@@ -57,16 +61,23 @@ def conversation_service() -> AsyncMock:
         next_cursor=None,
         fetched_rows=1,
     )
-    service.snapshot.return_value = ConversationSnapshot(
-        principal_id="anonymous",
-        conversation_id=_CID,
-        content_revision=0,
-        title=None,
-        created_at=now,
-        updated_at=now,
-        agent_session_id=_CID,
-        agent_lane_id="main",
+    service.history_cursor_codec = ConversationHistoryCursorCodec(
+        b"unit-test-history-cursor-secret"
+    )
+    service.history.return_value = ConversationHistoryPage(
+        conversation=ConversationHead(
+            principal_id="anonymous",
+            conversation_id=_CID,
+            content_revision=0,
+            title=None,
+            created_at=now,
+            updated_at=now,
+            agent_session_id=_CID,
+            agent_lane_id="main",
+        ),
         turns=(),
+        next_cursor=None,
+        fetched_rows=0,
     )
     service.rename.return_value = {**summary, "title": "Renamed chat"}
     service.delete.return_value = True
@@ -222,11 +233,72 @@ async def test_history_of_other_principal_is_404(
     conversation_client: AsyncClient,
     conversation_service: AsyncMock,
 ) -> None:
-    conversation_service.snapshot.return_value = None
+    conversation_service.history.return_value = None
 
     response = await conversation_client.get(f"/web/api/conversations/{_CID}/history")
 
     assert response.status_code == 404
+
+
+async def test_history_cursor_round_trips_and_cross_conversation_is_422(
+    conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+) -> None:
+    cursor = ConversationHistoryCursor(conversation_id=UUID(_CID), before_turn_number=71)
+    current = conversation_service.history.return_value
+    conversation_service.history.return_value = ConversationHistoryPage(
+        conversation=current.conversation,
+        turns=(),
+        next_cursor=cursor,
+        fetched_rows=3,
+    )
+    first = await conversation_client.get(f"/web/api/conversations/{_CID}/history?limit=2")
+    token = first.json()["next_cursor"]
+    assert isinstance(token, str)
+
+    conversation_service.history.return_value = ConversationHistoryPage(
+        conversation=current.conversation,
+        turns=(),
+        next_cursor=None,
+        fetched_rows=0,
+    )
+    second = await conversation_client.get(
+        f"/web/api/conversations/{_CID}/history",
+        params={"limit": 2, "cursor": token},
+    )
+    assert second.status_code == 200
+    assert conversation_service.history.await_args.kwargs["page"] == (
+        ConversationHistoryPageRequest(limit=2, cursor=cursor)
+    )
+
+    other = conversation_service.history_cursor_codec.encode(
+        ConversationHistoryCursor(
+            conversation_id=UUID("00000000-0000-0000-0000-000000000002"),
+            before_turn_number=71,
+        )
+    )
+    conversation_service.history.reset_mock()
+    mismatch = await conversation_client.get(
+        f"/web/api/conversations/{_CID}/history", params={"cursor": other}
+    )
+    assert mismatch.status_code == 422
+    conversation_service.history.assert_not_awaited()
+
+
+async def test_tampered_history_cursor_is_422(
+    conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+) -> None:
+    token = conversation_service.history_cursor_codec.encode(
+        ConversationHistoryCursor(conversation_id=UUID(_CID), before_turn_number=2)
+    )
+    replacement = "A" if token[-1] != "A" else "B"
+    response = await conversation_client.get(
+        f"/web/api/conversations/{_CID}/history",
+        params={"cursor": f"{token[:-1]}{replacement}"},
+    )
+    assert response.status_code == 422
+    conversation_service.history.assert_not_awaited()
 
 
 async def test_rename_validates_trimmed_title(conversation_client: AsyncClient) -> None:

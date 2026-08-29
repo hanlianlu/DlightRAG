@@ -75,6 +75,7 @@ class AnswerRunDescriptor(ClientContractModel):
 class ConversationHistory(ClientContractModel):
     conversation: ConversationSummary
     turns: list[ConversationTurn]
+    next_cursor: str | None = None
 
 
 class RenameConversationRequest(ClientContractModel):

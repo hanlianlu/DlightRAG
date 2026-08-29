@@ -544,12 +544,14 @@ subscriber, request finalizer, or browser reconnect is responsible for
 committing history. Non-Web run creation uses the same atomic run, input-blob,
 and run-artifact transaction without a conversation turn.
 
-Conversation reads return every linked turn in conversation order. Queued and
-running turns are pending entries carrying `answer_run_id`, status, and
-cancellation-request state, which lets a reloaded browser resubscribe without
-remembering the original 202 response. Failed and cancelled turns remain
-visible until their run reaches the configured retention floor; they are never
-fed back to the model as conversation history.
+Conversation history returns linked turns in chronological keyset pages, newest
+40 by default and at most 100 per request. Queued and running turns are pending
+entries carrying `answer_run_id`, status, and cancellation-request state, which
+lets a reloaded browser resubscribe without remembering the original 202
+response. Failed and cancelled turns remain visible until their run reaches the
+configured retention floor; they are never fed back to the model as conversation
+history. Exact accepted-run recovery reads separate bounded physical batches and
+has no semantic turn-count ceiling.
 
 The conversation-turn reference uses `ON DELETE CASCADE`, so run pruning cannot
 leave a dangling entry. Pruning the final routed run also removes its Agent

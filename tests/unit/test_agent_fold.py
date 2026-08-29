@@ -88,6 +88,52 @@ def test_fold_projects_only_conversation_semantics_in_source_order() -> None:
     assert messages[3]["content"] == "correct"
 
 
+def test_fold_omits_incomplete_fast_host_users_from_authoritative_history() -> None:
+    session_id = SessionId.new()
+    succeeded = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=_now(),
+        content="successful question",
+        acceptance_id="run-succeeded",
+    )
+    answer = AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=_now(),
+        content="successful answer",
+        stop_reason="stop",
+        acceptance_id="run-succeeded",
+    )
+    failed = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=_now(),
+        content="failed question",
+        acceptance_id="run-failed",
+    )
+    current = UserMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=_now(),
+        content="current question",
+        acceptance_id="run-current",
+    )
+    entries = (succeeded, answer, failed, current)
+
+    assert [message["content"] for message in fold_entries(entries)] == [
+        "successful question",
+        "successful answer",
+    ]
+    assert [
+        message["content"]
+        for message in fold_entries(
+            entries,
+            included_incomplete_host_user_entry_id=current.entry_id,
+        )
+    ] == ["successful question", "successful answer", "current question"]
+
+
 def test_exchange_boundaries_never_split_assistant_from_ordered_results() -> None:
     session_id = SessionId.new()
     entries = (

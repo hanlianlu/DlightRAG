@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import asyncpg
 
@@ -38,12 +38,19 @@ from dlightrag.adapters.postgres.core._operations import ConnectionPool, Postgre
 from dlightrag.application.answer_runs.routing import RoutingAcceptance
 from dlightrag.application.web_conversations import (
     AnswerTurnCreation,
+    CarriedAttachment,
     ConversationCursor,
+    ConversationHead,
+    ConversationHistoryCursor,
+    ConversationHistoryPage,
+    ConversationHistoryPageRequest,
     ConversationPageRequest,
     ConversationRowPage,
-    ConversationSnapshot,
     ConversationSubmissionConflict,
     LinkedTurn,
+    RecoveryPageRequest,
+    RecoveryTurnBatch,
+    SubmissionSeed,
     WebConversationSchemaError,
     WebConversationUnavailableError,
 )
@@ -372,22 +379,74 @@ c.created_at,
 c.updated_at
 """
 
-_GET_TURNS = f"""
+_GET_TURNS_PAGE = f"""
+WITH selected_turns AS (
+    SELECT t.*
+    FROM web_conversation_turns AS t
+    WHERE t.principal_id = $1
+      AND t.conversation_id = $2::text::uuid
+      AND ($3::integer IS NULL OR t.turn_number < $3)
+    ORDER BY t.turn_number DESC
+    LIMIT $4
+)
 SELECT
 {_TURN_COLUMNS},
 {answer_run_columns("r")}
+FROM selected_turns AS t
+JOIN dlightrag_answer_runs AS r
+  ON r.owner_id = t.principal_id
+ AND r.run_id = t.answer_run_id
+ORDER BY t.turn_number DESC
+"""  # noqa: S608 - interpolates only trusted column-projection constants
+
+_GET_RECOVERY_NEWEST = _GET_TURNS_PAGE
+
+_GET_RECOVERY_OLDEST = f"""
+WITH selected_turns AS (
+    SELECT t.*
+    FROM web_conversation_turns AS t
+    WHERE t.principal_id = $1
+      AND t.conversation_id = $2::text::uuid
+      AND ($3::integer IS NULL OR t.turn_number > $3)
+      AND ($4::integer IS NULL OR t.turn_number < $4)
+    ORDER BY t.turn_number ASC
+    LIMIT $5
+)
+SELECT
+{_TURN_COLUMNS},
+{answer_run_columns("r")}
+FROM selected_turns AS t
+JOIN dlightrag_answer_runs AS r
+  ON r.owner_id = t.principal_id
+ AND r.run_id = t.answer_run_id
+ORDER BY t.turn_number ASC
+"""  # noqa: S608 - interpolates only trusted column-projection constants
+
+_GET_CARRIED_ATTACHMENTS = """
+SELECT
+    t.answer_run_id::text AS run_id,
+    (attachment.value->>'ordinal')::integer AS source_ordinal,
+    attachment.value->>'digest' AS digest,
+    attachment.value->>'filename' AS filename,
+    attachment.value->>'mime_type' AS mime_type,
+    COALESCE((attachment.value->>'byte_size')::bigint, 0) AS byte_size
 FROM web_conversation_turns AS t
 JOIN dlightrag_answer_runs AS r
   ON r.owner_id = t.principal_id
  AND r.run_id = t.answer_run_id
-JOIN web_conversations AS c
-  ON c.principal_id = t.principal_id
- AND c.conversation_id = t.conversation_id
+CROSS JOIN LATERAL jsonb_array_elements(
+    COALESCE(r.prepared_input_json, r.accepted_input_json)->'attachments'
+) AS attachment(value)
 WHERE t.principal_id = $1
   AND t.conversation_id = $2::text::uuid
-ORDER BY t.turn_number DESC
+  AND r.status = 'succeeded'
+  AND attachment.value->>'ordinal' IS NOT NULL
+  AND attachment.value->>'digest' IS NOT NULL
+  AND attachment.value->>'filename' IS NOT NULL
+  AND attachment.value->>'mime_type' IS NOT NULL
+ORDER BY t.turn_number DESC, source_ordinal ASC
 LIMIT $3
-"""  # noqa: S608 - interpolates only trusted column-projection constants
+"""
 
 _GET_TURN_BY_SUBMISSION = f"""
 SELECT
@@ -441,14 +500,9 @@ VALUES (
     $1::text::uuid,
     $2,
     $3::text::uuid,
-    (
-        SELECT COALESCE(MAX(turn_number), 0) + 1
-        FROM web_conversation_turns
-        WHERE principal_id = $2
-          AND conversation_id = $3::text::uuid
-    ),
-    $4::text::uuid,
-    $5::text::uuid
+    $4,
+    $5::text::uuid,
+    $6::text::uuid
 )
 RETURNING turn_id::text AS turn_id, turn_number
 """
@@ -487,6 +541,19 @@ _SUBMISSION_KEY_INDEXES = frozenset(
 
 def _row_dict(row: Any) -> dict[str, Any]:
     return dict(row)
+
+
+def _conversation_head(row: Any) -> ConversationHead:
+    return ConversationHead(
+        principal_id=str(row["principal_id"]),
+        conversation_id=str(row["conversation_id"]),
+        content_revision=int(row["content_revision"]),
+        title=row["title"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        agent_session_id=str(row["agent_session_id"]),
+        agent_lane_id=str(row["agent_lane_id"]),
+    )
 
 
 def _linked_turn(row: Any) -> LinkedTurn:
@@ -846,42 +913,141 @@ class PGWebConversationStore(PostgresOperationRunner):
 
         return await self._run_write(_operation)
 
-    async def snapshot(
+    async def history_page(
         self,
         principal_id: str,
         conversation_id: str,
         *,
-        window_turns: int = 100,
-    ) -> ConversationSnapshot | None:
-        """Load one conversation and its run-linked recent turns."""
+        page: ConversationHistoryPageRequest,
+    ) -> ConversationHistoryPage | None:
+        """Read one chronological limit+1 keyset page under a coherent head."""
+        validated = ConversationHistoryPageRequest(limit=page.limit, cursor=page.cursor)
+        if (
+            validated.cursor is not None
+            and str(validated.cursor.conversation_id) != conversation_id
+        ):
+            raise ValueError("conversation history cursor belongs to another conversation")
         await self._ensure_initialized()
 
-        async def _operation(conn: Any) -> ConversationSnapshot | None:
+        async def _operation(conn: Any) -> ConversationHistoryPage | None:
             async with conn.transaction(isolation="repeatable_read", readonly=True):
-                row = await conn.fetchrow(
-                    _GET_CONVERSATION,
-                    principal_id,
-                    conversation_id,
-                )
+                row = await conn.fetchrow(_GET_CONVERSATION, principal_id, conversation_id)
                 if row is None:
                     return None
                 turn_rows = await conn.fetch(
-                    _GET_TURNS,
+                    _GET_TURNS_PAGE,
                     principal_id,
                     conversation_id,
-                    window_turns,
+                    (validated.cursor.before_turn_number if validated.cursor is not None else None),
+                    validated.limit + 1,
                 )
-                return ConversationSnapshot(
-                    principal_id=str(row["principal_id"]),
-                    conversation_id=str(row["conversation_id"]),
-                    content_revision=int(row["content_revision"]),
-                    title=row["title"],
-                    created_at=row["created_at"],
-                    updated_at=row["updated_at"],
-                    agent_session_id=str(row["agent_session_id"]),
-                    agent_lane_id=str(row["agent_lane_id"]),
-                    turns=tuple(_linked_turn(turn) for turn in reversed(turn_rows)),
+                fetched_rows = len(turn_rows)
+                retained = turn_rows[: validated.limit]
+                next_cursor = None
+                if fetched_rows > validated.limit:
+                    if not retained:
+                        raise RuntimeError("history page reported more rows after an empty page")
+                    next_cursor = ConversationHistoryCursor(
+                        conversation_id=validated.cursor.conversation_id
+                        if validated.cursor is not None
+                        else UUID(conversation_id),
+                        before_turn_number=int(retained[-1]["turn_number"]),
+                    )
+                return ConversationHistoryPage(
+                    conversation=_conversation_head(row),
+                    turns=tuple(_linked_turn(turn) for turn in reversed(retained)),
+                    next_cursor=next_cursor,
+                    fetched_rows=fetched_rows,
                 )
+
+        return await self._run_read(_operation)
+
+    async def submission_seed(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        attachment_limit: int,
+    ) -> SubmissionSeed | None:
+        """Read the execution mapping and newest successful attachment metadata."""
+        if isinstance(attachment_limit, bool) or attachment_limit < 0:
+            raise ValueError("attachment limit must be non-negative")
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> SubmissionSeed | None:
+            async with conn.transaction(isolation="repeatable_read", readonly=True):
+                row = await conn.fetchrow(_GET_CONVERSATION, principal_id, conversation_id)
+                if row is None:
+                    return None
+                attachment_rows = (
+                    await conn.fetch(
+                        _GET_CARRIED_ATTACHMENTS,
+                        principal_id,
+                        conversation_id,
+                        attachment_limit,
+                    )
+                    if attachment_limit
+                    else ()
+                )
+                attachments = tuple(
+                    CarriedAttachment(
+                        run_id=str(item["run_id"]),
+                        source_ordinal=int(item["source_ordinal"]),
+                        digest=str(item["digest"]),
+                        filename=str(item["filename"]),
+                        mime_type=str(item["mime_type"]),
+                        byte_size=int(item["byte_size"]),
+                    )
+                    for item in attachment_rows
+                )
+                return SubmissionSeed(
+                    head=_conversation_head(row),
+                    attachments=attachments,
+                )
+
+        return await self._run_read(_operation)
+
+    async def recovery_page(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        page: RecoveryPageRequest,
+    ) -> RecoveryTurnBatch:
+        """Read one bounded physical recovery page across every run status."""
+        validated = RecoveryPageRequest(
+            direction=page.direction,
+            limit=page.limit,
+            before_turn_number=page.before_turn_number,
+            after_turn_number=page.after_turn_number,
+            upper_turn_number=page.upper_turn_number,
+        )
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> RecoveryTurnBatch:
+            if validated.direction == "newest":
+                rows = await conn.fetch(
+                    _GET_RECOVERY_NEWEST,
+                    principal_id,
+                    conversation_id,
+                    validated.before_turn_number,
+                    validated.limit + 1,
+                )
+            else:
+                rows = await conn.fetch(
+                    _GET_RECOVERY_OLDEST,
+                    principal_id,
+                    conversation_id,
+                    validated.after_turn_number,
+                    validated.upper_turn_number,
+                    validated.limit + 1,
+                )
+            fetched_rows = len(rows)
+            return RecoveryTurnBatch(
+                turns=tuple(_linked_turn(row) for row in rows[: validated.limit]),
+                has_more=fetched_rows > validated.limit,
+                fetched_rows=fetched_rows,
+            )
 
         return await self._run_read(_operation)
 
@@ -1019,12 +1185,19 @@ class PGWebConversationStore(PostgresOperationRunner):
                             "submission id was reused in a different conversation"
                         ) from exc
                     raise
+                touched = await conn.fetchrow(
+                    _TOUCH_CONVERSATION, principal_id, conversation_id, title_hint
+                )
+                if touched is None:
+                    raise RuntimeError("conversation touch returned no row")
+                turn_number = int(touched["content_revision"])
                 try:
                     turn_row = await conn.fetchrow(
                         _INSERT_TURN,
                         turn_id,
                         principal_id,
                         conversation_id,
+                        turn_number,
                         submission_id,
                         creation.run.run_id,
                     )
@@ -1040,10 +1213,8 @@ class PGWebConversationStore(PostgresOperationRunner):
                     ) from None
                 if turn_row is None:
                     raise RuntimeError("conversation turn insert returned no row")
-                touched = await conn.fetchrow(
-                    _TOUCH_CONVERSATION, principal_id, conversation_id, title_hint
-                )
-                turn_number = int(turn_row["turn_number"])
+                if int(turn_row["turn_number"]) != turn_number:
+                    raise RuntimeError("conversation turn insert changed its allocated number")
                 return AnswerTurnCreation(
                     turn=LinkedTurn(
                         turn_id=str(turn_row["turn_id"]),
@@ -1128,7 +1299,8 @@ __all__ = [
     "WEB_CONVERSATION_MIGRATIONS",
     "WEB_CONVERSATION_SCHEMA_TABLES",
     "AnswerTurnCreation",
-    "ConversationSnapshot",
+    "ConversationHead",
+    "ConversationHistoryPage",
     "ConversationSubmissionConflict",
     "LinkedTurn",
     "PGWebConversationStore",

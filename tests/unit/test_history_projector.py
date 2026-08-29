@@ -9,6 +9,7 @@ from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
 from dlightrag.engine.answer.history import (
     HistoryProjectionOverflowError,
     HistoryProjectionTarget,
+    IncrementalHistoryProjector,
     project_history,
 )
 
@@ -144,6 +145,37 @@ def test_research_seed_uses_compaction_trigger_as_acceptance_target() -> None:
         {"role": "user", "content": "new"},
         {"role": "assistant", "content": "answer"},
     ]
+
+
+def test_incremental_durable_projection_matches_sequence_beyond_100_turns() -> None:
+    profile = ModelProfile(context_window_tokens=220)
+    target = HistoryProjectionTarget("durable", profile, _measure(40))
+    pairs = [
+        (
+            {"role": "user", "content": f"q{index}"},
+            {"role": "assistant", "content": f"a{index}"},
+        )
+        for index in range(205)
+    ]
+    expected = project_history(
+        [message for pair in pairs for message in pair],
+        targets=(target,),
+        context_policy=_POLICY,
+    )
+    projector = IncrementalHistoryProjector(targets=(target,), context_policy=_POLICY)
+    retained = 0
+    for pair in reversed(pairs):
+        if not projector.offer_newest_pair(*pair):
+            break
+        retained += 1
+    for pair in pairs[: len(pairs) - retained]:
+        if not projector.offer_oldest_omitted_pair(*pair):
+            break
+
+    actual = projector.finish()
+    assert actual.messages == expected.messages
+    assert actual.episodic_summary == expected.episodic_summary
+    assert retained < 205
 
 
 def test_fixed_envelope_overflow_names_the_failing_call() -> None:

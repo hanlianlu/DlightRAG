@@ -148,6 +148,7 @@ export interface AnswerRunDescriptor {
 export interface ConversationHistory {
   conversation: ConversationSummary;
   turns: ConversationTurn[];
+  next_cursor?: string | null;
 }
 
 export class ConversationApiError extends Error {
@@ -185,11 +186,20 @@ export async function createConversation(signal?: AbortSignal): Promise<Conversa
 
 export async function getConversationHistory(
   conversationId: string,
+  cursor: string | null = null,
+  limit?: number,
   signal?: AbortSignal,
 ): Promise<ConversationHistory> {
   const id = encodeURIComponent(conversationId);
-  const response = await fetch(`/web/api/conversations/${id}/history`, {signal});
-  return responseJson<ConversationHistory>(response, 'Failed to load conversation history');
+  const query = new URLSearchParams();
+  if (cursor !== null) query.set('cursor', cursor);
+  if (limit !== undefined) query.set('limit', String(limit));
+  const suffix = query.size > 0 ? `?${query.toString()}` : '';
+  const response = await fetch(`/web/api/conversations/${id}/history${suffix}`, {signal});
+  const history = await responseJson<Omit<ConversationHistory, 'next_cursor'> & {
+    next_cursor?: string | null;
+  }>(response, 'Failed to load conversation history');
+  return {...history, next_cursor: history.next_cursor ?? null};
 }
 
 export async function renameConversation(

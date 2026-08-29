@@ -27,7 +27,10 @@ _POSTGRES_IDENTIFIERS = (
 )
 _WEB_RECORD_NAMES = {
     "AnswerTurnCreation",
-    "ConversationSnapshot",
+    "ConversationHead",
+    "ConversationHistoryPage",
+    "RecoveryTurnBatch",
+    "SubmissionSeed",
     "ConversationSubmissionConflict",
     "LinkedTurn",
 }
@@ -51,6 +54,35 @@ def test_web_conversation_page_query_matches_the_covering_index_contract() -> No
     assert "ORDER BY updated_at DESC, conversation_id DESC LIMIT $4" in after
     assert "OFFSET" not in first.upper()
     assert "OFFSET" not in after.upper()
+
+
+def test_web_turn_pages_select_limit_plus_one_identities_before_run_joins() -> None:
+    from dlightrag.adapters.postgres.web import web_conversations
+
+    history = " ".join(web_conversations._GET_TURNS_PAGE.split()).upper()
+    oldest = " ".join(web_conversations._GET_RECOVERY_OLDEST.split()).upper()
+    assert "WITH SELECTED_TURNS AS" in history
+    assert history.index("LIMIT $4") < history.index("JOIN DLIGHTRAG_ANSWER_RUNS")
+    assert "T.TURN_NUMBER < $3" in history
+    assert "ORDER BY T.TURN_NUMBER DESC" in history
+    assert "LIMIT $5" in oldest
+    assert oldest.index("LIMIT $5") < oldest.index("JOIN DLIGHTRAG_ANSWER_RUNS")
+    assert "ORDER BY T.TURN_NUMBER ASC" in oldest
+    assert "OFFSET" not in history and "OFFSET" not in oldest
+
+
+def test_web_turn_numbers_use_the_locked_conversation_revision_and_attachment_seed_is_safe() -> (
+    None
+):
+    from dlightrag.adapters.postgres.web import web_conversations
+
+    insert = " ".join(web_conversations._INSERT_TURN.split()).upper()
+    attachments = " ".join(web_conversations._GET_CARRIED_ATTACHMENTS.split()).upper()
+
+    assert "MAX(TURN_NUMBER)" not in insert
+    assert "$4" in insert
+    assert "ORDER BY T.TURN_NUMBER DESC, SOURCE_ORDINAL ASC" in attachments
+    assert "ATTACHMENT.VALUE->>'DIGEST' IS NOT NULL" in attachments
 
 
 def test_asyncpg_is_private_to_the_postgres_adapter() -> None:

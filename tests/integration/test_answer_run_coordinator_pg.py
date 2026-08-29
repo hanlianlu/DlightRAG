@@ -568,7 +568,9 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert result is not None
     session_snapshot = await store.load_routing(owner_id=_OWNER, run_id=run_id)
     assert session_snapshot is not None
-    assert repository_calls == {"load": 1, "refresh": 2}
+    # One refresh establishes the Host-neutral boundary before routing; Fast
+    # acceptance and completion retain their existing refreshes.
+    assert repository_calls == {"load": 1, "refresh": 3}
     agent_snapshot = await store.claim_next(worker_id="unused")
     assert agent_snapshot is None
     session_id = SessionId(session_snapshot.agent_session_id)
@@ -707,7 +709,9 @@ async def test_fast_post_stage_cancellation_replays_without_generation_or_lane_i
     assert finish_failure_calls == 0
     routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
     assert routing is not None
-    assert repository_calls == {"load": 2, "refresh": 3}
+    # Cancellation reclaims this run for two execution attempts. Each attempt
+    # performs one bounded Host-neutral boundary refresh before routing.
+    assert repository_calls == {"load": 2, "refresh": 5}
     reader = PGAgentSessionRepository(
         pool=cast(Any, store)._operation_pool,
         owner_id=_OWNER,
@@ -797,7 +801,8 @@ async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
 
     routing = await store.load_routing(owner_id=_OWNER, run_id=creation.run.run_id)
     assert routing is not None
-    assert repository_calls == {"load": 1, "refresh": 2}
+    # The routing boundary adds one refresh before Fast acceptance/failure.
+    assert repository_calls == {"load": 1, "refresh": 3}
     reader = PGAgentSessionRepository(
         pool=cast(Any, store)._operation_pool,
         owner_id=_OWNER,
@@ -1019,7 +1024,9 @@ async def test_publication_correction_is_one_linked_agent_operation(
         {"input_tokens": 5, "output_tokens": 2},
         {"input_tokens": 6, "output_tokens": 2},
     ]
-    assert repository_calls == {"load": 1, "refresh": 28}
+    # The Host-neutral pre-routing boundary contributes one bounded refresh;
+    # linked Research operations keep their previous refresh discipline.
+    assert repository_calls == {"load": 1, "refresh": 29}
     assert decoded_rows == 1000
     # Detached-parent baseline: load=4, decoded_rows=4,000, refresh=26.
     assert publication_calls == 2
@@ -1073,6 +1080,7 @@ async def test_research_empty_canonical_uses_concurrently_advanced_refresh_for_r
 ) -> None:
     original_load = PGAgentSessionRepository.load
     original_refresh = PGAgentSessionRepository.refresh
+    original_transact = PGAgentSessionRepository.transact
     original_decode = pg_session_repository._decode_entry
     original_restore = answer_executor_module._restore_durable_evidence
     counters = {"load": 0, "refresh": 0, "decoded_rows": 0}
@@ -1086,15 +1094,24 @@ async def test_research_empty_canonical_uses_concurrently_advanced_refresh_for_r
         counters["load"] += 1
         return await original_load(repository, session_id)
 
-    async def concurrent_refresh(
+    async def counted_refresh(
         repository: PGAgentSessionRepository,
         session_id: SessionId,
         *,
         previous: Any,
     ) -> Any:
-        nonlocal injected
         counters["refresh"] += 1
-        if not injected and previous.commit_sequence == 0:
+        return await original_refresh(repository, session_id, previous=previous)
+
+    async def concurrent_transact(
+        repository: PGAgentSessionRepository,
+        *,
+        session_id: SessionId,
+        fencing_epoch: int,
+        transaction: SessionTransaction[Any],
+    ) -> Any:
+        nonlocal injected
+        if not injected:
             injected = True
             entry = UserMessageEntry(
                 entry_id=EntryId.new(),
@@ -1104,9 +1121,10 @@ async def test_research_empty_canonical_uses_concurrently_advanced_refresh_for_r
             )
             head = LaneHead(LaneId.main(), entry.entry_id)
             state = LaneState(LaneId.main())
-            committed = await repository.transact(
+            committed = await original_transact(
+                repository,
                 session_id=session_id,
-                fencing_epoch=cast(Any, repository)._fencing_epoch,
+                fencing_epoch=fencing_epoch,
                 transaction=SessionTransaction.from_parts(
                     entries=[entry],
                     register_writes=[SetRegister(head), SetRegister(state)],
@@ -1117,7 +1135,12 @@ async def test_research_empty_canonical_uses_concurrently_advanced_refresh_for_r
                 ),
             )
             assert isinstance(committed, TransactionCommit)
-        return await original_refresh(repository, session_id, previous=previous)
+        return await original_transact(
+            repository,
+            session_id=session_id,
+            fencing_epoch=fencing_epoch,
+            transaction=transaction,
+        )
 
     def counted_decode(*args: Any, **kwargs: Any) -> Any:
         counters["decoded_rows"] += 1
@@ -1128,7 +1151,8 @@ async def test_research_empty_canonical_uses_concurrently_advanced_refresh_for_r
         await original_restore(prepared, repository, session_id)
 
     monkeypatch.setattr(PGAgentSessionRepository, "load", counted_load)
-    monkeypatch.setattr(PGAgentSessionRepository, "refresh", concurrent_refresh)
+    monkeypatch.setattr(PGAgentSessionRepository, "refresh", counted_refresh)
+    monkeypatch.setattr(PGAgentSessionRepository, "transact", concurrent_transact)
     monkeypatch.setattr(pg_session_repository, "_decode_entry", counted_decode)
     monkeypatch.setattr(answer_executor_module, "_restore_durable_evidence", tracked_restore)
 

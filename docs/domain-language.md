@@ -124,9 +124,9 @@ _Avoid_: state rollback, silent transcript promotion, confidence score
 The single deployment clock (`answer.runtime.answer_run_retention_days`, default 365) that bounds how long terminal Answer runs, their event logs, routed Agent Session history, and superseded Memory history stay durable. The sweep is best-effort: it may reclaim later, never earlier.
 _Avoid_: deadline, SLA, per-aggregate TTL, inactivity expiry
 
-**Conversation Read Window**:
-The bounded number of recent turns a Web Conversation snapshot and the history endpoint return. It is a UI and payload bound, not retention: older turns stay durable until the Retention Floor reclaims their runs.
-_Avoid_: max_turns, trim window, retention window
+**Conversation History Page**:
+One signed turn-number keyset page returned by the Web history endpoint: 40 recent turns by default and at most 100 per request. It is a UI and payload bound, not retention or model recovery: older turns stay durable until the Retention Floor reclaims their runs.
+_Avoid_: snapshot, max_turns, trim window, retention window
 
 ## Session Entries And Effects
 

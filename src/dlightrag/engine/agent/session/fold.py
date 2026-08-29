@@ -20,6 +20,7 @@ from dlightrag.engine.agent.session.entries import (
     ToolResultMessageEntry,
     UserMessageEntry,
 )
+from dlightrag.engine.agent.session.ids import EntryId
 from dlightrag.engine.agent.session.projection import render_compaction_summary
 from dlightrag.engine.agent.tool_content import tool_content_message_fields
 from dlightrag.engine.ai.messages import ToolCall
@@ -97,16 +98,34 @@ def fold_tool_message(entry: ToolResultMessageEntry) -> dict[str, Any]:
     }
 
 
-def fold_entries(entries: Sequence[SessionEntry]) -> list[dict[str, Any]]:
+def fold_entries(
+    entries: Sequence[SessionEntry],
+    *,
+    included_incomplete_host_user_entry_id: EntryId | None = None,
+) -> list[dict[str, Any]]:
     """Fold ordered non-projection entries into model-context messages.
 
     Compaction entries are audit facts, not chronological messages. The active
     projection is materialized once by ``project_session_messages`` before its
-    retained suffix.
+    retained suffix. Fast Host user entries carry an ``acceptance_id``; only a
+    matching Assistant makes that turn model history. The Fast projection path
+    may include one exact current reserved User Entry, which it removes again
+    before serializing the separately supplied query.
     """
+    completed_host_turns = {
+        entry.acceptance_id
+        for entry in entries
+        if isinstance(entry, AssistantMessageEntry) and entry.acceptance_id is not None
+    }
     messages: list[dict[str, Any]] = []
     for entry in entries:
         if isinstance(entry, UserMessageEntry):
+            if (
+                entry.acceptance_id is not None
+                and entry.acceptance_id not in completed_host_turns
+                and entry.entry_id != included_incomplete_host_user_entry_id
+            ):
+                continue
             messages.append({"role": "user", "content": entry.content})
         elif isinstance(entry, AssistantMessageEntry):
             messages.append(fold_assistant_message(entry))
@@ -122,10 +141,15 @@ def fold_entries(entries: Sequence[SessionEntry]) -> list[dict[str, Any]]:
 def project_session_messages(
     entries: Sequence[SessionEntry],
     projection: object | None,
+    *,
+    included_incomplete_host_user_entry_id: EntryId | None = None,
 ) -> list[dict[str, Any]]:
     """Materialize one active summary before its retained non-compaction suffix."""
     if projection is None:
-        return fold_entries(entries)
+        return fold_entries(
+            entries,
+            included_incomplete_host_user_entry_id=included_incomplete_host_user_entry_id,
+        )
     from dlightrag.engine.agent.session.projection import (
         ContextProjection,
         projection_source_digest,
@@ -178,7 +202,12 @@ def project_session_messages(
                 "content": render_compaction_summary(projection.summary),
             }
         )
-    messages.extend(fold_entries(retained))
+    messages.extend(
+        fold_entries(
+            retained,
+            included_incomplete_host_user_entry_id=included_incomplete_host_user_entry_id,
+        )
+    )
     return messages
 
 

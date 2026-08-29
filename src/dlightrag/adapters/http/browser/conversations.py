@@ -15,7 +15,8 @@ from dlightrag.application.answer_runs.execution import AnswerRunRequest, Attach
 from dlightrag.application.answer_runs.results import project_answer_result
 from dlightrag.application.answer_runs.sources import SourceDownloadLinkBuilder
 from dlightrag.application.web_conversations import (
-    ConversationSnapshot,
+    ConversationHead,
+    ConversationHistoryPage,
     LinkedTurn,
 )
 from dlightrag.application.web_conversations import (
@@ -47,22 +48,24 @@ def project_conversation_summary(
 
 
 def project_conversation_history(
-    snapshot: ConversationSnapshot,
+    page: ConversationHistoryPage,
     *,
+    next_cursor: str | None = None,
     downloadable_workspaces: set[str] | None = None,
     visual_workspaces: set[str] | None = None,
 ) -> ConversationHistory:
-    """Project one durable snapshot into browser presentation models."""
+    """Project one bounded durable page into browser presentation models."""
     return ConversationHistory(
-        conversation=_snapshot_summary(snapshot),
+        conversation=_head_summary(page.conversation),
         turns=[
             project_conversation_turn(
                 turn,
                 downloadable_workspaces=downloadable_workspaces,
                 visual_workspaces=visual_workspaces,
             )
-            for turn in snapshot.turns
+            for turn in page.turns
         ],
+        next_cursor=next_cursor,
     )
 
 
@@ -124,12 +127,12 @@ def project_conversation_turn(
     )
 
 
-def _snapshot_summary(snapshot: ConversationSnapshot) -> ConversationSummary:
+def _head_summary(head: ConversationHead) -> ConversationSummary:
     return ConversationSummary(
-        conversation_id=snapshot.conversation_id,
-        title=snapshot.title,
-        created_at=snapshot.created_at,
-        updated_at=snapshot.updated_at,
+        conversation_id=head.conversation_id,
+        title=head.title,
+        created_at=head.created_at,
+        updated_at=head.updated_at,
     )
 
 

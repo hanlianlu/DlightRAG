@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   continueAnswerRun,
   getAnswerRunChildren,
+  getConversationHistory,
   listConversations,
   steerAnswerRun,
 } from './conversations.ts';
@@ -43,6 +44,34 @@ test('conversation pages use the bounded route and encode an opaque continuation
     '/web/api/conversations',
     '/web/api/conversations?cursor=facts%2Fsignature%20%2B%20padding',
   ]);
+});
+
+test('history pages encode cursor and limit, normalize rollback payloads, and pass abort', async () => {
+  let seenUrl = '';
+  let seenSignal: AbortSignal | null | undefined;
+  globalThis.fetch = async (input, init) => {
+    seenUrl = new URL(String(input), 'http://localhost').toString();
+    seenSignal = init?.signal;
+    return new Response(JSON.stringify({
+      conversation: {
+        conversation_id: 'conversation-1', title: null,
+        created_at: '2026-08-23T00:00:00Z', updated_at: '2026-08-23T00:00:00Z',
+      },
+      turns: [],
+    }), {headers: {'Content-Type': 'application/json'}});
+  };
+  const controller = new AbortController();
+
+  const result = await getConversationHistory(
+    'conversation/1', 'opaque cursor+', 25, controller.signal,
+  );
+
+  assert.equal(
+    seenUrl,
+    'http://localhost/web/api/conversations/conversation%2F1/history?cursor=opaque+cursor%2B&limit=25',
+  );
+  assert.equal(seenSignal, controller.signal);
+  assert.equal(result.next_cursor, null);
 });
 
 test('continuation posts one submission id to the selected branch operation', async () => {

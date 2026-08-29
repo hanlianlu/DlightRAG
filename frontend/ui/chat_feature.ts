@@ -33,7 +33,6 @@ import type {
 import './chat_composer.ts';
 import {
   ANSWER_RECONNECT_COPY,
-  MAX_CHAT_TURNS,
   MAX_STEERING_MESSAGES,
   answerReconnectState,
   storedTurnView,
@@ -71,6 +70,10 @@ export function answerPhaseLabel(phase: string): string | null {
 export function answerToolEventLabel(eventType: string): string | null {
   if (!Object.hasOwn(ANSWER_TOOL_EVENT_LABELS, eventType)) return null;
   return ANSWER_TOOL_EVENT_LABELS[eventType as ToolEventType];
+}
+
+function terminalTurn(turn: ChatTurnView): boolean {
+  return turn.state === 'succeeded' || turn.state === 'failed' || turn.state === 'cancelled';
 }
 
 interface DonePayload {
@@ -247,9 +250,32 @@ export class DlChatFeature extends LightElement {
     if (!changed.has('view')) return;
     this.#pendingResume = null;
     if (this.view.kind === 'ready') {
-      const visibleHistory = this.view.history.slice(-MAX_CHAT_TURNS);
-      this.turns = visibleHistory.map(storedTurnView);
-      const pending = [...visibleHistory].reverse().find(
+      const stored = this.view.history.map(storedTurnView);
+      const previousView = changed.get('view') as ChatView | undefined;
+      if (
+        previousView?.kind === 'ready'
+        && previousView.conversationId === this.view.conversationId
+      ) {
+        const currentById = new Map(this.turns.map((turn) => [turn.id, turn]));
+        const currentByRunId = new Map(
+          this.turns.filter((turn) => turn.runId).map((turn) => [turn.runId, turn]),
+        );
+        const mergedStored = stored.map((turn) => {
+          const current = currentById.get(turn.id) ?? currentByRunId.get(turn.runId);
+          return current && !terminalTurn(current) && !terminalTurn(turn) ? current : turn;
+        });
+        const storedIds = new Set(stored.map((turn) => turn.id));
+        const storedRunIds = new Set(stored.map((turn) => turn.runId).filter(Boolean));
+        const live = this.turns.filter((turn) => (
+          !terminalTurn(turn)
+          && !storedIds.has(turn.id)
+          && (!turn.runId || !storedRunIds.has(turn.runId))
+        ));
+        this.turns = [...mergedStored, ...live];
+      } else {
+        this.turns = stored;
+      }
+      const pending = [...this.view.history].reverse().find(
         (turn) => turn.status === 'queued' || turn.status === 'running',
       );
       if (pending) {
@@ -290,7 +316,8 @@ export class DlChatFeature extends LightElement {
       <dl-chat-message-list .view=${this.view} .turns=${this.turns}
         .scrollRequest=${this.#scrollRequest}
         .interactionLocked=${this.interactionLocked}
-        @dl-chat-reconnect=${this.#reconnect}></dl-chat-message-list>
+        @dl-chat-reconnect=${this.#reconnect}
+        @dl-chat-load-older=${this.#loadOlderMessages}></dl-chat-message-list>
       <dl-chat-composer
         ?inert=${this.interactionLocked}
         .running=${this.#runController.active}
@@ -303,6 +330,11 @@ export class DlChatFeature extends LightElement {
       ></dl-chat-composer>
     `;
   }
+
+  #loadOlderMessages = (event: Event): void => {
+    event.stopPropagation();
+    void conversationStore.loadOlderMessages();
+  };
 
   #abortContinuation(): void {
     this.#continuationController?.abort();
@@ -378,7 +410,7 @@ export class DlChatFeature extends LightElement {
     );
     const turn = optimisticTurn(query, liveAttachmentRefs);
     this.#scrollRequest += 1;
-    this.turns = [...this.turns, turn].slice(-MAX_CHAT_TURNS);
+    this.turns = [...this.turns, turn];
 
     try {
       if (!conversationStore.canAnswer) {

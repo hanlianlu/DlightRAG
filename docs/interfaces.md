@@ -492,8 +492,8 @@ panel structure remain ordinary typed fields rendered by Lit. The run and its
 conversation turn are inserted in one transaction before
 the 202 response, so no subscriber, finalizer, or reconnect commits history
 afterwards. Disconnecting the browser closes that subscriber only, and
-reconnecting resumes from the durable event sequence. Conversation reads return
-every linked turn in order: queued and running turns are pending entries carrying
+reconnecting resumes from the durable event sequence. Conversation history pages
+return linked turns in order: queued and running turns are pending entries carrying
 `answer_run_id`, status, and cancellation state, so a reloaded tab can
 resubscribe without remembering the original 202. Failed and cancelled turns stay
 visible with their public terminal error until their run is pruned; only
@@ -508,9 +508,11 @@ with a stable limit message. Once a run is accepted, a resource that cannot be
 read produces a classified terminal `error` event; the answer does not silently
 drop evidence.
 
-Web conversation snapshots return up to 100 recent turns; this is a read
-window, not retention. Web also exposes resume/cancel, live Research steering,
-child roster, follow-up, and fork. A fork atomically opens a new conversation
+`GET /web/api/conversations/{id}/history` returns the newest 40 turns by default
+and accepts a signed keyset cursor plus a per-page limit up to 100. The browser
+prepends older chronological pages on demand; paging is a read bound, not
+retention. Web also exposes resume/cancel, live Research steering, child roster,
+follow-up, and fork. A fork atomically opens a new conversation
 branch and every continuation descriptor exposes parent lineage. Uploaded answer
 attachments are stored once as owner-scoped
 content-addressed blobs owned by the run, not by a Web-owned table. Historical
@@ -521,7 +523,7 @@ browser thumbnails are derived on demand. There is no parsed-chunk table and no
 vector cache: the research path reads each attachment fresh from its stored
 bytes. Manual deletion and the shared run-retention floor delete linked runs,
 cascade their events/references, and release blobs no surviving run references.
-The 100-turn read window never trims storage.
+History page bounds never trim storage or cap exact durable model recovery.
 
 `AnswerExecutor` is the product façade and `AnswerOrchestrator` prepares typed
 Host context, tools, and effects. Callers set `mode` to `auto`, `fast`, or

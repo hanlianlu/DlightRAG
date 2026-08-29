@@ -18,9 +18,14 @@ from dlightrag.application.answer_runs import (
     AnswerRunAcceptor,
     AnswerService,
 )
-from dlightrag.application.answer_runs.execution import AnswerRunRequest, AttachmentReference
+from dlightrag.application.answer_runs.execution import AnswerRunRequest
 from dlightrag.application.answer_runs.routing import RoutingAcceptance
+from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.ai.media import thumbnail_bytes
+from dlightrag.engine.answer.history import (
+    HistoryProjectionTarget,
+    IncrementalHistoryProjector,
+)
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.runtime import (
     AnswerRunRecord,
@@ -34,11 +39,17 @@ from .models import (
     AnswerTurnCreation,
     ConversationCursor,
     ConversationCursorCodec,
+    ConversationHead,
+    ConversationHistoryCursor,
+    ConversationHistoryCursorCodec,
+    ConversationHistoryPage,
+    ConversationHistoryPageRequest,
     ConversationPage,
     ConversationPageRequest,
-    ConversationSnapshot,
     ConversationSummary,
     LinkedTurn,
+    RecoveryPageRequest,
+    SubmissionSeed,
     WebConversationStore,
 )
 
@@ -75,11 +86,7 @@ _HISTORY_THUMBNAIL_MIN_QUALITY = 50
 _HISTORY_THUMBNAIL_MIN_PX = 64
 _PRUNE_INTERVAL_SECONDS = 60 * 60
 _PRUNE_BATCH_SIZE = 500
-#: How many recent turns a snapshot and the history endpoint return. This is a
-#: read window for UI and history payloads, not retention: older turns stay
-#: durable until run retention reclaims them. Keyset pagination replaces this
-#: bound when the history endpoint grows a "load older" surface.
-_HISTORY_WINDOW_TURNS = 100
+_RECOVERY_BATCH_SIZE = 64
 _NEW_CONVERSATION_NAMESPACE = UUID("9c0e62a5-a12c-45b2-8aeb-474fc2237cdf")
 
 
@@ -174,12 +181,18 @@ class WebConversationService:
         self._answers = answers
         self._max_attachments = max_attachments
         self._cursor_codec = ConversationCursorCodec(cursor_secret)
+        self._history_cursor_codec = ConversationHistoryCursorCodec(cursor_secret)
         self._prune_task: asyncio.Task[None] | None = None
 
     @property
     def cursor_codec(self) -> ConversationCursorCodec:
         """Return the codec shared by this service and its HTTP adapter."""
         return self._cursor_codec
+
+    @property
+    def history_cursor_codec(self) -> ConversationHistoryCursorCodec:
+        """Return the owned HTTP adapter's conversation-turn cursor codec."""
+        return self._history_cursor_codec
 
     async def start_retention(self) -> None:
         """Start the empty-conversation sweep after schema composition."""
@@ -248,6 +261,43 @@ class WebConversationService:
             )
         return ConversationPage(
             items=items,
+            next_cursor=next_cursor,
+            fetched_rows=result.fetched_rows,
+        )
+
+    async def history(
+        self,
+        user: UserContext | None,
+        conversation_id: str,
+        *,
+        page: ConversationHistoryPageRequest | None = None,
+    ) -> ConversationHistoryPage | None:
+        """Return one chronological recent or older presentation page."""
+        principal_id = owner_id_from_user(user)
+        requested = page or ConversationHistoryPageRequest()
+        if (
+            requested.cursor is not None
+            and str(requested.cursor.conversation_id) != conversation_id
+        ):
+            raise ValueError("conversation history cursor belongs to another conversation")
+        result = await self._store_call(
+            self._store.history_page(
+                principal_id,
+                conversation_id,
+                page=requested,
+            )
+        )
+        if result is None:
+            return None
+        next_cursor = None
+        if result.next_cursor is not None:
+            next_cursor = ConversationHistoryCursor(
+                conversation_id=UUID(conversation_id),
+                before_turn_number=result.next_cursor.before_turn_number,
+            )
+        return ConversationHistoryPage(
+            conversation=result.conversation,
+            turns=result.turns,
             next_cursor=next_cursor,
             fetched_rows=result.fetched_rows,
         )
@@ -364,11 +414,6 @@ class WebConversationService:
         create_conversation = conversation_id is None
         if create_conversation:
             conversation_id = _new_conversation_id(principal_id, submission_id)
-            snapshot = _empty_snapshot(principal_id, conversation_id)
-        else:
-            snapshot = await self.snapshot(principal_id, conversation_id)
-            if snapshot is None:
-                return None
         idempotency_fingerprint = _web_answer_request_fingerprint(
             conversation_id=conversation_id,
             query=query,
@@ -376,27 +421,79 @@ class WebConversationService:
             attachments=attachments,
             mode=mode,
         )
+        replay = await self._store_call(
+            self._store.replay_answer_turn(
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+                submission_id=submission_id,
+                idempotency_fingerprint=idempotency_fingerprint,
+            )
+        )
+        if replay is not None:
+            return _submission(replay)
+
+        if create_conversation:
+            seed = SubmissionSeed(head=_empty_head(principal_id, conversation_id))
+        else:
+            seed = await self._store_call(
+                self._store.submission_seed(
+                    principal_id,
+                    conversation_id,
+                    attachment_limit=max(0, self._max_attachments - len(attachments)),
+                )
+            )
+            if seed is None:
+                return None
         prepared = _prepare_submission(
             query=query,
             workspaces=workspaces,
-            snapshot=snapshot,
+            seed=seed,
             attachments=attachments,
-            max_attachments=self._max_attachments,
             mode=mode,
         )
-        return await self._answers.accept(
-            request=prepared.request,
-            owner_id=principal_id,
-            idempotency_key=submission_id,
-            idempotency_fingerprint=idempotency_fingerprint,
-            auth_mode=(user.auth_mode if user is not None else "none"),
-            acceptor=_WebAnswerAcceptor(
-                store=self._store,
-                conversation_id=conversation_id,
-                title_hint=_auto_title(query),
-                create_conversation=create_conversation,
-            ),
-        )
+
+        async def resolve_history(
+            targets: Sequence[HistoryProjectionTarget],
+        ) -> PriorTurns:
+            if create_conversation:
+                return IncrementalHistoryProjector(targets=targets).finish()
+            return await self._resolve_recovery_history(
+                principal_id,
+                conversation_id,
+                targets=targets,
+            )
+
+        try:
+            return await self._answers.accept(
+                request=prepared.request,
+                owner_id=principal_id,
+                idempotency_key=submission_id,
+                idempotency_fingerprint=idempotency_fingerprint,
+                auth_mode=(user.auth_mode if user is not None else "none"),
+                acceptor=_WebAnswerAcceptor(
+                    store=self._store,
+                    conversation_id=conversation_id,
+                    title_hint=_auto_title(query),
+                    create_conversation=create_conversation,
+                ),
+                history_resolver=resolve_history,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A concurrent identical acceptance may win while recovery is being
+            # projected. Never turn that durable replay into a recovery failure.
+            replay = await self._store_call(
+                self._store.replay_answer_turn(
+                    principal_id=principal_id,
+                    conversation_id=conversation_id,
+                    submission_id=submission_id,
+                    idempotency_fingerprint=idempotency_fingerprint,
+                )
+            )
+            if replay is not None:
+                return _submission(replay)
+            raise
 
     async def continue_answer(
         self,
@@ -453,18 +550,72 @@ class WebConversationService:
             ),
         )
 
-    async def snapshot(
+    async def _resolve_recovery_history(
         self,
         principal_id: str,
         conversation_id: str,
-    ) -> ConversationSnapshot | None:
-        return await self._store_call(
-            self._store.snapshot(
-                principal_id,
-                conversation_id,
-                window_turns=_HISTORY_WINDOW_TURNS,
+        *,
+        targets: Sequence[HistoryProjectionTarget],
+    ) -> PriorTurns:
+        """Project durable succeeded pairs with bounded physical keyset reads."""
+        projector = IncrementalHistoryProjector(targets=targets)
+        if not projector.accepts_history:
+            return projector.finish()
+
+        before: int | None = None
+        rejected_turn_number: int | None = None
+        while True:
+            batch = await self._store_call(
+                self._store.recovery_page(
+                    principal_id,
+                    conversation_id,
+                    page=RecoveryPageRequest(
+                        direction="newest",
+                        limit=_RECOVERY_BATCH_SIZE,
+                        before_turn_number=before,
+                    ),
+                )
             )
-        )
+            if not batch.turns:
+                break
+            for turn in batch.turns:
+                pair = _successful_pair(turn)
+                if pair is None:
+                    continue
+                if not projector.offer_newest_pair(*pair):
+                    rejected_turn_number = turn.turn_number
+                    break
+            if rejected_turn_number is not None or not batch.has_more:
+                break
+            before = batch.turns[-1].turn_number
+
+        if rejected_turn_number is None or not projector.needs_omitted_pairs:
+            return projector.finish()
+
+        after: int | None = None
+        while projector.needs_omitted_pairs:
+            batch = await self._store_call(
+                self._store.recovery_page(
+                    principal_id,
+                    conversation_id,
+                    page=RecoveryPageRequest(
+                        direction="oldest",
+                        limit=_RECOVERY_BATCH_SIZE,
+                        after_turn_number=after,
+                        upper_turn_number=rejected_turn_number + 1,
+                    ),
+                )
+            )
+            if not batch.turns:
+                break
+            for turn in batch.turns:
+                pair = _successful_pair(turn)
+                if pair is not None and not projector.offer_oldest_omitted_pair(*pair):
+                    break
+            if not batch.has_more:
+                break
+            after = batch.turns[-1].turn_number
+        return projector.finish()
 
     async def _store_call(self, operation: Awaitable[T]) -> T:
         return await operation
@@ -480,10 +631,10 @@ def _new_conversation_id(principal_id: str, submission_id: str) -> str:
     )
 
 
-def _empty_snapshot(principal_id: str, conversation_id: str) -> ConversationSnapshot:
-    """Supply empty history while the first conversation row awaits acceptance."""
+def _empty_head(principal_id: str, conversation_id: str) -> ConversationHead:
+    """Supply execution identity while the first row awaits atomic acceptance."""
     now = datetime.datetime.now(datetime.UTC)
-    return ConversationSnapshot(
+    return ConversationHead(
         principal_id=principal_id,
         conversation_id=conversation_id,
         content_revision=0,
@@ -492,7 +643,6 @@ def _empty_snapshot(principal_id: str, conversation_id: str) -> ConversationSnap
         updated_at=now,
         agent_session_id=conversation_id,
         agent_lane_id="main",
-        turns=(),
     )
 
 
@@ -513,36 +663,15 @@ def _prepare_submission(
     *,
     query: str,
     workspaces: Sequence[str],
-    snapshot: ConversationSnapshot,
+    seed: SubmissionSeed,
     attachments: Sequence[WebAttachment],
-    max_attachments: int,
     mode: str | None = None,
 ) -> _PreparedSubmission:
-    """Normalize one browser submission into the run's immutable input.
-
-    Only succeeded turns become model history, and only their uploads stay
-    readable as prior resources: a pending, failed, or cancelled turn remains
-    visible in the browser but is never replayed to the model.
-    """
-    history: list[dict[str, Any]] = []
-    prior: list[tuple[str, AttachmentReference]] = []
-    for turn in snapshot.turns:
-        if turn.run.status != "succeeded":
-            continue
-        turn_request = AnswerRunRequest.from_request(turn.run.request_input())
-        history.extend(
-            (
-                {"role": "user", "content": turn_request.query},
-                {"role": "assistant", "content": str((turn.run.result or {}).get("answer") or "")},
-            )
-        )
-        prior.extend((turn.run.run_id, attachment) for attachment in turn_request.attachments)
-    remaining = max(0, max_attachments - len(attachments))
-    carried = prior[-remaining:] if remaining else []
+    """Normalize a browser submission without coupling it to a UI history page."""
     request = AnswerRequest(
         query=query,
         workspaces=tuple(workspaces),
-        history=tuple(history),
+        history=(),
         semantic_highlights=True,
         mode=mode,
         resources=tuple(
@@ -555,19 +684,35 @@ def _prepare_submission(
         ),
         history_resources=tuple(
             AnswerHistoryResource(
-                run_id=run_id,
-                source_ordinal=item.ordinal,
+                run_id=item.run_id,
+                source_ordinal=item.source_ordinal,
                 digest=item.digest,
                 filename=item.filename,
                 mime_type=item.mime_type,
                 byte_size=item.byte_size,
             )
-            for run_id, item in carried
+            for item in seed.attachments
         ),
-        agent_session_id=snapshot.agent_session_id,
-        agent_lane_id=snapshot.agent_lane_id,
+        agent_session_id=seed.head.agent_session_id,
+        agent_lane_id=seed.head.agent_lane_id,
     )
     return _PreparedSubmission(request=request)
+
+
+def _successful_pair(
+    turn: LinkedTurn,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Project only complete succeeded durable turns into model history."""
+    if turn.run.status != "succeeded":
+        return None
+    request = AnswerRunRequest.from_request(turn.run.request_input())
+    return (
+        {"role": "user", "content": request.query},
+        {
+            "role": "assistant",
+            "content": str((turn.run.result or {}).get("answer") or ""),
+        },
+    )
 
 
 def _web_answer_request_fingerprint(

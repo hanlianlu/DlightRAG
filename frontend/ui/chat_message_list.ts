@@ -24,6 +24,8 @@ export type ChatView =
       conversationId: string;
       history: readonly ConversationTurn[];
       lineage: string | null;
+      hasOlderMessages?: boolean;
+      olderMessagesState?: 'idle' | 'loading' | 'error';
     }
   | {kind: 'unavailable'; hasRecent: boolean}
   | {kind: 'error'};
@@ -59,7 +61,6 @@ export interface ChatViewActionDetail {
   action: 'retry' | 'new' | 'recent';
 }
 
-export const MAX_CHAT_TURNS = 100;
 export const MAX_STEERING_MESSAGES = 50;
 const STICK_TO_BOTTOM_PX = 160;
 
@@ -134,6 +135,9 @@ export class DlChatMessageList extends LightElement {
   #stickAfterUpdate = true;
   #scrollFrame = 0;
   #pendingTurnAnchor: string | null = null;
+  #pendingPrependAnchor: {turnId: string; offset: number} | null = null;
+  #restoreOlderFocus = false;
+  #olderAnnouncement = '';
 
   constructor() {
     super();
@@ -150,6 +154,27 @@ export class DlChatMessageList extends LightElement {
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
+    const previousView = changed.get('view') as ChatView | undefined;
+    if (
+      previousView?.kind === 'ready'
+      && (this.view.kind !== 'ready'
+        || previousView.conversationId !== this.view.conversationId)
+    ) {
+      this.#pendingPrependAnchor = null;
+      this.#restoreOlderFocus = false;
+      this.#olderAnnouncement = '';
+    }
+    if (
+      previousView?.kind === 'ready'
+      && this.view.kind === 'ready'
+      && previousView.conversationId === this.view.conversationId
+    ) {
+      const previousState = previousView.olderMessagesState ?? 'idle';
+      const currentState = this.view.olderMessagesState ?? 'idle';
+      if (currentState === 'loading') this.#olderAnnouncement = 'Loading older messages…';
+      else if (currentState === 'error') this.#olderAnnouncement = 'Older messages could not be loaded.';
+      else if (previousState === 'loading') this.#olderAnnouncement = 'Loaded older messages.';
+    }
     const area = this.querySelector<HTMLElement>('#chat-area');
     this.#stickAfterUpdate = changed.has('scrollRequest') || !area
       || area.scrollHeight - area.scrollTop - area.clientHeight <= STICK_TO_BOTTOM_PX;
@@ -176,6 +201,35 @@ export class DlChatMessageList extends LightElement {
       }
     }
     if (this.#showWelcome()) return;
+    const previousView = changed.get('view') as ChatView | undefined;
+    const olderFlightSettled = previousView?.kind === 'ready'
+      && this.view.kind === 'ready'
+      && (previousView.olderMessagesState ?? 'idle') === 'loading'
+      && (this.view.olderMessagesState ?? 'idle') !== 'loading';
+    if (this.#pendingPrependAnchor && olderFlightSettled) {
+      if (this.#scrollFrame) cancelAnimationFrame(this.#scrollFrame);
+      const pending = this.#pendingPrependAnchor;
+      this.#pendingPrependAnchor = null;
+      this.#scrollFrame = requestAnimationFrame(() => {
+        this.#scrollFrame = 0;
+        const area = this.querySelector<HTMLElement>('#chat-area');
+        const anchor = Array.from(
+          this.querySelectorAll<HTMLElement>('[data-turn-id]'),
+        ).find((element) => element.dataset.turnId === pending.turnId);
+        if (area && anchor) {
+          const nextOffset = anchor.getBoundingClientRect().top
+            - area.getBoundingClientRect().top;
+          area.scrollTop += nextOffset - pending.offset;
+        }
+        if (this.#restoreOlderFocus) {
+          this.#restoreOlderFocus = false;
+          const button = this.querySelector<HTMLButtonElement>('[data-load-older]');
+          if (button) button.focus({preventScroll: true});
+          else this.querySelector<HTMLElement>('#chat-messages')?.focus({preventScroll: true});
+        }
+      });
+      return;
+    }
     if (this.#pendingTurnAnchor && this.#scrollFrame) {
       cancelAnimationFrame(this.#scrollFrame);
       this.#scrollFrame = 0;
@@ -205,8 +259,12 @@ export class DlChatMessageList extends LightElement {
     const turns = this.turns;
     return html`
       <main class="chat-area" id="chat-area" aria-label="Chat" @click=${this.#backgroundClick}>
-        <div class="chat-messages" id="chat-messages" role="log" aria-label="Conversation messages"
-             ?inert=${this.interactionLocked}>
+        ${this.#olderMessagesControl()}
+        <span class="sr-only" data-older-status role="status" aria-live="polite">
+          ${this.#olderAnnouncement}
+        </span>
+        <div class="chat-messages" id="chat-messages" role="log" tabindex="-1"
+             aria-label="Conversation messages" ?inert=${this.interactionLocked}>
           ${this.#lineage()}
           ${this.#viewState()}
           ${repeat(
@@ -224,6 +282,41 @@ export class DlChatMessageList extends LightElement {
       </main>
     `;
   }
+
+  #olderMessagesControl(): TemplateResult | typeof nothing {
+    if (this.view.kind !== 'ready' || !this.view.hasOlderMessages) return nothing;
+    const state = this.view.olderMessagesState ?? 'idle';
+    return html`
+      <div data-older-messages>
+        <button type="button" data-load-older aria-busy=${state === 'loading' ? 'true' : 'false'}
+                ?disabled=${state === 'loading'} @click=${this.#loadOlderMessages}>
+          ${state === 'error' ? 'Retry loading older messages' : 'Load older messages'}
+        </button>
+      </div>
+    `;
+  }
+
+  #loadOlderMessages = (event: Event): void => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const area = this.querySelector<HTMLElement>('#chat-area');
+    if (area) {
+      const areaTop = area.getBoundingClientRect().top;
+      const anchor = Array.from(
+        this.querySelectorAll<HTMLElement>('[data-turn-id]'),
+      ).find((element) => element.getBoundingClientRect().bottom > areaTop);
+      if (anchor?.dataset.turnId) {
+        this.#pendingPrependAnchor = {
+          turnId: anchor.dataset.turnId,
+          offset: anchor.getBoundingClientRect().top - areaTop,
+        };
+      }
+    }
+    this.#restoreOlderFocus = document.activeElement === button;
+    this.dispatchEvent(new CustomEvent<void>('dl-chat-load-older', {
+      bubbles: true,
+      composed: true,
+    }));
+  };
 
   #showWelcome(): boolean {
     return this.turns.length === 0 && (this.view.kind === 'new' || this.view.kind === 'ready');

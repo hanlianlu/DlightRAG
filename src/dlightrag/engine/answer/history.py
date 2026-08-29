@@ -2,13 +2,13 @@
 """Project one pinned history across every reachable model call."""
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
-from dlightrag.engine.ai.tokens import truncate_to_estimated_tokens
+from dlightrag.engine.ai.tokens import estimate_tokens, truncate_to_estimated_tokens
 
 
 class HistoryInputMeasure(Protocol):
@@ -64,6 +64,95 @@ class _ResolvedTarget:
     allowance_tokens: int
 
 
+class IncrementalHistoryProjector:
+    """Bounded two-phase projection for a durable history adapter.
+
+    Recent pairs are offered newest-first until the first exact target rejection.
+    When that happens, omitted pairs are offered oldest-first; only the bounded
+    extractive prefix is retained. This is the same policy as :func:`project_history`
+    without materializing an arbitrary number of durable turns.
+    """
+
+    def __init__(
+        self,
+        *,
+        targets: Sequence[HistoryProjectionTarget],
+        context_policy: ContextPolicy = CONTEXT_POLICY,
+    ) -> None:
+        self._resolved = tuple(_resolve_target(target, context_policy) for target in targets)
+        self._max_summary_tokens = context_policy.episodic_summary_tokens
+        self._kept: list[dict[str, Any]] = []
+        self._recent_complete = False
+        self._summary = ""
+        self._summary_saturated = False
+
+    @property
+    def accepts_history(self) -> bool:
+        return bool(self._resolved)
+
+    @property
+    def recent_complete(self) -> bool:
+        return self._recent_complete
+
+    @property
+    def needs_omitted_pairs(self) -> bool:
+        return (
+            bool(self._resolved)
+            and self._recent_complete
+            and self._max_summary_tokens > 0
+            and not self._summary_saturated
+        )
+
+    def offer_newest_pair(
+        self,
+        user: Mapping[str, Any],
+        assistant: Mapping[str, Any],
+    ) -> bool:
+        """Retain one next-older complete pair, or establish the recent cutoff."""
+        if self._recent_complete or not self._resolved:
+            return False
+        pair = [dict(user), dict(assistant)]
+        candidate = [*pair, *self._kept]
+        if not all(_fits(candidate, "", target) for target in self._resolved):
+            self._recent_complete = True
+            return False
+        self._kept = candidate
+        return True
+
+    def offer_oldest_omitted_pair(
+        self,
+        user: Mapping[str, Any],
+        assistant: Mapping[str, Any],
+    ) -> bool:
+        """Append one omitted pair while it can still alter the bounded prefix."""
+        if not self.needs_omitted_pairs:
+            return False
+        lines = []
+        if not self._summary:
+            lines.append("Earlier conversation (extractive continuation):")
+        for message in (user, assistant):
+            role = str(message.get("role") or "message")
+            content = message.get("content")
+            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+            lines.append(f"{role}: {text}")
+        candidate = "\n".join(filter(None, (self._summary, *lines)))
+        if estimate_tokens(candidate) > self._max_summary_tokens:
+            self._summary = truncate_to_estimated_tokens(candidate, self._max_summary_tokens)
+            self._summary_saturated = True
+        else:
+            self._summary = candidate.strip()
+        return True
+
+    def finish(self) -> PriorTurns:
+        summary = _fit_summary_text(
+            self._kept,
+            self._summary,
+            resolved=self._resolved,
+            max_tokens=self._max_summary_tokens,
+        )
+        return PriorTurns(self._kept, episodic_summary=summary)
+
+
 def project_history(
     messages: Sequence[dict[str, Any]],
     *,
@@ -71,24 +160,23 @@ def project_history(
     context_policy: ContextPolicy = CONTEXT_POLICY,
 ) -> PriorTurns:
     """Keep the newest contiguous complete pairs accepted by every target."""
-    resolved = tuple(_resolve_target(target, context_policy) for target in targets)
-    pairs = _complete_pairs(messages)
-    if not resolved:
-        return PriorTurns()
-    kept: list[dict[str, Any]] = []
-    for pair in reversed(pairs):
-        candidate = [*pair, *kept]
-        if not all(_fits(candidate, "", target) for target in resolved):
-            break
-        kept = candidate
-    omitted_pairs = pairs[: len(pairs) - len(kept) // 2]
-    summary = _fit_episodic_summary(
-        kept,
-        omitted_pairs,
-        resolved=resolved,
-        max_tokens=context_policy.episodic_summary_tokens,
+    projector = IncrementalHistoryProjector(
+        targets=targets,
+        context_policy=context_policy,
     )
-    return PriorTurns(kept, episodic_summary=summary)
+    pairs = _complete_pairs(messages)
+    if not projector.accepts_history:
+        return PriorTurns()
+    retained_pairs = 0
+    for pair in reversed(pairs):
+        if not projector.offer_newest_pair(pair[0], pair[1]):
+            break
+        retained_pairs += 1
+    if retained_pairs != len(pairs):
+        for pair in pairs[: len(pairs) - retained_pairs]:
+            if not projector.offer_oldest_omitted_pair(pair[0], pair[1]):
+                break
+    return projector.finish()
 
 
 def _resolve_target(
@@ -144,7 +232,21 @@ def _fit_episodic_summary(
     max_tokens: int,
 ) -> str:
     """Fit the extractive continuation after preserving the recent-pair set."""
-    summary = _episodic_summary(omitted_pairs, max_tokens=max_tokens)
+    return _fit_summary_text(
+        kept,
+        _episodic_summary(omitted_pairs, max_tokens=max_tokens),
+        resolved=resolved,
+        max_tokens=max_tokens,
+    )
+
+
+def _fit_summary_text(
+    kept: list[dict[str, Any]],
+    summary: str,
+    *,
+    resolved: Sequence[_ResolvedTarget],
+    max_tokens: int,
+) -> str:
     if not summary or all(_fits(kept, summary, target) for target in resolved):
         return summary
 
@@ -195,6 +297,7 @@ def _complete_pairs(messages: Sequence[dict[str, Any]]) -> list[list[dict[str, A
 
 __all__ = [
     "HistoryInputMeasure",
+    "IncrementalHistoryProjector",
     "HistoryProjectionOverflowError",
     "HistoryProjectionTarget",
     "project_history",

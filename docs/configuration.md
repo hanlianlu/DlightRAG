@@ -890,9 +890,10 @@ Web conversations have no retention knobs of their own. Every terminal Answer
 run — conversation-linked or not — is reclaimed once after the shared
 `answer.runtime.answer_run_retention_days` floor (default 365 days) counted from
 `finished_at`; the turn cascade empties the conversation, and a lightweight
-hourly task then reclaims conversations that have no turns left. The snapshot
-and history endpoint return the most recent turns as a read window; older turns
-stay durable until retention reclaims them. Cleanup releases blobs no surviving
+hourly task then reclaims conversations that have no turns left. The history
+endpoint returns recent turns in bounded signed keyset pages (40 by default,
+maximum 100); older turns stay durable until retention reclaims them. Cleanup
+releases blobs no surviving
 run references and deletes an Agent Session when no remaining run routing row
 names it. Empty Web Conversation rows do not extend model-history retention;
 Session trees shared by another routed run are preserved. Cleanup never touches

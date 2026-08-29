@@ -2,7 +2,7 @@
 """Shared builders for durable Answer run state in Web tests."""
 
 import datetime
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 from dlightrag.application.answer_runs import (
@@ -17,6 +17,9 @@ from dlightrag.application.web_conversations import (
     LinkedTurn,
     WebAnswerSubmission,
 )
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.tokens import estimate_messages_tokens, estimate_tokens
+from dlightrag.engine.answer.history import HistoryProjectionTarget
 from dlightrag.engine.runtime import (
     AnswerRunRecord,
     AnswerRunStatus,
@@ -46,6 +49,7 @@ class FakeAnswers(AnswerService):
         idempotency_fingerprint: str,
         acceptor: AnswerRunAcceptor[T],
         auth_mode: str = "none",
+        history_resolver: Any | None = None,
     ) -> T | None:
         del auth_mode
         replay = await acceptor.replay_run(
@@ -55,6 +59,26 @@ class FakeAnswers(AnswerService):
         )
         if replay is not None:
             return replay
+        if history_resolver is not None:
+            profile = ModelProfile(
+                context_window_tokens=1_000_000,
+                max_input_tokens=None,
+                max_output_tokens=1_000,
+                supports_images=True,
+                supports_reasoning=True,
+            )
+
+            def measure_history(messages: list[dict[str, Any]], projected_summary: str = "") -> int:
+                return estimate_messages_tokens(messages) + estimate_tokens(projected_summary)
+
+            projected = await history_resolver(
+                (HistoryProjectionTarget("fake", profile, measure_history),)
+            )
+            request = replace(
+                request,
+                history=tuple(projected.messages),
+                episodic_summary=projected.episodic_summary,
+            )
         self.prepared.append(request)
         return await acceptor.create_run(
             owner_id=owner_id,

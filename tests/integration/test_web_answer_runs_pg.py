@@ -33,6 +33,7 @@ from dlightrag.adapters.postgres.web.web_conversations import (
 )
 from dlightrag.application.web_conversations import (
     ConversationCursor,
+    ConversationHistoryPageRequest,
     ConversationPageRequest,
     ConversationSubmissionConflict,
 )
@@ -496,8 +497,9 @@ async def test_forked_conversation_maps_to_a_new_lane_in_the_parent_session(
             _OWNER,
             uuid.UUID(parent_conversation),
         )
-    parent = await store.snapshot(_OWNER, parent_conversation)
-    assert parent is not None
+    parent_seed = await store.submission_seed(_OWNER, parent_conversation, attachment_limit=0)
+    assert parent_seed is not None
+    parent = parent_seed.head
     branch_conversation = str(uuid.uuid4())
     branch_lane = str(uuid.uuid4())
     request = {
@@ -521,8 +523,9 @@ async def test_forked_conversation_maps_to_a_new_lane_in_the_parent_session(
         forked_from_conversation_id=parent_conversation,
     )
     assert created is not None
-    branch = await store.snapshot(_OWNER, branch_conversation)
-    assert branch is not None
+    branch_seed = await store.submission_seed(_OWNER, branch_conversation, attachment_limit=0)
+    assert branch_seed is not None
+    branch = branch_seed.head
     assert branch.agent_session_id == parent.agent_session_id
     assert branch.agent_lane_id == branch_lane
     assert branch.agent_lane_id != parent.agent_lane_id
@@ -943,13 +946,17 @@ async def test_a_snapshot_projects_each_turn_from_its_run(
     assert pending is not None and done is not None
     await _finish(pool, done.turn.answer_run_id, status="succeeded")
 
-    snapshot = await store.snapshot(_OWNER, conversation_id, window_turns=_MAX_TURNS)
+    page = await store.history_page(
+        _OWNER,
+        conversation_id,
+        page=ConversationHistoryPageRequest(limit=_MAX_TURNS),
+    )
 
-    assert snapshot is not None
-    assert [turn.turn_number for turn in snapshot.turns] == [1, 2]
-    assert [turn.run.status for turn in snapshot.turns] == ["queued", "succeeded"]
-    assert (snapshot.turns[0].run.prepared_input or {})["query"] == "first"
-    assert snapshot.turns[1].run.result == {"answer": "done"}
+    assert page is not None
+    assert [turn.turn_number for turn in page.turns] == [1, 2]
+    assert [turn.run.status for turn in page.turns] == ["queued", "succeeded"]
+    assert (page.turns[0].run.prepared_input or {})["query"] == "first"
+    assert page.turns[1].run.result == {"answer": "done"}
 
 
 async def test_a_run_is_only_findable_by_its_owner(store: PGWebConversationStore) -> None:
@@ -1371,6 +1378,14 @@ async def test_a_successful_linked_run_prunes_after_the_retention_floor(
     assert await _count(pool, "web_conversations") == 1
     assert await _count(pool, "dlightrag_agent_sessions") == 0
 
+    replacement = await _submit(
+        store,
+        conversation_id,
+        request=_request("after retention"),
+    )
+    assert replacement is not None
+    assert replacement.turn.turn_number == 2
+
 
 async def test_empty_conversation_rebases_to_a_fresh_main_lane_after_session_retention(
     store: PGWebConversationStore,
@@ -1589,6 +1604,68 @@ async def test_the_accepted_envelope_survives_the_terminal_transition(
     assert envelope["attachments"][0]["filename"] == "chart.png"
 
 
+async def test_submission_seed_keeps_first_attachment_ordinals_and_skips_incomplete_legacy_rows(
+    store: PGWebConversationStore,
+    pool: Any,
+) -> None:
+    conversation_id = await _conversation(store)
+    contents = [f"attachment-{ordinal}".encode() for ordinal in range(3)]
+    digests = [artifact_digest(content) for content in contents]
+    creation = await _submit(
+        store,
+        conversation_id,
+        request=_request(
+            "attachments",
+            attachments=[
+                {
+                    "ordinal": ordinal,
+                    "digest": digests[ordinal],
+                    "filename": f"attachment-{ordinal}.txt",
+                    "mime_type": "text/plain",
+                    "byte_size": len(contents[ordinal]),
+                }
+                for ordinal in range(3)
+            ],
+        ),
+        artifacts=[PendingArtifact(content=content) for content in contents],
+        references=[
+            PendingArtifactReference(
+                resource_id=f"attachment-{ordinal}",
+                reference_kind="current_attachment",
+                ordinal=ordinal,
+                digest=digests[ordinal],
+                filename=f"attachment-{ordinal}.txt",
+                mime_type="text/plain",
+            )
+            for ordinal in range(3)
+        ],
+    )
+    assert creation is not None
+    await _finish(pool, creation.turn.answer_run_id, status="succeeded")
+
+    seed = await store.submission_seed(_OWNER, conversation_id, attachment_limit=2)
+    assert seed is not None
+    assert [item.source_ordinal for item in seed.attachments] == [0, 1]
+
+    legacy = await _submit(store, conversation_id, request=_request("legacy"))
+    assert legacy is not None
+    await _finish(pool, legacy.turn.answer_run_id, status="succeeded")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE dlightrag_answer_runs "
+            "SET accepted_input_json = jsonb_set(accepted_input_json, '{attachments}', $2::jsonb) "
+            "WHERE owner_id = $1 AND run_id = $3::uuid",
+            _OWNER,
+            '[{"ordinal": 0, "filename": "legacy.txt", "mime_type": "text/plain"}]',
+            uuid.UUID(legacy.turn.answer_run_id),
+        )
+
+    complete_seed = await store.submission_seed(_OWNER, conversation_id, attachment_limit=6)
+    assert complete_seed is not None
+    assert [item.source_ordinal for item in complete_seed.attachments] == [0, 1, 2]
+    assert all(item.digest != "None" for item in complete_seed.attachments)
+
+
 async def test_an_empty_conversation_is_reclaimed_after_its_turns_age_out(
     store: PGWebConversationStore, runs: PGAnswerRunStore, pool: Any
 ) -> None:
@@ -1616,10 +1693,47 @@ async def test_a_conversation_with_live_turns_is_never_reclaimed(
     assert await _count(pool, "web_conversations") == 1
 
 
-async def test_turns_beyond_the_read_window_stay_durable(
+async def test_205_turn_keyset_traversal_is_stable_across_a_concurrent_append(
+    store: PGWebConversationStore,
+) -> None:
+    conversation_id = await _conversation(store)
+    for number in range(1, 206):
+        created = await _submit(store, conversation_id, request=_request(f"turn {number}"))
+        assert created is not None
+
+    page = await store.history_page(
+        _OWNER,
+        conversation_id,
+        page=ConversationHistoryPageRequest(limit=40),
+    )
+    assert page is not None
+    assert page.fetched_rows == 41
+    assert [turn.turn_number for turn in page.turns] == list(range(166, 206))
+    seen = [turn.turn_number for turn in page.turns]
+    cursor = page.next_cursor
+
+    appended = await _submit(store, conversation_id, request=_request("concurrent append"))
+    assert appended is not None and appended.turn.turn_number == 206
+    while cursor is not None:
+        page = await store.history_page(
+            _OWNER,
+            conversation_id,
+            page=ConversationHistoryPageRequest(limit=40, cursor=cursor),
+        )
+        assert page is not None
+        assert page.fetched_rows <= 41
+        seen.extend(turn.turn_number for turn in page.turns)
+        cursor = page.next_cursor
+
+    assert sorted(seen) == list(range(1, 206))
+    assert len(seen) == len(set(seen))
+    assert 206 not in seen
+
+
+async def test_older_turns_remain_durable_and_keyset_reachable(
     store: PGWebConversationStore, pool: Any
 ) -> None:
-    """The snapshot window is a read bound; it never deletes older turns."""
+    """A presentation page is a read bound; its cursor keeps older turns reachable."""
     conversation_id = await _conversation(store)
     for index in range(3):
         await store.create_answer_turn(
@@ -1639,9 +1753,21 @@ async def test_turns_beyond_the_read_window_stay_durable(
     assert await _count(pool, "web_conversation_turns") == 3
     assert await _count(pool, "dlightrag_answer_runs") == 3
 
-    snapshot = await store.snapshot(_OWNER, conversation_id, window_turns=2)
-    assert snapshot is not None
-    assert [turn.turn_number for turn in snapshot.turns] == [2, 3]
+    page = await store.history_page(
+        _OWNER,
+        conversation_id,
+        page=ConversationHistoryPageRequest(limit=2),
+    )
+    assert page is not None
+    assert [turn.turn_number for turn in page.turns] == [2, 3]
+    assert page.next_cursor is not None
+    older = await store.history_page(
+        _OWNER,
+        conversation_id,
+        page=ConversationHistoryPageRequest(limit=2, cursor=page.next_cursor),
+    )
+    assert older is not None
+    assert [turn.turn_number for turn in older.turns] == [1]
 
 
 # ---------------------------------------------------------------------------

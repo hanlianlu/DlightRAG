@@ -62,7 +62,13 @@ from dlightrag.engine.agent.session.operation import (
 )
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.projection import ContextProjection
-from dlightrag.engine.agent.session.registers import HostTurnReservation, RegisterRef
+from dlightrag.engine.agent.session.registers import (
+    HostTurnReservation,
+    LaneHead,
+    LaneState,
+    RegisterRef,
+    SetRegister,
+)
 from dlightrag.engine.agent.session.repository import validate_snapshot_refresh
 from dlightrag.engine.agent.session.runtime import (
     AgentSessionRuntime,
@@ -70,6 +76,12 @@ from dlightrag.engine.agent.session.runtime import (
     FollowUpCommand,
     OperationConflictError,
     SessionLeaseLostError,
+)
+from dlightrag.engine.agent.session.transactions import (
+    RegisterConflict,
+    RegisterExpectation,
+    SessionTransaction,
+    TransactionLeaseLost,
 )
 from dlightrag.engine.agent.tools import (
     AgentTool,
@@ -750,7 +762,11 @@ class AnswerExecutor:
                 raise RunExecutionError(classify_answer_error(exc), message) from exc
 
     async def _ensure_resolved_mode(
-        self, session: RunSession, request: AnswerRunInput
+        self,
+        session: RunSession,
+        request: AnswerRunInput,
+        *,
+        history: Sequence[Mapping[str, Any]],
     ) -> ResolvedMode:
         record = await self._store.load_routing(owner_id=session.owner_id, run_id=session.run_id)
         if record is None:
@@ -766,7 +782,11 @@ class AnswerExecutor:
             raise RunExecutionError("routing_failed", "Answer mode routing failed.") from exc
         if decided is None:
             decided = _require_resolved_mode(
-                await self._route_with_model(request, valid_modes=record.valid_modes)
+                await self._route_with_model(
+                    request,
+                    history=history,
+                    valid_modes=record.valid_modes,
+                )
             )
         written = await self._store.resolve(
             owner_id=session.owner_id,
@@ -778,7 +798,11 @@ class AnswerExecutor:
         return _require_resolved_mode(written or decided)
 
     async def _route_with_model(
-        self, request: AnswerRunInput, *, valid_modes: tuple[str, ...]
+        self,
+        request: AnswerRunInput,
+        *,
+        history: Sequence[Mapping[str, Any]],
+        valid_modes: tuple[str, ...],
     ) -> str:
         model, _telemetry = self._models.new_highlight_model()
         router = AnswerModeRouter(model)
@@ -792,7 +816,7 @@ class AnswerExecutor:
         try:
             return await router.choose(
                 query=request.query,
-                history=request.history,
+                history=history,
                 resources=resources,
                 tool_categories=tools,
                 has_images=any(item.role == "image" for item in resources),
@@ -943,36 +967,55 @@ class AnswerExecutor:
     async def _execute(self, session: RunSession) -> RunExecutionOutcome:
         request = AnswerRunInput.from_prepared_input(session.prepared_input)
         model_profiles = self.validate_pinned_model_profiles(request)
-        await session.enter_phase("routing")
-        resolved_mode = await self._ensure_resolved_mode(session, request)
-        await session.enter_phase("planning")
         agent_session_id = SessionId(request.agent_session_id)
         agent_lane_id = LaneId(request.agent_lane_id)
         repository = session.execution.session_repository
-        canonical_snapshot = await repository.load(agent_session_id)
-        if canonical_snapshot.entries:
-            history_lane_id = (
-                agent_lane_id
-                if any(lane.lane_id == agent_lane_id for lane in canonical_snapshot.tree.lanes)
-                else LaneId(request.source_lane_id or LaneId.main().value)
-            )
-            selected_snapshot = replace(
-                canonical_snapshot,
-                selected_lane_id=history_lane_id,
-            )
-            projected_history = PriorTurns(
-                project_session_messages(
-                    canonical_snapshot.tree.ancestry(history_lane_id),
-                    selected_snapshot.active_projection,
-                )
-                if resolved_mode == "fast"
-                else []
-            )
+        loaded_snapshot = await repository.load(agent_session_id)
+        canonical_snapshot = await _reserve_agent_session_boundary(
+            repository,
+            session_id=agent_session_id,
+            fencing_epoch=session.execution.fencing_epoch,
+            previous=loaded_snapshot,
+        )
+        lane_ids = {lane.lane_id for lane in canonical_snapshot.tree.lanes}
+        source_lane_id = LaneId(request.source_lane_id) if request.source_lane_id else None
+        history_lane_id = (
+            agent_lane_id
+            if agent_lane_id in lane_ids
+            else source_lane_id
+            if source_lane_id in lane_ids
+            else LaneId.main()
+        )
+        selected_snapshot = replace(
+            canonical_snapshot,
+            selected_lane_id=history_lane_id,
+        )
+        authoritative_messages = project_session_messages(
+            canonical_snapshot.tree.ancestry(history_lane_id),
+            selected_snapshot.active_projection,
+        )
+        has_agent_history = bool(authoritative_messages)
+        if has_agent_history:
+            routing_history = PriorTurns(authoritative_messages)
         else:
-            projected_history = PriorTurns(
+            routing_history = PriorTurns(
                 [dict(message) for message in request.history],
                 episodic_summary=request.episodic_summary,
             )
+        await session.enter_phase("routing")
+        resolved_mode = await self._ensure_resolved_mode(
+            session,
+            request,
+            history=routing_history.messages,
+        )
+        await session.enter_phase("planning")
+        projected_history = (
+            PriorTurns(authoritative_messages)
+            if has_agent_history and resolved_mode == "fast"
+            else PriorTurns()
+            if has_agent_history
+            else routing_history
+        )
 
         fast_boundaries: FastRunBoundaries | None = None
         fast_session_host: FastSessionHost | None = None
@@ -1306,7 +1349,7 @@ class AnswerExecutor:
                         fast_compaction_trace.update(
                             _durable_fast_compaction_trace(replay_snapshot)
                         )
-                if canonical_snapshot.entries:
+                if has_agent_history:
                     (
                         compacted_history,
                         compaction_trace,
@@ -1892,6 +1935,65 @@ def _durable_fast_compaction_trace(snapshot: Any) -> dict[str, Any]:
     }
 
 
+async def _reserve_agent_session_boundary(
+    repository: Any,
+    *,
+    session_id: SessionId,
+    fencing_epoch: int,
+    previous: Any,
+) -> Any:
+    """Claim one Host-neutral Session boundary before history-sensitive routing.
+
+    The durable repository binds Session writes to the active Answer run. An
+    empty transaction establishes that lease without choosing Fast or Research,
+    then the refresh supplies the exact authoritative history boundary that no
+    earlier run can advance while this run routes and accepts its operation.
+    """
+    snapshot = previous
+    while True:
+        lanes = tuple(snapshot.tree.lanes)
+        if lanes:
+            lane = next(
+                (item for item in lanes if item.lane_id == snapshot.selected_lane_id),
+                lanes[0],
+            )
+            lane_state = lane.state
+            if not isinstance(lane_state.value, LaneState):
+                raise TypeError("Lane State register has the wrong value type")
+            transaction = SessionTransaction.from_parts(
+                register_writes=[SetRegister(lane_state.value)],
+                expectations=[RegisterExpectation(lane_state.ref, lane_state.sequence)],
+            )
+        else:
+            lane_id = LaneId.main()
+            head = LaneHead(lane_id, None)
+            state = LaneState(lane_id)
+            transaction = SessionTransaction.from_parts(
+                register_writes=[SetRegister(head), SetRegister(state)],
+                expectations=[
+                    RegisterExpectation(head.ref, None),
+                    RegisterExpectation(state.ref, None),
+                ],
+            )
+        outcome = await repository.transact(
+            session_id=session_id,
+            fencing_epoch=fencing_epoch,
+            transaction=transaction,
+        )
+        if isinstance(outcome, TransactionLeaseLost):
+            raise SessionLeaseLostError(session_id.value)
+        refreshed = await repository.refresh(session_id, previous=snapshot)
+        validate_snapshot_refresh(
+            session_id,
+            previous=snapshot,
+            snapshot=refreshed,
+        )
+        if isinstance(outcome, RegisterConflict):
+            snapshot = refreshed
+            continue
+        return refreshed
+
+
 def _require_fast_turn_reservation(
     snapshot: Any,
     *,
@@ -1931,7 +2033,11 @@ def _project_fast_history_before_current_user(
     latest = semantic_entries[-1] if semantic_entries else None
     if not isinstance(latest, UserMessageEntry) or latest.entry_id != accepted_user_entry_id:
         raise ValueError("Fast compaction lost the current accepted User Entry")
-    messages = project_session_messages(ancestry, projection)
+    messages = project_session_messages(
+        ancestry,
+        projection,
+        included_incomplete_host_user_entry_id=accepted_user_entry_id,
+    )
     if not messages or messages[-1].get("role") != "user":
         raise ValueError("Fast compaction projection did not retain the current User query")
     return PriorTurns(messages[:-1])

@@ -10,7 +10,7 @@ import json
 import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from dlightrag.application.answer_runs.routing import RoutingAcceptance
@@ -34,7 +34,9 @@ class LinkedTurn:
 
 
 @dataclass(frozen=True, slots=True)
-class ConversationSnapshot:
+class ConversationHead:
+    """Owned conversation identity and durable execution mapping, without turns."""
+
     principal_id: str
     conversation_id: str
     content_revision: int
@@ -43,7 +45,26 @@ class ConversationSnapshot:
     updated_at: datetime.datetime
     agent_session_id: str
     agent_lane_id: str
-    turns: tuple[LinkedTurn, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CarriedAttachment:
+    """Bounded metadata for one successful prior current attachment."""
+
+    run_id: str
+    source_ordinal: int
+    digest: str
+    filename: str
+    mime_type: str
+    byte_size: int
+
+
+@dataclass(frozen=True, slots=True)
+class SubmissionSeed:
+    """Conversation mapping plus bounded attachment carry-forward metadata."""
+
+    head: ConversationHead
+    attachments: tuple[CarriedAttachment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +81,9 @@ class ConversationSummary:
 
 CONVERSATION_PAGE_DEFAULT_LIMIT = 50
 CONVERSATION_PAGE_MAX_LIMIT = 100
+CONVERSATION_HISTORY_PAGE_DEFAULT_LIMIT = 40
+CONVERSATION_HISTORY_PAGE_MAX_LIMIT = 100
+RECOVERY_PAGE_MAX_LIMIT = 128
 _CURSOR_MAC_BYTES = 16
 _BASE64URL_CHARACTERS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -122,6 +146,90 @@ class ConversationPage:
     fetched_rows: int
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationHistoryCursor:
+    """Immutable boundary for an older page in one conversation."""
+
+    conversation_id: UUID
+    before_turn_number: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.conversation_id, UUID):
+            raise ValueError("conversation history cursor id must be a UUID")
+        if isinstance(self.before_turn_number, bool) or not isinstance(
+            self.before_turn_number, int
+        ):
+            raise ValueError("conversation history cursor turn number must be an integer")
+        if self.before_turn_number < 1:
+            raise ValueError("conversation history cursor turn number must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationHistoryPageRequest:
+    """One hard-bounded recent or older turn-page request."""
+
+    limit: int = CONVERSATION_HISTORY_PAGE_DEFAULT_LIMIT
+    cursor: ConversationHistoryCursor | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.limit, bool) or not isinstance(self.limit, int):
+            raise ValueError("conversation history page limit must be an integer")
+        if not 1 <= self.limit <= CONVERSATION_HISTORY_PAGE_MAX_LIMIT:
+            raise ValueError(
+                "conversation history page limit must be between 1 and "
+                f"{CONVERSATION_HISTORY_PAGE_MAX_LIMIT}"
+            )
+        if self.cursor is not None and not isinstance(self.cursor, ConversationHistoryCursor):
+            raise ValueError("conversation history cursor is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationHistoryPage:
+    """Chronological presentation page with an older-page continuation."""
+
+    conversation: ConversationHead
+    turns: tuple[LinkedTurn, ...]
+    next_cursor: ConversationHistoryCursor | None
+    fetched_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryPageRequest:
+    """Bounded physical turn scan used only for durable recovery projection."""
+
+    direction: Literal["newest", "oldest"]
+    limit: int
+    before_turn_number: int | None = None
+    after_turn_number: int | None = None
+    upper_turn_number: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.direction not in {"newest", "oldest"}:
+            raise ValueError("recovery direction is invalid")
+        if isinstance(self.limit, bool) or not isinstance(self.limit, int):
+            raise ValueError("recovery page limit must be an integer")
+        if not 1 <= self.limit <= RECOVERY_PAGE_MAX_LIMIT:
+            raise ValueError(f"recovery page limit must be between 1 and {RECOVERY_PAGE_MAX_LIMIT}")
+        for value in (
+            self.before_turn_number,
+            self.after_turn_number,
+            self.upper_turn_number,
+        ):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 1
+            ):
+                raise ValueError("recovery turn boundaries must be positive integers")
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryTurnBatch:
+    """One bounded physical recovery read; turns follow the requested direction."""
+
+    turns: tuple[LinkedTurn, ...]
+    has_more: bool
+    fetched_rows: int
+
+
 class ConversationCursorCodec:
     """Encode paired ordering facts as an opaque, integrity-checked token.
 
@@ -142,7 +250,7 @@ class ConversationCursorCodec:
             sort_keys=True,
         ).encode("utf-8")
         encoded = _base64url_encode(payload)
-        mac = hmac.new(self._secret, payload, hashlib.sha256).digest()[:_CURSOR_MAC_BYTES]
+        mac = _cursor_mac(self._secret, b"conversation-list\0", payload)
         return f"{encoded}.{_base64url_encode(mac)}"
 
     def decode(self, token: str) -> ConversationCursor:
@@ -152,9 +260,7 @@ class ConversationCursorCodec:
                 raise ValueError
             payload = _base64url_decode(encoded)
             supplied_mac = _base64url_decode(encoded_mac)
-            expected_mac = hmac.new(self._secret, payload, hashlib.sha256).digest()[
-                :_CURSOR_MAC_BYTES
-            ]
+            expected_mac = _cursor_mac(self._secret, b"conversation-list\0", payload)
             if len(supplied_mac) != _CURSOR_MAC_BYTES or not hmac.compare_digest(
                 supplied_mac, expected_mac
             ):
@@ -181,6 +287,71 @@ class ConversationCursorCodec:
             )
         except (binascii.Error, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
             raise ConversationCursorError("invalid conversation page cursor") from exc
+
+
+class ConversationHistoryCursorCodec:
+    """Signed, opaque, conversation-bound turn cursor with canonical decoding."""
+
+    def __init__(self, secret: bytes | None = None) -> None:
+        self._secret = secret or secrets.token_bytes(32)
+
+    def encode(self, cursor: ConversationHistoryCursor) -> str:
+        payload = _canonical_json(
+            {
+                "before_turn_number": cursor.before_turn_number,
+                "conversation_id": str(cursor.conversation_id),
+                "scope": "conversation-history",
+                "v": 1,
+            }
+        )
+        mac = _cursor_mac(self._secret, b"conversation-history\0", payload)
+        return f"{_base64url_encode(payload)}.{_base64url_encode(mac)}"
+
+    def decode(self, token: str) -> ConversationHistoryCursor:
+        try:
+            encoded, encoded_mac = token.split(".")
+            if not encoded or not encoded_mac:
+                raise ValueError
+            payload = _base64url_decode(encoded)
+            supplied_mac = _base64url_decode(encoded_mac)
+            expected_mac = _cursor_mac(self._secret, b"conversation-history\0", payload)
+            if len(supplied_mac) != _CURSOR_MAC_BYTES or not hmac.compare_digest(
+                supplied_mac, expected_mac
+            ):
+                raise ValueError
+            decoded = json.loads(payload)
+            if not isinstance(decoded, dict) or set(decoded) != {
+                "before_turn_number",
+                "conversation_id",
+                "scope",
+                "v",
+            }:
+                raise ValueError
+            if _canonical_json(decoded) != payload:
+                raise ValueError
+            if decoded["v"] != 1 or decoded["scope"] != "conversation-history":
+                raise ValueError
+            conversation_text = decoded["conversation_id"]
+            before_turn_number = decoded["before_turn_number"]
+            if not isinstance(conversation_text, str):
+                raise ValueError
+            conversation_id = UUID(conversation_text)
+            if str(conversation_id) != conversation_text:
+                raise ValueError
+            return ConversationHistoryCursor(
+                conversation_id=conversation_id,
+                before_turn_number=before_turn_number,
+            )
+        except (binascii.Error, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+            raise ConversationCursorError("invalid conversation history cursor") from exc
+
+
+def _cursor_mac(secret: bytes, domain: bytes, payload: bytes) -> bytes:
+    return hmac.new(secret, domain + payload, hashlib.sha256).digest()[:_CURSOR_MAC_BYTES]
+
+
+def _canonical_json(value: Mapping[str, Any]) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 def _canonical_cursor_timestamp(value: datetime.datetime) -> str:
@@ -241,9 +412,27 @@ class WebConversationStore(Protocol):
     ) -> dict[str, Any] | None: ...
     async def delete_conversation(self, principal_id: str, conversation_id: str) -> bool: ...
     async def delete_all_conversations(self, principal_id: str) -> int: ...
-    async def snapshot(
-        self, principal_id: str, conversation_id: str, *, window_turns: int = 100
-    ) -> ConversationSnapshot | None: ...
+    async def history_page(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        page: ConversationHistoryPageRequest,
+    ) -> ConversationHistoryPage | None: ...
+    async def submission_seed(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        attachment_limit: int,
+    ) -> SubmissionSeed | None: ...
+    async def recovery_page(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        page: RecoveryPageRequest,
+    ) -> RecoveryTurnBatch: ...
     async def find_turn_by_run(self, principal_id: str, run_id: str) -> LinkedTurn | None: ...
     async def replay_answer_turn(
         self,
@@ -272,18 +461,29 @@ class WebConversationStore(Protocol):
 
 __all__ = [
     "AnswerTurnCreation",
+    "CarriedAttachment",
+    "CONVERSATION_HISTORY_PAGE_DEFAULT_LIMIT",
+    "CONVERSATION_HISTORY_PAGE_MAX_LIMIT",
     "CONVERSATION_PAGE_DEFAULT_LIMIT",
     "CONVERSATION_PAGE_MAX_LIMIT",
     "ConversationCursor",
     "ConversationCursorCodec",
     "ConversationCursorError",
+    "ConversationHead",
+    "ConversationHistoryCursor",
+    "ConversationHistoryCursorCodec",
+    "ConversationHistoryPage",
+    "ConversationHistoryPageRequest",
     "ConversationPage",
     "ConversationPageRequest",
     "ConversationRowPage",
-    "ConversationSnapshot",
     "ConversationSummary",
     "ConversationSubmissionConflict",
     "LinkedTurn",
+    "RECOVERY_PAGE_MAX_LIMIT",
+    "RecoveryPageRequest",
+    "RecoveryTurnBatch",
+    "SubmissionSeed",
     "WebConversationSchemaError",
     "WebConversationStore",
     "WebConversationUnavailableError",

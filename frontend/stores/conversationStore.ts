@@ -22,7 +22,12 @@ export type ConversationMutationResult = 'ok' | 'missing' | 'error';
 
 export interface ConversationApi {
   list(cursor: string | null, signal?: AbortSignal): Promise<ConversationPage>;
-  history(conversationId: string, signal?: AbortSignal): Promise<ConversationHistory>;
+  history(
+    conversationId: string,
+    cursor?: string | null,
+    limit?: number,
+    signal?: AbortSignal,
+  ): Promise<ConversationHistory>;
   rename(
     conversationId: string,
     title: string,
@@ -57,6 +62,10 @@ export class ConversationStore extends Store {
   #viewGeneration = 0;
   #listController: AbortController | null = null;
   #viewController: AbortController | null = null;
+  #historyPageController: AbortController | null = null;
+  #historyNextCursor: string | null = null;
+  #historyLoadMoreState: ConversationLoadMoreState = 'idle';
+  #historyLoadMoreFlight: Promise<void> | null = null;
 
   constructor(api: ConversationApi = browserConversationApi) {
     super();
@@ -85,6 +94,14 @@ export class ConversationStore extends Store {
 
   get hasOlderConversations(): boolean {
     return this.#nextCursor !== null;
+  }
+
+  get historyLoadMoreState(): ConversationLoadMoreState {
+    return this.#historyLoadMoreState;
+  }
+
+  get hasOlderMessages(): boolean {
+    return this.#historyNextCursor !== null;
   }
 
   get viewState(): ConversationViewState {
@@ -173,6 +190,8 @@ export class ConversationStore extends Store {
     this.#abortView();
     this.#activeConversationId = null;
     this.#history = null;
+    this.#historyNextCursor = null;
+    this.#historyLoadMoreState = 'idle';
     this.#viewState = 'new';
     this.#publishView();
   }
@@ -181,24 +200,42 @@ export class ConversationStore extends Store {
     conversationId: string,
     options: {showLoading?: boolean; preserveOnError?: boolean} = {},
   ): Promise<ConversationOpenResult> {
-    this.#viewController?.abort();
-    const controller = new AbortController();
-    const generation = ++this.#viewGeneration;
     const sameConversation = this.#activeConversationId === conversationId;
+    const hadHistory = sameConversation && this.#history !== null;
+    this.#abortView();
+    const controller = new AbortController();
+    const generation = this.#viewGeneration;
     this.#viewController = controller;
     this.#activeConversationId = conversationId;
-    if (!sameConversation) this.#history = null;
+    this.#historyLoadMoreState = 'idle';
+    if (!sameConversation) {
+      this.#history = null;
+      this.#historyNextCursor = null;
+    }
     if (options.showLoading !== false) {
       this.#viewState = 'loading';
       this.#publishView();
     }
 
     try {
-      const history = await this.#api.history(conversationId, controller.signal);
+      const recent = await this.#api.history(conversationId, null, undefined, controller.signal);
       if (generation !== this.#viewGeneration) return 'stale';
-      this.#history = history;
+      if (recent.conversation.conversation_id !== conversationId) {
+        throw new Error('conversation history response changed conversation identity');
+      }
+      const replaceHistory = sameConversation && this.#history !== null
+        && this.#recentPageHasGap(this.#history.turns, recent.turns);
+      const turns = sameConversation && this.#history !== null && !replaceHistory
+        ? this.#mergeTurns(this.#history.turns, recent.turns, true)
+        : this.#mergeTurns([], recent.turns, true);
+      if (!hadHistory || replaceHistory) this.#historyNextCursor = recent.next_cursor ?? null;
+      this.#history = {
+        ...recent,
+        turns,
+        next_cursor: this.#historyNextCursor,
+      };
       this.#activeConversationId = conversationId;
-      this.#upsert(history.conversation);
+      this.#upsert(recent.conversation);
       this.#viewState = 'ready';
       this.#publishView();
       return 'ready';
@@ -207,6 +244,7 @@ export class ConversationStore extends Store {
       if (this.#isRouteUnavailable(error)) {
         this.#removeSummary(conversationId);
         this.#history = null;
+        this.#historyNextCursor = null;
         this.#activeConversationId = conversationId;
         this.#viewState = 'unavailable';
         this.#publishView();
@@ -216,11 +254,75 @@ export class ConversationStore extends Store {
         return 'error';
       }
       this.#history = null;
+      this.#historyNextCursor = null;
       this.#viewState = 'error';
       this.#publishView();
       return 'error';
     } finally {
       if (this.#viewController === controller) this.#viewController = null;
+    }
+  }
+
+  loadOlderMessages(): Promise<void> {
+    if (this.#historyLoadMoreFlight !== null) return this.#historyLoadMoreFlight;
+    const conversationId = this.#activeConversationId;
+    const cursor = this.#historyNextCursor;
+    if (!conversationId || cursor === null || this.#viewState !== 'ready') {
+      return Promise.resolve();
+    }
+    const flight = this.#loadOlderMessagesPage(
+      conversationId,
+      cursor,
+      this.#viewGeneration,
+    );
+    this.#historyLoadMoreFlight = flight;
+    void flight.finally(() => {
+      if (this.#historyLoadMoreFlight === flight) this.#historyLoadMoreFlight = null;
+    });
+    return flight;
+  }
+
+  async #loadOlderMessagesPage(
+    conversationId: string,
+    cursor: string,
+    generation: number,
+  ): Promise<void> {
+    this.#historyPageController?.abort();
+    const controller = new AbortController();
+    this.#historyPageController = controller;
+    this.#historyLoadMoreState = 'loading';
+    this.#publishView();
+    try {
+      const older = await this.#api.history(
+        conversationId,
+        cursor,
+        undefined,
+        controller.signal,
+      );
+      if (
+        generation !== this.#viewGeneration
+        || this.#activeConversationId !== conversationId
+        || this.#historyNextCursor !== cursor
+      ) return;
+      if (older.conversation.conversation_id !== conversationId || this.#history === null) {
+        throw new Error('older history response changed conversation identity');
+      }
+      this.#history = {
+        ...this.#history,
+        conversation: older.conversation,
+        turns: this.#mergeTurns(this.#history.turns, older.turns, false),
+        next_cursor: older.next_cursor ?? null,
+      };
+      this.#historyNextCursor = older.next_cursor ?? null;
+      this.#historyLoadMoreState = 'idle';
+      this.#upsert(older.conversation);
+      this.#publishView();
+    } catch (error) {
+      if (isAbortError(error) || generation !== this.#viewGeneration) return;
+      this.#historyLoadMoreState = 'error';
+      this.#publishView();
+    } finally {
+      if (this.#historyPageController === controller) this.#historyPageController = null;
     }
   }
 
@@ -235,6 +337,8 @@ export class ConversationStore extends Store {
     this.#upsert(summary);
     this.#activeConversationId = summary.conversation_id;
     this.#history = null;
+    this.#historyNextCursor = null;
+    this.#historyLoadMoreState = 'idle';
     this.#viewState = 'ready';
     // The live answer already owns the viewport; only list consumers update.
     this.changed();
@@ -258,7 +362,9 @@ export class ConversationStore extends Store {
         if (!this.#isMissing(error)) return 'error';
         this.#removeSummary(conversationId);
         if (this.#activeConversationId === conversationId) {
+          this.#abortView();
           this.#history = null;
+          this.#historyNextCursor = null;
           this.#viewState = 'unavailable';
           this.#publishView();
         }
@@ -271,6 +377,7 @@ export class ConversationStore extends Store {
     conversationId: string,
     signal?: AbortSignal,
   ): Promise<ConversationMutationResult> {
+    if (this.#activeConversationId === conversationId) this.#abortView();
     return this.#mutate(async () => {
       let result: ConversationMutationResult = 'ok';
       try {
@@ -280,11 +387,20 @@ export class ConversationStore extends Store {
         result = 'missing';
       }
       this.#removeSummary(conversationId);
+      if (this.#activeConversationId === conversationId) {
+        this.#abortView();
+        this.#activeConversationId = conversationId;
+        this.#history = null;
+        this.#historyNextCursor = null;
+        this.#viewState = 'unavailable';
+        this.#publishView();
+      }
       return result;
     });
   }
 
   async deleteAll(signal?: AbortSignal): Promise<ConversationMutationResult> {
+    this.#abortView();
     return this.#mutate(async () => {
       try {
         await this.#api.deleteAll(signal);
@@ -292,6 +408,7 @@ export class ConversationStore extends Store {
         return 'error';
       }
       this.#conversations = [];
+      this.openNew();
       return 'ok';
     });
   }
@@ -327,7 +444,15 @@ export class ConversationStore extends Store {
   #abortView(): void {
     this.#viewController?.abort();
     this.#viewController = null;
+    this.#abortHistoryPage();
     this.#viewGeneration += 1;
+  }
+
+  #abortHistoryPage(): void {
+    this.#historyPageController?.abort();
+    this.#historyPageController = null;
+    this.#historyLoadMoreFlight = null;
+    this.#historyLoadMoreState = 'idle';
   }
 
   #upsert(summary: ConversationSummary): void {
@@ -350,6 +475,41 @@ export class ConversationStore extends Store {
     ]));
     for (const conversation of incoming) byId.set(conversation.conversation_id, conversation);
     return this.#sort([...byId.values()]);
+  }
+
+  #recentPageHasGap(
+    existing: readonly ConversationHistory['turns'][number][],
+    recent: readonly ConversationHistory['turns'][number][],
+  ): boolean {
+    if (existing.length === 0 || recent.length === 0) return false;
+    const newestExisting = Math.max(...existing.map((turn) => turn.turn_number));
+    const oldestRecent = Math.min(...recent.map((turn) => turn.turn_number));
+    return oldestRecent > newestExisting + 1;
+  }
+
+  #mergeTurns(
+    existing: readonly ConversationHistory['turns'][number][],
+    incoming: readonly ConversationHistory['turns'][number][],
+    incomingWins: boolean,
+  ): ConversationHistory['turns'] {
+    const byId = new Map(existing.map((turn) => [turn.turn_id, turn]));
+    const byNumber = new Map(existing.map((turn) => [turn.turn_number, turn]));
+    for (const turn of incoming) {
+      const sameId = byId.get(turn.turn_id);
+      const sameNumber = byNumber.get(turn.turn_number);
+      if (
+        (sameId && (
+          sameId.turn_number !== turn.turn_number
+          || sameId.answer_run_id !== turn.answer_run_id
+        ))
+        || (sameNumber && sameNumber.turn_id !== turn.turn_id)
+      ) {
+        throw new Error('conversation turn identity changed across history pages');
+      }
+      if (!sameId || incomingWins) byId.set(turn.turn_id, turn);
+      byNumber.set(turn.turn_number, byId.get(turn.turn_id)!);
+    }
+    return [...byId.values()].sort((left, right) => left.turn_number - right.turn_number);
   }
 
   #sort(conversations: readonly ConversationSummary[]): ConversationSummary[] {

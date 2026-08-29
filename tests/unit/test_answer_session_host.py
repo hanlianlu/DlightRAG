@@ -12,6 +12,7 @@ from dlightrag.engine.agent.session.entries import (
     CompactionEntry,
     UserMessageEntry,
 )
+from dlightrag.engine.agent.session.fold import project_session_messages
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, ProjectionId, SessionId
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
@@ -46,6 +47,7 @@ from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.answer.execution.executor import (
     AnswerExecutor,
     _project_fast_history_before_current_user,
+    _reserve_agent_session_boundary,
 )
 from dlightrag.engine.answer.fast import FastSessionHost, ensure_session_lane
 from dlightrag.engine.answer.history import HistoryProjectionTarget
@@ -395,6 +397,38 @@ def test_transaction_commit_projection_stamps_entries_and_applies_register_write
 
 
 @pytest.mark.asyncio
+async def test_routing_boundary_refresh_observes_a_turn_settled_after_the_initial_load() -> None:
+    repository = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    initial = await repository.load(session_id)
+    earlier = await _fast_host(repository, session_id)
+    await earlier.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="earlier",
+        idempotency_key="earlier-key",
+        content="earlier question",
+    )
+    await earlier.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="earlier",
+        content="earlier answer",
+    )
+
+    boundary = await _reserve_agent_session_boundary(
+        repository,
+        session_id=session_id,
+        fencing_epoch=1,
+        previous=initial,
+    )
+
+    assert [
+        message["content"] for message in project_session_messages(boundary.tree.ancestry(), None)
+    ] == ["earlier question", "earlier answer"]
+
+
+@pytest.mark.asyncio
 async def test_fast_host_decodes_long_history_once_across_accept_complete_fail_and_replay() -> None:
     repository = _CountingFastRepository()
     session_id = SessionId.new()
@@ -710,6 +744,68 @@ async def test_staged_fast_result_settles_active_reservation_without_regeneratio
     assert isinstance(assistant, AssistantMessageEntry)
     assert assistant.content == "durable answer"
     assert not any(isinstance(record.value, HostTurnReservation) for record in snapshot.registers)
+
+
+@pytest.mark.asyncio
+async def test_fast_compaction_omits_a_failed_user_between_succeeded_and_current_turns() -> None:
+    store = MemoryAgentSessionRepository[None]()
+    session_id = SessionId.new()
+    host = await _fast_host(store, session_id)
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="run-succeeded",
+        idempotency_key="submission-succeeded",
+        content="successful question",
+    )
+    await host.complete(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="run-succeeded",
+        content="successful answer",
+    )
+    await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="run-failed",
+        idempotency_key="submission-failed",
+        content="failed question",
+    )
+    await host.fail(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="run-failed",
+    )
+    current = await host.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        reservation_id="run-current",
+        idempotency_key="submission-current",
+        content="current question",
+    )
+    snapshot = await store.load(session_id)
+    ancestry = snapshot.tree.ancestry()
+    projection = ContextProjection(
+        projection_id=ProjectionId.new(),
+        covered_through_sequence=ancestry[1].sequence,
+        first_retained_sequence=ancestry[2].sequence,
+        summary='{"goal":"successful turn"}',
+        covered_through_entry_id=ancestry[1].entry_id,
+        first_retained_entry_id=ancestry[2].entry_id,
+        source_digest=projection_source_digest([entry.entry_id for entry in ancestry[:2]]),
+    )
+
+    history = _project_fast_history_before_current_user(
+        snapshot,
+        lane_id=LaneId.main(),
+        projection=projection,
+        accepted_user_entry_id=current.user_entry_id,
+    )
+
+    assert len(history.messages) == 1
+    assert "successful turn" in str(history.messages[0]["content"])
+    assert all(message.get("content") != "failed question" for message in history.messages)
+    assert all(message.get("content") != "current question" for message in history.messages)
 
 
 @pytest.mark.asyncio
@@ -1159,7 +1255,7 @@ async def test_staged_fast_result_rejects_an_interleaved_lane_head() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fast_failure_clears_reservation_but_keeps_unanswered_user() -> None:
+async def test_fast_failure_keeps_replay_user_but_omits_it_from_model_history() -> None:
     store = MemoryAgentSessionRepository[None]()
     session_id = SessionId.new()
     host = await _fast_host(store, session_id)
@@ -1180,6 +1276,7 @@ async def test_fast_failure_clears_reservation_but_keeps_unanswered_user() -> No
     [entry] = snapshot.tree.ancestry()
     assert isinstance(entry, UserMessageEntry)
     assert entry.content == "unanswered"
+    assert project_session_messages(snapshot.tree.ancestry(), None) == []
     assert not any(isinstance(record.value, HostTurnReservation) for record in snapshot.registers)
 
     recovered = await host.accept(

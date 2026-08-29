@@ -211,8 +211,8 @@ on every host and needs no leader election:
   left alone and released when that run is itself deleted.
 
 Conversation deletion removes linked runs before the conversation row, matching
-the retention lock order. The 100-turn conversation snapshot is only a read
-window and never trims durable rows.
+the retention lock order. Conversation history uses bounded signed keyset pages
+(default 40, maximum 100) and never trims durable rows.
 
 ## Graph Storage
 

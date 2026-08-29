@@ -359,6 +359,8 @@ export class DlConversationSidebar extends LightElement {
         conversationId: history.conversation.conversation_id,
         history: history.turns,
         lineage,
+        hasOlderMessages: conversationStore.hasOlderMessages,
+        olderMessagesState: conversationStore.historyLoadMoreState,
       };
       return;
     }
