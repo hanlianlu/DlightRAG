@@ -103,7 +103,11 @@ export class DlWorkspaceCreate extends LightElement {
               ?disabled=${this.pending} @click=${(event: MouseEvent) => {
                 event.stopPropagation();
                 void this.#submit();
-              }}>${msg('Create', {id: 'workspaceCreate.create'})}</button>
+              }}>
+        <svg class="ui-popover-create-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 2.75v10.5M2.75 8h10.5"></path>
+        </svg>
+      </button>
     `;
   }
 }

@@ -93,3 +93,23 @@ it('dialog radio inputs use the active theme accent', () => {
 
   expect(getComputedStyle(input).accentColor).to.equal(getComputedStyle(accentProbe).color);
 });
+
+it('popover create icon is geometrically centered inside its square button', () => {
+  const row = fixture('ui-popover-create', `
+    <button class="ui-popover-create-btn" aria-label="Create workspace">
+      <svg class="ui-popover-create-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 3.5v9M3.5 8h9"></path>
+      </svg>
+    </button>
+  `);
+  const button = row.querySelector<HTMLButtonElement>('button')!;
+  const icon = row.querySelector<SVGElement>('svg')!;
+  const buttonRect = button.getBoundingClientRect();
+  const iconRect = icon.getBoundingClientRect();
+
+  expect(buttonRect.width).to.equal(buttonRect.height);
+  expect(Math.abs(buttonRect.left + buttonRect.width / 2 - iconRect.left - iconRect.width / 2))
+    .to.be.lessThanOrEqual(0.5);
+  expect(Math.abs(buttonRect.top + buttonRect.height / 2 - iconRect.top - iconRect.height / 2))
+    .to.be.lessThanOrEqual(0.5);
+});

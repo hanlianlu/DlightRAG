@@ -105,7 +105,9 @@ const PRIMITIVES: PrimitiveSpec[] = [
       '<div class="ui-popover" role="dialog" aria-label="Workspaces">' +
       '<button class="ui-popover-item" type="button" aria-pressed="true">All workspaces</button>' +
       '<div class="ui-popover-create"><input class="ui-popover-input" aria-label="New workspace name" ' +
-      'placeholder="New workspace..."><button class="ui-popover-create-btn" aria-label="Create workspace">Create</button>' +
+      'placeholder="New workspace..."><button class="ui-popover-create-btn" aria-label="Create workspace">' +
+      '<svg class="ui-popover-create-icon" viewBox="0 0 16 16" aria-hidden="true">' +
+      '<path d="M8 2.75v10.5M2.75 8h10.5"></path></svg></button>' +
       '</div></div>',
   },
   {

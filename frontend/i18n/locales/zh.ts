@@ -283,7 +283,6 @@ export const templates: Record<
   'workspaceCreate.placeholder': '新工作区…',
   'workspaceCreate.nameAria': '新工作区名称',
   'workspaceCreate.createAria': '创建工作区',
-  'workspaceCreate.create': '创建',
 
   // Workspace scope
   'workspaceScope.loadingMore': '正在加载工作区…',
