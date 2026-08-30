@@ -234,11 +234,21 @@ Cancelling a waiting convenience call or closing any event subscriber detaches
 that caller only. Explicit run cancellation is the sole client action that sets
 `cancel_requested_at`.
 
-`POST /web/api/answer` creates a core run and returns its descriptor. For a first
-submission, an omitted `conversation_id` causes the server to create the
-conversation, turn, uploaded artifacts, and run in that same transaction; a
-failed admission leaves no empty conversation. The browser then subscribes to
-its own owner-scoped `/web/api/answer/{run_id}/events`. That
+`POST /web/api/answer` creates a core run and returns the canonical accepted
+`{conversation, turn}` projection. For a first submission, an omitted
+`conversation_id` causes the server to create the conversation, turn, uploaded
+artifacts, and run in that same transaction; a failed admission leaves no empty
+conversation. After an ambiguous POST result the browser reconciles through the
+owner-scoped `GET /web/api/answer-submissions/{submission_id}` route; a found
+submission returns the POST-identical projection and an unknown or foreign id
+returns 404. Reconciliation never automatically repeats POST. A browser-local
+XState actor owns only this pre-acceptance transaction: explicit Retry reuses the
+original submission UUID and immutable query/scope/mode/files, while Edit
+restores that intent to the composer and a later Send creates a new UUID. Pending
+attachments move into one in-memory lease without cloning Blob URLs; the lease
+is revoked only after the canonical accepted turn replaces the optimistic turn,
+on discard, or when the registry is disposed. The browser then subscribes to its
+own owner-scoped `/web/api/answer/{run_id}/events`. That
 stream follows the same durable event log with the same sequence, resume, 410,
 and detach semantics as the REST stream, and differs only in projection: a
 browser `done` frame embeds the same typed `AnswerPresentation` used by

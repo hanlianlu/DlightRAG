@@ -6,12 +6,14 @@
 // in user order. The server contract (parse_web_answer_request) reads exactly
 // these names: query, workspaces, optional conversation_id, submission_id, attachments.
 
+export type AnswerMode = 'auto' | 'fast' | 'research';
+
 export interface AnswerEnvelope {
     query: string;
     workspaces: string[];
     conversationId: string | null;
     submissionId: string;
-    mode?: 'auto' | 'fast' | 'research';
+    mode?: AnswerMode;
 }
 
 export interface AnswerRequestInit {

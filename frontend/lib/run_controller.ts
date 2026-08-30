@@ -6,7 +6,7 @@ import {
   type ConversationTurn,
 } from '../api/conversations.ts';
 import {createSSEParser, parseData} from './sse.ts';
-import {answerRunStore} from '../stores/answerRunStore.ts';
+import {answerEventCursorStore} from '../stores/answerEventCursorStore.ts';
 
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_DELAY_MS = 500;
@@ -95,7 +95,6 @@ export class RunController {
   readonly #readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
   #batch: AnswerRunBatch | null = null;
   #timer: ReturnType<typeof setTimeout> | null = null;
-  #submissionPending = false;
   #active = false;
   #stopping = false;
   #runId: string | null = null;
@@ -122,10 +121,6 @@ export class RunController {
     return this.#stopping;
   }
 
-  get submissionPending(): boolean {
-    return this.#submissionPending;
-  }
-
   get runId(): string | null {
     return this.#runId;
   }
@@ -134,25 +129,6 @@ export class RunController {
   signalFor(runId: string): AbortSignal | null {
     const signal = this.#lifecycleController?.signal;
     return this.#runId === runId && signal && !signal.aborted ? signal : null;
-  }
-
-  /** Start the short, navigation-blocking window before a submission is durable. */
-  beginSubmission(): AbortSignal | null {
-    if (this.#active) return null;
-    this.#startLifecycle();
-    this.#submissionPending = true;
-    this.#active = true;
-    this.#notify();
-    return this.#lifecycleController?.signal ?? null;
-  }
-
-  /** Bind the accepted durable run without replacing the submission's abort signal. */
-  acceptSubmission(runId: string, cancelRequested: boolean): void {
-    if (!this.#lifecycleController) return;
-    this.#submissionPending = false;
-    this.#runId = runId;
-    this.#stopping = cancelRequested || this.#cancelControllers.has(runId);
-    this.#notify();
   }
 
   /** Begin following a durable run discovered from conversation history. */
@@ -229,7 +205,7 @@ export class RunController {
     let barrenAttempts = 0;
 
     const mayRetry = (before: number): boolean => {
-      barrenAttempts = answerRunStore.lastSequence(conversationId, runId) > before
+      barrenAttempts = answerEventCursorStore.lastSequence(conversationId, runId) > before
         ? 0
         : barrenAttempts + 1;
       return barrenAttempts <= this.#maxReconnectAttempts;
@@ -237,7 +213,7 @@ export class RunController {
 
     try {
       while (!signal.aborted) {
-        const after = answerRunStore.lastSequence(conversationId, runId);
+        const after = answerEventCursorStore.lastSequence(conversationId, runId);
         let response: Response;
         try {
           response = await this.#fetch(`/web/api/answer/${encodeURIComponent(runId)}/events`, {
@@ -299,14 +275,12 @@ export class RunController {
     this.#lifecycleController?.abort();
     this.#cancelReaders();
     this.#lifecycleController = new AbortController();
-    this.#submissionPending = false;
     this.#runId = null;
     this.#stopping = false;
   }
 
   #resetState(): void {
-    const changed = this.#active || this.#submissionPending || this.#stopping || this.#runId !== null;
-    this.#submissionPending = false;
+    const changed = this.#active || this.#stopping || this.#runId !== null;
     this.#active = false;
     this.#stopping = false;
     this.#runId = null;
@@ -428,8 +402,8 @@ export class RunController {
       if (signal.aborted || this.#batch !== batch) return;
       const sequence = Number(id);
       if (Number.isFinite(sequence) && sequence > 0) {
-        if (sequence <= answerRunStore.lastSequence(conversationId, runId)) return;
-        answerRunStore.recordSequence(conversationId, runId, sequence);
+        if (sequence <= answerEventCursorStore.lastSequence(conversationId, runId)) return;
+        answerEventCursorStore.recordSequence(conversationId, runId, sequence);
       }
       const event = this.#interpretEvent(eventType, data);
       if (!event) return;

@@ -833,6 +833,29 @@ def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
 
 
 @pytest.mark.e2e
+def test_mobile_topbar_hides_scope_copy_and_keeps_an_accessible_icon_files_action(
+    page: Page,
+) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+    close = page.get_by_role("button", name="Close conversations")
+    if close.is_visible():
+        close.click()
+        expect(page.locator("#chat-sidebar")).to_be_hidden()
+
+    expect(page.locator(".topbar-scope-label")).to_be_hidden()
+    files = page.get_by_role("button", name="Files", exact=True)
+    expect(files).to_be_visible()
+    expect(files.locator(".files-button-label")).to_be_hidden()
+    expect(files.locator(".files-button-icon")).to_be_visible()
+    box = files.bounding_box()
+    assert box is not None
+    assert box["width"] == pytest.approx(box["height"], abs=1)
+
+
+@pytest.mark.e2e
 def test_resizing_open_files_panel_to_compact_locks_controls_but_not_scroll(page: Page) -> None:
     _install_conversation_routes(page)
     page.set_viewport_size({"width": 1440, "height": 900})

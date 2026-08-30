@@ -130,19 +130,9 @@ export interface ConversationTurn {
   created_at: string;
 }
 
-export interface AnswerRunDescriptor {
-  run_id: string;
-  status: AnswerRunStatus;
-  cancel_requested: boolean;
-  turn_id: string;
-  turn_number: number;
-  submission_id: string;
-  events_url: string;
-  status_url: string;
-  cancel_url: string;
-  parent_run_id?: string | null;
-  continuation_kind?: string | null;
+export interface AcceptedAnswer {
   conversation: ConversationSummary;
+  turn: ConversationTurn;
 }
 
 export interface ConversationHistory {
@@ -320,7 +310,7 @@ export async function continueAnswerRun(
   content: string,
   submissionId: string,
   signal?: AbortSignal,
-): Promise<AnswerRunDescriptor> {
+): Promise<AcceptedAnswer> {
   const id = encodeURIComponent(runId);
   const response = await fetch(`/web/api/answer/${id}/${operation}`, {
     method: 'POST',
@@ -328,7 +318,7 @@ export async function continueAnswerRun(
     body: JSON.stringify({content, submission_id: submissionId}),
     signal,
   });
-  return responseJson<AnswerRunDescriptor>(response, `Failed to ${operation} the answer`);
+  return responseJson<AcceptedAnswer>(response, `Failed to ${operation} the answer`);
 }
 
 export async function resumeAnswerRun(

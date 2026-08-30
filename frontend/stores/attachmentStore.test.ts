@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {AttachmentStore} from './attachmentStore.ts';
+import {AttachmentStore, type PendingAttachment} from './attachmentStore.ts';
 
 function file(name: string, type: string, size = 10): File {
   return {name, type, size} as File;
@@ -87,7 +87,41 @@ test('clear empties the collection and revokes every url', () => {
   assert.deepEqual(revoked.sort(), [a.objectUrl, b.objectUrl].sort());
 });
 
-test('subscribers are notified on add, remove, and clear', () => {
+test('list returns a snapshot that cannot mutate store ownership', () => {
+  const {store} = makeStore();
+  store.add(file('a.png', 'image/png'), 'image');
+
+  (store.list() as PendingAttachment[]).length = 0;
+
+  assert.equal(store.size, 1);
+});
+
+test('a lease moves the existing File and Blob URL and can restore them', () => {
+  const {store, revoked} = makeStore();
+  const original = store.add(file('a.png', 'image/png'), 'image');
+
+  const lease = store.leaseAll();
+
+  assert.equal(store.size, 0);
+  assert.equal(lease.items[0], original);
+  lease.restore();
+  assert.equal(store.list()[0], original);
+  assert.deepEqual(revoked, []);
+});
+
+test('accepting or discarding a lease revokes its single Blob URL once', () => {
+  const {store, revoked} = makeStore();
+  const accepted = store.add(file('a.png', 'image/png'), 'image');
+  const acceptedLease = store.leaseAll();
+  acceptedLease.accept();
+  acceptedLease.discard();
+  const discarded = store.add(file('b.pdf', 'application/pdf'), 'document');
+  store.leaseAll().discard();
+
+  assert.deepEqual(revoked, [accepted.objectUrl, discarded.objectUrl]);
+});
+
+test('subscribers are notified on add, remove, clear, lease, and restore', () => {
   const {store} = makeStore();
   let notifications = 0;
   store.subscribe(() => {
@@ -97,7 +131,9 @@ test('subscribers are notified on add, remove, and clear', () => {
   const a = store.add(file('a.png', 'image/png'), 'image');
   store.add(file('b.pdf', 'application/pdf'), 'document');
   store.remove(a.id);
+  const lease = store.leaseAll();
+  lease.restore();
   store.clear();
 
-  assert.equal(notifications, 4);
+  assert.equal(notifications, 6);
 });

@@ -16,6 +16,14 @@ export interface PendingAttachment {
     objectUrl: string;
 }
 
+export interface AttachmentLease {
+    readonly items: readonly PendingAttachment[];
+    readonly settled: boolean;
+    accept(): void;
+    restore(): void;
+    discard(): void;
+}
+
 interface AttachmentStoreOptions {
     createId?: () => string;
     createObjectUrl?: (file: File) => string;
@@ -44,7 +52,33 @@ export class AttachmentStore {
     }
 
     list(): readonly PendingAttachment[] {
-        return this.#items;
+        return [...this.#items];
+    }
+
+    /** Move every attachment into a submission without creating another Blob URL. */
+    leaseAll(): AttachmentLease {
+        const items = this.#items.splice(0);
+        if (items.length > 0) this.#notify();
+        let settled = false;
+        const settle = (restore: boolean): void => {
+            if (settled) return;
+            settled = true;
+            if (restore) {
+                this.#items.unshift(...items);
+                if (items.length > 0) this.#notify();
+                return;
+            }
+            for (const item of items) this.#revokeObjectUrl(item.objectUrl);
+        };
+        return {
+            items: [...items],
+            get settled() {
+                return settled;
+            },
+            accept: () => settle(false),
+            restore: () => settle(true),
+            discard: () => settle(false),
+        };
     }
 
     add(file: File, kind: PendingAttachmentKind): PendingAttachment {

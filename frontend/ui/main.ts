@@ -18,16 +18,16 @@ await initializeLanguagePreference();
 
 const appModule = await import('./app.ts');
 void appModule;
-const {setupMathRendering} = await import('./mathjax.ts');
-const {setupPanelSplits} = await import('./split_panel.ts');
+const {initializeBrowserAdapters} = await import('./browser_adapters.ts');
 
-// Vite's one-shot entry is the approved seam for the two browser/third-party
-// adapters: MathJax loading/scheduling and Web Awesome split-panel binding.
-document.addEventListener('DOMContentLoaded', () => {
+// Dynamic imports can finish after DOMContentLoaded on a cold load. Start
+// immediately when parsing already completed, otherwise wait for it once.
+const start = (): void => {
   const app = document.querySelector<DlApp>('dl-app');
-  if (!app) return;
-  void app.ready.then(() => {
-    setupPanelSplits();
-    setupMathRendering();
-  });
-});
+  if (app) void initializeBrowserAdapters(app);
+};
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', start, {once: true});
+} else {
+  start();
+}

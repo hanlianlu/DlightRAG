@@ -66,6 +66,34 @@ it('sanitizes rich answer HTML while Lit escapes structured references', async (
   expect(eventPresentation).to.equal(element.presentation);
 });
 
+it('expands and collapses long References lists locally per Answer', async () => {
+  const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
+  element.presentation = {
+    ...presentation,
+    sources: Array.from({length: 5}, (_, index) => ({
+      ...presentation.sources[0],
+      id: String(index + 1),
+      title: `Reference ${index + 1}`,
+    })),
+  };
+  document.body.appendChild(element);
+  await element.updateComplete;
+
+  const toggle = element.querySelector<HTMLButtonElement>('.answer-references-show-all')!;
+  expect(toggle.textContent?.trim()).to.equal('Show all 5');
+  expect(toggle.getAttribute('aria-expanded')).to.equal('false');
+  toggle.click();
+  await element.updateComplete;
+
+  const collapse = element.querySelector<HTMLButtonElement>('.answer-references-show-all')!;
+  expect(element.querySelector('.answer-reference-list')?.classList.contains('expanded')).to.equal(true);
+  expect(collapse.textContent?.trim()).to.equal('Show fewer');
+  expect(collapse.getAttribute('aria-expanded')).to.equal('true');
+  collapse.click();
+  await element.updateComplete;
+  expect(element.querySelector('.answer-reference-list')?.classList.contains('expanded')).to.equal(false);
+});
+
 it('renders Artifact intent and semantic Visual Evidence in approved order', async () => {
   const artifact = {
     resource_id: 'artifact-report',

@@ -22,8 +22,10 @@ from dlightrag.adapters.http.browser.answer_events import browser_frame
 from dlightrag.adapters.http.browser.app_shell import app_html_response
 from dlightrag.adapters.http.browser.attachment_requests import parse_web_answer_request
 from dlightrag.adapters.http.browser.conversation_models import (
-    AnswerRunDescriptor,
+    AcceptedAnswer,
     ConversationTurn,
+    WebCommandError,
+    WebCommandErrorKind,
 )
 from dlightrag.adapters.http.browser.conversations import (
     WEB_IMAGE_URL_BASE,
@@ -47,6 +49,7 @@ from dlightrag.application.access import AccessAction, owner_id_from_user
 from dlightrag.application.answer_runs import (
     CHILD_ROSTER_PAGE_DEFAULT_LIMIT,
     CHILD_ROSTER_PAGE_MAX_LIMIT,
+    AnswerRuntimeUnavailableError,
     ChildRosterCursorError,
     ChildRosterPageRequest,
     IdempotencyKeyConflict,
@@ -56,8 +59,10 @@ from dlightrag.application.answer_runs.sources import SourceDownloadLinkBuilder
 from dlightrag.application.corpus_admin import normalize_workspace_ids
 from dlightrag.application.web_conversations import (
     ConversationSubmissionConflict,
+    LinkedTurn,
     WebAnswerSubmission,
     WebConversationService,
+    WebConversationUnavailableError,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,37 +101,46 @@ async def design_system_page() -> FileResponse:
     return app_html_response("design-system.html")
 
 
-@router.post("/answer", status_code=202, response_model=AnswerRunDescriptor)
+@router.post("/answer", status_code=202, response_model=AcceptedAnswer)
 async def start_answer_run(
     request: Request,
     workspace: str = Depends(get_workspace),
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
-) -> AnswerRunDescriptor:
+) -> AcceptedAnswer:
     """Accept one submission as a durable run linked to its conversation entry.
 
     The run, its uploaded bytes, and the conversation turn are committed in one
-    transaction before this descriptor is returned, so the browser follows the
-    run's own event stream and a page reload rediscovers it from history.
+    transaction before this result is returned, so the browser can discard its
+    local File and Blob resources at the acceptance seam.
     """
     application = get_application(request)
     cfg = application.config
     # Enforce the probed answer capability at admission (pre-acceptance 4xx).
     capability = (await application.answers.capabilities()).answer
-    body = await parse_web_answer_request(
-        request,
-        max_attachments=cfg.answer.generation.max_attachments,
-        max_attachment_bytes=cfg.answer.generation.max_attachment_bytes,
-        max_total_attachment_bytes=cfg.answer.generation.max_total_attachment_bytes,
-        image_max_pixels=cfg.answer.generation.image_max_pixels,
-        answer_image_capability=capability,
-    )
+    try:
+        body = await parse_web_answer_request(
+            request,
+            max_attachments=cfg.answer.generation.max_attachments,
+            max_attachment_bytes=cfg.answer.generation.max_attachment_bytes,
+            max_total_attachment_bytes=cfg.answer.generation.max_total_attachment_bytes,
+            image_max_pixels=cfg.answer.generation.image_max_pixels,
+            answer_image_capability=capability,
+        )
+    except HTTPException as exc:
+        kind = "attachment_rejected" if exc.status_code == 413 else "invalid_request"
+        raise _command_error(exc.status_code, kind, str(exc.detail)) from exc
     query = body.query.strip()
     if not query:
-        raise HTTPException(status_code=422, detail="A question is required")
+        raise _command_error(422, "invalid_request", "A question is required")
 
     target_workspaces = normalize_workspace_ids(body.workspaces or [workspace])
-    for ws in target_workspaces:
-        await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
+    try:
+        for ws in target_workspaces:
+            await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        raise _command_error(403, "scope_forbidden", str(exc.detail)) from exc
 
     try:
         submission = await conversation_service.start_answer(
@@ -141,13 +155,40 @@ async def start_answer_run(
             mode=body.mode,
         )
     except ConversationSubmissionConflict, IdempotencyKeyConflict:
-        raise HTTPException(
-            status_code=409,
-            detail="This submission id was already used for a different request",
+        raise _command_error(
+            409,
+            "submission_conflict",
+            "This submission id was already used for a different request",
+        ) from None
+    except AnswerRuntimeUnavailableError, WebConversationUnavailableError:
+        raise _command_error(
+            503, "service_unavailable", "Answer submission is temporarily unavailable"
         ) from None
     if submission is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return answer_run_descriptor(submission)
+        raise _command_error(404, "conversation_missing", "Conversation not found")
+    return await accepted_answer(request, submission)
+
+
+@router.get("/answer-submissions/{submission_id}", response_model=AcceptedAnswer)
+async def accepted_answer_submission(
+    submission_id: UUID,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> AcceptedAnswer:
+    """Recover one owner-scoped accepted command after an ambiguous POST result."""
+    try:
+        submission = await conversation_service.submission(
+            getattr(request.state, "user_context", None), str(submission_id)
+        )
+    except WebConversationUnavailableError:
+        raise _command_error(
+            503,
+            "service_unavailable",
+            "Answer submission lookup is temporarily unavailable",
+        ) from None
+    if submission is None:
+        raise _command_error(404, "invalid_request", "Answer submission not found")
+    return await accepted_answer(request, submission)
 
 
 @router.get("/answer/{run_id}", response_model=ConversationTurn)
@@ -249,7 +290,7 @@ async def _continue_answer_run(
     body: _WebContinuation,
     request: Request,
     conversation_service: WebConversationService,
-) -> AnswerRunDescriptor:
+) -> AcceptedAnswer:
     user = getattr(request.state, "user_context", None)
     parent = await conversation_service.turn_for_run(user, run_id)
     authorized_workspaces: list[str] | None = None
@@ -269,13 +310,18 @@ async def _continue_answer_run(
             authorized_workspaces=authorized_workspaces,
         )
     except ConversationSubmissionConflict, IdempotencyKeyConflict:
-        raise HTTPException(
-            status_code=409,
-            detail="This submission id was already used for a different continuation",
+        raise _command_error(
+            409,
+            "submission_conflict",
+            "This submission id was already used for a different continuation",
         ) from None
     if submission is None:
-        raise HTTPException(status_code=409, detail="Continuation requires a terminal answer")
-    return answer_run_descriptor(submission)
+        raise _command_error(
+            409,
+            "invalid_request",
+            "Continuation requires a terminal answer",
+        )
+    return await accepted_answer(request, submission)
 
 
 @router.post("/answer/{run_id}/follow-up", status_code=202)
@@ -284,7 +330,7 @@ async def follow_up_answer_run(
     body: _WebContinuation,
     request: Request,
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
-) -> AnswerRunDescriptor:
+) -> AcceptedAnswer:
     return await _continue_answer_run(
         kind="follow_up",
         run_id=run_id,
@@ -300,7 +346,7 @@ async def fork_answer_run(
     body: _WebContinuation,
     request: Request,
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
-) -> AnswerRunDescriptor:
+) -> AcceptedAnswer:
     return await _continue_answer_run(
         kind="fork",
         run_id=run_id,
@@ -481,23 +527,34 @@ async def answer_run_events(
     )
 
 
-def answer_run_descriptor(submission: WebAnswerSubmission) -> AnswerRunDescriptor:
-    """Project the owner-scoped links one accepted submission is followed by."""
-    run_id = submission.run.run_id
-    accepted = submission.run.request_input()
-    return AnswerRunDescriptor(
-        run_id=run_id,
-        status=submission.run.status,
-        cancel_requested=submission.run.cancel_requested,
+async def accepted_answer(
+    request: Request,
+    submission: WebAnswerSubmission,
+) -> AcceptedAnswer:
+    """Project one accepted command through the same canonical history model."""
+    downloadable, visual = await _projection_workspaces(request, submission.run.request_input())
+    linked = LinkedTurn(
         turn_id=submission.turn_id,
         turn_number=submission.turn_number,
-        submission_id=str(submission.run.idempotency_key or ""),
-        events_url=f"/web/api/answer/{run_id}/events",
-        status_url=f"/web/api/answer/{run_id}",
-        cancel_url=f"/web/api/answer/{run_id}",
+        submission_id=submission.submission_id,
+        created_at=submission.created_at or submission.run.created_at,
+        run=submission.run,
+        conversation_id=submission.conversation.conversation_id,
+    )
+    return AcceptedAnswer(
         conversation=project_conversation_summary(submission.conversation),
-        parent_run_id=accepted.get("parent_run_id"),
-        continuation_kind=accepted.get("continuation_kind"),
+        turn=project_conversation_turn(
+            linked,
+            downloadable_workspaces=downloadable,
+            visual_workspaces=visual,
+        ),
+    )
+
+
+def _command_error(status_code: int, kind: WebCommandErrorKind, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail=WebCommandError(kind=kind, message=message).model_dump(),
     )
 
 

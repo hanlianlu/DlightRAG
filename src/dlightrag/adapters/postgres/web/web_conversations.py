@@ -1061,6 +1061,24 @@ class PGWebConversationStore(PostgresOperationRunner):
 
         return await self._run_read(_operation)
 
+    async def find_answer_turn_by_submission(
+        self, principal_id: str, submission_id: str
+    ) -> AnswerTurnCreation | None:
+        """Return one owner-scoped accepted submission without needing its conversation."""
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> AnswerTurnCreation | None:
+            row = await conn.fetchrow(_GET_TURN_BY_SUBMISSION, principal_id, submission_id)
+            if row is None:
+                return None
+            return AnswerTurnCreation(
+                turn=_linked_turn(row),
+                summary=_row_dict(row),
+                replayed=True,
+            )
+
+        return await self._run_read(_operation)
+
     async def create_answer_turn(
         self,
         *,

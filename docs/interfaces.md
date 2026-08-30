@@ -363,7 +363,7 @@ LightRAG's document status and DlightRAG's content-hash guard.
 | REST API | JSON object | HTTP 202 run descriptor | reconnectable SSE at `/answer/{run_id}/events` |
 | CLI / eval HTTP helper | — | waits for the REST result | reconnectable SSE via the internal HTTP client |
 | MCP Server | JSON text | descriptor-only, returns immediately | status, steer, follow-up, cancel, resume, fork, transcript, and child-roster tools |
-| Web UI | — | HTTP 202 run descriptor | rendered events plus applicable run/control/branch routes under `/web/api/answer/{run_id}` |
+| Web UI | — | HTTP 202 canonical accepted conversation turn | rendered events plus applicable run/control/branch routes under `/web/api/answer/{run_id}` |
 | CLI (`scripts/cli.py`) | JSON object printed to stdout | Typed `parts` plus default `evidence_images` render as terminal text and image URL lines | follows the run, then falls back to status |
 
 ### Contract Terms
@@ -515,9 +515,18 @@ and attachment reads always filter by both the authenticated principal and
 conversation ID, so another principal receives the same 404 as a missing
 conversation.
 
-`POST /web/api/answer` creates a core run and returns its 202 descriptor, including
-the authoritative conversation summary; the browser then subscribes to its own
-owner-scoped `GET /web/api/answer/{run_id}/events`. That
+`POST /web/api/answer` creates a core run and returns `202 Accepted` with the
+canonical `{conversation, turn}` projection. The turn carries the authoritative
+`submission_id`, `answer_run_id`, status, cancellation flag, user text, and
+committed attachment references. `GET /web/api/answer-submissions/{submission_id}`
+performs an owner-scoped reconciliation lookup and returns that identical shape,
+or 404 for an unknown or foreign id. The browser uses lookup after an ambiguous
+POST result and never automatically repeats the POST. Pre-acceptance command
+failures use `{kind, message}` with `invalid_request`, `attachment_rejected`,
+`scope_forbidden`, `conversation_missing`, `submission_conflict`, or
+`service_unavailable`; authentication expiry remains HTTP 401 and returns the
+browser to the login flow. It then subscribes to its owner-scoped
+`GET /web/api/answer/{run_id}/events`. That
 stream follows the same durable event log as the REST stream, with the same
 sequence, `Last-Event-ID` resume, 410-on-trim, and detach semantics, and differs
 only in projection: a browser `done` frame embeds one typed

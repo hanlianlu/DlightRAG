@@ -2,17 +2,16 @@
 
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
-import {csrfHeaders} from '../api/csrf.ts';
+import {waitFor} from 'xstate';
+import {BrowserAnswerSubmissionAdapter} from '../api/answerSubmission.ts';
 import {
   continueAnswerRun,
   getAnswerRunChildren,
   getAnswerRunChildrenPage,
   steerAnswerRun,
-  type AnswerRunDescriptor,
   type ConversationAttachmentReference,
   type ConversationTurn,
 } from '../api/conversations.ts';
-import {buildAnswerRequest} from '../lib/answer_request.ts';
 import {localizedRunErrorPayload} from '../lib/run_errors.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {
@@ -21,8 +20,13 @@ import {
   type FollowResult,
 } from '../lib/run_controller.ts';
 import {LightElement} from '../lib/lit_host.ts';
-import {answerRunStore, payloadFingerprint} from '../stores/answerRunStore.ts';
+import {answerEventCursorStore} from '../stores/answerEventCursorStore.ts';
 import {attachmentStore} from '../stores/attachmentStore.ts';
+import {AnswerSubmissionController} from '../stores/answerSubmissionController.ts';
+import {
+  answerSubmissionSnapshot,
+  type AnswerSubmissionActor,
+} from '../stores/answerSubmissionMachine.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import type {AttachmentPolicy} from './attachment_policy.ts';
@@ -48,7 +52,6 @@ import {webRouter} from './router.ts';
 
 export type {ChatRunActionDetail, ChatView, ChatViewActionDetail} from './chat_message_list.ts';
 
-const NEW_CHAT_RUN_KEY = '__new_chat__';
 type AnswerPhase = 'routing' | 'planning' | 'searching' | 'researching' | 'generating';
 export const ANSWER_PHASE_LABELS = {
   routing: 'Routing answer...',
@@ -117,12 +120,18 @@ function isMemoryOperation(value: unknown): value is ChatMemoryOperationDetail {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function loginHref(): string {
+  const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  return `/web/login?next=${encodeURIComponent(next)}`;
+}
+
 function optimisticTurn(
+  submissionId: string,
   query: string,
   attachments: readonly ConversationAttachmentReference[],
 ): ChatTurnView {
   return {
-    id: `local-${crypto.randomUUID()}`,
+    id: `local-${submissionId}`,
     userText: query,
     userAttachments: attachments,
     runId: '',
@@ -159,6 +168,10 @@ export class DlChatFeature extends LightElement {
   declare runRevision: number;
 
   readonly #runController: RunController;
+  readonly #submissionController = new AnswerSubmissionController(this);
+  readonly #submissionAdapter = new BrowserAnswerSubmissionAdapter();
+  #submissionActor: AnswerSubmissionActor | null = null;
+  #submissionTurnId: string | null = null;
   #continuationController: AbortController | null = null;
   #pendingResume: {conversationId: string; stored: ConversationTurn} | null = null;
   #scrollRequest = 0;
@@ -180,7 +193,13 @@ export class DlChatFeature extends LightElement {
   }
 
   get submissionPending(): boolean {
-    return this.#runController.submissionPending;
+    return this.#submissionController.snapshots.some(
+      ({status}) => status === 'submitting' || status === 'reconciling',
+    );
+  }
+
+  get hasUnresolvedSubmission(): boolean {
+    return this.#submissionController.snapshots.length > 0;
   }
 
   get hasDraft(): boolean {
@@ -260,6 +279,11 @@ export class DlChatFeature extends LightElement {
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (!changed.has('view')) return;
     this.#pendingResume = null;
+    const routeConversationId = this.view.kind === 'ready' ? this.view.conversationId : null;
+    this.#submissionActor = this.#submissionController.actor(routeConversationId);
+    this.#submissionTurnId = this.#submissionActor
+      ? `local-${answerSubmissionSnapshot(this.#submissionActor).submissionId}`
+      : null;
     if (this.view.kind === 'ready') {
       const stored = this.view.history.map(storedTurnView);
       const previousView = changed.get('view') as ChatView | undefined;
@@ -298,6 +322,10 @@ export class DlChatFeature extends LightElement {
     } else {
       this.turns = [];
     }
+    const submissionTurn = this.#submissionTurnForRoute();
+    if (submissionTurn && !this.turns.some((turn) => turn.id === submissionTurn.id)) {
+      this.turns = [...this.turns, submissionTurn];
+    }
   }
 
   protected override updated(changed: PropertyValues<this>): void {
@@ -329,9 +357,11 @@ export class DlChatFeature extends LightElement {
         .interactionLocked=${this.interactionLocked}
         @dl-chat-reconnect=${this.#reconnect}
         @dl-chat-load-older=${this.#loadOlderMessages}></dl-chat-message-list>
+      ${this.#submissionFailureControls()}
       <dl-chat-composer
         ?inert=${this.interactionLocked}
         .running=${this.#runController.active}
+        .submissionPending=${this.submissionPending}
         .stopping=${this.#runController.stopping}
         .attachmentPolicy=${this.attachmentPolicy}
         .attachmentAccept=${this.attachmentAccept}
@@ -339,6 +369,34 @@ export class DlChatFeature extends LightElement {
         @dl-composer-steer=${this.#steer}
         @dl-composer-cancel=${this.#cancel}
       ></dl-chat-composer>
+    `;
+  }
+
+  #submissionFailureControls(): TemplateResult {
+    if (!this.#submissionActor) return html``;
+    const snapshot = answerSubmissionSnapshot(this.#submissionActor);
+    if (!['editable', 'retryable', 'conflict', 'login'].includes(snapshot.status)) return html``;
+    return html`
+      <div role="alert" class="submission-failure">
+        <span>${snapshot.error?.message || msg('The answer could not be submitted.', {id: 'chatFeature.submissionFailed'})}</span>
+        ${snapshot.status === 'login' ? html`
+          <a class="ui-btn" href=${loginHref()} @click=${this.#loginSubmission}>
+            ${msg('Sign in', {id: 'chatFeature.submissionSignIn'})}
+          </a>
+        ` : html`
+          ${snapshot.status === 'retryable' ? html`
+            <button class="ui-btn" type="button" @click=${this.#retrySubmission}>
+              ${msg('Retry', {id: 'chatFeature.submissionRetry'})}
+            </button>
+          ` : null}
+          <button class="ui-btn" type="button" @click=${this.#editSubmission}>
+            ${msg('Edit', {id: 'chatFeature.submissionEdit'})}
+          </button>
+        `}
+        <button class="ui-btn" type="button" @click=${this.#discardSubmission}>
+          ${msg('Discard', {id: 'chatFeature.submissionDiscard'})}
+        </button>
+      </div>
     `;
   }
 
@@ -352,9 +410,37 @@ export class DlChatFeature extends LightElement {
     this.#continuationController = null;
   }
 
+  #submissionTurnForRoute(): ChatTurnView | null {
+    const actor = this.#submissionActor;
+    if (!actor) return null;
+    const snapshot = answerSubmissionSnapshot(actor);
+    if (['accepted', 'handedOff', 'edited', 'discarded'].includes(snapshot.status)) return null;
+    const {intent, lease} = actor.getSnapshot().context;
+    const attachments: ConversationAttachmentReference[] = lease.items.map((item, index) => ({
+      attachment_id: item.id,
+      ordinal: index + 1,
+      kind: item.kind,
+      filename: item.file.name,
+      mime_type: item.file.type,
+      byte_size: item.file.size,
+      url: item.objectUrl,
+      thumbnail_url: item.objectUrl,
+      label: item.file.name,
+    }));
+    const turn = optimisticTurn(intent.submissionId, intent.query, attachments);
+    if (snapshot.status === 'submitting' || snapshot.status === 'reconciling') return turn;
+    return {
+      ...turn,
+      state: 'failed',
+      error: snapshot.error?.message || msg('The answer could not be submitted.', {
+        id: 'chatFeature.submissionFailed',
+      }),
+    };
+  }
+
   #runStateChanged(): void {
     this.runRevision += 1;
-    const active = this.#runController.active;
+    const active = this.#runController.active || this.submissionPending;
     if (active === this.#announcedActive) return;
     this.#announcedActive = active;
     this.dispatchEvent(new CustomEvent<ChatRunningChangeDetail>('dl-chat-running-change', {
@@ -403,134 +489,162 @@ export class DlChatFeature extends LightElement {
         ? msg('Stopping...', {id: 'chatFeature.stopping'})
         : msg('Answer in progress...', {id: 'chatFeature.answerInProgress'}),
     });
-    answerRunStore.trackRun(conversationId, turn.runId);
+    answerEventCursorStore.trackRun(conversationId, turn.runId);
     if (!this.#runController.beginFollow(turn.runId, turn.cancelRequested)) return;
     void this.#followTurn(turn.id, conversationId, turn.runId);
   };
 
   async #submitQuery(query: string, mode: AnswerMode | null): Promise<void> {
-    const signal = this.#runController.beginSubmission();
-    if (!signal) return;
-    let conversationId = conversationStore.answerConversationId;
-    const pendingAttachments = [...attachmentStore.list()];
-    const liveAttachmentRefs: ConversationAttachmentReference[] = pendingAttachments.map(
-      (item, index) => {
-        const previewUrl = URL.createObjectURL(item.file);
-        return {
-          attachment_id: item.id,
-          ordinal: index + 1,
-          kind: item.kind,
-          filename: item.file.name,
-          mime_type: item.file.type,
-          byte_size: item.file.size,
-          url: previewUrl,
-          thumbnail_url: previewUrl,
-          label: item.file.name,
-        };
-      },
-    );
-    const turn = optimisticTurn(query, liveAttachmentRefs);
+    if (this.#runController.active || this.#submissionActor) return;
+    if (!conversationStore.canAnswer) {
+      this.#requestToast({
+        message: msg('Conversation service is unavailable. Please retry loading the conversation.', {
+          id: 'chatFeature.conversationUnavailable',
+        }),
+        duration: 3000,
+      });
+      return;
+    }
+    const conversationId = conversationStore.answerConversationId;
+    const lease = attachmentStore.leaseAll();
+    const liveAttachmentRefs: ConversationAttachmentReference[] = lease.items.map((item, index) => ({
+      attachment_id: item.id,
+      ordinal: index + 1,
+      kind: item.kind,
+      filename: item.file.name,
+      mime_type: item.file.type,
+      byte_size: item.file.size,
+      url: item.objectUrl,
+      thumbnail_url: item.objectUrl,
+      label: item.file.name,
+    }));
+    const submissionId = crypto.randomUUID();
+    const turn = optimisticTurn(submissionId, query, liveAttachmentRefs);
+    const actor = this.#submissionController.start({
+      query,
+      mode,
+      conversationId,
+      submissionId,
+      workspaces: [...workspaceStore.active],
+    }, lease, this.#submissionAdapter);
+    if (!actor) {
+      lease.restore();
+      return;
+    }
+    this.#submissionActor = actor;
+    this.#submissionTurnId = turn.id;
+    actor.subscribe(() => {
+      this.requestUpdate();
+      if (answerSubmissionSnapshot(actor).status !== 'accepted') this.#runStateChanged();
+    });
     this.#scrollRequest += 1;
     this.turns = [...this.turns, turn];
+    this.#runStateChanged();
+    await this.#observeSubmission(actor, turn.id, conversationId);
+  }
 
+  async #observeSubmission(
+    actor: AnswerSubmissionActor,
+    turnId: string,
+    expectedConversationId: string | null,
+  ): Promise<void> {
     try {
-      if (!conversationStore.canAnswer) {
-        this.#setTurnError(
-          turn.id,
-          msg('Conversation service is unavailable. Please retry loading the conversation.', {
-            id: 'chatFeature.conversationUnavailable',
-          }),
-        );
-        return;
-      }
-      const activeWorkspaces = [...workspaceStore.active];
-      const fingerprint = await payloadFingerprint({
-        query,
-        attachments: pendingAttachments.map((item) => ({
-          name: item.file.name,
-          size: item.file.size,
-          type: item.file.type,
-        })),
-        workspaces: activeWorkspaces,
-      });
-      if (conversationStore.answerConversationId !== conversationId) {
-        this.#setTurnError(
-          turn.id,
-          msg('The active conversation changed before this answer started.', {
-            id: 'chatFeature.conversationChanged',
-          }),
-        );
-        return;
-      }
-      const runKey = conversationId ?? NEW_CHAT_RUN_KEY;
-      const submissionId = answerRunStore.getOrCreateSubmissionId(runKey, fingerprint);
-      const {body, headers} = buildAnswerRequest(
-        {
-          query,
-          workspaces: activeWorkspaces,
-          conversationId,
-          submissionId,
-          ...(mode ? {mode} : {}),
-        },
-        pendingAttachments.map((item) => item.file),
-      );
-      attachmentStore.clear();
-      const response = await fetch('/web/api/answer', {
-        method: 'POST',
-        headers: {...csrfHeaders(), ...(headers ?? {})},
-        body,
-        signal,
-      });
-      if (!response.ok) {
-        if (response.status < 500) answerRunStore.clear(runKey);
-        this.#setTurnError(turn.id, msg('Service error. Please try again.', {id: 'chatFeature.serviceError'}));
-        return;
-      }
-      const descriptor = await response.json() as AnswerRunDescriptor;
-      const acceptedConversationId = descriptor.conversation.conversation_id;
-      if (conversationId && acceptedConversationId !== conversationId) {
-        answerRunStore.clear(runKey);
-        this.#setTurnError(
-          turn.id,
-          msg('The answer was accepted for an unexpected conversation.', {
-            id: 'chatFeature.unexpectedConversation',
-          }),
-        );
-        return;
-      }
-      answerRunStore.attachRun(runKey, descriptor.run_id);
-      if (!conversationId) {
-        answerRunStore.transfer(runKey, acceptedConversationId);
-        conversationStore.adoptCreatedConversation(descriptor.conversation);
-        conversationId = acceptedConversationId;
-        await webRouter.navigate(conversationRoute(conversationId), {
-          replace: true,
-          notify: false,
-          bypassGuard: true,
-        });
-      } else {
-        conversationStore.upsertSummary(descriptor.conversation);
-      }
-      this.#setTurn(turn.id, {
-        runId: descriptor.run_id,
-        state: 'pending',
-        progress: descriptor.cancel_requested ? msg('Stopping...', {id: 'chatFeature.stopping'}) : '',
-        cancelRequested: descriptor.cancel_requested,
-      });
-      this.#runController.acceptSubmission(descriptor.run_id, descriptor.cancel_requested);
-      await this.#followTurn(turn.id, conversationId, descriptor.run_id);
+      await waitFor(actor, (snapshot) => (
+        !snapshot.matches('submitting') && !snapshot.matches('reconciling')
+      ));
     } catch {
-      if (!signal.aborted) {
-        this.#setTurnError(turn.id, msg('Connection error. Please try again.', {id: 'chatFeature.connectionError'}));
-      }
-    } finally {
-      if (this.#runController.submissionPending) this.#runController.finish();
+      return;
     }
+    if (this.#submissionActor !== actor) return;
+    const snapshot = answerSubmissionSnapshot(actor);
+    if (snapshot.status !== 'accepted' || !snapshot.accepted) {
+      this.#setTurnError(
+        turnId,
+        snapshot.error?.message || msg('The answer could not be submitted.', {
+          id: 'chatFeature.submissionFailed',
+        }),
+      );
+      this.#runStateChanged();
+      return;
+    }
+    const accepted = snapshot.accepted;
+    const acceptedConversationId = accepted.conversation.conversation_id;
+    if (expectedConversationId && acceptedConversationId !== expectedConversationId) {
+      this.#setTurnError(turnId, msg('The answer was accepted for an unexpected conversation.', {
+        id: 'chatFeature.unexpectedConversation',
+      }));
+      actor.send({type: 'HANDOFF'});
+      this.#submissionActor = null;
+      this.#runStateChanged();
+      return;
+    }
+    this.#submissionActor = null;
+    this.#submissionTurnId = null;
+    if (!expectedConversationId) {
+      conversationStore.adoptCreatedConversation(accepted.conversation);
+      await webRouter.navigate(conversationRoute(acceptedConversationId), {
+        replace: true,
+        notify: false,
+        bypassGuard: true,
+      });
+    } else {
+      conversationStore.upsertSummary(accepted.conversation);
+    }
+    const stored = accepted.turn;
+    answerEventCursorStore.trackRun(acceptedConversationId, stored.answer_run_id);
+    this.#replaceStoredTurn(turnId, stored);
+    const following = this.#runController.beginFollow(
+      stored.answer_run_id,
+      stored.cancel_requested,
+    );
+    actor.send({type: 'HANDOFF'});
+    if (!following) {
+      this.#runStateChanged();
+      return;
+    }
+    this.#runStateChanged();
+    await this.#followTurn(turnId, acceptedConversationId, stored.answer_run_id);
+  }
+
+  #retrySubmission = (): void => {
+    const actor = this.#submissionActor;
+    const turnId = this.#submissionTurnId;
+    if (!actor || !turnId) return;
+    actor.send({type: 'RETRY'});
+    this.#setTurn(turnId, {state: 'pending', error: ''});
+    void this.#observeSubmission(
+      actor,
+      turnId,
+      answerSubmissionSnapshot(actor).conversationId,
+    );
+  };
+
+  #editSubmission = (): void => this.#finishFailedSubmission('EDIT');
+  #discardSubmission = (): void => this.#finishFailedSubmission('DISCARD');
+  #loginSubmission = (): void => this.#finishFailedSubmission('DISCARD');
+
+  #finishFailedSubmission(type: 'EDIT' | 'DISCARD'): void {
+    const actor = this.#submissionActor;
+    if (!actor) return;
+    const intent = actor.getSnapshot().context.intent;
+    actor.send({type});
+    if (type === 'EDIT') {
+      workspaceStore.restoreActive(intent.workspaces);
+      this.querySelector<DlChatComposer>('dl-chat-composer')
+        ?.restoreSubmission(intent.query, intent.mode);
+    }
+    if (this.#submissionTurnId) {
+      this.turns = this.turns.filter((turn) => turn.id !== this.#submissionTurnId);
+    }
+    this.#submissionActor = null;
+    this.#submissionTurnId = null;
+    this.#runStateChanged();
+    if (type === 'EDIT') this.focusComposer();
   }
 
   async #resumeStoredTurn(conversationId: string, stored: ConversationTurn): Promise<void> {
     if (this.#runController.active) return;
-    answerRunStore.trackRun(conversationId, stored.answer_run_id);
+    answerEventCursorStore.trackRun(conversationId, stored.answer_run_id);
     if (!this.#runController.beginFollow(stored.answer_run_id, stored.cancel_requested)) return;
     await this.#followTurn(
       stored.turn_id || stored.answer_run_id,
@@ -577,7 +691,7 @@ export class DlChatFeature extends LightElement {
     }
     this.#runController.finish(runId);
     if (!finished) return;
-    answerRunStore.clear(conversationId);
+    answerEventCursorStore.clear(conversationId);
     void conversationStore.refreshActive();
   }
 

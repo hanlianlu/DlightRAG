@@ -373,6 +373,9 @@ class WebConversationStore(Protocol):
         page: RecoveryPageRequest,
     ) -> RecoveryTurnBatch: ...
     async def find_turn_by_run(self, principal_id: str, run_id: str) -> LinkedTurn | None: ...
+    async def find_answer_turn_by_submission(
+        self, principal_id: str, submission_id: str
+    ) -> AnswerTurnCreation | None: ...
     async def replay_answer_turn(
         self,
         *,

@@ -268,6 +268,27 @@
     outline-offset: 2px;
 }
 
+.answer-references-show-all {
+    display: none;
+}
+
+@media (width <= 640px) {
+    .answer-reference-list:not(.expanded) .answer-ref-item:nth-child(n + 4) {
+        display: none;
+    }
+
+    .answer-references-show-all {
+        background: transparent;
+        border: 0;
+        color: var(--color-accent-action);
+        cursor: pointer;
+        display: inline-flex;
+        font: inherit;
+        font-size: var(--font-size-detail);
+        padding: var(--space-tight) 0;
+    }
+}
+
 .answer-ref-id {
     color: var(--color-accent-muted);
     font-weight: 600;

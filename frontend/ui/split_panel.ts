@@ -19,6 +19,7 @@ interface SplitState {
 
 let states: SplitState[] = [];
 let widthFrame: number | null = null;
+let initialized = false;
 
 function cssDefault(widthVar: WidthVar): number {
     const value = Number.parseInt(
@@ -167,7 +168,8 @@ function createState(
  * This is the retained third-party integration seam, not a Feature adapter.
  */
 export function setupPanelSplits(): void {
-    states = [
+    if (initialized) return;
+    const nextStates = [
         createState('panel-split', 'inspector', '--panel-width', 'dlightrag-panel-width'),
         createState(
             'artifact-canvas-split',
@@ -176,6 +178,9 @@ export function setupPanelSplits(): void {
             'dlightrag-artifact-canvas-width',
         ),
     ].filter((state): state is SplitState => state !== null);
+    if (nextStates.length === 0) return;
+    initialized = true;
+    states = nextStates;
 
     for (const state of states) {
         state.split.addEventListener('wa-reposition', scheduleRenderedWidthSync);

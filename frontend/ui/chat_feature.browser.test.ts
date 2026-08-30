@@ -2,12 +2,14 @@
 
 import {expect} from '@esm-bundle/chai';
 import type {
+  AcceptedAnswer,
   AnswerPresentation,
-  AnswerRunDescriptor,
   ConversationTurn,
 } from '../api/conversations.ts';
 import {attachmentStore} from '../stores/attachmentStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
+import {workspaceStore} from '../stores/workspaceStore.ts';
+import {answerSubmissionRegistry} from '../stores/answerSubmissionRegistry.ts';
 import type {DlChatComposer} from './chat_composer.ts';
 import './chat_composer.ts';
 import type {DlConversationSidebar} from './conversation_sidebar.ts';
@@ -30,6 +32,7 @@ import {
 import {webRouter} from './router.ts';
 
 const originalFetch = window.fetch;
+const originalRevokeObjectURL = URL.revokeObjectURL;
 
 const policy = {
   countLimit: 6,
@@ -76,22 +79,20 @@ function storedTurn(): ConversationTurn {
   };
 }
 
-function continuationDescriptor(conversationId: string): AnswerRunDescriptor {
+function continuationDescriptor(conversationId: string): AcceptedAnswer {
   return {
-    run_id: `run-${conversationId}`,
-    status: 'queued',
-    cancel_requested: false,
-    turn_id: `turn-${conversationId}`,
-    turn_number: 1,
-    submission_id: `submission-${conversationId}`,
-    events_url: `/web/api/answer/run-${conversationId}/events`,
-    status_url: `/web/api/answer/run-${conversationId}`,
-    cancel_url: `/web/api/answer/run-${conversationId}`,
     conversation: {
       conversation_id: conversationId,
       title: 'Continuation',
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
+    },
+    turn: {
+      ...storedTurn(),
+      answer_run_id: `run-${conversationId}`,
+      turn_id: `turn-${conversationId}`,
+      submission_id: `submission-${conversationId}`,
+      status: 'queued',
     },
   };
 }
@@ -113,6 +114,8 @@ async function settle(element: DlChatFeature): Promise<void> {
 
 afterEach(() => {
   window.fetch = originalFetch;
+  URL.revokeObjectURL = originalRevokeObjectURL;
+  answerSubmissionRegistry.dispose();
   attachmentStore.clear();
   conversationStore.openNew();
   document.body.replaceChildren();
@@ -273,8 +276,10 @@ it('maps and renders every reconnect state with one visible status and action', 
 it('forces a submitted turn into view without forcing later stream updates', async () => {
   let finishRequest!: () => void;
   window.fetch = () => new Promise<Response>((resolve) => {
-    finishRequest = () => resolve(new Response('{}', {
-      status: 503,
+    finishRequest = () => resolve(new Response(JSON.stringify({
+      kind: 'invalid_request', message: 'Invalid question',
+    }), {
+      status: 422,
       headers: {'Content-Type': 'application/json'},
     }));
   });
@@ -305,6 +310,9 @@ it('forces a submitted turn into view without forcing later stream updates', asy
   await feature.querySelector('dl-chat-composer')?.updateComplete;
   feature.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
   await waitFor(() => feature.turns.length === 2);
+  await feature.updateComplete;
+  const submitting = feature.querySelector<HTMLButtonElement>('[aria-label="Submitting"]');
+  expect(submitting?.disabled).to.equal(true);
   await feature.querySelector('dl-chat-message-list')?.updateComplete;
   await new Promise((resolve) => requestAnimationFrame(resolve));
   expect(scrollTop).to.equal(1000);
@@ -318,6 +326,201 @@ it('forces a submitted turn into view without forcing later stream updates', asy
   await feature.querySelector('dl-chat-message-list')?.updateComplete;
   await new Promise((resolve) => requestAnimationFrame(resolve));
   expect(scrollTop).to.equal(0);
+});
+
+it('Edit restores the original query, mode, workspaces, and attachment lease', async () => {
+  workspaceStore.init([
+    {workspace: 'alpha', displayName: 'Alpha', embeddingModel: ''},
+    {workspace: 'beta', displayName: 'Beta', embeddingModel: ''},
+  ], ['alpha'], 'alpha');
+  const submissionIds: string[] = [];
+  window.fetch = async (_input, init) => {
+    const body = init?.body;
+    submissionIds.push(body instanceof FormData
+      ? String(body.get('submission_id'))
+      : String(JSON.parse(String(body)).submission_id));
+    return new Response(JSON.stringify({
+      kind: 'invalid_request',
+      message: 'Revise this request',
+    }), {
+      status: 422,
+      headers: {'Content-Type': 'application/json'},
+    });
+  };
+
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.attachmentPolicy = policy;
+  feature.attachmentAccept = 'image/*,.md,.pdf';
+  feature.view = {
+    kind: 'ready',
+    conversationId: 'edit-intent',
+    lineage: null,
+    history: [],
+  };
+  document.body.appendChild(feature);
+  await settle(feature);
+
+  const composer = feature.querySelector('dl-chat-composer') as DlChatComposer;
+  composer.addFiles([new File(['notes'], 'notes.md', {type: 'text/markdown'})]);
+  composer.querySelector<HTMLButtonElement>('.composer-mode-trigger')?.click();
+  await composer.updateComplete;
+  composer.querySelector<HTMLButtonElement>('[data-mode="research"]')?.click();
+  const input = composer.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  input.value = 'Original question';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await composer.updateComplete;
+  composer.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+  await waitFor(() => feature.turns.at(-1)?.state === 'failed');
+
+  workspaceStore.select('beta');
+  const edit = Array.from(feature.querySelectorAll<HTMLButtonElement>('.submission-failure button'))
+    .find((button) => button.textContent?.trim() === 'Edit')!;
+  edit.click();
+  await settle(feature);
+
+  expect(composer.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')?.value)
+    .to.equal('Original question');
+  expect(composer.querySelector<HTMLButtonElement>('.composer-mode-trigger')?.textContent?.trim())
+    .to.equal('Research');
+  expect(workspaceStore.active).to.deep.equal(['alpha']);
+  expect(attachmentStore.list().map((item) => item.file.name)).to.deep.equal(['notes.md']);
+
+  composer.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+  await waitFor(() => submissionIds.length === 2 && feature.turns.at(-1)?.state === 'failed');
+  expect(submissionIds[1]).not.to.equal(submissionIds[0]);
+});
+
+it('keeps failed actors per route and restores their optimistic turn on return', async () => {
+  window.fetch = async (input, init) => {
+    if (init?.method === 'POST' && String(input) === '/web/api/answer') {
+      throw new TypeError('Failed to fetch');
+    }
+    if (String(input).startsWith('/web/api/answer-submissions/')) {
+      return new Response(null, {status: 404});
+    }
+    throw new Error(`unexpected fetch: ${String(input)}`);
+  };
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.view = {kind: 'new'};
+  document.body.appendChild(feature);
+  await settle(feature);
+
+  const input = feature.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  input.value = 'Keep this failed question';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await feature.querySelector('dl-chat-composer')?.updateComplete;
+  feature.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+  await waitFor(() => feature.turns.at(-1)?.state === 'failed');
+  await waitFor(() => feature.textContent?.includes('Retry') ?? false);
+  expect(feature.textContent).to.contain('Retry');
+
+  feature.view = {
+    kind: 'ready',
+    conversationId: 'another-conversation',
+    lineage: null,
+    history: [],
+  };
+  await settle(feature);
+  expect(Boolean(feature.querySelector('.submission-failure'))).to.equal(false);
+  expect(feature.textContent).not.to.contain('Keep this failed question');
+
+  feature.view = {kind: 'new'};
+  await settle(feature);
+  expect(feature.textContent).to.contain('Keep this failed question');
+  expect(feature.textContent).to.contain('Retry');
+});
+
+it('hands accepted work to RunController without announcing a false idle gap', async () => {
+  const conversationId = 'submission-handoff';
+  const accepted = continuationDescriptor(conversationId);
+  conversationStore.adoptCreatedConversation(accepted.conversation);
+  let eventsRequested = false;
+  window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === '/web/api/answer' && init?.method === 'POST') {
+      return Promise.resolve(new Response(JSON.stringify(accepted), {
+        status: 202,
+        headers: {'Content-Type': 'application/json'},
+      }));
+    }
+    if (url.endsWith('/events')) {
+      eventsRequested = true;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          {once: true},
+        );
+      });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as typeof fetch;
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.view = {
+    kind: 'ready',
+    conversationId,
+    lineage: null,
+    history: [],
+  };
+  const activeChanges: boolean[] = [];
+  feature.addEventListener('dl-chat-running-change', (event) => {
+    activeChanges.push((event as CustomEvent<{active: boolean}>).detail.active);
+  });
+  document.body.appendChild(feature);
+  await settle(feature);
+
+  const composer = feature.querySelector('dl-chat-composer') as DlChatComposer;
+  composer.attachmentPolicy = policy;
+  composer.addFiles([new File(['notes'], 'handoff.md', {type: 'text/markdown'})]);
+  const leasedUrl = attachmentStore.list()[0].objectUrl;
+  let authoritativeAtRevoke = false;
+  URL.revokeObjectURL = (url) => {
+    if (url === leasedUrl) {
+      const current = feature.turns.at(-1);
+      authoritativeAtRevoke = current?.runId === accepted.turn.answer_run_id
+        && current.userAttachments.every((attachment) => attachment.url !== leasedUrl);
+    }
+    originalRevokeObjectURL.call(URL, url);
+  };
+  const input = feature.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  input.value = 'Start without flicker';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await feature.querySelector('dl-chat-composer')?.updateComplete;
+  feature.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+  await waitFor(() => eventsRequested);
+
+  expect(activeChanges).to.deep.equal([true]);
+  expect(authoritativeAtRevoke).to.equal(true);
+  expect(answerSubmissionRegistry.list()).to.have.length(0);
+  feature.detachRun();
+});
+
+it('exits a 401 submission through the login flow without retaining its actor', async () => {
+  window.fetch = async () => new Response('Authentication required', {status: 401});
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  feature.view = {kind: 'new'};
+  document.body.appendChild(feature);
+  await settle(feature);
+
+  const input = feature.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  input.value = 'Question after session expiry';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await feature.querySelector('dl-chat-composer')?.updateComplete;
+  feature.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+  await waitFor(() => feature.turns.at(-1)?.state === 'failed');
+  await settle(feature);
+
+  const signIn = feature.querySelector<HTMLAnchorElement>('.submission-failure a');
+  expect(signIn?.textContent?.trim()).to.equal('Sign in');
+  expect(signIn?.getAttribute('href')).to.match(/^\/web\/login\?next=/);
+  document.addEventListener('click', (event) => event.preventDefault(), {
+    capture: true,
+    once: true,
+  });
+  signIn?.click();
+  await settle(feature);
+  expect(answerSubmissionRegistry.list()).to.have.length(0);
+  expect(feature.turns).to.have.length(0);
 });
 
 it('Composer owns draft, attachment, mode, and typed submission intent', async () => {

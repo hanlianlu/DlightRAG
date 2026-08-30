@@ -3,6 +3,7 @@
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
+import type {AnswerMode} from '../lib/answer_request.ts';
 import {formatFileSize} from '../lib/file_size.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {attachmentStore, type PendingAttachment} from '../stores/attachmentStore.ts';
@@ -16,8 +17,8 @@ import {
 import {detectDropItems, type RelativeFile} from './folder-upload.ts';
 
 const STORAGE_KEY = 'dlightrag.answerMode';
-const MODES = ['auto', 'fast', 'research'] as const;
-export type AnswerMode = (typeof MODES)[number];
+const MODES = ['auto', 'fast', 'research'] as const satisfies readonly AnswerMode[];
+export type {AnswerMode} from '../lib/answer_request.ts';
 
 const MODE_LABELS: Record<AnswerMode, string> = {
   auto: 'Auto',
@@ -52,6 +53,7 @@ function storedMode(): AnswerMode | null {
 export class DlChatComposer extends LightElement {
   static properties = {
     running: {type: Boolean},
+    submissionPending: {type: Boolean},
     stopping: {type: Boolean},
     attachmentPolicy: {attribute: false},
     attachmentAccept: {type: String},
@@ -64,6 +66,7 @@ export class DlChatComposer extends LightElement {
   };
 
   declare running: boolean;
+  declare submissionPending: boolean;
   declare stopping: boolean;
   declare attachmentPolicy: AttachmentPolicy | null;
   declare attachmentAccept: string;
@@ -83,6 +86,7 @@ export class DlChatComposer extends LightElement {
     super();
     updateWhenLocaleChanges(this);
     this.running = false;
+    this.submissionPending = false;
     this.stopping = false;
     this.attachmentPolicy = null;
     this.attachmentAccept = '';
@@ -146,6 +150,23 @@ export class DlChatComposer extends LightElement {
     return true;
   }
 
+  restoreSubmission(query: string, requestMode: AnswerMode | null): void {
+    this.draft = query;
+    this.#requestMode = requestMode;
+    this.mode = requestMode ?? 'auto';
+    this.modeOpen = false;
+    try {
+      if (requestMode === null) localStorage.removeItem(STORAGE_KEY);
+      else localStorage.setItem(STORAGE_KEY, requestMode);
+    } catch {
+      // The restored mode still applies for this page when storage is blocked.
+    }
+    void this.updateComplete.then(() => {
+      this.#resize();
+      this.#input()?.focus();
+    });
+  }
+
   addFiles(files: Iterable<File>): void {
     for (const file of files) this.#addAttachment(file);
   }
@@ -204,10 +225,13 @@ export class DlChatComposer extends LightElement {
             </div>
             <button type="submit"
                     class="composer-send ${stop ? 'is-stop' : ''} ${steer ? 'is-steer' : ''}"
-                    aria-label=${this.running
-                      ? (hasText ? msg('Steer', {id: 'chatComposer.steer'}) : msg('Stop', {id: 'chatComposer.stop'}))
-                      : msg('Send', {id: 'chatComposer.send'})}
-                    ?disabled=${(!hasText && !this.running) || this.stopping}
+                    aria-label=${this.submissionPending
+                      ? msg('Submitting', {id: 'chatComposer.submitting'})
+                      : this.running
+                        ? (hasText ? msg('Steer', {id: 'chatComposer.steer'}) : msg('Stop', {id: 'chatComposer.stop'}))
+                        : msg('Send', {id: 'chatComposer.send'})}
+                    ?disabled=${this.submissionPending
+                      || (!hasText && !this.running) || this.stopping}
                     @click=${this.#sendClicked}>
               <svg class="composer-send-icon composer-send-icon--send" width="18" height="18"
                    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -310,6 +334,7 @@ export class DlChatComposer extends LightElement {
   };
 
   #primaryIntent(): void {
+    if (this.submissionPending) return;
     const query = this.draft.trim();
     if (this.running) {
       if (query) {

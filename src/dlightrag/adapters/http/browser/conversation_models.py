@@ -2,7 +2,7 @@
 """Browser Pydantic presentation models for Web Conversations."""
 
 import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
@@ -55,21 +55,28 @@ class ConversationTurn(ClientContractModel):
     created_at: datetime.datetime
 
 
-class AnswerRunDescriptor(ClientContractModel):
-    """What the browser needs to follow one accepted submission."""
+class AcceptedAnswer(ClientContractModel):
+    """Authoritative conversation and turn created by one accepted command."""
 
-    run_id: str
-    status: AnswerRunStatus
-    cancel_requested: bool = False
-    turn_id: str
-    turn_number: int
-    submission_id: str
-    events_url: str
-    status_url: str
-    cancel_url: str
     conversation: ConversationSummary
-    parent_run_id: str | None = None
-    continuation_kind: str | None = None
+    turn: ConversationTurn
+
+
+WebCommandErrorKind = Literal[
+    "invalid_request",
+    "attachment_rejected",
+    "scope_forbidden",
+    "conversation_missing",
+    "submission_conflict",
+    "service_unavailable",
+]
+
+
+class WebCommandError(ClientContractModel):
+    """Stable browser answer-command error payload."""
+
+    kind: WebCommandErrorKind
+    message: str
 
 
 class ConversationHistory(ClientContractModel):
@@ -91,11 +98,13 @@ class RenameConversationRequest(ClientContractModel):
 
 
 __all__ = [
-    "AnswerRunDescriptor",
+    "AcceptedAnswer",
     "ConversationAttachmentReference",
     "ConversationHistory",
     "ConversationPage",
     "ConversationSummary",
     "ConversationTurn",
     "RenameConversationRequest",
+    "WebCommandError",
+    "WebCommandErrorKind",
 ]

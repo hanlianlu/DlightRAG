@@ -570,6 +570,26 @@ it('aborts optional memory clearing and ignores its result after disconnect', as
   expect(document.activeElement).to.equal(focusSentinel);
 });
 
+it('protects unresolved failed submissions from tab unload without blocking in-app navigation', async () => {
+  const chat: ConversationChat = {
+    view: {kind: 'new'},
+    hasDraft: false,
+    hasUnresolvedSubmission: true,
+    submissionPending: false,
+    detachRun: () => undefined,
+    focusComposer: () => undefined,
+    clearDraft: () => undefined,
+  };
+  const sidebar = document.createElement('dl-conversation-sidebar') as DlConversationSidebar;
+  sidebar.chatFeature = chat;
+  document.body.appendChild(sidebar);
+  await sidebar.updateComplete;
+
+  const event = new Event('beforeunload', {cancelable: true}) as BeforeUnloadEvent;
+  window.dispatchEvent(event);
+  expect(event.defaultPrevented).to.equal(true);
+});
+
 it('cancels a pending draft dialog on disconnect without wedging later navigation', async () => {
   window.matchMedia = media(true);
   window.fetch = async (input) => {

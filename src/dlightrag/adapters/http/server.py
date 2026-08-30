@@ -152,8 +152,18 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         request: Request,  # noqa: ARG001
         exc: HTTPException,
     ) -> JSONResponse:
-        """Wrap every HTTPException in ErrorDetail for a uniform response schema."""
+        """Wrap HTTP errors, preserving explicit typed browser command envelopes."""
         status = exc.status_code
+        if (
+            isinstance(exc.detail, dict)
+            and isinstance(exc.detail.get("kind"), str)
+            and isinstance(exc.detail.get("message"), str)
+        ):
+            return JSONResponse(
+                status_code=status,
+                content=exc.detail,
+                headers=exc.headers,
+            )
         if status == 503:
             error_type = "unavailable"
         elif 400 <= status < 500:

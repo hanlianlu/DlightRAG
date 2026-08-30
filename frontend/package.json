@@ -29,6 +29,7 @@
     "dompurify": "^3.4.12",
     "lit": "^3.3.3",
     "mermaid": "^11.16.0",
-    "nanoevents": "^10.0.0"
+    "nanoevents": "^10.0.0",
+    "xstate": "^5.32.6"
   }
 }

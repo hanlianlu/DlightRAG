@@ -230,12 +230,19 @@ export class DlApp extends LightElement {
                 <header class="topbar" ?inert=${inspectorModal || this.canvasModal}>
                   <dl-conversation-sidebar .enabled=${ready} .chatFeature=${chatFeature}
                     .shellInert=${this.canvasModal}></dl-conversation-sidebar>
-                  <span class="topbar-scope-label" ?inert=${shellModal}>Search in:</span>
+                  <span class="topbar-scope-label" ?inert=${shellModal}>${msg('Search in:', {id: 'app.searchIn'})}</span>
                   <dl-workspace-scope class="workspace-selector" id="workspace-selector"
                     ?inert=${shellModal}></dl-workspace-scope>
                   <div class="topbar-spacer" ?inert=${shellModal}></div>
                   <button class="topbar-btn" id="files-btn" type="button"
-                          ?inert=${shellModal} @click=${this.#openFiles}>Files</button>
+                          aria-label=${msg('Files', {id: 'app.files'})}
+                          ?inert=${shellModal} @click=${this.#openFiles}>
+                    <svg class="files-button-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="1.8">
+                      <path d="M3.5 6.5h6l2 2h9v10h-17z"></path>
+                    </svg>
+                    <span class="files-button-label">${msg('Files', {id: 'app.files'})}</span>
+                  </button>
                   <dl-theme-control id="theme-control" ?inert=${shellModal}></dl-theme-control>
                 </header>
 

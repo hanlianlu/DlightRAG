@@ -40,6 +40,7 @@ export interface ConversationRouteChangeDetail {
 export interface ConversationChat {
   view: ChatView;
   readonly hasDraft: boolean;
+  readonly hasUnresolvedSubmission?: boolean;
   readonly submissionPending: boolean;
   clearDraft(): void;
   detachRun(): void;
@@ -570,7 +571,7 @@ export class DlConversationSidebar extends LightElement {
   };
 
   #beforeUnload = (event: BeforeUnloadEvent): void => {
-    if (!this.#hasUnsavedDraft()) return;
+    if (!this.#hasUnsavedDraft() && !this.chatFeature?.hasUnresolvedSubmission) return;
     event.preventDefault();
     event.returnValue = '';
   };

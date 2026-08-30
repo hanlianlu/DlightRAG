@@ -145,6 +145,12 @@ body.files-panel-open #files-btn {
     display: none;
 }
 
+.files-button-icon {
+    display: none;
+    height: var(--size-icon-md);
+    width: var(--size-icon-md);
+}
+
 .topbar-btn {
     background: transparent;
     border: none;
@@ -561,6 +567,21 @@ dl-chat-composer {
     display: contents;
 }
 
+.submission-failure {
+    align-items: center;
+    align-self: center;
+    display: flex;
+    gap: var(--space-tight);
+    max-width: var(--layout-content-width);
+    padding: 0 var(--space-section) var(--space-tight);
+    width: 100%;
+}
+
+.submission-failure > span {
+    flex: 1;
+    font-size: var(--font-size-detail);
+}
+
 .panel-split[data-open] {
     --divider-width: 1px;
     --max: calc(100% - var(--split-chat-reserve) - var(--split-other-width));
@@ -649,8 +670,33 @@ body.conversation-sidebar-open .panel-split {
         gap: var(--space-inline);
     }
 
+    .topbar-scope-label,
+    .files-button-label {
+        display: none;
+    }
+
+    #files-btn {
+        align-items: center;
+        display: inline-flex;
+        justify-content: center;
+        padding: 0;
+        width: var(--size-button);
+    }
+
+    .files-button-icon {
+        display: block;
+    }
+
     .workspace-selector {
         max-width: min(240px, 52vw);
+    }
+
+    .submission-failure {
+        flex-wrap: wrap;
+    }
+
+    .submission-failure > span {
+        flex-basis: 100%;
     }
 
     #theme-menu {

@@ -248,6 +248,8 @@ def web_answer_submission(
         turn_id=TURN_ID,
         turn_number=1,
         conversation=conversation_summary(conversation_id),
+        submission_id=SUBMISSION_ID,
+        created_at=NOW,
     )
 
 

@@ -409,8 +409,11 @@ def test_lit_shell_completion_has_one_owner_and_no_compatibility_layer() -> None
     assert "@dl-artifact-canvas-state-change" in app
     assert "document.getElementById" not in app
     assert "document.querySelector" not in app
-    assert "setupPanelSplits();" in main
-    assert "setupMathRendering();" in main
+    browser_adapters = (FRONTEND_UI / "browser_adapters.ts").read_text(encoding="utf-8")
+    assert "initializeBrowserAdapters(app)" in main
+    assert "document.readyState === 'loading'" in main
+    assert "setupPanelSplits();" in browser_adapters
+    assert "setupMathRendering();" in browser_adapters
     assert "workspaceCreated" in bus and "workspaceDeleted" in bus
     assert "panelOpening" not in bus and "settings" not in bus.lower()
 

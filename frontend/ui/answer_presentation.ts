@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
-import {html, nothing, type TemplateResult} from 'lit';
+import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {
   AnswerArtifact,
@@ -40,14 +40,21 @@ function secureExternalLinks(container: ParentNode): void {
 export class AnswerPresentationElement extends LightElement {
   static properties = {
     presentation: {attribute: false},
+    referencesExpanded: {state: true},
   };
 
   declare presentation: AnswerPresentation | null;
+  declare referencesExpanded: boolean;
 
   constructor() {
     super();
     updateWhenLocaleChanges(this);
     this.presentation = null;
+    this.referencesExpanded = false;
+  }
+
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has('presentation')) this.referencesExpanded = false;
   }
 
   protected override updated(): void {
@@ -93,6 +100,7 @@ export class AnswerPresentationElement extends LightElement {
         <section class="answer-references" aria-label=${msg('References', {id: 'answerPresentation.referencesAria'})}
                  @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
           <h3 class="answer-references-title">${msg('References', {id: 'answerPresentation.references'})}</h3>
+          <div class=${this.referencesExpanded ? 'answer-reference-list expanded' : 'answer-reference-list'}>
           ${repeat(
             presentation.sources,
             (source) => source.id,
@@ -103,6 +111,16 @@ export class AnswerPresentationElement extends LightElement {
               </button>
             `,
           )}
+          </div>
+          ${presentation.sources.length > 3 ? html`
+            <button class="answer-references-show-all" type="button"
+                    aria-expanded=${String(this.referencesExpanded)}
+                    @click=${this.#toggleReferences}>
+              ${this.referencesExpanded
+                ? msg('Show fewer', {id: 'answerPresentation.showFewerReferences'})
+                : msg(str`Show all ${presentation.sources.length}`, {id: 'answerPresentation.showAllReferences'})}
+            </button>
+          ` : nothing}
         </section>
       ` : nothing}
     `;
@@ -178,6 +196,10 @@ export class AnswerPresentationElement extends LightElement {
       </div>
     `;
   }
+
+  #toggleReferences = (): void => {
+    this.referencesExpanded = !this.referencesExpanded;
+  };
 
   #handleIntent = (event: Event): void => {
     const target = event.target instanceof Element ? event.target : null;

@@ -1,8 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """The Web durable Answer run contract.
 
-Covers the atomic submission descriptor, its idempotent replay and conflict, the
-owner-scoped status/cancel/event routes, run-artifact attachment reads, and the
+Covers atomic canonical submission acceptance, idempotent replay and conflict,
+owner-scoped lookup/status/cancel/event routes, run-artifact attachment reads, and the
 projection every conversation read shares. Storage-level atomicity, foreign
 keys, retention, and concurrency live in the PostgreSQL integration suite.
 """
@@ -36,6 +36,7 @@ from dlightrag.application.web_conversations import (
     RecoveryTurnBatch,
     SubmissionSeed,
     WebConversationService,
+    WebConversationUnavailableError,
 )
 from dlightrag.engine.runtime import AnswerRunEvent, IdempotencyKeyConflict
 from tests.unit.conftest import answer_capability_view
@@ -137,19 +138,19 @@ async def client(service: AsyncMock, application_double: AsyncMock, test_config)
 # ---------------------------------------------------------------------------
 
 
-async def test_submission_returns_202_with_the_durable_descriptor(
+async def test_submission_returns_202_with_the_authoritative_turn(
     client: AsyncClient, service: AsyncMock
 ) -> None:
     response = await client.post("/web/api/answer", json=_BODY)
 
     assert response.status_code == 202
     body = response.json()
-    assert body["run_id"] == RUN_ID
-    assert body["status"] == "queued"
-    assert body["turn_id"] == TURN_ID
-    assert body["events_url"] == f"/web/api/answer/{RUN_ID}/events"
-    assert body["cancel_url"] == f"/web/api/answer/{RUN_ID}"
     assert body["conversation"]["conversation_id"] == _CID
+    assert body["turn"]["answer_run_id"] == RUN_ID
+    assert body["turn"]["status"] == "queued"
+    assert body["turn"]["turn_id"] == TURN_ID
+    assert body["turn"]["submission_id"] == SUBMISSION_ID
+    assert "events_url" not in body
     # The 202 body is the whole answer contract: nothing is streamed by the
     # request that created the run.
     assert "html" not in body
@@ -218,8 +219,78 @@ async def test_replaying_a_submission_returns_the_authoritative_run(
     # A replay is accepted work too, so it reports the same 202 as the original
     # submission and simply carries the run's current status.
     assert response.status_code == 202
-    assert response.json()["run_id"] == RUN_ID
-    assert response.json()["status"] == "running"
+    assert response.json()["turn"]["answer_run_id"] == RUN_ID
+    assert response.json()["turn"]["status"] == "running"
+
+
+async def test_submission_lookup_recovers_the_same_owner_scoped_result(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    service.submission.return_value = web_answer_submission(conversation_id=_CID)
+
+    response = await client.get(f"/web/api/answer-submissions/{SUBMISSION_ID}")
+
+    assert response.status_code == 200
+    assert response.json()["conversation"]["conversation_id"] == _CID
+    assert response.json()["turn"]["submission_id"] == SUBMISSION_ID
+    assert service.submission.await_args.args[1] == SUBMISSION_ID
+
+
+async def test_submission_lookup_hides_unknown_and_foreign_ids(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    service.submission.return_value = None
+
+    response = await client.get(f"/web/api/answer-submissions/{SUBMISSION_ID}")
+
+    assert response.status_code == 404
+    assert response.json()["kind"] == "invalid_request"
+
+
+async def test_submission_lookup_service_scopes_the_store_read_to_the_owner() -> None:
+    store = AsyncMock()
+    store.find_answer_turn_by_submission.return_value = answer_turn_creation(
+        conversation_id=_CID,
+        run=answer_run(status="running"),
+    )
+    service = WebConversationService(
+        store=store,
+        answers=FakeAnswers(),
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
+
+    submission = await service.submission(None, SUBMISSION_ID)
+
+    assert submission is not None
+    store.find_answer_turn_by_submission.assert_awaited_once_with(_ANONYMOUS, SUBMISSION_ID)
+
+
+async def test_submission_lookup_rejects_a_malformed_id_before_storage() -> None:
+    store = AsyncMock()
+    service = WebConversationService(
+        store=store,
+        answers=FakeAnswers(),
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
+
+    assert await service.submission(None, "not-a-uuid") is None
+    store.find_answer_turn_by_submission.assert_not_awaited()
+
+
+async def test_submission_lookup_returns_typed_service_unavailable(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    service.submission.side_effect = WebConversationUnavailableError("database unavailable")
+
+    response = await client.get(f"/web/api/answer-submissions/{SUBMISSION_ID}")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "kind": "service_unavailable",
+        "message": "Answer submission lookup is temporarily unavailable",
+    }
 
 
 async def test_service_replays_before_preparing_resolved_run_input() -> None:
@@ -450,6 +521,7 @@ async def test_reusing_a_submission_with_different_input_is_409(
     response = await client.post("/web/api/answer", json=_BODY)
 
     assert response.status_code == 409
+    assert response.json()["kind"] == "submission_conflict"
 
 
 async def test_submission_to_an_unknown_conversation_is_404(
@@ -460,6 +532,7 @@ async def test_submission_to_an_unknown_conversation_is_404(
     response = await client.post("/web/api/answer", json=_BODY)
 
     assert response.status_code == 404
+    assert response.json()["kind"] == "conversation_missing"
 
 
 async def test_an_empty_question_is_rejected_before_acceptance(
@@ -468,6 +541,7 @@ async def test_an_empty_question_is_rejected_before_acceptance(
     response = await client.post("/web/api/answer", json={**_BODY, "query": "  "})
 
     assert response.status_code == 422
+    assert response.json()["kind"] == "invalid_request"
     service.start_answer.assert_not_awaited()
 
 

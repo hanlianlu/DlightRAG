@@ -179,6 +179,14 @@ class WorkspaceStore extends Store {
     this.emit('workspaceToggled', { workspaces: [...this.#active] });
   }
 
+  /** Restore an earlier composer scope after an editable submission failure. */
+  restoreActive(workspaces: readonly string[]): void {
+    this.#active = this.#validActive([...workspaces]);
+    this.#primary = this.#validPrimary(this.#primary);
+    this.#syncCookies();
+    this.emit('workspaceToggled', {workspaces: [...this.#active]});
+  }
+
   add(record: WorkspaceRecord): void {
     if (!this.#records.some((r) => r.workspace === record.workspace)) {
       this.#records.push(record);

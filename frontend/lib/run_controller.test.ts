@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import type {ConversationTurn} from '../api/conversations.ts';
 import {RunController, type AnswerRunEvent} from './run_controller.ts';
-import {answerRunStore} from '../stores/answerRunStore.ts';
+import {answerEventCursorStore} from '../stores/answerEventCursorStore.ts';
 
 function eventResponse(body: string): Response {
   return new Response(body, {
@@ -88,7 +88,7 @@ test('RunController resumes SSE from the last durable sequence without replaying
       'id: 2\nevent: done\ndata: {"status":"cancelled","presentation":null}\n\n',
     ].join('')),
   ];
-  answerRunStore.trackRun(conversationId, runId);
+  answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
     reconnectDelayMs: 0,
     fetch: (async (_input, init) => {
@@ -109,9 +109,9 @@ test('RunController resumes SSE from the last durable sequence without replaying
     {kind: 'token', text: 'Hello'},
     {kind: 'done', payload: {status: 'cancelled', presentation: null}},
   ]);
-  assert.equal(answerRunStore.lastSequence(conversationId, runId), 2);
+  assert.equal(answerEventCursorStore.lastSequence(conversationId, runId), 2);
   controller.finish(runId);
-  answerRunStore.clear(conversationId);
+  answerEventCursorStore.clear(conversationId);
 });
 
 test('RunController frame-batches 2,000 streamed tokens without losing order or durability', async () => {
@@ -128,7 +128,7 @@ test('RunController frame-batches 2,000 streamed tokens without losing order or 
   chunks.push(
     'id: 2001\nevent: done\ndata: {"status":"cancelled","presentation":null}\n\n',
   );
-  answerRunStore.trackRun(conversationId, runId);
+  answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
     scheduleFrame: frames.schedule,
     cancelFrame: frames.cancel,
@@ -153,7 +153,7 @@ test('RunController frame-batches 2,000 streamed tokens without losing order or 
   assert.equal(result.kind, 'terminal');
   assert.equal(terminalDelivered, true, 'terminal delivery must happen before follow resolves');
   assert.equal(text, expected);
-  assert.equal(answerRunStore.lastSequence(conversationId, runId), 2_001);
+  assert.equal(answerEventCursorStore.lastSequence(conversationId, runId), 2_001);
   assert.equal(batches.length, 6, 'four controlled frames plus token and terminal flushes');
   assert.ok(
     events.filter((event) => event.kind === 'token').length <= 7,
@@ -165,14 +165,14 @@ test('RunController frame-batches 2,000 streamed tokens without losing order or 
   });
   assert.equal(frames.callbacks.size, 0);
   controller.finish(runId);
-  answerRunStore.clear(conversationId);
+  answerEventCursorStore.clear(conversationId);
 });
 
 test('RunController preserves token-reset-token and progress/tool boundaries', async () => {
   const conversationId = 'run-controller-order';
   const runId = 'run-order';
   const frames = new TestFrames();
-  answerRunStore.trackRun(conversationId, runId);
+  answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
     scheduleFrame: frames.schedule,
     cancelFrame: frames.cancel,
@@ -202,7 +202,7 @@ test('RunController preserves token-reset-token and progress/tool boundaries', a
   ]);
   assert.equal(frames.callbacks.size, 0);
   controller.finish(runId);
-  answerRunStore.clear(conversationId);
+  answerEventCursorStore.clear(conversationId);
 });
 
 test('RunController ignores unknown wire events after durably advancing their sequence', async () => {
@@ -213,7 +213,7 @@ test('RunController ignores unknown wire events after durably advancing their se
     eventResponse('id: 1\nevent: future_event\ndata: {"value":1}\n\n'),
     eventResponse('id: 2\nevent: done\ndata: {"status":"cancelled","presentation":null}\n\n'),
   ];
-  answerRunStore.trackRun(conversationId, runId);
+  answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
     reconnectDelayMs: 0,
     fetch: (async (_input, init) => {
@@ -230,15 +230,15 @@ test('RunController ignores unknown wire events after durably advancing their se
   assert.deepEqual(events, [
     {kind: 'done', payload: {status: 'cancelled', presentation: null}},
   ]);
-  assert.equal(answerRunStore.lastSequence(conversationId, runId), 2);
+  assert.equal(answerEventCursorStore.lastSequence(conversationId, runId), 2);
   controller.finish(runId);
-  answerRunStore.clear(conversationId);
+  answerEventCursorStore.clear(conversationId);
 });
 
 test('RunController settles an exhausted stream from the authoritative run row', async () => {
   const conversationId = 'run-controller-settle';
   const runId = 'run-settle';
-  answerRunStore.trackRun(conversationId, runId);
+  answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
     maxReconnectAttempts: 0,
     reconnectDelayMs: 0,
@@ -252,7 +252,7 @@ test('RunController settles an exhausted stream from the authoritative run row',
   assert.equal(result.kind, 'retryable');
   assert.equal(result.kind === 'retryable' ? result.stored.status : '', 'running');
   controller.finish(runId);
-  answerRunStore.clear(conversationId);
+  answerEventCursorStore.clear(conversationId);
 });
 
 test('RunController flushes a pending frame at stream end and stream failure', async () => {
@@ -276,7 +276,7 @@ test('RunController flushes a pending frame at stream end and stream failure', a
             controller.error(new Error('stream failed'));
           },
         }), {status: 200, headers: {'Content-Type': 'text/event-stream'}});
-    answerRunStore.trackRun(conversationId, runId);
+    answerEventCursorStore.trackRun(conversationId, runId);
     const controller = new RunController({
       maxReconnectAttempts: 0,
       reconnectDelayMs: 0,
@@ -296,10 +296,10 @@ test('RunController flushes a pending frame at stream end and stream failure', a
 
     assert.equal(result.kind, 'retryable');
     assert.deepEqual(events, [{kind: 'token', text: 'delivered'}]);
-    assert.equal(answerRunStore.lastSequence(conversationId, runId), 1);
+    assert.equal(answerEventCursorStore.lastSequence(conversationId, runId), 1);
     assert.equal(frames.callbacks.size, 0);
     controller.finish(runId);
-    answerRunStore.clear(conversationId);
+    answerEventCursorStore.clear(conversationId);
   }
 });
 
@@ -308,7 +308,7 @@ test('RunController detach synchronously flushes accepted events and cancels its
   const runId = 'run-detach-flush';
   const frames = new TestFrames();
   const encoder = new TextEncoder();
-  answerRunStore.trackRun(conversationId, runId);
+  answerEventCursorStore.trackRun(conversationId, runId);
   const controller = new RunController({
     scheduleFrame: frames.schedule,
     cancelFrame: frames.cancel,
@@ -325,7 +325,7 @@ test('RunController detach synchronously flushes accepted events and cancels its
     runId,
     (batch) => events.push(...batch),
   );
-  while (answerRunStore.lastSequence(conversationId, runId) < 1) {
+  while (answerEventCursorStore.lastSequence(conversationId, runId) < 1) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   assert.equal(frames.callbacks.size, 1);
@@ -335,7 +335,7 @@ test('RunController detach synchronously flushes accepted events and cancels its
   assert.deepEqual(events, [{kind: 'token', text: 'accepted'}]);
   assert.equal(frames.callbacks.size, 0);
   assert.equal((await following).kind, 'aborted');
-  answerRunStore.clear(conversationId);
+  answerEventCursorStore.clear(conversationId);
 });
 
 test('RunController aborts run-owned commands when its lifecycle finishes', () => {

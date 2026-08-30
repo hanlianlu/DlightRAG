@@ -68,6 +68,10 @@ export const templates: Record<
   'settings.modelCatalogue.conflict': '模型目录已更改。请检查最新修订版本后重试。',
   'settings.modelCatalogue.failed': '模型目录请求失败。',
 
+  // App shell
+  'app.searchIn': '搜索范围：',
+  'app.files': '文件',
+
   // Chat feature
   'chatFeature.continuationFailed': '后续对话无法开始。',
   'chatFeature.stopping': '正在停止…',
@@ -88,6 +92,11 @@ export const templates: Record<
   'chatFeature.toolEvent.tool_end': '工具已结束…',
   'chatFeature.answerStopped': '回答已停止',
   'chatFeature.answerReady': '回答已就绪',
+  'chatFeature.submissionFailed': '回答无法提交。',
+  'chatFeature.submissionRetry': '重试',
+  'chatFeature.submissionSignIn': '登录',
+  'chatFeature.submissionEdit': '编辑',
+  'chatFeature.submissionDiscard': '放弃',
 
   // Chat message list
   'chatMessageList.olderLoading': '正在加载更早的消息…',
@@ -141,6 +150,7 @@ export const templates: Record<
   'chatComposer.modeMenuAria': '回答模式',
   'chatComposer.steer': '引导',
   'chatComposer.stop': '停止',
+  'chatComposer.submitting': '提交中',
   'chatComposer.send': '发送',
   'chatComposer.removeAttachment': str`移除 ${0}`,
 
@@ -340,6 +350,8 @@ export const templates: Record<
   'answerPresentation.visualEvidence': '视觉证据',
   'answerPresentation.referencesAria': '引用来源',
   'answerPresentation.references': '引用来源',
+  'answerPresentation.showAllReferences': str`显示全部 ${0} 项`,
+  'answerPresentation.showFewerReferences': `收起`,
   'answerPresentation.artifactUnavailableAria': str`${0}，不可用`,
   'answerPresentation.artifactUnavailable': '该工件不可用。',
   'answerPresentation.openImage': str`打开图片：${0}`,

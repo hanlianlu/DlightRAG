@@ -102,6 +102,8 @@ class WebAnswerSubmission:
     turn_id: str
     turn_number: int
     conversation: ConversationSummary
+    submission_id: str = ""
+    created_at: datetime.datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +345,20 @@ class WebConversationService:
         if parse_run_id(run_id) is None:
             return None
         return await self._store_call(self._store.find_turn_by_run(principal_id, run_id))
+
+    async def submission(
+        self, user: UserContext | None, submission_id: str
+    ) -> WebAnswerSubmission | None:
+        """Return one owner-scoped accepted browser submission, if it exists."""
+        principal_id = owner_id_from_user(user)
+        try:
+            UUID(submission_id)
+        except ValueError:
+            return None
+        creation = await self._store_call(
+            self._store.find_answer_turn_by_submission(principal_id, submission_id)
+        )
+        return None if creation is None else _submission(creation)
 
     async def attachment(
         self,
@@ -655,6 +671,8 @@ def _submission(creation: AnswerTurnCreation) -> WebAnswerSubmission:
         run=creation.turn.run,
         turn_id=creation.turn.turn_id,
         turn_number=creation.turn.turn_number,
+        submission_id=creation.turn.submission_id,
+        created_at=creation.turn.created_at,
         conversation=_conversation_summary(creation.summary),
     )
 
