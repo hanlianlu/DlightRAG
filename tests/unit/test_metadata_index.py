@@ -232,6 +232,20 @@ class TestMetadataSQL:
         assert json.loads(field_values["custom_metadata"]) == {"department": "Finance"}
         assert "ingested_at" not in field_values
 
+    def test_field_stats_migration_is_minimal_and_tracks_row_presence(self) -> None:
+        migration = next(
+            item for item in _SCHEMA_MIGRATIONS if item.version == "metadata_field_stats"
+        )
+        sql = "\n".join(migration.statements)
+
+        assert "workspace       VARCHAR(255) NOT NULL" in sql
+        assert "field_id        TEXT         NOT NULL" in sql
+        assert "document_count  BIGINT       NOT NULL" in sql
+        assert "AFTER INSERT OR UPDATE OR DELETE" in sql
+        assert "NEW.custom_metadata" in sql
+        assert "OLD.custom_metadata" in sql
+        assert "TRUNCATE TABLE dlightrag_metadata_field_stats" in sql
+
     def test_metadata_schema_migrations_cover_registry_columns_and_indexes(self):
         versions = {migration.version for migration in _SCHEMA_MIGRATIONS}
         sql = "\n".join(stmt for migration in _SCHEMA_MIGRATIONS for stmt in migration.statements)
@@ -256,6 +270,7 @@ class TestMetadataSQL:
                 "index_workspace_download_locator",
                 "index_custom_metadata_search_gin",
                 "index_filename_trgm",
+                "metadata_field_stats",
             }
             | {f"column_{field_id}" for field_id in declared}
             | {f"index_{field_id}_canonical" for field_id in declared}
@@ -447,6 +462,8 @@ async def test_metadata_field_schema_reports_only_populated_filters() -> None:
 
     class Conn:
         async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
+            assert "FROM dlightrag_metadata_field_stats" in query
+            assert "FROM dlightrag_doc_metadata" not in query
             assert "workspace = ANY($1::text[])" in query
             assert args == (["default"],)
             return {
@@ -514,4 +531,5 @@ async def test_metadata_field_schema_reads_multiple_workspaces_in_one_operation(
     assert schema["custom_keys"] == ["department", "jurisdiction"]
     assert len(seen) == 1
     assert "workspace = ANY($1::text[])" in seen[0][0]
+    assert "LIMIT 128" in seen[0][0]
     assert seen[0][1] == (["reports", "legal"],)

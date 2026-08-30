@@ -243,7 +243,7 @@ async def test_schema_cache_is_set_keyed_bounded_and_uses_stale_on_refresh_failu
     assert first == reordered == {"revision": "current"}
     lookup.assert_awaited_once_with(("finance", "legal"))
 
-    now = 301.0
+    now = 16.0
     lookup.side_effect = RuntimeError("unavailable")
     assert await service.schema_for(("legal", "finance")) == {"revision": "current"}
 
@@ -322,7 +322,7 @@ async def test_schema_ttl_starts_when_successful_refresh_enters_cache() -> None:
 
     async def slow_lookup(_workspaces):
         nonlocal now
-        now = 299.0
+        now = 14.0
         return {"revision": "current"}
 
     lookup = AsyncMock(side_effect=slow_lookup)
@@ -343,7 +343,7 @@ async def test_schema_ttl_starts_when_successful_refresh_enters_cache() -> None:
     )
 
     assert await service.schema_for(("reports",)) == {"revision": "current"}
-    now = 300.0
+    now = 15.0
     assert await service.schema_for(("reports",)) == {"revision": "current"}
     lookup.assert_awaited_once()
 

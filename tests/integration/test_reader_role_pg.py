@@ -266,6 +266,48 @@ async def test_reader_startup_fails_when_a_declared_version_is_missing(database:
         await pool.close()
 
 
+async def test_metadata_field_stats_migration_backfills_existing_rows(database: str) -> None:
+    config = _config(database, service_role="writer")
+    pool = await _pool(config, config.domain_pool_server_settings())
+    legacy = tuple(
+        migration
+        for migration in pg_metadata_index._SCHEMA_MIGRATIONS
+        if migration.version != "metadata_field_stats"
+    )
+    try:
+        async with pool.acquire() as conn:
+            await apply_migrations(
+                conn,
+                scope="doc_metadata",
+                migrations=legacy,
+                require_applied_prefix=False,
+            )
+            await conn.execute(
+                "INSERT INTO dlightrag_doc_metadata "
+                "(workspace, doc_id, title, custom_metadata) "
+                "VALUES ('legacy', 'doc-1', 'Report', '{\"department\":\"finance\"}')"
+            )
+
+            await apply_migrations(
+                conn,
+                scope="doc_metadata",
+                migrations=pg_metadata_index._SCHEMA_MIGRATIONS,
+                require_applied_prefix=False,
+            )
+
+            rows = await conn.fetch(
+                "SELECT field_id, document_count "
+                "FROM dlightrag_metadata_field_stats "
+                "WHERE workspace = 'legacy' ORDER BY field_id"
+            )
+            assert [(str(row["field_id"]), int(row["document_count"])) for row in rows] == [
+                ("department", 1),
+                ("title", 1),
+            ]
+    finally:
+        await pool.close()
+
+
 # ---------------------------------------------------------------------------
 # Required schema objects, not just the ledger
 # ---------------------------------------------------------------------------

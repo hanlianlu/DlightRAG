@@ -39,6 +39,9 @@ from dlightrag.adapters.postgres.corpus.partition_foundation import (
     child_partition_name,
     default_child_name,
 )
+from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
+    rebuild_metadata_field_stats_for_workspace,
+)
 from dlightrag.adapters.postgres.corpus.promotion_jobs import PGPromotionJobStore
 from dlightrag.adapters.postgres.corpus.workspace_write_gate import workspace_write_gate
 from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
@@ -464,6 +467,10 @@ class PGPromotionWorker:
                     f"ALTER TABLE ONLY {pg_identifier(default_child_name(parent))} "  # noqa: S608
                     f"DROP CONSTRAINT {_exclusion_constraint_name(parent, workspace)}"
                 )
+            # Copying into detached staging tables does not fire the metadata
+            # trigger; deleting DEFAULT copies fires the parent's cloned trigger.
+            # Recount after ATTACH so the logical move leaves availability intact.
+            await rebuild_metadata_field_stats_for_workspace(conn, workspace)
             flipped = await conn.execute(_FLIP_HOT_GUARDED, workspace, fence_owner)
             if flipped == "UPDATE 0":
                 raise StalePromotionAttempt("registry flip refused: fence not current")

@@ -18,6 +18,8 @@ Proves on compact fixtures:
 * the canonical custom JSONB containment predicate rides the GIN index.
 """
 
+import asyncio
+import datetime
 import hashlib
 import json
 import os
@@ -238,6 +240,147 @@ async def writer_corpus() -> AsyncIterator[WriterCorpus]:
             pass
         await pg_pool.close()
         reset_config()
+
+
+async def test_field_schema_stats_follow_writes_deletes_clear_and_workspace_union(
+    writer_corpus: WriterCorpus,
+) -> None:
+    from dlightrag.adapters.postgres.corpus import pg_metadata_index
+
+    first_workspace = "ms_schema_a"
+    second_workspace = "ms_schema_b"
+    first = pg_metadata_index.PGMetadataIndex(workspace=first_workspace)
+    second = pg_metadata_index.PGMetadataIndex(workspace=second_workspace)
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        await first.clear()
+        await second.clear()
+        await first.upsert(
+            "doc-a",
+            {
+                "filename": "report.pdf",
+                "filename_stem": "report",
+                "file_extension": "pdf",
+                "custom_metadata": {"department": "finance"},
+            },
+        )
+        await first.upsert(
+            "doc-b",
+            {
+                "title": "Quarterly report",
+                "author": "Ada",
+                "custom_metadata": {"department": "finance", "team": "core"},
+            },
+        )
+        await second.upsert(
+            "doc-c",
+            {
+                "creation_date": datetime.datetime(2026, 1, 2),
+                "custom_metadata": {"jurisdiction": "eu"},
+            },
+        )
+
+        counts = {
+            str(row["field_id"]): int(row["document_count"])
+            for row in await conn.fetch(
+                "SELECT field_id, document_count "
+                "FROM dlightrag_metadata_field_stats WHERE workspace = $1",
+                first_workspace,
+            )
+        }
+        assert counts == {
+            "author": 1,
+            "department": 2,
+            "file_extension": 1,
+            "filename": 1,
+            "filename_stem": 1,
+            "team": 1,
+            "title": 1,
+        }
+        assert await first.get_field_schema(workspaces=(first_workspace, second_workspace)) == {
+            "filters": [
+                "filename",
+                "file_extension",
+                "title",
+                "author",
+                "creation_date_from",
+                "creation_date_to",
+                "custom",
+            ],
+            "custom_keys": ["department", "jurisdiction", "team"],
+        }
+        async with conn.transaction():
+            await conn.execute("SET LOCAL enable_seqscan = off")
+            plan = "\n".join(
+                str(row["QUERY PLAN"])
+                for row in await conn.fetch(
+                    "EXPLAIN (COSTS OFF) " + pg_metadata_index._FIELD_SCHEMA,
+                    [first_workspace, second_workspace],
+                )
+            )
+        assert "dlightrag_metadata_field_stats_pkey" in plan
+        assert "dlightrag_doc_metadata" not in plan
+
+        await first.delete("doc-a")
+        assert await first.get_field_schema() == {
+            "filters": ["title", "author", "custom"],
+            "custom_keys": ["department", "team"],
+        }
+        assert await first.merge_custom_metadata("doc-b", {"custom_metadata": {"region": "north"}})
+        assert await first.get_field_schema() == {
+            "filters": ["title", "author", "custom"],
+            "custom_keys": ["department", "region", "team"],
+        }
+        await conn.execute(
+            "UPDATE dlightrag_doc_metadata SET title = NULL "
+            "WHERE workspace = $1 AND doc_id = 'doc-b'",
+            first_workspace,
+        )
+        assert await first.get_field_schema() == {
+            "filters": ["author", "custom"],
+            "custom_keys": ["department", "region", "team"],
+        }
+
+        await first.clear()
+        assert await first.get_field_schema() == {"filters": [], "custom_keys": []}
+        assert not await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM dlightrag_metadata_field_stats WHERE workspace = $1)",
+            first_workspace,
+        )
+
+        await asyncio.gather(
+            *(
+                first.upsert(
+                    f"concurrent-{index}",
+                    {"custom_metadata": {"shared": index}},
+                )
+                for index in range(12)
+            )
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT document_count FROM dlightrag_metadata_field_stats "
+                "WHERE workspace = $1 AND field_id = 'shared'",
+                first_workspace,
+            )
+            == 12
+        )
+        await asyncio.gather(*(first.delete(f"concurrent-{index}") for index in range(12)))
+        assert not await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM dlightrag_metadata_field_stats WHERE workspace = $1)",
+            first_workspace,
+        )
+
+        many_keys = {f"key_{index:03d}": index for index in range(130)}
+        await second.clear()
+        await second.upsert("doc-many", {"custom_metadata": many_keys})
+        bounded = await second.get_field_schema()
+        assert bounded["filters"] == ["custom"]
+        assert bounded["custom_keys"] == list(many_keys)[:128]
+    finally:
+        await first.clear()
+        await second.clear()
+        await conn.close()
 
 
 def _scope(*, candidate_count: int, candidate_count_exact: bool = True) -> MetadataScope:

@@ -63,6 +63,9 @@ _PG_METADATA_COLUMNS = tuple(
     )
     for field_id in METADATA_FIELD_IDS
 )
+_FILTERABLE_COLUMNS: tuple[str, ...] = tuple(
+    dict.fromkeys(column for columns in FILTER_FIELD_COLUMNS.values() for column in columns)
+)
 
 
 def _build_create_table() -> str:
@@ -146,6 +149,137 @@ _SEARCH_COLUMN = "custom_metadata_search"
 # matches against the same table and column.
 METADATA_TABLE = _METADATA_TABLE
 METADATA_SEARCH_COLUMN = _SEARCH_COLUMN
+
+_FIELD_STATS_TABLE = "dlightrag_metadata_field_stats"
+_CUSTOM_SCHEMA_KEY_LIMIT = 128
+_CREATE_FIELD_STATS_TABLE = f"""
+CREATE TABLE IF NOT EXISTS {_FIELD_STATS_TABLE} (
+    workspace       VARCHAR(255) NOT NULL,
+    field_id        TEXT         NOT NULL,
+    document_count  BIGINT       NOT NULL,
+    PRIMARY KEY (workspace, field_id),
+    CONSTRAINT dlightrag_metadata_field_stats_count_check
+        CHECK (document_count >= 0)
+)
+"""
+
+
+def _presence_rows(record: str) -> str:
+    builtins = ",\n            ".join(
+        f"('{column}', {record}.{column} IS NOT NULL)" for column in _FILTERABLE_COLUMNS
+    )
+    return f"""
+        SELECT {record}.workspace AS workspace, fields.field_id
+        FROM (VALUES
+            {builtins}
+        ) AS fields(field_id, present)
+        WHERE fields.present
+        UNION
+        SELECT {record}.workspace, custom.key
+        FROM jsonb_object_keys(
+            COALESCE({record}.custom_metadata, '{{}}'::jsonb)
+        ) AS custom(key)
+    """  # noqa: S608 - record and columns are fixed migration SQL
+
+
+def _presence_difference(left: str, right: str) -> str:
+    return f"""
+        SELECT workspace, field_id FROM ({_presence_rows(left)}) AS left_fields
+        EXCEPT
+        SELECT workspace, field_id FROM ({_presence_rows(right)}) AS right_fields
+    """  # noqa: S608 - composes only fixed trigger fragments
+
+
+def _increment_field_stats(rows: str) -> str:
+    return f"""
+        INSERT INTO {_FIELD_STATS_TABLE} (workspace, field_id, document_count)
+        SELECT present.workspace, present.field_id, 1
+        FROM ({rows}) AS present
+        ORDER BY present.workspace, present.field_id
+        ON CONFLICT (workspace, field_id) DO UPDATE
+        SET document_count = {_FIELD_STATS_TABLE}.document_count + 1;
+    """  # noqa: S608 - composes only fixed trigger fragments
+
+
+def _decrement_field_stats(rows: str) -> str:
+    return f"""
+        INSERT INTO {_FIELD_STATS_TABLE} (workspace, field_id, document_count)
+        SELECT removed.workspace, removed.field_id, 0
+        FROM ({rows}) AS removed
+        ORDER BY removed.workspace, removed.field_id
+        ON CONFLICT (workspace, field_id) DO UPDATE
+        SET document_count = {_FIELD_STATS_TABLE}.document_count - 1;
+
+        DELETE FROM {_FIELD_STATS_TABLE} AS stats
+        USING ({rows}) AS removed
+        WHERE stats.workspace = removed.workspace
+          AND stats.field_id = removed.field_id
+          AND stats.document_count = 0;
+    """  # noqa: S608 - composes only fixed trigger fragments
+
+
+_CREATE_FIELD_STATS_TRIGGER_FN = f"""
+CREATE OR REPLACE FUNCTION dlightrag_sync_metadata_field_stats()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        {_increment_field_stats(_presence_rows("NEW"))}
+    ELSIF TG_OP = 'UPDATE' THEN
+        {_increment_field_stats(_presence_difference("NEW", "OLD"))}
+        {_decrement_field_stats(_presence_difference("OLD", "NEW"))}
+    ELSE
+        {_decrement_field_stats(_presence_rows("OLD"))}
+    END IF;
+    RETURN NULL;
+END
+$$
+"""
+
+_DROP_FIELD_STATS_TRIGGER = (
+    "DROP TRIGGER IF EXISTS dlightrag_metadata_field_stats ON dlightrag_doc_metadata"
+)
+_CREATE_FIELD_STATS_TRIGGER = """
+CREATE TRIGGER dlightrag_metadata_field_stats
+AFTER INSERT OR UPDATE OR DELETE ON dlightrag_doc_metadata
+FOR EACH ROW EXECUTE FUNCTION dlightrag_sync_metadata_field_stats()
+"""
+
+
+def _field_stats_source(where: str = "") -> str:
+    builtins = ",\n                ".join(
+        f"('{column}', metadata.{column} IS NOT NULL)" for column in _FILTERABLE_COLUMNS
+    )
+    predicate = f"WHERE {where}" if where else ""
+    return f"""
+        SELECT metadata.workspace, metadata.doc_id, fields.field_id
+        FROM dlightrag_doc_metadata AS metadata
+        CROSS JOIN LATERAL (VALUES
+                {builtins}
+        ) AS fields(field_id, present)
+        WHERE fields.present {f"AND {where}" if where else ""}
+        UNION
+        SELECT metadata.workspace, metadata.doc_id, custom.key
+        FROM dlightrag_doc_metadata AS metadata
+        CROSS JOIN LATERAL jsonb_object_keys(
+            COALESCE(metadata.custom_metadata, '{{}}'::jsonb)
+        ) AS custom(key)
+        {predicate}
+    """  # noqa: S608 - predicate and columns are fixed migration SQL
+
+
+def _backfill_field_stats(where: str = "") -> str:
+    return f"""
+INSERT INTO {_FIELD_STATS_TABLE} (workspace, field_id, document_count)
+SELECT present.workspace, present.field_id, COUNT(*)::bigint
+FROM ({_field_stats_source(where)}) AS present
+GROUP BY present.workspace, present.field_id
+"""  # noqa: S608 - composes only fixed backfill fragments
+
+
+_BACKFILL_FIELD_STATS = _backfill_field_stats()
+_BACKFILL_WORKSPACE_FIELD_STATS = _backfill_field_stats("metadata.workspace = $1")
 
 
 def _metadata_partition_spec() -> PartitionedTableSpec:
@@ -266,6 +400,20 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             ),
         )
     )
+    migrations.append(
+        Migration(
+            "metadata_field_stats",
+            "Maintain bounded planner field availability counts",
+            (
+                _CREATE_FIELD_STATS_TABLE,
+                _CREATE_FIELD_STATS_TRIGGER_FN,
+                _DROP_FIELD_STATS_TRIGGER,
+                _CREATE_FIELD_STATS_TRIGGER,
+                f"TRUNCATE TABLE {_FIELD_STATS_TABLE}",
+                _BACKFILL_FIELD_STATS,
+            ),
+        )
+    )
     return tuple(migrations)
 
 
@@ -284,6 +432,12 @@ _SCHEMA_TABLES = (
         ),
         partitioned_by=("workspace",),
         required_child_partitions=(default_child_name("dlightrag_doc_metadata"),),
+    ),
+    TableRequirement(
+        name=_FIELD_STATS_TABLE,
+        columns=("workspace", "field_id", "document_count"),
+        primary_key=("workspace", "field_id"),
+        checks=("dlightrag_metadata_field_stats_count_check",),
     ),
 )
 
@@ -376,36 +530,35 @@ def _build_params(workspace: str, doc_id: str, metadata: dict[str, Any]) -> list
 _UPSERT = _build_upsert()
 _UPDATE = _build_update()
 
-_FILTERABLE_COLUMNS: tuple[str, ...] = tuple(
-    dict.fromkeys(column for columns in FILTER_FIELD_COLUMNS.values() for column in columns)
-)
-
 
 def _build_field_schema() -> str:
-    """Report which filter columns hold data, plus the custom keys in use.
-
-    Deliberately reports populated columns rather than the table definition: the
-    planner cannot see the corpus, so naming a column it can never match is what
-    sends it down an empty filter. One row out regardless of document count.
-    """
+    """Read populated filter columns and the most prevalent custom keys."""
     populated = ",\n    ".join(
-        f"bool_or({column} IS NOT NULL) AS {column}" for column in _FILTERABLE_COLUMNS
+        f"bool_or(field_id = '{column}') AS {column}" for column in _FILTERABLE_COLUMNS
     )
+    builtins = ", ".join(f"'{column}'" for column in _FILTERABLE_COLUMNS)
     return f"""
+WITH combined AS (
+    SELECT field_id, SUM(document_count)::bigint AS document_count
+    FROM {_FIELD_STATS_TABLE}
+    WHERE workspace = ANY($1::text[])
+      AND document_count > 0
+    GROUP BY field_id
+)
 SELECT
     {populated},
     (
-        SELECT array_agg(DISTINCT key)
+        SELECT array_agg(field_id ORDER BY document_count DESC, field_id)
         FROM (
-            SELECT jsonb_object_keys(custom_metadata) AS key
-            FROM dlightrag_doc_metadata
-            WHERE workspace = ANY($1::text[])
-              AND custom_metadata != '{{}}'
-        ) AS keys
+            SELECT field_id, document_count
+            FROM combined
+            WHERE field_id NOT IN ({builtins})
+            ORDER BY document_count DESC, field_id
+            LIMIT {_CUSTOM_SCHEMA_KEY_LIMIT}
+        ) AS custom
     ) AS custom_keys
-FROM dlightrag_doc_metadata
-WHERE workspace = ANY($1::text[])
-"""  # noqa: S608 - column names come from the field registry, never from input
+FROM combined
+"""  # noqa: S608 - field names come from the registry, never from input
 
 
 _FIELD_SCHEMA = _build_field_schema()
@@ -568,6 +721,15 @@ def _decoded_row(row: Any) -> dict[str, Any]:
     raw = decoded.get("custom_metadata")
     decoded["custom_metadata"] = json.loads(raw) if isinstance(raw, str) else (raw or {})
     return decoded
+
+
+async def rebuild_metadata_field_stats_for_workspace(conn: Any, workspace: str) -> None:
+    """Recount one workspace after its rows move between physical partitions."""
+    await conn.execute(
+        f"DELETE FROM {_FIELD_STATS_TABLE} WHERE workspace = $1",  # noqa: S608
+        workspace,
+    )
+    await conn.execute(_BACKFILL_WORKSPACE_FIELD_STATS, workspace)
 
 
 class PGMetadataIndex(PostgresOperationRunner):

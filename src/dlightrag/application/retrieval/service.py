@@ -172,7 +172,7 @@ class RetrievalService:
         key = tuple(sorted(workspaces))
         now = self._clock()
         cached = self._schema_cache.get(key)
-        if cached is not None and now - cached[0] < 300.0:
+        if cached is not None and now - cached[0] < 15.0:
             return copy.deepcopy(cached[1])
         refresh = self._schema_refreshes.get(key)
         if refresh is None:

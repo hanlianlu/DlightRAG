@@ -551,6 +551,14 @@ async def test_promotion_is_atomic_across_all_parents_and_isolated(
         await _seed_workspace(conn, other, docs=2, chunks_per_doc=2)
         before_a = await _table_counts(conn, ws)
         before_b = await _table_counts(conn, other)
+        field_stats_before = {
+            str(row["field_id"]): int(row["document_count"])
+            for row in await conn.fetch(
+                "SELECT field_id, document_count "
+                "FROM dlightrag_metadata_field_stats WHERE workspace = $1",
+                ws,
+            )
+        }
 
         jobs = PGPromotionJobStore()
         assert await jobs.enqueue(ws) is True
@@ -589,6 +597,14 @@ async def test_promotion_is_atomic_across_all_parents_and_isolated(
         counts_a = await _table_counts(conn, ws)
         assert counts_a == before_a
         assert await _table_counts(conn, other) == before_b
+        assert {
+            str(row["field_id"]): int(row["document_count"])
+            for row in await conn.fetch(
+                "SELECT field_id, document_count "
+                "FROM dlightrag_metadata_field_stats WHERE workspace = $1",
+                ws,
+            )
+        } == field_stats_before
         for table, child in partitions.items():
             child_count = int(await conn.fetchval(f"SELECT COUNT(*) FROM {child}"))
             assert child_count == before_a[table]
@@ -615,7 +631,33 @@ async def test_promotion_is_atomic_across_all_parents_and_isolated(
         assert child_partition_name(_CHUNKS_TABLE, ws) in plan_text
         assert default_child_name(_CHUNKS_TABLE) not in plan_text
 
-        # New writes for A route into the dedicated child; B keeps using DEFAULT.
+        # New writes for A route into the dedicated child; its cloned metadata
+        # trigger keeps field counts current. B keeps using DEFAULT.
+        await conn.execute(
+            f"""
+            INSERT INTO {_METADATA_TABLE} (workspace, doc_id, title)
+            VALUES ($1, 'pw-hot-post-promotion', 'Post-promotion title')
+            """,
+            ws,
+        )
+        assert (
+            await conn.fetchval(
+                "SELECT document_count FROM dlightrag_metadata_field_stats "
+                "WHERE workspace = $1 AND field_id = 'title'",
+                ws,
+            )
+            == 1
+        )
+        await conn.execute(
+            f"DELETE FROM {_METADATA_TABLE} "
+            "WHERE workspace = $1 AND doc_id = 'pw-hot-post-promotion'",
+            ws,
+        )
+        assert not await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM dlightrag_metadata_field_stats "
+            "WHERE workspace = $1 AND field_id = 'title')",
+            ws,
+        )
         await conn.execute(
             f"""
             INSERT INTO {_CHUNKS_TABLE} (workspace, id, full_doc_id, content)
