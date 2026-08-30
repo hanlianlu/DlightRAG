@@ -2,6 +2,7 @@
 """PostgreSQL composition adapter for one LightRAG corpus backend."""
 
 import asyncio
+import hashlib
 import logging
 import os
 import random
@@ -20,6 +21,7 @@ from dlightrag.adapters.postgres.core._version import (
     ensure_postgres_extensions,
     ensure_postgres_major,
 )
+from dlightrag.adapters.postgres.core.identifiers import pg_qualified_identifier
 from dlightrag.adapters.postgres.corpus._corpus_schema import CHUNK_DOCUMENT_SCOPE_INDEX
 from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
     create_postgres_bm25,
@@ -68,6 +70,15 @@ ORDER BY tablename
 """
 _HAS_WORKSPACE_COLUMN = """SELECT 1 FROM information_schema.columns
 WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'workspace'
+"""
+_RESET_ARTIFACT_RELATIONS = """
+SELECT c.relname
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relkind IN ('r', 'p')
+  AND (c.relname LIKE 'p\\_%' ESCAPE '\\' OR c.relname LIKE 's\\_%' ESCAPE '\\')
+ORDER BY c.relname
 """
 
 _CHUNKS_REQUIRED_COLUMNS = ("id", "workspace", "full_doc_id", "content", "file_path")
@@ -381,16 +392,20 @@ class PGCorpusMaintenanceStore:
             return cleaned
 
     async def delete_workspace_record(self, workspace: str) -> bool:
-        """Delete one workspace's registry row and promotion jobs atomically.
+        """Delete registry/control rows and deterministic partition artifacts.
 
-        A deleted workspace must never keep retrying promotion work: the
-        registry row and every active/pending/failed promotion job commit
-        together or not at all. The caller holds the workspace write gate, so
-        no cutover can race this transaction.
+        A deleted workspace must never keep retrying promotion work or leave
+        dedicated/staging relations behind. The registry row, promotion jobs,
+        and artifact drops commit together or not at all. The caller must hold
+        the workspace write gate, so no promotion cutover can race this
+        transaction.
         """
         workspace_id = str(workspace).strip()
         if not workspace_id:
             raise ValueError("workspace cannot be empty")
+
+        workspace_digest = hashlib.sha256(workspace_id.encode("utf-8")).hexdigest()[:16]
+        artifact_suffix = f"_w_{workspace_digest}"
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
@@ -402,6 +417,14 @@ class PGCorpusMaintenanceStore:
                     "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1",
                     workspace_id,
                 )
+                relations = await conn.fetch(_RESET_ARTIFACT_RELATIONS)
+                for row in relations:
+                    relation = str(row["relname"])
+                    if not relation.endswith(artifact_suffix):
+                        continue
+                    await conn.execute(
+                        f"DROP TABLE IF EXISTS {pg_qualified_identifier(relation)}"  # noqa: S608
+                    )
             return result != "DELETE 0"
 
         return await self._workspace_registry._run_once(_operation)

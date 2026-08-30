@@ -1267,6 +1267,54 @@ async def test_detached_relation_with_the_child_name_fails_loudly(
             await conn.close()
 
 
+async def test_reset_drops_dedicated_partitions_before_shared_reregistration(
+    corpus: None, workspaces: tuple[str, str]
+) -> None:
+    ws, other = workspaces
+    await _clean_state()
+    registry = PGWorkspaceRegistry()
+    await registry.upsert(workspace=ws, display_name="Hot", embedding_model="m")
+    jobs = PGPromotionJobStore()
+
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        await _seed_workspace(conn, ws, docs=1, chunks_per_doc=1)
+        assert await jobs.enqueue(ws) is True
+        assert await _worker().run_once() is True
+        children = await _dedicated_partitions(conn, ws)
+        assert all(children.values())
+
+        from dlightrag.adapters.postgres.corpus.corpus import PGCorpusMaintenanceStore
+
+        maintenance = PGCorpusMaintenanceStore({**_DEFAULT_KWARGS, "database": _TEST_DB})
+        assert await maintenance.delete_workspace_record(ws) is True
+
+        for child in children.values():
+            assert await conn.fetchval("SELECT to_regclass($1)", f"public.{child}") is None
+
+        await registry.upsert(workspace=ws, display_name="Fresh", embedding_model="m")
+        await conn.execute(
+            f"INSERT INTO {_CHUNKS_TABLE} (workspace, id, full_doc_id, content) "
+            "VALUES ($1, $2, $3, $4)",
+            ws,
+            "pw-reset-fresh-chunk",
+            "pw-reset-fresh-doc",
+            "fresh",
+        )
+        from dlightrag.adapters.postgres.corpus.partition_foundation import default_child_name
+
+        routed_to = await conn.fetchval(
+            f"SELECT tableoid::regclass::text FROM {_CHUNKS_TABLE} "
+            "WHERE workspace = $1 AND id = $2",
+            ws,
+            "pw-reset-fresh-chunk",
+        )
+        assert str(routed_to) == default_child_name(_CHUNKS_TABLE).lower()
+        assert (await _registry_row(conn, ws))["storage_tier"] == "shared"
+    finally:
+        await conn.close()
+
+
 async def test_reset_removes_promotion_jobs_atomically_and_counters_cascade(
     corpus: None, workspaces: tuple[str, str]
 ) -> None:

@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for PostgreSQL corpus maintenance behavior."""
 
+import hashlib
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -45,8 +46,14 @@ def _maintenance_store(config: MagicMock, conn: object) -> PGCorpusMaintenanceSt
 
 class _Conn:
     def __init__(self) -> None:
+        digest = hashlib.sha256(b"research").hexdigest()[:16]
         self.executed: list[tuple[str, tuple[object, ...]]] = []
         self.fetchvals: list[tuple[str, tuple[object, ...]]] = []
+        self.relations = [
+            {"relname": f"p_metadata_w_{digest}"},
+            {"relname": f"s_metadata_w_{digest}"},
+            {"relname": "p_unrelated_w_0000000000000000"},
+        ]
         self.closed = False
 
     def transaction(self) -> _Tx:
@@ -55,6 +62,10 @@ class _Conn:
     async def execute(self, query: str, *args: object) -> str:
         self.executed.append((query, args))
         return "DELETE 1"
+
+    async def fetch(self, query: str) -> list[dict[str, str]]:
+        assert "pg_class" in query
+        return self.relations
 
     async def fetchval(self, query: str, *args: object) -> bool:
         self.fetchvals.append((query, args))
@@ -88,9 +99,12 @@ async def test_delete_workspace_record_uses_the_operational_registry(monkeypatch
     config.pg_connection_kwargs.assert_called_once_with()
     # Promotion jobs and the registry row delete in one transaction, jobs
     # first, so a deleted workspace never keeps retrying promotion work.
+    digest = hashlib.sha256(b"research").hexdigest()[:16]
     assert conn.executed == [
         ("DELETE FROM dlightrag_promotion_jobs WHERE workspace = $1", ("research",)),
         ("DELETE FROM dlightrag_workspace_meta WHERE workspace = $1", ("research",)),
+        (f"DROP TABLE IF EXISTS p_metadata_w_{digest}", ()),
+        (f"DROP TABLE IF EXISTS s_metadata_w_{digest}", ()),
     ]
     connect.assert_not_awaited()
     assert conn.closed is False

@@ -138,6 +138,11 @@ class StalePromotionAttempt(RuntimeError):
     """This attempt's lease or fence is no longer current; abandon quietly."""
 
 
+def _raise_if_renewal_lost(renewal_lost: asyncio.Event) -> None:
+    if renewal_lost.is_set():
+        raise StalePromotionAttempt("promotion lease/fence was lost during copy")
+
+
 def staging_partition_name(table_name: str, workspace: str) -> str:
     """Deterministic internal name for one detached pre-attach staging table."""
     parent_digest = hashlib.sha256(pg_identifier(table_name).lower().encode("utf-8")).hexdigest()[
@@ -282,13 +287,25 @@ class PGPromotionWorker:
             )
             raise StalePromotionAttempt("promotion fence changed before state transition")
 
-        renewal_task = asyncio.create_task(self._renew_while(claim=claim, fence_owner=fence_owner))
+        renewal_lost = asyncio.Event()
+        renewal_task = asyncio.create_task(
+            self._renew_while(
+                claim=claim,
+                fence_owner=fence_owner,
+                renewal_lost=renewal_lost,
+            )
+        )
         self._current_attempt_gated = False
         try:
             async with workspace_write_gate(workspace, exclusive=True) as conn:
                 self._current_attempt_gated = True
                 try:
-                    await self._copy_and_cutover(conn, claim, fence_owner)
+                    await self._copy_and_cutover(
+                        conn,
+                        claim,
+                        fence_owner,
+                        renewal_lost,
+                    )
                 except BaseException as exc:
                     # Any normal failure or cancellation while still inside
                     # the exclusive gate: clean the current attempt's
@@ -324,26 +341,46 @@ class PGPromotionWorker:
                     workspace,
                 )
 
-    async def _renew_while(self, *, claim: PromotionJobClaim, fence_owner: str) -> None:
-        """Renew the job lease and fence so long copies never outlive them."""
+    async def _renew_while(
+        self,
+        *,
+        claim: PromotionJobClaim,
+        fence_owner: str,
+        renewal_lost: asyncio.Event,
+    ) -> None:
+        """Renew the attempt, signaling the copy loop when ownership is lost."""
         interval = max(1.0, self._lease_seconds / _LEASE_RENEW_INTERVAL_DIVISOR)
-        while True:
-            await asyncio.sleep(interval)
-            lease_until = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
-                seconds=self._lease_seconds
-            )
-            renewed = await self._job_store.renew_lease(
-                job_id=claim.job_id,
-                owner=claim.owner,
-                lease_generation=claim.lease_generation,
-                lease_until=lease_until,
-            )
-            if not renewed:
-                return
-            await self._registry.acquire_write_fence(
-                workspace=claim.workspace,
-                owner=fence_owner,
-                until=lease_until,
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                lease_until = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
+                    seconds=self._lease_seconds
+                )
+                renewed = await self._job_store.renew_lease(
+                    job_id=claim.job_id,
+                    owner=claim.owner,
+                    lease_generation=claim.lease_generation,
+                    lease_until=lease_until,
+                )
+                if not renewed:
+                    renewal_lost.set()
+                    return
+                fence_renewed = await self._registry.acquire_write_fence(
+                    workspace=claim.workspace,
+                    owner=fence_owner,
+                    until=lease_until,
+                )
+                if not fence_renewed:
+                    renewal_lost.set()
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            renewal_lost.set()
+            logger.warning(
+                "Promotion lease/fence renewal failed for workspace '%s'",
+                claim.workspace,
+                exc_info=True,
             )
 
     async def _copy_and_cutover(
@@ -351,8 +388,10 @@ class PGPromotionWorker:
         conn: Any,
         claim: PromotionJobClaim,
         fence_owner: str,
+        renewal_lost: asyncio.Event,
     ) -> None:
         workspace = claim.workspace
+        _raise_if_renewal_lost(renewal_lost)
         await self._recheck_current(conn, claim, fence_owner)
 
         tables = await _discover_retrieval_parents(conn)
@@ -361,6 +400,7 @@ class PGPromotionWorker:
 
         staged: list[tuple[str, str, str]] = []  # (parent, staging, child)
         for parent in tables:
+            _raise_if_renewal_lost(renewal_lost)
             child = child_partition_name(parent, workspace)
             if await _child_is_attached(conn, parent, child, workspace):
                 # A previous cutover already attached this parent's dedicated
@@ -375,7 +415,9 @@ class PGPromotionWorker:
             await _create_staging(conn, parent, staging, workspace)
             await _copy_workspace_rows(conn, parent, staging, workspace)
             await _verify_copy_checksums(conn, parent, staging, workspace)
+            _raise_if_renewal_lost(renewal_lost)
             await _build_staging_indexes(conn, parent, staging)
+            _raise_if_renewal_lost(renewal_lost)
             staged.append((parent, staging, child))
 
         # Phase 1 (autocommit, inside the exclusive gate): commit each
@@ -387,6 +429,7 @@ class PGPromotionWorker:
             await _add_exclusion_check(conn, parent, workspace, workspace_literal)
         if _PHASE1_PAUSE_HOOK is not None:
             await _PHASE1_PAUSE_HOOK(conn)
+        _raise_if_renewal_lost(renewal_lost)
 
         # Phase 2: the one atomic cutover.
         async with conn.transaction():

@@ -20,6 +20,7 @@ from dlightrag.adapters.postgres.corpus import promotion_worker as worker_module
 from dlightrag.adapters.postgres.corpus.promotion_worker import (
     PGPromotionWorker,
     PromotionAttemptError,
+    PromotionJobClaim,
     StalePromotionAttempt,
     staging_partition_name,
 )
@@ -421,6 +422,68 @@ async def test_fence_unavailable_fails_the_attempt_without_gate(
     assert not any("ATTACH PARTITION" in q for q, _ in conn.executed)
 
 
+async def test_renewal_fence_loss_signals_copy_abort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    async def immediate_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(worker_module.asyncio, "sleep", immediate_sleep)
+    job_store = SimpleNamespace(renew_lease=AsyncMock(return_value=True))
+    registry = SimpleNamespace(acquire_write_fence=AsyncMock(return_value=False))
+    worker = PGPromotionWorker(job_store=cast(Any, job_store), registry=cast(Any, registry))
+    claim = PromotionJobClaim(
+        job_id=11,
+        workspace="ws_alpha",
+        attempt_count=2,
+        lease_generation=7,
+        owner="promo-owner",
+    )
+    renewal_lost = asyncio.Event()
+
+    await worker._renew_while(
+        claim=claim,
+        fence_owner="promo-owner#7",
+        renewal_lost=renewal_lost,
+    )
+
+    assert renewal_lost.is_set()
+    job_store.renew_lease.assert_awaited_once()
+    registry.acquire_write_fence.assert_awaited_once()
+
+
+async def test_copy_aborts_before_work_when_renewal_was_lost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    job_store = SimpleNamespace()
+    registry = SimpleNamespace()
+    worker = PGPromotionWorker(job_store=cast(Any, job_store), registry=cast(Any, registry))
+    recheck = AsyncMock()
+    monkeypatch.setattr(worker, "_recheck_current", recheck)
+    renewal_lost = asyncio.Event()
+    renewal_lost.set()
+
+    with pytest.raises(StalePromotionAttempt, match="lost during copy"):
+        await worker._copy_and_cutover(
+            _Conn(),
+            PromotionJobClaim(
+                job_id=11,
+                workspace="ws_alpha",
+                attempt_count=2,
+                lease_generation=7,
+                owner="promo-owner",
+            ),
+            "promo-owner#7",
+            renewal_lost,
+        )
+
+    recheck.assert_not_awaited()
+
+
 async def test_state_transition_refusal_releases_owned_fence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -651,7 +714,12 @@ async def test_cancelled_stale_worker_mutates_nothing_and_drops_no_staging(
     monkeypatch.setattr(worker, "_recheck_current", AsyncMock())
     monkeypatch.setattr(worker, "_cleanup_artifacts_on", AsyncMock())
 
-    async def cancel_mid(conn_arg: Any, claim: Any, fence_owner: str) -> None:  # noqa: ANN001, ANN401
+    async def cancel_mid(
+        conn_arg: Any,  # noqa: ANN401
+        claim: Any,  # noqa: ANN401
+        fence_owner: str,
+        renewal_lost: asyncio.Event,
+    ) -> None:
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(worker, "_copy_and_cutover", cancel_mid)
@@ -702,7 +770,12 @@ async def test_cancelled_current_worker_fails_guarded_and_cleans_once(
     monkeypatch.setattr(worker, "_recheck_current", AsyncMock())
     monkeypatch.setattr(worker, "_cleanup_artifacts_on", AsyncMock())
 
-    async def cancel_mid(conn_arg: Any, claim: Any, fence_owner: str) -> None:  # noqa: ANN001, ANN401
+    async def cancel_mid(
+        conn_arg: Any,  # noqa: ANN401
+        claim: Any,  # noqa: ANN401
+        fence_owner: str,
+        renewal_lost: asyncio.Event,
+    ) -> None:
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(worker, "_copy_and_cutover", cancel_mid)
