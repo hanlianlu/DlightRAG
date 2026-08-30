@@ -17,9 +17,10 @@ build/
 venv/
 ENV/
 
-# Local planning artifacts
-docs/plans/*
-!docs/plans/README.md
+# Local research and planning artifacts
+/docs/adr/
+/docs/plans/
+/docs/research/
 docs/superpowers/
 docs/upstream/
 superpowers/

@@ -1,6 +1,6 @@
 # Architecture Reorganization Plan
 
-This is the implementation plan for [ADR 0001](adr/0001-application-engine-adapters-architecture.md). Canonical architecture documents and diagrams still describe the current tree. Update those documents in the same milestone that makes their claims true.
+This document records the accepted application-engine-adapters reorganization plan. Canonical architecture documents and diagrams still describe the current tree. Update those documents in the same milestone that makes their claims true.
 
 Do not start source movement from this file until the user authorizes a milestone. This file records target owners, file mapping, order, and gates.
 
@@ -260,7 +260,7 @@ Exit: completion criteria below are all true, and the milestone diff contains no
 
 ## Documentation policy
 
-ADR and this plan describe the accepted future. `docs/architecture.md`, `docs/interfaces.md`, `docs/configuration.md`, `docs/domain-language.md` only as needed for renamed product terms, and the SVG figures describe code that already exists.
+This plan describes the accepted future. `docs/architecture.md`, `docs/interfaces.md`, `docs/configuration.md`, `docs/domain-language.md` only as needed for renamed product terms, and the SVG figures describe code that already exists.
 
 Per milestone, update every canonical sentence or diagram the milestone makes false. Do not draw the unfinished tree as current. M7 is the consistency audit, not the first documentation pass.
 
