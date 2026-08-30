@@ -27,7 +27,8 @@ Nested environment variables use the same path with `__` separators. Removed
 
 Keep these in normal `config.yaml`:
 
-- model/provider choices: `models.chat`, `models.embedding`, `models.rerank`
+- model/provider choices and endpoint facts: `models.catalogue`, `models.chat`,
+  `models.embedding`, `models.rerank`
 - parser sidecar endpoint and visual context controls: `corpus.sidecars`
 - metadata schema: fixed; custom metadata needs no declaration
 - domain entity guidance: `corpus.retrieval.kg_entity_types`,
@@ -390,7 +391,7 @@ OpenRouter are `provider: openai` plus their `base_url` — there is no
 `provider: deepseek` or `provider: openrouter`, and any unknown value is
 rejected when the config loads.
 
-### Runtime model catalogue and reasoning profiles
+### Model catalogue and reasoning profiles
 
 Each chat model resolves an endpoint-scoped profile containing its context
 window (`C`), optional maximum input (`I`), optional maximum output (`O`), image
@@ -400,17 +401,51 @@ different endpoint is a different profile. The built-in catalogue is ordered by
 upstream vendor and model; each native endpoint immediately precedes its
 OpenRouter counterpart.
 
-Resolution is deterministic: a PostgreSQL runtime overlay replaces a matching
-built-in profile, the versioned JSON catalogue supplies the shipped defaults,
-and an unknown endpoint receives a permissive fallback profile. DlightRAG
-does not probe model endpoints. Runtime overlay rows are complete profiles, not
-field patches. PostgreSQL publishes updates atomically with an optimistic
-revision and `NOTIFY`; every process reloads the committed snapshot and clears
-its capability cache. Startup and reconnect synchronize the current value.
-Invalid updates, stale revisions, and updates that would make a configured role
-invalid are rejected before publication.
+Resolution is deterministic: a PostgreSQL runtime overlay has highest
+precedence, followed by startup entries from `models.catalogue`, the versioned
+built-in JSON catalogue, and finally a permissive fallback profile. Both startup
+and runtime rows are complete profiles, not field patches. DlightRAG does not
+probe model endpoints or persist inferred limits after a provider rejection.
 
-Administrators can read and edit the effective catalogue through:
+Startup entries are suitable for version-controlled deployment configuration:
+
+```yaml
+models:
+  catalogue:
+    - provider: openai
+      model: vendor/new-model
+      base_url: https://api.vendor.example/v1
+      profile:
+        context_window_tokens: 262144
+        max_input_tokens: null
+        max_output_tokens: 32768
+        supports_images: true
+        reasoning:
+          format: openai
+          levels:
+            off: none
+            minimal: null
+            low: low
+            medium: medium
+            high: high
+            xhigh: null
+            max: null
+  chat:
+    default:
+      provider: openai
+      model: vendor/new-model
+      base_url: https://api.vendor.example/v1
+```
+
+Startup entries are installed before the composed application can start or
+resolve model profiles and require a restart to change. PostgreSQL runtime
+updates are hot, publish atomically with
+an optimistic revision and `NOTIFY`, and clear every process's capability
+cache. Startup and reconnect synchronize the current runtime value. Invalid
+updates, stale revisions, and updates that would make a configured role invalid
+are rejected before publication.
+
+Administrators can read and edit the effective runtime catalogue through:
 
 - REST: `GET|PUT|DELETE /models/catalogue`
 - Web: Settings → Runtime Model Catalogue
@@ -419,8 +454,9 @@ Administrators can read and edit the effective catalogue through:
 
 A write sends the revision returned by the preceding read (`If-Match` for
 HTTP, `expected_revision` for MCP). Each PUT contains `provider`, `model`,
-optional `base_url`, and one complete `profile`. A DELETE removes the overlay;
-a built-in endpoint then resolves to its shipped profile. Catalogue writes use
+optional `base_url`, and one complete `profile`. A DELETE removes only the
+runtime overlay; the endpoint then resolves to its startup-configured profile,
+or to its built-in profile when no startup entry exists. Catalogue writes use
 the admin-only `model_catalogue.write` action and are disabled entirely on
 reader-only deployments.
 
@@ -433,6 +469,13 @@ supported level; an impossible `off` request is a configuration error.
 Supported request formats are `openrouter`, `openai`, `deepseek`,
 `anthropic`, and `gemini`; an unknown format is rejected rather than silently
 dropping a reasoning control.
+
+An uncatalogued endpoint has no verified effort map. Typed reasoning therefore
+uses a best-effort protocol mapping inferred from the provider and endpoint:
+OpenRouter, native Anthropic, native Gemini, DeepSeek, or otherwise OpenAI.
+DlightRAG sends the requested level without local clamping and surfaces any
+provider rejection; it never silently drops the requested control. Internal
+compaction does not opt into an unverified reasoning mapping.
 
 Model configuration uses only the typed, provider-independent levels:
 

@@ -33,6 +33,7 @@ from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.reasoning import best_effort_reasoning_profile
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.execution import (
@@ -241,6 +242,23 @@ def test_execution_rejects_tools_that_differ_from_the_accepted_agent_plan() -> N
             request,
             (AgentTool("lookup", "Changed description.", Args, execute),),
         )
+
+
+def test_pinned_model_profile_preserves_unverified_reasoning_semantics() -> None:
+    pinned = PinnedModelProfile(
+        role="query",
+        fingerprint=_fingerprint("query"),
+        profile=ModelProfile(
+            context_window_tokens=10_000,
+            reasoning=best_effort_reasoning_profile("openrouter"),
+        ),
+    )
+
+    restored = PinnedModelProfile.from_json(pinned.as_json())
+
+    assert restored == pinned
+    assert restored.profile.reasoning is not None
+    assert restored.profile.reasoning.best_effort is True
 
 
 def test_execution_rejects_changed_context_or_model_pins() -> None:

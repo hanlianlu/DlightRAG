@@ -29,10 +29,11 @@ def _entry(
     *,
     context: int = 100_000,
     off: str | None = "disabled",
+    model: str = "test-model",
 ) -> dict[str, object]:
     return {
         "provider": "openai",
-        "model": "test-model",
+        "model": model,
         "base_url": "https://api.example.test/v1",
         "profile": {
             "context_window_tokens": context,
@@ -123,8 +124,13 @@ async def _admin(
     *,
     configured: tuple[ModelSettings, ...] = (),
     read_only: bool = False,
+    startup_context: int | None = None,
 ) -> tuple[ModelCatalogueAdmin, FakeStore, ModelCatalogue, list[str]]:
     catalogue = _catalogue()
+    if startup_context is not None:
+        catalogue.replace_startup(
+            (parse_catalogue_entry(_entry(context=startup_context, model="startup-model")),)
+        )
     store = FakeStore(catalogue)
     invalidations: list[str] = []
     admin = ModelCatalogueAdmin(
@@ -216,6 +222,33 @@ async def test_remove_restores_builtin_and_requires_an_existing_overlay() -> Non
             expected_revision=restored.revision,
             actor="a",
         )
+
+
+@pytest.mark.asyncio
+async def test_runtime_remove_restores_startup_config_before_builtin() -> None:
+    admin, _store, _catalogue_instance, _invalidations = await _admin(startup_context=150_000)
+    initial = admin.read()
+
+    configured = next(entry for entry in initial.models if entry.model == "startup-model")
+    assert configured.source == "config"
+    assert configured.profile["context_window_tokens"] == 150_000
+
+    changed = await admin.upsert(
+        _entry(context=200_000, model="startup-model"),
+        expected_revision=initial.revision,
+        actor="a",
+    )
+    restored = await admin.remove(
+        provider="openai",
+        model="startup-model",
+        base_url="https://api.example.test/v1",
+        expected_revision=changed.revision,
+        actor="a",
+    )
+
+    configured = next(entry for entry in restored.models if entry.model == "startup-model")
+    assert configured.source == "config"
+    assert configured.profile["context_window_tokens"] == 150_000
 
 
 @pytest.mark.asyncio

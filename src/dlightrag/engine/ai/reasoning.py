@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 type ReasoningLevel = Literal[
@@ -83,14 +83,38 @@ class ReasoningProfile:
 
     format: str
     levels: ReasoningLevels
+    best_effort: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if self.format not in REASONING_FORMATS:
             supported = ", ".join(sorted(REASONING_FORMATS))
             raise ValueError(f"reasoning format must be one of: {supported}")
 
+    @classmethod
+    def unverified(cls, *, format: str, levels: ReasoningLevels) -> ReasoningProfile:
+        profile = cls(format=format, levels=levels)
+        object.__setattr__(profile, "best_effort", True)
+        return profile
+
     def as_dict(self) -> dict[str, Any]:
         return {"format": self.format, "levels": self.levels.as_dict()}
+
+
+def best_effort_reasoning_profile(format_name: str) -> ReasoningProfile:
+    """Build an unverified protocol mapping for one uncatalogued endpoint."""
+    off = "disabled" if format_name in {"openrouter", "deepseek", "anthropic", "gemini"} else "none"
+    return ReasoningProfile.unverified(
+        format=format_name,
+        levels=ReasoningLevels(
+            off=off,
+            minimal="minimal",
+            low="low",
+            medium="medium",
+            high="high",
+            xhigh="xhigh",
+            max="max",
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,8 +182,8 @@ def resolve_reasoning(
 
 
 def cheapest_supported_reasoning(profile: ReasoningProfile | None) -> ReasoningLevel | None:
-    """Return the cheapest controllable level for internal compaction policy."""
-    if profile is None:
+    """Return the cheapest verified level for internal compaction policy."""
+    if profile is None or profile.best_effort:
         return None
     for level in REASONING_LEVELS:
         if profile.levels.value(level) is not None:
@@ -265,6 +289,7 @@ __all__ = [
     "ReasoningLevels",
     "ReasoningProfile",
     "ResolvedReasoning",
+    "best_effort_reasoning_profile",
     "cheapest_supported_reasoning",
     "conflicting_reasoning_keys",
     "merge_reasoning_kwargs",

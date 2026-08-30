@@ -23,7 +23,7 @@ export interface ModelCatalogueEntry {
   model: string;
   base_url: string | null;
   profile: ModelProfilePayload;
-  source: 'builtin' | 'overlay' | 'fallback';
+  source: 'builtin' | 'config' | 'overlay' | 'fallback';
 }
 
 export interface ModelCatalogue {

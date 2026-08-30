@@ -9,13 +9,13 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from dlightrag.engine.ai.catalog import (
-    FALLBACK_MODEL_PROFILE,
     MODEL_CATALOGUE,
     CatalogueEntry,
     CatalogueSnapshot,
     ModelCatalogue,
     catalogue_overlay_data,
     catalogue_overlay_revision,
+    fallback_model_profile,
     parse_catalogue_entry,
     parse_catalogue_overlay,
 )
@@ -173,7 +173,7 @@ class ModelCatalogueAdmin:
         expected_revision: str,
         actor: str,
     ) -> ModelCatalogueView:
-        """Restore a built-in entry or delete a custom entry."""
+        """Remove a runtime entry and reveal its startup or built-in baseline."""
         fingerprint = model_endpoint_fingerprint(
             provider.strip().lower(),
             model.strip(),
@@ -248,7 +248,8 @@ class ModelCatalogueAdmin:
 
     def _validate_configured_models(self, snapshot: CatalogueSnapshot) -> None:
         for settings in self._configured_models():
-            profile = snapshot.resolve(model_fingerprint(settings)) or FALLBACK_MODEL_PROFILE
+            fingerprint = model_fingerprint(settings)
+            profile = snapshot.resolve(fingerprint) or fallback_model_profile(fingerprint)
             try:
                 resolve_reasoning(profile.reasoning, settings.reasoning)
                 resolve_reasoning(
@@ -282,6 +283,7 @@ class ModelCatalogueAdmin:
             self._on_publish(snapshot)
 
     def _view(self, snapshot: CatalogueSnapshot) -> ModelCatalogueView:
+        startup = snapshot.startup_fingerprints
         overlay = snapshot.overlay_fingerprints
         return ModelCatalogueView(
             revision=snapshot.revision,
@@ -291,7 +293,13 @@ class ModelCatalogueAdmin:
                     model=entry.model,
                     base_url=entry.base_url,
                     profile=entry.as_dict()["profile"],  # type: ignore[arg-type]
-                    source="overlay" if entry.fingerprint in overlay else "builtin",
+                    source=(
+                        "overlay"
+                        if entry.fingerprint in overlay
+                        else "config"
+                        if entry.fingerprint in startup
+                        else "builtin"
+                    ),
                 )
                 for entry in snapshot.entries
             ),

@@ -8,14 +8,19 @@ import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.resources import files
 from types import MappingProxyType
 from typing import Never, cast
 
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
-from dlightrag.engine.ai.reasoning import REASONING_LEVELS, ReasoningLevels, ReasoningProfile
+from dlightrag.engine.ai.reasoning import (
+    REASONING_LEVELS,
+    ReasoningLevels,
+    ReasoningProfile,
+    best_effort_reasoning_profile,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -51,7 +56,7 @@ class UnknownModelProfileError(ValueError):
         super().__init__(
             "No trusted model profile for "
             f"provider={fingerprint.provider!r}, model={fingerprint.model!r}, "
-            f"endpoint={endpoint[:12]!r}; publish an explicit runtime catalogue entry"
+            f"endpoint={endpoint[:12]!r}; configure or publish an explicit catalogue entry"
         )
 
 
@@ -81,14 +86,36 @@ class CatalogueSnapshot:
     revision: str
     entries: tuple[CatalogueEntry, ...]
     profiles: Mapping[ModelFingerprint, ModelProfile]
+    startup_fingerprints: frozenset[ModelFingerprint]
     overlay_fingerprints: frozenset[ModelFingerprint]
 
     def resolve(self, fingerprint: ModelFingerprint) -> ModelProfile | None:
         return self.profiles.get(fingerprint)
 
 
+def _entry_order(entry: CatalogueEntry) -> tuple[str, str, str]:
+    return (
+        entry.provider,
+        entry.model,
+        entry.fingerprint.endpoint_fingerprint or "",
+    )
+
+
+def _unique_entries(
+    entries: Sequence[CatalogueEntry],
+    *,
+    source: str,
+) -> dict[ModelFingerprint, CatalogueEntry]:
+    unique: dict[ModelFingerprint, CatalogueEntry] = {}
+    for entry in entries:
+        if entry.fingerprint in unique:
+            raise ValueError(f"{source} contains a duplicate endpoint")
+        unique[entry.fingerprint] = entry
+    return unique
+
+
 class ModelCatalogue:
-    """Own the process's atomic built-in-plus-overlay snapshot."""
+    """Own the process's built-in, startup, and runtime catalogue snapshot."""
 
     def __init__(
         self,
@@ -101,6 +128,7 @@ class ModelCatalogue:
         self._builtin = MappingProxyType(
             {entry.fingerprint: entry for entry in self._builtin_entries}
         )
+        self._startup: tuple[CatalogueEntry, ...] = ()
         self._overlay: tuple[CatalogueEntry, ...] = ()
         self._snapshot = self._merge(())
         if self._snapshot.revision != builtin_revision:
@@ -119,6 +147,10 @@ class ModelCatalogue:
         return self._snapshot
 
     @property
+    def startup(self) -> tuple[CatalogueEntry, ...]:
+        return self._startup
+
+    @property
     def overlay(self) -> tuple[CatalogueEntry, ...]:
         return self._overlay
 
@@ -127,6 +159,18 @@ class ModelCatalogue:
 
     def preview(self, overlay: Sequence[CatalogueEntry]) -> CatalogueSnapshot:
         return self._merge(tuple(overlay))
+
+    def replace_startup(self, startup: Sequence[CatalogueEntry]) -> CatalogueSnapshot:
+        candidate = tuple(startup)
+        previous = self._startup
+        self._startup = candidate
+        try:
+            snapshot = self._merge(self._overlay)
+        except Exception:
+            self._startup = previous
+            raise
+        self._snapshot = snapshot
+        return snapshot
 
     def replace_overlay(self, overlay: Sequence[CatalogueEntry]) -> CatalogueSnapshot:
         candidate = tuple(overlay)
@@ -137,41 +181,49 @@ class ModelCatalogue:
         return snapshot
 
     def _merge(self, overlay: tuple[CatalogueEntry, ...]) -> CatalogueSnapshot:
-        overrides: dict[ModelFingerprint, CatalogueEntry] = {}
-        for entry in overlay:
-            if entry.fingerprint in overrides:
-                raise ValueError("runtime model catalogue overlay contains a duplicate endpoint")
-            overrides[entry.fingerprint] = entry
+        startup = _unique_entries(self._startup, source="startup model catalogue")
+        overrides = _unique_entries(overlay, source="runtime model catalogue overlay")
 
         effective: list[CatalogueEntry] = []
-        builtin_fingerprints: set[ModelFingerprint] = set()
+        baseline_fingerprints: set[ModelFingerprint] = set()
         for builtin in self._builtin_entries:
-            builtin_fingerprints.add(builtin.fingerprint)
-            effective.append(overrides.get(builtin.fingerprint, builtin))
-        custom = sorted(
+            baseline_fingerprints.add(builtin.fingerprint)
+            configured = startup.get(builtin.fingerprint, builtin)
+            effective.append(overrides.get(builtin.fingerprint, configured))
+
+        custom_startup = sorted(
+            (
+                entry
+                for fingerprint, entry in startup.items()
+                if fingerprint not in baseline_fingerprints
+            ),
+            key=_entry_order,
+        )
+        for entry in custom_startup:
+            baseline_fingerprints.add(entry.fingerprint)
+            effective.append(overrides.get(entry.fingerprint, entry))
+
+        custom_overlay = sorted(
             (
                 entry
                 for fingerprint, entry in overrides.items()
-                if fingerprint not in builtin_fingerprints
+                if fingerprint not in baseline_fingerprints
             ),
-            key=lambda entry: (
-                entry.provider,
-                entry.model,
-                entry.fingerprint.endpoint_fingerprint or "",
-            ),
+            key=_entry_order,
         )
-        effective.extend(custom)
+        effective.extend(custom_overlay)
         models = [entry.as_dict() for entry in effective]
         profiles = MappingProxyType({entry.fingerprint: entry.profile for entry in effective})
         effective_revision = _model_catalog_revision(cast(list[object], models))
         revision = (
             effective_revision
-            if not overlay
+            if not startup and not overlay
             else _model_catalog_revision(
                 cast(
                     list[object],
                     [
                         {"effective_revision": effective_revision},
+                        {"startup_revision": catalogue_overlay_revision(self._startup)},
                         {"overlay_revision": catalogue_overlay_revision(overlay)},
                     ],
                 )
@@ -181,6 +233,7 @@ class ModelCatalogue:
             revision=revision,
             entries=tuple(effective),
             profiles=profiles,
+            startup_fingerprints=frozenset(startup),
             overlay_fingerprints=frozenset(overrides),
         )
 
@@ -394,17 +447,22 @@ def parse_catalogue_entry(value: object, *, path: str = "entry") -> CatalogueEnt
     )
 
 
-def parse_catalogue_overlay(value: object) -> tuple[CatalogueEntry, ...]:
+def parse_catalogue_overlay(
+    value: object,
+    *,
+    source: str = "runtime model catalogue overlay",
+    path: str = "overlay",
+) -> tuple[CatalogueEntry, ...]:
     if type(value) is not list:
-        raise RuntimeError("runtime model catalogue overlay must be an array")
+        raise RuntimeError(f"{source} must be an array")
     entries: list[CatalogueEntry] = []
     seen: dict[ModelFingerprint, int] = {}
     for index, raw in enumerate(cast(list[object], value)):
-        entry = parse_catalogue_entry(raw, path=f"overlay[{index}]")
+        entry = parse_catalogue_entry(raw, path=f"{path}[{index}]")
         if entry.fingerprint in seen:
             raise RuntimeError(
-                f"overlay[{index}] duplicates the normalized fingerprint from "
-                f"overlay[{seen[entry.fingerprint]}]"
+                f"{path}[{index}] duplicates the normalized fingerprint from "
+                f"{path}[{seen[entry.fingerprint]}]"
             )
         seen[entry.fingerprint] = index
         entries.append(entry)
@@ -474,8 +532,9 @@ MODEL_CATALOGUE = ModelCatalogue(
 )
 
 #: The unconditional capacity guess for endpoints the catalogue does not know.
-#: It is deliberately generous: the first real provider rejection is the
-#: calibration signal, never a wasted probe call. Semantic reasoning is absent.
+#: It is deliberately generous: provider rejection remains explicit rather than
+#: triggering endpoint probes or persistent adaptation. Reasoning is attached
+#: separately as an unverified, protocol-derived request mapping.
 FALLBACK_MODEL_PROFILE = ModelProfile(
     context_window_tokens=1_048_576,
     max_input_tokens=None,
@@ -483,6 +542,33 @@ FALLBACK_MODEL_PROFILE = ModelProfile(
     supports_images=True,
     reasoning=None,
 )
+_OPENROUTER_ENDPOINT = normalized_endpoint_fingerprint("https://openrouter.ai/api/v1")
+_DEEPSEEK_ENDPOINTS = frozenset(
+    {
+        normalized_endpoint_fingerprint("https://api.deepseek.com"),
+        normalized_endpoint_fingerprint("https://api.deepseek.com/v1"),
+    }
+)
+
+
+def _fallback_reasoning_format(fingerprint: ModelFingerprint) -> str:
+    if fingerprint.provider == "anthropic":
+        return "anthropic"
+    if fingerprint.provider == "gemini":
+        return "gemini"
+    if fingerprint.endpoint_fingerprint == _OPENROUTER_ENDPOINT:
+        return "openrouter"
+    if fingerprint.endpoint_fingerprint in _DEEPSEEK_ENDPOINTS:
+        return "deepseek"
+    return "openai"
+
+
+def fallback_model_profile(fingerprint: ModelFingerprint) -> ModelProfile:
+    """Attach protocol-derived, unverified reasoning controls to fallback capacity."""
+    return replace(
+        FALLBACK_MODEL_PROFILE,
+        reasoning=best_effort_reasoning_profile(_fallback_reasoning_format(fingerprint)),
+    )
 
 
 def current_model_catalog_revision() -> str:
@@ -500,7 +586,7 @@ def resolve_model_profile(fingerprint: ModelFingerprint) -> ModelProfile:
         fingerprint.model,
         fingerprint.endpoint_fingerprint,
     )
-    return FALLBACK_MODEL_PROFILE
+    return fallback_model_profile(fingerprint)
 
 
 __all__ = [
@@ -514,6 +600,7 @@ __all__ = [
     "catalogue_overlay_data",
     "catalogue_overlay_revision",
     "current_model_catalog_revision",
+    "fallback_model_profile",
     "model_profile_data",
     "parse_catalogue_entry",
     "parse_catalogue_overlay",

@@ -138,7 +138,12 @@ class PinnedModelProfile:
                 "max_output_tokens": self.profile.max_output_tokens,
                 "supports_images": self.profile.supports_images,
                 "reasoning": (
-                    self.profile.reasoning.as_dict() if self.profile.reasoning is not None else None
+                    {
+                        **self.profile.reasoning.as_dict(),
+                        "best_effort": self.profile.reasoning.best_effort,
+                    }
+                    if self.profile.reasoning is not None
+                    else None
                 ),
             },
         }
@@ -403,8 +408,15 @@ def _link_references(value: Any) -> tuple[LinkReference, ...]:
 def _reasoning_profile_from_json(value: Any) -> ReasoningProfile | None:
     if value is None:
         return None
-    if not isinstance(value, Mapping) or set(value) != {"format", "levels"}:
+    required = {"format", "levels"}
+    if not isinstance(value, Mapping):
         raise ValueError("pinned reasoning profile has an invalid shape")
+    keys = set(value)
+    if not required <= keys or not keys <= required | {"best_effort"}:
+        raise ValueError("pinned reasoning profile has an invalid shape")
+    best_effort = value.get("best_effort", False)
+    if type(best_effort) is not bool:
+        raise ValueError("pinned reasoning profile best_effort must be a boolean")
     raw_levels = value.get("levels")
     if not isinstance(raw_levels, Mapping) or set(raw_levels) != set(REASONING_LEVELS):
         raise ValueError("pinned reasoning profile requires every explicit level")
@@ -414,10 +426,13 @@ def _reasoning_profile_from_json(value: Any) -> ReasoningProfile | None:
         if raw is not None and not isinstance(raw, str):
             raise ValueError(f"pinned reasoning level {level} must be a string or null")
         levels[level] = raw
-    return ReasoningProfile(
-        format=str(value["format"]),
-        levels=ReasoningLevels(**levels),  # type: ignore[arg-type]
-    )
+    parsed_levels = ReasoningLevels(**levels)  # type: ignore[arg-type]
+    if best_effort:
+        return ReasoningProfile.unverified(
+            format=str(value["format"]),
+            levels=parsed_levels,
+        )
+    return ReasoningProfile(format=str(value["format"]), levels=parsed_levels)
 
 
 def _optional_int(value: Any) -> int | None:

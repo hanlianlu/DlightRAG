@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -16,9 +17,12 @@ from pydantic import (
     model_validator,
 )
 
+from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.contracts import ChatProvider, InputModality
 from dlightrag.engine.ai.reasoning import (
     ReasoningLevel,
+    ReasoningLevels,
+    ReasoningProfile,
     conflicting_reasoning_keys,
 )
 
@@ -138,6 +142,101 @@ class ModelSettings(FrozenSettings):
         return {
             **self.model_kwargs_copy(),
             **thaw_settings_value(self.agentic_model_kwargs),
+        }
+
+
+class ModelCatalogueReasoningSettings(FrozenSettings):
+    """Verified reasoning facts for one startup-configured endpoint."""
+
+    format: str
+    levels: ReasoningLevels
+
+    @model_validator(mode="after")
+    def _validate_format(self) -> Self:
+        self.as_reasoning_profile()
+        return self
+
+    def as_reasoning_profile(self) -> ReasoningProfile:
+        return ReasoningProfile(format=self.format, levels=self.levels)
+
+
+class ModelCatalogueProfileSettings(FrozenSettings):
+    """One complete startup-configured endpoint capability profile."""
+
+    context_window_tokens: int = Field(gt=0)
+    max_input_tokens: int | None
+    max_output_tokens: int | None
+    supports_images: bool
+    reasoning: ModelCatalogueReasoningSettings | None
+
+    @model_validator(mode="after")
+    def _validate_capacity(self) -> Self:
+        self.as_model_profile()
+        return self
+
+    def as_model_profile(self) -> ModelProfile:
+        return ModelProfile(
+            context_window_tokens=self.context_window_tokens,
+            max_input_tokens=self.max_input_tokens,
+            max_output_tokens=self.max_output_tokens,
+            supports_images=self.supports_images,
+            reasoning=(
+                self.reasoning.as_reasoning_profile() if self.reasoning is not None else None
+            ),
+        )
+
+
+class ModelCatalogueEntrySettings(FrozenSettings):
+    """One complete static model catalogue entry from startup configuration."""
+
+    provider: ChatProvider
+    model: str
+    base_url: str | None
+    profile: ModelCatalogueProfileSettings
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _fold_provider(cls, value: Any) -> Any:
+        return _canonical_provider(value)
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model(cls, value: str) -> str:
+        if not value or value != value.strip():
+            raise ValueError("model must be a non-empty canonical string")
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value or value != value.strip():
+            raise ValueError("base_url must be null or a valid HTTP(S) URL")
+        try:
+            parsed = urlsplit(value)
+            _ = parsed.port
+        except ValueError:
+            raise ValueError("base_url must be null or a valid HTTP(S) URL") from None
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("base_url must be null or a valid HTTP(S) URL")
+        return value
+
+    def as_catalogue_data(self) -> dict[str, object]:
+        profile = self.profile.as_model_profile()
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "base_url": self.base_url,
+            "profile": {
+                "context_window_tokens": profile.context_window_tokens,
+                "max_input_tokens": profile.max_input_tokens,
+                "max_output_tokens": profile.max_output_tokens,
+                "supports_images": profile.supports_images,
+                "reasoning": (
+                    profile.reasoning.as_dict() if profile.reasoning is not None else None
+                ),
+            },
         }
 
 
@@ -266,16 +365,23 @@ class RerankSettings(FrozenSettings):
 
 
 class ModelsSettings(FrozenSettings):
+    catalogue: tuple[ModelCatalogueEntrySettings, ...] = ()
     chat: ModelRoleSettings = Field(default_factory=ModelRoleSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     rerank: RerankSettings = Field(default_factory=RerankSettings)
     max_concurrency: int = Field(default=16, ge=1)
+
+    def catalogue_data(self) -> list[dict[str, object]]:
+        return [entry.as_catalogue_data() for entry in self.catalogue]
 
 
 __all__ = [
     "EmbeddingSettings",
     "FrozenSettings",
     "MODEL_ROLE_NAMES",
+    "ModelCatalogueEntrySettings",
+    "ModelCatalogueProfileSettings",
+    "ModelCatalogueReasoningSettings",
     "ModelRole",
     "ModelRoleOverrides",
     "ModelRoleSettings",

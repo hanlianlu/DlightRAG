@@ -18,6 +18,11 @@ from dlightrag.engine.ai.catalog import (
     resolve_model_profile,
 )
 from dlightrag.engine.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
+from dlightrag.engine.ai.reasoning import (
+    cheapest_supported_reasoning,
+    reasoning_request_kwargs,
+    resolve_reasoning,
+)
 
 
 def test_context_policy_applies_explicit_model_aware_reserves() -> None:
@@ -84,12 +89,65 @@ def test_unknown_model_resolves_to_the_fallback_profile() -> None:
 
     resolved = resolve_model_profile(fingerprint)
 
-    assert resolved == FALLBACK_MODEL_PROFILE
-    assert resolved.context_window_tokens == 1_048_576
-    assert resolved.max_output_tokens == 262_144
-    assert resolved.supports_images is True
-    assert resolved.reasoning is None
+    assert resolved.context_window_tokens == FALLBACK_MODEL_PROFILE.context_window_tokens
+    assert resolved.max_input_tokens == FALLBACK_MODEL_PROFILE.max_input_tokens
+    assert resolved.max_output_tokens == FALLBACK_MODEL_PROFILE.max_output_tokens
+    assert resolved.supports_images is FALLBACK_MODEL_PROFILE.supports_images
+    assert resolved.reasoning is not None
+    assert resolved.reasoning.format == "openai"
+    assert resolved.reasoning.best_effort is True
+    assert cheapest_supported_reasoning(resolved.reasoning) is None
     assert not hasattr(resolved, "supports_tools")
+
+
+@pytest.mark.parametrize(
+    ("provider", "endpoint", "format_name", "expected"),
+    [
+        (
+            "openai",
+            "https://openrouter.ai/api/v1",
+            "openrouter",
+            {"reasoning": {"effort": "high"}},
+        ),
+        (
+            "openai",
+            "https://api.deepseek.com/v1",
+            "deepseek",
+            {"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
+        ),
+        ("openai", "https://api.example.test/v1", "openai", {"reasoning_effort": "high"}),
+        (
+            "anthropic",
+            None,
+            "anthropic",
+            {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}},
+        ),
+        (
+            "gemini",
+            None,
+            "gemini",
+            {"thinking_config": {"include_thoughts": True, "thinking_level": "HIGH"}},
+        ),
+    ],
+)
+def test_unknown_model_reasoning_uses_protocol_derived_best_effort_mapping(
+    provider: str,
+    endpoint: str | None,
+    format_name: str,
+    expected: dict[str, object],
+) -> None:
+    profile = resolve_model_profile(
+        ModelFingerprint(
+            provider=provider,
+            model="private-model",
+            endpoint_fingerprint=normalized_endpoint_fingerprint(endpoint),
+        )
+    )
+
+    assert profile.reasoning is not None
+    assert profile.reasoning.format == format_name
+    assert profile.reasoning.best_effort is True
+    assert reasoning_request_kwargs(resolve_reasoning(profile.reasoning, "high")) == expected
 
 
 def test_fast_full_dynamic_reserve_is_not_clamped_on_small_profiles() -> None:

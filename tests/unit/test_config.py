@@ -132,14 +132,34 @@ def test_auth_validation_uses_nested_access() -> None:
     assert config.access.auth_mode == "simple"
 
 
-def test_removed_capacity_overrides_seam_is_rejected() -> None:
+def test_models_accept_complete_startup_catalogue_entries() -> None:
     row = {
-        "provider": "openai",
-        "model": "x",
-        "context_window_tokens": 100,
+        "provider": " OpenAI ",
+        "model": "vendor/new-model",
+        "base_url": "https://api.vendor.example/v1",
+        "profile": {
+            "context_window_tokens": 262_144,
+            "max_input_tokens": None,
+            "max_output_tokens": 32_768,
+            "supports_images": True,
+            "reasoning": {
+                "format": "openai",
+                "levels": {
+                    "off": "none",
+                    "minimal": None,
+                    "low": "low",
+                    "medium": "medium",
+                    "high": "high",
+                    "xhigh": None,
+                    "max": None,
+                },
+            },
+        },
     }
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        ModelsSettings(capacity_overrides=(row,))  # type: ignore[call-arg]
+
+    settings = ModelsSettings.model_validate({"catalogue": [row]})
+
+    assert settings.catalogue_data() == [{**row, "provider": "openai"}]
 
 
 def test_postgres_projection_and_reader_settings() -> None:

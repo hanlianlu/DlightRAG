@@ -95,9 +95,25 @@ def test_invalid_model_settings_are_rejected(values: dict[str, Any]) -> None:
         ModelSettings(**values)  # type: ignore[arg-type]
 
 
-def test_capacity_overrides_are_not_configuration() -> None:
-    with pytest.raises(ValidationError, match="Extra inputs"):
-        ModelsSettings(capacity_overrides=[])  # type: ignore[call-arg]
+def test_startup_catalogue_requires_complete_profile_facts() -> None:
+    with pytest.raises(ValidationError, match="max_input_tokens"):
+        ModelsSettings.model_validate(
+            {
+                "catalogue": [
+                    {
+                        "provider": "openai",
+                        "model": "new-model",
+                        "base_url": None,
+                        "profile": {
+                            "context_window_tokens": 100_000,
+                            "max_output_tokens": 10_000,
+                            "supports_images": False,
+                            "reasoning": None,
+                        },
+                    }
+                ]
+            }
+        )
 
 
 @pytest.mark.parametrize("values", [{"dim": 0}, {"max_token_size": 0}, {"batch_size": 0}])

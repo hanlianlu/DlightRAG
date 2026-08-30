@@ -2,6 +2,7 @@
 # Priority: env > .env > config.yaml > defaults
 
 models:
+  catalogue: []
   chat:
     default:
       provider: openai

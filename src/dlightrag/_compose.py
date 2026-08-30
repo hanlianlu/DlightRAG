@@ -109,7 +109,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         retrieval_settings,
     )
     from dlightrag.application.web_conversations import WebConversationService
-    from dlightrag.engine.ai.catalog import catalogue_overlay_revision
+    from dlightrag.engine.ai.catalog import (
+        MODEL_CATALOGUE,
+        catalogue_overlay_revision,
+        parse_catalogue_overlay,
+    )
     from dlightrag.engine.ai.fingerprints import model_fingerprint
     from dlightrag.engine.ai.media import MAX_DECODE_IMAGE_PIXELS
     from dlightrag.engine.ai.scheduler import ModelScheduler
@@ -129,6 +133,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
 
     # Large document scans are DlightRAG product policy, not an AI package import side effect.
     Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS
+    startup_catalogue = parse_catalogue_overlay(
+        config.models.catalogue_data(),
+        source="startup model catalogue",
+        path="models.catalogue",
+    )
     health = ApplicationHealth(readiness_probe=PGReadinessProbe(config))
     scheduler = ModelScheduler(max_concurrency=config.models.max_concurrency)
     telemetry = LangfuseTelemetry()
@@ -335,6 +344,15 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         child_roster_cursor_secret=cursor_secrets.derive("dlightrag-child-roster-cursor"),
     )
     web_store = PGWebConversationStore(run_store=run_store)
+    web_conversations = WebConversationService(
+        store=web_store,
+        answers=answers,
+        max_attachments=config.answer.generation.max_attachments,
+        # Stable across workers sharing the operational database. Cursors
+        # carry no authorization state and naturally expire on credential rotation.
+        cursor_secret=cursor_secrets.derive("dlightrag-web-conversation-cursor"),
+    )
+    MODEL_CATALOGUE.replace_startup(startup_catalogue)
     return _ApplicationComponents(
         health=health,
         capabilities=capabilities,
@@ -351,14 +369,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         memory=memory,
         memory_store=memory_store,
         memory_embedder=memory_embedder,
-        web_conversations=WebConversationService(
-            store=web_store,
-            answers=answers,
-            max_attachments=config.answer.generation.max_attachments,
-            # Stable across workers sharing the operational database. Cursors
-            # carry no authorization state and naturally expire on credential rotation.
-            cursor_secret=cursor_secrets.derive("dlightrag-web-conversation-cursor"),
-        ),
+        web_conversations=web_conversations,
         initialize_process=_initialize_process,
         close_process=_close_process,
     )
