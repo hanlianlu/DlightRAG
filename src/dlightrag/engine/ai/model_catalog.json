@@ -1,5 +1,5 @@
 {
-  "revision": "sha256:9171ce50bd616240ad2c453e91e101802dea9995059ce94f485a6cd102562ba9",
+  "revision": "sha256:d602d91b22b4d049fab2c5ec45493dd480b0eff80b660e5c45e22f30d102cfb2",
   "models": [
     {
       "provider": "anthropic",
@@ -100,7 +100,7 @@
       "profile": {
         "context_window_tokens": 1048576,
         "max_input_tokens": null,
-        "max_output_tokens": 393216,
+        "max_output_tokens": 384000,
         "supports_images": false,
         "reasoning": {
           "format": "deepseek",
@@ -110,7 +110,7 @@
             "low": "low",
             "medium": null,
             "high": "high",
-            "xhigh": null,
+            "xhigh": "high",
             "max": "max"
           }
         }
@@ -146,7 +146,7 @@
       "profile": {
         "context_window_tokens": 1048576,
         "max_input_tokens": null,
-        "max_output_tokens": 393216,
+        "max_output_tokens": 384000,
         "supports_images": true,
         "reasoning": {
           "format": "deepseek",
@@ -156,7 +156,7 @@
             "low": "low",
             "medium": null,
             "high": "high",
-            "xhigh": null,
+            "xhigh": "high",
             "max": "max"
           }
         }
@@ -179,7 +179,7 @@
             "low": "low",
             "medium": null,
             "high": "high",
-            "xhigh": null,
+            "xhigh": "high",
             "max": "max"
           }
         }
@@ -266,7 +266,7 @@
         "reasoning": {
           "format": "openrouter",
           "levels": {
-            "off": "disabled",
+            "off": null,
             "minimal": null,
             "low": "low",
             "medium": null,
@@ -489,7 +489,7 @@
       "model": "xiaomi/mimo-v2.5",
       "base_url": "https://openrouter.ai/api/v1",
       "profile": {
-        "context_window_tokens": 1050000,
+        "context_window_tokens": 1048576,
         "max_input_tokens": null,
         "max_output_tokens": 131072,
         "supports_images": true,

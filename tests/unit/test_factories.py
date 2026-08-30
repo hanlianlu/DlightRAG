@@ -133,7 +133,7 @@ def test_root_resolves_model_profiles_independently_per_role() -> None:
     )
 
     assert model_profile_for_role(config, "keyword").max_output_tokens == 65_536
-    assert model_profile_for_role(config, "extract").max_output_tokens == 393_216
+    assert model_profile_for_role(config, "extract").max_output_tokens == 384_000
     query = model_profile_for_role(config, "query")
     assert query.context_window_tokens == 1_048_576
     assert query.max_input_tokens is None

@@ -61,6 +61,24 @@ _DEEPSEEK_ROUTER_LEVELS = {
     "xhigh": "xhigh",
     "max": None,
 }
+_DEEPSEEK_CURRENT_LEVELS = {
+    "off": "disabled",
+    "minimal": None,
+    "low": "low",
+    "medium": None,
+    "high": "high",
+    "xhigh": "high",
+    "max": "max",
+}
+_MIMO_LEVELS = {
+    "off": "disabled",
+    "minimal": None,
+    "low": "enabled",
+    "medium": None,
+    "high": None,
+    "xhigh": None,
+    "max": None,
+}
 _GROK_LEVELS = {
     "off": None,
     "minimal": None,
@@ -295,6 +313,35 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
 
 
 @pytest.mark.parametrize(
+    ("model", "supports_images"),
+    [
+        ("deepseek-v4-flash", False),
+        ("deepseek-v4-flash-vision-exp", True),
+    ],
+)
+def test_packaged_catalogue_contains_corrected_native_deepseek_profiles(
+    model: str,
+    supports_images: bool,
+) -> None:
+    matches = [
+        entry
+        for entry in catalog._BUILTIN_MODEL_ENTRIES
+        if (entry.provider, entry.model, entry.base_url)
+        == ("openai", model, "https://api.deepseek.com")
+    ]
+
+    assert len(matches) == 1
+    profile = matches[0].profile
+    assert profile.context_window_tokens == 1_048_576
+    assert profile.max_input_tokens is None
+    assert profile.max_output_tokens == 384_000
+    assert profile.supports_images is supports_images
+    assert profile.reasoning is not None
+    assert profile.reasoning.format == "deepseek"
+    assert profile.reasoning.levels.as_dict() == _DEEPSEEK_CURRENT_LEVELS
+
+
+@pytest.mark.parametrize(
     ("model", "context_window", "max_input", "max_output", "images", "levels"),
     [
         (
@@ -327,7 +374,7 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
             None,
             384_000,
             True,
-            {**_KIMI_LEVELS, "off": "disabled"},
+            _DEEPSEEK_CURRENT_LEVELS,
         ),
         (
             "google/gemini-3.7-flash",
@@ -343,7 +390,7 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
             None,
             943_718,
             True,
-            {**_KIMI_LEVELS, "off": "disabled"},
+            _KIMI_LEVELS,
         ),
         (
             "openai/gpt-5.6-sol",
@@ -384,6 +431,14 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
             450_000,
             True,
             _GROK_LEVELS,
+        ),
+        (
+            "xiaomi/mimo-v2.5",
+            1_048_576,
+            None,
+            131_072,
+            True,
+            _MIMO_LEVELS,
         ),
         (
             "z-ai/glm-5.3-flash",

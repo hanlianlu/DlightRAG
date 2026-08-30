@@ -74,7 +74,7 @@ def test_profile_resolution_prefers_runtime_complete_overlay_before_builtin() ->
         MODEL_CATALOGUE.replace_overlay(previous)
 
     catalog_profile = resolve_model_profile(fingerprint)
-    assert catalog_profile.context_window_tokens == 1_050_000
+    assert catalog_profile.context_window_tokens == 1_048_576
     assert catalog_profile.max_output_tokens == 131_072
     assert catalog_profile.supports_images is True
     assert catalog_profile.reasoning is not None
