@@ -781,13 +781,6 @@ class PostgresMemoryStore:
 
         return await self._read(operation)
 
-    async def list_active(self, *, owner_id: str) -> tuple[MemoryRecord, ...]:
-        async def operation(conn: PGConnection) -> tuple[MemoryRecord, ...]:
-            rows = await conn.fetch(_SELECT_ACTIVE, owner_id)
-            return tuple(_row(row) for row in rows)
-
-        return await self._read(operation)
-
     async def list_active_page(
         self,
         *,
@@ -1268,13 +1261,6 @@ _SELECT_ONE = f"""
 SELECT {_RECORD_COLUMNS}
 FROM dlightrag_memory_records
 WHERE owner_id = $1 AND memory_id = $2
-"""  # noqa: S608 - interpolates only the trusted _RECORD_COLUMNS constant
-
-_SELECT_ACTIVE = f"""
-SELECT {_RECORD_COLUMNS}
-FROM dlightrag_memory_records
-WHERE owner_id = $1 AND status = 'active'
-ORDER BY updated_at DESC
 """  # noqa: S608 - interpolates only the trusted _RECORD_COLUMNS constant
 
 _SELECT_ACTIVE_PAGE = f"""

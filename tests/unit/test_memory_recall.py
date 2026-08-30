@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Frozen recall cases: RRF fusion, exact-first, packing prior, budgets."""
 
+from unittest.mock import AsyncMock
+
 from dlightrag_memory.fusion import rrf_fuse
 from dlightrag_memory.memory import Memory, _packing_prior, _truncate_to_budget
 from dlightrag_memory.models import MemoryProvenance, MemoryRecord
@@ -103,11 +105,14 @@ async def test_recall_timeout_falls_back_to_recent_active_records(monkeypatch) -
         await asyncio.sleep(0.02)
         return ()
 
+    page_probe = AsyncMock(wraps=store.list_active_page)
     monkeypatch.setattr(store, "search_candidates", timeout)
+    monkeypatch.setattr(store, "list_active_page", page_probe)
     monkeypatch.setattr("dlightrag_memory.memory._SEARCH_DEADLINE_SECONDS", 0.001)
 
-    result = await memory.recall(owner_id="alpha", query="anything")
+    result = await memory.recall(owner_id="alpha", query="anything", top_k=1)
 
+    page_probe.assert_awaited_once_with(owner_id="alpha", limit=1)
     assert [record.memory_id for record in result.records] == ["recent"]
     assert result.strategy == "recent_fallback"
     assert result.degraded == ("search_timeout",)

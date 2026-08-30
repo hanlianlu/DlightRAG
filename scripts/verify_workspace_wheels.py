@@ -125,7 +125,7 @@ async def main():
         idempotency_key='installed-wheel-proposal',
     )
     assert receipt.outcome == 'changed' and replay == receipt
-    records = await Memory(store).list_active(owner_id='owner-1')
+    records, _ = await Memory(store).browse(owner_id='owner-1', limit=100)
     assert [item.body for item in records] == ['Installed memory works.']
     recalled = await memory.recall(owner_id='owner-1', query='memory works')
     assert recalled.records
@@ -136,7 +136,8 @@ async def main():
         idempotency_key='installed-wheel-forget',
     )
     assert forgotten.outcome == 'changed'
-    assert await memory.list_active(owner_id='owner-1') == ()
+    records, _ = await memory.browse(owner_id='owner-1', limit=100)
+    assert records == ()
     server = dlightrag_memory.mcp_server.build_memory_server(memory, subject='owner-1')
     assert {tool.name for tool in await server.list_tools()} == {
         'memory_recall', 'memory_remember', 'memory_forget', 'memory_undo'

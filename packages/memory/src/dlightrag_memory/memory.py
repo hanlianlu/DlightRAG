@@ -145,9 +145,6 @@ class Memory:
     async def count_active(self, *, owner_id: str) -> int:
         return await self._store.count_active(owner_id=owner_id)
 
-    async def list_active(self, *, owner_id: str) -> tuple[MemoryRecord, ...]:
-        return await self._store.list_active(owner_id=owner_id)
-
     async def browse(
         self,
         *,
@@ -173,8 +170,8 @@ class Memory:
                 timeout=_SEARCH_DEADLINE_SECONDS,
             )
         except TimeoutError:
-            recent = list(await self._store.list_active(owner_id=owner_id))[:cap]
-            recent = _truncate_to_budget(recent, budget=budget)
+            page, _ = await self._store.list_active_page(owner_id=owner_id, limit=cap)
+            recent = _truncate_to_budget(list(page), budget=budget)
             recent.sort(key=lambda record: (recall_recency(record), record.memory_id))
             return RecallResult(
                 records=tuple(recent),

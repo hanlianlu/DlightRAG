@@ -28,7 +28,7 @@ async def test_disabled_owner_has_only_the_settings_control_plane() -> None:
     assert disabled.epoch == 1
     assert (await service.settings(**owner)).active_count is None
     with pytest.raises(MemoryDisabledError):
-        await service.list_active(**owner)
+        await service.list_active_page(owner_id="alpha", auth_mode="jwt")
     with pytest.raises(MemoryDisabledError):
         await service.remember(
             **owner,
@@ -62,7 +62,9 @@ async def test_mutation_rechecks_activation_inside_the_store_settlement() -> Non
             provenance=_provenance(),
             idempotency_key="request-1",
         )
-    assert await store.list_active(owner_id="alpha") == ()
+    records, cursor = await store.list_active_page(owner_id="alpha", limit=100)
+    assert records == ()
+    assert cursor is None
 
 
 async def test_deactivation_and_clear_invalidate_existing_run_epochs() -> None:

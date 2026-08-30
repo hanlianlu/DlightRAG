@@ -10,7 +10,6 @@ from dlightrag_memory import (
     MemoryKind,
     MemoryOperationReceipt,
     MemoryProvenance,
-    MemoryRecord,
 )
 from dlightrag_memory.store import default_purge_cutoff
 
@@ -131,10 +130,6 @@ class MemoryService:
             settlement=settlement,
         )
         return state.enabled and state.epoch == epoch
-
-    async def list_active(self, *, owner_id: str, auth_mode: str) -> tuple[MemoryRecord, ...]:
-        await self._require_enabled(owner_id=owner_id, auth_mode=auth_mode)
-        return await self._memory.list_active(owner_id=owner_id)
 
     @property
     def memory_list_cursor_codec(self) -> MemoryListCursorCodec:

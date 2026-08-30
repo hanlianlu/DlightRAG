@@ -2,13 +2,18 @@
 """Standalone Memory MCP: subject binding, receipts, and four tools."""
 
 import pytest
-from dlightrag_memory import Memory, MemoryProvenance, MemoryWriteRejectedError
+from dlightrag_memory import Memory, MemoryProvenance, MemoryRecord, MemoryWriteRejectedError
 from dlightrag_memory.mcp_server import _forget, _recall, _remember, _undo, build_memory_server
 from dlightrag_memory.store import InMemoryMemoryStore
 
 
 async def _memory() -> Memory:
     return Memory(InMemoryMemoryStore())
+
+
+async def _active(memory: Memory) -> tuple[MemoryRecord, ...]:
+    records, _ = await memory.browse(owner_id="pi-user", limit=100)
+    return records
 
 
 async def test_recall_returns_bound_subject_records_with_ids() -> None:
@@ -48,7 +53,7 @@ async def test_remember_writes_with_mcp_provenance_and_replays_receipt() -> None
 
     assert stored["outcome"] == "changed"
     assert replay == stored
-    (record,) = await memory.list_active(owner_id="pi-user")
+    (record,) = await _active(memory)
     assert record.provenance.origin_kind == "mcp"
 
 
@@ -91,7 +96,7 @@ async def test_forget_and_undo_return_operation_receipts() -> None:
         idempotency_key="undo-1",
     )
     assert undone["outcome"] == "changed"
-    assert [row.body for row in await memory.list_active(owner_id="pi-user")] == ["Keep me."]
+    assert [row.body for row in await _active(memory)] == ["Keep me."]
 
 
 async def test_build_server_registers_exactly_four_tools() -> None:

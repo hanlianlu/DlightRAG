@@ -63,12 +63,24 @@ async def _remember(
     )
 
 
+async def _active(memory: Memory, *, owner_id: str = "alpha") -> tuple[MemoryRecord, ...]:
+    records, _ = await memory.browse(owner_id=owner_id, limit=100)
+    return records
+
+
+async def _store_active(
+    store: InMemoryMemoryStore, *, owner_id: str = "alpha"
+) -> tuple[MemoryRecord, ...]:
+    records, _ = await store.list_active_page(owner_id=owner_id, limit=100)
+    return records
+
+
 async def test_owners_cannot_read_each_other() -> None:
     store = InMemoryMemoryStore()
     await store.insert(_record(owner="alpha", memory_id="m1"))
     await store.insert(_record(owner="beta", memory_id="m1", body="Other."))
-    assert [row.body for row in await store.list_active(owner_id="alpha")] == ["No email."]
-    assert [row.body for row in await store.list_active(owner_id="beta")] == ["Other."]
+    assert [row.body for row in await _store_active(store, owner_id="alpha")] == ["No email."]
+    assert [row.body for row in await _store_active(store, owner_id="beta")] == ["Other."]
 
 
 async def test_operation_replay_returns_the_original_receipt() -> None:
@@ -78,7 +90,7 @@ async def test_operation_replay_returns_the_original_receipt() -> None:
 
     assert first.outcome == "changed"
     assert replay == first
-    assert len(await memory.list_active(owner_id="alpha")) == 1
+    assert len(await _active(memory)) == 1
 
 
 async def test_owner_guard_rejects_before_journal_or_record_settlement() -> None:
@@ -97,7 +109,7 @@ async def test_owner_guard_rejects_before_journal_or_record_settlement() -> None
             guard=reject,
         )
 
-    assert await memory.list_active(owner_id="alpha") == ()
+    assert await _active(memory) == ()
     settled = await _remember(memory, key="call-1", body="Lives in Gothenburg.", kind="fact")
     assert settled.outcome == "changed"
 
@@ -134,9 +146,7 @@ async def test_supersede_and_compensating_undo_preserve_history() -> None:
     )
 
     assert replacement.outcome == "changed"
-    assert [row.body for row in await memory.list_active(owner_id="alpha")] == [
-        "Lives in Gothenburg."
-    ]
+    assert [row.body for row in await _active(memory)] == ["Lives in Gothenburg."]
 
     undone = await memory.undo(
         owner_id="alpha",
@@ -146,7 +156,7 @@ async def test_supersede_and_compensating_undo_preserve_history() -> None:
     )
 
     assert undone.outcome == "changed"
-    assert [row.body for row in await memory.list_active(owner_id="alpha")] == ["Lives in Beijing."]
+    assert [row.body for row in await _active(memory)] == ["Lives in Beijing."]
     current = await store.get(owner_id="alpha", memory_id=replacement.memory_id or "")
     assert current is not None and current.status == "superseded"
 
@@ -161,7 +171,7 @@ async def test_forget_and_undo_restore_as_a_new_active_record() -> None:
         idempotency_key="forget-1",
     )
     assert forgotten.outcome == "changed"
-    assert await memory.list_active(owner_id="alpha") == ()
+    assert await _active(memory) == ()
 
     undone = await memory.undo(
         owner_id="alpha",
@@ -170,7 +180,7 @@ async def test_forget_and_undo_restore_as_a_new_active_record() -> None:
         idempotency_key="undo-1",
     )
     assert undone.outcome == "changed"
-    (restored,) = await memory.list_active(owner_id="alpha")
+    (restored,) = await _active(memory)
     assert restored.body == "Prefers concise answers."
     assert restored.memory_id != remembered.memory_id
 
@@ -211,7 +221,7 @@ async def test_clear_physically_removes_records_and_operation_replay() -> None:
     memory = Memory(InMemoryMemoryStore())
     first = await _remember(memory, key="call-1")
     assert await memory.clear(owner_id="alpha") == 1
-    assert await memory.list_active(owner_id="alpha") == ()
+    assert await _active(memory) == ()
 
     replay_after_clear = await _remember(memory, key="call-1")
     assert replay_after_clear.changed
@@ -282,7 +292,7 @@ async def test_multi_row_forget_undo_restores_all_rows_in_order() -> None:
     for old_id in ("r1", "r2"):
         old = await store.get(owner_id="alpha", memory_id=old_id)
         assert old is not None and old.status == "forgotten"
-    assert sorted(record.body for record in await memory.list_active(owner_id="alpha")) == [
+    assert sorted(record.body for record in await _active(memory)) == [
         "  prefers tea.  ",
         "Likes trains.",
         "Prefers tea.",

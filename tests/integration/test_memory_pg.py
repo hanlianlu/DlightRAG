@@ -86,11 +86,23 @@ def _record(
     )
 
 
+async def _active(memory: Memory, *, owner_id: str = "alpha") -> tuple[MemoryRecord, ...]:
+    records, _ = await memory.browse(owner_id=owner_id, limit=100)
+    return records
+
+
+async def _store_active(
+    store: PostgresMemoryStore, *, owner_id: str = "alpha"
+) -> tuple[MemoryRecord, ...]:
+    records, _ = await store.list_active_page(owner_id=owner_id, limit=100)
+    return records
+
+
 async def test_pg_owners_are_isolated(store: PostgresMemoryStore) -> None:
     await store.insert(_record(owner="alpha", body="Alpha only."))
     await store.insert(_record(owner="beta", body="Beta only."))
-    assert [row.body for row in await store.list_active(owner_id="alpha")] == ["Alpha only."]
-    assert [row.body for row in await store.list_active(owner_id="beta")] == ["Beta only."]
+    assert [row.body for row in await _store_active(store, owner_id="alpha")] == ["Alpha only."]
+    assert [row.body for row in await _store_active(store, owner_id="beta")] == ["Beta only."]
 
 
 async def test_pg_initialization_rejects_legacy_confidence_schema(
@@ -220,7 +232,7 @@ async def test_pg_supersede_forget_and_compensating_undo(store: PostgresMemorySt
         idempotency_key="undo-1",
     )
     assert undone.outcome == "changed"
-    assert [row.body for row in await memory.list_active(owner_id="alpha")] == ["Lives in Beijing."]
+    assert [row.body for row in await _active(memory)] == ["Lives in Beijing."]
 
     forgotten = await memory.forget(
         owner_id="alpha",
@@ -235,7 +247,7 @@ async def test_pg_supersede_forget_and_compensating_undo(store: PostgresMemorySt
         idempotency_key="undo-2",
     )
     assert restored.outcome == "changed"
-    assert [row.body for row in await memory.list_active(owner_id="alpha")] == ["Lives in Beijing."]
+    assert [row.body for row in await _active(memory)] == ["Lives in Beijing."]
 
 
 async def test_pg_clear_physically_erases_records_and_operations(
@@ -250,7 +262,7 @@ async def test_pg_clear_physically_erases_records_and_operations(
         idempotency_key="call-1",
     )
     assert await memory.clear(owner_id="alpha") == 1
-    assert await memory.list_active(owner_id="alpha") == ()
+    assert await _active(memory) == ()
 
 
 async def test_pg_purge_expired_non_active_rows(store: PostgresMemoryStore) -> None:

@@ -50,8 +50,6 @@ class MemoryStore(Protocol):
 
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None: ...
 
-    async def list_active(self, *, owner_id: str) -> tuple[MemoryRecord, ...]: ...
-
     async def search_candidates(
         self, *, owner_id: str, query: str, limit: int
     ) -> tuple[SearchCandidate, ...]: ...
@@ -515,20 +513,20 @@ class InMemoryMemoryStore:
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None:
         return self._rows.get((owner_id, memory_id))
 
-    async def list_active(self, *, owner_id: str) -> tuple[MemoryRecord, ...]:
+    def _active_records(self, *, owner_id: str) -> list[MemoryRecord]:
         rows = [
             record
             for record in self._rows.values()
             if record.owner_id == owner_id and record.status == "active"
         ]
         rows.sort(key=recall_recency, reverse=True)
-        return tuple(rows)
+        return rows
 
     async def search_candidates(
         self, *, owner_id: str, query: str, limit: int
     ) -> tuple[SearchCandidate, ...]:
         cap = max(1, min(int(limit), 100))
-        active = list(await self.list_active(owner_id=owner_id))
+        active = self._active_records(owner_id=owner_id)
         key = normalized_body(query)
         exact = [record for record in active if normalized_body(record.body) == key]
         query_terms = set(key.split())
@@ -559,7 +557,7 @@ class InMemoryMemoryStore:
         limit: int = 50,
     ) -> tuple[tuple[MemoryRecord, ...], tuple[datetime, str] | None]:
         cap = max(1, min(int(limit), 100))
-        rows = list(await self.list_active(owner_id=owner_id))
+        rows = self._active_records(owner_id=owner_id)
         rows.sort(key=lambda record: (_cursor_time(record), record.memory_id), reverse=True)
         if after is not None:
             rows = [
