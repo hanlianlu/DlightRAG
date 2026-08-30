@@ -58,8 +58,6 @@ deployment:
   workspace: default
 
 corpus:
-  extraction:
-    language: English
   sidecars:
     docling:
       endpoint: http://host.docker.internal:5001

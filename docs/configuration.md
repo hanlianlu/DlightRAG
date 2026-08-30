@@ -90,6 +90,15 @@ corpus:
       # force_ocr: false
 ```
 
+`corpus.extraction.language` defaults to `English`. It is a free-form target
+language inserted into LightRAG's prompts for generated entity and relation
+descriptions, summaries, and retrieval keywords—not a switch that adds general
+language support. The configured models, embeddings, parser/OCR, and lexical
+retrieval must support the corpus language independently. Keep the default to
+canonicalize a multilingual graph in English, or override it when another graph
+output language is intentional. Changing it does not translate existing graph
+data; reset and reingest the corpus for a consistent change.
+
 Changing the selected parser affects new parses; it does not rewrite an
 existing workspace's chunks, vectors, graph, or parser cache. Explicitly reset
 and reingest a corpus when it must be rebuilt with Docling artifacts.
@@ -201,8 +210,9 @@ correctly bound captions, at roughly 5x the parse time. Set
 `MINERU_HYBRID_EFFORT=high` in `.env.mineru` for figure-heavy corpora.
 
 `corpus.sidecars.mineru.language` is MinerU's OCR language hint for scanned or
-image-based documents. It is separate from `corpus.extraction.language`, which controls
-LightRAG's KG extraction prompt language.
+image-based documents. It is separate from `corpus.extraction.language`, which
+controls the target language of LightRAG's generated graph content and retrieval
+keywords.
 
 `corpus.sidecars.mineru.backend` selects MinerU's parse engine and defaults to
 `hybrid-engine`, MinerU's current VLM-assisted default. Accepted values are
