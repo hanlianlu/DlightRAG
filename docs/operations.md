@@ -231,10 +231,6 @@ docker compose run --rm dlightrag-api dlightrag-rebuild-vdb --target all --yes
 docker compose up -d dlightrag-api dlightrag-mcp
 ```
 
-`lightrag-gui` (the optional graph browser overlay) runs only under
-`--profile gui` with `-f docker-compose.gui.yml`; stop and restart it with the
-same overlay flags if you started it.
-
 ### DlightRAG Chunk Post-Rebuild Maintenance
 
 Upstream LightRAG's rebuild can rebuild chunk vectors from chunk text. DlightRAG

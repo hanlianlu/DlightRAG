@@ -42,8 +42,6 @@ dependencies = [
     "bm25s>=0.3.11",
     # LightRAG paragraph_semantic chunker fallback
     "langchain-text-splitters",
-    # lightrag-server runtime dep when lightrag-hku is installed without the api extra.
-    "bcrypt",
     # MCP server
     "mcp>=2.1.1",
     # REST API server

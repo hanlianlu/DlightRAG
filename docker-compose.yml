@@ -1,9 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 # Credentials come from .env (not tracked in git).
 #
-# Optional overlays:
-#   docker compose --profile docling up -d          # durable document parsing
-#   docker compose -f docker-compose.yml -f docker-compose.gui.yml --profile gui up -d
+# Optional profile:
+#   docker compose --profile docling up -d  # durable document parsing
 
 x-common-env: &common-env
   # Container-specific wiring only: the service host differs from local runs,

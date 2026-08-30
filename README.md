@@ -172,10 +172,6 @@ This starts:
 | `dlightrag-mcp` | MCP streamable HTTP server | `127.0.0.1:8101` |
 | `postgres` | PG18 ecosystem | `5432` |
 
-The upstream LightRAG graph browser is opt-in:
-`docker compose -f docker-compose.yml -f docker-compose.gui.yml --profile gui up -d`
-serves it on `127.0.0.1:9621`.
-
 4. Open the Web UI:
 
 ```text

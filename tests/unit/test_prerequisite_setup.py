@@ -58,16 +58,6 @@ def test_inline_script_environment_installs_the_local_product() -> None:
     assert '# dlightrag-memory = { path = "packages/memory", editable = true }' in source
 
 
-def test_optional_gui_embedding_tracks_wizard_model() -> None:
-    overlay = (_ROOT / "docker-compose.gui.yml").read_text(encoding="utf-8")
-    assert "${LIGHTRAG_GUI_EMBEDDING_BINDING:-voyageai}" in overlay
-    assert "${LIGHTRAG_GUI_EMBEDDING_MODEL:-voyage-multimodal-3.5}" in overlay
-    assert "${LIGHTRAG_GUI_EMBEDDING_DIM:-1024}" in overlay
-    assert "${LIGHTRAG_GUI_LLM_HOST:-" in overlay
-    assert "${LIGHTRAG_GUI_LLM_MODEL:-" in overlay
-    assert "lightrag-gui" not in (_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-
-
 def test_memory_compose_healthcheck_uses_configured_database_identity() -> None:
     compose = (_ROOT / "packages/memory/compose.yaml").read_text(encoding="utf-8")
     assert 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' in compose
