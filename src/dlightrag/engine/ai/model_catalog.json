@@ -1,5 +1,5 @@
 {
-  "revision": "sha256:b13732969fec67343f62e4dd2cc2aba5b93ad3a6429865d43e358192b5e97594",
+  "revision": "sha256:1c388f26d909d231b07e6e06d4d2cfff2f9af4cd6069473a76650d7756d7908d",
   "models": [
     {
       "provider": "anthropic",
@@ -503,6 +503,29 @@
             "high": null,
             "xhigh": null,
             "max": null
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "glm-5.3-flash",
+      "base_url": "https://api.z.ai/api/paas/v4",
+      "profile": {
+        "context_window_tokens": 1000000,
+        "max_input_tokens": null,
+        "max_output_tokens": 131072,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openai",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": "max"
           }
         }
       }

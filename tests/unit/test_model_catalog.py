@@ -255,6 +255,16 @@ def test_packaged_catalog_revision_is_bound_to_canonical_models() -> None:
             "openai",
             _GROK_LEVELS,
         ),
+        (
+            "openai",
+            "glm-5.3-flash",
+            "https://api.z.ai/api/paas/v4",
+            1_000_000,
+            None,
+            131_072,
+            "openai",
+            _KIMI_LEVELS,
+        ),
     ],
 )
 def test_packaged_catalogue_contains_requested_endpoint_profiles(
@@ -374,6 +384,14 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
             450_000,
             True,
             _GROK_LEVELS,
+        ),
+        (
+            "z-ai/glm-5.3-flash",
+            1_050_000,
+            None,
+            163_840,
+            True,
+            _KIMI_LEVELS,
         ),
     ],
 )
