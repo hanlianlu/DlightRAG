@@ -106,7 +106,6 @@ export class DlIngestTarget extends LightElement {
         const displayName = this.#displayName;
         return html`
             ${this.active ? html`
-                <span class="ingest-target-label">${msg('Files in:', {id: 'ingestTarget.filesIn'})}</span>
                 <button
                     class="ingest-target-pill"
                     id="ingest-target-trigger"

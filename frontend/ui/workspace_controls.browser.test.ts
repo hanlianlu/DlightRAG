@@ -65,6 +65,8 @@ it('owns a native expanded trigger and closes after typed creation intent', asyn
   expect(popover.querySelector('[role="option"]')).to.equal(null);
   expect(popover.querySelector('dl-workspace-create')).not.to.equal(null);
   expect(trigger.getAttribute('aria-expanded')).to.equal('true');
+  expect(scope.querySelector<HTMLButtonElement>('[aria-label="Create workspace"]')?.textContent?.trim())
+    .to.equal('Create');
 
   const input = scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')!;
   input.value = 'Research';
@@ -279,6 +281,8 @@ it('uses native dialog popover controls and restores ingest-trigger focus', asyn
   await ingest.updateComplete;
   const trigger = ingest.querySelector<HTMLButtonElement>('#ingest-target-trigger')!;
   expect(trigger.tagName).to.equal('BUTTON');
+  expect(ingest.querySelector('.ingest-target-label')).to.equal(null);
+  expect(trigger.textContent?.trim()).to.equal('Default');
   expect(trigger.getAttribute('aria-haspopup')).to.equal('dialog');
   expect(trigger.getAttribute('aria-controls')).to.equal('ingest-target-popover');
 

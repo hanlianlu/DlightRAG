@@ -18,7 +18,7 @@
     margin-block: var(--space-component);
 }
 
-.ui-dialog-checkbox input[type='checkbox'] {
+.ui-dialog-checkbox input:is([type='checkbox'], [type='radio']) {
     accent-color: var(--color-accent-action);
     cursor: pointer;
     flex: 0 0 auto;

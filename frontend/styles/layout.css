@@ -167,8 +167,7 @@ body.files-panel-open #files-btn {
     text-transform: none;
 }
 
-.topbar-scope-label,
-.ingest-target-label {
+.topbar-scope-label {
     color: var(--color-text-muted);
     flex: 0 0 auto;
     font-size: var(--font-size-detail);

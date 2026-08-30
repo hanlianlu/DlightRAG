@@ -103,7 +103,7 @@ export class DlWorkspaceCreate extends LightElement {
               ?disabled=${this.pending} @click=${(event: MouseEvent) => {
                 event.stopPropagation();
                 void this.#submit();
-              }}>+</button>
+              }}>${msg('Create', {id: 'workspaceCreate.create'})}</button>
     `;
   }
 }

@@ -81,3 +81,15 @@ it('confirm-dialog checkbox input centers against its label line', () => {
 
   expect(Math.abs(inputCenter - labelCenter)).to.be.lessThanOrEqual(2);
 });
+
+it('dialog radio inputs use the active theme accent', () => {
+  const dialog = fixture('confirm-dialog', `
+    <label class="ui-dialog-checkbox"><input type="radio" checked /> Automatic</label>
+  `);
+  const input = dialog.querySelector<HTMLInputElement>('input')!;
+  const accentProbe = document.createElement('span');
+  accentProbe.style.color = 'var(--color-accent-action)';
+  dialog.appendChild(accentProbe);
+
+  expect(getComputedStyle(input).accentColor).to.equal(getComputedStyle(accentProbe).color);
+});

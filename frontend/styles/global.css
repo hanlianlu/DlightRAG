@@ -182,11 +182,13 @@ body.conversation-drawer-open {
     display: flex;
     flex-shrink: 0;
     font: inherit;
-    font-size: var(--font-size-body);
+    font-size: var(--font-size-detail);
+    font-weight: 600;
     height: var(--size-button);
     justify-content: center;
+    padding-inline: var(--space-component);
     transition: background 0.15s, border-color 0.15s;
-    width: var(--size-button);
+    white-space: nowrap;
 }
 
 .ui-popover-create-btn:hover {

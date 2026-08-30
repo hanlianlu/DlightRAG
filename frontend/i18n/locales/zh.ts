@@ -275,7 +275,6 @@ export const templates: Record<
 
   // Ingest target
   'ingestTarget.selectWorkspaceAria': '选择摄取工作区',
-  'ingestTarget.filesIn': '文件位于：',
   'ingestTarget.filesInAria': str`文件位于 ${0}；选择文件工作区`,
 
   // Workspace create
@@ -284,6 +283,7 @@ export const templates: Record<
   'workspaceCreate.placeholder': '新工作区…',
   'workspaceCreate.nameAria': '新工作区名称',
   'workspaceCreate.createAria': '创建工作区',
+  'workspaceCreate.create': '创建',
 
   // Workspace scope
   'workspaceScope.loadingMore': '正在加载工作区…',
