@@ -61,6 +61,24 @@ _DEEPSEEK_ROUTER_LEVELS = {
     "xhigh": "xhigh",
     "max": None,
 }
+_GROK_LEVELS = {
+    "off": None,
+    "minimal": None,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": None,
+}
+_QWEN_ROUTER_LEVELS = {
+    "off": "disabled",
+    "minimal": None,
+    "low": "low",
+    "medium": "medium",
+    "high": None,
+    "xhigh": "xhigh",
+    "max": None,
+}
 
 
 def _canonical_revision(models: Sequence[object]) -> str:
@@ -227,6 +245,16 @@ def test_packaged_catalog_revision_is_bound_to_canonical_models() -> None:
             "openai",
             _KIMI_LEVELS,
         ),
+        (
+            "openai",
+            "grok-4.6",
+            "https://api.x.ai/v1",
+            500_000,
+            None,
+            None,
+            "openai",
+            _GROK_LEVELS,
+        ),
     ],
 )
 def test_packaged_catalogue_contains_requested_endpoint_profiles(
@@ -235,7 +263,7 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
     endpoint: str | None,
     context_window: int,
     max_input: int | None,
-    max_output: int,
+    max_output: int | None,
     reasoning_format: str,
     reasoning_levels: dict[str, str | None],
 ) -> None:
@@ -331,9 +359,25 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
             True,
             _OPENAI_LEVELS,
         ),
+        (
+            "qwen/qwen3.8-flash",
+            1_000_000,
+            983_616,
+            131_072,
+            True,
+            _QWEN_ROUTER_LEVELS,
+        ),
+        (
+            "x-ai/grok-4.6",
+            500_000,
+            None,
+            450_000,
+            True,
+            _GROK_LEVELS,
+        ),
     ],
 )
-def test_openrouter_profiles_cover_every_catalogued_native_model(
+def test_packaged_catalogue_contains_requested_openrouter_profiles(
     model: str,
     context_window: int,
     max_input: int | None,

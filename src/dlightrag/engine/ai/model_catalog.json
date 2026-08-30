@@ -1,5 +1,5 @@
 {
-  "revision": "sha256:d7537791b4267db58baea3c004f8dea01ca1af3b84fea342256d73ccae2d07a3",
+  "revision": "sha256:b13732969fec67343f62e4dd2cc2aba5b93ad3a6429865d43e358192b5e97594",
   "models": [
     {
       "provider": "anthropic",
@@ -411,6 +411,75 @@
             "high": "high",
             "xhigh": "xhigh",
             "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "qwen/qwen3.8-flash",
+      "base_url": "https://openrouter.ai/api/v1",
+      "profile": {
+        "context_window_tokens": 1000000,
+        "max_input_tokens": 983616,
+        "max_output_tokens": 131072,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openrouter",
+          "levels": {
+            "off": "disabled",
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": null,
+            "xhigh": "xhigh",
+            "max": null
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "grok-4.6",
+      "base_url": "https://api.x.ai/v1",
+      "profile": {
+        "context_window_tokens": 500000,
+        "max_input_tokens": null,
+        "max_output_tokens": null,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openai",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": null
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "x-ai/grok-4.6",
+      "base_url": "https://openrouter.ai/api/v1",
+      "profile": {
+        "context_window_tokens": 500000,
+        "max_input_tokens": null,
+        "max_output_tokens": 450000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openrouter",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": null
           }
         }
       }
