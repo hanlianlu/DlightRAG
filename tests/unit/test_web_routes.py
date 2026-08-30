@@ -100,9 +100,6 @@ def mock_application():
     corpora.workspace_catalog_cursor_codec = WorkspaceCatalogCursorCodec(
         b"web-workspace-catalog-test-secret"
     )
-    corpora.list_ingested_files = AsyncMock(
-        return_value=[{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}]
-    )
     corpora.get_pipeline_status = AsyncMock(
         return_value={"busy": False, "pending_enqueues": 0, "latest_message": ""}
     )
@@ -754,7 +751,6 @@ class TestWebFiles:
                 "pipeline_status": {"busy": False, "pending_enqueues": 0},
             }
         )
-        mock_application.corpora.list_ingested_files = AsyncMock(return_value=[])
         mock_application.corpora.get_pipeline_status = AsyncMock(return_value={"busy": False})
 
         resp = await client.get("/web/api/files", params={"workspace": "cold-ws"})
@@ -766,7 +762,6 @@ class TestWebFiles:
         mock_application.corpora.file_panel_snapshot.assert_awaited_once_with(
             "cold_ws", page=FilePanelPageRequest()
         )
-        mock_application.corpora.list_ingested_files.assert_not_awaited()
         mock_application.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_rejects_stale_workspace(
@@ -779,7 +774,6 @@ class TestWebFiles:
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
         mock_application.corpora.file_panel_snapshot.assert_not_awaited()
-        mock_application.corpora.list_ingested_files.assert_not_awaited()
         mock_application.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_rejects_stale_workspace_even_with_registered_cookie(
@@ -793,7 +787,6 @@ class TestWebFiles:
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
         mock_application.corpora.file_panel_snapshot.assert_not_awaited()
-        mock_application.corpora.list_ingested_files.assert_not_awaited()
         mock_application.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_canonicalizes_requested_workspace(
@@ -818,7 +811,6 @@ class TestWebFiles:
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
         mock_application.corpora.file_panel_snapshot.assert_not_awaited()
-        mock_application.corpora.list_ingested_files.assert_not_awaited()
 
     async def test_ingest_status_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application

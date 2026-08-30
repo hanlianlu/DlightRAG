@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for deletion context collection."""
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from dlightrag.engine.rag.corpus.contracts import DocStatusMatch
 from dlightrag.engine.rag.corpus.ingestion.cleanup import (
     DeletionContext,
     cascade_delete,
@@ -12,60 +12,110 @@ from dlightrag.engine.rag.corpus.ingestion.cleanup import (
 )
 
 
-def _make_lightrag(docs: dict[str, str] | None = None):
-    """Create a mock lightrag with doc_status API."""
-    if docs is None:
-        return None
+def _make_status_lookup(docs: dict[str, str]) -> MagicMock:
+    """Create an indexed deletion lookup fake."""
 
-    doc_status = MagicMock()
+    async def _resolve(*, file_paths, doc_ids):
+        paths = set(file_paths)
+        ids = set(doc_ids)
+        return tuple(
+            DocStatusMatch(doc_id=doc_id, file_path=file_path)
+            for doc_id, file_path in sorted(docs.items())
+            if doc_id in ids or file_path in paths
+        )
 
-    async def _get_by_path(fp: str):
-        for _d_id, stored_fp in docs.items():
-            if stored_fp == fp:
-                # Real LightRAG strips 'id' from the return dict
-                return {"file_path": stored_fp}
-        return None
-
-    async def _get_by_status(_status):
-        return {d_id: SimpleNamespace(file_path=fp) for d_id, fp in docs.items()}
-
-    doc_status.get_doc_by_file_path = AsyncMock(side_effect=_get_by_path)
-    doc_status.get_docs_by_status = AsyncMock(side_effect=_get_by_status)
-
-    lightrag = MagicMock()
-    lightrag.doc_status = doc_status
-    return lightrag
+    lookup = MagicMock()
+    lookup.resolve_deletion_matches = AsyncMock(side_effect=_resolve)
+    return lookup
 
 
 class TestCollectDeletionContext:
     """Test multi-strategy doc_id lookup for deletion."""
 
-    async def test_lightrag_doc_status_exact_path(self) -> None:
-        lightrag = _make_lightrag({"doc-003": "/storage/docs/report.pdf"})
+    async def test_doc_status_exact_path(self) -> None:
+        lookup = _make_status_lookup({"doc-003": "/storage/docs/report.pdf"})
         ctx = await collect_deletion_context(
             identifier="/storage/docs/report.pdf",
-            lightrag=lightrag,
+            metadata_index=None,
+            doc_status_lookup=lookup,
         )
         assert "doc-003" in ctx.doc_ids
         assert "/storage/docs/report.pdf" in ctx.file_paths
         assert "doc_status" in ctx.sources_used
 
-    async def test_lightrag_doc_status_basename(self) -> None:
-        lightrag = _make_lightrag({"doc-004": "/storage/report.pdf"})
+    async def test_doc_status_basename(self) -> None:
+        lookup = _make_status_lookup({"doc-004": "report.pdf"})
         ctx = await collect_deletion_context(
             identifier="report.pdf",
-            lightrag=lightrag,
+            metadata_index=None,
+            doc_status_lookup=lookup,
         )
         assert "doc-004" in ctx.doc_ids
         assert "doc_status" in ctx.sources_used
 
-    async def test_stem_match_via_doc_status(self) -> None:
-        lightrag = _make_lightrag({"doc-005": "/storage/report.pdf"})
+    async def test_bare_stem_does_not_match_another_extension(self) -> None:
+        lookup = _make_status_lookup({"doc-005": "report.pdf"})
         ctx = await collect_deletion_context(
             identifier="report.xlsx",
-            lightrag=lightrag,
+            metadata_index=None,
+            doc_status_lookup=lookup,
         )
-        assert "doc-005" in ctx.doc_ids
+        assert ctx.doc_ids == set()
+
+    async def test_path_identifier_never_expands_to_same_basename_documents(self) -> None:
+        metadata_index = MagicMock()
+        metadata_index.find_by_download_locator = AsyncMock(return_value=[])
+        metadata_index.find_by_filename = AsyncMock(return_value=["doc-wrong"])
+        lookup = _make_status_lookup(
+            {
+                "doc-right": "/inputs/a/report.pdf",
+                "doc-wrong": "/inputs/b/report.pdf",
+            }
+        )
+
+        ctx = await collect_deletion_context(
+            identifier="/inputs/a/report.pdf",
+            metadata_index=metadata_index,
+            doc_status_lookup=lookup,
+        )
+
+        assert ctx.doc_ids == {"doc-right"}
+        metadata_index.find_by_filename.assert_not_awaited()
+
+    async def test_path_identifier_does_not_fallback_to_bare_status_path(self) -> None:
+        metadata_index = MagicMock()
+        metadata_index.find_by_download_locator = AsyncMock(return_value=[])
+        metadata_index.find_by_filename = AsyncMock(return_value=["doc-wrong"])
+        lookup = _make_status_lookup({"doc-wrong": "report.pdf"})
+
+        ctx = await collect_deletion_context(
+            identifier="/inputs/a/report.pdf",
+            metadata_index=metadata_index,
+            doc_status_lookup=lookup,
+        )
+
+        assert ctx.doc_ids == set()
+        metadata_index.find_by_filename.assert_not_awaited()
+
+    async def test_metadata_status_path_expands_exact_duplicate_receipts(self) -> None:
+        metadata_index = MagicMock()
+        metadata_index.find_by_download_locator = AsyncMock(return_value=["doc-primary"])
+        metadata_index.find_by_filename = AsyncMock(return_value=[])
+        lookup = _make_status_lookup(
+            {
+                "doc-primary": "/staged/report__abc.pdf",
+                "doc-duplicate": "/staged/report__abc.pdf",
+            }
+        )
+
+        ctx = await collect_deletion_context(
+            identifier="s3://bucket/report.pdf",
+            metadata_index=metadata_index,
+            doc_status_lookup=lookup,
+        )
+
+        assert ctx.doc_ids == {"doc-primary", "doc-duplicate"}
+        assert ctx.file_paths == {"/staged/report__abc.pdf"}
 
     async def test_metadata_index_fallback(self) -> None:
         metadata_index = MagicMock()
@@ -73,14 +123,14 @@ class TestCollectDeletionContext:
         metadata_index.find_by_filename = AsyncMock(return_value=["doc-006"])
         ctx = await collect_deletion_context(
             identifier="report.pdf",
-            lightrag=None,
             metadata_index=metadata_index,
+            doc_status_lookup=None,
         )
         assert ctx.doc_ids == {"doc-006"}
         assert ctx.sources_used == ["metadata_index"]
 
     async def test_metadata_index_exact_remote_path_precedes_filename(self) -> None:
-        lightrag = _make_lightrag(
+        lookup = _make_status_lookup(
             {"doc-remote": "/inputs/default/__remote_ingest__/s3/b1/report__abc.pdf"}
         )
         metadata_index = MagicMock()
@@ -89,8 +139,8 @@ class TestCollectDeletionContext:
 
         ctx = await collect_deletion_context(
             identifier="s3://bucket/team-a/report.pdf",
-            lightrag=lightrag,
             metadata_index=metadata_index,
+            doc_status_lookup=lookup,
         )
 
         assert ctx.doc_ids == {"doc-remote"}
@@ -101,26 +151,27 @@ class TestCollectDeletionContext:
         metadata_index.find_by_filename.assert_not_awaited()
 
     async def test_doc_status_exception_falls_back_to_metadata(self) -> None:
-        lightrag = MagicMock()
-        lightrag.doc_status = MagicMock()
-        lightrag.doc_status.get_doc_by_file_path = AsyncMock(
-            side_effect=RuntimeError("connection lost")
-        )
+        lookup = MagicMock()
+        lookup.resolve_deletion_matches = AsyncMock(side_effect=RuntimeError("connection lost"))
         metadata_index = MagicMock()
         metadata_index.find_by_download_locator = AsyncMock(return_value=[])
         metadata_index.find_by_filename = AsyncMock(return_value=["doc-007"])
 
         ctx = await collect_deletion_context(
             identifier="file.pdf",
-            lightrag=lightrag,
             metadata_index=metadata_index,
+            doc_status_lookup=lookup,
         )
 
         assert ctx.doc_ids == {"doc-007"}
         assert ctx.sources_used == ["metadata_index"]
 
     async def test_no_matches(self) -> None:
-        ctx = await collect_deletion_context(identifier="nonexistent.pdf")
+        ctx = await collect_deletion_context(
+            identifier="nonexistent.pdf",
+            metadata_index=None,
+            doc_status_lookup=None,
+        )
         assert ctx.doc_ids == set()
         assert ctx.file_paths == set()
         assert ctx.sources_used == []

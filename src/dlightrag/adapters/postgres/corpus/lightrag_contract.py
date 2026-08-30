@@ -47,6 +47,10 @@ class PGLightRAGContractGuard:
         "apipeline_process_enqueue_documents",
     )
     _REQUIRED_ATTRIBUTES = ("chunks_vdb", "text_chunks", "full_docs", "doc_status")
+    _REQUIRED_DOC_STATUS_CALLABLES = (
+        "get_docs_by_statuses_page",
+        "get_full_docs_by_ids",
+    )
     _CHUNKS_VDB_COLUMNS = {"id", "content", "content_vector", "workspace", "file_path"}
     _BM25_TABLE = "lightrag_doc_chunks"
     _BM25_COLUMNS = {"id", "content", "file_path"}
@@ -70,6 +74,13 @@ class PGLightRAGContractGuard:
             for name in self._REQUIRED_ATTRIBUTES
             if not hasattr(self._lightrag, name)
         )
+        doc_status = getattr(self._lightrag, "doc_status", None)
+        if doc_status is not None:
+            errors.extend(
+                f"LightRAG doc_status missing callable {name!r}"
+                for name in self._REQUIRED_DOC_STATUS_CALLABLES
+                if not callable(getattr(doc_status, name, None))
+            )
         if errors:
             raise RuntimeError(
                 f"LightRAG runtime contract check failed ({len(errors)} issue(s)):\n"

@@ -742,7 +742,6 @@ def e2e_base_url(
     )
     application_double.corpora.create_workspace.side_effect = _create_workspace
     application_double.corpora.reset.side_effect = _reset_workspaces
-    application_double.corpora.list_ingested_files.return_value = []
     application_double.corpora.get_pipeline_status.return_value = {
         "busy": False,
         "pending_enqueues": 0,
@@ -750,6 +749,11 @@ def e2e_base_url(
     application_double.corpora.file_panel_snapshot.return_value = {
         "files": [],
         "pipeline_status": {"busy": False, "pending_enqueues": 0},
+        "next_cursor": None,
+        "fetched_rows": 0,
+    }
+    application_double.corpora.failed_file_snapshot.return_value = {
+        "failed": [],
         "next_cursor": None,
         "fetched_rows": 0,
     }

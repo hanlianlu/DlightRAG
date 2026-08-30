@@ -28,11 +28,12 @@ class FilePanelCursorError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class FilePanelCursor:
-    """The complete mixed-direction ordering key for one workspace page."""
+    """The complete mixed-direction ordering key for one workspace status view."""
 
     workspace: str
     updated_at: datetime.datetime | None
     doc_id: str
+    view: str = "processed"
 
     def __post_init__(self) -> None:
         canonical_workspace = require_canonical_workspace_id(self.workspace)
@@ -47,11 +48,13 @@ class FilePanelCursor:
             raise ValueError("file-panel cursor document id must be non-empty")
         if len(self.doc_id) > 255:
             raise ValueError("file-panel cursor document id exceeds the storage bound")
+        if not isinstance(self.view, str) or self.view not in {"processed", "failed"}:
+            raise ValueError("file-panel cursor view is invalid")
 
 
 @dataclass(frozen=True, slots=True)
 class FilePanelPageRequest:
-    """One hard-bounded recent or older processed-file page request."""
+    """One hard-bounded recent or older file-status page request."""
 
     limit: int = FILE_PANEL_PAGE_DEFAULT_LIMIT
     cursor: FilePanelCursor | None = None
@@ -101,9 +104,50 @@ class ProcessedFileRow:
 
 @dataclass(frozen=True, slots=True)
 class FilePanelRowPage:
-    """Bounded persistence result, including the measured physical fetch size."""
+    """Bounded processed-file result, including the physical fetch size."""
 
     items: tuple[ProcessedFileRow, ...]
+    has_more: bool
+    fetched_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class FailedFileRow:
+    """One failed document plus its private page-order facts."""
+
+    doc_id: str
+    file_path: str
+    error: str
+    updated_at: datetime.datetime | None
+
+    def __post_init__(self) -> None:
+        if not self.doc_id:
+            raise ValueError("failed file document id must be non-empty")
+        if self.updated_at is not None and (
+            not isinstance(self.updated_at, datetime.datetime)
+            or self.updated_at.tzinfo is not None
+            or self.updated_at.utcoffset() is not None
+        ):
+            raise ValueError("failed file timestamp must be a naive datetime or null")
+
+    def presentation(self) -> dict[str, Any]:
+        return {
+            "doc_id": self.doc_id,
+            "file_path": self.file_path,
+            "error": self.error,
+            "updated_at": (
+                self.updated_at.isoformat(timespec="microseconds")
+                if self.updated_at is not None
+                else ""
+            ),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FailedFileRowPage:
+    """Bounded failed-file result, including the physical fetch size."""
+
+    items: tuple[FailedFileRow, ...]
     has_more: bool
     fetched_rows: int
 
@@ -120,7 +164,8 @@ class FilePanelCursorCodec:
                 "doc_id": cursor.doc_id,
                 "scope": "file-panel",
                 "updated_at": _canonical_timestamp(cursor.updated_at),
-                "v": 1,
+                "v": 2,
+                "view": cursor.view,
                 "workspace": cursor.workspace,
             }
         )
@@ -140,21 +185,17 @@ class FilePanelCursorCodec:
             ):
                 raise ValueError
             decoded = json.loads(payload)
-            if not isinstance(decoded, dict) or set(decoded) != {
-                "doc_id",
-                "scope",
-                "updated_at",
-                "v",
-                "workspace",
-            }:
+            if not isinstance(decoded, dict) or _canonical_json(decoded) != payload:
                 raise ValueError
-            if _canonical_json(decoded) != payload:
+            version = decoded.get("v")
+            common_keys = {"doc_id", "scope", "updated_at", "v", "workspace"}
+            if type(version) is not int or decoded.get("scope") != "file-panel":
                 raise ValueError
-            if (
-                type(decoded["v"]) is not int
-                or decoded["v"] != 1
-                or decoded["scope"] != "file-panel"
-            ):
+            if version == 1 and set(decoded) == common_keys:
+                view = "processed"
+            elif version == 2 and set(decoded) == common_keys | {"view"}:
+                view = decoded["view"]
+            else:
                 raise ValueError
             doc_id = decoded["doc_id"]
             workspace = decoded["workspace"]
@@ -173,6 +214,7 @@ class FilePanelCursorCodec:
                 workspace=workspace,
                 updated_at=updated_at,
                 doc_id=doc_id,
+                view=view,
             )
         except (binascii.Error, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
             raise FilePanelCursorError("invalid file-panel page cursor") from exc
@@ -210,6 +252,8 @@ def _base64url_decode(value: str) -> bytes:
 __all__ = [
     "FILE_PANEL_PAGE_DEFAULT_LIMIT",
     "FILE_PANEL_PAGE_MAX_LIMIT",
+    "FailedFileRow",
+    "FailedFileRowPage",
     "FilePanelCursor",
     "FilePanelCursorCodec",
     "FilePanelCursorError",

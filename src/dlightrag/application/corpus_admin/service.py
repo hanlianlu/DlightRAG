@@ -83,6 +83,7 @@ from .errors import (
     UploadTooLargeError,
 )
 from .file_panel import (
+    FailedFileRowPage,
     FilePanelCursor,
     FilePanelCursorCodec,
     FilePanelPageRequest,
@@ -377,6 +378,12 @@ class FilePanelSnapshot(TypedDict):
     fetched_rows: int
 
 
+class FailedFileSnapshot(TypedDict):
+    failed: list[dict[str, Any]]
+    next_cursor: FilePanelCursor | None
+    fetched_rows: int
+
+
 class CorpusResetResult(TypedDict):
     workspaces: dict[str, dict[str, Any]]
     total_errors: int
@@ -441,6 +448,13 @@ class FilePanelStore(Protocol):
         *,
         page: FilePanelPageRequest,
     ) -> FilePanelRowPage: ...
+
+    async def list_failed_files(
+        self,
+        workspace: str,
+        *,
+        page: FilePanelPageRequest,
+    ) -> FailedFileRowPage: ...
 
 
 class MetadataSearchStore(Protocol):
@@ -676,6 +690,8 @@ class CorpusAdmin:
         requested = page or FilePanelPageRequest()
         if requested.cursor is not None and requested.cursor.workspace != workspace:
             raise ValueError("file-panel cursor belongs to another workspace")
+        if requested.cursor is not None and requested.cursor.view != "processed":
+            raise ValueError("file-panel cursor belongs to another view")
         result = await self._file_panel.list_processed_files(workspace, page=requested)
         next_cursor = None
         if result.has_more:
@@ -705,6 +721,37 @@ class CorpusAdmin:
         return {
             "files": [item.presentation() for item in result.items],
             "pipeline_status": pipeline_status,
+            "next_cursor": next_cursor,
+            "fetched_rows": result.fetched_rows,
+        }
+
+    async def failed_file_snapshot(
+        self,
+        workspace_id: str,
+        *,
+        page: FilePanelPageRequest | None = None,
+    ) -> FailedFileSnapshot:
+        """Return one hard-bounded page of failed document status rows."""
+        workspace = require_canonical_workspace_id(workspace_id)
+        requested = page or FilePanelPageRequest()
+        if requested.cursor is not None and requested.cursor.workspace != workspace:
+            raise ValueError("file-panel cursor belongs to another workspace")
+        if requested.cursor is not None and requested.cursor.view != "failed":
+            raise ValueError("file-panel cursor belongs to another view")
+        result = await self._file_panel.list_failed_files(workspace, page=requested)
+        next_cursor = None
+        if result.has_more:
+            if not result.items:
+                raise RuntimeError("failed-file store reported more rows after an empty page")
+            last = result.items[-1]
+            next_cursor = FilePanelCursor(
+                workspace=workspace,
+                updated_at=last.updated_at,
+                doc_id=last.doc_id,
+                view="failed",
+            )
+        return {
+            "failed": [item.presentation() for item in result.items],
             "next_cursor": next_cursor,
             "fetched_rows": result.fetched_rows,
         }
@@ -801,10 +848,6 @@ class CorpusAdmin:
             raise
         return upload_dir, saved_paths
 
-    async def list_ingested_files(self, workspace_id: str) -> list[dict[str, Any]]:
-        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
-        return await runtime.alist_ingested_files()
-
     async def get_pipeline_status(self, workspace_id: str) -> dict[str, Any]:
         runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
         return await runtime.aget_pipeline_status()
@@ -833,10 +876,6 @@ class CorpusAdmin:
                 filenames=filenames,
                 dry_run=dry_run,
             )
-
-    async def list_failed_docs(self, workspace_id: str) -> list[dict[str, Any]]:
-        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
-        return await runtime.alist_failed_docs()
 
     async def get_visual_asset(
         self,

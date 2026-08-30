@@ -144,6 +144,12 @@ async def test_file_panel_traverses_null_and_timestamp_groups_without_gaps() -> 
                 """
             )
             await conn.execute(
+                "ALTER TABLE LIGHTRAG_DOC_STATUS ADD COLUMN IF NOT EXISTS content_summary TEXT"
+            )
+            await conn.execute(
+                "ALTER TABLE LIGHTRAG_DOC_STATUS ADD COLUMN IF NOT EXISTS error_msg TEXT"
+            )
+            await conn.execute(
                 "DELETE FROM LIGHTRAG_DOC_STATUS WHERE workspace = ANY($1::varchar[])",
                 [workspace, other_workspace],
             )
@@ -161,6 +167,7 @@ async def test_file_panel_traverses_null_and_timestamp_groups_without_gaps() -> 
                     timestamp - datetime.timedelta(days=1),
                 ),
                 (workspace, "ignored", "pending", "/ignored", timestamp),
+                (workspace, "failed-a", "failed", "/failed-a", timestamp),
                 (other_workspace, "foreign", "processed", "/foreign", timestamp),
             ]
             await conn.executemany(
@@ -170,6 +177,14 @@ async def test_file_panel_traverses_null_and_timestamp_groups_without_gaps() -> 
                 ) VALUES ($1, $2, $3, $4, $5)
                 """,
                 rows,
+            )
+            await conn.execute(
+                """
+                UPDATE LIGHTRAG_DOC_STATUS
+                SET error_msg = 'parser failed'
+                WHERE workspace = $1 AND id = 'failed-a'
+                """,
+                workspace,
             )
 
         store = PGFilePanelStore(pool=pool)
@@ -196,6 +211,14 @@ async def test_file_panel_traverses_null_and_timestamp_groups_without_gaps() -> 
 
         assert observed == ["null-a", "null-b", "same-a", "same-b", "older"]
         assert len(observed) == len(set(observed))
+        failed_page = await store.list_failed_files(
+            workspace,
+            page=FilePanelPageRequest(limit=1),
+        )
+        assert [(item.doc_id, item.error) for item in failed_page.items] == [
+            ("failed-a", "parser failed")
+        ]
+        assert failed_page.fetched_rows == 1
         async with pool.acquire() as conn:
             indexdef = await conn.fetchval(
                 "SELECT indexdef FROM pg_indexes WHERE indexname = $1",
@@ -205,6 +228,80 @@ async def test_file_panel_traverses_null_and_timestamp_groups_without_gaps() -> 
             normalized = " ".join(str(indexdef).split()).lower()
             assert "workspace, updated_at desc, id" in normalized
             assert "where" in normalized and "status" in normalized and "processed" in normalized
+            failed_indexdef = await conn.fetchval(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = $1",
+                "idx_dlightrag_file_panel_failed_updated_id",
+            )
+            assert failed_indexdef is not None
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM LIGHTRAG_DOC_STATUS WHERE workspace = ANY($1::varchar[])",
+                [workspace, other_workspace],
+            )
+        await pool.close()
+
+
+@pytest.mark.usefixtures("pg_check")
+async def test_doc_status_deletion_lookup_returns_exact_duplicates_and_known_ids() -> None:
+    import asyncpg
+
+    from dlightrag.adapters.postgres.corpus.doc_status_lookup import PGDocStatusLookup
+
+    workspace = "test_pg_doc_status_lookup"
+    other_workspace = "test_pg_doc_status_lookup_other"
+    pool = await asyncpg.create_pool(
+        host=str(_PG_CONN_KWARGS["host"]),
+        port=int(_PG_CONN_KWARGS["port"]),
+        user=str(_PG_CONN_KWARGS["user"]),
+        password=str(_PG_CONN_KWARGS["password"]),
+        database=str(_PG_CONN_KWARGS["database"]),
+        min_size=1,
+        max_size=1,
+    )
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS LIGHTRAG_DOC_STATUS (
+                    workspace varchar(255) NOT NULL,
+                    id varchar(255) NOT NULL,
+                    status varchar(64),
+                    file_path TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT LIGHTRAG_DOC_STATUS_PK PRIMARY KEY (workspace, id)
+                )
+                """
+            )
+            await conn.execute(
+                "DELETE FROM LIGHTRAG_DOC_STATUS WHERE workspace = ANY($1::varchar[])",
+                [workspace, other_workspace],
+            )
+            await conn.executemany(
+                """
+                INSERT INTO LIGHTRAG_DOC_STATUS (workspace, id, status, file_path)
+                VALUES ($1, $2, $3, $4)
+                """,
+                [
+                    (workspace, "doc-1", "processed", "report.pdf"),
+                    (workspace, "dup-1", "failed", "report.pdf"),
+                    (workspace, "doc-2", "processed", "other.pdf"),
+                    (other_workspace, "foreign", "processed", "report.pdf"),
+                ],
+            )
+
+        lookup = PGDocStatusLookup(workspace=workspace, pool=pool)
+        matches = await lookup.resolve_deletion_matches(
+            file_paths=("report.pdf",),
+            doc_ids=("doc-2",),
+        )
+
+        assert [(match.doc_id, match.file_path) for match in matches] == [
+            ("doc-1", "report.pdf"),
+            ("doc-2", "other.pdf"),
+            ("dup-1", "report.pdf"),
+        ]
     finally:
         async with pool.acquire() as conn:
             await conn.execute(

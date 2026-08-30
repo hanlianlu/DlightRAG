@@ -16,6 +16,8 @@ from dlightrag.application.corpus_admin import (
     CorpusAdmin,
     CorpusAdminSettings,
     CorpusIngestError,
+    FailedFileRow,
+    FailedFileRowPage,
     FilePanelCursor,
     FilePanelPageRequest,
     FilePanelRowPage,
@@ -89,7 +91,10 @@ def _admin(
     file_panel = SimpleNamespace(
         list_processed_files=AsyncMock(
             return_value=FilePanelRowPage(items=(), has_more=False, fetched_rows=0)
-        )
+        ),
+        list_failed_files=AsyncMock(
+            return_value=FailedFileRowPage(items=(), has_more=False, fetched_rows=0)
+        ),
     )
     metadata_store = metadata_search or SimpleNamespace(
         search_metadata_page=AsyncMock(
@@ -542,6 +547,47 @@ async def test_file_panel_snapshot_derives_bounded_cursor_and_rejects_foreign_cu
             ),
         )
     file_panel.list_processed_files.assert_not_awaited()
+
+
+async def test_failed_file_snapshot_is_bounded_and_preserves_error_text() -> None:
+    admin, pool, _, _, file_panel, _ = _admin()
+    timestamp = datetime(2026, 3, 4, 5, 6, 7, 123456)
+    file_panel.list_failed_files.return_value = FailedFileRowPage(
+        items=(
+            FailedFileRow(
+                doc_id="doc-failed",
+                file_path="/failed.pdf",
+                error="parser failed",
+                updated_at=timestamp,
+            ),
+        ),
+        has_more=True,
+        fetched_rows=2,
+    )
+
+    snapshot = await admin.failed_file_snapshot(
+        "finance",
+        page=FilePanelPageRequest(limit=1),
+    )
+
+    assert snapshot == {
+        "failed": [
+            {
+                "doc_id": "doc-failed",
+                "file_path": "/failed.pdf",
+                "error": "parser failed",
+                "updated_at": "2026-03-04T05:06:07.123456",
+            }
+        ],
+        "next_cursor": FilePanelCursor(
+            workspace="finance",
+            updated_at=timestamp,
+            doc_id="doc-failed",
+            view="failed",
+        ),
+        "fetched_rows": 2,
+    }
+    pool.acquire.assert_not_awaited()
 
 
 async def test_workspace_exists_uses_default_fast_path_and_bounded_maintenance_lookup() -> None:

@@ -29,6 +29,7 @@ from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
 )
 from dlightrag.adapters.postgres.corpus.corpus_chunks import PGCorpusChunkStore
 from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
+from dlightrag.adapters.postgres.corpus.doc_status_lookup import PGDocStatusLookup
 from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
 from dlightrag.adapters.postgres.corpus.ingest_jobs import PGIngestJobStore
 from dlightrag.adapters.postgres.corpus.lightrag_contract import PGLightRAGContractGuard
@@ -584,6 +585,7 @@ class PGCorpusRuntimeBinder:
             bm25=bm25,
             bm25_languages=profile_languages(profiles),
             scoped_chunk_reader=chunks,
+            doc_status_lookup=PGDocStatusLookup(workspace=config.deployment.workspace),
         )
 
 

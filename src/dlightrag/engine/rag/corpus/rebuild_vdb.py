@@ -245,7 +245,6 @@ async def restore_sidecar_image_vectors(
     telemetry: Telemetry,
 ) -> dict[str, int]:
     """Restore DlightRAG direct image vectors after a chunks VDB rebuild."""
-    processed = await lightrag.doc_status.get_docs_by_status(DocStatus.PROCESSED)
     document_embedder = build_document_embedder(
         settings,
         multimodal_embedder,
@@ -263,22 +262,30 @@ async def restore_sidecar_image_vectors(
     )
 
     stats = {"processed_docs": 0, "skipped_docs": 0}
-    for doc_id, status_info in (processed or {}).items():
-        chunks = _status_chunks(status_info)
-        if not chunks:
-            stats["skipped_docs"] += 1
-            continue
-        full_doc = await stores.get_full_doc(doc_id)
-        sidecar_location = _mapping_get(full_doc, "sidecar_location")
-        if not sidecar_location:
-            stats["skipped_docs"] += 1
-            continue
-        await engine._overwrite_sidecar_image_vectors(
-            doc_id=doc_id,
-            sidecar_location=str(sidecar_location),
-            chunk_ids=set(chunks),
-        )
-        stats["processed_docs"] += 1
+    async for processed in stores.iter_doc_status_pages((DocStatus.PROCESSED,)):
+        doc_ids = list(processed)
+        full_statuses = await stores.get_full_doc_statuses(doc_ids)
+        missing = set(doc_ids).difference(full_statuses)
+        if missing:
+            raise RuntimeError(
+                f"document-status rows disappeared during sidecar restore: {sorted(missing)}"
+            )
+        for doc_id in doc_ids:
+            chunks = _status_chunks(full_statuses[doc_id])
+            if not chunks:
+                stats["skipped_docs"] += 1
+                continue
+            full_doc = await stores.get_full_doc(doc_id)
+            sidecar_location = _mapping_get(full_doc, "sidecar_location")
+            if not sidecar_location:
+                stats["skipped_docs"] += 1
+                continue
+            await engine._overwrite_sidecar_image_vectors(
+                doc_id=doc_id,
+                sidecar_location=str(sidecar_location),
+                chunk_ids=set(chunks),
+            )
+            stats["processed_docs"] += 1
     return stats
 
 

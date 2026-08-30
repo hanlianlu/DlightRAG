@@ -190,3 +190,29 @@ def test_postgres_guard_reports_public_runtime_drift() -> None:
 
     with pytest.raises(RuntimeError, match="apipeline_process_enqueue_documents"):
         PGLightRAGContractGuard(runtime).verify_surface()
+
+
+def test_postgres_guard_reports_missing_full_status_hydration() -> None:
+    runtime = _fake_lightrag()
+    runtime.initialize_storages = AsyncMock()
+    runtime.finalize_storages = AsyncMock()
+    runtime.aquery_data = AsyncMock()
+    runtime.apipeline_enqueue_documents = AsyncMock()
+    runtime.apipeline_process_enqueue_documents = AsyncMock()
+    runtime.doc_status = SimpleNamespace(get_docs_by_statuses_page=AsyncMock())
+
+    with pytest.raises(RuntimeError, match="get_full_docs_by_ids"):
+        PGLightRAGContractGuard(runtime).verify_surface()
+
+
+def test_postgres_guard_reports_missing_bounded_status_pager() -> None:
+    runtime = _fake_lightrag()
+    runtime.initialize_storages = AsyncMock()
+    runtime.finalize_storages = AsyncMock()
+    runtime.aquery_data = AsyncMock()
+    runtime.apipeline_enqueue_documents = AsyncMock()
+    runtime.apipeline_process_enqueue_documents = AsyncMock()
+    runtime.doc_status = SimpleNamespace()
+
+    with pytest.raises(RuntimeError, match="get_docs_by_statuses_page"):
+        PGLightRAGContractGuard(runtime).verify_surface()

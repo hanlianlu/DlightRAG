@@ -47,6 +47,16 @@ def _service(
     )
 
 
+def _set_failed_docs(service: WorkspaceRag, docs: list[dict[str, Any]]) -> None:
+    service._initialized = True
+
+    async def _iter() -> AsyncIterator[dict[str, Any]]:
+        for doc in docs:
+            yield doc
+
+    service._iter_failed_docs = _iter  # type: ignore[method-assign]
+
+
 def _runtime_lightrag() -> SimpleNamespace:
     return SimpleNamespace(
         workspace="default",
@@ -73,6 +83,7 @@ def _runtime_binder() -> SimpleNamespace:
                 bm25=object(),
                 bm25_languages=(),
                 scoped_chunk_reader=object(),
+                doc_status_lookup=object(),
             )
         ),
     )
@@ -666,35 +677,12 @@ class TestWorkspaceRagRetrieve:
 
 
 class TestWorkspaceRagFileManagement:
-    """Test alist_ingested_files and adelete_files delegation."""
-
-    async def test_alist_not_initialized_raises(self, test_config):
-        service = _service(test_config)
-        with pytest.raises(RuntimeError, match="not initialized"):
-            await service.alist_ingested_files()
+    """Test file deletion delegation."""
 
     async def test_adelete_not_initialized_raises(self, test_config):
         service = _service(test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
             await service.adelete_files(filenames=["a.pdf"])
-
-    async def test_alist_reads_lightrag_doc_status(self, test_config):
-        service = _service(test_config)
-        service._initialized = True
-        service._lightrag_stores = MagicMock()
-        service._lightrag_stores.docs_by_status = AsyncMock(
-            return_value={"d1": MagicMock(file_path="/tmp/a.pdf", updated_at="now")}
-        )
-        result = await service.alist_ingested_files()
-        assert result == [
-            {
-                "doc_id": "d1",
-                "file_path": "/tmp/a.pdf",
-                "status": "processed",
-                "updated_at": "now",
-            }
-        ]
-        service._lightrag_stores.docs_by_status.assert_awaited_once()
 
     async def test_adelete_uses_cascade_pipeline(self, test_config):
         service = _service(test_config)
@@ -705,6 +693,10 @@ class TestWorkspaceRagFileManagement:
         service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
         service._lightrag.doc_status.get_docs_by_status = AsyncMock(
             return_value={"d1": MagicMock(file_path="/tmp/a.pdf")}
+        )
+        service._doc_status_lookup = MagicMock()
+        service._doc_status_lookup.resolve_deletion_matches = AsyncMock(
+            return_value=(SimpleNamespace(doc_id="d1", file_path="/tmp/a.pdf"),)
         )
         result = await service.adelete_files(filenames=["a.pdf"])
         assert result[0]["status"] == "deleted"
@@ -2296,8 +2288,14 @@ class TestWorkspaceRagLightRAGMainPath:
             return_value={"old-doc": SimpleNamespace(file_path=str(fake_pdf))}
         )
         service._metadata_index = MagicMock()
+        service._metadata_index.find_by_download_locator = AsyncMock(return_value=[])
+        service._metadata_index.find_by_filename = AsyncMock(return_value=[])
         service._metadata_index.get = AsyncMock(return_value={"page_count": 0})
         service._metadata_index.delete = AsyncMock()
+        service._doc_status_lookup = MagicMock()
+        service._doc_status_lookup.resolve_deletion_matches = AsyncMock(
+            return_value=(SimpleNamespace(doc_id="old-doc", file_path=str(fake_pdf)),)
+        )
 
         result = await service.aingest(source_type="local", path=str(fake_pdf), replace=True)
 
@@ -2447,20 +2445,83 @@ class TestWorkspaceRagLightRAGMainPath:
             "source_uri": "bynder://asset/1",
         }
 
+    async def test_failed_doc_pages_hydrate_full_error_rows(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = _service(test_config)
+        stores = MagicMock()
+
+        async def _pages(*_args, **_kwargs):
+            yield {"doc-failed": object()}
+
+        stores.iter_doc_status_pages = _pages
+        stores.get_full_doc_statuses = AsyncMock(
+            return_value={
+                "doc-failed": SimpleNamespace(
+                    file_path="report.pdf",
+                    error_msg="parser failed",
+                    content_summary="fallback",
+                    updated_at="2026-08-27T00:00:00",
+                )
+            }
+        )
+        service._lightrag_stores = stores
+
+        pages = [page async for page in service._iter_failed_doc_pages()]
+
+        assert pages == [
+            [
+                {
+                    "doc_id": "doc-failed",
+                    "file_path": "report.pdf",
+                    "error": "parser failed",
+                    "updated_at": "2026-08-27T00:00:00",
+                }
+            ]
+        ]
+        stores.get_full_doc_statuses.assert_awaited_once_with(["doc-failed"])
+
+    async def test_retry_failed_docs_requires_initialized_runtime(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = _service(test_config)
+
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await service.aretry_failed_docs()
+
+    async def test_retry_streams_all_failed_docs_but_caps_response_details(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = _service(test_config)
+        _set_failed_docs(
+            service,
+            [{"doc_id": f"doc-{index}", "error": "failed"} for index in range(101)],
+        )
+        service._metadata_index = None
+        service._lightrag = MagicMock()
+
+        result = await service.aretry_failed_docs()
+
+        assert result["retried"] == 101
+        assert result["failed"] == 101
+        assert len(result["failed_docs"]) == 100
+        assert result["details_truncated"] is True
+
     async def test_retry_failed_doc_uses_metadata_locator_not_deleted_parser_path(
         self, test_config: DlightragConfig
     ) -> None:
         service = _service(test_config)
         deleted_parser_path = "/srv/dlightrag/inputs/finance/__remote_ingest__/url/batch/report.pdf"
         events: list[str] = []
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-failed",
                     "file_path": deleted_parser_path,
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
 
@@ -2575,14 +2636,15 @@ class TestWorkspaceRagLightRAGMainPath:
             parser_rules=test_config.corpus.parser_rules,
             chunk_options=dict(test_config.corpus.parser.chunk_options),
         )
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": original_doc_id,
                     "file_path": "report.pdf",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
 
         result = await service.aretry_failed_docs()
@@ -2658,14 +2720,15 @@ class TestWorkspaceRagLightRAGMainPath:
         metadata: dict[str, str] | None,
     ) -> None:
         service = _service(test_config)
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-failed",
                     "file_path": "https://legacy.example.com/report.pdf",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.get.return_value = metadata
@@ -2685,13 +2748,14 @@ class TestWorkspaceRagLightRAGMainPath:
         self, test_config: DlightragConfig
     ) -> None:
         service = _service(test_config)
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-failed",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.get.return_value = {
@@ -2724,13 +2788,14 @@ class TestWorkspaceRagLightRAGMainPath:
         self, test_config: DlightragConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
         service = _service(test_config)
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-failed",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.get.side_effect = RuntimeError(
@@ -2751,14 +2816,15 @@ class TestWorkspaceRagLightRAGMainPath:
         self, test_config: DlightragConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
         service = _service(test_config)
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-failed",
                     "file_path": "/deleted/__remote_ingest__/report.pdf",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.get.return_value = {
@@ -2791,13 +2857,14 @@ class TestWorkspaceRagLightRAGMainPath:
         self, test_config: DlightragConfig
     ) -> None:
         service = _service(test_config)
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-failed",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.get.return_value = {
@@ -2822,13 +2889,14 @@ class TestWorkspaceRagLightRAGMainPath:
         self, test_config: DlightragConfig
     ) -> None:
         service = _service(test_config)
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-old",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.get.return_value = {
@@ -2876,13 +2944,14 @@ class TestWorkspaceRagLightRAGMainPath:
         self, test_config: DlightragConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
         service = _service(test_config)
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-old",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.get.return_value = {
@@ -2926,13 +2995,14 @@ class TestWorkspaceRagLightRAGMainPath:
         self, test_config: DlightragConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
         service = _service(test_config)
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-old",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.get.return_value = {
@@ -2980,13 +3050,14 @@ class TestWorkspaceRagLightRAGMainPath:
         deletion_result: object,
     ) -> None:
         service = _service(test_config)
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-old",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.get.return_value = {
@@ -3022,14 +3093,15 @@ class TestWorkspaceRagLightRAGMainPath:
         self, test_config: DlightragConfig
     ) -> None:
         service = _service(test_config)
-        service.alist_failed_docs = AsyncMock(
-            return_value=[
+        _set_failed_docs(
+            service,
+            [
                 {
                     "doc_id": "doc-same",
                     "file_path": "/inputs/default/report.pdf",
                     "error": "parser failed",
                 }
-            ]
+            ],
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.get.return_value = {
@@ -3181,7 +3253,13 @@ class TestWorkspaceRagLightRAGMainPath:
             return_value={"d1": MagicMock(file_path="/tmp/a.pdf")}
         )
         service._metadata_index = MagicMock()
+        service._metadata_index.find_by_download_locator = AsyncMock(return_value=[])
+        service._metadata_index.find_by_filename = AsyncMock(return_value=[])
         service._metadata_index.delete = AsyncMock()
+        service._doc_status_lookup = MagicMock()
+        service._doc_status_lookup.resolve_deletion_matches = AsyncMock(
+            return_value=(SimpleNamespace(doc_id="d1", file_path="/tmp/a.pdf"),)
+        )
 
         results = await service.adelete_files(filenames=["a.pdf"], dry_run=True)
 

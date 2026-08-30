@@ -142,29 +142,42 @@ async def test_cancelling_parks_docs_that_a_startup_sweep_would_otherwise_resume
 
     @dataclass
     class _Doc:
+        content_summary: str = "book"
+        content_length: int = 4
         status: Any = DocStatus.PARSING
+        created_at: str = "2026-08-27T00:00:00"
+        updated_at: str = "2026-08-27T00:00:00"
         error_msg: str = ""
         file_path: str = "book.pdf"
         chunks_list: list[str] = field(default_factory=list)
+        metadata: dict[str, Any] = field(default_factory=dict)
 
     written: dict[str, Any] = {}
 
     class _DocStatus:
         async def upsert(self, data: dict[str, Any]) -> None:
+            assert data["doc-1"]["content_summary"] == "book"
+            assert data["doc-1"]["content_length"] == 4
+            assert data["doc-1"]["status"] == DocStatus.FAILED.value
             written.update(data)
 
     class _Stores:
         doc_status = _DocStatus()
 
-        async def docs_by_status(self, status: Any) -> dict[str, Any]:
-            return {"doc-1": _Doc()} if status is DocStatus.PARSING else {}
+        async def iter_doc_status_pages(self, statuses: Any):
+            assert DocStatus.PARSING in statuses
+            yield {"doc-1": object()}
+
+        async def get_full_doc_statuses(self, doc_ids: list[str]) -> dict[str, Any]:
+            assert doc_ids == ["doc-1"]
+            return {"doc-1": _Doc()}
 
     service = cast(Any, WorkspaceRag.__new__(WorkspaceRag))
     service._lightrag_stores = _Stores()
     service._ensure_initialized = lambda: None
 
     assert await service.afail_unfinished_docs(reason="ingest job cancelled") == 1
-    assert written["doc-1"]["status"] is DocStatus.FAILED
+    assert written["doc-1"]["status"] == DocStatus.FAILED.value
     assert written["doc-1"]["error_msg"] == "ingest job cancelled"
     # The rest of the row must survive the round trip.
     assert written["doc-1"]["file_path"] == "book.pdf"
@@ -178,9 +191,11 @@ async def test_terminal_docs_are_left_alone() -> None:
     class _Stores:
         doc_status = None
 
-        async def docs_by_status(self, status: Any) -> dict[str, Any]:
-            assert status not in (DocStatus.PROCESSED, DocStatus.FAILED)
-            return {}
+        async def iter_doc_status_pages(self, statuses: Any):
+            assert DocStatus.PROCESSED not in statuses
+            assert DocStatus.FAILED not in statuses
+            if False:
+                yield {}
 
     service = cast(Any, WorkspaceRag.__new__(WorkspaceRag))
     service._lightrag_stores = _Stores()

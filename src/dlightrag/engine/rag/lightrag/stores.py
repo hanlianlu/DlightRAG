@@ -22,6 +22,7 @@ When upgrading lightrag-hku, verify these surfaces still exist and behave as
 expected. The host contract guard provides runtime contract checks.
 """
 
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
@@ -47,8 +48,41 @@ class LightRAGStores:
     async def get_doc_status(self, doc_id: str) -> dict[str, Any] | None:
         return await self.doc_status.get_by_id(doc_id)
 
-    async def docs_by_status(self, status: Any) -> dict[str, Any]:
-        return await self.doc_status.get_docs_by_status(status)
+    async def iter_doc_status_pages(
+        self,
+        statuses: Sequence[Any],
+        *,
+        page_size: int = 200,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield strict keyset pages without materializing a status bucket."""
+        if not statuses:
+            return
+        if isinstance(page_size, bool) or page_size < 1:
+            raise ValueError("page_size must be a positive integer")
+
+        from lightrag.base import CURSOR_END, CURSOR_START
+
+        cursor = CURSOR_START
+        while True:
+            page = await self.doc_status.get_docs_by_statuses_page(
+                list(statuses),
+                limit=page_size,
+                position=cursor,
+                strict=True,
+            )
+            yield dict(page.docs)
+            next_cursor = page.next_position
+            if next_cursor is CURSOR_END:
+                return
+            if next_cursor == cursor:
+                raise RuntimeError("LightRAG status paging cursor did not advance")
+            cursor = next_cursor
+
+    async def get_full_doc_statuses(self, doc_ids: list[str]) -> dict[str, Any]:
+        """Hydrate full status rows for one bounded page of known ids."""
+        if not doc_ids:
+            return {}
+        return await self.doc_status.get_full_docs_by_ids(doc_ids, strict=True)
 
     async def get_full_doc(self, doc_id: str) -> dict[str, Any] | None:
         return await self.full_docs.get_by_id(doc_id)

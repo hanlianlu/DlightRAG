@@ -6,6 +6,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from dlightrag.engine.rag.corpus.contracts import DocStatusLookup
 from dlightrag.engine.rag.corpus.ingest_jobs import IngestJobStore
 from dlightrag.engine.rag.corpus.metadata_index import MetadataIndexProtocol
 from dlightrag.engine.rag.retrieval.ports import (
@@ -106,6 +107,7 @@ class WorkspaceCorpusStores:
     chunks: CorpusChunkStore
     filtered_vectors: FilteredVectorSearch | None
     bm25: BM25Search | None
+    doc_status_lookup: DocStatusLookup
     bm25_languages: tuple[str, ...] = ()
     scoped_chunk_reader: ScopedChunkReader | None = None
 

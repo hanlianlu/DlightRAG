@@ -2,7 +2,7 @@
 """File operations API routes."""
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.responses import FileResponse, RedirectResponse
@@ -16,6 +16,10 @@ from dlightrag.adapters.http.rest.models import (
 )
 from dlightrag.application.access import AccessAction, UserContext
 from dlightrag.application.corpus_admin import (
+    FILE_PANEL_PAGE_DEFAULT_LIMIT,
+    FILE_PANEL_PAGE_MAX_LIMIT,
+    FilePanelCursorError,
+    FilePanelPageRequest,
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,
@@ -36,14 +40,33 @@ logger = logging.getLogger(__name__)
 async def list_files(
     request: Request,
     workspace: str | None = Query(default=None),
+    limit: Annotated[
+        int,
+        Query(ge=1, le=FILE_PANEL_PAGE_MAX_LIMIT),
+    ] = FILE_PANEL_PAGE_DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """List all ingested documents."""
+    """List one bounded page of ingested documents."""
     application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=ws)
-    files = await application.corpora.list_ingested_files(ws)
-    return {"files": files, "count": len(files), "workspace": ws}
+    page = _file_page_request(
+        application,
+        ws,
+        view="processed",
+        limit=limit,
+        cursor=cursor,
+    )
+    snapshot = await application.corpora.file_panel_snapshot(ws, page=page)
+    files = snapshot["files"]
+    return {
+        "files": files,
+        "count": len(files),
+        "workspace": ws,
+        "next_cursor": _encode_file_cursor(application, snapshot["next_cursor"]),
+        "fetched_rows": snapshot["fetched_rows"],
+    }
 
 
 @router.delete("/files", response_model=DeleteFilesResponse)
@@ -70,14 +93,33 @@ async def delete_files(
 async def list_failed_files(
     request: Request,
     workspace: str | None = Query(default=None),
+    limit: Annotated[
+        int,
+        Query(ge=1, le=FILE_PANEL_PAGE_MAX_LIMIT),
+    ] = FILE_PANEL_PAGE_DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """List documents currently in DocStatus.FAILED."""
+    """List one bounded page of documents in DocStatus.FAILED."""
     application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=ws)
-    failed = await application.corpora.list_failed_docs(ws)
-    return {"failed": failed, "count": len(failed), "workspace": ws}
+    page = _file_page_request(
+        application,
+        ws,
+        view="failed",
+        limit=limit,
+        cursor=cursor,
+    )
+    snapshot = await application.corpora.failed_file_snapshot(ws, page=page)
+    failed = snapshot["failed"]
+    return {
+        "failed": failed,
+        "count": len(failed),
+        "workspace": ws,
+        "next_cursor": _encode_file_cursor(application, snapshot["next_cursor"]),
+        "fetched_rows": snapshot["fetched_rows"],
+    }
 
 
 @router.post("/files/retry")
@@ -122,6 +164,35 @@ async def serve_file(
     except SourceDownloadUnavailableError as exc:
         raise HTTPException(503, str(exc)) from exc
     return _download_response(target)
+
+
+def _file_page_request(
+    application: Any,
+    workspace: str,
+    *,
+    view: str,
+    limit: int,
+    cursor: str | None,
+) -> FilePanelPageRequest:
+    try:
+        decoded = (
+            application.corpora.file_panel_cursor_codec.decode(cursor)
+            if cursor is not None
+            else None
+        )
+        if decoded is not None and decoded.workspace != workspace:
+            raise FilePanelCursorError("file-panel cursor belongs to another workspace")
+        if decoded is not None and decoded.view != view:
+            raise FilePanelCursorError("file-panel cursor belongs to another view")
+        return FilePanelPageRequest(limit=limit, cursor=decoded)
+    except (FilePanelCursorError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+def _encode_file_cursor(application: Any, cursor: Any | None) -> str | None:
+    if cursor is None:
+        return None
+    return application.corpora.file_panel_cursor_codec.encode(cursor)
 
 
 async def _enforce_source_download_access(

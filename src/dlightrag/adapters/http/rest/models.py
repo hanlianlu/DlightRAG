@@ -232,12 +232,16 @@ class FileListResponse(ClientContractModel):
     files: list[Any]
     count: int
     workspace: str
+    next_cursor: str | None = None
+    fetched_rows: int
 
 
 class FailedFilesResponse(ClientContractModel):
     failed: list[Any]
     count: int
     workspace: str
+    next_cursor: str | None = None
+    fetched_rows: int
 
 
 class DeleteFilesResponse(ClientContractModel):

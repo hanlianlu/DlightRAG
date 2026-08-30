@@ -15,7 +15,7 @@ from dlightrag.application.answer_runs.client_contracts import (
     QueryImage,
     RetrieveRequestContract,
 )
-from dlightrag.application.corpus_admin import IngestSpec
+from dlightrag.application.corpus_admin import FILE_PANEL_PAGE_DEFAULT_LIMIT, IngestSpec
 
 
 class MCPInput(ClientContractModel):
@@ -78,6 +78,8 @@ class DeleteWorkspaceInput(MCPInput):
 
 class ListFilesInput(MCPInput):
     workspace: str | None = None
+    limit: int = FILE_PANEL_PAGE_DEFAULT_LIMIT
+    cursor: str | None = None
 
 
 class DeleteFilesInput(MCPInput):

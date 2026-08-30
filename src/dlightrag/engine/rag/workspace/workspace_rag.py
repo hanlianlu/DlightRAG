@@ -16,7 +16,12 @@ from lightrag.constants import PARSED_DIR_NAME
 from dlightrag.engine.ai.embedding import MultimodalEmbedder, create_embedding_model
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import Telemetry
-from dlightrag.engine.rag.corpus.contracts import IngestDocument, SourceType, VisualAssetSize
+from dlightrag.engine.rag.corpus.contracts import (
+    DocStatusLookup,
+    IngestDocument,
+    SourceType,
+    VisualAssetSize,
+)
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     build_document_embedder,
     resolve_direct_image_embedding_enabled,
@@ -247,6 +252,7 @@ class WorkspaceRag:
         # Direct LightRAG runtime and DlightRAG orchestration.
         self._lightrag: Any = None  # Direct LightRAG reference
         self._metadata_index: MetadataIndexProtocol | None = None
+        self._doc_status_lookup: DocStatusLookup | None = None
         self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
         self._lightrag_stores: LightRAGStores | None = None
         self._ingestion_engine: UnifiedIngestionEngine | None = None
@@ -439,6 +445,7 @@ class WorkspaceRag:
         )
 
         self._metadata_index = corpus_stores.metadata_index
+        self._doc_status_lookup = corpus_stores.doc_status_lookup
         from dlightrag.engine.rag.retrieval.language import BM25LanguageClassifier
 
         bm25_language_classifier = (
@@ -622,7 +629,6 @@ class WorkspaceRag:
         self,
         *,
         file_path: Path,
-        stored_file_path: str | None = None,
     ) -> None:
         """Delete an existing ingest target before replacing it."""
         lightrag = self.lightrag
@@ -634,34 +640,25 @@ class WorkspaceRag:
             collect_deletion_context,
         )
 
-        identifiers: list[str] = []
-        for candidate in (stored_file_path, str(file_path), file_path.name):
-            if candidate and candidate not in identifiers:
-                identifiers.append(candidate)
+        identifier = str(file_path)
+        ctx = await collect_deletion_context(
+            identifier=identifier,
+            metadata_index=self._metadata_index,
+            doc_status_lookup=self._doc_status_lookup,
+        )
+        if not ctx.doc_ids:
+            return
 
-        seen_doc_ids: set[str] = set()
-        for identifier in identifiers:
-            ctx = await collect_deletion_context(
-                identifier=identifier,
-                lightrag=lightrag,
-                metadata_index=self._metadata_index,
+        stats = await cascade_delete(
+            ctx=ctx,
+            lightrag=lightrag,
+            metadata_index=self._metadata_index,
+        )
+        errors = stats.get("errors") or []
+        if errors:
+            raise RuntimeError(
+                f"replace cleanup failed for {identifier}: {'; '.join(map(str, errors))}"
             )
-            ctx.doc_ids.difference_update(seen_doc_ids)
-            if not ctx.doc_ids:
-                continue
-
-            stats = await cascade_delete(
-                ctx=ctx,
-                lightrag=lightrag,
-                metadata_index=self._metadata_index,
-            )
-            seen_doc_ids.update(ctx.doc_ids)
-
-            errors = stats.get("errors") or []
-            if errors:
-                raise RuntimeError(
-                    f"replace cleanup failed for {identifier}: {'; '.join(map(str, errors))}"
-                )
 
     async def _purge_existing_download_locator(self, download_locator: str) -> None:
         """Delete only documents owning one exact locator in this workspace."""
@@ -681,7 +678,6 @@ class WorkspaceRag:
         file_path: Path,
         *,
         replace: bool,
-        stored_file_path: str | None = None,
         source_root: Path | None = None,
         title: str | None = None,
         author: str | None = None,
@@ -698,7 +694,6 @@ class WorkspaceRag:
                     file_path=file_path,
                     relative_to=source_root,
                 ),
-                stored_file_path=stored_file_path,
             )
 
         file_path = await asyncio.to_thread(
@@ -1696,30 +1691,6 @@ class WorkspaceRag:
 
     # === FILE MANAGEMENT API ===
 
-    async def alist_ingested_files(self) -> list[dict[str, Any]]:
-        """List all processed files from LightRAG doc_status."""
-        self._ensure_initialized()
-        if self._lightrag_stores is None:
-            return []
-
-        from lightrag.base import DocStatus
-
-        try:
-            processed = await self._lightrag_stores.docs_by_status(DocStatus.PROCESSED)
-        except Exception as exc:
-            logger.warning("Failed to query PROCESSED docs: %s", exc)
-            return []
-
-        return [
-            {
-                "doc_id": doc_id,
-                "file_path": getattr(info, "file_path", "") or "",
-                "status": "processed",
-                "updated_at": str(getattr(info, "updated_at", "")),
-            }
-            for doc_id, info in (processed or {}).items()
-        ]
-
     async def afail_unfinished_docs(self, *, reason: str) -> int:
         """Park unfinished documents as FAILED so no startup sweep resumes them.
 
@@ -1741,91 +1712,118 @@ class WorkspaceRag:
             DocStatus.PROCESSING,
             DocStatus.PREPROCESSED,
         )
-        updates: dict[str, Any] = {}
-        for status in unfinished:
-            try:
-                docs = await self._lightrag_stores.docs_by_status(status)
-            except Exception as exc:
-                logger.warning("Failed to query %s docs: %s", status.value, exc)
-                continue
-            for doc_id, info in docs.items():
-                # Echo the whole row back so no field is dropped on the way through.
-                row = asdict(info)
-                row["status"] = DocStatus.FAILED
+        updated = 0
+        async for docs in self._lightrag_stores.iter_doc_status_pages(unfinished):
+            doc_ids = list(docs)
+            full_rows = await self._lightrag_stores.get_full_doc_statuses(doc_ids)
+            missing = set(doc_ids).difference(full_rows)
+            if missing:
+                raise RuntimeError(
+                    f"document-status rows disappeared during cancellation: {sorted(missing)}"
+                )
+            updates: dict[str, Any] = {}
+            for doc_id in doc_ids:
+                # Echo the full row back so no field is dropped on the way through.
+                row = asdict(full_rows[doc_id])
+                row["status"] = DocStatus.FAILED.value
                 row["error_msg"] = reason
                 updates[doc_id] = row
+            if updates:
+                await self._lightrag_stores.doc_status.upsert(updates)
+                updated += len(updates)
+        return updated
 
-        if updates:
-            await self._lightrag_stores.doc_status.upsert(updates)
-        return len(updates)
-
-    async def alist_failed_docs(self) -> list[dict[str, Any]]:
-        """Return all documents currently in DocStatus.FAILED for this workspace."""
-        self._ensure_initialized()
+    async def _iter_failed_doc_pages(self) -> AsyncIterator[list[dict[str, Any]]]:
+        """Yield full failed-document presentation rows one bounded page at a time."""
         if self._lightrag_stores is None:
-            return []
+            return
 
         from lightrag.base import DocStatus
 
-        try:
-            failed = await self._lightrag_stores.docs_by_status(DocStatus.FAILED)
-        except Exception as exc:
-            logger.warning("Failed to query FAILED docs: %s", exc)
-            return []
+        async for scheduled in self._lightrag_stores.iter_doc_status_pages((DocStatus.FAILED,)):
+            doc_ids = list(scheduled)
+            full_rows = await self._lightrag_stores.get_full_doc_statuses(doc_ids)
+            missing = set(doc_ids).difference(full_rows)
+            if missing:
+                raise RuntimeError(
+                    f"document-status rows disappeared during failed listing: {sorted(missing)}"
+                )
+            yield [
+                {
+                    "doc_id": doc_id,
+                    "file_path": full_rows[doc_id].file_path or "",
+                    "error": full_rows[doc_id].error_msg or full_rows[doc_id].content_summary,
+                    "updated_at": str(full_rows[doc_id].updated_at),
+                }
+                for doc_id in doc_ids
+            ]
 
-        return [
-            {
-                "doc_id": doc_id,
-                "file_path": getattr(info, "file_path", "") or "",
-                "error": getattr(info, "error_msg", None) or getattr(info, "content_summary", ""),
-                "updated_at": str(getattr(info, "updated_at", "")),
-            }
-            for doc_id, info in (failed or {}).items()
-        ]
+    async def _iter_failed_docs(self) -> AsyncIterator[dict[str, Any]]:
+        async for page in self._iter_failed_doc_pages():
+            for entry in page:
+                yield entry
 
     async def aretry_failed_docs(self) -> dict[str, Any]:
-        """Re-ingest every FAILED document from its durable metadata contract."""
+        """Stream-reingest FAILED documents from their durable metadata contracts."""
         self._require_writer("failed-document retry")
-
-        failed = await self.alist_failed_docs()
-        if not failed:
-            return {"retried": 0, "succeeded": 0, "failed": 0, "results": []}
+        self._ensure_initialized()
 
         lr = self.lightrag
+        retried = 0
+        succeeded_count = 0
+        failed_count = 0
+        details_truncated = False
         succeeded: list[dict[str, Any]] = []
         still_failed: list[dict[str, Any]] = []
 
-        for entry in failed:
+        def record_succeeded(detail: dict[str, Any]) -> None:
+            nonlocal succeeded_count, details_truncated
+            succeeded_count += 1
+            if len(succeeded) < 100:
+                succeeded.append(detail)
+            else:
+                details_truncated = True
+
+        def record_failed(detail: dict[str, Any]) -> None:
+            nonlocal failed_count, details_truncated
+            failed_count += 1
+            if len(still_failed) < 100:
+                still_failed.append(detail)
+            else:
+                details_truncated = True
+
+        async for entry in self._iter_failed_docs():
+            retried += 1
             doc_id = entry["doc_id"]
             if self._metadata_index is None:
-                still_failed.append({"doc_id": doc_id, "reason": "source metadata unavailable"})
+                record_failed({"doc_id": doc_id, "reason": "source metadata unavailable"})
                 continue
 
             try:
                 metadata = await self._metadata_index.get(doc_id)
             except Exception:
                 logger.warning("Failed to load retry metadata for doc_id=%s", doc_id)
-                still_failed.append({"doc_id": doc_id, "reason": "source metadata unavailable"})
+                record_failed({"doc_id": doc_id, "reason": "source metadata unavailable"})
                 continue
 
             source_uri = metadata.get("source_uri") if metadata else None
             download_locator = metadata.get("download_locator") if metadata else None
             stored_filename = metadata.get("filename") if metadata else None
             if not isinstance(source_uri, str) or not source_uri:
-                still_failed.append({"doc_id": doc_id, "reason": "source metadata incomplete"})
+                record_failed({"doc_id": doc_id, "reason": "source metadata incomplete"})
                 continue
             if not isinstance(download_locator, str) or not download_locator:
-                still_failed.append({"doc_id": doc_id, "reason": "source metadata incomplete"})
+                record_failed({"doc_id": doc_id, "reason": "source metadata incomplete"})
                 continue
             if not isinstance(stored_filename, str) or not stored_filename:
-                still_failed.append({"doc_id": doc_id, "reason": "source metadata incomplete"})
+                record_failed({"doc_id": doc_id, "reason": "source metadata incomplete"})
                 continue
 
             try:
                 display_filename = _retry_display_filename(stored_filename)
                 self._validate_retry_source_contract(source_uri, download_locator)
             except OSError, TypeError, ValueError:
-                still_failed.append({"doc_id": doc_id, "reason": "source metadata invalid"})
+                record_failed({"doc_id": doc_id, "reason": "source metadata invalid"})
                 continue
 
             try:
@@ -1834,11 +1832,11 @@ class WorkspaceRag:
                 )
                 processed = result.get("processed")
                 if result.get("errors") or (isinstance(processed, int | float) and processed < 1):
-                    still_failed.append({"doc_id": doc_id, "reason": "retry ingestion failed"})
+                    record_failed({"doc_id": doc_id, "reason": "retry ingestion failed"})
                     continue
                 replacement_doc_ids = self._retry_result_doc_ids(result)
                 if not replacement_doc_ids:
-                    still_failed.append({"doc_id": doc_id, "reason": "retry ingestion failed"})
+                    record_failed({"doc_id": doc_id, "reason": "retry ingestion failed"})
                     continue
                 if doc_id not in replacement_doc_ids:
                     if lr is None:
@@ -1864,12 +1862,12 @@ class WorkspaceRag:
                         logger.warning(
                             "Old retry metadata cleanup incomplete for doc_id=%s", doc_id
                         )
-                succeeded.append(
+                record_succeeded(
                     {"doc_id": doc_id, "file_path": entry.get("file_path", ""), "result": result}
                 )
             except Exception:
                 logger.warning("Retry failed for doc_id=%s", doc_id)
-                still_failed.append(
+                record_failed(
                     {
                         "doc_id": doc_id,
                         "file_path": entry.get("file_path", ""),
@@ -1877,12 +1875,15 @@ class WorkspaceRag:
                     }
                 )
 
+        if retried == 0:
+            return {"retried": 0, "succeeded": 0, "failed": 0, "results": []}
         return {
-            "retried": len(failed),
-            "succeeded": len(succeeded),
-            "failed": len(still_failed),
+            "retried": retried,
+            "succeeded": succeeded_count,
+            "failed": failed_count,
             "succeeded_docs": succeeded,
             "failed_docs": still_failed,
+            "details_truncated": details_truncated,
         }
 
     @staticmethod
@@ -2075,8 +2076,8 @@ class WorkspaceRag:
         for identifier in identifiers:
             ctx = await collect_deletion_context(
                 identifier=identifier,
-                lightrag=self._lightrag,
                 metadata_index=self._metadata_index,
+                doc_status_lookup=self._doc_status_lookup,
             )
             if dry_run:
                 results.append(

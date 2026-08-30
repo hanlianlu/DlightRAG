@@ -23,6 +23,10 @@ from dlightrag.adapters.mcp.server import (
 from dlightrag.application.access import AccessAction
 from dlightrag.application.answer_runs.capability import answer_image_capability_summary
 from dlightrag.application.corpus_admin import (
+    FILE_PANEL_PAGE_DEFAULT_LIMIT,
+    FILE_PANEL_PAGE_MAX_LIMIT,
+    FilePanelCursorError,
+    FilePanelPageRequest,
     SourceType,
     WorkspaceCatalogPageRequest,
     ingest_spec_from_payload,
@@ -410,7 +414,8 @@ async def cancel_ingest_job_tool(
 @mcp_app.tool(
     name="list_files",
     description=(
-        "List documents ingested in one workspace. Response returns files, count, and workspace."
+        "List one bounded page of documents in a workspace. Response returns files, count, "
+        "workspace, next_cursor, and fetched_rows."
     ),
     annotations=ToolAnnotations(read_only_hint=True),
 )
@@ -418,6 +423,18 @@ async def list_files_tool(
     workspace: Annotated[
         str | None,
         Field(default=None, description="Workspace to list files from. Omit for default."),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=FILE_PANEL_PAGE_MAX_LIMIT,
+            description="Maximum files in this page.",
+        ),
+    ] = FILE_PANEL_PAGE_DEFAULT_LIMIT,
+    cursor: Annotated[
+        str | None,
+        Field(default=None, min_length=1, max_length=1024, description="Opaque next cursor."),
     ] = None,
 ) -> dict[str, Any]:
     args = ListFilesInput.model_validate(locals())
@@ -428,8 +445,33 @@ async def list_files_tool(
         workspace_name,
         application=application,
     )
-    files = await application.corpora.list_ingested_files(workspace_name)
-    return {"files": files, "count": len(files), "workspace": workspace_name}
+    try:
+        decoded = (
+            application.corpora.file_panel_cursor_codec.decode(args.cursor)
+            if args.cursor is not None
+            else None
+        )
+        if decoded is not None and decoded.workspace != workspace_name:
+            raise FilePanelCursorError("file-panel cursor belongs to another workspace")
+        if decoded is not None and decoded.view != "processed":
+            raise FilePanelCursorError("file-panel cursor belongs to another view")
+        page = FilePanelPageRequest(limit=args.limit, cursor=decoded)
+    except (FilePanelCursorError, ValueError) as exc:
+        raise ValueError(str(exc)) from None
+    snapshot = await application.corpora.file_panel_snapshot(workspace_name, page=page)
+    files = snapshot["files"]
+    next_cursor = snapshot["next_cursor"]
+    return {
+        "files": files,
+        "count": len(files),
+        "workspace": workspace_name,
+        "next_cursor": (
+            application.corpora.file_panel_cursor_codec.encode(next_cursor)
+            if next_cursor is not None
+            else None
+        ),
+        "fetched_rows": snapshot["fetched_rows"],
+    }
 
 
 @mcp_app.tool(

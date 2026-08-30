@@ -3,7 +3,7 @@
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -52,6 +52,52 @@ async def test_get_full_docs_empty_input_skips_storage() -> None:
 
     assert await stores.get_full_docs([]) == []
     fake.full_docs.get_by_ids.assert_not_awaited()
+
+
+async def test_status_pages_use_strict_keyset_paging() -> None:
+    from lightrag.base import CURSOR_END, CURSOR_START, CursorAfter, DocStatus
+
+    fake = FakeLightRAG()
+    fake.doc_status = AsyncMock()
+    cursor = CursorAfter("next")
+    fake.doc_status.get_docs_by_statuses_page.side_effect = [
+        SimpleNamespace(docs={"doc-1": object()}, next_position=cursor),
+        SimpleNamespace(docs={"doc-2": object()}, next_position=CURSOR_END),
+    ]
+    stores = _stores(fake)
+
+    pages = [
+        page async for page in stores.iter_doc_status_pages((DocStatus.PROCESSED,), page_size=1)
+    ]
+
+    assert [list(page) for page in pages] == [["doc-1"], ["doc-2"]]
+    assert fake.doc_status.get_docs_by_statuses_page.await_args_list == [
+        call(
+            [DocStatus.PROCESSED],
+            limit=1,
+            position=CURSOR_START,
+            strict=True,
+        ),
+        call(
+            [DocStatus.PROCESSED],
+            limit=1,
+            position=cursor,
+            strict=True,
+        ),
+    ]
+
+
+async def test_full_doc_statuses_use_strict_batch_hydration() -> None:
+    fake = FakeLightRAG()
+    fake.doc_status = AsyncMock()
+    expected = {"doc-1": object()}
+    fake.doc_status.get_full_docs_by_ids.return_value = expected
+    stores = _stores(fake)
+
+    result = await stores.get_full_doc_statuses(["doc-1"])
+
+    assert result == expected
+    fake.doc_status.get_full_docs_by_ids.assert_awaited_once_with(["doc-1"], strict=True)
 
 
 async def test_chunk_document_scope_index_is_owned_independently_of_bm25() -> None:

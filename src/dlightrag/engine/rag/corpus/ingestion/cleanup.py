@@ -3,9 +3,11 @@
 
 import logging
 from dataclasses import dataclass, field
-from inspect import isawaitable
 from pathlib import Path
 from typing import Any
+
+from dlightrag.engine.rag.corpus.contracts import DocStatusLookup
+from dlightrag.engine.rag.corpus.metadata_index import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -25,102 +27,84 @@ class DeletionContext:
 
 async def collect_deletion_context(
     identifier: str,
-    lightrag: Any = None,
-    metadata_index: Any = None,
+    *,
+    metadata_index: MetadataIndexProtocol | None,
+    doc_status_lookup: DocStatusLookup | None,
 ) -> DeletionContext:
-    """Find doc_id(s) for a file using LightRAG doc_status and metadata index.
+    """Resolve one deletion identifier through bounded indexed reads only.
 
-    Strategy order:
-    1. LightRAG doc_status - storage-agnostic lookup by file_path
-    2. Metadata index - filename-based lookup (PGMetadataIndex)
+    Identifiers are exact source locators, stored filenames, or status
+    ``file_path`` values. Bare stems are intentionally not expanded because
+    that is ambiguous and previously required corpus-wide status scans.
     """
     ctx = DeletionContext(identifier=identifier)
-    basename = Path(identifier).name
-    stem = Path(identifier).stem
+    normalized = str(identifier).strip()
+    if not normalized:
+        return ctx
+    basename = Path(normalized).name
 
-    # Strategy 1: LightRAG doc_status lookup (storage-agnostic)
-    if lightrag and hasattr(lightrag, "doc_status"):
-        doc_status = lightrag.doc_status
+    metadata_lookup_failed = False
+    status_lookup_failed = False
+
+    # An exact durable locator owns identity. A filename fallback is permitted
+    # only when the caller supplied a bare display name and exact resolution
+    # completed without error; failures must never widen deletion identity.
+    if metadata_index is not None:
         try:
-            # Try exact path match first
-            result = await doc_status.get_doc_by_file_path(identifier)
-
-            # get_doc_by_file_path may return a dict without 'id' field
-            # (LightRAG strips it).  Always extract file_path from it if present.
-            if isinstance(result, dict):
-                fp = result.get("file_path", "")
-                if fp:
-                    ctx.file_paths.add(fp)
-
-            # get_doc_by_file_path omits the primary-key id, so we must
-            # scan docs to find the doc_id.  This runs whenever doc_ids is
-            # still empty — for both relative and absolute identifiers.
-            # We also always scan FAILED docs to collect DUPLICATE records
-            # that share the same file_path, so the receipt is cleaned up
-            # alongside the original document.
-            if not ctx.doc_ids:
-                from lightrag.base import DocStatus
-
-                all_docs = await doc_status.get_docs_by_status(DocStatus.PROCESSED)
-                for d_id, doc_info in all_docs.items():
-                    fp = getattr(doc_info, "file_path", "") or ""
-                    stored_name = Path(fp).name
-                    stored_stem = Path(fp).stem
-
-                    if fp == identifier or stored_name == basename or stored_stem == stem:
-                        ctx.doc_ids.add(d_id)
-                        if fp:
-                            ctx.file_paths.add(fp)
-
-            # Collect DUPLICATE/FAILED receipts for the same file so they
-            # are removed together with the original document.
-            from lightrag.base import DocStatus
-
-            failed_docs = await doc_status.get_docs_by_status(DocStatus.FAILED)
-            for d_id, doc_info in failed_docs.items():
-                fp = getattr(doc_info, "file_path", "") or ""
-                stored_name = Path(fp).name
-                stored_stem = Path(fp).stem
-
-                if fp == identifier or stored_name == basename or stored_stem == stem:
-                    ctx.doc_ids.add(d_id)
-                    if fp:
-                        ctx.file_paths.add(fp)
-
-            if ctx.doc_ids or ctx.file_paths:
-                ctx.sources_used.append("doc_status")
-
-        except Exception as e:
-            logger.warning(f"LightRAG doc_status lookup failed for {identifier}: {e}")
-
-    # Strategy 2: Metadata index lookup, by exact location then by name
-    if metadata_index and not ctx.doc_ids:
-        try:
-            doc_ids = await metadata_index.find_by_download_locator(identifier)
-            if not doc_ids:
-                doc_ids = await metadata_index.find_by_filename(basename)
-            for d_id in doc_ids:
-                ctx.doc_ids.add(d_id)
-            if doc_ids and lightrag and hasattr(lightrag, "doc_status"):
-                try:
-                    await _add_doc_status_file_paths_for_doc_ids(ctx, lightrag.doc_status)
-                except Exception as exc:
-                    logger.debug(
-                        "Best-effort doc_status file path hydration failed: %s",
-                        exc,
-                        exc_info=True,
-                    )
-            if doc_ids:
+            ctx.doc_ids.update(await metadata_index.find_by_download_locator(normalized))
+            if ctx.doc_ids:
                 ctx.sources_used.append("metadata_index")
-        except Exception as e:
-            logger.warning(f"Metadata index lookup failed for {identifier}: {e}")
+        except Exception as exc:
+            metadata_lookup_failed = True
+            logger.warning("Metadata index lookup failed for %s: %s", identifier, exc)
+
+    async def merge_status_matches(*, file_paths: tuple[str, ...]) -> None:
+        nonlocal status_lookup_failed
+        if doc_status_lookup is None:
+            return
+        try:
+            matches = await doc_status_lookup.resolve_deletion_matches(
+                file_paths=file_paths,
+                doc_ids=tuple(sorted(ctx.doc_ids)),
+            )
+        except Exception as exc:
+            status_lookup_failed = True
+            logger.warning("Document status lookup failed for %s: %s", identifier, exc)
+            return
+        for match in matches:
+            ctx.doc_ids.add(match.doc_id)
+            if match.file_path:
+                ctx.file_paths.add(match.file_path)
+        if matches and "doc_status" not in ctx.sources_used:
+            ctx.sources_used.append("doc_status")
+
+    await merge_status_matches(file_paths=(normalized,))
+
+    if not ctx.doc_ids and normalized == basename and not metadata_lookup_failed:
+        if metadata_index is not None:
+            try:
+                ctx.doc_ids.update(await metadata_index.find_by_filename(basename))
+                if ctx.doc_ids:
+                    ctx.sources_used.append("metadata_index")
+            except Exception as exc:
+                metadata_lookup_failed = True
+                logger.warning("Metadata filename lookup failed for %s: %s", identifier, exc)
+        if not metadata_lookup_failed and not status_lookup_failed:
+            await merge_status_matches(file_paths=(basename,))
+
+    # A metadata locator can differ from the status file_path. Expand once on
+    # the exact hydrated paths to include duplicate receipts sharing identity.
+    duplicate_paths = tuple(sorted(ctx.file_paths.difference({normalized})))
+    if duplicate_paths and not status_lookup_failed:
+        await merge_status_matches(file_paths=duplicate_paths)
 
     logger.info(
-        f"Deletion context for {identifier}: "
-        f"doc_ids={len(ctx.doc_ids)}, "
-        f"file_paths={len(ctx.file_paths)}, sources={ctx.sources_used}"
+        "Deletion context for %s: doc_ids=%d, file_paths=%d, sources=%s",
+        identifier,
+        len(ctx.doc_ids),
+        len(ctx.file_paths),
+        ctx.sources_used,
     )
-
     return ctx
 
 
@@ -240,23 +224,6 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
                 logger.debug("Failed to scan parsed dir: %s", parsed_root, exc_info=True)
 
     return removed
-
-
-async def _add_doc_status_file_paths_for_doc_ids(ctx: DeletionContext, doc_status: Any) -> None:
-    from lightrag.base import DocStatus
-
-    for status in (DocStatus.PROCESSED, DocStatus.FAILED):
-        maybe_docs = doc_status.get_docs_by_status(status)
-        if isawaitable(maybe_docs):
-            maybe_docs = await maybe_docs
-        if not isinstance(maybe_docs, dict):
-            continue
-        docs = maybe_docs
-        for doc_id in ctx.doc_ids:
-            doc_info = docs.get(doc_id)
-            fp = getattr(doc_info, "file_path", "") if doc_info is not None else ""
-            if fp:
-                ctx.file_paths.add(fp)
 
 
 def _is_remote_source_path(path: str) -> bool:

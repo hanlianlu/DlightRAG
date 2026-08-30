@@ -35,6 +35,7 @@ from dlightrag.application.config import (
     set_config,
 )
 from dlightrag.application.corpus_admin import (
+    FilePanelCursor,
     FilePanelCursorCodec,
     IngestSpec,
     MetadataSearchCursor,
@@ -153,7 +154,6 @@ def mock_service():
     service.aanswer = AsyncMock(
         return_value=AnswerResult(answer="The answer is 42", contexts={"chunks": []})
     )
-    service.alist_ingested_files = AsyncMock(return_value=[])
     service.adelete_files = AsyncMock(return_value=[{"status": "deleted"}])
     return service
 
@@ -222,7 +222,6 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
         child_roster_cursor_codec=ChildRosterCursorCodec(b"api-server-children"),
     )
     corpora.cancel_ingest_job = AsyncMock()
-    corpora.list_ingested_files = mock_service.alist_ingested_files
     corpora.delete_files = mock_service.adelete_files
     corpora.list_workspaces = AsyncMock(return_value=["default"])
     corpora.alist_workspace_records = AsyncMock(
@@ -238,7 +237,9 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
     )
     corpora.create_workspace = AsyncMock()
     corpora.reset = AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0})
-    corpora.list_failed_docs = AsyncMock(return_value=[])
+    corpora.failed_file_snapshot = AsyncMock(
+        return_value={"failed": [], "next_cursor": None, "fetched_rows": 0}
+    )
     corpora.retry_failed_docs = AsyncMock(return_value={})
     corpora.prepare_source_download = AsyncMock()
     corpora.get_visual_asset = AsyncMock()
@@ -361,7 +362,7 @@ class TestWorkspaceLifecycleAPI:
         resp = await client.get("/files")
 
         assert resp.status_code == 200
-        mock_application.corpora.list_ingested_files.assert_awaited_once_with("app_ws")
+        assert mock_application.corpora.file_panel_snapshot.await_args.args == ("app_ws",)
 
     async def test_list_workspaces_returns_records(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
@@ -2181,9 +2182,12 @@ class TestFilesEndpoint:
     async def test_list_files_count_matches(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.corpora.list_ingested_files = AsyncMock(
-            return_value=["a.pdf", "b.pdf", "c.pdf"]
-        )
+        mock_application.corpora.file_panel_snapshot.return_value = {
+            "files": [{"doc_id": value} for value in ("a", "b", "c")],
+            "pipeline_status": {},
+            "next_cursor": None,
+            "fetched_rows": 3,
+        }
         app.state.application = mock_application
         resp = await client.get("/files")
         assert resp.status_code == 200
@@ -2195,10 +2199,64 @@ class TestFilesEndpoint:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         app.state.application = mock_application
-        resp = await client.get("/files?workspace=project-z")
+        resp = await client.get("/files?workspace=project-z&limit=7")
         assert resp.status_code == 200
-        call_kwargs = mock_application.corpora.list_ingested_files.call_args
-        assert call_kwargs[0][0] == "project_z"  # normalized: hyphens → underscores
+        call_kwargs = mock_application.corpora.file_panel_snapshot.call_args
+        assert call_kwargs.args[0] == "project_z"  # normalized: hyphens → underscores
+        assert call_kwargs.kwargs["page"].limit == 7
+
+    async def test_list_files_encodes_next_cursor_and_rejects_tamper(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
+    ) -> None:
+        next_cursor = FilePanelCursor(
+            workspace="default",
+            updated_at=datetime.datetime(2026, 8, 27),
+            doc_id="doc-1",
+        )
+        mock_application.corpora.file_panel_snapshot.return_value = {
+            "files": [{"doc_id": "doc-1"}],
+            "pipeline_status": {},
+            "next_cursor": next_cursor,
+            "fetched_rows": 2,
+        }
+        app.state.application = mock_application
+
+        response = await client.get("/files?limit=1")
+        tampered = await client.get("/files?cursor=not-a-cursor")
+        failed_cursor = mock_application.corpora.file_panel_cursor_codec.encode(
+            FilePanelCursor(
+                workspace="default",
+                updated_at=None,
+                doc_id="failed-1",
+                view="failed",
+            )
+        )
+        cross_view = await client.get("/files", params={"cursor": failed_cursor})
+
+        assert response.status_code == 200
+        assert response.json()["next_cursor"] == (
+            mock_application.corpora.file_panel_cursor_codec.encode(next_cursor)
+        )
+        assert response.json()["fetched_rows"] == 2
+        assert tampered.status_code == 422
+        assert cross_view.status_code == 422
+
+    async def test_failed_files_use_bounded_snapshot(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
+    ) -> None:
+        mock_application.corpora.failed_file_snapshot.return_value = {
+            "failed": [{"doc_id": "failed-1", "error": "parser failed"}],
+            "next_cursor": None,
+            "fetched_rows": 1,
+        }
+        app.state.application = mock_application
+
+        response = await client.get("/files/failed?limit=1")
+
+        assert response.status_code == 200
+        assert response.json()["failed"][0]["error"] == "parser failed"
+        assert response.json()["fetched_rows"] == 1
+        assert mock_application.corpora.failed_file_snapshot.await_args.kwargs["page"].limit == 1
 
 
 # ---------------------------------------------------------------------------

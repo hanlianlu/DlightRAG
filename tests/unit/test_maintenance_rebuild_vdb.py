@@ -112,6 +112,15 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
         )
     )
     stores = AsyncMock()
+
+    async def _status_pages(*_args, **_kwargs):
+        yield {"doc-1": object(), "doc-2": object()}
+
+    stores.iter_doc_status_pages = _status_pages
+    stores.get_full_doc_statuses.return_value = {
+        "doc-1": SimpleNamespace(chunks_list=["chunk-a", "doc-1-mm-drawing-000"]),
+        "doc-2": SimpleNamespace(chunks_list=[]),
+    }
     stores.get_full_doc.side_effect = [
         {"sidecar_location": "file:///tmp/doc-1.parsed"},
         {"sidecar_location": "file:///tmp/doc-2.parsed"},
@@ -151,6 +160,7 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
     )
 
     assert stats == {"processed_docs": 1, "skipped_docs": 1}
+    stores.get_full_doc_statuses.assert_awaited_once_with(["doc-1", "doc-2"])
     build_document_embedder.assert_called_once_with(settings, embedder, image_enabled=True)
     assert calls == [
         {

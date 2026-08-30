@@ -23,7 +23,11 @@ from dlightrag.application.config import (
     AccessControlRuleConfig,
     DlightragConfig,
 )
-from dlightrag.application.corpus_admin import IngestSpec, WorkspaceCatalogPage
+from dlightrag.application.corpus_admin import (
+    FilePanelCursorCodec,
+    IngestSpec,
+    WorkspaceCatalogPage,
+)
 from dlightrag.application.retrieval import RetrieveResponse as ServiceResponse
 from dlightrag.engine.runtime import AnswerRunRecord
 from tests.config_helpers import mutate_config, replace_config
@@ -77,7 +81,15 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
         start_ingest_job=AsyncMock(),
         get_ingest_job=AsyncMock(),
         cancel_ingest_job=AsyncMock(),
-        list_ingested_files=AsyncMock(return_value=[]),
+        file_panel_cursor_codec=FilePanelCursorCodec(b"mcp-file-cursor-secret"),
+        file_panel_snapshot=AsyncMock(
+            return_value={
+                "files": [],
+                "pipeline_status": {},
+                "next_cursor": None,
+                "fetched_rows": 0,
+            }
+        ),
         delete_files=AsyncMock(return_value=[]),
     )
     application.retrieval = SimpleNamespace(
@@ -1100,7 +1112,12 @@ async def test_mcp_delete_files_forwards_dry_run(mock_mcp_application) -> None:
 async def test_mcp_file_tools_canonicalize_display_workspace_before_access_and_manager(
     mock_mcp_application,
 ) -> None:
-    mock_mcp_application.corpora.list_ingested_files.return_value = []
+    mock_mcp_application.corpora.file_panel_snapshot.return_value = {
+        "files": [],
+        "pipeline_status": {},
+        "next_cursor": None,
+        "fetched_rows": 0,
+    }
     mock_mcp_application.corpora.delete_files.return_value = []
 
     listed = await mcp_server.mcp_app.call_tool(
@@ -1114,7 +1131,8 @@ async def test_mcp_file_tools_canonicalize_display_workspace_before_access_and_m
 
     assert _tool_json(listed)["workspace"] == "finance_reports"
     assert _tool_json(deleted)["workspace"] == "finance_reports"
-    mock_mcp_application.corpora.list_ingested_files.assert_awaited_once_with("finance_reports")
+    mock_mcp_application.corpora.file_panel_snapshot.assert_awaited_once()
+    assert mock_mcp_application.corpora.file_panel_snapshot.await_args.args == ("finance_reports",)
     mock_mcp_application.corpora.delete_files.assert_awaited_once_with(
         "finance_reports",
         filenames=["report.pdf"],
