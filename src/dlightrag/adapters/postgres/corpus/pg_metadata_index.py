@@ -24,7 +24,6 @@ from dlightrag.engine.rag.retrieval import MetadataFilter
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     METADATA_FIELD_IDS,
-    canonical_metadata_key,
 )
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
 
@@ -97,8 +96,8 @@ def _index_clause(field_id: str, pg_type: str, indexed: bool) -> str | None:
         # ``title`` is unbounded TEXT: a plain B-tree on the value can fail on
         # values larger than one index page (~2704 bytes). A fixed-width MD5 of
         # the canonical value keeps the index key bounded; the equality recheck
-        # in ``_match_conditions`` makes the match exact regardless of hash
-        # collisions.
+        # in ``metadata_match_conditions`` makes the match exact regardless of
+        # hash collisions.
         return f" (workspace, MD5({_canonical(field_id)}))"
     if _is_string_pg_type(pg_type):
         return f" (workspace, {_canonical(field_id)})"
@@ -142,6 +141,11 @@ WHERE custom_metadata_search
 
 _METADATA_TABLE = "dlightrag_doc_metadata"
 _SEARCH_COLUMN = "custom_metadata_search"
+
+# Public identities the other corpus adapters reuse so every retrieval leg
+# matches against the same table and column.
+METADATA_TABLE = _METADATA_TABLE
+METADATA_SEARCH_COLUMN = _SEARCH_COLUMN
 
 
 def _metadata_partition_spec() -> PartitionedTableSpec:
@@ -411,8 +415,7 @@ _FIELD_SCHEMA = _build_field_schema()
 # who omits the extension still hits the functional workspace-leading indexes on
 # both.
 _FILENAME_EXACT_CONDITION = (
-    "(LOWER(TRIM(filename)) = LOWER(TRIM(${idx})) "
-    "OR LOWER(TRIM(filename_stem)) = LOWER(TRIM(${idx}))) "
+    "({canonical_filename} = {canonical_value} OR {canonical_stem} = {canonical_value}) "
 )
 
 
@@ -422,7 +425,7 @@ _FILENAME_EXACT_CONDITION = (
 # ``LIKE`` is the one shape the planner recognizes against the pg_trgm GIN
 # expression index, while the ``ESCAPE`` clause keeps caller ``%``, ``_``, and
 # ``\`` characters literal.
-_FILENAME_CONTAINS_CONDITION = "LOWER(TRIM(filename)) LIKE ${idx} ESCAPE '\\'"
+_FILENAME_CONTAINS_CONDITION = "{canonical_filename} LIKE LOWER(${idx}) ESCAPE '\\'"
 
 
 def like_contains_pattern(value: str) -> str:
@@ -430,40 +433,78 @@ def like_contains_pattern(value: str) -> str:
 
     ``%``, ``_``, and ``\`` in the value stay literal characters: they are
     escaped against the ``ESCAPE '\'`` clause, and only this helper's own
-    ``%`` framing acts as a wildcard. The value is lowercased here so it folds
-    like the column side's ``LOWER(TRIM(filename))``.
+    ``%`` framing acts as a wildcard. PostgreSQL lowercases the bound pattern
+    in the predicate so non-ASCII folding uses the same database collation as
+    the indexed ``LOWER(TRIM(filename))`` expression.
     """
-    escaped = value.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
 
 
 _FILENAME_MODES = frozenset({"exact", "contains"})
 
 
-def _match_conditions(
+def _filename_condition(
+    column_prefix: str,
+    value: str,
+    *,
+    filename_mode: str,
+    idx: int,
+) -> tuple[str, Any]:
+    """Render the one filename clause the selected mode demands."""
+    canonical_filename = _canonical(f"{column_prefix}filename")
+    if filename_mode == "contains":
+        condition = _FILENAME_CONTAINS_CONDITION.format(
+            canonical_filename=canonical_filename, idx=idx
+        )
+        return condition, like_contains_pattern(value)
+    condition = _FILENAME_EXACT_CONDITION.format(
+        canonical_filename=canonical_filename,
+        canonical_stem=_canonical(f"{column_prefix}filename_stem"),
+        canonical_value=_canonical(f"${idx}"),
+    )
+    return condition, value
+
+
+def metadata_match_conditions(
     workspace: str,
     filters: MetadataFilter,
     *,
     filename_mode: str = "exact",
+    start_index: int = 1,
+    alias: str | None = None,
 ) -> tuple[list[str], list[Any]]:
     """Build the shared workspace-and-filter conditions for one metadata match.
+
+    Every retrieval leg (bounded scope preflight, exact/HNSW vector, BM25, and
+    the graph-scoped chunk read) renders its predicates through this one
+    builder, so their semantics can never drift apart. ``start_index`` lets
+    each statement place the conditions after its own leading parameters, and
+    ``alias`` qualifies columns when the conditions run in a subquery against
+    an aliased metadata table.
 
     ``filename_mode`` selects the filename clause: ``exact`` (name or stem
     equality) or ``contains`` (literal substring). The widened clause is chosen
     once by the caller, so the internal full-set query and a paged traversal
     share identical SQL semantics instead of drifting apart.
+
+    All custom key/value equalities collapse into one canonical JSONB
+    containment object evaluated through the same SQL function the write path
+    uses, so strings, numbers, booleans, nulls, and nested text representations
+    match the storage contract exactly. No raw custom scan runs on this path.
     """
     if filename_mode not in _FILENAME_MODES:
         raise ValueError("metadata match filename mode is invalid")
-    conditions: list[str] = ["workspace = $1"]
+    column_prefix = f"{alias}." if alias else ""
+    conditions: list[str] = [f"{column_prefix}workspace = ${start_index}"]
     params: list[Any] = [workspace]
-    idx = 2
+    idx = start_index + 1
 
     for attr in ("file_extension", "author"):
         value = getattr(filters, attr, None)
         if value is None:
             continue
-        conditions.append(f"{_canonical(attr)} = {_canonical(f'${idx}')}")
+        conditions.append(f"{_canonical(f'{column_prefix}{attr}')} = {_canonical(f'${idx}')}")
         params.append(value)
         idx += 1
 
@@ -472,46 +513,43 @@ def _match_conditions(
         # value, so the predicate carries the MD5 equality for the index plus
         # the full equality recheck that makes matches exact on hash collision.
         conditions.append(
-            f"MD5({_canonical('title')}) = MD5({_canonical(f'${idx}')}) "
-            f"AND {_canonical('title')} = {_canonical(f'${idx}')}"
+            f"MD5({_canonical(f'{column_prefix}title')}) = MD5({_canonical(f'${idx}')}) "
+            f"AND {_canonical(f'{column_prefix}title')} = {_canonical(f'${idx}')}"
         )
         params.append(filters.title)
         idx += 1
 
     if filters.filename:
-        template = (
-            _FILENAME_CONTAINS_CONDITION
-            if filename_mode == "contains"
-            else _FILENAME_EXACT_CONDITION
+        condition, param = _filename_condition(
+            column_prefix,
+            filters.filename,
+            filename_mode=filename_mode,
+            idx=idx,
         )
-        conditions.append(template.format(idx=idx))
-        params.append(
-            like_contains_pattern(filters.filename)
-            if filename_mode == "contains"
-            else filters.filename
-        )
+        conditions.append(condition)
+        params.append(param)
         idx += 1
 
     # Date range
     if filters.creation_date_from:
-        conditions.append(f"creation_date >= ${idx}")
+        conditions.append(f"{column_prefix}creation_date >= ${idx}")
         params.append(filters.creation_date_from)
         idx += 1
     if filters.creation_date_to:
-        conditions.append(f"creation_date <= ${idx}")
+        conditions.append(f"{column_prefix}creation_date <= ${idx}")
         params.append(filters.creation_date_to)
         idx += 1
 
-    # JSONB values are stored verbatim, so the canonical fold happens here
-    # rather than being baked into what was written. Keys were folded on the
-    # way in, so the same fold applies to the key the caller filters on.
-    for key, value in (filters.custom or {}).items():
+    # Custom key/value equalities are one canonical containment object: the
+    # bound JSONB folds keys and scalar/text representations through the same
+    # immutable SQL function the storage column was written with, so the
+    # comparison and the GIN jsonb_path_ops index agree by construction.
+    if filters.custom:
         conditions.append(
-            f"{_canonical(f'custom_metadata ->> ${idx}')} = {_canonical(f'${idx + 1}')}"
+            f"{column_prefix}{_SEARCH_COLUMN} @> dlightrag_canonical_custom_metadata(${idx}::jsonb)"
         )
-        params.append(canonical_metadata_key(key))
-        params.append(value if isinstance(value, str) else json.dumps(value))
-        idx += 2
+        params.append(json.dumps(filters.custom))
+        idx += 1
 
     return conditions, params
 
@@ -591,8 +629,13 @@ class PGMetadataIndex(PostgresOperationRunner):
         return (await self._run(_operation)) != "UPDATE 0"
 
     async def query(self, filters: MetadataFilter) -> list[str]:
-        """Query for doc_ids matching the given filters."""
-        conditions, params = _match_conditions(
+        """Query for doc_ids matching the given filters.
+
+        Explicit metadata-search/admin API only: the retrieval runtime path
+        resolves scopes through ``MetadataScopeStore.resolve_scope`` and never
+        materializes a document-id set on the request path.
+        """
+        conditions, params = metadata_match_conditions(
             self._workspace,
             filters,
             filename_mode="exact",
@@ -604,7 +647,7 @@ class PGMetadataIndex(PostgresOperationRunner):
         # The caller named a file the corpus does not carry verbatim. A planner
         # cannot know whether a name is complete, and a human rarely types one,
         # so widen that single clause rather than returning nothing.
-        conditions, params = _match_conditions(
+        conditions, params = metadata_match_conditions(
             self._workspace,
             filters,
             filename_mode="contains",

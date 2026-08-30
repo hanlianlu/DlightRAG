@@ -4,13 +4,25 @@
 from unittest.mock import AsyncMock
 
 from dlightrag.adapters.postgres.corpus.corpus_vectors import PGFilteredVectorSearch
-from dlightrag.engine.rag.retrieval import MetadataScope
+from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.filtering import (
     FilteredChunkStore,
     FilteredVectorStorage,
     _active_filter,
     metadata_filter_scope,
 )
+
+
+def _scope(
+    *, candidate_count: int, candidate_count_exact: bool = True, **overrides: object
+) -> MetadataScope:
+    return MetadataScope(
+        filters=overrides.get("filters", MetadataFilter(filename="x.pdf")),  # type: ignore[arg-type]
+        filename_mode=overrides.get("filename_mode", "exact"),  # type: ignore[arg-type]
+        doc_exists=overrides.get("doc_exists", True),  # type: ignore[arg-type]
+        candidate_count=candidate_count,
+        candidate_count_exact=candidate_count_exact,
+    )
 
 
 class _FakeDB:
@@ -55,7 +67,7 @@ _FakePGVectorStorage.__name__ = "PGVectorStorage"
 
 
 async def test_empty_scope_is_active_filter() -> None:
-    empty = MetadataScope(doc_ids=frozenset(), chunk_count=0)
+    empty = _scope(candidate_count=0, doc_exists=False)
     async with metadata_filter_scope(empty):
         assert _active_filter.get() == empty
 
@@ -85,7 +97,7 @@ async def test_filtered_query_uses_query_embedding_context() -> None:
         filtered_search=filtered_search,
     )
 
-    async with metadata_filter_scope(MetadataScope(doc_ids=frozenset({"doc-1"}), chunk_count=3)):
+    async with metadata_filter_scope(_scope(candidate_count=3)):
         await wrapper.query("question", top_k=5)
 
     embedding_func.assert_awaited_once_with(["question"], context="query")
@@ -97,7 +109,7 @@ async def test_large_candidate_pg_search_places_distance_filter_outside_cte() ->
 
     await search.search(
         [0.1, 0.2, 0.3],
-        scope=MetadataScope(doc_ids=frozenset({"doc-1", "doc-2"}), chunk_count=9_000),
+        scope=_scope(candidate_count=9_000, candidate_count_exact=False),
         top_k=5,
     )
 
@@ -109,8 +121,8 @@ async def test_large_candidate_pg_search_places_distance_filter_outside_cte() ->
     assert "WITH nearest_results AS MATERIALIZED" in storage.db.sql
     assert "FROM nearest_results" in storage.db.sql
     cte_sql, outer_sql = storage.db.sql.split("FROM nearest_results", maxsplit=1)
-    assert "score > $4" not in cte_sql
-    assert "score > $4" in outer_sql
+    assert "score > $5" not in cte_sql
+    assert "score > $5" in outer_sql
 
 
 class _FakeChunkKV:
@@ -127,13 +139,29 @@ class _FakeChunkKV:
         return [self._rows.get(chunk_id) for chunk_id in ids]
 
 
+class _FakeScopedReader:
+    """Seam double: returns the positional list a scoped database read would."""
+
+    def __init__(self, rows: dict[str, dict[str, object]]) -> None:
+        self._rows = rows
+        self.calls: list[tuple[MetadataScope, list[str]]] = []
+
+    async def read_scoped(
+        self,
+        scope: MetadataScope,
+        chunk_ids: list[str],
+    ) -> list[dict[str, object] | None]:
+        self.calls.append((scope, list(chunk_ids)))
+        return [self._rows.get(chunk_id) for chunk_id in chunk_ids]
+
+
 def _chunk(chunk_id: str, doc_id: str | None) -> dict[str, object]:
     return {"id": chunk_id, "content": chunk_id, "full_doc_id": doc_id}
 
 
 async def test_chunk_store_passes_through_without_scope() -> None:
     kv = _FakeChunkKV({"c1": _chunk("c1", "doc-1"), "c2": _chunk("c2", "doc-2")})
-    store = FilteredChunkStore(original=kv)
+    store = FilteredChunkStore(original=kv, scoped_reader=_FakeScopedReader({}))
 
     rows = await store.get_by_ids(["c1", "c2"])
 
@@ -141,9 +169,10 @@ async def test_chunk_store_passes_through_without_scope() -> None:
 
 
 async def test_chunk_store_nulls_out_of_scope_rows() -> None:
+    reader = _FakeScopedReader({"c1": _chunk("c1", "doc-1")})
     kv = _FakeChunkKV({"c1": _chunk("c1", "doc-1"), "c2": _chunk("c2", "doc-2")})
-    store = FilteredChunkStore(original=kv)
-    scope = MetadataScope(doc_ids=frozenset({"doc-1"}), chunk_count=1)
+    store = FilteredChunkStore(original=kv, scoped_reader=reader)
+    scope = _scope(candidate_count=1)
 
     async with metadata_filter_scope(scope) as stats:
         rows = await store.get_by_ids(["c1", "c2"])
@@ -152,13 +181,16 @@ async def test_chunk_store_nulls_out_of_scope_rows() -> None:
     assert rows[0] is not None and rows[0]["id"] == "c1"
     assert rows[1] is None
     assert stats.kg_chunks_dropped == 1
+    assert stats.graph_strategy is True
+    assert reader.calls == [(scope, ["c1", "c2"])]
 
 
 async def test_chunk_store_drops_rows_without_document_attribution() -> None:
     kv = _FakeChunkKV({"c1": _chunk("c1", None)})
-    store = FilteredChunkStore(original=kv)
+    reader = _FakeScopedReader({})  # no row for c1: missing/out-of-scope
+    store = FilteredChunkStore(original=kv, scoped_reader=reader)
 
-    async with metadata_filter_scope(MetadataScope(doc_ids=frozenset({"doc-1"}), chunk_count=1)):
+    async with metadata_filter_scope(_scope(candidate_count=1)):
         rows = await store.get_by_ids(["c1"])
 
     assert rows == [None]
@@ -167,13 +199,28 @@ async def test_chunk_store_drops_rows_without_document_attribution() -> None:
 async def test_chunk_store_still_requests_every_id() -> None:
     """Filtering must not shorten the request: callers zip results against their ids."""
     kv = _FakeChunkKV({"c1": _chunk("c1", "doc-1"), "c2": _chunk("c2", "doc-2")})
-    store = FilteredChunkStore(original=kv)
+    reader = _FakeScopedReader({"c1": _chunk("c1", "doc-1")})
+    store = FilteredChunkStore(original=kv, scoped_reader=reader)
 
-    async with metadata_filter_scope(MetadataScope(doc_ids=frozenset({"doc-1"}), chunk_count=1)):
+    async with metadata_filter_scope(_scope(candidate_count=1)):
         rows = await store.get_by_ids(["c1", "c2"])
 
-    assert kv.requested == [["c1", "c2"]]
+    assert kv.requested == []
+    assert reader.calls[0][1] == ["c1", "c2"]
     assert len(rows) == 2
+
+
+async def test_chunk_store_requires_a_reader_under_scope() -> None:
+    kv = _FakeChunkKV({"c1": _chunk("c1", "doc-1")})
+    store = FilteredChunkStore(original=kv)
+
+    async with metadata_filter_scope(_scope(candidate_count=1)):
+        try:
+            await store.get_by_ids(["c1"])
+        except RuntimeError as exc:
+            assert "scoped chunk reader" in str(exc)
+        else:
+            raise AssertionError("a scoped read without a reader must fail loudly")
 
 
 async def test_chunk_store_proxies_unknown_attributes() -> None:
@@ -186,3 +233,4 @@ async def test_chunk_store_proxies_unknown_attributes() -> None:
 async def test_stats_stay_zero_without_scope() -> None:
     async with metadata_filter_scope(None) as stats:
         assert stats.kg_chunks_dropped == 0
+        assert stats.graph_strategy is False

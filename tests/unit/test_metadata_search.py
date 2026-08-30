@@ -11,10 +11,9 @@ import pytest
 
 from dlightrag.adapters.postgres.corpus import pg_metadata_search
 from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
-    _FILENAME_CONTAINS_CONDITION,
-    _FILENAME_EXACT_CONDITION,
     PGMetadataIndex,
-    _match_conditions,
+    _filename_condition,
+    metadata_match_conditions,
 )
 from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
 from dlightrag.application.corpus_admin import (
@@ -170,18 +169,26 @@ def test_metadata_search_page_validation_and_cursor_invariants() -> None:
 def test_match_conditions_selects_the_filename_clause_by_mode() -> None:
     filters = MetadataFilter(filename="Quarterly Report")
 
-    exact_conditions, exact_params = _match_conditions("finance", filters, filename_mode="exact")
-    contains_conditions, contains_params = _match_conditions(
+    exact_conditions, exact_params = metadata_match_conditions(
+        "finance", filters, filename_mode="exact"
+    )
+    contains_conditions, contains_params = metadata_match_conditions(
         "finance", filters, filename_mode="contains"
     )
 
     assert exact_conditions[0] == "workspace = $1"
-    assert exact_conditions[1] == _FILENAME_EXACT_CONDITION.format(idx=2)
-    assert contains_conditions[1] == _FILENAME_CONTAINS_CONDITION.format(idx=2)
+    assert (
+        exact_conditions[1]
+        == _filename_condition("", "Quarterly Report", filename_mode="exact", idx=2)[0]
+    )
+    assert (
+        contains_conditions[1]
+        == _filename_condition("", "Quarterly Report", filename_mode="contains", idx=2)[0]
+    )
     assert exact_params == ["finance", "Quarterly Report"]
-    assert contains_params == ["finance", "%quarterly report%"]
+    assert contains_params == ["finance", "%Quarterly Report%"]
     with pytest.raises(ValueError, match="mode"):
-        _match_conditions("finance", filters, filename_mode="regex")
+        metadata_match_conditions("finance", filters, filename_mode="regex")
 
 
 async def test_query_keeps_exact_then_contains_fallback_semantics() -> None:
@@ -193,10 +200,16 @@ async def test_query_keeps_exact_then_contains_fallback_semantics() -> None:
 
     assert result == ["doc-2"]
     assert len(conn.fetches) == 2
-    assert _FILENAME_EXACT_CONDITION.format(idx=2) in conn.fetches[0][0]
-    assert _FILENAME_CONTAINS_CONDITION.format(idx=2) in conn.fetches[1][0]
+    assert (
+        _filename_condition("", "Quarterly Report", filename_mode="exact", idx=2)[0]
+        in conn.fetches[0][0]
+    )
+    assert (
+        _filename_condition("", "Quarterly Report", filename_mode="contains", idx=2)[0]
+        in conn.fetches[1][0]
+    )
     assert conn.fetches[0][1] == ("finance", "Quarterly Report")
-    assert conn.fetches[1][1] == ("finance", "%quarterly report%")
+    assert conn.fetches[1][1] == ("finance", "%Quarterly Report%")
 
 
 async def test_query_skips_the_widened_retry_when_exact_matches_or_no_filename() -> None:
@@ -261,8 +274,8 @@ async def test_page_store_uses_the_cursor_bound_mode_and_doc_id_keyset() -> None
     query, args = conn.fetches[0]
     assert "doc_id > $3" in query
     assert "ORDER BY doc_id ASC LIMIT $4" in query
-    assert _FILENAME_CONTAINS_CONDITION.format(idx=2) in query
-    assert args == ("finance", "%quarterly report%", "doc-7", 6)
+    assert _filename_condition("", "Quarterly Report", filename_mode="contains", idx=2)[0] in query
+    assert args == ("finance", "%Quarterly Report%", "doc-7", 6)
 
 
 async def test_page_store_falls_back_to_contains_only_on_empty_first_page() -> None:
@@ -278,8 +291,14 @@ async def test_page_store_falls_back_to_contains_only_on_empty_first_page() -> N
     assert page.document_ids == ("copy-1",)
     assert page.mode == "contains"
     assert len(conn.fetches) == 2
-    assert _FILENAME_EXACT_CONDITION.format(idx=2) in conn.fetches[0][0]
-    assert _FILENAME_CONTAINS_CONDITION.format(idx=2) in conn.fetches[1][0]
+    assert (
+        _filename_condition("", "Quarterly Report", filename_mode="exact", idx=2)[0]
+        in conn.fetches[0][0]
+    )
+    assert (
+        _filename_condition("", "Quarterly Report", filename_mode="contains", idx=2)[0]
+        in conn.fetches[1][0]
+    )
 
     # An exact first page is authoritative: no widened retry is issued.
     conn = _Conn([[_row("exact-1")]])
@@ -314,7 +333,7 @@ async def test_page_store_rejects_cross_workspace_before_fetch() -> None:
 
 
 def test_paged_sql_keeps_placeholder_continuity_and_never_uses_offset() -> None:
-    conditions, params = _match_conditions(
+    conditions, params = metadata_match_conditions(
         "finance",
         MetadataFilter(filename="Report", file_extension=".pdf"),
         filename_mode="exact",

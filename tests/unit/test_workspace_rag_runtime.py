@@ -72,6 +72,7 @@ def _runtime_binder() -> SimpleNamespace:
                 filtered_vectors=object(),
                 bm25=object(),
                 bm25_languages=(),
+                scoped_chunk_reader=object(),
             )
         ),
     )

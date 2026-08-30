@@ -3,39 +3,63 @@
 
 from unittest.mock import AsyncMock
 
-from dlightrag.engine.rag.retrieval import MetadataFilter
+from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.metadata_path import metadata_retrieve
 
 
-async def test_metadata_retrieve_returns_doc_scope_without_expanding_chunks() -> None:
-    metadata_index = AsyncMock()
-    metadata_index.query.return_value = ["doc-1", "doc-2"]
+def _scope(**overrides: object) -> MetadataScope:
+    fields: dict[str, object] = {
+        "filters": MetadataFilter(filename="x.pdf"),
+        "filename_mode": "exact",
+        "doc_exists": True,
+        "candidate_count": 1470,
+        "candidate_count_exact": True,
+    }
+    fields.update(overrides)
+    return MetadataScope(**fields)  # type: ignore[arg-type]
+
+
+async def test_metadata_retrieve_returns_scope_facts_without_document_ids() -> None:
     stores = AsyncMock()
-    stores.count_chunks_for_docs.return_value = 1470
+    stores.resolve_scope.return_value = _scope()
 
     scope = await metadata_retrieve(
-        metadata_index=metadata_index,
         stores=stores,
         filters=MetadataFilter(filename="x.pdf"),
     )
 
-    # The chunk fan-out is counted, never materialized.
-    assert scope.doc_ids == frozenset({"doc-1", "doc-2"})
-    assert scope.chunk_count == 1470
-    stores.count_chunks_for_docs.assert_awaited_once_with(["doc-1", "doc-2"])
+    # The filter facts and the bounded chunk probe are the only facts read
+    # back; no document-id set is ever materialized.
+    assert scope.doc_exists is True
+    assert scope.candidate_count == 1470
+    assert scope.candidate_count_exact is True
+    assert scope.filename_mode == "exact"
+    stores.resolve_scope.assert_awaited_once()
 
 
-async def test_metadata_retrieve_empty_docs_short_circuits() -> None:
-    metadata_index = AsyncMock()
-    metadata_index.query.return_value = []
+async def test_metadata_retrieve_forwards_empty_scope() -> None:
     stores = AsyncMock()
+    stores.resolve_scope.return_value = _scope(doc_exists=False, candidate_count=0)
 
     scope = await metadata_retrieve(
-        metadata_index=metadata_index,
         stores=stores,
         filters=MetadataFilter(filename="missing.pdf"),
     )
 
     assert not scope
-    assert scope.chunk_count == 0
-    stores.count_chunks_for_docs.assert_not_called()
+    assert scope.candidate_count == 0
+    assert scope.candidate_count_exact is True
+    stores.resolve_scope.assert_awaited_once()
+
+
+async def test_metadata_retrieve_keeps_zero_chunk_match_active() -> None:
+    """A matching document with zero chunks must still be an active scope."""
+    stores = AsyncMock()
+    stores.resolve_scope.return_value = _scope(doc_exists=True, candidate_count=0)
+
+    scope = await metadata_retrieve(
+        stores=stores,
+        filters=MetadataFilter(filename="chunkless.pdf"),
+    )
+
+    assert bool(scope) is True

@@ -11,10 +11,15 @@ from dlightrag.adapters.postgres.core._operations import ConnectionPool, Postgre
 from dlightrag.adapters.postgres.core.identifiers import pg_identifier, pg_qualified_identifier
 from dlightrag.adapters.postgres.corpus._corpus_schema import (
     BM25_LANGUAGE_COLUMN,
+    CHUNK_DOCUMENT_SCOPE_INDEX,
     LIGHTRAG_CHUNKS_TABLE,
 )
 from dlightrag.adapters.postgres.corpus.corpus_languages import update_chunk_bm25_languages
-from dlightrag.engine.rag.retrieval import ContextRow
+from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
+    METADATA_TABLE,
+    metadata_match_conditions,
+)
+from dlightrag.engine.rag.retrieval import ContextRow, MetadataScope
 from dlightrag.engine.rag.retrieval.bm25 import (
     BM25_PROFILE_FALLBACK,
     BM25Profile,
@@ -30,7 +35,7 @@ from dlightrag.engine.rag.retrieval.language import (
 
 BM25_INDEX_PREFIX = pg_identifier("idx_lightrag_doc_chunks_bm25")
 BM25_LANGUAGE_INDEX = pg_identifier("idx_lightrag_doc_chunks_dlightrag_bm25_language")
-BM25_DOC_INDEX = pg_identifier("idx_lightrag_doc_chunks_dlightrag_full_doc_id")
+BM25_DOC_INDEX = pg_identifier(CHUNK_DOCUMENT_SCOPE_INDEX)
 BM25_TABLE = pg_identifier(LIGHTRAG_CHUNKS_TABLE)
 _VERIFY_SCHEMA_SQL = (
     "SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2 LIMIT 1"
@@ -125,16 +130,28 @@ def build_bm25_sql(
     scoped: bool,
     limit: int,
     language: str | None = None,
+    metadata_conditions: tuple[str, ...] = (),
 ) -> str:
     safe_index = pg_identifier(index_name)
     limit_value = int(limit)
     if limit_value < 1:
         raise ValueError("BM25 limit must be positive")
-    candidate_clause = "AND full_doc_id = ANY($3::text[])" if scoped else ""
+    if scoped and not metadata_conditions:
+        raise ValueError("scoped BM25 requires metadata conditions")
+    # The scoped candidate clause is one database-side semi-join over the
+    # metadata predicate (conditions already carry their shifted placeholders
+    # starting at $3); the ranked BM25 stream remains the index source and the
+    # final LIMIT stays outside the join/filter.
+    candidate_clause = (
+        f"AND full_doc_id IN (SELECT doc_id FROM {METADATA_TABLE} "  # noqa: S608
+        f"WHERE {' AND '.join(metadata_conditions)})"
+        if scoped
+        else ""
+    )
     language_clause = (
         f"AND {BM25_LANGUAGE_COLUMN} = '{_validated_language_code(language)}'" if language else ""
     )
-    limit_placeholder = "$4" if scoped else "$3"
+    limit_placeholder = f"${3 + len(metadata_conditions)}" if scoped else "$3"
     return (
         f"SELECT id, content, file_path, full_doc_id, "  # noqa: S608
         f"-(content <@> to_bm25query($1, '{safe_index}')) AS score "
@@ -209,20 +226,37 @@ class PGBM25ProfileSearch(PostgresOperationRunner):
         *,
         profile_name: str,
         language: str | None,
-        doc_ids: list[str] | None,
+        scope: MetadataScope | None,
         limit: int,
     ) -> list[ContextRow]:
-        sql = build_bm25_sql(
-            index_name=_index_name(profile_name),
-            scoped=doc_ids is not None,
-            limit=limit,
-            language=language,
-        )
+        if scope is not None:
+            conditions, params = metadata_match_conditions(
+                self._workspace,
+                scope.filters,
+                filename_mode=scope.filename_mode,
+                start_index=3,
+            )
+            sql = build_bm25_sql(
+                index_name=_index_name(profile_name),
+                scoped=True,
+                limit=limit,
+                language=language,
+                metadata_conditions=tuple(conditions),
+            )
 
-        async def operation(conn: Any) -> list[Any]:
-            if doc_ids is None:
+            async def operation(conn: Any) -> list[Any]:
+                return await conn.fetch(sql, query, self._workspace, *params, int(limit))
+
+        else:
+            sql = build_bm25_sql(
+                index_name=_index_name(profile_name),
+                scoped=False,
+                limit=limit,
+                language=language,
+            )
+
+            async def operation(conn: Any) -> list[Any]:
                 return await conn.fetch(sql, query, self._workspace, int(limit))
-            return await conn.fetch(sql, query, self._workspace, doc_ids, int(limit))
 
         rows = await self._run(operation)
         return [self._row_to_chunk(row, profile_name=profile_name) for row in rows]

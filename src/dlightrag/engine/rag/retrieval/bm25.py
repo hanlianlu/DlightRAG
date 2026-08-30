@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.engine.rag.retrieval import ContextRow, MetadataScope, format_bm25_top, rrf_fuse
+from dlightrag.engine.rag.retrieval.filtering import current_filter_stats
 from dlightrag.engine.rag.retrieval.language import BM25LanguageClassifier, normalize_language_code
 from dlightrag.engine.rag.retrieval.ports import BM25ProfileSearch
 
@@ -114,25 +115,31 @@ class ProfiledBM25Search:
             return []
         limit = self._top_k if top_k is None else top_k
         profiles = self._profiles_for_query(query)
-        doc_ids = scope.as_list() if scope is not None else None
         rankings = [
             await self._searcher.search_profile(
                 query,
                 profile_name=profile.name,
                 language=profile.language_bucket,
-                doc_ids=doc_ids,
+                scope=scope,
                 limit=int(limit),
             )
             for profile in profiles
         ]
         result = rankings[0] if len(rankings) == 1 else rrf_fuse(rankings)[: int(limit)]
+        stats = current_filter_stats()
+        if stats is not None and scope is not None:
+            stats.bm25_strategy = True
+            if scope.candidate_count_exact:
+                shortfall = max(0, min(int(limit), scope.candidate_count) - len(result))
+                if shortfall:
+                    stats.bm25_candidate_shortfall = shortfall
         logger.info(
             "[BM25] search: workspace=%s query=%r profiles=%s candidate_scope=%s "
             "top_k=%d returned=%d top=%s",
             self._workspace,
             query,
             ",".join(profile.name for profile in profiles) or "none",
-            f"{len(doc_ids)}doc" if doc_ids is not None else "all",
+            f"{scope.render_candidate_count()}chunk" if scope is not None else "all",
             int(limit),
             len(result),
             format_bm25_top(result),

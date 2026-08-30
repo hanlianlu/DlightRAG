@@ -7,7 +7,12 @@ from typing import Any, Protocol
 
 from dlightrag.engine.rag.corpus.ingest_jobs import IngestJobStore
 from dlightrag.engine.rag.corpus.metadata_index import MetadataIndexProtocol
-from dlightrag.engine.rag.retrieval.ports import BM25Search, CorpusChunkStore, FilteredVectorSearch
+from dlightrag.engine.rag.retrieval.ports import (
+    BM25Search,
+    CorpusChunkStore,
+    FilteredVectorSearch,
+    ScopedChunkReader,
+)
 from dlightrag.engine.rag.workspace.settings import RagSettings
 
 
@@ -65,6 +70,7 @@ class WorkspaceCorpusStores:
     filtered_vectors: FilteredVectorSearch | None
     bm25: BM25Search | None
     bm25_languages: tuple[str, ...] = ()
+    scoped_chunk_reader: ScopedChunkReader | None = None
 
 
 @dataclass(frozen=True, slots=True)

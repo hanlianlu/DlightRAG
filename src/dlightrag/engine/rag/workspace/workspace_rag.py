@@ -406,12 +406,15 @@ class WorkspaceRag:
             lightrag.chunks_vdb = filtered_vdb  # type: ignore[assignment]
 
         # Wrap text_chunks so the same scope reaches the entity/relation legs,
-        # which resolve chunks by id and never pass through chunks_vdb.
+        # which resolve chunks by id and never pass through chunks_vdb. Under
+        # an active scope the wrapper replaces the KV round trip with the
+        # storage's one-query scoped chunk read.
         if lightrag.text_chunks is not None:
             from dlightrag.engine.rag.retrieval.filtering import FilteredChunkStore
 
             lightrag.text_chunks = FilteredChunkStore(  # type: ignore[assignment]
-                original=lightrag.text_chunks
+                original=lightrag.text_chunks,
+                scoped_reader=corpus_stores.scoped_chunk_reader,
             )
 
         from dlightrag.engine.rag.lightrag.stores import LightRAGStores
@@ -473,7 +476,6 @@ class WorkspaceRag:
                 if self._direct_image_embedding_enabled
                 else None
             ),
-            metadata_index=self._metadata_index,
             stores=self._lightrag_stores,
             rrf_k=settings.rrf_k,
         )

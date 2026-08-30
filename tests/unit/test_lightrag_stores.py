@@ -2,6 +2,7 @@
 """Tests for LightRAG storage boundary adapter."""
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -51,6 +52,30 @@ async def test_get_full_docs_empty_input_skips_storage() -> None:
 
     assert await stores.get_full_docs([]) == []
     fake.full_docs.get_by_ids.assert_not_awaited()
+
+
+async def test_chunk_document_scope_index_is_owned_independently_of_bm25() -> None:
+    class FakeDB:
+        def __init__(self) -> None:
+            self.executed: list[str] = []
+
+        async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            assert timing_label == "ws chunk_document_scope_index"
+            return await operation(self)
+
+        async def execute(self, sql: str) -> None:
+            self.executed.append(sql)
+
+    fake = FakeLightRAG()
+    db = FakeDB()
+    fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
+
+    await PGCorpusChunkStore(fake).ensure_document_scope_index()
+
+    assert db.executed == [
+        "CREATE INDEX IF NOT EXISTS idx_lightrag_doc_chunks_dlightrag_full_doc_id "
+        "ON LIGHTRAG_DOC_CHUNKS(workspace, full_doc_id)"
+    ]
 
 
 async def test_overwrite_chunk_vectors_requires_matching_dimension() -> None:
@@ -128,7 +153,81 @@ async def test_overwrite_chunk_vectors_respects_batch_record_budget(
     assert [batch[0][1] for batch in db.batches] == ["img-1", "img-2"]
 
 
-async def test_count_chunks_for_docs_counts_without_reading_ids() -> None:
+async def test_resolve_scope_probes_bounded_chunk_count_without_document_ids() -> None:
+    from dlightrag.engine.rag.retrieval import MetadataFilter
+
+    class FakeTextChunksDB:
+        def __init__(self) -> None:
+            self.fetches: list[tuple[Any, ...]] = []
+
+        async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            assert timing_label is None or isinstance(timing_label, str)
+            return await operation(self)
+
+        async def fetchrow(self, *args):  # noqa: ANN002, ANN202
+            self.fetches.append(args)
+            return {"doc_exists": True, "chunk_count": 12}
+
+    fake = FakeLightRAG()
+    db = FakeTextChunksDB()
+    fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
+    stores = PGCorpusChunkStore(fake, exact_threshold=8192)
+
+    scope = await stores.resolve_scope(MetadataFilter(filename="x.pdf"))
+
+    assert scope.doc_exists is True
+    assert scope.candidate_count == 12
+    assert scope.candidate_count_exact is True
+    assert scope.filename_mode == "exact"
+    args = db.fetches[0]
+    sql = args[0]
+    params = args[1:]
+    assert "EXISTS (SELECT 1 FROM dlightrag_doc_metadata" in sql
+    assert "count(*)" in sql
+    assert "LIMIT $6" in sql
+    # One probe per attempted mode; the exact hit never widens.
+    assert len(db.fetches) == 1
+    # chunk workspace, then inner metadata predicates, then the probe cap.
+    assert params[2] == "ws"
+    assert params[3:5] == ("ws", "x.pdf")
+    assert params[5] == 8193
+
+
+async def test_resolve_scope_widens_to_contains_only_on_exact_miss() -> None:
+    from dlightrag.engine.rag.retrieval import MetadataFilter
+
+    class FakeTextChunksDB:
+        def __init__(self) -> None:
+            self.fetches: list[tuple[Any, ...]] = []
+
+        async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            assert timing_label is None or isinstance(timing_label, str)
+            return await operation(self)
+
+        async def fetchrow(self, *args):  # noqa: ANN002, ANN202
+            self.fetches.append(args)
+            if len(self.fetches) == 1:
+                return {"doc_exists": False, "chunk_count": 0}
+            return {"doc_exists": True, "chunk_count": 4}
+
+    fake = FakeLightRAG()
+    db = FakeTextChunksDB()
+    fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
+    stores = PGCorpusChunkStore(fake, exact_threshold=8192)
+
+    scope = await stores.resolve_scope(MetadataFilter(filename="report"))
+
+    assert scope.doc_exists is True
+    assert scope.filename_mode == "contains"
+    assert scope.candidate_count == 4
+    assert len(db.fetches) == 2
+    assert "LIKE LOWER($2) ESCAPE" in db.fetches[1][0]
+    assert db.fetches[1][2] == "%report%"
+
+
+async def test_resolve_scope_reports_the_cap_as_a_non_exact_sentinel() -> None:
+    from dlightrag.engine.rag.retrieval import MetadataFilter
+
     class FakeTextChunksDB:
         def __init__(self) -> None:
             self.fetch_args: tuple | None = None
@@ -137,22 +236,99 @@ async def test_count_chunks_for_docs_counts_without_reading_ids() -> None:
             assert timing_label is None or isinstance(timing_label, str)
             return await operation(self)
 
-        async def fetchval(self, *args):  # noqa: ANN002, ANN202
+        async def fetchrow(self, *args):  # noqa: ANN002, ANN202
             self.fetch_args = args
-            return 1470
+            # The probe stopped at threshold + 1: a lower bound, never exact.
+            return {"doc_exists": True, "chunk_count": 3}
+
+    fake = FakeLightRAG()
+    db = FakeTextChunksDB()
+    fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
+    stores = PGCorpusChunkStore(fake, exact_threshold=2)
+
+    scope = await stores.resolve_scope(MetadataFilter(file_extension="pdf"))
+
+    assert scope.doc_exists is True
+    assert scope.candidate_count == 3
+    assert scope.candidate_count_exact is False
+    assert scope.render_candidate_count() == "3+"
+
+
+async def test_read_scoped_chunks_fuses_fetch_and_metadata_guard_in_one_query() -> None:
+    from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
+
+    class FakeTextChunksDB:
+        def __init__(self) -> None:
+            self.fetch_args: tuple | None = None
+
+        async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            assert timing_label is None or isinstance(timing_label, str)
+            return await operation(self)
+
+        async def fetch(self, *args):  # noqa: ANN002, ANN202
+            self.fetch_args = args
+            return [
+                {
+                    "id": "c2",
+                    "content": "beta",
+                    "full_doc_id": "doc-1",
+                    "file_path": "x.pdf",
+                    "llm_cache_list": '["hit"]',
+                    "heading": '{"h": 1}',
+                    "sidecar": "{}",
+                    "create_time": 10,
+                    "update_time": 0,
+                }
+            ]
 
     fake = FakeLightRAG()
     db = FakeTextChunksDB()
     fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
     stores = PGCorpusChunkStore(fake)
+    scope = MetadataScope(
+        filters=MetadataFilter(filename="x.pdf"),
+        filename_mode="exact",
+        doc_exists=True,
+        candidate_count=2,
+        candidate_count_exact=True,
+    )
 
-    result = await stores.count_chunks_for_docs(["doc-1", "doc-2"])
+    rows = await stores.read_scoped(scope, ["c1", "c2", "c2"])
 
-    assert result == 1470
     assert db.fetch_args is not None
-    assert "count(*)" in db.fetch_args[0]
-    assert db.fetch_args[1] == "ws"
-    assert db.fetch_args[2] == ["doc-1", "doc-2"]
+    sql = db.fetch_args[0]
+    assert "EXISTS (SELECT 1 FROM dlightrag_doc_metadata m" in sql
+    assert "c.id = ANY($2::text[])" in sql
+    # Positional order with duplicates and None for missing/out-of-scope ids.
+    assert rows[0] is None
+    assert rows[1] is not None and rows[1]["id"] == "c2"
+    assert rows[2] is not None and rows[2]["id"] == "c2"
+    # JSON decoding matches LightRAG's get_by_ids text-chunk contract.
+    assert rows[1]["llm_cache_list"] == ["hit"]
+    assert rows[1]["heading"] == {"h": 1}
+    assert rows[1]["sidecar"] == {}
+    assert rows[1]["update_time"] == 10  # 0 folds back to create_time
+
+
+async def test_read_scoped_chunks_skips_empty_request() -> None:
+    from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
+
+    class FakeTextChunksDB:
+        async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            raise AssertionError("empty request must not reach storage")
+
+    fake = FakeLightRAG()
+    fake.text_chunks = SimpleNamespace(db=FakeTextChunksDB(), workspace="ws")
+    stores = PGCorpusChunkStore(fake)
+    scope = MetadataScope(
+        filters=MetadataFilter(filename="x.pdf"),
+        filename_mode="exact",
+        doc_exists=True,
+        candidate_count=0,
+        candidate_count_exact=True,
+    )
+
+    assert await stores.read_scoped(scope, []) == []
 
 
 async def test_context_chunks_by_ids_formats_text_chunks() -> None:

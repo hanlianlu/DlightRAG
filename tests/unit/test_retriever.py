@@ -2,24 +2,35 @@
 """Tests for unified retrieval orchestration."""
 
 import logging
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.engine.rag.retrieval import MetadataFilter
+from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.retriever import UnifiedRetriever
 
 
+def _scope(
+    *, candidate_count: int = 0, candidate_count_exact: bool = True, doc_exists: bool = False
+) -> MetadataScope:
+    return MetadataScope(
+        filters=MetadataFilter(filename="x.pdf"),
+        filename_mode="exact",
+        doc_exists=doc_exists,
+        candidate_count=candidate_count,
+        candidate_count_exact=candidate_count_exact,
+    )
+
+
 async def test_unified_retriever_empty_metadata_candidates_short_circuits() -> None:
-    metadata_index = AsyncMock()
-    metadata_index.query.return_value = []
     stores = AsyncMock()
+    stores.resolve_scope.return_value = _scope()
     backend = AsyncMock()
     bm25 = AsyncMock()
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=metadata_index,
         stores=stores,
     )
 
@@ -33,9 +44,8 @@ async def test_unified_retriever_empty_metadata_candidates_short_circuits() -> N
 async def test_unified_retriever_llm_empty_candidates_falls_back_unfiltered() -> None:
     from dlightrag.engine.rag.retrieval import RetrievalResult
 
-    metadata_index = AsyncMock()
-    metadata_index.query.return_value = []
     stores = AsyncMock()
+    stores.resolve_scope.return_value = _scope()
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
         contexts={"chunks": [{"chunk_id": "semantic-a"}], "entities": [], "relationships": []}
@@ -45,7 +55,6 @@ async def test_unified_retriever_llm_empty_candidates_falls_back_unfiltered() ->
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=metadata_index,
         stores=stores,
     )
 
@@ -64,10 +73,8 @@ async def test_unified_retriever_llm_empty_candidates_falls_back_unfiltered() ->
 async def test_unified_retriever_llm_filtered_empty_falls_back_unfiltered() -> None:
     from dlightrag.engine.rag.retrieval import RetrievalResult
 
-    metadata_index = AsyncMock()
-    metadata_index.query.return_value = ["doc-1"]
     stores = AsyncMock()
-    stores.count_chunks_for_docs.return_value = 12
+    stores.resolve_scope.return_value = _scope(candidate_count=12, doc_exists=True)
     backend = AsyncMock()
     backend.aretrieve.side_effect = [
         RetrievalResult(contexts={"chunks": [], "entities": [], "relationships": []}),
@@ -80,7 +87,6 @@ async def test_unified_retriever_llm_filtered_empty_falls_back_unfiltered() -> N
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=metadata_index,
         stores=stores,
     )
 
@@ -92,20 +98,20 @@ async def test_unified_retriever_llm_filtered_empty_falls_back_unfiltered() -> N
 
     assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["semantic-a"]
     assert result.trace["metadata_filter_relaxed"] is True
-    assert result.trace["metadata_doc_count"] == 1
+    assert result.trace["metadata_match_exists"] is True
     assert result.trace["metadata_candidate_count"] == 12
+    assert result.trace["metadata_candidate_count_exact"] is True
+    assert result.trace["metadata_candidate_count_lower_bound"] is None
     assert backend.aretrieve.await_count == 2
-    assert bm25.search.await_args_list[0].kwargs["scope"].doc_ids == frozenset({"doc-1"})
+    assert bm25.search.await_args_list[0].kwargs["scope"].candidate_count == 12
     assert bm25.search.await_args_list[1].kwargs["scope"] is None
 
 
 async def test_unified_retriever_explicit_filtered_empty_stays_filtered() -> None:
     from dlightrag.engine.rag.retrieval import RetrievalResult
 
-    metadata_index = AsyncMock()
-    metadata_index.query.return_value = ["doc-1"]
     stores = AsyncMock()
-    stores.count_chunks_for_docs.return_value = 12
+    stores.resolve_scope.return_value = _scope(candidate_count=12, doc_exists=True)
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
         contexts={"chunks": [], "entities": [], "relationships": []}
@@ -115,7 +121,6 @@ async def test_unified_retriever_explicit_filtered_empty_stays_filtered() -> Non
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=metadata_index,
         stores=stores,
     )
 
@@ -134,7 +139,6 @@ async def test_unified_retriever_explicit_filtered_empty_stays_filtered() -> Non
 async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
     from dlightrag.engine.rag.retrieval import RetrievalResult
 
-    metadata_index = AsyncMock()
     stores = AsyncMock()
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
@@ -149,7 +153,6 @@ async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=metadata_index,
         stores=stores,
         rrf_k=60,
     )
@@ -183,7 +186,6 @@ async def test_unified_retriever_fuses_visual_leg_as_an_independent_ranking() ->
         backend=backend,
         bm25=bm25,
         visual=visual,
-        metadata_index=AsyncMock(),
         stores=AsyncMock(),
         rrf_k=60,
     )
@@ -218,7 +220,6 @@ async def test_unified_retriever_skips_visual_leg_without_query_images() -> None
         backend=backend,
         bm25=bm25,
         visual=visual,
-        metadata_index=AsyncMock(),
         stores=AsyncMock(),
     )
 
@@ -231,7 +232,6 @@ async def test_unified_retriever_skips_visual_leg_without_query_images() -> None
 async def test_unified_retriever_does_not_cap_fused_chunks_to_candidate_limit() -> None:
     from dlightrag.engine.rag.retrieval import RetrievalResult
 
-    metadata_index = AsyncMock()
     stores = AsyncMock()
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
@@ -246,7 +246,6 @@ async def test_unified_retriever_does_not_cap_fused_chunks_to_candidate_limit() 
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=metadata_index,
         stores=stores,
     )
 
@@ -265,7 +264,6 @@ async def test_unified_retriever_keeps_distinct_chunks_with_same_content_prefix(
     from dlightrag.engine.rag.retrieval import RetrievalResult
 
     shared = "The quick brown fox jumps. " + "x" * 173
-    metadata_index = AsyncMock()
     stores = AsyncMock()
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
@@ -284,7 +282,6 @@ async def test_unified_retriever_keeps_distinct_chunks_with_same_content_prefix(
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=metadata_index,
         stores=stores,
     )
 
@@ -298,7 +295,6 @@ async def test_unified_retriever_logs_retrieval_mix_summary(
 ) -> None:
     from dlightrag.engine.rag.retrieval import RetrievalResult
 
-    metadata_index = AsyncMock()
     stores = AsyncMock()
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
@@ -316,7 +312,6 @@ async def test_unified_retriever_logs_retrieval_mix_summary(
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=metadata_index,
         stores=stores,
         rrf_k=60,
     )
@@ -341,7 +336,6 @@ async def test_unified_retriever_logs_retrieval_mix_summary(
 async def test_unified_retriever_lightrag_failure_falls_back_to_bm25() -> None:
     """When LightRAG retrieval raises, BM25 results must still be returned."""
 
-    metadata_index = AsyncMock()
     stores = AsyncMock()
     backend = AsyncMock()
     backend.aretrieve.side_effect = RuntimeError("LightRAG backend down")
@@ -350,7 +344,6 @@ async def test_unified_retriever_lightrag_failure_falls_back_to_bm25() -> None:
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=metadata_index,
         stores=stores,
     )
 
@@ -379,7 +372,6 @@ async def test_unified_retriever_bm25_failure_continues_without_bm25(
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=AsyncMock(),
         stores=AsyncMock(),
     )
 
@@ -401,7 +393,6 @@ async def test_unified_retriever_raises_semantic_error_when_both_lanes_fail() ->
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=AsyncMock(),
         stores=AsyncMock(),
     )
 
@@ -421,7 +412,6 @@ async def test_unified_retriever_raises_semantic_error_when_bm25_is_disabled(
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=None,
-        metadata_index=AsyncMock(),
         stores=AsyncMock(),
     )
 
@@ -439,6 +429,18 @@ async def test_unified_retriever_traces_kg_chunks_dropped_by_scope() -> None:
     from dlightrag.engine.rag.retrieval import RetrievalResult
     from dlightrag.engine.rag.retrieval.filtering import FilteredChunkStore
 
+    class _ScopedReader:
+        async def read_scoped(
+            self,
+            scope: MetadataScope,
+            chunk_ids: list[str],
+        ) -> list[dict[str, Any] | None]:
+            rows: list[dict[str, Any] | None] = [
+                {"id": "in", "full_doc_id": "doc-1"},
+                {"id": "out", "full_doc_id": "doc-9"},
+            ]
+            return [rows[0], None]
+
     chunk_store = FilteredChunkStore(
         original=AsyncMock(
             get_by_ids=AsyncMock(
@@ -447,7 +449,8 @@ async def test_unified_retriever_traces_kg_chunks_dropped_by_scope() -> None:
                     {"id": "out", "full_doc_id": "doc-9"},
                 ]
             )
-        )
+        ),
+        scoped_reader=_ScopedReader(),
     )
 
     async def _backend_retrieve(*args: object, **kwargs: object) -> RetrievalResult:
@@ -455,10 +458,8 @@ async def test_unified_retriever_traces_kg_chunks_dropped_by_scope() -> None:
         await chunk_store.get_by_ids(["in", "out"])
         return RetrievalResult(contexts={"chunks": [], "entities": [], "relationships": []})
 
-    metadata_index = AsyncMock()
-    metadata_index.query.return_value = ["doc-1"]
     stores = AsyncMock()
-    stores.count_chunks_for_docs.return_value = 5
+    stores.resolve_scope.return_value = _scope(candidate_count=5, doc_exists=True)
     backend = AsyncMock()
     backend.aretrieve.side_effect = _backend_retrieve
     bm25 = AsyncMock()
@@ -466,7 +467,6 @@ async def test_unified_retriever_traces_kg_chunks_dropped_by_scope() -> None:
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
-        metadata_index=metadata_index,
         stores=stores,
     )
 
@@ -477,3 +477,63 @@ async def test_unified_retriever_traces_kg_chunks_dropped_by_scope() -> None:
     )
 
     assert result.trace["metadata_kg_chunks_dropped"] == 1
+
+
+async def test_unified_retriever_traces_capped_probe_as_a_lower_bound() -> None:
+    from dlightrag.engine.rag.retrieval import RetrievalResult
+
+    stores = AsyncMock()
+    stores.resolve_scope.return_value = _scope(
+        candidate_count=8193, candidate_count_exact=False, doc_exists=True
+    )
+    backend = AsyncMock()
+    backend.aretrieve.return_value = RetrievalResult(
+        contexts={"chunks": [], "entities": [], "relationships": []}
+    )
+    bm25 = AsyncMock()
+    bm25.search.return_value = []
+    retriever = UnifiedRetriever(backend=backend, bm25=bm25, stores=stores)
+
+    result = await retriever.aretrieve(
+        "query",
+        metadata_filter=MetadataFilter(filename="huge.pdf"),
+        metadata_filter_source="explicit",
+    )
+
+    # A capped probe is reported as a lower bound, never as an exact total.
+    assert result.trace["metadata_match_exists"] is True
+    assert result.trace["metadata_candidate_count"] == 8193
+    assert result.trace["metadata_candidate_count_exact"] is False
+    assert result.trace["metadata_candidate_count_lower_bound"] == "8193+"
+
+
+async def test_unified_retriever_traces_execution_strategy_and_candidate_shortfall() -> None:
+    from dlightrag.engine.rag.retrieval import RetrievalResult
+    from dlightrag.engine.rag.retrieval.filtering import current_filter_stats
+
+    stores = AsyncMock()
+    stores.resolve_scope.return_value = _scope(candidate_count=30, doc_exists=True)
+    backend = AsyncMock()
+
+    async def _backend_retrieve(*args: object, **kwargs: object) -> RetrievalResult:
+        stats = current_filter_stats()
+        assert stats is not None
+        stats.vector_strategy = "exact_vector"
+        stats.vector_candidate_shortfall = 3
+        return RetrievalResult(
+            contexts={"chunks": [{"chunk_id": "semantic-a"}], "entities": [], "relationships": []}
+        )
+
+    backend.aretrieve.side_effect = _backend_retrieve
+    bm25 = AsyncMock()
+    bm25.search.return_value = [{"chunk_id": "bm25-a"}]
+    retriever = UnifiedRetriever(backend=backend, bm25=bm25, stores=stores)
+
+    result = await retriever.aretrieve(
+        "query",
+        metadata_filter=MetadataFilter(filename="x.pdf"),
+        metadata_filter_source="explicit",
+    )
+
+    assert result.trace["metadata_execution_strategy"] == "exact_vector"
+    assert result.trace["metadata_candidate_shortfall"] == {"vector": 3}

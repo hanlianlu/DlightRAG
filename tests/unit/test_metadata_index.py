@@ -110,8 +110,8 @@ class TestFilenameResolution:
 
         assert result == ["d2"]
         assert len(executed) == 2
-        assert "LOWER(TRIM(filename)) LIKE $2 ESCAPE '\\'" in executed[1][0]
-        assert executed[1][1][1] == "%linear algebra%"
+        assert "LOWER(TRIM(filename)) LIKE LOWER($2) ESCAPE '\\'" in executed[1][0]
+        assert executed[1][1][1] == "%Linear Algebra%"
 
     async def test_caller_wildcards_are_literal_text(self) -> None:
         index, executed = self._index({"LIKE": [{"doc_id": "d3"}]})
@@ -119,7 +119,7 @@ class TestFilenameResolution:
         await index.query(MetadataFilter(filename="%IMG%9551%"))
 
         # Escaped substring search has no pattern language: '%' is a character.
-        assert executed[1][1][1] == "%\\%img\\%9551\\%%"
+        assert executed[1][1][1] == "%\\%IMG\\%9551\\%%"
 
     async def test_caller_backslash_and_underscore_are_literal_text(self) -> None:
         index, executed = self._index({"LIKE": [{"doc_id": "d5"}]})
@@ -135,7 +135,7 @@ class TestFilenameResolution:
 
         widened = executed[1][0]
         assert "LOWER(TRIM(file_extension)) = LOWER(TRIM($2))" in widened
-        assert "LOWER(TRIM(filename)) LIKE $3 ESCAPE '\\'" in widened
+        assert "LOWER(TRIM(filename)) LIKE LOWER($3) ESCAPE '\\'" in widened
         assert executed[1][1][2] == "%report%"
 
     async def test_no_filename_never_runs_twice(self) -> None:
@@ -156,7 +156,7 @@ class TestMetadataSQL:
             like_contains_pattern,
         )
 
-        assert like_contains_pattern("Report.pdf") == "%report.pdf%"
+        assert like_contains_pattern("Report.pdf") == "%Report.pdf%"
         assert like_contains_pattern("50%_off\\docs") == "%50\\%\\_off\\\\docs%"
 
     def test_upsert_sql_does_not_reference_similarity(self):
@@ -408,8 +408,8 @@ async def test_metadata_index_get_many_fetches_doc_ids_in_one_query() -> None:
     assert seen["args"] == ("default", ["doc-1", "doc-2"])
 
 
-async def test_custom_filter_matches_case_insensitively_with_bound_key() -> None:
-    """Values are stored verbatim, so the fold happens here; the key is never interpolated."""
+async def test_custom_filter_is_one_canonical_jsonb_containment() -> None:
+    """All custom key/value equalities collapse into one canonical containment object."""
     from dlightrag.engine.rag.retrieval import MetadataFilter
 
     idx = pg_metadata_index.PGMetadataIndex(workspace="default")
@@ -426,11 +426,20 @@ async def test_custom_filter_matches_case_insensitively_with_bound_key() -> None
 
     idx._run = run  # type: ignore[method-assign]
 
-    await idx.query(MetadataFilter(custom={"department": " Finance "}))
+    await idx.query(
+        MetadataFilter(custom={"department": " Finance ", "pages": 7, "reviewed": True})
+    )
 
-    assert "LOWER(TRIM(custom_metadata ->> $2)) = LOWER(TRIM($3))" in seen["query"]
-    assert seen["args"] == ("default", "department", " Finance ")
-    assert "department" not in seen["query"]
+    assert (
+        "custom_metadata_search @> dlightrag_canonical_custom_metadata($2::jsonb)" in seen["query"]
+    )
+    assert "->>" not in seen["query"]
+    assert seen["args"] == (
+        "default",
+        json.dumps({"department": " Finance ", "pages": 7, "reviewed": True}),
+    )
+    # No raw custom scan predicate is emitted per key.
+    assert seen["query"].count("custom_metadata_search @>") == 1
 
 
 async def test_metadata_field_schema_reports_only_populated_filters() -> None:

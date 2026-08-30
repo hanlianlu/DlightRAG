@@ -76,10 +76,10 @@ def test_web_conversation_page_query_matches_the_covering_index_contract() -> No
 
 def test_metadata_search_page_sql_matches_the_doc_id_keyset_contract() -> None:
     from dlightrag.adapters.postgres.corpus import pg_metadata_search
-    from dlightrag.adapters.postgres.corpus.pg_metadata_index import _match_conditions
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import metadata_match_conditions
     from dlightrag.engine.rag.retrieval import MetadataFilter
 
-    conditions, params = _match_conditions(
+    conditions, params = metadata_match_conditions(
         "finance",
         MetadataFilter(filename="Report", file_extension=".pdf"),
         filename_mode="exact",

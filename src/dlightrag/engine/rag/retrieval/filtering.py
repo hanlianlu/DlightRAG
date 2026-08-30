@@ -18,16 +18,21 @@ from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.engine.rag.retrieval import MetadataScope
-from dlightrag.engine.rag.retrieval.ports import FilteredVectorSearch
+from dlightrag.engine.rag.retrieval.ports import FilteredVectorSearch, ScopedChunkReader
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
 class MetadataFilterStats:
-    """Out-of-scope chunks the knowledge-graph legs asked for and did not get."""
+    """Per-request facts the scoped legs report back to the retrieval trace."""
 
     kg_chunks_dropped: int = 0
+    vector_strategy: str | None = None
+    bm25_strategy: bool = False
+    graph_strategy: bool = False
+    vector_candidate_shortfall: int | None = None
+    bm25_candidate_shortfall: int | None = None
 
 
 # Per-request filter state (async-safe: each coroutine gets its own value)
@@ -37,6 +42,11 @@ _active_filter: contextvars.ContextVar[MetadataScope | None] = contextvars.Conte
 _active_stats: contextvars.ContextVar[MetadataFilterStats | None] = contextvars.ContextVar(
     "_active_stats", default=None
 )
+
+
+def current_filter_stats() -> MetadataFilterStats | None:
+    """Stats sink for the active scope, or None outside a retrieval request."""
+    return _active_stats.get()
 
 
 @asynccontextmanager
@@ -115,42 +125,49 @@ class FilteredChunkStore:
 
     LightRAG's entity and relation legs never vector-search for their chunks: they
     read the chunk ids baked into graph nodes at ingest time and resolve them by
-    primary key, so the chunks_vdb in-filter cannot see them. Dropping out-of-scope
-    rows here is the storage's own contract — get_by_ids already returns None for
-    ids it cannot resolve, and every caller skips None entries.
+    primary key, so the chunks_vdb in-filter cannot see them. Under an active
+    scope this wrapper replaces the KV ``get_by_ids`` round trip with one scoped
+    chunk read that fuses the chunk fetch and the metadata guard in the database,
+    returning the same positional list with ``None`` for missing or out-of-scope
+    ids — the storage's own contract every caller already zips against.
 
     Filtering the vector lookup that *selects* those ids is not an option: LightRAG
     reads a short result from chunks_vdb.get_vectors_by_ids as storage corruption
     and falls back to an unfiltered ranking method.
     """
 
-    def __init__(self, original: Any) -> None:
+    def __init__(
+        self,
+        original: Any,
+        *,
+        scoped_reader: ScopedChunkReader | None = None,
+    ) -> None:
         self._original = original
+        self._scoped_reader = scoped_reader
 
     async def get_by_ids(self, ids: list[str]) -> list[dict[str, Any] | None]:
-        rows = await self._original.get_by_ids(ids)
         scope = _active_filter.get()
         if scope is None:
-            return rows
-        scoped: list[dict[str, Any] | None] = []
-        dropped = 0
-        for row in rows:
-            # A row with no document attribution cannot satisfy a hard filter.
-            if row is not None and row.get("full_doc_id") not in scope.doc_ids:
-                scoped.append(None)
-                dropped += 1
-            else:
-                scoped.append(row)
+            return await self._original.get_by_ids(ids)
+        if self._scoped_reader is None:
+            raise RuntimeError(
+                "a metadata filter is active but no scoped chunk reader is configured"
+            )
+        rows = await self._scoped_reader.read_scoped(scope, list(ids))
+        dropped = sum(1 for row in rows if row is None)
         if dropped:
             stats = _active_stats.get()
             if stats is not None:
                 stats.kg_chunks_dropped += dropped
             logger.info(
-                "Metadata scope dropped %d of %d graph-referenced chunk(s)",
+                "Metadata scope returned no chunk for %d of %d graph-referenced id(s)",
                 dropped,
-                len(rows),
+                len(ids),
             )
-        return scoped
+        stats = _active_stats.get()
+        if stats is not None:
+            stats.graph_strategy = True
+        return rows
 
     def __getattr__(self, name: str) -> Any:
         """Proxy all other attributes to original (global_config, embedding_func, etc.)."""

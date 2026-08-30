@@ -24,6 +24,7 @@ expected. The host contract guard provides runtime contract checks.
 
 from typing import Any
 
+from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.ports import CorpusChunkStore
 
 
@@ -105,8 +106,9 @@ class LightRAGStores:
     ) -> None:
         await self._chunk_store.overwrite_chunk_vectors(vectors, embedding_dim=embedding_dim)
 
-    async def count_chunks_for_docs(self, doc_ids: list[str]) -> int:
-        return await self._chunk_store.count_chunks_for_docs(doc_ids)
+    async def resolve_scope(self, filters: MetadataFilter) -> MetadataScope:
+        """Resolve filter facts plus the bounded matching-chunk probe."""
+        return await self._chunk_store.resolve_scope(filters)
 
     async def fetch_chunk_contents(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
         return await self._chunk_store.fetch_chunk_contents(chunk_ids)

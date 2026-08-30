@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from dlightrag.engine.rag.retrieval.metadata_fields import canonical_metadata_key
+
 ContextRow = dict[str, Any]
 
 
@@ -61,6 +63,20 @@ class MetadataFilter(BaseModel):
             return value
         return value.astimezone(UTC).replace(tzinfo=None)
 
+    @field_validator("custom", mode="before")
+    @classmethod
+    def _canonicalize_custom_keys(cls, value: Any) -> Any:
+        """Fold custom keys once at the filter boundary.
+
+        Ingest stores custom metadata under keys folded with the same
+        ``canonical_metadata_key`` contract, so a filter and the rows it can
+        match never drift apart. Colliding folds resolve to the last key in
+        caller order, mirroring how the ingest normalization collapses them.
+        """
+        if not isinstance(value, dict):
+            return value
+        return {canonical_metadata_key(str(key)): item for key, item in value.items()}
+
     def is_empty(self) -> bool:
         """Return True if no filter criteria are set."""
         # An empty `custom` dict carries no criterion, and treating it as one
@@ -70,20 +86,34 @@ class MetadataFilter(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class MetadataScope:
-    """Documents a metadata filter selected, plus their chunk fan-out.
+    """Normalized metadata predicate facts plus a bounded candidate probe.
 
-    Retrieval filters by ``full_doc_id`` rather than by chunk id: the filter is
-    a document-level predicate, and one document can own thousands of chunks, so
-    expanding it client-side would ship that fan-out to the backend and back on
-    every vector and BM25 query. ``chunk_count`` is only what the exact-scan
-    branch needs to bound its brute-force cost.
+    The scope carries the filter facts and the selected filename mode, not any
+    materialized document-id set: matching documents may number in the millions,
+    and shipping that set through Python on every vector, BM25, and graph
+    request would not scale. Storage adapters translate these facts into their
+    own predicates; ``candidate_count`` bounds what the exact vector scan has to
+    brute-force and is derived from a capped database probe, so when
+    ``candidate_count_exact`` is False it is a lower bound (the probe stopped
+    at its cap), never an exact total.
     """
 
-    doc_ids: frozenset[str]
-    chunk_count: int
+    filters: MetadataFilter
+    filename_mode: str
+    doc_exists: bool
+    candidate_count: int
+    candidate_count_exact: bool
 
     def __bool__(self) -> bool:
-        return bool(self.doc_ids)
+        """True when the metadata predicate matched at least one document.
 
-    def as_list(self) -> list[str]:
-        return list(self.doc_ids)
+        A matching document with zero chunks is still an active scope: the
+        filter must stay applied rather than falling back to the whole corpus.
+        """
+        return self.doc_exists
+
+    def render_candidate_count(self) -> str:
+        """Human/trace rendering that never misstates a bounded probe as exact."""
+        if self.candidate_count_exact:
+            return str(self.candidate_count)
+        return f"{self.candidate_count}+"

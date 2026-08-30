@@ -20,6 +20,7 @@ from dlightrag.adapters.postgres.core._version import (
     ensure_postgres_extensions,
     ensure_postgres_major,
 )
+from dlightrag.adapters.postgres.corpus._corpus_schema import CHUNK_DOCUMENT_SCOPE_INDEX
 from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
     create_postgres_bm25,
     required_postgres_extensions,
@@ -75,13 +76,20 @@ _VECTOR_REQUIRED_COLUMNS = (
 )
 
 
-def lightrag_retrieval_table_specs(lightrag: Any) -> tuple[PartitionedTableSpec, ...]:
+def lightrag_retrieval_table_specs(
+    lightrag: Any,
+    *,
+    require_chunk_scope_index: bool = True,
+) -> tuple[PartitionedTableSpec, ...]:
     """Partition specs for the LightRAG-owned retrieval-critical tables.
 
     ``LIGHTRAG_DOC_CHUNKS`` (and therefore BM25) plus the dynamic chunk-vector
     table this runtime attached. LightRAG keeps creating these tables; the
     partition seam converts the fresh empty ones after ``initialize_storages``
-    and validates them on every later startup.
+    and validates them on every later startup. Writers omit DlightRAG's chunk
+    scope index only during the initial conversion, create it on the resulting
+    parent, and then validate the complete runtime contract; readers always
+    require the complete contract without issuing DDL.
     """
     from dlightrag.adapters.postgres.corpus._corpus_schema import LIGHTRAG_CHUNKS_TABLE
 
@@ -92,6 +100,7 @@ def lightrag_retrieval_table_specs(lightrag: Any) -> tuple[PartitionedTableSpec,
         required_indexes=(
             "idx_lightrag_doc_chunks_id",
             "idx_lightrag_doc_chunks_workspace_id",
+            *((CHUNK_DOCUMENT_SCOPE_INDEX,) if require_chunk_scope_index else ()),
         ),
     )
     vdb = getattr(lightrag, "chunks_vdb", None)
@@ -405,14 +414,20 @@ class PGCorpusRuntimeBinder:
         await guard.verify_all()
         foundation = PGPartitionFoundation()
         if config.is_reader:
-            # Readers never issue DDL: validate the partitioned retrieval
-            # tables the writer is required to have established.
+            # Readers never issue DDL: validate the complete partitioned
+            # retrieval contract the writer is required to have established.
             await foundation.verify_tables(specs=lightrag_retrieval_table_specs(lightrag))
         else:
             # LightRAG just created its empty upstream tables; convert them to
-            # workspace-partitioned parents now, before DlightRAG derives its
-            # metadata, scope, and BM25 indexes onto them.
-            await foundation.ensure_tables(specs=lightrag_retrieval_table_specs(lightrag))
+            # workspace-partitioned parents before deriving DlightRAG indexes.
+            # The chunk scope index is added immediately after conversion and
+            # the complete contract is then verified below.
+            await foundation.ensure_tables(
+                specs=lightrag_retrieval_table_specs(
+                    lightrag,
+                    require_chunk_scope_index=False,
+                )
+            )
         if not config.is_reader:
             # LightRAG owns the table; DlightRAG adds its derived presentation
             # index only after the writer has established the upstream schema.
@@ -421,7 +436,15 @@ class PGCorpusRuntimeBinder:
         metadata_index = PGMetadataIndex(workspace=config.deployment.workspace)
         await metadata_index.initialize(validate_only=config.is_reader)
 
-        chunks = PGCorpusChunkStore(lightrag)
+        chunks = PGCorpusChunkStore(
+            lightrag,
+            exact_threshold=config.corpus.retrieval.metadata_filter_exact_vector_threshold,
+        )
+        if not config.is_reader:
+            # Scope preflight needs this chunk-side semi-join index regardless
+            # of whether the optional BM25 retrieval leg is enabled.
+            await chunks.ensure_document_scope_index()
+            await foundation.verify_tables(specs=lightrag_retrieval_table_specs(lightrag))
         filtered_vectors = (
             PGFilteredVectorSearch(
                 lightrag.chunks_vdb,
@@ -452,6 +475,7 @@ class PGCorpusRuntimeBinder:
             filtered_vectors=filtered_vectors,
             bm25=bm25,
             bm25_languages=profile_languages(profiles),
+            scoped_chunk_reader=chunks,
         )
 
 

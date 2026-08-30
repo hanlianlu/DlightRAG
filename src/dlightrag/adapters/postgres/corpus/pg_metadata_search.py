@@ -4,7 +4,7 @@
 from typing import Any
 
 from dlightrag.adapters.postgres.core._operations import PostgresOperationRunner
-from dlightrag.adapters.postgres.corpus.pg_metadata_index import _match_conditions
+from dlightrag.adapters.postgres.corpus.pg_metadata_index import metadata_match_conditions
 from dlightrag.application.corpus_admin import (
     MetadataMatchRowPage,
     MetadataSearchFilenameMode,
@@ -22,8 +22,8 @@ def _paged_sql(
     """Build one ordered doc_id-keyset page query without OFFSET.
 
     The cursor predicate is appended last, so the filter placeholders keep the
-    indices ``_match_conditions`` produced, and the LIMIT placeholder follows
-    it. The caller binds parameters in the same order.
+    indices ``metadata_match_conditions`` produced, and the LIMIT placeholder
+    follows it. The caller binds parameters in the same order.
     """
     parts = list(conditions)
     if after_doc_id is not None:
@@ -58,7 +58,7 @@ class PGMetadataSearchStore(PostgresOperationRunner):
 
         async def _operation(conn: Any) -> MetadataMatchRowPage:
             mode: MetadataSearchFilenameMode = cursor.mode if cursor is not None else "exact"
-            conditions, params = _match_conditions(
+            conditions, params = metadata_match_conditions(
                 workspace_id,
                 filters,
                 filename_mode=mode,
@@ -78,7 +78,7 @@ class PGMetadataSearchStore(PostgresOperationRunner):
                 # literal-substring clause, exactly as the internal query path
                 # does, and bind that decision into this page's cursor mode.
                 mode = "contains"
-                conditions, params = _match_conditions(
+                conditions, params = metadata_match_conditions(
                     workspace_id,
                     filters,
                     filename_mode=mode,

@@ -95,22 +95,25 @@ def test_retrieval_partition_specs_cover_vector_filter_and_ann_contract() -> Non
 
     assert chunks.name.lower() == "lightrag_doc_chunks"
     assert chunks.primary_key == ("workspace", "id")
+    assert "idx_lightrag_doc_chunks_dlightrag_full_doc_id" in chunks.required_indexes
     assert vectors.name == "lightrag_vdb_chunks_8"
     assert "full_doc_id" in vectors.required_columns
     assert vectors.required_index_markers == ("USING hnsw",)
 
 
 @pytest.mark.parametrize("is_reader", [False, True])
+@pytest.mark.parametrize("bm25_enabled", [False, True])
 async def test_runtime_binder_composes_workspace_stores(
     test_config: DlightragConfig,
     monkeypatch: pytest.MonkeyPatch,
     is_reader: bool,
+    bm25_enabled: bool,
 ) -> None:
     config = clone_config(test_config)
     mutate_config(config, "deployment.service_role", "reader" if is_reader else "writer")
-    mutate_config(config, "corpus.retrieval.bm25_enabled", True)
+    mutate_config(config, "corpus.retrieval.bm25_enabled", bm25_enabled)
     metadata = SimpleNamespace(initialize=AsyncMock())
-    chunks = object()
+    chunks = SimpleNamespace(ensure_document_scope_index=AsyncMock())
     vectors = SimpleNamespace(ensure_document_scope_index=AsyncMock())
     file_panel = SimpleNamespace(ensure_page_index=AsyncMock())
     bm25 = object()
@@ -152,13 +155,20 @@ async def test_runtime_binder_composes_workspace_stores(
         foundation.verify_tables.assert_awaited_once_with(
             specs=corpus_module.lightrag_retrieval_table_specs(lightrag)
         )
+        chunks.ensure_document_scope_index.assert_not_awaited()
         file_panel_constructor.assert_not_called()
         guard.verify_read_only_attach_contract.assert_called_once_with()
         attach_read_only.assert_awaited_once_with(lightrag, config=config)
         lightrag.initialize_storages.assert_not_awaited()
     else:
-        foundation.verify_tables.assert_not_awaited()
         foundation.ensure_tables.assert_awaited_once_with(
+            specs=corpus_module.lightrag_retrieval_table_specs(
+                lightrag,
+                require_chunk_scope_index=False,
+            )
+        )
+        chunks.ensure_document_scope_index.assert_awaited_once_with()
+        foundation.verify_tables.assert_awaited_once_with(
             specs=corpus_module.lightrag_retrieval_table_specs(lightrag)
         )
         file_panel_constructor.assert_called_once_with()
@@ -167,7 +177,10 @@ async def test_runtime_binder_composes_workspace_stores(
         attach_read_only.assert_not_awaited()
         lightrag.initialize_storages.assert_awaited_once_with()
     metadata.initialize.assert_awaited_once_with(validate_only=is_reader)
-    chunk_constructor.assert_called_once_with(lightrag)
+    chunk_constructor.assert_called_once_with(
+        lightrag,
+        exact_threshold=config.corpus.retrieval.metadata_filter_exact_vector_threshold,
+    )
     vector_constructor.assert_called_once_with(
         chunks_vdb,
         exact_threshold=config.corpus.retrieval.metadata_filter_exact_vector_threshold,
@@ -176,12 +189,16 @@ async def test_runtime_binder_composes_workspace_stores(
         vectors.ensure_document_scope_index.assert_not_awaited()
     else:
         vectors.ensure_document_scope_index.assert_awaited_once_with()
-    create_bm25.assert_awaited_once_with(config, profiles=profiles)
+    create_bm25.assert_awaited_once_with(
+        config,
+        profiles=profiles if bm25_enabled else None,
+    )
     assert stores.metadata_index is metadata
     assert stores.chunks is chunks
     assert stores.filtered_vectors is vectors
     assert stores.bm25 is bm25
-    assert stores.bm25_languages == ("en",)
+    assert stores.bm25_languages == (("en",) if bm25_enabled else ())
+    assert stores.scoped_chunk_reader is chunks
 
 
 @pytest.mark.parametrize("validate_only", [False, True])

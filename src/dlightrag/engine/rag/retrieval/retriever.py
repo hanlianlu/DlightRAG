@@ -6,7 +6,6 @@ import logging
 from collections import Counter
 from typing import Any
 
-from dlightrag.engine.rag.corpus.metadata_index import MetadataIndexProtocol
 from dlightrag.engine.rag.retrieval import (
     ContextRow,
     MetadataFilter,
@@ -17,7 +16,7 @@ from dlightrag.engine.rag.retrieval import (
 )
 from dlightrag.engine.rag.retrieval.filtering import metadata_filter_scope
 from dlightrag.engine.rag.retrieval.metadata_path import metadata_retrieve
-from dlightrag.engine.rag.retrieval.ports import BM25Search, MetadataChunkStore, RetrievalBackend
+from dlightrag.engine.rag.retrieval.ports import BM25Search, MetadataScopeStore, RetrievalBackend
 from dlightrag.engine.rag.retrieval.visual import (
     DirectVisualRetriever,
     PreparedVisualQuery,
@@ -41,6 +40,26 @@ def _multi_source_count(rankings: list[list[ContextRow]]) -> int:
     return sum(1 for count in hits.values() if count > 1)
 
 
+def _scope_trace(scope: MetadataScope | None) -> dict[str, Any]:
+    """The one trace vocabulary for a resolved metadata scope."""
+    if scope is None:
+        return {
+            "metadata_match_exists": None,
+            "metadata_candidate_count": None,
+            "metadata_candidate_count_exact": None,
+            "metadata_candidate_count_lower_bound": None,
+        }
+    return {
+        "metadata_match_exists": scope.doc_exists,
+        "metadata_candidate_count": scope.candidate_count,
+        "metadata_candidate_count_exact": scope.candidate_count_exact,
+        # A capped probe is a lower bound; it is never rendered as an exact total.
+        "metadata_candidate_count_lower_bound": (
+            scope.render_candidate_count() if not scope.candidate_count_exact else None
+        ),
+    }
+
+
 class UnifiedRetriever:
     """Run retrieval-wide metadata filtering, the retrieval legs, and fusion.
 
@@ -54,15 +73,13 @@ class UnifiedRetriever:
         *,
         backend: RetrievalBackend,
         bm25: BM25Search | None,
-        metadata_index: MetadataIndexProtocol,
-        stores: MetadataChunkStore,
+        stores: MetadataScopeStore,
         visual: DirectVisualRetriever | None = None,
         rrf_k: int = 60,
     ) -> None:
         self._backend = backend
         self._bm25 = bm25
         self._visual = visual
-        self._metadata_index = metadata_index
         self._stores = stores
         self._rrf_k = rrf_k
 
@@ -95,8 +112,7 @@ class UnifiedRetriever:
         scope = await self._resolve_candidates(metadata_filter)
         trace: dict[str, Any] = {
             "metadata_filter_source": metadata_filter_source,
-            "metadata_doc_count": len(scope.doc_ids) if scope is not None else None,
-            "metadata_candidate_count": scope.chunk_count if scope is not None else None,
+            **_scope_trace(scope),
             "metadata_filter_relaxed": False,
         }
         if scope is not None and not scope:
@@ -180,6 +196,22 @@ class UnifiedRetriever:
         trace["bm25_enabled"] = self._bm25 is not None
         trace["bm25_query"] = lexical_query if self._bm25 is not None else None
         trace["metadata_kg_chunks_dropped"] = filter_stats.kg_chunks_dropped
+        strategies = [
+            strategy
+            for strategy in (
+                filter_stats.vector_strategy,
+                "bm25" if filter_stats.bm25_strategy else None,
+                "scoped_graph" if filter_stats.graph_strategy else None,
+            )
+            if strategy
+        ]
+        trace["metadata_execution_strategy"] = "+".join(strategies) if strategies else None
+        shortfall: dict[str, int] = {}
+        if filter_stats.vector_candidate_shortfall is not None:
+            shortfall["vector"] = filter_stats.vector_candidate_shortfall
+        if filter_stats.bm25_candidate_shortfall is not None:
+            shortfall["bm25"] = filter_stats.bm25_candidate_shortfall
+        trace["metadata_candidate_shortfall"] = shortfall or None
         if bm25_error is not None:
             trace["bm25_error_type"] = type(bm25_error).__name__
         trace["bm25_chunk_count"] = len(bm25_chunks)
@@ -205,22 +237,24 @@ class UnifiedRetriever:
                 **kwargs,
             )
             relaxed.trace["metadata_filter_source"] = metadata_filter_source
-            relaxed.trace["metadata_doc_count"] = len(scope.doc_ids)
-            relaxed.trace["metadata_candidate_count"] = scope.chunk_count
+            relaxed.trace.update(_scope_trace(scope))
             relaxed.trace["metadata_filter_relaxed"] = True
             return relaxed
         trace["fused_multi_source_count"] = _multi_source_count(rankings)
         logger.info(
             "[Retriever] mix: bm25_enabled=%s bm25_query=%r filter_source=%s "
             "metadata_scope=%s filter_relaxed=%s kg_chunks_dropped=%d "
+            "execution_strategy=%s candidate_shortfall=%s "
             "lightrag_mix_chunks=%d visual_chunks=%d bm25_chunks=%d fused_chunks=%d "
             "multi_source=%d bm25_top=%s",
             self._bm25 is not None,
             lexical_query if self._bm25 is not None else None,
             metadata_filter_source,
-            f"{len(scope.doc_ids)}doc/{scope.chunk_count}chunk" if scope is not None else "all",
+            f"{scope.render_candidate_count()}chunk" if scope is not None else "all",
             trace.get("metadata_filter_relaxed", False),
             filter_stats.kg_chunks_dropped,
+            trace.get("metadata_execution_strategy"),
+            trace.get("metadata_candidate_shortfall"),
             trace["lightrag_mix_chunk_count"],
             trace["direct_visual_chunk_count"],
             trace["bm25_chunk_count"],
@@ -237,7 +271,6 @@ class UnifiedRetriever:
         if metadata_filter is None or metadata_filter.is_empty():
             return None
         return await metadata_retrieve(
-            metadata_index=self._metadata_index,
             stores=self._stores,
             filters=metadata_filter,
         )

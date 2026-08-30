@@ -18,7 +18,7 @@ from dlightrag.adapters.postgres.corpus.corpus_bm25 import (
     rebuild_postgres_bm25,
     required_postgres_extensions,
 )
-from dlightrag.engine.rag.retrieval import MetadataScope
+from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.bm25 import (
     BM25_PROFILE_FALLBACK,
     BM25Profile,
@@ -28,8 +28,28 @@ from dlightrag.engine.rag.retrieval.bm25 import (
 from dlightrag.engine.rag.retrieval.language import BM25LanguageClassifier
 
 
-def _scope(*doc_ids: str, chunk_count: int = 12) -> MetadataScope:
-    return MetadataScope(doc_ids=frozenset(doc_ids), chunk_count=chunk_count)
+def _scope(
+    *, candidate_count: int = 12, candidate_count_exact: bool = True, doc_exists: bool = True
+) -> MetadataScope:
+    return MetadataScope(
+        filters=MetadataFilter(filename="x.pdf"),
+        filename_mode="exact",
+        doc_exists=doc_exists,
+        candidate_count=candidate_count,
+        candidate_count_exact=candidate_count_exact,
+    )
+
+
+def _metadata_conditions(workspace: str = "default") -> tuple[str, ...]:
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import metadata_match_conditions
+
+    conditions, _params = metadata_match_conditions(
+        workspace,
+        MetadataFilter(filename="x.pdf"),
+        filename_mode="exact",
+        start_index=3,
+    )
+    return tuple(conditions)
 
 
 def _profiled_bm25(
@@ -52,13 +72,16 @@ def test_bm25_sql_filters_candidates() -> None:
         scoped=True,
         limit=20,
         language="en",
+        metadata_conditions=_metadata_conditions(),
     )
 
-    assert "full_doc_id = ANY" in sql
-    assert "LIMIT $4" in sql
+    assert "full_doc_id IN (SELECT doc_id FROM dlightrag_doc_metadata" in sql
+    assert "workspace = $3" in sql
+    assert "LIMIT $5" in sql
     assert "to_bm25query" in sql
     assert "idx_lightrag_doc_chunks_bm25_en" in sql
     assert "dlightrag_bm25_language = 'en'" in sql
+    assert "ANY(" not in sql
 
 
 def test_bm25_sql_has_no_candidate_clause_when_unfiltered() -> None:
@@ -69,8 +92,17 @@ def test_bm25_sql_has_no_candidate_clause_when_unfiltered() -> None:
         language=None,
     )
 
-    assert "full_doc_id = ANY" not in sql
+    assert "full_doc_id IN" not in sql
     assert "LIMIT $3" in sql
+
+
+def test_bm25_sql_rejects_scoped_without_metadata_conditions() -> None:
+    with pytest.raises(ValueError, match="metadata conditions"):
+        build_bm25_sql(
+            index_name="idx_lightrag_doc_chunks_bm25_simple",
+            scoped=True,
+            limit=20,
+        )
 
 
 def test_bm25_sql_rejects_non_positive_limit() -> None:
@@ -278,7 +310,7 @@ async def test_bm25_search_empty_candidate_set_short_circuits() -> None:
     searcher = SimpleNamespace(search_profile=AsyncMock())
     bm25 = _profiled_bm25(searcher)
 
-    assert await bm25.search("query", scope=MetadataScope(doc_ids=frozenset(), chunk_count=0)) == []
+    assert await bm25.search("query", scope=_scope(doc_exists=False, candidate_count=0)) == []
     searcher.search_profile.assert_not_awaited()
 
 
@@ -305,15 +337,17 @@ async def test_bm25_search_maps_rows() -> None:
         "hello",
         profile_name="en",
         language=None,
-        doc_ids=["doc-a"],
+        scope=_scope(),
         limit=3,
     )
 
     args = conn.fetch.await_args.args
     assert args[1] == "hello"
     assert args[2] == "default"
-    assert args[3] == ["doc-a"]
-    assert args[4] == 3
+    assert args[3] == "default"  # the bound metadata-side workspace
+    assert args[4] == "x.pdf"
+    assert args[5] == 3
+    assert "full_doc_id IN (SELECT doc_id FROM dlightrag_doc_metadata" in args[0]
     assert rows == [
         {
             "chunk_id": "chunk-a",
@@ -346,7 +380,7 @@ async def test_bm25_search_uses_default_pool_manager(
             "hello",
             profile_name="simple",
             language=None,
-            doc_ids=None,
+            scope=None,
             limit=3,
         )
         == []
@@ -442,13 +476,13 @@ async def test_bm25_search_logs_profile_routing_and_results(
     )
 
     with caplog.at_level(logging.INFO, logger="dlightrag.engine.rag.retrieval.bm25"):
-        await bm25.search("hello", scope=_scope("doc-a"))
+        await bm25.search("hello", scope=_scope())
 
     assert "[BM25] search" in caplog.text
     assert "workspace=default" in caplog.text
     assert "query='hello'" in caplog.text
     assert "profiles=en" in caplog.text
-    assert "candidate_scope=1" in caplog.text
+    assert "candidate_scope=12chunk" in caplog.text
     assert "returned=1" in caplog.text
     assert "top=chunk-a:en:1.500" in caplog.text
 
@@ -575,7 +609,7 @@ async def test_bm25_routes_chinese_query_to_jieba_profile_only(
     assert searcher.search_profile.await_args.kwargs == {
         "profile_name": "zh",
         "language": "zh",
-        "doc_ids": None,
+        "scope": None,
         "limit": 5,
     }
     assert {row["chunk_id"] for row in rows} == {"zh-hit"}

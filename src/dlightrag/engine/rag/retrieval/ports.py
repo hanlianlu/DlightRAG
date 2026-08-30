@@ -3,7 +3,7 @@
 
 from typing import Any, Protocol
 
-from dlightrag.engine.rag.retrieval.models import ContextRow, MetadataScope
+from dlightrag.engine.rag.retrieval.models import ContextRow, MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.results import RetrievalResult
 
 
@@ -36,16 +36,33 @@ class BM25ProfileSearch(Protocol):
         *,
         profile_name: str,
         language: str | None,
-        doc_ids: list[str] | None,
+        scope: MetadataScope | None,
         limit: int,
     ) -> list[ContextRow]: ...
 
 
-class MetadataChunkStore(Protocol):
-    async def count_chunks_for_docs(self, doc_ids: list[str]) -> int: ...
+class MetadataScopeStore(Protocol):
+    """Resolve one normalized filter into scope facts without materializing ids."""
+
+    async def resolve_scope(self, filters: MetadataFilter) -> MetadataScope: ...
 
 
-class CorpusChunkStore(MetadataChunkStore, Protocol):
+class ScopedChunkReader(Protocol):
+    """Read graph-referenced chunks under an active metadata scope.
+
+    Returns one entry per requested id in positional order (duplicates
+    preserved, ``None`` for missing or out-of-scope rows) so callers keep
+    zipping results against the ids they asked for.
+    """
+
+    async def read_scoped(
+        self,
+        scope: MetadataScope,
+        chunk_ids: list[str],
+    ) -> list[dict[str, Any] | None]: ...
+
+
+class CorpusChunkStore(MetadataScopeStore, Protocol):
     async def overwrite_chunk_vectors(
         self,
         vectors: dict[str, list[float]],
@@ -75,6 +92,7 @@ __all__ = [
     "BM25ProfileSearch",
     "CorpusChunkStore",
     "FilteredVectorSearch",
-    "MetadataChunkStore",
+    "MetadataScopeStore",
     "RetrievalBackend",
+    "ScopedChunkReader",
 ]

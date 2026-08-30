@@ -122,12 +122,12 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         assert service._metadata_index is not None
         assert service._lightrag_stores is not None
         scope = await metadata_retrieve(
-            metadata_index=service._metadata_index,
             stores=service._lightrag_stores,
             filters=MetadataFilter(custom={"e2e_case": "pg18"}),
         )
-        assert scope.doc_ids == frozenset({doc_id})
-        assert scope.chunk_count >= 1
+        assert scope.doc_exists is True
+        assert scope.candidate_count >= 1
+        assert scope.candidate_count_exact is True
 
         assert service._bm25 is not None
         bm25_rows = await service._bm25.search(
@@ -141,7 +141,13 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         raw_chunks = await service._lightrag_stores.get_text_chunks([chunk_id])
         indexed_text = str(raw_chunks[0]["content"])
         query_embedding = stable_vector(f"document:{indexed_text}", dim=cfg.models.embedding.dim)
-        missing_scope = MetadataScope(doc_ids=frozenset({"missing-doc"}), chunk_count=1)
+        missing_scope = MetadataScope(
+            filters=MetadataFilter(filename="missing-doc.pdf"),
+            filename_mode="exact",
+            doc_exists=True,
+            candidate_count=1,
+            candidate_count_exact=True,
+        )
         async with metadata_filter_scope(missing_scope):
             assert (
                 await service._lightrag.chunks_vdb.query(
