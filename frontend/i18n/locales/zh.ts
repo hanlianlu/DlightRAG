@@ -90,7 +90,7 @@ export const templates: Record<
   'chatMessageList.olderLoaded': '已加载更早的消息。',
   'chatMessageList.chatAria': '聊天',
   'chatMessageList.messagesAria': '会话消息',
-  'chatMessageList.welcomeSub': '欢迎使用DlightRAG知识库',
+  'chatMessageList.welcomeSub': '欢迎使用DlightRAG!',
   'chatMessageList.retryLoadOlder': '重试加载更早的消息',
   'chatMessageList.loadOlder': '加载更早的消息',
   'chatMessageList.forkedFrom': str`从 ${0} 分支而来`,
