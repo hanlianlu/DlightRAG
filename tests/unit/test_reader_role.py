@@ -177,12 +177,34 @@ class _SchemaConn:
         self._oids = {name: 900 + index for index, name in enumerate(self._tables)}
         self._by_oid = {oid: name for name, oid in self._oids.items()}
 
+    def _table_for(self, *args: Any) -> Any:
+        """Resolve one catalog row by OID (migration verifier) or name (partition seam)."""
+        key = args[0] if args else None
+        if key in self._tables:
+            return self._tables[key]
+        if key in self._by_oid:
+            return self._tables[self._by_oid[key]]
+        return None
+
     async def fetchval(self, sql: str, *args: Any) -> Any:
         if "dlightrag_schema_migrations" in sql:
             return self.ledger_exists
+        if "pg_inherits" in sql:
+            return True  # every declared parent index has a child index
         if "pg_catalog.pg_class" in sql:
+            if "SELECT c.relkind" in sql:
+                table = self._table_for(*args)
+                return "p" if table is not None and table.partitioned_by else "r"
             return self._oids.get(str(args[0]))
         raise AssertionError(f"unexpected fetchval: {sql}")
+
+    async def fetchrow(self, sql: str, *args: Any) -> dict[str, Any] | None:
+        table = self._table_for(*args)
+        if "contype = 'p'" in sql:
+            return {"name": f"{table.name}_pkey", "columns": list(table.primary_key)}
+        if "pg_partitioned_table" in sql:
+            return {"columns": list(table.partitioned_by)}
+        raise AssertionError(f"unexpected fetchrow: {sql}")
 
     async def fetch(self, sql: str, *args: Any) -> list[dict[str, Any]]:
         if "pg_catalog" not in sql:
@@ -192,13 +214,20 @@ class _SchemaConn:
                 for applied_scope, version in sorted(self.applied)
                 if applied_scope == scope
             ]
-        table = self._tables[self._by_oid[int(args[0])]]
+        table = self._table_for(*args)
         if "attisdropped" in sql:
             return [{"name": name} for name in table.columns]
         if "pg_index" in sql:
+            if "pg_get_indexdef" in sql:
+                return [
+                    {"name": name, "definition": f"CREATE INDEX {name} ON {table.name}"}
+                    for name in (*table.indexes, *table.unique_indexes)
+                ]
             if "indisunique" in sql:
                 return [{"name": name} for name in table.unique_indexes]
             return [{"name": name} for name in (*table.indexes, *table.unique_indexes)]
+        if "pg_inherits" in sql and "SELECT c.relname" in sql:
+            return [{"name": child} for child in table.required_child_partitions]
         if "contype = 'c'" in sql:
             return [{"name": name} for name in table.checks]
         if "contype IN ('p', 'u')" in sql:
@@ -339,7 +368,7 @@ async def test_reader_startup_fails_when_a_required_table_is_absent(scope_index:
 
     with (
         _domain_pool_routed_to(conn),
-        pytest.raises(schema_error, match=f"table {tables[0].name}"),
+        pytest.raises(schema_error, match=tables[0].name),
     ):
         await store_cls().initialize(validate_only=True)
 

@@ -10,6 +10,7 @@ import pytest
 from dlightrag.adapters.postgres.corpus import corpus as corpus_module
 from dlightrag.adapters.postgres.corpus.corpus import (
     PGCorpusCoordination,
+    PGCorpusMaintenanceStore,
     PGCorpusRuntimeBinder,
     build_pg_corpus_backend,
 )
@@ -82,6 +83,23 @@ def test_backend_factory_applies_lightrag_environment_on_create(
     apply_runtime.assert_called_once_with(force=True)
 
 
+def test_retrieval_partition_specs_cover_vector_filter_and_ann_contract() -> None:
+    lightrag = SimpleNamespace(
+        chunks_vdb=SimpleNamespace(
+            table_name="lightrag_vdb_chunks_8",
+            db=SimpleNamespace(vector_index_type="HNSW"),
+        )
+    )
+
+    chunks, vectors = corpus_module.lightrag_retrieval_table_specs(lightrag)
+
+    assert chunks.name.lower() == "lightrag_doc_chunks"
+    assert chunks.primary_key == ("workspace", "id")
+    assert vectors.name == "lightrag_vdb_chunks_8"
+    assert "full_doc_id" in vectors.required_columns
+    assert vectors.required_index_markers == ("USING hnsw",)
+
+
 @pytest.mark.parametrize("is_reader", [False, True])
 async def test_runtime_binder_composes_workspace_stores(
     test_config: DlightragConfig,
@@ -102,6 +120,8 @@ async def test_runtime_binder_composes_workspace_stores(
     vector_constructor = MagicMock(return_value=vectors)
     file_panel_constructor = MagicMock(return_value=file_panel)
     create_bm25 = AsyncMock(return_value=bm25)
+    foundation = SimpleNamespace(ensure_tables=AsyncMock(), verify_tables=AsyncMock())
+    foundation_constructor = MagicMock(return_value=foundation)
     guard = SimpleNamespace(
         verify_surface=MagicMock(),
         verify_read_only_attach_contract=MagicMock(),
@@ -113,6 +133,7 @@ async def test_runtime_binder_composes_workspace_stores(
     monkeypatch.setattr(corpus_module, "PGCorpusChunkStore", chunk_constructor)
     monkeypatch.setattr(corpus_module, "PGFilteredVectorSearch", vector_constructor)
     monkeypatch.setattr(corpus_module, "PGFilePanelStore", file_panel_constructor)
+    monkeypatch.setattr(corpus_module, "PGPartitionFoundation", foundation_constructor)
     monkeypatch.setattr(corpus_module, "profiles_from_config", MagicMock(return_value=profiles))
     monkeypatch.setattr(corpus_module, "create_postgres_bm25", create_bm25)
     monkeypatch.setattr(corpus_module, "PGLightRAGContractGuard", guard_constructor)
@@ -127,11 +148,19 @@ async def test_runtime_binder_composes_workspace_stores(
     guard.verify_surface.assert_called_once_with()
     guard.verify_all.assert_awaited_once_with()
     if is_reader:
+        foundation.ensure_tables.assert_not_awaited()
+        foundation.verify_tables.assert_awaited_once_with(
+            specs=corpus_module.lightrag_retrieval_table_specs(lightrag)
+        )
         file_panel_constructor.assert_not_called()
         guard.verify_read_only_attach_contract.assert_called_once_with()
         attach_read_only.assert_awaited_once_with(lightrag, config=config)
         lightrag.initialize_storages.assert_not_awaited()
     else:
+        foundation.verify_tables.assert_not_awaited()
+        foundation.ensure_tables.assert_awaited_once_with(
+            specs=corpus_module.lightrag_retrieval_table_specs(lightrag)
+        )
         file_panel_constructor.assert_called_once_with()
         file_panel.ensure_page_index.assert_awaited_once_with()
         guard.verify_read_only_attach_contract.assert_not_called()
@@ -153,6 +182,24 @@ async def test_runtime_binder_composes_workspace_stores(
     assert stores.filtered_vectors is vectors
     assert stores.bm25 is bm25
     assert stores.bm25_languages == ("en",)
+
+
+@pytest.mark.parametrize("validate_only", [False, True])
+async def test_maintenance_initializes_registry_and_promotion_job_schemas(
+    validate_only: bool,
+) -> None:
+    registry = SimpleNamespace(initialize=AsyncMock())
+    promotion_jobs = SimpleNamespace(initialize=AsyncMock())
+    store = PGCorpusMaintenanceStore(
+        {},
+        workspace_registry=registry,  # pyright: ignore[reportArgumentType]
+        promotion_jobs=promotion_jobs,  # pyright: ignore[reportArgumentType]
+    )
+
+    await store.initialize(validate_only=validate_only)
+
+    registry.initialize.assert_awaited_once_with(validate_only=validate_only)
+    promotion_jobs.initialize.assert_awaited_once_with(validate_only=validate_only)
 
 
 async def test_runtime_binder_rejects_missing_postgres_chunk_backend(

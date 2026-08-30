@@ -3,7 +3,7 @@
 
 from typing import Any
 
-_BOOTSTRAPPABLE_EXTENSIONS = frozenset({"pg_textsearch", "pg_jieba"})
+_BOOTSTRAPPABLE_EXTENSIONS = frozenset({"pg_textsearch", "pg_jieba", "pg_trgm"})
 
 # DlightRAG's PostgreSQL major is a hard runtime requirement, not a tunable:
 # pgvector halfvec, pg_textsearch, and pg_jieba are all pinned to the PG18
@@ -69,8 +69,12 @@ async def ensure_postgres_extensions(conn: Any, extensions: tuple[str, ...]) -> 
         try:
             await conn.execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
         except Exception as exc:
-            # Both bootstrappable extensions exist only to serve BM25.
+            if extension in ("pg_textsearch", "pg_jieba"):
+                # Both bootstrappable text-search extensions exist only to serve BM25.
+                raise RuntimeError(
+                    f"PostgreSQL extension {extension!r} is unavailable ({exc}). "
+                    "It backs BM25 retrieval; set bm25_enabled: false to run vector-only."
+                ) from exc
             raise RuntimeError(
-                f"PostgreSQL extension {extension!r} is unavailable ({exc}). "
-                "It backs BM25 retrieval; set bm25_enabled: false to run vector-only."
+                f"PostgreSQL extension {extension!r} is unavailable ({exc})."
             ) from exc

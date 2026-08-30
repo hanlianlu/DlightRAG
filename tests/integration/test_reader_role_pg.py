@@ -100,6 +100,14 @@ async def database() -> AsyncIterator[str]:
         await admin.execute(f'CREATE DATABASE "{db_name}"')
     finally:
         await admin.close()
+    # The document-metadata migration installs a pg_trgm GIN index; the
+    # throwaway databases carry the extension the writer's startup path
+    # guarantees on real environments.
+    setup = await asyncpg.connect(**{**_PG_CONN_KWARGS, "database": db_name})
+    try:
+        await setup.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+    finally:
+        await setup.close()
     try:
         yield db_name
     finally:

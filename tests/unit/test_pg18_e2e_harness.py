@@ -58,7 +58,7 @@ def test_pg18_harness_connection_env_falls_back_to_canonical_storage_namespace()
 
 
 def test_pg18_harness_tracks_required_postgres_extensions() -> None:
-    assert REQUIRED_EXTENSIONS == ("vector", "pg_textsearch", "pg_jieba")
+    assert REQUIRED_EXTENSIONS == ("vector", "pg_textsearch", "pg_jieba", "pg_trgm")
 
 
 def test_pg18_harness_validates_preloaded_libraries() -> None:

@@ -149,6 +149,98 @@ async def test_workspace_registry_rejects_an_empty_workspace() -> None:
         await registry.exists("  ")
 
 
+async def test_add_ingested_counts_only_accepts_non_negative_monotonic_deltas() -> None:
+    conn = _Conn()
+    registry = PGWorkspaceRegistry(pool=_Pool(conn))
+
+    assert await registry.add_ingested_counts(workspace="research", docs=3, chunks=41) is True
+    sql, args = conn.executed[-1]
+    assert "ingested_docs_total = ingested_docs_total + $2" in sql
+    assert args == ("research", 3, 41)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        await registry.add_ingested_counts(workspace="research", docs=-1, chunks=0)
+
+
+async def test_storage_tier_and_promotion_state_are_validated() -> None:
+    conn = _Conn()
+    registry = PGWorkspaceRegistry(pool=_Pool(conn))
+
+    assert await registry.set_storage_tier(workspace="research", tier="hot") is True
+    sql, _args = conn.executed[-1]
+    assert "storage_tier = 'shared' AND $2 = 'hot'" in sql
+    with pytest.raises(ValueError, match="storage tier"):
+        await registry.set_storage_tier(workspace="research", tier="promoting")
+
+    assert (
+        await registry.set_promotion_state(
+            workspace="research",
+            state="failed",
+            error="invariant mismatch",
+            next_retry_at="2026-04-02T00:00:00Z",
+        )
+        is True
+    )
+    with pytest.raises(ValueError, match="must record its error"):
+        await registry.set_promotion_state(workspace="research", state="failed")
+    with pytest.raises(ValueError, match="retry time"):
+        await registry.set_promotion_state(
+            workspace="research", state="failed", error="invariant mismatch"
+        )
+    with pytest.raises(ValueError, match="promotion state"):
+        await registry.set_promotion_state(workspace="research", state="cutover")
+
+
+async def test_write_fence_acquire_and_release_are_owner_scoped() -> None:
+    conn = _Conn()
+    registry = PGWorkspaceRegistry(pool=_Pool(conn))
+
+    assert (
+        await registry.acquire_write_fence(
+            workspace="research", owner="worker-1", until="2026-04-01T00:00:00Z"
+        )
+        is True
+    )
+    sql, args = conn.executed[-1]
+    assert "write_fence_owner IS NULL" in sql
+    assert "$3::timestamptz > NOW()" in sql
+    assert args == ("research", "worker-1", "2026-04-01T00:00:00Z")
+
+    assert await registry.release_write_fence(workspace="research", owner="worker-1") is True
+    sql, args = conn.executed[-1]
+    assert "write_fence_owner = $2 OR write_fence_owner IS NULL" in sql
+    assert args == ("research", "worker-1")
+
+    with pytest.raises(ValueError, match="owner cannot be empty"):
+        await registry.acquire_write_fence(
+            workspace="research", owner="  ", until="2026-04-01T00:00:00Z"
+        )
+
+
+async def test_registry_schema_declares_control_plane_columns_and_checks() -> None:
+    from dlightrag.adapters.postgres.corpus import workspaces
+
+    sql = "\n".join(
+        stmt for migration in workspaces._SCHEMA_MIGRATIONS for stmt in migration.statements
+    )
+
+    assert "ingested_docs_total" in sql
+    assert "ingested_chunks_total" in sql
+    assert "storage_tier IN ('shared', 'hot')" in sql
+    assert "promotion_state IN ('none', 'pending', 'promoting', 'failed')" in sql
+    assert "write_fence_owner" in sql
+    assert "(write_fence_owner IS NULL) = (write_fence_until IS NULL)" in sql
+    assert "(promotion_state = 'failed') = (promotion_last_error IS NOT NULL)" in sql
+    assert "(promotion_state = 'failed') = (promotion_next_retry_at IS NOT NULL)" in sql
+    assert "workspace_meta_promotion_constraints" in {
+        migration.version for migration in workspaces._SCHEMA_MIGRATIONS
+    }
+    upgrade_sql = workspaces._ADD_WORKSPACE_CHECKS
+    for constraint_name, expression in workspaces._WORKSPACE_CHECK_EXPRESSIONS:
+        assert f"ADD CONSTRAINT {constraint_name}" in upgrade_sql
+        assert f"CHECK ({expression})" in upgrade_sql
+
+
 async def test_workspace_registry_list_page_uses_ascending_keyset_without_offset() -> None:
     conn = _Conn()
     registry = PGWorkspaceRegistry(pool=_Pool(conn))

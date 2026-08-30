@@ -27,10 +27,36 @@ CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
     workspace       TEXT PRIMARY KEY,
     display_name    TEXT NOT NULL DEFAULT '',
     embedding_model TEXT NOT NULL DEFAULT '',
+    ingested_docs_total    BIGINT NOT NULL DEFAULT 0,
+    ingested_chunks_total  BIGINT NOT NULL DEFAULT 0,
+    storage_tier           TEXT NOT NULL DEFAULT 'shared',
+    promotion_state        TEXT NOT NULL DEFAULT 'none',
+    promotion_last_error   TEXT,
+    promotion_retry_count  INTEGER NOT NULL DEFAULT 0,
+    promotion_next_retry_at TIMESTAMPTZ,
+    write_fence_owner      TEXT,
+    write_fence_until      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ DEFAULT NOW()
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT dlightrag_workspace_meta_counters_nonnegative
+        CHECK (ingested_docs_total >= 0 AND ingested_chunks_total >= 0),
+    CONSTRAINT dlightrag_workspace_meta_tier
+        CHECK (storage_tier IN ('shared', 'hot')),
+    CONSTRAINT dlightrag_workspace_meta_promotion_state
+        CHECK (promotion_state IN ('none', 'pending', 'promoting', 'failed')),
+    CONSTRAINT dlightrag_workspace_meta_retry_nonnegative
+        CHECK (promotion_retry_count >= 0),
+    CONSTRAINT dlightrag_workspace_meta_fence_pair
+        CHECK ((write_fence_owner IS NULL) = (write_fence_until IS NULL)),
+    CONSTRAINT dlightrag_workspace_meta_failed_error
+        CHECK ((promotion_state = 'failed') = (promotion_last_error IS NOT NULL)),
+    CONSTRAINT dlightrag_workspace_meta_retry_state
+        CHECK ((promotion_state = 'failed') = (promotion_next_retry_at IS NOT NULL))
 )
 """
+
+_STORAGE_TIERS = frozenset({"shared", "hot"})
+_PROMOTION_STATES = frozenset({"none", "pending", "promoting", "failed"})
 
 _UPSERT = """
 INSERT INTO dlightrag_workspace_meta (workspace, display_name, embedding_model)
@@ -66,19 +92,217 @@ SELECT EXISTS (
 
 _DELETE = "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1"
 
+_ADD_INGESTED_COUNTS = """
+UPDATE dlightrag_workspace_meta
+SET ingested_docs_total = ingested_docs_total + $2,
+    ingested_chunks_total = ingested_chunks_total + $3,
+    updated_at = NOW()
+WHERE workspace = $1
+"""
+
+_SET_STORAGE_TIER = """
+UPDATE dlightrag_workspace_meta
+SET storage_tier = $2, updated_at = NOW()
+WHERE workspace = $1
+  AND (storage_tier = $2 OR (storage_tier = 'shared' AND $2 = 'hot'))
+"""
+
+_SET_PROMOTION_STATE = """
+UPDATE dlightrag_workspace_meta
+SET promotion_state = $2,
+    promotion_last_error = CASE WHEN $2 = 'failed' THEN $3 ELSE NULL END,
+    promotion_retry_count = CASE WHEN $2 = 'failed' THEN promotion_retry_count + 1
+                                 ELSE promotion_retry_count END,
+    promotion_next_retry_at = CASE WHEN $2 = 'failed' THEN $4::timestamptz ELSE NULL END,
+    updated_at = NOW()
+WHERE workspace = $1
+"""
+
+_ACQUIRE_WRITE_FENCE = """
+UPDATE dlightrag_workspace_meta
+SET write_fence_owner = $2, write_fence_until = $3::timestamptz, updated_at = NOW()
+WHERE workspace = $1
+  AND $3::timestamptz > NOW()
+  AND (write_fence_owner IS NULL
+       OR write_fence_owner = $2
+       OR write_fence_until <= NOW())
+"""
+
+_RELEASE_WRITE_FENCE = """
+UPDATE dlightrag_workspace_meta
+SET write_fence_owner = NULL, write_fence_until = NULL, updated_at = NOW()
+WHERE workspace = $1 AND (write_fence_owner = $2 OR write_fence_owner IS NULL)
+"""
+
+_GET_ROW = """
+SELECT workspace, display_name, embedding_model,
+       ingested_docs_total, ingested_chunks_total,
+       storage_tier, promotion_state, promotion_last_error,
+       promotion_retry_count, promotion_next_retry_at,
+       write_fence_owner, write_fence_until,
+       created_at, updated_at
+FROM dlightrag_workspace_meta
+WHERE workspace = $1
+"""
+
+_WORKSPACE_CHECK_EXPRESSIONS = (
+    (
+        "dlightrag_workspace_meta_counters_nonnegative",
+        "ingested_docs_total >= 0 AND ingested_chunks_total >= 0",
+    ),
+    ("dlightrag_workspace_meta_tier", "storage_tier IN ('shared', 'hot')"),
+    (
+        "dlightrag_workspace_meta_promotion_state",
+        "promotion_state IN ('none', 'pending', 'promoting', 'failed')",
+    ),
+    ("dlightrag_workspace_meta_retry_nonnegative", "promotion_retry_count >= 0"),
+    (
+        "dlightrag_workspace_meta_fence_pair",
+        "(write_fence_owner IS NULL) = (write_fence_until IS NULL)",
+    ),
+    (
+        "dlightrag_workspace_meta_failed_error",
+        "(promotion_state = 'failed') = (promotion_last_error IS NOT NULL)",
+    ),
+    (
+        "dlightrag_workspace_meta_retry_state",
+        "(promotion_state = 'failed') = (promotion_next_retry_at IS NOT NULL)",
+    ),
+)
+
+
+_ADD_WORKSPACE_CHECKS = """
+DO $dlightrag$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+                   WHERE conrelid = 'dlightrag_workspace_meta'::regclass
+                     AND conname = 'dlightrag_workspace_meta_counters_nonnegative') THEN
+        ALTER TABLE dlightrag_workspace_meta
+        ADD CONSTRAINT dlightrag_workspace_meta_counters_nonnegative
+        CHECK (ingested_docs_total >= 0 AND ingested_chunks_total >= 0);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+                   WHERE conrelid = 'dlightrag_workspace_meta'::regclass
+                     AND conname = 'dlightrag_workspace_meta_tier') THEN
+        ALTER TABLE dlightrag_workspace_meta
+        ADD CONSTRAINT dlightrag_workspace_meta_tier
+        CHECK (storage_tier IN ('shared', 'hot'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+                   WHERE conrelid = 'dlightrag_workspace_meta'::regclass
+                     AND conname = 'dlightrag_workspace_meta_promotion_state') THEN
+        ALTER TABLE dlightrag_workspace_meta
+        ADD CONSTRAINT dlightrag_workspace_meta_promotion_state
+        CHECK (promotion_state IN ('none', 'pending', 'promoting', 'failed'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+                   WHERE conrelid = 'dlightrag_workspace_meta'::regclass
+                     AND conname = 'dlightrag_workspace_meta_retry_nonnegative') THEN
+        ALTER TABLE dlightrag_workspace_meta
+        ADD CONSTRAINT dlightrag_workspace_meta_retry_nonnegative
+        CHECK (promotion_retry_count >= 0);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+                   WHERE conrelid = 'dlightrag_workspace_meta'::regclass
+                     AND conname = 'dlightrag_workspace_meta_fence_pair') THEN
+        ALTER TABLE dlightrag_workspace_meta
+        ADD CONSTRAINT dlightrag_workspace_meta_fence_pair
+        CHECK ((write_fence_owner IS NULL) = (write_fence_until IS NULL));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+                   WHERE conrelid = 'dlightrag_workspace_meta'::regclass
+                     AND conname = 'dlightrag_workspace_meta_failed_error') THEN
+        ALTER TABLE dlightrag_workspace_meta
+        ADD CONSTRAINT dlightrag_workspace_meta_failed_error
+        CHECK ((promotion_state = 'failed') = (promotion_last_error IS NOT NULL));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+                   WHERE conrelid = 'dlightrag_workspace_meta'::regclass
+                     AND conname = 'dlightrag_workspace_meta_retry_state') THEN
+        ALTER TABLE dlightrag_workspace_meta
+        ADD CONSTRAINT dlightrag_workspace_meta_retry_state
+        CHECK ((promotion_state = 'failed') = (promotion_next_retry_at IS NOT NULL));
+    END IF;
+END
+$dlightrag$
+"""
+
+
 _SCHEMA_MIGRATIONS = (
     Migration(
         "workspace_meta",
         "Create and migrate workspace registry",
         (_CREATE,),
     ),
+    Migration(
+        "workspace_meta_promotion_counters",
+        "Add monotonic ingestion counters",
+        (
+            "ALTER TABLE dlightrag_workspace_meta "
+            "ADD COLUMN IF NOT EXISTS ingested_docs_total BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE dlightrag_workspace_meta "
+            "ADD COLUMN IF NOT EXISTS ingested_chunks_total BIGINT NOT NULL DEFAULT 0",
+        ),
+    ),
+    Migration(
+        "workspace_meta_storage_tier",
+        "Add storage tier",
+        (
+            "ALTER TABLE dlightrag_workspace_meta "
+            "ADD COLUMN IF NOT EXISTS storage_tier TEXT NOT NULL DEFAULT 'shared'",
+        ),
+    ),
+    Migration(
+        "workspace_meta_promotion_state",
+        "Add promotion observability fields",
+        (
+            "ALTER TABLE dlightrag_workspace_meta "
+            "ADD COLUMN IF NOT EXISTS promotion_state TEXT NOT NULL DEFAULT 'none'",
+            "ALTER TABLE dlightrag_workspace_meta "
+            "ADD COLUMN IF NOT EXISTS promotion_last_error TEXT",
+            "ALTER TABLE dlightrag_workspace_meta "
+            "ADD COLUMN IF NOT EXISTS promotion_retry_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE dlightrag_workspace_meta "
+            "ADD COLUMN IF NOT EXISTS promotion_next_retry_at TIMESTAMPTZ",
+        ),
+    ),
+    Migration(
+        "workspace_meta_write_fence",
+        "Add promotion write-fence facts",
+        (
+            "ALTER TABLE dlightrag_workspace_meta ADD COLUMN IF NOT EXISTS write_fence_owner TEXT",
+            "ALTER TABLE dlightrag_workspace_meta "
+            "ADD COLUMN IF NOT EXISTS write_fence_until TIMESTAMPTZ",
+        ),
+    ),
+    Migration(
+        "workspace_meta_promotion_constraints",
+        "Install registry counter, tier, state, retry, and fence invariants",
+        (_ADD_WORKSPACE_CHECKS,),
+    ),
 )
 
 _SCHEMA_TABLES = (
     TableRequirement(
         name="dlightrag_workspace_meta",
-        columns=("workspace", "display_name", "embedding_model", "created_at", "updated_at"),
+        columns=(
+            "workspace",
+            "display_name",
+            "embedding_model",
+            "ingested_docs_total",
+            "ingested_chunks_total",
+            "storage_tier",
+            "promotion_state",
+            "promotion_last_error",
+            "promotion_retry_count",
+            "promotion_next_retry_at",
+            "write_fence_owner",
+            "write_fence_until",
+            "created_at",
+            "updated_at",
+        ),
         primary_key=("workspace",),
+        checks=tuple(name for name, _expression in _WORKSPACE_CHECK_EXPRESSIONS),
     ),
 )
 
@@ -184,6 +408,104 @@ class PGWorkspaceRegistry(PostgresOperationRunner):
             return result != "DELETE 0"
 
         return await self._run(_operation)
+
+    # -- Promotion control-plane foundation (no worker wiring yet) -----------
+    # These narrow interfaces exist for the Commit 3 promotion control plane.
+    # Nothing in this revision increments the counters or drives a job.
+
+    async def add_ingested_counts(
+        self,
+        *,
+        workspace: str,
+        docs: int,
+        chunks: int,
+    ) -> bool:
+        """Add non-negative ingestion counts; the stored totals never decrease."""
+        workspace_id = _workspace_id(workspace)
+        docs_delta = int(docs)
+        chunks_delta = int(chunks)
+        if docs_delta < 0 or chunks_delta < 0:
+            raise ValueError("ingested count deltas must be non-negative")
+
+        async def _operation(conn: Any) -> str:
+            return await conn.execute(_ADD_INGESTED_COUNTS, workspace_id, docs_delta, chunks_delta)
+
+        return (await self._run(_operation)) != "UPDATE 0"
+
+    async def set_storage_tier(self, *, workspace: str, tier: str) -> bool:
+        """Set the observed storage tier; dedicated workspaces never auto-demote."""
+        workspace_id = _workspace_id(workspace)
+        if tier not in _STORAGE_TIERS:
+            raise ValueError(f"storage tier must be one of {sorted(_STORAGE_TIERS)}")
+
+        async def _operation(conn: Any) -> str:
+            return await conn.execute(_SET_STORAGE_TIER, workspace_id, tier)
+
+        return (await self._run(_operation)) != "UPDATE 0"
+
+    async def set_promotion_state(
+        self,
+        *,
+        workspace: str,
+        state: str,
+        error: str | None = None,
+        next_retry_at: Any = None,
+    ) -> bool:
+        """Record promotion observability; a failed state requires an error."""
+        workspace_id = _workspace_id(workspace)
+        if state not in _PROMOTION_STATES:
+            raise ValueError(f"promotion state must be one of {sorted(_PROMOTION_STATES)}")
+        if state == "failed" and not error:
+            raise ValueError("a failed promotion state must record its error")
+        if state == "failed" and next_retry_at is None:
+            raise ValueError("a failed promotion state must schedule its retry time")
+
+        async def _operation(conn: Any) -> str:
+            return await conn.execute(
+                _SET_PROMOTION_STATE, workspace_id, state, error, next_retry_at
+            )
+
+        return (await self._run(_operation)) != "UPDATE 0"
+
+    async def acquire_write_fence(
+        self,
+        *,
+        workspace: str,
+        owner: str,
+        until: Any,
+    ) -> bool:
+        """Take or renew the promotion write fence; an expired fence is free."""
+        workspace_id = _workspace_id(workspace)
+        owner_id = str(owner).strip()
+        if not owner_id:
+            raise ValueError("write-fence owner cannot be empty")
+
+        async def _operation(conn: Any) -> str:
+            return await conn.execute(_ACQUIRE_WRITE_FENCE, workspace_id, owner_id, until)
+
+        return (await self._run(_operation)) != "UPDATE 0"
+
+    async def release_write_fence(self, *, workspace: str, owner: str) -> bool:
+        """Release a fence the caller owns (or one that is already gone)."""
+        workspace_id = _workspace_id(workspace)
+        owner_id = str(owner).strip()
+        if not owner_id:
+            raise ValueError("write-fence owner cannot be empty")
+
+        async def _operation(conn: Any) -> str:
+            return await conn.execute(_RELEASE_WRITE_FENCE, workspace_id, owner_id)
+
+        return (await self._run(_operation)) != "UPDATE 0"
+
+    async def get_row(self, workspace: str) -> dict[str, Any] | None:
+        """Return the full registry row, including control-plane facts."""
+        workspace_id = _workspace_id(workspace)
+
+        async def _operation(conn: Any) -> Any:
+            return await conn.fetchrow(_GET_ROW, workspace_id)
+
+        row = await self._run(_operation)
+        return dict(row) if row is not None else None
 
 
 def _workspace_id(workspace: str) -> str:

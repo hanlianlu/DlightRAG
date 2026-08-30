@@ -33,7 +33,12 @@ from dlightrag.adapters.postgres.corpus.lightrag_readonly import (
     attach_lightrag_storages_read_only,
     verify_reader_corpus_session,
 )
+from dlightrag.adapters.postgres.corpus.partition_foundation import (
+    PartitionedTableSpec,
+    PGPartitionFoundation,
+)
 from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+from dlightrag.adapters.postgres.corpus.promotion_jobs import PGPromotionJobStore
 from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
 from dlightrag.application.config import DlightragConfig
 from dlightrag.engine.rag.retrieval.bm25 import profile_languages, profiles_from_config
@@ -58,6 +63,59 @@ ORDER BY tablename
 _HAS_WORKSPACE_COLUMN = """SELECT 1 FROM information_schema.columns
 WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'workspace'
 """
+
+_CHUNKS_REQUIRED_COLUMNS = ("id", "workspace", "full_doc_id", "content", "file_path")
+_VECTOR_REQUIRED_COLUMNS = (
+    "id",
+    "workspace",
+    "full_doc_id",
+    "content",
+    "content_vector",
+    "file_path",
+)
+
+
+def lightrag_retrieval_table_specs(lightrag: Any) -> tuple[PartitionedTableSpec, ...]:
+    """Partition specs for the LightRAG-owned retrieval-critical tables.
+
+    ``LIGHTRAG_DOC_CHUNKS`` (and therefore BM25) plus the dynamic chunk-vector
+    table this runtime attached. LightRAG keeps creating these tables; the
+    partition seam converts the fresh empty ones after ``initialize_storages``
+    and validates them on every later startup.
+    """
+    from dlightrag.adapters.postgres.corpus._corpus_schema import LIGHTRAG_CHUNKS_TABLE
+
+    chunks_spec = PartitionedTableSpec(
+        name=LIGHTRAG_CHUNKS_TABLE,
+        required_columns=_CHUNKS_REQUIRED_COLUMNS,
+        primary_key=("workspace", "id"),
+        required_indexes=(
+            "idx_lightrag_doc_chunks_id",
+            "idx_lightrag_doc_chunks_workspace_id",
+        ),
+    )
+    vdb = getattr(lightrag, "chunks_vdb", None)
+    vector_table = getattr(vdb, "table_name", None)
+    if not vector_table:
+        return (chunks_spec,)
+    index_type = str(getattr(getattr(vdb, "db", None), "vector_index_type", "") or "").lower()
+    # HNSW and HNSW_HALFVEC share the ``hnsw`` access method (halfvec changes
+    # only the operator class), so the indexdef marker is the method name.
+    marker = {
+        "hnsw": "USING hnsw",
+        "hnsw_halfvec": "USING hnsw",
+        "ivfflat": "USING ivfflat",
+        "vchordrq": "USING vchordrq",
+    }.get(index_type, "")
+    return (
+        chunks_spec,
+        PartitionedTableSpec(
+            name=str(vector_table),
+            required_columns=_VECTOR_REQUIRED_COLUMNS,
+            primary_key=("workspace", "id"),
+            required_index_markers=(marker,) if marker else (),
+        ),
+    )
 
 
 def _configured_process_count() -> int:
@@ -212,12 +270,18 @@ class PGCorpusMaintenanceStore:
         connection_kwargs: Mapping[str, Any],
         *,
         workspace_registry: PGWorkspaceRegistry | None = None,
+        promotion_jobs: PGPromotionJobStore | None = None,
     ) -> None:
         self._connection_kwargs = dict(connection_kwargs)
         self._workspace_registry = workspace_registry or PGWorkspaceRegistry()
+        self._promotion_jobs = promotion_jobs or PGPromotionJobStore()
 
     async def initialize(self, *, validate_only: bool = False) -> None:
+        # The job table is part of the Commit-1 durable schema foundation even
+        # before Commit 3 wires its worker. Readers validate both scopes and
+        # remain strictly DDL-free.
         await self._workspace_registry.initialize(validate_only=validate_only)
+        await self._promotion_jobs.initialize(validate_only=validate_only)
 
     @asynccontextmanager
     async def _connection(self) -> AsyncIterator[Any]:
@@ -339,6 +403,16 @@ class PGCorpusRuntimeBinder:
         else:
             await lightrag.initialize_storages()
         await guard.verify_all()
+        foundation = PGPartitionFoundation()
+        if config.is_reader:
+            # Readers never issue DDL: validate the partitioned retrieval
+            # tables the writer is required to have established.
+            await foundation.verify_tables(specs=lightrag_retrieval_table_specs(lightrag))
+        else:
+            # LightRAG just created its empty upstream tables; convert them to
+            # workspace-partitioned parents now, before DlightRAG derives its
+            # metadata, scope, and BM25 indexes onto them.
+            await foundation.ensure_tables(specs=lightrag_retrieval_table_specs(lightrag))
         if not config.is_reader:
             # LightRAG owns the table; DlightRAG adds its derived presentation
             # index only after the writer has established the upstream schema.
@@ -391,9 +465,11 @@ def apply_lightrag_environment(config: DlightragConfig) -> None:
 def build_pg_corpus_backend(config: DlightragConfig) -> WorkspaceCorpusBackend:
     """Translate one root config into one coherent PostgreSQL corpus backend."""
     apply_lightrag_environment(config)
-    required_extensions: tuple[str, ...] = ()
+    # pg_trgm backs the literal filename-substring index on the metadata table
+    # and is required for every corpus, independent of BM25.
+    required_extensions: tuple[str, ...] = ("pg_trgm",)
     if config.corpus.retrieval.bm25_enabled:
-        required_extensions = required_postgres_extensions(
+        required_extensions = required_extensions + required_postgres_extensions(
             profiles_from_config(config.corpus.retrieval.bm25_profiles)
         )
     connection_kwargs = config.pg_connection_kwargs()
@@ -445,6 +521,7 @@ class PGReadinessProbe:
 
 __all__ = [
     "build_pg_corpus_backend",
+    "lightrag_retrieval_table_specs",
     "PGCorpusCoordination",
     "PGCorpusMaintenanceStore",
     "PGCorpusRuntimeBinder",

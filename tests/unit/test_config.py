@@ -57,6 +57,8 @@ def test_defaults_preserve_runtime_contract(tmp_path: Path) -> None:
     assert config.models.embedding.batch_size == 64
     assert config.corpus.retrieval.top_k == 40
     assert config.corpus.retrieval.chunk_top_k == 20
+    assert config.corpus.promotion.doc_threshold is None
+    assert config.corpus.promotion.chunk_threshold is None
     assert config.answer.runtime.answer_run_retention_days == 365
     assert config.input_dir_path == tmp_path / "inputs"
 
@@ -65,10 +67,12 @@ def test_nested_environment_loading(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DLIGHTRAG_STORAGE__POSTGRES__HOST", "db.internal")
     monkeypatch.setenv("DLIGHTRAG_MODELS__EMBEDDING__DIM", "768")
     monkeypatch.setenv("DLIGHTRAG_CORPUS__RETRIEVAL__TOP_K", "42")
+    monkeypatch.setenv("DLIGHTRAG_CORPUS__PROMOTION__DOC_THRESHOLD", "3")
     config = DlightragConfig()
     assert config.storage.postgres.host == "db.internal"
     assert config.models.embedding.dim == 768
     assert config.corpus.retrieval.top_k == 42
+    assert config.corpus.promotion.doc_threshold == 3
 
 
 def test_old_flat_constructor_field_is_rejected() -> None:

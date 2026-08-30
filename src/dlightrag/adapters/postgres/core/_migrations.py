@@ -66,6 +66,21 @@ WHERE con.conrelid = $1 AND con.contype IN ('p', 'u')
 GROUP BY con.oid, con.contype
 """
 
+_TABLE_PARTITION_KEYS = """SELECT array_agg(a.attname ORDER BY key.ord) AS columns
+FROM pg_catalog.pg_partitioned_table pt
+JOIN LATERAL unnest(pt.partattrs) WITH ORDINALITY AS key(attnum, ord) ON TRUE
+JOIN pg_catalog.pg_attribute a ON a.attrelid = pt.partrelid AND a.attnum = key.attnum
+WHERE pt.partrelid = $1
+"""
+
+_TABLE_CHILDREN = """SELECT c.relname AS name
+FROM pg_catalog.pg_inherits i
+JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid
+WHERE i.inhparent = $1
+"""
+
+_TABLE_RELKIND = "SELECT c.relkind::text FROM pg_catalog.pg_class c WHERE c.oid = $1"
+
 _TABLE_FOREIGN_KEYS = """SELECT cf.relname AS referenced,
        array_agg(a.attname ORDER BY k.ord) AS columns
 FROM pg_catalog.pg_constraint con
@@ -101,6 +116,11 @@ class TableRequirement:
     ``unique_indexes`` names the partial unique indexes that enforce an invariant
     no constraint can express; the catalog must report them as unique, because a
     same-named index rebuilt without uniqueness would silently retire that invariant.
+
+    ``partitioned_by`` names the LIST partition key columns: the catalog must
+    report the table as partitioned on exactly those columns. ``required_child_partitions``
+    names deterministic partition children that must be attached (the shared
+    DEFAULT child); their absence means the table silently reverted to plain.
     """
 
     name: str
@@ -111,6 +131,8 @@ class TableRequirement:
     checks: tuple[str, ...] = ()
     indexes: tuple[str, ...] = ()
     unique_indexes: tuple[str, ...] = ()
+    partitioned_by: tuple[str, ...] = ()
+    required_child_partitions: tuple[str, ...] = ()
 
 
 async def apply_migrations(
@@ -254,6 +276,33 @@ async def _absent_table_objects(conn: Any, table: TableRequirement) -> list[str]
             f"foreign key {_columns(table.name, key.columns)} -> {key.references}"
             for key in table.foreign_keys
             if (key.columns, key.references) not in present_keys
+        ]
+    if table.partitioned_by or table.required_child_partitions:
+        absent.extend(await _absent_partition_objects(conn, table, oid))
+    return absent
+
+
+async def _absent_partition_objects(conn: Any, table: TableRequirement, oid: Any) -> list[str]:
+    """Name every partition invariant the catalog does not report."""
+    absent: list[str] = []
+    relkind = await conn.fetchval(_TABLE_RELKIND, oid)
+    if table.partitioned_by and str(relkind) != "p":
+        absent.append(f"partitioned table {table.name} (catalog relkind={relkind!r})")
+        return absent
+    if table.partitioned_by:
+        row = await conn.fetchrow(_TABLE_PARTITION_KEYS, oid)
+        actual = tuple(row["columns"]) if row else ()
+        if actual != table.partitioned_by:
+            absent.append(
+                f"partition key {_columns(table.name, table.partitioned_by)} "
+                f"(catalog reports {_columns(table.name, actual)})"
+            )
+    if table.required_child_partitions:
+        present = {str(row["name"]) for row in await conn.fetch(_TABLE_CHILDREN, oid)}
+        absent += [
+            f"partition child {name}"
+            for name in table.required_child_partitions
+            if name not in present
         ]
     return absent
 

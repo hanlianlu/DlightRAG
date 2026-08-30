@@ -16,7 +16,7 @@ from dlightrag.application.config import DlightragConfig
 from dlightrag.engine.ai.settings import EmbeddingSettings, ModelRoleSettings, ModelSettings
 
 RUN_E2E_ENV = "DLIGHTRAG_RUN_E2E_PG18"
-REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba")
+REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba", "pg_trgm")
 REQUIRED_PRELOAD_LIBRARIES = ("pg_textsearch", "pg_jieba")
 
 

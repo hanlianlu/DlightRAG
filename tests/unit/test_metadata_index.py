@@ -104,31 +104,39 @@ class TestFilenameResolution:
         assert "LOWER(TRIM(filename_stem)) = LOWER(TRIM($2))" in sql
 
     async def test_miss_widens_to_contains(self) -> None:
-        index, executed = self._index({"STRPOS": [{"doc_id": "d2"}]})
+        index, executed = self._index({"LIKE": [{"doc_id": "d2"}]})
 
         result = await index.query(MetadataFilter(filename="Linear Algebra"))
 
         assert result == ["d2"]
         assert len(executed) == 2
-        assert "STRPOS(LOWER(TRIM(filename)), LOWER(TRIM($2))) > 0" in executed[1][0]
-        assert executed[1][1][1] == "Linear Algebra"
+        assert "LOWER(TRIM(filename)) LIKE $2 ESCAPE '\\'" in executed[1][0]
+        assert executed[1][1][1] == "%linear algebra%"
 
     async def test_caller_wildcards_are_literal_text(self) -> None:
-        index, executed = self._index({"STRPOS": [{"doc_id": "d3"}]})
+        index, executed = self._index({"LIKE": [{"doc_id": "d3"}]})
 
         await index.query(MetadataFilter(filename="%IMG%9551%"))
 
-        # Substring search has no pattern language, so '%' is just a character.
-        assert executed[1][1][1] == "%IMG%9551%"
+        # Escaped substring search has no pattern language: '%' is a character.
+        assert executed[1][1][1] == "%\\%img\\%9551\\%%"
+
+    async def test_caller_backslash_and_underscore_are_literal_text(self) -> None:
+        index, executed = self._index({"LIKE": [{"doc_id": "d5"}]})
+
+        await index.query(MetadataFilter(filename="100%_off\\sale"))
+
+        assert executed[1][1][1] == "%100\\%\\_off\\\\sale%"
 
     async def test_widening_keeps_other_conditions(self) -> None:
-        index, executed = self._index({"STRPOS": [{"doc_id": "d4"}]})
+        index, executed = self._index({"LIKE": [{"doc_id": "d4"}]})
 
         await index.query(MetadataFilter(filename="report", file_extension="pdf"))
 
         widened = executed[1][0]
         assert "LOWER(TRIM(file_extension)) = LOWER(TRIM($2))" in widened
-        assert "STRPOS(LOWER(TRIM(filename)), LOWER(TRIM($3))) > 0" in widened
+        assert "LOWER(TRIM(filename)) LIKE $3 ESCAPE '\\'" in widened
+        assert executed[1][1][2] == "%report%"
 
     async def test_no_filename_never_runs_twice(self) -> None:
         index, executed = self._index({})
@@ -138,28 +146,52 @@ class TestFilenameResolution:
 
 
 class TestMetadataSQL:
-    def test_indexes_do_not_require_pg_trgm(self):
+    def test_filename_trgm_gin_index_is_installed(self):
         sql = _index_sql()
 
-        assert "gin_trgm" not in sql
-        assert "trgm" not in sql
+        assert "ON dlightrag_doc_metadata USING GIN (LOWER(TRIM(filename)) gin_trgm_ops)" in sql
+
+    def test_contains_predicate_escapes_pattern_language(self):
+        from dlightrag.adapters.postgres.corpus.pg_metadata_index import (
+            like_contains_pattern,
+        )
+
+        assert like_contains_pattern("Report.pdf") == "%report.pdf%"
+        assert like_contains_pattern("50%_off\\docs") == "%50\\%\\_off\\\\docs%"
 
     def test_upsert_sql_does_not_reference_similarity(self):
         assert "similarity(" not in _UPSERT
 
-    def test_string_btree_indexes_are_case_normalized(self):
+    def test_custom_search_column_is_canonicalized_at_write(self):
+        assert "custom_metadata_search = dlightrag_canonical_custom_metadata(" in _UPSERT
+        assert "COALESCE(EXCLUDED.custom_metadata::jsonb" in _UPSERT
+        assert "custom_metadata_search" in pg_metadata_index._UPDATE
+
+    def test_custom_search_canonicalizes_every_value_to_comparison_text(self):
+        sql = pg_metadata_index._CREATE_CANONICAL_CUSTOM_FN
+
+        assert "to_jsonb(lower(trim(COALESCE(value #>> '{}', 'null'))))" in sql
+        assert "ELSE value" not in sql
+
+    def test_string_btree_indexes_are_workspace_leading_and_case_normalized(self):
         sql = _index_sql()
 
-        assert "ON dlightrag_doc_metadata (LOWER(TRIM(filename)))" in sql
-        assert "ON dlightrag_doc_metadata (LOWER(TRIM(filename_stem)))" in sql
-        assert "ON dlightrag_doc_metadata (LOWER(TRIM(file_extension)))" in sql
-        assert "ON dlightrag_doc_metadata (LOWER(TRIM(title)))" in sql
-        assert "ON dlightrag_doc_metadata (LOWER(TRIM(author)))" in sql
+        assert "ON dlightrag_doc_metadata (workspace, LOWER(TRIM(filename)))" in sql
+        assert "ON dlightrag_doc_metadata (workspace, LOWER(TRIM(filename_stem)))" in sql
+        assert "ON dlightrag_doc_metadata (workspace, LOWER(TRIM(file_extension)))" in sql
+        assert "ON dlightrag_doc_metadata (workspace, LOWER(TRIM(author)))" in sql
+
+    def test_unbounded_title_uses_bounded_md5_index_key(self):
+        sql = _index_sql()
+
+        assert "ON dlightrag_doc_metadata (workspace, MD5(LOWER(TRIM(title))))" in sql
+        # No B-tree is ever built on the unbounded TEXT value itself.
+        assert "(workspace, LOWER(TRIM(title)))" not in sql
 
     def test_non_string_btree_indexes_remain_plain(self):
         sql = _index_sql()
 
-        assert "ON dlightrag_doc_metadata (creation_date)" in sql
+        assert "ON dlightrag_doc_metadata (workspace, creation_date)" in sql
 
     def test_download_locator_has_workspace_scoped_exact_index(self) -> None:
         sql = _index_sql()
@@ -212,15 +244,32 @@ class TestMetadataSQL:
             assert f"index_{field_id}_canonical" in versions
 
     def test_migrations_are_derived_not_recorded_history(self) -> None:
-        """Every version maps to a metadata field declared today."""
+        """Every version maps to a metadata field or named foundation step declared today."""
         declared = set(METADATA_FIELD_IDS)
         allowed = (
-            {"document_metadata", "index_workspace_download_locator"}
+            {
+                "document_metadata",
+                "partition_default_child",
+                "function_canonical_custom_metadata",
+                "column_custom_metadata_search",
+                "backfill_custom_metadata_search",
+                "index_workspace_download_locator",
+                "index_custom_metadata_search_gin",
+                "index_filename_trgm",
+            }
             | {f"column_{field_id}" for field_id in declared}
             | {f"index_{field_id}_canonical" for field_id in declared}
         )
 
         assert {migration.version for migration in _SCHEMA_MIGRATIONS} <= allowed
+
+    def test_metadata_table_migration_declares_workspace_partitioning(self) -> None:
+        sql = "\n".join(stmt for migration in _SCHEMA_MIGRATIONS for stmt in migration.statements)
+
+        assert "PARTITION BY LIST (workspace)" in sql
+        assert "PARTITION OF dlightrag_doc_metadata DEFAULT" in sql
+        assert "CREATE INDEX IF NOT EXISTS idx_dm_custom_metadata_search" in sql
+        assert "USING GIN (custom_metadata_search jsonb_path_ops)" in sql
 
 
 async def test_metadata_index_initializes_schema_with_migrations() -> None:
@@ -248,8 +297,25 @@ async def test_metadata_index_initialization_disables_prefix_only_validation() -
         seen["conn"] = conn
         seen.update(kwargs)
 
+    class _Tx:
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    class _FoundationConn:
+        def transaction(self) -> Any:
+            return _Tx()
+
+        async def fetchval(self, query: str, *args: Any) -> None:
+            return None
+
+        async def execute(self, query: str, *args: Any) -> None:
+            return None
+
     async def run(operation):  # noqa: ANN001, ANN202
-        return await operation(object())
+        return await operation(_FoundationConn())
 
     original = pg_metadata_index.apply_migrations
     pg_metadata_index.apply_migrations = fake_apply_migrations  # type: ignore[assignment]
@@ -317,8 +383,16 @@ async def test_metadata_index_get_many_fetches_doc_ids_in_one_query() -> None:
             seen["query"] = query
             seen["args"] = args
             return [
-                {"doc_id": "doc-1", "department": "finance"},
-                {"doc_id": "doc-2", "department": "legal"},
+                {
+                    "doc_id": "doc-1",
+                    "department": "finance",
+                    "custom_metadata_search": '{"department": "finance"}',
+                },
+                {
+                    "doc_id": "doc-2",
+                    "department": "legal",
+                    "custom_metadata_search": '{"department": "legal"}',
+                },
             ]
 
     async def run(operation):  # noqa: ANN001, ANN202

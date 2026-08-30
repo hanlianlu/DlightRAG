@@ -311,7 +311,7 @@ class TestDockerMode:
             result = Mock()
             result.returncode = 0
             if "extname" in query:
-                result.stdout = "3"
+                result.stdout = "4"
             elif "schemata" in query:
                 result.stdout = "1"
             elif "to_regclass" in query:

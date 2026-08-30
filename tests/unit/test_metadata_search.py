@@ -179,7 +179,7 @@ def test_match_conditions_selects_the_filename_clause_by_mode() -> None:
     assert exact_conditions[1] == _FILENAME_EXACT_CONDITION.format(idx=2)
     assert contains_conditions[1] == _FILENAME_CONTAINS_CONDITION.format(idx=2)
     assert exact_params == ["finance", "Quarterly Report"]
-    assert contains_params == exact_params
+    assert contains_params == ["finance", "%quarterly report%"]
     with pytest.raises(ValueError, match="mode"):
         _match_conditions("finance", filters, filename_mode="regex")
 
@@ -196,7 +196,7 @@ async def test_query_keeps_exact_then_contains_fallback_semantics() -> None:
     assert _FILENAME_EXACT_CONDITION.format(idx=2) in conn.fetches[0][0]
     assert _FILENAME_CONTAINS_CONDITION.format(idx=2) in conn.fetches[1][0]
     assert conn.fetches[0][1] == ("finance", "Quarterly Report")
-    assert conn.fetches[1][1] == ("finance", "Quarterly Report")
+    assert conn.fetches[1][1] == ("finance", "%quarterly report%")
 
 
 async def test_query_skips_the_widened_retry_when_exact_matches_or_no_filename() -> None:
@@ -262,7 +262,7 @@ async def test_page_store_uses_the_cursor_bound_mode_and_doc_id_keyset() -> None
     assert "doc_id > $3" in query
     assert "ORDER BY doc_id ASC LIMIT $4" in query
     assert _FILENAME_CONTAINS_CONDITION.format(idx=2) in query
-    assert args == ("finance", "Quarterly Report", "doc-7", 6)
+    assert args == ("finance", "%quarterly report%", "doc-7", 6)
 
 
 async def test_page_store_falls_back_to_contains_only_on_empty_first_page() -> None:

@@ -14,6 +14,12 @@ from dlightrag.adapters.postgres.core._migrations import (
 )
 from dlightrag.adapters.postgres.core._operations import PostgresOperationRunner
 from dlightrag.adapters.postgres.core.identifiers import pg_identifier
+from dlightrag.adapters.postgres.corpus.partition_foundation import (
+    PartitionedTableSpec,
+    default_child_name,
+    ensure_partitioned_tables,
+    verify_partitioned_tables,
+)
 from dlightrag.engine.rag.retrieval import MetadataFilter
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
@@ -68,7 +74,11 @@ def _build_create_table() -> str:
     for f in _PG_METADATA_COLUMNS:
         cols.append(f"    {f.field_id}    {f.pg_type}")
     cols.append("    PRIMARY KEY (workspace, doc_id)")
-    return "CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (\n" + ",\n".join(cols) + "\n)"
+    return (
+        "CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (\n"
+        + ",\n".join(cols)
+        + "\n) PARTITION BY LIST (workspace)"
+    )
 
 
 _CREATE_TABLE = _build_create_table()
@@ -83,14 +93,71 @@ def _canonical(expr: str) -> str:
 def _index_clause(field_id: str, pg_type: str, indexed: bool) -> str | None:
     if not indexed:
         return None
+    if field_id == "title":
+        # ``title`` is unbounded TEXT: a plain B-tree on the value can fail on
+        # values larger than one index page (~2704 bytes). A fixed-width MD5 of
+        # the canonical value keeps the index key bounded; the equality recheck
+        # in ``_match_conditions`` makes the match exact regardless of hash
+        # collisions.
+        return f" (workspace, MD5({_canonical(field_id)}))"
     if _is_string_pg_type(pg_type):
-        return f" ({_canonical(field_id)})"
-    return f" ({field_id})"
+        return f" (workspace, {_canonical(field_id)})"
+    return f" (workspace, {field_id})"
 
 
 def _is_string_pg_type(pg_type: str) -> bool:
     normalized = pg_type.upper()
     return normalized.startswith(("TEXT", "VARCHAR", "CHAR", "CHARACTER"))
+
+
+# The one canonicalization contract for ``custom_metadata_search``: top-level
+# keys plus every scalar/text representation are folded to trimmed lowercase
+# text. This intentionally preserves the existing ``custom_metadata ->> key``
+# comparison semantics, where JSON numbers/booleans and equivalent strings
+# compare identically. Both write paths and the later runtime ``@>`` predicate
+# fold through this same immutable SQL function, so stored and bound values can
+# never drift apart. ORDER BY resolves duplicate folded keys deterministically.
+_CREATE_CANONICAL_CUSTOM_FN = """
+CREATE OR REPLACE FUNCTION dlightrag_canonical_custom_metadata(meta jsonb)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT COALESCE(jsonb_object_agg(
+        lower(trim(key)),
+        to_jsonb(lower(trim(COALESCE(value #>> '{}', 'null'))))
+        ORDER BY lower(trim(key)), key
+    ), '{}'::jsonb)
+    FROM jsonb_each(COALESCE(meta, '{}'::jsonb))
+$$
+"""
+
+_BACKFILL_CUSTOM_SEARCH = """
+UPDATE dlightrag_doc_metadata
+SET custom_metadata_search = dlightrag_canonical_custom_metadata(custom_metadata)
+WHERE custom_metadata_search
+      IS DISTINCT FROM dlightrag_canonical_custom_metadata(custom_metadata)
+"""
+
+_METADATA_TABLE = "dlightrag_doc_metadata"
+_SEARCH_COLUMN = "custom_metadata_search"
+
+
+def _metadata_partition_spec() -> PartitionedTableSpec:
+    return PartitionedTableSpec(
+        name=_METADATA_TABLE,
+        required_columns=("workspace", "doc_id", *METADATA_FIELD_IDS, _SEARCH_COLUMN),
+        primary_key=("workspace", "doc_id"),
+        required_indexes=(
+            "idx_dm_workspace_download_locator",
+            *(f"idx_dm_{f.field_id}" for f in _PG_METADATA_COLUMNS if f.indexed),
+            "idx_dm_custom_metadata_search",
+            "idx_dm_filename_trgm",
+        ),
+        missing_ok=True,
+        convert_empty_plain=False,
+    )
 
 
 def _build_schema_migrations() -> tuple[Migration, ...]:
@@ -104,8 +171,35 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
     migrations = [
         Migration(
             "document_metadata",
-            "Create document metadata table",
+            "Create document metadata table partitioned by workspace",
             (_CREATE_TABLE,),
+        ),
+        Migration(
+            "partition_default_child",
+            "Attach the shared DEFAULT child to the metadata parent",
+            (
+                f"CREATE TABLE IF NOT EXISTS {default_child_name(_METADATA_TABLE)} "
+                f"PARTITION OF {_METADATA_TABLE} DEFAULT",
+            ),
+        ),
+        Migration(
+            "function_canonical_custom_metadata",
+            "Install the shared custom-metadata canonicalization function",
+            (_CREATE_CANONICAL_CUSTOM_FN,),
+        ),
+        Migration(
+            "column_custom_metadata_search",
+            "Add the storage-internal canonical search JSONB column",
+            (
+                "ALTER TABLE dlightrag_doc_metadata "
+                "ADD COLUMN IF NOT EXISTS custom_metadata_search "
+                "JSONB NOT NULL DEFAULT '{}'",
+            ),
+        ),
+        Migration(
+            "backfill_custom_metadata_search",
+            "Deterministically backfill canonical custom-metadata search values",
+            (_BACKFILL_CUSTOM_SEARCH,),
         ),
     ]
     for f in _PG_METADATA_COLUMNS:
@@ -146,6 +240,28 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
                 ),
             )
         )
+    migrations.append(
+        Migration(
+            "index_custom_metadata_search_gin",
+            "GIN containment index for canonical custom metadata",
+            (
+                "CREATE INDEX IF NOT EXISTS idx_dm_custom_metadata_search "
+                "ON dlightrag_doc_metadata "
+                "USING GIN (custom_metadata_search jsonb_path_ops)",
+            ),
+        )
+    )
+    migrations.append(
+        Migration(
+            "index_filename_trgm",
+            "Trigram GIN index for literal filename substring matching",
+            (
+                "CREATE INDEX IF NOT EXISTS idx_dm_filename_trgm "
+                "ON dlightrag_doc_metadata "
+                "USING GIN (LOWER(TRIM(filename)) gin_trgm_ops)",
+            ),
+        )
+    )
     return tuple(migrations)
 
 
@@ -154,12 +270,16 @@ _SCHEMA_MIGRATIONS = _build_schema_migrations()
 _SCHEMA_TABLES = (
     TableRequirement(
         name="dlightrag_doc_metadata",
-        columns=("workspace", "doc_id", *METADATA_FIELD_IDS),
+        columns=("workspace", "doc_id", *METADATA_FIELD_IDS, "custom_metadata_search"),
         primary_key=("workspace", "doc_id"),
         indexes=(
             "idx_dm_workspace_download_locator",
             *(f"idx_dm_{f.field_id}" for f in _PG_METADATA_COLUMNS if f.indexed),
+            "idx_dm_custom_metadata_search",
+            "idx_dm_filename_trgm",
         ),
+        partitioned_by=("workspace",),
+        required_child_partitions=(default_child_name("dlightrag_doc_metadata"),),
     ),
 )
 
@@ -177,15 +297,41 @@ def _field_assignment(field_id: str, placeholder: str, table_qualified: str) -> 
     return f"{field_id} = COALESCE({placeholder}, {table_qualified})"
 
 
+def _custom_placeholder_index(columns: tuple[str, ...]) -> int:
+    """Return the $-placeholder index of the custom_metadata value in ``columns``."""
+    return columns.index(_CUSTOM) + 1
+
+
+def _search_assignment(placeholder: str, table_qualified: str) -> str:
+    """Recompute the canonical search column from the merged raw custom metadata."""
+    return (
+        f"{_SEARCH_COLUMN} = dlightrag_canonical_custom_metadata("
+        f"COALESCE({table_qualified}, '{{}}'::jsonb) "
+        f"|| COALESCE({placeholder}::jsonb, '{{}}'::jsonb))"
+    )
+
+
 def _build_upsert() -> str:
-    columns = ("workspace", "doc_id", *_UPSERT_FIELD_IDS)
+    columns = ("workspace", "doc_id", *_UPSERT_FIELD_IDS, _SEARCH_COLUMN)
     insert_columns = ", ".join(columns)
-    placeholders = ",".join(f"${idx}" for idx in range(1, len(columns) + 1))
+    placeholders = ",".join(f"${idx}" for idx in range(1, len(columns)))
+    custom_placeholder = f"${_custom_placeholder_index(columns)}"
+    placeholders += (
+        ", dlightrag_canonical_custom_metadata("
+        f"COALESCE({custom_placeholder}::jsonb, '{{}}'::jsonb))"
+    )
     updates = [
         "    "
         + _field_assignment(field_id, f"EXCLUDED.{field_id}", f"dlightrag_doc_metadata.{field_id}")
         for field_id in _UPSERT_FIELD_IDS
     ]
+    updates.append(
+        "    "
+        + _search_assignment(
+            f"EXCLUDED.{_CUSTOM}",
+            "dlightrag_doc_metadata.custom_metadata",
+        )
+    )
     return (
         "INSERT INTO dlightrag_doc_metadata\n"
         f"    ({insert_columns})\n"
@@ -200,6 +346,8 @@ def _build_update() -> str:
         "    " + _field_assignment(field_id, f"${idx}", field_id)
         for idx, field_id in enumerate(_UPSERT_FIELD_IDS, start=3)
     ]
+    custom_placeholder = f"${3 + _UPSERT_FIELD_IDS.index(_CUSTOM)}"
+    assignments.append("    " + _search_assignment(custom_placeholder, _CUSTOM))
     return (
         "UPDATE dlightrag_doc_metadata SET\n"
         + ",\n".join(assignments)
@@ -260,14 +408,34 @@ _FIELD_SCHEMA = _build_field_schema()
 
 
 # A named file is matched against both the full name and the stem, so a caller
-# who omits the extension still hits the functional lower() indexes on both.
+# who omits the extension still hits the functional workspace-leading indexes on
+# both.
 _FILENAME_EXACT_CONDITION = (
     "(LOWER(TRIM(filename)) = LOWER(TRIM(${idx})) "
-    "OR LOWER(TRIM(filename_stem)) = LOWER(TRIM(${idx})))"
+    "OR LOWER(TRIM(filename_stem)) = LOWER(TRIM(${idx}))) "
 )
-# A caller types a name, not a pattern, so the widened match is literal substring
-# search. ILIKE would mean escaping %, _ and \ back out of the pattern language.
-_FILENAME_CONTAINS_CONDITION = "STRPOS(LOWER(TRIM(filename)), LOWER(TRIM(${idx}))) > 0"
+
+
+# A caller types a name, not a pattern, so the widened match is a literal
+# substring search. The full pattern (wildcard framing plus escaping) is built
+# by ``like_contains_pattern`` and bound as a bare parameter: a parameterized
+# ``LIKE`` is the one shape the planner recognizes against the pg_trgm GIN
+# expression index, while the ``ESCAPE`` clause keeps caller ``%``, ``_``, and
+# ``\`` characters literal.
+_FILENAME_CONTAINS_CONDITION = "LOWER(TRIM(filename)) LIKE ${idx} ESCAPE '\\'"
+
+
+def like_contains_pattern(value: str) -> str:
+    r"""Build one literal-substring LIKE pattern for caller-supplied text.
+
+    ``%``, ``_``, and ``\`` in the value stay literal characters: they are
+    escaped against the ``ESCAPE '\'`` clause, and only this helper's own
+    ``%`` framing acts as a wildcard. The value is lowercased here so it folds
+    like the column side's ``LOWER(TRIM(filename))``.
+    """
+    escaped = value.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
 
 _FILENAME_MODES = frozenset({"exact", "contains"})
 
@@ -291,12 +459,23 @@ def _match_conditions(
     params: list[Any] = [workspace]
     idx = 2
 
-    for attr in ("file_extension", "title", "author"):
+    for attr in ("file_extension", "author"):
         value = getattr(filters, attr, None)
         if value is None:
             continue
         conditions.append(f"{_canonical(attr)} = {_canonical(f'${idx}')}")
         params.append(value)
+        idx += 1
+
+    if filters.title:
+        # Unbounded TEXT: the index key is the fixed-width MD5 of the canonical
+        # value, so the predicate carries the MD5 equality for the index plus
+        # the full equality recheck that makes matches exact on hash collision.
+        conditions.append(
+            f"MD5({_canonical('title')}) = MD5({_canonical(f'${idx}')}) "
+            f"AND {_canonical('title')} = {_canonical(f'${idx}')}"
+        )
+        params.append(filters.title)
         idx += 1
 
     if filters.filename:
@@ -306,7 +485,11 @@ def _match_conditions(
             else _FILENAME_EXACT_CONDITION
         )
         conditions.append(template.format(idx=idx))
-        params.append(filters.filename)
+        params.append(
+            like_contains_pattern(filters.filename)
+            if filename_mode == "contains"
+            else filters.filename
+        )
         idx += 1
 
     # Date range
@@ -341,8 +524,9 @@ _FIND_BY_FILENAME = (
 
 
 def _decoded_row(row: Any) -> dict[str, Any]:
-    """asyncpg hands JSONB back as text, which callers and comparisons must not see."""
+    """Decode public metadata and remove storage-internal search projections."""
     decoded = dict(row)
+    decoded.pop(_SEARCH_COLUMN, None)
     raw = decoded.get("custom_metadata")
     decoded["custom_metadata"] = json.loads(raw) if isinstance(raw, str) else (raw or {})
     return decoded
@@ -359,10 +543,16 @@ class PGMetadataIndex(PostgresOperationRunner):
         self._workspace = workspace
 
     async def initialize(self, *, validate_only: bool = False) -> None:
-        """Create table and indexes, or validate them (reader)."""
+        """Create/convert the partitioned table and indexes, or validate (reader).
+
+        The partition foundation runs before migrations so an old unpartitioned
+        (or populated) corpus fails loudly with the one-time development reset
+        message instead of hitting a raw PostgreSQL DDL error.
+        """
 
         async def _operation(conn: Any) -> None:
             if validate_only:
+                await verify_partitioned_tables(conn, specs=(_metadata_partition_spec(),))
                 await verify_migrations(
                     conn,
                     scope="doc_metadata",
@@ -371,6 +561,7 @@ class PGMetadataIndex(PostgresOperationRunner):
                     schema_error=CorpusSchemaError,
                 )
                 return
+            await ensure_partitioned_tables(conn, specs=(_metadata_partition_spec(),))
             await apply_migrations(
                 conn,
                 scope="doc_metadata",

@@ -262,6 +262,18 @@ class RetrievalSettings(FrozenSettings):
     kg_entity_types: tuple[str, ...] = ()
 
 
+class WorkspacePromotionSettings(FrozenSettings):
+    """Thresholds for moving one shared workspace into dedicated partitions.
+
+    Commit 1 exposes tiny test overrides but deliberately ships no guessed
+    production threshold. Commit 3 enables the worker after the scale release
+    gate supplies benchmark-derived values.
+    """
+
+    doc_threshold: int | None = Field(default=None, ge=1)
+    chunk_threshold: int | None = Field(default=None, ge=1)
+
+
 class SourceSettings(FrozenSettings):
     blob_connection_string: str | None = None
     azure_sas_expiry: int = Field(default=3600, ge=1)
@@ -280,6 +292,7 @@ class CorpusSettings(FrozenSettings):
     extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
     ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
+    promotion: WorkspacePromotionSettings = Field(default_factory=WorkspacePromotionSettings)
     sources: SourceSettings = Field(default_factory=SourceSettings)
     visual_assets: VisualAssetSettings = Field(default_factory=VisualAssetSettings)
 

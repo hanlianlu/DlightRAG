@@ -59,7 +59,7 @@ _DEFAULT_PG = {
     "password": "dlightrag",
     "database": "dlightrag",
 }
-_REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba")
+_REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba", "pg_trgm")
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 _SYSTEM_SCHEMAS = ("pg_catalog", "information_schema", "pg_toast")
 _COMPOSE_VOLUMES = ("pg18_data", "dlightrag_data", "dlightrag_agent_workspaces")
@@ -387,8 +387,8 @@ def run_docker_reset(
     verification_checks = [
         (
             "extensions",
-            "SELECT count(*) FROM pg_extension WHERE extname = ANY('{vector,pg_textsearch,pg_jieba}')",
-            "3",
+            "SELECT count(*) FROM pg_extension WHERE extname = ANY('{vector,pg_textsearch,pg_jieba,pg_trgm}')",
+            "4",
         ),
         (
             "no-app-schema",
@@ -555,7 +555,7 @@ async def _native_pg_work(
             report.record(
                 "dry-run-ddl",
                 "DROP SCHEMA public CASCADE; CREATE SCHEMA public; then"
-                " CREATE EXTENSION IF NOT EXISTS vector, pg_textsearch, pg_jieba",
+                " CREATE EXTENSION IF NOT EXISTS vector, pg_textsearch, pg_jieba, pg_trgm",
             )
             return
 
