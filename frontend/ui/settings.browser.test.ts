@@ -42,6 +42,15 @@ afterEach(() => {
   document.body.className = '';
 });
 
+it('does not expose runtime model catalogue administration in Settings', async () => {
+  const settings = mount();
+  await settings.updateComplete;
+
+  expect(settings.textContent).not.to.contain('Runtime Model Catalogue');
+  expect(Boolean(settings.querySelector('dl-model-catalogue'))).to.equal(false);
+  expect(customElements.get('dl-model-catalogue')).to.equal(undefined);
+});
+
 it('consumes a typed memory fact through its command and refreshes after Undo', async () => {
   const methods: string[] = [];
   window.fetch = async (_input, init) => {
