@@ -305,7 +305,7 @@ Source rollback is `git revert` of the milestone.
 - `DLIGHTRAG_*` configuration keys, including `answer.agent`
 - PostgreSQL table and migration scope names, including `dlightrag_agent_*`
 - `dlightrag-api`, `dlightrag-mcp`, `dlightrag-rebuild-bm25`, `dlightrag-rebuild-vdb` command names
-- package version `3.0.0` until a separate release decision
+- package version `2.0.0` until a separate release decision
 - `packages/memory` independence
 - `frontend/` as the TypeScript source tree
 - Fast and Research product behavior
