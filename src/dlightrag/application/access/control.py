@@ -47,6 +47,10 @@ class AccessAction:
     WORKSPACE_RESET = "workspace.reset"
     JOB_READ = "job.read"
     JOB_CANCEL = "job.cancel"
+    # Storage/promotion facts are operator-facing: only the admin preset (and
+    # explicitly granted rules) carry this action; ordinary readers/editors
+    # never see tier, promotion state, or retry details.
+    WORKSPACE_STORAGE_STATUS = "workspace.storage_status"
 
 
 _READER_ACTIONS: tuple[str, ...] = (

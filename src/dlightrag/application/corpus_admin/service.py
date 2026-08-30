@@ -1,10 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Corpus workspace lifecycle and administration over canonical ids."""
 
+import datetime
 import logging
 import re
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Literal, Protocol, TypedDict
@@ -12,7 +14,11 @@ from typing import Annotated, Any, Literal, Protocol, TypedDict
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dlightrag.application.access import WorkspaceRecord
-from dlightrag.application.errors import CorpusUnavailableError, StorageSchemaError
+from dlightrag.application.errors import (
+    CorpusUnavailableError,
+    StorageSchemaError,
+    WorkspaceWriteFencedError,
+)
 from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.engine.rag.corpus.contracts import IngestDocument, SourceType, VisualAssetSize
 from dlightrag.engine.rag.corpus.downloads import (
@@ -51,9 +57,13 @@ from dlightrag.engine.rag.workspace.pool import WorkspacePool
 from dlightrag.engine.rag.workspace.ports import (
     CorpusMaintenanceStore,
     CorpusSchemaError,
+    PromotionWorker,
 )
 from dlightrag.engine.rag.workspace.ports import (
     CorpusUnavailableError as _EngineCorpusUnavailableError,
+)
+from dlightrag.engine.rag.workspace.ports import (
+    WorkspaceWriteFencedError as _EngineWorkspaceWriteFencedError,
 )
 from dlightrag.engine.rag.workspace.workspace_rag import WorkspaceRag
 from dlightrag.engine.rag.workspace.workspaces import (
@@ -125,6 +135,22 @@ def validate_workspace_name(name: str, *, max_length: int = 64) -> str:
 
 class _CorpusContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+
+@asynccontextmanager
+async def _workspace_write_gate(
+    maintenance: CorpusMaintenanceStore, workspace: str
+) -> AsyncIterator[None]:
+    """Gate one workspace write behind the promotion fence, translated to
+    the retryable product error transports map to HTTP 409 + Retry-After."""
+    try:
+        async with maintenance.workspace_write_gate(workspace):
+            yield
+    except _EngineWorkspaceWriteFencedError as exc:
+        raise WorkspaceWriteFencedError(
+            workspace=exc.workspace,
+            retry_after_seconds=exc.retry_after_seconds,
+        ) from exc
 
 
 class IngestSpec(_CorpusContractModel):
@@ -456,6 +482,7 @@ class CorpusAdmin:
         file_panel_cursor_secret: bytes | None = None,
         metadata_search_cursor_secret: bytes | None = None,
         workspace_catalog_cursor_secret: bytes | None = None,
+        promotion_worker: PromotionWorker | None = None,
     ) -> None:
         self._settings = settings
         self._pool = pool
@@ -464,6 +491,7 @@ class CorpusAdmin:
         self._file_panel = file_panel
         self._metadata_search = metadata_search
         self._source_download_for = source_download_for
+        self._promotion_worker = promotion_worker
         self._file_panel_cursor_codec = FilePanelCursorCodec(file_panel_cursor_secret)
         self._metadata_search_cursor_codec = MetadataSearchCursorCodec(
             metadata_search_cursor_secret
@@ -491,7 +519,15 @@ class CorpusAdmin:
         except IngestJobSchemaError as exc:
             raise StorageSchemaError(str(exc)) from exc
 
+    def start_promotion_worker(self) -> None:
+        """Start the background promotion worker (writer roles only)."""
+        if self._settings.read_only or self._promotion_worker is None:
+            return
+        self._promotion_worker.start()
+
     async def aclose(self) -> None:
+        if self._promotion_worker is not None:
+            await self._promotion_worker.aclose()
         await self._ingest_jobs.close()
 
     async def alist_workspace_records(self) -> list[WorkspaceRecord]:
@@ -782,12 +818,21 @@ class CorpusAdmin:
         dry_run: bool = False,
     ) -> list[dict[str, Any]]:
         self._require_writer("file deletion")
-        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
-        return await runtime.adelete_files(
-            file_paths=file_paths,
-            filenames=filenames,
-            dry_run=dry_run,
-        )
+        workspace = require_canonical_workspace_id(workspace_id)
+        if dry_run:
+            runtime = await _acquire_workspace(self._pool, workspace)
+            return await runtime.adelete_files(
+                file_paths=file_paths,
+                filenames=filenames,
+                dry_run=dry_run,
+            )
+        async with _workspace_write_gate(self._maintenance, workspace):
+            runtime = await _acquire_workspace(self._pool, workspace)
+            return await runtime.adelete_files(
+                file_paths=file_paths,
+                filenames=filenames,
+                dry_run=dry_run,
+            )
 
     async def list_failed_docs(self, workspace_id: str) -> list[dict[str, Any]]:
         runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
@@ -805,8 +850,10 @@ class CorpusAdmin:
 
     async def retry_failed_docs(self, workspace_id: str) -> dict[str, Any]:
         self._require_writer("failed document retry")
-        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
-        return await runtime.aretry_failed_docs()
+        workspace = require_canonical_workspace_id(workspace_id)
+        async with _workspace_write_gate(self._maintenance, workspace):
+            runtime = await _acquire_workspace(self._pool, workspace)
+            return await runtime.aretry_failed_docs()
 
     async def get_metadata(self, workspace_id: str, document_id: str) -> dict[str, Any]:
         runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
@@ -819,9 +866,11 @@ class CorpusAdmin:
         data: dict[str, Any],
     ) -> None:
         self._require_writer("metadata update")
-        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
+        workspace = require_canonical_workspace_id(workspace_id)
         try:
-            await runtime.aupdate_metadata(document_id, data)
+            async with _workspace_write_gate(self._maintenance, workspace):
+                runtime = await _acquire_workspace(self._pool, workspace)
+                await runtime.aupdate_metadata(document_id, data)
         except _EngineMetadataValidationError as exc:
             raise MetadataValidationError(str(exc)) from exc
 
@@ -864,7 +913,12 @@ class CorpusAdmin:
         keep_files: bool = False,
         dry_run: bool = False,
     ) -> CorpusResetResult:
-        """Reset an explicit non-empty set of authorized canonical workspaces."""
+        """Reset an explicit non-empty set of authorized canonical workspaces.
+
+        A real (non-dry-run) reset is a write: every workspace goes through the
+        promotion fence gate, which raises ``WorkspaceWriteFencedError`` when a
+        promotion is mid-flight.
+        """
         workspaces = _require_workspace_scope(workspace_ids)
         self._require_writer("workspace reset")
         known = set(await self.list_workspaces())
@@ -872,17 +926,14 @@ class CorpusAdmin:
         total_errors = 0
 
         for workspace in workspaces:
-            if workspace not in known and not await self._pool.is_loaded(workspace):
-                result = await self._reset_orphan(
-                    workspace,
-                    keep_files=keep_files,
-                    dry_run=dry_run,
-                )
+            if not dry_run:
+                async with _workspace_write_gate(self._maintenance, workspace):
+                    result = await self._reset_one(
+                        workspace, known=known, keep_files=keep_files, dry_run=dry_run
+                    )
             else:
-                result = await self._reset_loaded(
-                    workspace,
-                    keep_files=keep_files,
-                    dry_run=dry_run,
+                result = await self._reset_one(
+                    workspace, known=known, keep_files=keep_files, dry_run=dry_run
                 )
             results[workspace] = result
             total_errors += len(result.get("errors", ()))
@@ -890,6 +941,26 @@ class CorpusAdmin:
                 total_errors += 1
 
         return {"workspaces": results, "total_errors": total_errors}
+
+    async def _reset_one(
+        self,
+        workspace: str,
+        *,
+        known: set[str],
+        keep_files: bool,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        if workspace not in known and not await self._pool.is_loaded(workspace):
+            return await self._reset_orphan(
+                workspace,
+                keep_files=keep_files,
+                dry_run=dry_run,
+            )
+        return await self._reset_loaded(
+            workspace,
+            keep_files=keep_files,
+            dry_run=dry_run,
+        )
 
     async def _reset_orphan(
         self,
@@ -949,6 +1020,47 @@ class CorpusAdmin:
                     "Failed to close workspace '%s'", safe_log_text(workspace), exc_info=True
                 )
         return result
+
+    async def get_workspace_storage_status(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return operator-facing storage/promotion facts for one workspace.
+
+        Bounded monotonic counters, the storage tier, the promotion state,
+        the last error, and the next retry time come straight from the durable
+        registry — never from live corpus scans.
+        """
+        workspace = require_canonical_workspace_id(workspace_id)
+        row = await self._maintenance.get_workspace_record(workspace)
+        if row is None:
+            return None
+        fence_until = row.get("write_fence_until")
+        now = datetime.datetime.now(datetime.UTC)
+        if fence_until is not None and getattr(fence_until, "tzinfo", None) is None:
+            fence_until = fence_until.replace(tzinfo=datetime.UTC)
+        fenced = bool(fence_until is not None and fence_until > now)
+        retry_after = (
+            max(0.0, (fence_until - now).total_seconds()) if fenced and fence_until else None
+        )
+        promotion_state = str(row.get("promotion_state") or "none")
+        if promotion_state == "promoting" and not fenced:
+            # A crashed attempt left committed exclusion proofs behind: the
+            # workspace stays conservatively write-fenced (small bounded
+            # retry) until a reclaimed worker cleans up.
+            fenced = True
+            retry_after = 5.0
+        return {
+            "workspace": workspace,
+            "storage_tier": str(row.get("storage_tier") or "shared"),
+            "promotion_state": promotion_state,
+            "ingested_docs_total": int(row.get("ingested_docs_total") or 0),
+            "ingested_chunks_total": int(row.get("ingested_chunks_total") or 0),
+            "promotion_retry_count": int(row.get("promotion_retry_count") or 0),
+            "promotion_last_error": (
+                str(row["promotion_last_error"]) if row.get("promotion_last_error") else None
+            ),
+            "promotion_next_retry_at": _iso_or_none(row.get("promotion_next_retry_at")),
+            "write_fenced": fenced,
+            "retry_after_seconds": retry_after,
+        }
 
     def _require_writer(self, operation: str) -> None:
         if self._settings.read_only:

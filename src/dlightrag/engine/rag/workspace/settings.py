@@ -263,7 +263,7 @@ class RetrievalSettings(FrozenSettings):
 
 
 class WorkspacePromotionSettings(FrozenSettings):
-    """Thresholds for moving one shared workspace into dedicated partitions.
+    """Thresholds and worker timing for dedicated hot-workspace partitions.
 
     Commit 1 exposes tiny test overrides but deliberately ships no guessed
     production threshold. Commit 3 enables the worker after the scale release
@@ -272,6 +272,11 @@ class WorkspacePromotionSettings(FrozenSettings):
 
     doc_threshold: int | None = Field(default=None, ge=1)
     chunk_threshold: int | None = Field(default=None, ge=1)
+    # Promotion is a background copy: the lease must comfortably outlive the
+    # longest copy window, and a failed attempt backs off before retrying.
+    lease_seconds: int = Field(default=1800, ge=60)
+    retry_backoff_seconds: int = Field(default=600, ge=1)
+    claim_poll_seconds: float = Field(default=5.0, ge=0.1)
 
 
 class SourceSettings(FrozenSettings):

@@ -40,6 +40,10 @@ from dlightrag.adapters.postgres.corpus.partition_foundation import (
 )
 from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
 from dlightrag.adapters.postgres.corpus.promotion_jobs import PGPromotionJobStore
+from dlightrag.adapters.postgres.corpus.promotion_worker import PGPromotionWorker
+from dlightrag.adapters.postgres.corpus.workspace_write_gate import (
+    workspace_write_gate as _workspace_write_gate,
+)
 from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
 from dlightrag.application.config import DlightragConfig
 from dlightrag.engine.rag.retrieval.bm25 import profile_languages, profiles_from_config
@@ -48,6 +52,7 @@ from dlightrag.engine.rag.workspace.ports import (
     CorpusUnavailableError,
     WorkspaceCorpusBackend,
     WorkspaceCorpusStores,
+    WorkspaceWriteFencedError,
 )
 from dlightrag.engine.rag.workspace.settings import RagSettings
 
@@ -180,7 +185,11 @@ class PGCorpusCoordination:
             logger.debug("Could not read PostgreSQL max_connections", exc_info=True)
             return
 
-        per_process = self._lightrag_pool_max_size + self._domain_pool_max_size
+        # The promotion write gate opens dedicated connections bounded by a
+        # process-wide semaphore sized from the domain pool max size, so the
+        # per-process budget is lightrag + domain + gate.
+        gate_max_size = self._domain_pool_max_size
+        per_process = self._lightrag_pool_max_size + self._domain_pool_max_size + gate_max_size
         process_count = _configured_process_count()
         estimated = per_process * process_count
         reserved = max(5, max_connections // 10)
@@ -188,12 +197,14 @@ class PGCorpusCoordination:
         logger.info(
             "PostgreSQL connection sanity: max_connections=%d usable_after_headroom=%d "
             "configured_pool_connections_per_process=%d "
-            "(lightrag=%d, dlightrag=%d) process_count=%d estimated_pool_connections=%d",
+            "(lightrag=%d, dlightrag=%d, promotion_gate=%d) process_count=%d "
+            "estimated_pool_connections=%d",
             max_connections,
             usable,
             per_process,
             self._lightrag_pool_max_size,
             self._domain_pool_max_size,
+            gate_max_size,
             process_count,
             estimated,
         )
@@ -256,19 +267,60 @@ class PGCorpusCoordination:
 
     @asynccontextmanager
     async def pipeline_recovery(self) -> AsyncIterator[None]:
-        try:
-            pool = await pg_pool.get()
-            async with pool.acquire(timeout=self._acquire_timeout) as conn:
-                lock_key = advisory_lock_key("dlightrag_pipeline_recovery", self._workspace)
-                await conn.execute("SELECT pg_advisory_lock($1)", lock_key)
-                try:
-                    yield
-                finally:
-                    await conn.execute("SELECT pg_advisory_unlock($1)", lock_key)
-        except Exception as exc:
-            if is_postgres_unavailable(exc):
-                raise CorpusUnavailableError("Corpus PostgreSQL session is unavailable") from exc
-            raise
+        """Serialize startup native pipeline recovery behind the write gate.
+
+        LightRAG's ``apipeline_process_enqueue_documents`` sweep is a real
+        corpus write, so it joins the cross-process per-workspace gate:
+        while a promotion fence is active this waits (polling, cancellation
+        safe) instead of abandoning pending documents, then holds the shared
+        gate for the whole sweep so a promotion cutover drains it.
+        """
+        from dlightrag.adapters.postgres.corpus.workspace_write_gate import (
+            _active_fence_seconds,
+            workspace_write_gate,
+        )
+
+        while True:
+            try:
+                remaining = await pg_pool.run(
+                    lambda conn: _active_fence_seconds(conn, self._workspace)
+                )
+            except Exception as exc:
+                if is_postgres_unavailable(exc):
+                    raise CorpusUnavailableError(
+                        "Corpus PostgreSQL session is unavailable"
+                    ) from exc
+                raise
+            if remaining > 0:
+                logger.info(
+                    "Pipeline recovery for workspace '%s' waiting %.0fs for a "
+                    "promotion fence to clear",
+                    self._workspace,
+                    remaining,
+                )
+                await asyncio.sleep(min(5.0, max(0.5, remaining)))
+                continue
+            try:
+                async with workspace_write_gate(self._workspace):
+                    pool = await pg_pool.get()
+                    async with pool.acquire(timeout=self._acquire_timeout) as conn:
+                        lock_key = advisory_lock_key("dlightrag_pipeline_recovery", self._workspace)
+                        await conn.execute("SELECT pg_advisory_lock($1)", lock_key)
+                        try:
+                            yield
+                        finally:
+                            await conn.execute("SELECT pg_advisory_unlock($1)", lock_key)
+                return
+            except WorkspaceWriteFencedError:
+                # A fence landed between the poll and the gate acquisition:
+                # wait it out and retry rather than abandoning documents.
+                continue
+            except Exception as exc:
+                if is_postgres_unavailable(exc):
+                    raise CorpusUnavailableError(
+                        "Corpus PostgreSQL session is unavailable"
+                    ) from exc
+                raise
 
 
 class PGCorpusMaintenanceStore:
@@ -329,7 +381,30 @@ class PGCorpusMaintenanceStore:
             return cleaned
 
     async def delete_workspace_record(self, workspace: str) -> bool:
-        return await self._workspace_registry.delete(workspace)
+        """Delete one workspace's registry row and promotion jobs atomically.
+
+        A deleted workspace must never keep retrying promotion work: the
+        registry row and every active/pending/failed promotion job commit
+        together or not at all. The caller holds the workspace write gate, so
+        no cutover can race this transaction.
+        """
+        workspace_id = str(workspace).strip()
+        if not workspace_id:
+            raise ValueError("workspace cannot be empty")
+
+        async def _operation(conn: Any) -> bool:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM dlightrag_promotion_jobs WHERE workspace = $1",
+                    workspace_id,
+                )
+                result = await conn.execute(
+                    "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1",
+                    workspace_id,
+                )
+            return result != "DELETE 0"
+
+        return await self._workspace_registry._run_once(_operation)
 
     async def list_workspace_records(self) -> tuple[dict[str, Any], ...]:
         return tuple(await self._workspace_registry.list())
@@ -361,6 +436,16 @@ class PGCorpusMaintenanceStore:
             display_name=display_name,
             embedding_model=embedding_model,
         )
+
+    async def get_workspace_record(self, workspace: str) -> dict[str, Any] | None:
+        """Return the full registry row including storage/promotion facts."""
+        return await self._workspace_registry.get_row(workspace)
+
+    @asynccontextmanager
+    async def workspace_write_gate(self, workspace: str) -> AsyncIterator[None]:
+        """Gate one workspace write behind the promotion fence and drain protocol."""
+        async with _workspace_write_gate(workspace):
+            yield None
 
 
 class PGCorpusRuntimeBinder:
@@ -512,7 +597,30 @@ def build_pg_corpus_backend(config: DlightragConfig) -> WorkspaceCorpusBackend:
         ),
         maintenance=PGCorpusMaintenanceStore(connection_kwargs),
         runtime=PGCorpusRuntimeBinder(config),
-        ingest_jobs=PGIngestJobStore(),
+        ingest_jobs=PGIngestJobStore(
+            promotion_doc_threshold=config.corpus.promotion.doc_threshold,
+            promotion_chunk_threshold=config.corpus.promotion.chunk_threshold,
+        ),
+        promotion=_build_promotion_worker(config),
+    )
+
+
+def _build_promotion_worker(config: DlightragConfig) -> PGPromotionWorker | None:
+    """Build the promotion worker for writer roles; readers never claim DDL.
+
+    The worker runs even while both thresholds are disabled: it reclaims
+    expired leases and finishes reconciliations, but nothing enqueues new
+    jobs in that configuration.
+    """
+    if config.is_reader:
+        return None
+    promotion = config.corpus.promotion
+    return PGPromotionWorker(
+        job_store=PGPromotionJobStore(),
+        registry=PGWorkspaceRegistry(),
+        lease_seconds=promotion.lease_seconds,
+        retry_backoff_seconds=promotion.retry_backoff_seconds,
+        claim_poll_seconds=promotion.claim_poll_seconds,
     )
 
 

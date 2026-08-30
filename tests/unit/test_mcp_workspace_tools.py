@@ -318,6 +318,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "get_answer_run",
         "get_capabilities",
         "get_ingest_job",
+        "get_workspace_storage_status",
         "ingest",
         "forget_memory",
         "remember_memory",

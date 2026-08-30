@@ -19,8 +19,9 @@ from dlightrag.application.corpus_admin import (
     MetadataSearchCursorError,
     MetadataSearchPageRequest,
 )
+from dlightrag.application.errors import WorkspaceWriteFencedError
 
-from .deps import enforce_access, get_application, resolve_workspace
+from .deps import enforce_access, get_application, raise_fenced_http, resolve_workspace
 
 router = APIRouter()
 
@@ -113,6 +114,8 @@ async def update_metadata(
     await enforce_access(request, user, AccessAction.WORKSPACE_UPDATE_METADATA, workspace=ws)
     try:
         await application.corpora.update_metadata(ws, doc_id, body.metadata)
+    except WorkspaceWriteFencedError as exc:
+        raise raise_fenced_http(exc) from exc
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found") from None
     return {"status": "success", "doc_id": doc_id}

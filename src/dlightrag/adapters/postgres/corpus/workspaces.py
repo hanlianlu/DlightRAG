@@ -116,6 +116,7 @@ SET promotion_state = $2,
     promotion_next_retry_at = CASE WHEN $2 = 'failed' THEN $4::timestamptz ELSE NULL END,
     updated_at = NOW()
 WHERE workspace = $1
+  AND ($5::text IS NULL OR write_fence_owner = $5)
 """
 
 _ACQUIRE_WRITE_FENCE = """
@@ -450,8 +451,9 @@ class PGWorkspaceRegistry(PostgresOperationRunner):
         state: str,
         error: str | None = None,
         next_retry_at: Any = None,
+        expected_fence_owner: str | None = None,
     ) -> bool:
-        """Record promotion observability; a failed state requires an error."""
+        """Record promotion observability, optionally fenced by owner."""
         workspace_id = _workspace_id(workspace)
         if state not in _PROMOTION_STATES:
             raise ValueError(f"promotion state must be one of {sorted(_PROMOTION_STATES)}")
@@ -460,9 +462,20 @@ class PGWorkspaceRegistry(PostgresOperationRunner):
         if state == "failed" and next_retry_at is None:
             raise ValueError("a failed promotion state must schedule its retry time")
 
+        fence_owner = (
+            str(expected_fence_owner).strip() if expected_fence_owner is not None else None
+        )
+        if expected_fence_owner is not None and not fence_owner:
+            raise ValueError("expected fence owner cannot be empty")
+
         async def _operation(conn: Any) -> str:
             return await conn.execute(
-                _SET_PROMOTION_STATE, workspace_id, state, error, next_retry_at
+                _SET_PROMOTION_STATE,
+                workspace_id,
+                state,
+                error,
+                next_retry_at,
+                fence_owner,
             )
 
         return (await self._run(_operation)) != "UPDATE 0"

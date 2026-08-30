@@ -1,7 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Behavioral contract for corpus administration."""
 
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -45,6 +47,11 @@ def _settings(
     )
 
 
+@asynccontextmanager
+async def _noop_write_gate(workspace: str) -> AsyncIterator[None]:
+    yield None
+
+
 def _admin(
     *,
     read_only: bool = False,
@@ -65,6 +72,8 @@ def _admin(
         list_workspace_records=AsyncMock(return_value=[]),
         list_workspace_records_page=AsyncMock(return_value=([], False)),
         workspace_exists=AsyncMock(return_value=True),
+        get_workspace_record=AsyncMock(return_value=None),
+        workspace_write_gate=_noop_write_gate,
     )
     jobs = SimpleNamespace(
         start_recovery=AsyncMock(),
@@ -699,3 +708,136 @@ async def test_workspace_catalog_cursor_codec_is_exposed() -> None:
     admin, _, _, _, _, _ = _admin()
 
     assert isinstance(admin.workspace_catalog_cursor_codec, WorkspaceCatalogCursorCodec)
+
+
+# ---------------------------------------------------------------------------
+# Commit 3: promotion fence gates and storage status
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_files_under_a_promotion_fence_raises_retryable_error() -> None:
+    from dlightrag.application.errors import WorkspaceWriteFencedError
+    from dlightrag.engine.rag.workspace.ports import (
+        WorkspaceWriteFencedError as EngineWorkspaceWriteFencedError,
+    )
+
+    admin, _, maintenance, _, _, _ = _admin()
+
+    @asynccontextmanager
+    async def fenced_gate(workspace: str) -> AsyncIterator[None]:
+        raise EngineWorkspaceWriteFencedError(workspace=workspace, retry_after_seconds=17.0)
+        yield None  # pragma: no cover
+
+    maintenance.workspace_write_gate = fenced_gate
+
+    with pytest.raises(WorkspaceWriteFencedError) as excinfo:
+        await admin.delete_files("finance", filenames=["report.pdf"])
+
+    assert excinfo.value.retry_after_seconds == 17.0
+    assert "finance" in str(excinfo.value)
+
+
+async def test_dry_run_delete_skips_the_fence_gate() -> None:
+    admin, pool, maintenance, _, _, _ = _admin()
+    maintenance.workspace_write_gate = MagicMock(side_effect=AssertionError("gated"))
+    pool.acquire.return_value.adelete_files.return_value = [{"dry_run": True}]
+
+    result = await admin.delete_files("finance", filenames=["report.pdf"], dry_run=True)
+
+    assert result == [{"dry_run": True}]
+    maintenance.workspace_write_gate.assert_not_called()
+
+
+async def test_storage_status_projects_registry_facts_bounded() -> None:
+    admin, _, maintenance, _, _, _ = _admin()
+    now = datetime.now(UTC)
+    maintenance.get_workspace_record.return_value = {
+        "workspace": "finance",
+        "storage_tier": "hot",
+        "promotion_state": "failed",
+        "ingested_docs_total": 42,
+        "ingested_chunks_total": 900,
+        "promotion_retry_count": 3,
+        "promotion_last_error": "promotion failed: copy verification failed",
+        "promotion_next_retry_at": now,
+        "write_fence_owner": None,
+        "write_fence_until": None,
+    }
+
+    status = await admin.get_workspace_storage_status("finance")
+    assert status is not None
+
+    assert status == {
+        "workspace": "finance",
+        "storage_tier": "hot",
+        "promotion_state": "failed",
+        "ingested_docs_total": 42,
+        "ingested_chunks_total": 900,
+        "promotion_retry_count": 3,
+        "promotion_last_error": "promotion failed: copy verification failed",
+        "promotion_next_retry_at": now.isoformat(),
+        "write_fenced": False,
+        "retry_after_seconds": None,
+    }
+
+
+async def test_storage_status_reports_active_fence_retry_window() -> None:
+    admin, _, maintenance, _, _, _ = _admin()
+    maintenance.get_workspace_record.return_value = {
+        "workspace": "finance",
+        "storage_tier": "shared",
+        "promotion_state": "promoting",
+        "ingested_docs_total": 0,
+        "ingested_chunks_total": 0,
+        "promotion_retry_count": 0,
+        "promotion_last_error": None,
+        "promotion_next_retry_at": None,
+        "write_fence_owner": "worker#1",
+        "write_fence_until": datetime.now(UTC) + timedelta(seconds=30),
+    }
+
+    status = await admin.get_workspace_storage_status("finance")
+    assert status is not None
+
+    assert status["write_fenced"] is True
+    assert 25.0 <= status["retry_after_seconds"] <= 30.1
+    assert status["storage_tier"] == "shared"
+    assert status["promotion_state"] == "promoting"
+
+
+async def test_storage_status_treats_stale_promoting_as_conservatively_fenced() -> None:
+    admin, _, maintenance, _, _, _ = _admin()
+    maintenance.get_workspace_record.return_value = {
+        "workspace": "finance",
+        "storage_tier": "shared",
+        "promotion_state": "promoting",
+        "ingested_docs_total": 0,
+        "ingested_chunks_total": 0,
+        "promotion_retry_count": 0,
+        "promotion_last_error": None,
+        "promotion_next_retry_at": None,
+        "write_fence_owner": "dead-worker#1",
+        "write_fence_until": datetime.now(UTC) - timedelta(seconds=60),  # expired
+    }
+
+    status = await admin.get_workspace_storage_status("finance")
+
+    assert status is not None
+    # A crashed worker's committed exclusion proofs keep the workspace
+    # conservatively write-fenced with a small bounded retry window.
+    assert status["write_fenced"] is True
+    assert status["retry_after_seconds"] == 5.0
+    assert status["promotion_state"] == "promoting"
+
+
+async def test_start_promotion_worker_starts_only_on_writers() -> None:
+    writer, _, _, _, _, _ = _admin()
+    reader, _, _, _, _, _ = _admin(read_only=True)
+
+    writer._promotion_worker = cast(Any, SimpleNamespace(start=MagicMock()))
+    writer.start_promotion_worker()
+    writer._promotion_worker.start.assert_called_once_with()  # type: ignore[union-attr]
+
+    reader._promotion_worker = cast(Any, SimpleNamespace(start=MagicMock()))
+    reader.start_promotion_worker()
+    reader._promotion_worker.start.assert_not_called()  # type: ignore[union-attr]

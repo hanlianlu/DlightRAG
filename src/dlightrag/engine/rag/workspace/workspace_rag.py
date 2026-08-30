@@ -103,6 +103,9 @@ class RemoteIngestWindowProgress:
     processed_delta: int
     failed_delta: int
     errors: tuple[str, ...] = ()
+    # Successfully committed chunks in this window; feeds the workspace's
+    # monotonic ingested-chunk counter behind the promotion trigger.
+    chunk_delta: int = 0
 
 
 @dataclass(frozen=True)
@@ -1085,6 +1088,11 @@ class WorkspaceRag:
                             failed_delta=len(batch_errors)
                             + max(0, len(window) - len(prepared_items)),
                             errors=tuple([*window_errors, *batch_errors]),
+                            chunk_delta=sum(
+                                len(item.get("chunks") or [])
+                                for item in batch_result.get("results") or []
+                                if isinstance(item, dict)
+                            ),
                         )
                     )
             finally:

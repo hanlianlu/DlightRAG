@@ -179,6 +179,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         ),
         file_panel=PGFilePanelStore(),
         metadata_search=PGMetadataSearchStore(),
+        promotion_worker=corpus_backend.promotion,
         source_download_for=lambda workspace: SourceDownloadService(
             settings=source_download_settings,
             metadata_index=PGMetadataIndex(workspace=workspace),

@@ -1,7 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Durable ingest-job persistence interface and lifecycle policy."""
 
+from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol
+
+# How often the ingest coordinator re-checks a workspace promotion fence while
+# a job waits for the cutover to finish. Jobs stay durably queued the whole
+# time and resume automatically once the fence is gone.
+FENCE_POLL_SECONDS = 2.0
 
 JOB_RETENTION_SECONDS = 7 * 24 * 3600
 JOB_LEASE_SECONDS = 300
@@ -29,6 +35,26 @@ class IngestJobStore(Protocol):
 
     async def claim_running(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool: ...
 
+    async def release_running(self, job_id: str, *, lease_owner: str) -> bool:
+        """Durably return one running job to queued so another claim can retry."""
+        ...
+
+    async def touch_queued(self, job_id: str) -> bool:
+        """Refresh one still-queued job's liveness; false if gone or claimed."""
+        ...
+
+    async def cancel_queued(self, job_id: str, *, error: str) -> bool:
+        """Terminally fail one still-queued job (explicit user cancellation)."""
+        ...
+
+    async def is_workspace_fenced(self, workspace: str) -> bool:
+        """Report whether a promotion write fence currently blocks writes."""
+        ...
+
+    def workspace_write_gate(self, workspace: str) -> AbstractAsyncContextManager[None]:
+        """Gate one ingest run behind the promotion fence and drain protocol."""
+        ...
+
     async def heartbeat(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool: ...
 
     async def record_window(
@@ -38,6 +64,7 @@ class IngestJobStore(Protocol):
         total_delta: int,
         processed_delta: int,
         failed_delta: int,
+        chunk_delta: int,
         current_window: int,
         errors: list[str],
         lease_owner: str,
@@ -66,4 +93,5 @@ __all__ = [
     "JOB_ORPHAN_AFTER_SECONDS",
     "JOB_RETENTION_SECONDS",
     "JOB_STATES_WITH_RESULT",
+    "FENCE_POLL_SECONDS",
 ]

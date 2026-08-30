@@ -142,6 +142,7 @@ class Application:
             await components.capabilities.probe_all()
             degraded = await self._warm_default_workspace()
             recovery_ready = await self._start_ingest_recovery()
+            self._start_promotion_worker()
             await self._start_run_coordinator()
             await self._initialize_web_conversations()
             await self._start_memory_janitor()
@@ -254,6 +255,17 @@ class Application:
             return False
         return True
 
+    def _start_promotion_worker(self) -> None:
+        """Start the background hot-workspace promotion worker (writers only)."""
+        start = getattr(self._components.corpora, "start_promotion_worker", None)
+        if start is None:
+            return
+        try:
+            start()
+        except Exception:
+            self._components.health.add_warning("Promotion worker unavailable")
+            logger.warning("Promotion worker failed to start", exc_info=True)
+
     async def _start_run_coordinator(self) -> None:
         """Begin executing accepted runs once startup validated their schema.
 
@@ -351,7 +363,7 @@ class Application:
         cancellation: asyncio.CancelledError | None = None
         for label, close in (
             ("memory janitor", self._stop_memory_janitor),
-            ("ingest jobs", components.corpora.aclose),
+            ("corpus admin (promotion worker + ingest jobs)", components.corpora.aclose),
             ("the durable answer coordinator", components.coordinator.aclose),
             ("the cancellation listener", components.cancellation_listener.aclose),
             ("Web conversation retention", components.web_conversations.aclose),

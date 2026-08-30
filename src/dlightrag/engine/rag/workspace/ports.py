@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Storage-neutral corpus backend composition interfaces."""
 
+import math
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -22,6 +23,22 @@ class CorpusSchemaError(RuntimeError):
 
 class CorpusUnavailableError(RuntimeError):
     """The configured corpus backend cannot currently be reached."""
+
+
+class WorkspaceWriteFencedError(RuntimeError):
+    """A workspace write is refused while a promotion write fence is active.
+
+    Retryable: the caller should surface the remaining fence duration and try
+    again after it elapses.
+    """
+
+    def __init__(self, *, workspace: str, retry_after_seconds: float) -> None:
+        self.workspace = workspace
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(
+            f"Workspace '{workspace}' is being promoted to dedicated storage; "
+            f"retry after {int(math.ceil(retry_after_seconds))} seconds"
+        )
 
 
 class CorpusCoordination(Protocol):
@@ -59,6 +76,26 @@ class CorpusMaintenanceStore(Protocol):
         display_name: str,
         embedding_model: str,
     ) -> None: ...
+
+    async def get_workspace_record(self, workspace: str) -> dict[str, Any] | None:
+        """Return the full registry row including storage/promotion facts."""
+        ...
+
+    def workspace_write_gate(self, workspace: str) -> AbstractAsyncContextManager[None]:
+        """Gate one workspace write behind the promotion fence and drain protocol.
+
+        Raises ``WorkspaceWriteFencedError`` when the workspace write fence is
+        active. Ingest jobs use the same gate on their store instead.
+        """
+        ...
+
+
+class PromotionWorker(Protocol):
+    """Background worker that drives hot-workspace promotion jobs."""
+
+    def start(self) -> None: ...
+
+    async def aclose(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +137,7 @@ class WorkspaceCorpusBackend:
     maintenance: CorpusMaintenanceStore
     runtime: CorpusRuntimeBinder
     ingest_jobs: IngestJobStore
+    promotion: PromotionWorker | None = None
 
 
 __all__ = [
@@ -109,6 +147,8 @@ __all__ = [
     "CorpusRuntimeModels",
     "CorpusSchemaError",
     "CorpusUnavailableError",
+    "PromotionWorker",
     "WorkspaceCorpusBackend",
     "WorkspaceCorpusStores",
+    "WorkspaceWriteFencedError",
 ]

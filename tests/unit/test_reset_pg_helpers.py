@@ -9,6 +9,14 @@ from dlightrag.adapters.postgres.corpus.corpus import PGCorpusMaintenanceStore
 from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
 
 
+class _Tx:
+    async def __aenter__(self) -> _Tx:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+
 class _Acquire:
     def __init__(self, conn: object) -> None:
         self._conn = conn
@@ -40,6 +48,9 @@ class _Conn:
         self.executed: list[tuple[str, tuple[object, ...]]] = []
         self.fetchvals: list[tuple[str, tuple[object, ...]]] = []
         self.closed = False
+
+    def transaction(self) -> _Tx:
+        return _Tx()
 
     async def execute(self, query: str, *args: object) -> str:
         self.executed.append((query, args))
@@ -75,8 +86,11 @@ async def test_delete_workspace_record_uses_the_operational_registry(monkeypatch
     assert await store.delete_workspace_record("research") is True
 
     config.pg_connection_kwargs.assert_called_once_with()
+    # Promotion jobs and the registry row delete in one transaction, jobs
+    # first, so a deleted workspace never keeps retrying promotion work.
     assert conn.executed == [
-        ("DELETE FROM dlightrag_workspace_meta WHERE workspace = $1", ("research",))
+        ("DELETE FROM dlightrag_promotion_jobs WHERE workspace = $1", ("research",)),
+        ("DELETE FROM dlightrag_workspace_meta WHERE workspace = $1", ("research",)),
     ]
     connect.assert_not_awaited()
     assert conn.closed is False

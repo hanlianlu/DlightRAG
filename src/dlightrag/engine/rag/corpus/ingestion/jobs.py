@@ -5,7 +5,7 @@ import asyncio
 import logging
 import shutil
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -13,11 +13,13 @@ from typing import Any, Protocol, cast
 from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.engine.rag.corpus.contracts import SourceType
 from dlightrag.engine.rag.corpus.ingest_jobs import (
+    FENCE_POLL_SECONDS,
     JOB_HEARTBEAT_SECONDS,
     JOB_LEASE_SECONDS,
     JOB_ORPHAN_AFTER_SECONDS,
     IngestJobStore,
 )
+from dlightrag.engine.rag.workspace.ports import WorkspaceWriteFencedError
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
 
 logger = logging.getLogger(__name__)
@@ -209,11 +211,22 @@ class IngestJobCoordinator:
         self._forget(job_id)
         return True
 
-    async def _park_unfinished_docs(self, workspace: str) -> None:
-        """Best-effort: cancelling the job must not be undone by a later sweep."""
+    async def _park_unfinished_docs(self, store: IngestJobStore, workspace: str) -> None:
+        """Best-effort: cancelling the job must not be undone by a later sweep.
+
+        The parking write runs under the same per-workspace write gate as every
+        other write, and is skipped entirely while the workspace is fenced.
+        """
         try:
-            svc = await self._get_service(workspace)
-            parked = await svc.afail_unfinished_docs(reason="ingest job cancelled")
+            async with store.workspace_write_gate(workspace):
+                svc = await self._get_service(workspace)
+                parked = await svc.afail_unfinished_docs(reason="ingest job cancelled")
+        except WorkspaceWriteFencedError:
+            logger.info(
+                "Skipping cancel park for '%s'; a promotion fence is active",
+                safe_log_text(workspace),
+            )
+            return
         except Exception:
             logger.warning(
                 "Could not park unfinished documents for '%s'; a restart may resume them",
@@ -295,6 +308,15 @@ class IngestJobCoordinator:
         return False
 
     async def _fail_recovered_job(self, job_id: str, store: IngestJobStore, error: str) -> None:
+        """Terminally fail one recovered job without any corpus write.
+
+        This is a control-plane failure (invalid source type), so it never
+        needs the workspace write gate and must not wait out a promotion
+        fence: fail the queued row directly, and only fall back to the
+        leased claim+fail when the row is already claimed.
+        """
+        if await store.cancel_queued(job_id, error=error):
+            return
         claimed = await store.claim_running(
             job_id,
             lease_owner=self._lease_owner,
@@ -313,98 +335,202 @@ class IngestJobCoordinator:
         cleanup_paths: tuple[Path, ...],
     ) -> None:
         store = await self.get_store()
-        claimed = await store.claim_running(
-            job_id,
-            lease_owner=self._lease_owner,
-            lease_seconds=JOB_LEASE_SECONDS,
-        )
-        if not claimed:
-            logger.info("Skipping ingest job %s; another worker owns it", job_id)
-            return
+        # Clean owned source paths only after a terminal transition we
+        # performed succeeds: queued-cancel, self-owned running fail, failure,
+        # or completion. A lost lease, a requeue behind a fence, shutdown, and
+        # a foreign claim all leave the files for whoever owns the row.
+        cleanup_after_run = False
+        try:
+            while True:
+                try:
+                    claimed = await self._claim_or_wait(store, job_id, workspace)
+                except asyncio.CancelledError:
+                    # Cancelled while waiting for a fence before any claim:
+                    # explicit user cancellation is terminal (queued-cancel,
+                    # then a self-owned running fail if the claim commit raced
+                    # the cancel); shutdown leaves the row queued and the
+                    # source files intact for the next recovery sweep.
+                    if not self._closing:
+                        if await store.cancel_queued(job_id, error="ingest job cancelled"):
+                            cleanup_after_run = True
+                        elif await store.fail(
+                            job_id,
+                            error="ingest job cancelled",
+                            lease_owner=self._lease_owner,
+                        ):
+                            cleanup_after_run = True
+                    raise
+                if not claimed:
+                    logger.info("Skipping ingest job %s; another worker owns it", job_id)
+                    return
 
-        progress_seen = False
-        cleanup_after_run = True
-        lease_lost = asyncio.Event()
-        parent_task = asyncio.current_task()
-        heartbeat_task = asyncio.create_task(
-            self._heartbeat_job(job_id, store, lease_lost, parent_task)
-        )
+                progress_seen = False
+                lease_lost = asyncio.Event()
+                parent_task = asyncio.current_task()
+                heartbeat_task = asyncio.create_task(
+                    self._heartbeat_job(job_id, store, lease_lost, parent_task)
+                )
 
-        async def _record_progress(progress: Any) -> None:
-            nonlocal progress_seen
-            progress_seen = True
-            updated = await store.record_window(
+                async def _record_progress(progress: Any) -> None:
+                    nonlocal progress_seen
+                    progress_seen = True
+                    updated = await store.record_window(
+                        job_id,
+                        total_delta=progress.total_delta,
+                        processed_delta=progress.processed_delta,
+                        failed_delta=progress.failed_delta,
+                        chunk_delta=getattr(progress, "chunk_delta", 0),
+                        current_window=progress.batch_index + 1,
+                        errors=list(progress.errors),
+                        lease_owner=self._lease_owner,
+                        lease_seconds=JOB_LEASE_SECONDS,
+                    )
+                    if not updated:
+                        raise LeaseLostError("ingest job lease lost")
+
+                try:
+                    # The whole critical write runs under the per-workspace
+                    # shared gate. A promotion that fenced this workspace
+                    # between our claim and the gate acquisition makes the
+                    # gate raise and the job returns durably to 'queued' to
+                    # wait the fence out.
+                    async with store.workspace_write_gate(workspace):
+                        svc = await self._get_service(workspace)
+                        await svc.aregister_workspace()
+                        result = await svc.aingest(
+                            source_type=source_type,
+                            **kwargs,
+                            _progress_callback=_record_progress,
+                        )
+                        # The no-progress fallback window commits the durable
+                        # counters INSIDE the shared gate: running it after
+                        # the gate release could deadlock or invert lock
+                        # order against a promotion cutover, and an abort
+                        # here would permanently miss committed counters.
+                        if not progress_seen:
+                            total_items, processed_items, failed_items, chunk_items, errors = (
+                                _infer_ingest_counts(result)
+                            )
+                            updated = await store.record_window(
+                                job_id,
+                                total_delta=total_items,
+                                processed_delta=processed_items,
+                                failed_delta=failed_items,
+                                chunk_delta=chunk_items,
+                                current_window=1,
+                                errors=errors,
+                                lease_owner=self._lease_owner,
+                                lease_seconds=JOB_LEASE_SECONDS,
+                            )
+                            if not updated:
+                                raise LeaseLostError("ingest job lease lost")
+                    finished = await store.finish(
+                        job_id,
+                        result=await self._job_result_with_totals(store, job_id, result),
+                        lease_owner=self._lease_owner,
+                    )
+                    if finished:
+                        cleanup_after_run = True
+                except WorkspaceWriteFencedError:
+                    released = await store.release_running(job_id, lease_owner=self._lease_owner)
+                    if released:
+                        heartbeat_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            _ = await heartbeat_task
+                        logger.info(
+                            "Ingest job %s requeued while workspace '%s' is being promoted",
+                            job_id,
+                            workspace,
+                        )
+                        # The source files still belong to this job: the next
+                        # claim re-runs the whole ingest from them.
+                        cleanup_after_run = False
+                        continue
+                    logger.info("Skipping ingest job %s; another worker owns it", job_id)
+                    cleanup_after_run = False
+                except asyncio.CancelledError:
+                    if lease_lost.is_set():
+                        cleanup_after_run = False
+                    elif not self._closing:
+                        await self._park_unfinished_docs(store, workspace)
+                        if await store.fail(
+                            job_id,
+                            error="ingest job cancelled",
+                            lease_owner=self._lease_owner,
+                        ):
+                            cleanup_after_run = True
+                    else:
+                        # Shutdown while running keeps the lease rows and the
+                        # source files for recovery.
+                        cleanup_after_run = False
+                    raise
+                except LeaseLostError:
+                    # Another worker re-claimed this job (detected via
+                    # record_window). Do not fail it or delete its source
+                    # files — the new owner owns them.
+                    logger.warning(
+                        "Ingest job %s lease lost mid-run; yielding to new owner", job_id
+                    )
+                    cleanup_after_run = False
+                except Exception as exc:
+                    if await store.fail(
+                        job_id,
+                        error=f"{type(exc).__name__}: {exc}",
+                        lease_owner=self._lease_owner,
+                    ):
+                        cleanup_after_run = True
+                finally:
+                    heartbeat_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        _ = await heartbeat_task
+                return
+        finally:
+            if cleanup_after_run and cleanup_paths:
+                await asyncio.to_thread(_cleanup_ingest_paths, cleanup_paths, self._input_root)
+
+    async def _claim_or_wait(
+        self,
+        store: IngestJobStore,
+        job_id: str,
+        workspace: str,
+    ) -> bool:
+        """Claim one job, waiting out a promotion fence while it is active.
+
+        The job row stays 'queued' the whole time (never failed), and the
+        claim itself refuses under an active fence inside one transaction, so
+        the wait-then-claim race cannot start a write after the fence exists.
+        While waiting, a bounded queued heartbeat refreshes ``updated_at`` so
+        the sweeper's orphan window (12 leases) never marks a fenced job
+        abandoned during a long promotion. If the row is gone or claimed, the
+        wait ends immediately.
+        """
+        while True:
+            if await store.is_workspace_fenced(workspace):
+                if not await self._touch_or_stop(store, job_id):
+                    return False
+                await asyncio.sleep(FENCE_POLL_SECONDS)
+                continue
+            claimed = await store.claim_running(
                 job_id,
-                total_delta=progress.total_delta,
-                processed_delta=progress.processed_delta,
-                failed_delta=progress.failed_delta,
-                current_window=progress.batch_index + 1,
-                errors=list(progress.errors),
                 lease_owner=self._lease_owner,
                 lease_seconds=JOB_LEASE_SECONDS,
             )
-            if not updated:
-                raise LeaseLostError("ingest job lease lost")
+            if claimed:
+                return True
+            if await store.is_workspace_fenced(workspace):
+                # The fence raced the claim; wait and retry.
+                if not await self._touch_or_stop(store, job_id):
+                    return False
+                continue
+            return False
 
+    async def _touch_or_stop(self, store: IngestJobStore, job_id: str) -> bool:
+        """Refresh queued liveness once; false when the row is gone/claimed."""
         try:
-            svc = await self._get_service(workspace)
-            await svc.aregister_workspace()
-            result = await svc.aingest(
-                source_type=source_type,
-                **kwargs,
-                _progress_callback=_record_progress,
-            )
-            if not progress_seen:
-                total_items, processed_items, failed_items, errors = _infer_ingest_counts(result)
-                updated = await store.record_window(
-                    job_id,
-                    total_delta=total_items,
-                    processed_delta=processed_items,
-                    failed_delta=failed_items,
-                    current_window=1,
-                    errors=errors,
-                    lease_owner=self._lease_owner,
-                    lease_seconds=JOB_LEASE_SECONDS,
-                )
-                if not updated:
-                    raise LeaseLostError("ingest job lease lost")
-            finished = await store.finish(
-                job_id,
-                result=await self._job_result_with_totals(store, job_id, result),
-                lease_owner=self._lease_owner,
-            )
-            if not finished:
-                cleanup_after_run = False
-        except asyncio.CancelledError:
-            if lease_lost.is_set():
-                cleanup_after_run = False
-            elif not self._closing:
-                await self._park_unfinished_docs(workspace)
-                await store.fail(
-                    job_id,
-                    error="ingest job cancelled",
-                    lease_owner=self._lease_owner,
-                )
-            else:
-                cleanup_after_run = False
-            raise
-        except LeaseLostError:
-            # Another worker re-claimed this job (detected via record_window).
-            # Do not fail it or delete its source files — the new owner owns them.
-            logger.warning("Ingest job %s lease lost mid-run; yielding to new owner", job_id)
-            cleanup_after_run = False
-        except Exception as exc:
-            await store.fail(
-                job_id,
-                error=f"{type(exc).__name__}: {exc}",
-                lease_owner=self._lease_owner,
-            )
-        finally:
-            heartbeat_task.cancel()
-            with suppress(asyncio.CancelledError):
-                _ = await heartbeat_task
-            if cleanup_after_run and cleanup_paths:
-                await asyncio.to_thread(_cleanup_ingest_paths, cleanup_paths, self._input_root)
+            return await store.touch_queued(job_id)
+        except Exception:
+            logger.warning("Queued ingest liveness touch failed for %s", job_id, exc_info=True)
+            return True
 
     async def _heartbeat_job(
         self,
@@ -509,20 +635,25 @@ def _cleanup_ingest_paths(paths: tuple[Path, ...], input_root: Path) -> None:
             logger.warning("Failed to clean ingest path: %s", resolved, exc_info=True)
 
 
-def _infer_ingest_counts(result: dict[str, Any]) -> tuple[int, int, int, list[str]]:
+def _infer_ingest_counts(result: dict[str, Any]) -> tuple[int, int, int, int, list[str]]:
     errors = [str(error) for error in result.get("errors") or []]
+    chunk_total = sum(
+        len(item.get("chunks") or [])
+        for item in result.get("results") or []
+        if isinstance(item, Mapping)
+    )
     if isinstance(result.get("processed"), int):
         processed = max(0, int(result["processed"]))
         failed = len(errors)
-        return processed + failed, processed, failed, errors
+        return processed + failed, processed, failed, chunk_total, errors
 
     if not result:
-        return 0, 0, 0, errors
+        return 0, 0, 0, 0, errors
     if str(result.get("status") or "").lower() == "skipped":
-        return 1, 0, 0, errors
+        return 1, 0, 0, chunk_total, errors
     if result.get("doc_id") or result.get("chunks") or result.get("source_kind"):
-        return 1, 1, 0, errors
-    return 0, 0, len(errors), errors
+        return 1, 1, 0, chunk_total, errors
+    return 0, 0, len(errors), chunk_total, errors
 
 
 __all__ = ["IngestJobCoordinator"]

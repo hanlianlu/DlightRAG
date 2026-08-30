@@ -159,6 +159,13 @@ WHERE job_id = $1
   AND lease_until > NOW()
 """
 
+_GET = """
+SELECT job_id, workspace, state, attempt_count, lease_generation, lease_owner,
+       lease_until, last_error, next_retry_at, promoted_at, created_at, updated_at
+FROM dlightrag_promotion_jobs
+WHERE job_id = $1
+"""
+
 _SCHEMA_MIGRATIONS = (
     Migration(
         "promotion_jobs",
@@ -336,6 +343,17 @@ class PGPromotionJobStore(PostgresOperationRunner):
             return await conn.execute(_MARK_DONE, *identity)
 
         return (await self._run(_operation)) != "UPDATE 0"
+
+    async def get(self, job_id: int) -> dict[str, Any] | None:
+        """Return one promotion job row, including its lease facts."""
+        if isinstance(job_id, bool) or not isinstance(job_id, int) or job_id < 1:
+            raise ValueError("job_id must be a positive integer")
+
+        async def _operation(conn: Any) -> Any:
+            return await conn.fetchrow(_GET, job_id)
+
+        row = await self._run(_operation)
+        return dict(row) if row is not None else None
 
 
 def _nonempty(value: Any, *, field: str) -> str:

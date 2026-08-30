@@ -78,6 +78,36 @@ async def get_capabilities_tool() -> dict[str, Any]:
 
 
 @mcp_app.tool(
+    name="get_workspace_storage_status",
+    description=(
+        "Operator-facing storage facts for one workspace: storage_tier "
+        "(shared or hot), promotion_state, monotonic ingested_docs_total and "
+        "ingested_chunks_total, promotion_last_error, promotion_next_retry_at, "
+        "and write_fenced with retry_after_seconds. Requires the admin-only "
+        "workspace.storage_status action; ordinary users are never granted it."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True),
+)
+async def get_workspace_storage_status_tool(
+    workspace: Annotated[
+        str | None,
+        Field(default=None, description="Workspace to inspect. Omit for default."),
+    ] = None,
+) -> dict[str, Any]:
+    application = await mcp_server._ensure_application()
+    workspace_name = normalize_workspace(workspace or application.config.deployment.workspace)
+    await mcp_server._enforce_access(
+        AccessAction.WORKSPACE_STORAGE_STATUS,
+        workspace_name,
+        application=application,
+    )
+    status = await application.corpora.get_workspace_storage_status(workspace_name)
+    if status is None:
+        raise ValueError(f"Workspace not found: {workspace_name}")
+    return status
+
+
+@mcp_app.tool(
     name="create_workspace",
     description=(
         "Create and register an empty DlightRAG workspace. Optional display_name is "

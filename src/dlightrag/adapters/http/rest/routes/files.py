@@ -24,8 +24,9 @@ from dlightrag.application.corpus_admin import (
     SourceDownloadUnavailableError,
     safe_log_text,
 )
+from dlightrag.application.errors import WorkspaceWriteFencedError
 
-from .deps import enforce_access, get_application, resolve_workspace
+from .deps import enforce_access, get_application, raise_fenced_http, resolve_workspace
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -53,12 +54,15 @@ async def delete_files(
     application = get_application(request)
     ws = resolve_workspace(body.workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_DELETE_FILES, workspace=ws)
-    results = await application.corpora.delete_files(
-        ws,
-        file_paths=body.file_paths,
-        filenames=body.filenames,
-        dry_run=body.dry_run,
-    )
+    try:
+        results = await application.corpora.delete_files(
+            ws,
+            file_paths=body.file_paths,
+            filenames=body.filenames,
+            dry_run=body.dry_run,
+        )
+    except WorkspaceWriteFencedError as exc:
+        raise raise_fenced_http(exc) from exc
     return {"results": results, "workspace": ws}
 
 
@@ -86,7 +90,10 @@ async def retry_failed_files(
     application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
-    return await application.corpora.retry_failed_docs(ws)
+    try:
+        return await application.corpora.retry_failed_docs(ws)
+    except WorkspaceWriteFencedError as exc:
+        raise raise_fenced_http(exc) from exc
 
 
 @router.get("/files/raw/{document_id:path}", response_model=None)

@@ -18,7 +18,23 @@ from dlightrag.application.access import (
 )
 from dlightrag.application.config import get_config
 from dlightrag.application.corpus_admin import normalize_workspace, normalize_workspace_ids
+from dlightrag.application.errors import WorkspaceWriteFencedError
 from dlightrag.application.settings import access_settings
+
+
+def raise_fenced_http(exc: WorkspaceWriteFencedError) -> HTTPException:
+    """Translate a promotion fence refusal into retryable 409 + Retry-After.
+
+    Retry-After rounds the remaining fence duration UP: a client retrying
+    early must still meet the fence.
+    """
+    import math
+
+    return HTTPException(
+        status_code=409,
+        detail=str(exc),
+        headers={"Retry-After": str(max(1, math.ceil(exc.retry_after_seconds)))},
+    )
 
 
 def get_application(request: Request) -> Application:

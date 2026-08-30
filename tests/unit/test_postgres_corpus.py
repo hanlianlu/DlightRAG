@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Focused behavior for the PostgreSQL corpus composition adapter."""
 
+import datetime
 import logging
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -45,11 +47,13 @@ async def test_connection_budget_warning_is_owned_by_coordination(
         acquire_timeout=test_config.storage.postgres.acquire_timeout,
     )
 
-    with caplog.at_level(logging.WARNING, logger="dlightrag.adapters.postgres.corpus.corpus"):
+    with caplog.at_level(logging.INFO, logger="dlightrag.adapters.postgres.corpus.corpus"):
         await coordination._log_connection_budget(_Connection(max_connections="50"))
 
     assert "PostgreSQL connection budget is tight" in caplog.text
-    assert "estimated_pool_connections=52" in caplog.text
+    # lightrag(16) + domain(10) + promotion gate(10) per process x 2 processes.
+    assert "estimated_pool_connections=72" in caplog.text
+    assert "promotion_gate=10" in caplog.text
 
 
 def test_backend_factory_applies_lightrag_environment_on_create(
@@ -238,3 +242,120 @@ async def test_runtime_binder_rejects_missing_postgres_chunk_backend(
         await PGCorpusRuntimeBinder(test_config).attach(lightrag)
 
     lightrag.initialize_storages.assert_awaited_once_with()
+
+
+# ---------------------------------------------------------------------------
+# Fix round: startup pipeline recovery joins the promotion write gate
+# ---------------------------------------------------------------------------
+
+
+async def test_pipeline_recovery_waits_out_a_fence_then_holds_the_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    coordination = PGCorpusCoordination(
+        connection_kwargs={"host": "localhost", "database": "x"},
+        workspace="research",
+        reader=False,
+        require_halfvec=False,
+        required_extensions=(),
+        lightrag_pool_max_size=4,
+        domain_pool_max_size=2,
+        acquire_timeout=5.0,
+    )
+
+    fence_values = [30.0, 0.0]  # fenced once, then clear
+    states: list[str] = []
+    sleepers: list[float] = []
+
+    class _FenceConn:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:  # noqa: ANN401
+            return {"write_fence_until": datetime.datetime.now(datetime.UTC)}
+
+        async def fetchval(self, query: str, *args: Any) -> float:
+            return fence_values.pop(0)
+
+    async def run(op: Any) -> Any:  # noqa: ANN001, ANN401
+        return await op(_FenceConn())
+
+    monkeypatch.setattr(corpus_module.pg_pool, "run", run)
+
+    @asynccontextmanager
+    async def fake_gate(workspace: str, *, exclusive: bool = False):  # noqa: ANN001, ANN202
+        states.append("gate-open")
+        yield None
+        states.append("gate-close")
+
+    from dlightrag.adapters.postgres.corpus import workspace_write_gate as gate_module
+
+    monkeypatch.setattr(gate_module, "workspace_write_gate", fake_gate)
+
+    async def fake_sleep(seconds: float) -> None:
+        sleepers.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    entered = False
+    async with coordination.pipeline_recovery():
+        entered = True
+        assert states == ["gate-open"]
+
+    assert entered is True
+    assert states == ["gate-open", "gate-close"]
+    assert sleepers == [5.0]  # polled the remaining fence duration once
+
+
+async def test_pipeline_recovery_cancellation_propagates_while_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    coordination = PGCorpusCoordination(
+        connection_kwargs={"host": "localhost", "database": "x"},
+        workspace="research",
+        reader=False,
+        require_halfvec=False,
+        required_extensions=(),
+        lightrag_pool_max_size=4,
+        domain_pool_max_size=2,
+        acquire_timeout=5.0,
+    )
+
+    class _FenceConn:
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:  # noqa: ANN401
+            return {"write_fence_until": datetime.datetime.now(datetime.UTC)}
+
+        async def fetchval(self, query: str, *args: Any) -> float:
+            return 60.0  # always fenced
+
+    async def run(op: Any) -> Any:  # noqa: ANN001, ANN401
+        return await op(_FenceConn())
+
+    monkeypatch.setattr(corpus_module.pg_pool, "run", run)
+
+    @asynccontextmanager
+    async def fake_gate(workspace: str, *, exclusive: bool = False):  # noqa: ANN001, ANN202
+        pytest.fail("the gate must not open while a fence is active")
+        yield None  # pragma: no cover
+
+    from dlightrag.adapters.postgres.corpus import workspace_write_gate as gate_module
+
+    monkeypatch.setattr(gate_module, "workspace_write_gate", fake_gate)
+
+    class _Cancelled(Exception):
+        pass
+
+    async def fake_sleep(seconds: float) -> None:
+        raise _Cancelled()
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(_Cancelled):
+        async with coordination.pipeline_recovery():
+            pytest.fail("gate must not open while fenced")
