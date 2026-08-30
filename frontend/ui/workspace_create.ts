@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import {WorkspaceApiError, createWorkspaceRequest} from '../api/workspaces.ts';
 import {LightElement} from '../lib/lit_host.ts';
@@ -20,6 +21,7 @@ export class DlWorkspaceCreate extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.pending = false;
     this.className = 'ui-popover-create';
   }
@@ -53,7 +55,9 @@ export class DlWorkspaceCreate extends LightElement {
         embeddingModel: '',
       });
       input.value = '';
-      this.#requestToast({message: `Workspace ${created.display_name} created.`});
+      this.#requestToast({
+        message: msg(str`Workspace ${created.display_name} created.`, {id: 'workspaceCreate.created'}),
+      });
       this.dispatchEvent(new CustomEvent<WorkspaceCreatedDetail>('dl-workspace-created', {
         detail: {workspace: created.workspace},
         bubbles: true,
@@ -66,7 +70,7 @@ export class DlWorkspaceCreate extends LightElement {
         this.#requestToast({
           message: error instanceof WorkspaceApiError
             ? error.message
-            : 'Failed to create workspace',
+            : msg('Failed to create workspace', {id: 'workspaceCreate.failed'}),
           duration: 3000,
         });
       }
@@ -85,15 +89,17 @@ export class DlWorkspaceCreate extends LightElement {
 
   protected override render(): TemplateResult {
     return html`
-      <input class="ui-popover-input" type="text" placeholder="New workspace..."
-             aria-label="New workspace name" ?disabled=${this.pending}
+      <input class="ui-popover-input" type="text"
+             placeholder=${msg('New workspace...', {id: 'workspaceCreate.placeholder'})}
+             aria-label=${msg('New workspace name', {id: 'workspaceCreate.nameAria'})} ?disabled=${this.pending}
              @click=${(event: Event) => { event.stopPropagation(); }}
              @keydown=${(event: KeyboardEvent) => {
                if (event.key !== 'Enter') return;
                event.preventDefault();
                void this.#submit();
              }}>
-      <button class="ui-popover-create-btn" type="button" aria-label="Create workspace"
+      <button class="ui-popover-create-btn" type="button"
+              aria-label=${msg('Create workspace', {id: 'workspaceCreate.createAria'})}
               ?disabled=${this.pending} @click=${(event: MouseEvent) => {
                 event.stopPropagation();
                 void this.#submit();

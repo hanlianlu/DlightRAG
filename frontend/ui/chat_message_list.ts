@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {guard} from 'lit/directives/guard.js';
 import {repeat} from 'lit/directives/repeat.js';
@@ -141,6 +142,7 @@ export class DlChatMessageList extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.view = {kind: 'new'};
     this.turns = [];
     this.scrollRequest = 0;
@@ -171,9 +173,15 @@ export class DlChatMessageList extends LightElement {
     ) {
       const previousState = previousView.olderMessagesState ?? 'idle';
       const currentState = this.view.olderMessagesState ?? 'idle';
-      if (currentState === 'loading') this.#olderAnnouncement = 'Loading older messages…';
-      else if (currentState === 'error') this.#olderAnnouncement = 'Older messages could not be loaded.';
-      else if (previousState === 'loading') this.#olderAnnouncement = 'Loaded older messages.';
+      if (currentState === 'loading') {
+        this.#olderAnnouncement = msg('Loading older messages…', {id: 'chatMessageList.olderLoading'});
+      } else if (currentState === 'error') {
+        this.#olderAnnouncement = msg('Older messages could not be loaded.', {
+          id: 'chatMessageList.olderError',
+        });
+      } else if (previousState === 'loading') {
+        this.#olderAnnouncement = msg('Loaded older messages.', {id: 'chatMessageList.olderLoaded'});
+      }
     }
     const area = this.querySelector<HTMLElement>('#chat-area');
     this.#stickAfterUpdate = changed.has('scrollRequest') || !area
@@ -258,13 +266,14 @@ export class DlChatMessageList extends LightElement {
   protected override render(): TemplateResult {
     const turns = this.turns;
     return html`
-      <main class="chat-area" id="chat-area" aria-label="Chat" @click=${this.#backgroundClick}>
+      <main class="chat-area" id="chat-area" aria-label=${msg('Chat', {id: 'chatMessageList.chatAria'})} @click=${this.#backgroundClick}>
         ${this.#olderMessagesControl()}
         <span class="sr-only" data-older-status role="status" aria-live="polite">
           ${this.#olderAnnouncement}
         </span>
         <div class="chat-messages" id="chat-messages" role="log" tabindex="-1"
-             aria-label="Conversation messages" ?inert=${this.interactionLocked}>
+             aria-label=${msg('Conversation messages', {id: 'chatMessageList.messagesAria'})}
+             ?inert=${this.interactionLocked}>
           ${this.#lineage()}
           ${this.#viewState()}
           ${repeat(
@@ -275,7 +284,7 @@ export class DlChatMessageList extends LightElement {
           ${this.#showWelcome() ? html`
             <div class="welcome" id="welcome">
               <div class="welcome-brand">DlightRAG</div>
-              <div class="welcome-sub">Ask anything about your documents</div>
+              <div class="welcome-sub">${msg('Ask anything about your documents', {id: 'chatMessageList.welcomeSub'})}</div>
             </div>
           ` : nothing}
         </div>
@@ -290,7 +299,9 @@ export class DlChatMessageList extends LightElement {
       <div data-older-messages>
         <button type="button" data-load-older aria-busy=${state === 'loading' ? 'true' : 'false'}
                 ?disabled=${state === 'loading'} @click=${this.#loadOlderMessages}>
-          ${state === 'error' ? 'Retry loading older messages' : 'Load older messages'}
+          ${state === 'error'
+            ? msg('Retry loading older messages', {id: 'chatMessageList.retryLoadOlder'})
+            : msg('Load older messages', {id: 'chatMessageList.loadOlder'})}
         </button>
       </div>
     `;
@@ -324,30 +335,33 @@ export class DlChatMessageList extends LightElement {
 
   #lineage(): TemplateResult | typeof nothing {
     if (this.view.kind !== 'ready' || !this.view.lineage) return nothing;
-    return html`<div class=${chatStyles.conversationLineage}>Forked from ${this.view.lineage}</div>`;
+    return html`<div class=${chatStyles.conversationLineage}>${msg(
+      str`Forked from ${this.view.lineage}`,
+      {id: 'chatMessageList.forkedFrom'},
+    )}</div>`;
   }
 
   #viewState(): TemplateResult | typeof nothing {
     if (this.view.kind === 'new' || this.view.kind === 'ready') return nothing;
     if (this.view.kind === 'loading') {
-      return html`<div role="status" aria-live="polite">Loading conversation history…</div>`;
+      return html`<div role="status" aria-live="polite">${msg('Loading conversation history…', {id: 'chatMessageList.loadingHistory'})}</div>`;
     }
     if (this.view.kind === 'error') {
       return html`
         <div class=${chatStyles.textError} role="alert" aria-live="assertive">
-          Conversation history is unavailable.
-          <button type="button" aria-label="Retry loading conversation history"
-                  @click=${() => this.#viewAction('retry')}>Retry conversation history</button>
+          ${msg('Conversation history is unavailable.', {id: 'chatMessageList.historyUnavailable'})}
+          <button type="button" aria-label=${msg('Retry loading conversation history', {id: 'chatMessageList.retryHistoryAria'})}
+                  @click=${() => this.#viewAction('retry')}>${msg('Retry conversation history', {id: 'chatMessageList.retryHistory'})}</button>
         </div>
       `;
     }
     return html`
       <div class=${chatStyles.textError} role="alert" aria-live="assertive">
-        Conversation unavailable.
-        <button type="button" @click=${() => this.#viewAction('new')}>Start a new chat</button>
+        ${msg('Conversation unavailable.', {id: 'chatMessageList.conversationUnavailable'})}
+        <button type="button" @click=${() => this.#viewAction('new')}>${msg('Start a new chat', {id: 'chatMessageList.startNewChat'})}</button>
         ${this.view.hasRecent ? html`
           <button type="button" @click=${() => this.#viewAction('recent')}>
-            Open recent conversation
+            ${msg('Open recent conversation', {id: 'chatMessageList.openRecent'})}
           </button>
         ` : nothing}
       </div>
@@ -386,7 +400,7 @@ export class DlChatMessageList extends LightElement {
       return html`
         <button type="button" class=${chatStyles.childAgentChip}
                 @click=${() => this.#runAction('children', turn.runId)}>
-          View child agents
+          ${msg('View child agents', {id: 'chatMessageList.viewChildAgents'})}
         </button>
         ${this.#answerBody(turn)}
       `;
@@ -398,7 +412,9 @@ export class DlChatMessageList extends LightElement {
     if (turn.state === 'succeeded' && turn.presentation) {
       return html`<dl-answer-presentation .presentation=${turn.presentation}></dl-answer-presentation>`;
     }
-    if (turn.state === 'failed') return html`${turn.error || 'Service error. Please try again.'}`;
+    if (turn.state === 'failed') {
+      return html`${turn.error || msg('Service error. Please try again.', {id: 'chatFeature.serviceError'})}`;
+    }
     return html`
       ${turn.streamText ? html`<span class="stream-tail">${turn.streamText}</span>` : nothing}
       ${turn.progress ? html`
@@ -407,11 +423,11 @@ export class DlChatMessageList extends LightElement {
       ` : nothing}
       ${turn.state === 'pending' && !turn.progress ? html`
         <span class="${chatStyles.streamingDot} ${chatStyles.progressPhase}"
-              data-phase="Answer in progress..."></span>
+              data-phase=${msg('Answer in progress...', {id: 'chatFeature.answerInProgress'})}></span>
       ` : nothing}
       ${turn.state === 'retryable' ? this.#reconnectNotice(turn) : nothing}
       ${turn.state === 'cancelled' ? html`
-        <div class=${chatStyles.stoppedNote}>Stopped</div>
+        <div class=${chatStyles.stoppedNote}>${msg('Stopped', {id: 'chatMessageList.stopped'})}</div>
       ` : nothing}
     `;
   }
@@ -422,11 +438,11 @@ export class DlChatMessageList extends LightElement {
     return html`
       <div class=${chatStyles.answerReconnect} data-reconnect-state=${state}>
         <span class=${chatStyles.answerReconnectStatus} role="status">
-          ${turn.error || copy.status}
+          ${turn.error || msg(copy.status, {id: `chatMessageList.reconnect.${state}.status`})}
         </span>
         <button class=${chatStyles.answerReconnectAction} type="button"
-                aria-label="Reconnect to this answer"
-                @click=${() => this.#reconnect(turn.runId)}>${copy.action}</button>
+                aria-label=${msg('Reconnect to this answer', {id: 'chatMessageList.reconnectAria'})}
+                @click=${() => this.#reconnect(turn.runId)}>${msg(copy.action, {id: `chatMessageList.reconnect.${state}.action`})}</button>
       </div>
     `;
   }
@@ -440,7 +456,7 @@ export class DlChatMessageList extends LightElement {
       return html`
         <div class=${chatStyles.runActions}>
           <button type="button" @click=${() => this.#runAction('children', turn.runId)}>
-            Child agents
+            ${msg('Child agents', {id: 'chatMessageList.childAgents'})}
           </button>
         </div>
       `;
@@ -450,15 +466,15 @@ export class DlChatMessageList extends LightElement {
     const tokenCount = Number(usageDetails?.total_tokens || 0);
     return html`
       <div class=${chatStyles.runActions}>
-        <button type="button" @click=${() => this.#runAction('follow-up', turn.runId)}>Follow up</button>
-        <button type="button" @click=${() => this.#runAction('fork', turn.runId)}>Fork</button>
+        <button type="button" @click=${() => this.#runAction('follow-up', turn.runId)}>${msg('Follow up', {id: 'chatMessageList.followUp'})}</button>
+        <button type="button" @click=${() => this.#runAction('fork', turn.runId)}>${msg('Fork', {id: 'chatMessageList.fork'})}</button>
         ${evidenceCount || tokenCount ? html`
           <span class=${chatStyles.runSummary}
                 title=${[
-                  evidenceCount ? `${evidenceCount} evidence chunks` : '',
-                  tokenCount ? `${tokenCount} tokens` : '',
+                  evidenceCount ? msg(str`${evidenceCount} evidence chunks`, {id: 'chatMessageList.evidenceChunksTitle'}) : '',
+                  tokenCount ? msg(str`${tokenCount} tokens`, {id: 'chatMessageList.tokensTitle'}) : '',
                 ].filter(Boolean).join(' · ')}>
-            ${evidenceCount ? `${evidenceCount} sources` : ''}
+            ${evidenceCount ? msg(str`${evidenceCount} sources`, {id: 'chatMessageList.sources'}) : ''}
           </span>
         ` : nothing}
       </div>
@@ -505,7 +521,7 @@ export class DlChatMessageList extends LightElement {
     return html`
       <div class=${chatStyles.historyImageCard}>
         <button type="button" class=${chatStyles.historyImageButton}
-                aria-label=${`Open ${reference.label}`} ?disabled=${failed}
+                aria-label=${msg(str`Open ${reference.label}`, {id: 'chatMessageList.openImageAria'})} ?disabled=${failed}
                 @click=${(event: Event) => this.#openImage(
                   reference,
                   event.currentTarget as HTMLElement,
@@ -518,12 +534,14 @@ export class DlChatMessageList extends LightElement {
         </button>
         <span class=${chatStyles.historyImageStatus}
               role=${failed ? 'alert' : 'status'} ?hidden=${loaded}>
-          ${failed ? `History image failed to load: ${reference.label}` : `Loading ${reference.label}`}
+          ${failed
+            ? msg(str`History image failed to load: ${reference.label}`, {id: 'chatMessageList.imageFailed'})
+            : msg(str`Loading ${reference.label}`, {id: 'chatMessageList.imageLoading'})}
         </span>
         <button type="button" class=${chatStyles.historyImageRetry}
-                aria-label=${`Retry image: ${reference.label}`} ?hidden=${!failed}
+                aria-label=${msg(str`Retry image: ${reference.label}`, {id: 'chatMessageList.retryImageAria'})} ?hidden=${!failed}
                 @click=${(event: Event) => this.#retryImage(reference, event.currentTarget as HTMLElement)}>
-          Retry image
+          ${msg('Retry image', {id: 'chatMessageList.retryImage'})}
         </button>
       </div>
     `;
@@ -629,7 +647,9 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     if (stored.presentation) state = 'succeeded';
     else {
       state = 'failed';
-      error = 'Stored answer presentation is unavailable.';
+      error = msg('Stored answer presentation is unavailable.', {
+        id: 'chatMessageList.storedPresentationUnavailable',
+      });
     }
   } else if (stored.status === 'failed') {
     state = 'failed';
@@ -649,7 +669,7 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     evidence: stored.evidence ?? {},
     error,
     progress: (stored.status === 'queued' || stored.status === 'running')
-      && stored.cancel_requested ? 'Stopping...' : '',
+      && stored.cancel_requested ? msg('Stopping...', {id: 'chatFeature.stopping'}) : '',
     liveStatus: '',
     sawChildren: false,
     cancelRequested: stored.cancel_requested,

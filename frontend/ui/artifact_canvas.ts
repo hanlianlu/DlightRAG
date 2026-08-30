@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
@@ -50,6 +51,7 @@ export class DlArtifactCanvas extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.activePreviewEnabled = true;
     this.canvasState = 'idle';
     this.layout = 'side';
@@ -157,25 +159,25 @@ export class DlArtifactCanvas extends LightElement {
     return html`
       <div class="artifact-canvas-header">
         <div class="artifact-canvas-heading">
-          <h2 class="artifact-canvas-title" id="artifact-canvas-title">${artifact?.label || 'Artifact'}</h2>
+          <h2 class="artifact-canvas-title" id="artifact-canvas-title">${artifact?.label || msg('Artifact', {id: 'artifactCanvas.fallbackTitle'})}</h2>
           ${artifact ? html`<span class="artifact-canvas-filename">${artifact.filename}</span>` : nothing}
         </div>
         <div class="artifact-canvas-actions">
           <div class="artifact-canvas-layout-actions" role="group"
                aria-labelledby="artifact-canvas-title">
             <button class="ui-btn" type="button" @click=${() => this.#setLayout('side')}
-                    aria-pressed=${this.layout === 'side'}>Side</button>
+                    aria-pressed=${this.layout === 'side'}>${msg('Side', {id: 'artifactCanvas.layoutSide'})}</button>
             <button class="ui-btn" type="button" @click=${() => this.#setLayout('wide')}
-                    aria-pressed=${this.layout === 'wide'}>Wide</button>
+                    aria-pressed=${this.layout === 'wide'}>${msg('Wide', {id: 'artifactCanvas.layoutWide'})}</button>
             <button class="ui-btn" type="button" @click=${() => this.#setLayout('fullscreen')}
-                    aria-pressed=${this.layout === 'fullscreen'}>Fullscreen</button>
+                    aria-pressed=${this.layout === 'fullscreen'}>${msg('Fullscreen', {id: 'artifactCanvas.layoutFullscreen'})}</button>
           </div>
           ${artifact?.download_url ? html`
             <a class="ui-btn" href=${safeSameOriginHref(artifact.download_url) || '#'} download>
-              Download
+              ${msg('Download', {id: 'artifactCanvas.download'})}
             </a>` : nothing}
           <button class="panel-close" data-action="close" type="button"
-                  aria-label="Close Artifact" @click=${() => this.close()}>✕</button>
+                  aria-label=${msg('Close Artifact', {id: 'artifactCanvas.close'})} @click=${() => this.close()}>✕</button>
         </div>
       </div>
       <div class="artifact-canvas-content">
@@ -189,17 +191,17 @@ export class DlArtifactCanvas extends LightElement {
     if (!artifact) return html``;
     if (artifact.status === 'unavailable') {
       return html`<div class="artifact-unavailable" role="alert">
-        <strong>Artifact unavailable</strong>
-        <p>${artifact.issue?.description || 'This Artifact could not be published.'}</p>
+        <strong>${msg('Artifact unavailable', {id: 'artifactCanvas.unavailableTitle'})}</strong>
+        <p>${artifact.issue?.description || msg('This Artifact could not be published.', {id: 'artifactCanvas.unavailableDescription'})}</p>
       </div>`;
     }
     if (this.canvasState === 'loading') {
-      return html`<div class="artifact-loading" role="status">Loading Artifact…</div>`;
+      return html`<div class="artifact-loading" role="status">${msg('Loading Artifact…', {id: 'artifactCanvas.loading'})}</div>`;
     }
     if (this.canvasState === 'error') {
       return html`<div class="artifact-error" role="alert">
-        <p>Could not load this Artifact safely.</p>
-        <button class="ui-btn" type="button" @click=${() => this.reload()}>Retry</button>
+        <p>${msg('Could not load this Artifact safely.', {id: 'artifactCanvas.error'})}</p>
+        <button class="ui-btn" type="button" @click=${() => this.reload()}>${msg('Retry', {id: 'artifactCanvas.retry'})}</button>
         ${this.textPreview ? html`<pre>${this.textPreview}</pre>` : nothing}
       </div>`;
     }
@@ -212,7 +214,7 @@ export class DlArtifactCanvas extends LightElement {
         const source = safeImageSrc(artifact.data_url || '');
         return source
           ? html`<button class="artifact-image" type="button"
-                  aria-label=${`Open image: ${artifact.label}`}
+                  aria-label=${msg(str`Open image: ${artifact.label}`, {id: 'artifactCanvas.openImage'})}
                   @click=${(event: Event) => this.#openImage(
                     source,
                     event.currentTarget as HTMLElement,
@@ -243,35 +245,35 @@ export class DlArtifactCanvas extends LightElement {
         <dl-active-artifact-frame
           .source=${this.textPreview}
           .active=${false}
-          .label=${this.artifact?.label || 'HTML Artifact'}
+          .label=${this.artifact?.label || msg('HTML Artifact', {id: 'artifactCanvas.htmlFallbackLabel'})}
         ></dl-active-artifact-frame>
-        ${this.#htmlSource('Source')}
+        ${this.#htmlSource(msg('Source', {id: 'artifactCanvas.source'}))}
       `;
     }
     if (!this.interactive) {
       return html`
         <div class="artifact-active-consent">
-          <strong>Untrusted interactive report</strong>
-          <p>Active code is isolated from DlightRAG. Normal external loads are blocked by browser policy.</p>
+          <strong>${msg('Untrusted interactive report', {id: 'artifactCanvas.untrustedTitle'})}</strong>
+          <p>${msg('Active code is isolated from DlightRAG. Normal external loads are blocked by browser policy.', {id: 'artifactCanvas.untrustedDescription'})}</p>
           <button class="ui-btn" type="button" @click=${() => { this.interactive = true; }}>
-            Open interactive report
+            ${msg('Open interactive report', {id: 'artifactCanvas.openInteractive'})}
           </button>
         </div>
-        ${this.#htmlSource('Static source')}
+        ${this.#htmlSource(msg('Static source', {id: 'artifactCanvas.staticSource'}))}
       `;
     }
     return html`
       <dl-active-artifact-frame
         .source=${this.textPreview}
         .active=${true}
-        .label=${this.artifact?.label || 'HTML Artifact'}
+        .label=${this.artifact?.label || msg('HTML Artifact', {id: 'artifactCanvas.htmlFallbackLabel'})}
         @artifact-frame-escape=${() => this.close()}
       ></dl-active-artifact-frame>
-      ${this.#htmlSource('Source')}
+      ${this.#htmlSource(msg('Source', {id: 'artifactCanvas.source'}))}
     `;
   }
 
-  #htmlSource(summary: 'Source' | 'Static source'): TemplateResult {
+  #htmlSource(summary: string): TemplateResult {
     return html`<details>
       <summary>${summary}</summary>
       <pre class="artifact-source">${this.textPreview}</pre>
@@ -280,10 +282,10 @@ export class DlArtifactCanvas extends LightElement {
 
   #downloadOnly(): TemplateResult {
     return html`<div class="artifact-download-only">
-      <p>No browser-safe inline preview is available for this file.</p>
+      <p>${msg('No browser-safe inline preview is available for this file.', {id: 'artifactCanvas.downloadOnly'})}</p>
       ${this.artifact?.download_url ? html`
         <a class="ui-btn" href=${safeSameOriginHref(this.artifact.download_url) || '#'} download>
-          Download ${this.artifact.filename}
+          ${msg(str`Download ${this.artifact.filename}`, {id: 'artifactCanvas.downloadFile'})}
         </a>` : nothing}
     </div>`;
   }

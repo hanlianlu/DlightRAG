@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** One replace-in-place toast Feature with optional asynchronous action. */
 
+import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {LightElement} from '../lib/lit_host.ts';
 
@@ -44,6 +45,7 @@ export class DlToastRegion extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.shellInert = false;
     this.request = null;
     this.visible = false;
@@ -190,10 +192,11 @@ export class DlToastRegion extends LightElement {
     let message: string;
     let duration: number;
     try {
-      message = await request.action.onAction() || 'Change undone.';
+      message = await request.action.onAction()
+        || msg('Change undone.', {id: 'toast.changeUndone'});
       duration = 3000;
     } catch {
-      message = 'Could not undo the change.';
+      message = msg('Could not undo the change.', {id: 'toast.undoFailed'});
       duration = 3000;
     }
     if (this.request !== request) return;

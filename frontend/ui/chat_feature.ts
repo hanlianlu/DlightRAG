@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
 import {csrfHeaders} from '../api/csrf.ts';
 import {
@@ -166,6 +167,7 @@ export class DlChatFeature extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.view = {kind: 'new'};
     this.attachmentPolicy = null;
     this.attachmentAccept = '';
@@ -245,7 +247,10 @@ export class DlChatFeature extends LightElement {
       }
     } catch {
       if (!controller.signal.aborted && this.#continuationController === controller) {
-        this.#requestToast({message: 'The continuation could not be started.', duration: 3000});
+        this.#requestToast({
+          message: msg('The continuation could not be started.', {id: 'chatFeature.continuationFailed'}),
+          duration: 3000,
+        });
       }
     } finally {
       if (this.#continuationController === controller) this.#continuationController = null;
@@ -394,7 +399,9 @@ export class DlChatFeature extends LightElement {
     this.#setTurn(turn.id, {
       state: 'pending',
       error: '',
-      progress: turn.cancelRequested ? 'Stopping...' : 'Answer in progress...',
+      progress: turn.cancelRequested
+        ? msg('Stopping...', {id: 'chatFeature.stopping'})
+        : msg('Answer in progress...', {id: 'chatFeature.answerInProgress'}),
     });
     answerRunStore.trackRun(conversationId, turn.runId);
     if (!this.#runController.beginFollow(turn.runId, turn.cancelRequested)) return;
@@ -430,7 +437,9 @@ export class DlChatFeature extends LightElement {
       if (!conversationStore.canAnswer) {
         this.#setTurnError(
           turn.id,
-          'Conversation service is unavailable. Please retry loading the conversation.',
+          msg('Conversation service is unavailable. Please retry loading the conversation.', {
+            id: 'chatFeature.conversationUnavailable',
+          }),
         );
         return;
       }
@@ -445,7 +454,12 @@ export class DlChatFeature extends LightElement {
         workspaces: activeWorkspaces,
       });
       if (conversationStore.answerConversationId !== conversationId) {
-        this.#setTurnError(turn.id, 'The active conversation changed before this answer started.');
+        this.#setTurnError(
+          turn.id,
+          msg('The active conversation changed before this answer started.', {
+            id: 'chatFeature.conversationChanged',
+          }),
+        );
         return;
       }
       const runKey = conversationId ?? NEW_CHAT_RUN_KEY;
@@ -469,14 +483,19 @@ export class DlChatFeature extends LightElement {
       });
       if (!response.ok) {
         if (response.status < 500) answerRunStore.clear(runKey);
-        this.#setTurnError(turn.id, 'Service error. Please try again.');
+        this.#setTurnError(turn.id, msg('Service error. Please try again.', {id: 'chatFeature.serviceError'}));
         return;
       }
       const descriptor = await response.json() as AnswerRunDescriptor;
       const acceptedConversationId = descriptor.conversation.conversation_id;
       if (conversationId && acceptedConversationId !== conversationId) {
         answerRunStore.clear(runKey);
-        this.#setTurnError(turn.id, 'The answer was accepted for an unexpected conversation.');
+        this.#setTurnError(
+          turn.id,
+          msg('The answer was accepted for an unexpected conversation.', {
+            id: 'chatFeature.unexpectedConversation',
+          }),
+        );
         return;
       }
       answerRunStore.attachRun(runKey, descriptor.run_id);
@@ -495,13 +514,15 @@ export class DlChatFeature extends LightElement {
       this.#setTurn(turn.id, {
         runId: descriptor.run_id,
         state: 'pending',
-        progress: descriptor.cancel_requested ? 'Stopping...' : '',
+        progress: descriptor.cancel_requested ? msg('Stopping...', {id: 'chatFeature.stopping'}) : '',
         cancelRequested: descriptor.cancel_requested,
       });
       this.#runController.acceptSubmission(descriptor.run_id, descriptor.cancel_requested);
       await this.#followTurn(turn.id, conversationId, descriptor.run_id);
     } catch {
-      if (!signal.aborted) this.#setTurnError(turn.id, 'Connection error. Please try again.');
+      if (!signal.aborted) {
+        this.#setTurnError(turn.id, msg('Connection error. Please try again.', {id: 'chatFeature.connectionError'}));
+      }
     } finally {
       if (this.#runController.submissionPending) this.#runController.finish();
     }
@@ -527,7 +548,10 @@ export class DlChatFeature extends LightElement {
         (events) => this.#handleRunBatch(turnId, events),
       );
     } catch {
-      result = {kind: 'error', message: 'Connection error. Please try again.'};
+      result = {
+        kind: 'error',
+        message: msg('Connection error. Please try again.', {id: 'chatFeature.connectionError'}),
+      };
     }
     if (this.#runController.runId !== runId) return;
 
@@ -540,7 +564,9 @@ export class DlChatFeature extends LightElement {
       const reconnectState = answerReconnectState(cancelRequested);
       this.#setTurn(turnId, {
         state: 'retryable',
-        error: ANSWER_RECONNECT_COPY[reconnectState].status,
+        error: msg(ANSWER_RECONNECT_COPY[reconnectState].status, {
+          id: `chatMessageList.reconnect.${reconnectState}.status`,
+        }),
         progress: '',
         liveStatus: '',
         cancelRequested,
@@ -564,7 +590,10 @@ export class DlChatFeature extends LightElement {
       await steerAnswerRun(runId, query, signal);
     } catch {
       if (!signal.aborted && this.#runController.runId === runId) {
-        this.#requestToast({message: 'This run can no longer be steered.', duration: 3000});
+        this.#requestToast({
+          message: msg('This run can no longer be steered.', {id: 'chatFeature.steerUnavailable'}),
+          duration: 3000,
+        });
       }
       return;
     }
@@ -619,7 +648,10 @@ export class DlChatFeature extends LightElement {
         const payload = event.payload as {phase?: string};
         const phase = String(payload?.phase || '');
         const label = answerPhaseLabel(phase);
-        if (label !== null) apply({progress: label, liveStatus: label, error: ''});
+        if (label !== null) {
+          const text = msg(label, {id: `chatFeature.phase.${phase}`});
+          apply({progress: text, liveStatus: text, error: ''});
+        }
         continue;
       }
       if (event.kind === 'tool') {
@@ -627,9 +659,10 @@ export class DlChatFeature extends LightElement {
         if (!info || typeof info.tool_name !== 'string') continue;
         const label = answerToolEventLabel(event.eventType);
         if (label === null) continue;
+        const text = msg(label, {id: `chatFeature.toolEvent.${event.eventType}`});
         apply({
-          progress: label,
-          liveStatus: label,
+          progress: text,
+          liveStatus: text,
           sawChildren: currentTurn().sawChildren || info.tool_name === 'spawn_agent',
           error: '',
         });
@@ -642,16 +675,16 @@ export class DlChatFeature extends LightElement {
       }
       const payload = event.payload;
       if (!isDonePayload(payload)) {
-        const message = 'Service error. Please try again.';
+        const message = msg('Service error. Please try again.', {id: 'chatFeature.serviceError'});
         apply({state: 'failed', error: message, progress: '', liveStatus: message});
         continue;
       }
       if (payload.status === 'cancelled') {
-        apply({state: 'cancelled', progress: '', liveStatus: 'Answer stopped'});
+        apply({state: 'cancelled', progress: '', liveStatus: msg('Answer stopped', {id: 'chatFeature.answerStopped'})});
         continue;
       }
       if (!payload.presentation) {
-        const message = 'Service error. Please try again.';
+        const message = msg('Service error. Please try again.', {id: 'chatFeature.serviceError'});
         apply({state: 'failed', error: message, progress: '', liveStatus: message});
         continue;
       }
@@ -662,7 +695,7 @@ export class DlChatFeature extends LightElement {
         usage: payload.usage ?? {},
         evidence: payload.evidence ?? {},
         progress: '',
-        liveStatus: 'Answer ready',
+        liveStatus: msg('Answer ready', {id: 'chatFeature.answerReady'}),
       });
     }
 

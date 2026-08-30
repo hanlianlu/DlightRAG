@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Theme Control Feature and document color-mode capability. */
 
+import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, svg, type TemplateResult} from 'lit';
 import {
   parseThemePreference,
@@ -63,6 +64,7 @@ export class DlThemeControl extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.preference = 'system';
     this.menuOpen = false;
   }
@@ -94,8 +96,9 @@ export class DlThemeControl extends LightElement {
   }
 
   protected override render(): TemplateResult {
+    const appearance = msg('Appearance', {id: 'theme.appearance'});
     return html`
-      <button id="theme-trigger" type="button" aria-label="Appearance" title="Appearance"
+      <button id="theme-trigger" type="button" aria-label=${appearance} title=${appearance}
               aria-haspopup="menu" aria-controls="theme-menu"
               aria-expanded=${this.menuOpen ? 'true' : 'false'}
               @click=${this.#triggerClick} @keydown=${this.#triggerKeydown}>
@@ -106,11 +109,11 @@ export class DlThemeControl extends LightElement {
              fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
              stroke-linejoin="round" aria-hidden="true">${SUN_ICON}</svg>
       </button>
-      <div id="theme-menu" role="menu" aria-label="Appearance" ?hidden=${!this.menuOpen}
+      <div id="theme-menu" role="menu" aria-label=${appearance} ?hidden=${!this.menuOpen}
            @keydown=${this.#menuKeydown}>
-        ${this.#option('system', 'System', SYSTEM_ICON)}
-        ${this.#option('light', 'Light', SUN_ICON)}
-        ${this.#option('dark', 'Dark', MOON_ICON)}
+        ${this.#option('system', msg('System', {id: 'theme.system'}), SYSTEM_ICON)}
+        ${this.#option('light', msg('Light', {id: 'theme.light'}), SUN_ICON)}
+        ${this.#option('dark', msg('Dark', {id: 'theme.dark'}), MOON_ICON)}
       </div>
     `;
   }
