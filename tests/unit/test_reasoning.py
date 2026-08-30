@@ -80,20 +80,20 @@ def test_compaction_selects_cheapest_supported_control() -> None:
         ),
         ("deepseek", "off", {"thinking": {"type": "disabled"}}),
         (
-            "anthropic_native",
+            "anthropic",
             "high",
             {
                 "thinking": {"type": "adaptive"},
                 "output_config": {"effort": "high"},
             },
         ),
-        ("anthropic_native", "off", {"thinking": {"type": "disabled"}}),
+        ("anthropic", "off", {"thinking": {"type": "disabled"}}),
         (
-            "gemini_native",
+            "gemini",
             "high",
             {"thinking_config": {"include_thoughts": True, "thinking_level": "HIGH"}},
         ),
-        ("gemini_native", "off", {"thinking_config": {"thinking_budget": 0}}),
+        ("gemini", "off", {"thinking_config": {"thinking_budget": 0}}),
     ],
 )
 def test_resolved_reasoning_translates_only_by_catalogue_format(

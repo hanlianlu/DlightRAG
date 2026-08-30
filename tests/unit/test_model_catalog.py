@@ -52,6 +52,15 @@ _KIMI_LEVELS = {
     "xhigh": None,
     "max": "max",
 }
+_DEEPSEEK_ROUTER_LEVELS = {
+    "off": "disabled",
+    "minimal": None,
+    "low": None,
+    "medium": None,
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": None,
+}
 
 
 def _canonical_revision(models: Sequence[object]) -> str:
@@ -185,7 +194,7 @@ def test_packaged_catalog_revision_is_bound_to_canonical_models() -> None:
             1_000_000,
             None,
             128_000,
-            "anthropic_native",
+            "anthropic",
             {**_ANTHROPIC_LEVELS, "off": None},
         ),
         (
@@ -195,18 +204,8 @@ def test_packaged_catalog_revision_is_bound_to_canonical_models() -> None:
             1_000_000,
             None,
             128_000,
-            "anthropic_native",
+            "anthropic",
             _ANTHROPIC_LEVELS,
-        ),
-        (
-            "openai",
-            "google/gemini-3.7-flash",
-            "https://openrouter.ai/api/v1",
-            1_048_576,
-            None,
-            65_536,
-            "openrouter",
-            _GEMINI_LEVELS,
         ),
         (
             "gemini",
@@ -215,7 +214,7 @@ def test_packaged_catalog_revision_is_bound_to_canonical_models() -> None:
             1_048_576,
             None,
             65_536,
-            "gemini_native",
+            "gemini",
             _GEMINI_LEVELS,
         ),
         (
@@ -255,6 +254,113 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
     assert profile.reasoning is not None
     assert profile.reasoning.format == reasoning_format
     assert profile.reasoning.levels.as_dict() == reasoning_levels
+
+
+@pytest.mark.parametrize(
+    ("model", "context_window", "max_input", "max_output", "images", "levels"),
+    [
+        (
+            "anthropic/claude-fable-5",
+            1_000_000,
+            None,
+            128_000,
+            True,
+            {**_ANTHROPIC_LEVELS, "off": None},
+        ),
+        (
+            "anthropic/claude-opus-5",
+            1_000_000,
+            None,
+            128_000,
+            True,
+            _ANTHROPIC_LEVELS,
+        ),
+        (
+            "deepseek/deepseek-v4-flash",
+            1_048_576,
+            None,
+            384_000,
+            False,
+            _DEEPSEEK_ROUTER_LEVELS,
+        ),
+        (
+            "deepseek/deepseek-v4-flash-vision-exp",
+            1_048_576,
+            None,
+            384_000,
+            True,
+            {**_KIMI_LEVELS, "off": "disabled"},
+        ),
+        (
+            "google/gemini-3.7-flash",
+            1_048_576,
+            None,
+            65_536,
+            True,
+            _GEMINI_LEVELS,
+        ),
+        (
+            "moonshotai/kimi-k3",
+            1_048_576,
+            None,
+            943_718,
+            True,
+            {**_KIMI_LEVELS, "off": "disabled"},
+        ),
+        (
+            "openai/gpt-5.6-sol",
+            1_050_000,
+            922_000,
+            128_000,
+            True,
+            _OPENAI_LEVELS,
+        ),
+        (
+            "openai/gpt-5.6-terra",
+            1_050_000,
+            922_000,
+            128_000,
+            True,
+            _OPENAI_LEVELS,
+        ),
+        (
+            "openai/gpt-5.6-luna",
+            1_050_000,
+            922_000,
+            128_000,
+            True,
+            _OPENAI_LEVELS,
+        ),
+    ],
+)
+def test_openrouter_profiles_cover_every_catalogued_native_model(
+    model: str,
+    context_window: int,
+    max_input: int | None,
+    max_output: int,
+    images: bool,
+    levels: dict[str, str | None],
+) -> None:
+    matches = [
+        entry
+        for entry in catalog._BUILTIN_MODEL_ENTRIES
+        if (
+            entry.provider,
+            entry.model,
+            entry.base_url,
+        )
+        == ("openai", model, "https://openrouter.ai/api/v1")
+    ]
+
+    assert len(matches) == 1
+    profile = matches[0].profile
+    assert profile.context_window_tokens == context_window
+    assert profile.max_input_tokens == max_input
+    assert profile.max_output_tokens == max_output
+    assert profile.supports_images is images
+    assert profile.reasoning is not None
+    assert profile.reasoning.format == "openrouter"
+    assert profile.reasoning.levels.as_dict() == levels
 
 
 def test_catalog_rejects_malformed_json_without_leaking_source(

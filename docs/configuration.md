@@ -396,7 +396,9 @@ Each chat model resolves an endpoint-scoped profile containing its context
 window (`C`), optional maximum input (`I`), optional maximum output (`O`), image
 capability, and an optional reasoning profile. DlightRAG matches the normalized
 `provider`, exact `model`, and normalized `base_url`; the same model name at a
-different endpoint is a different profile.
+different endpoint is a different profile. The built-in catalogue is ordered by
+upstream vendor and model; each native endpoint immediately precedes its
+OpenRouter counterpart.
 
 Resolution is deterministic: a PostgreSQL runtime overlay replaces a matching
 built-in profile, the versioned JSON catalogue supplies the shipped defaults,
@@ -429,9 +431,8 @@ an explicit mapping for all seven levels: `off`, `minimal`, `low`, `medium`,
 disabled. A non-off request is deterministically clamped to the nearest
 supported level; an impossible `off` request is a configuration error.
 Supported request formats are `openrouter`, `openai`, `deepseek`,
-`anthropic_native`, and
-`gemini_native`; an unknown format is rejected rather than silently dropping a
-reasoning control.
+`anthropic`, and `gemini`; an unknown format is rejected rather than silently
+dropping a reasoning control.
 
 Model configuration uses only the typed, provider-independent levels:
 

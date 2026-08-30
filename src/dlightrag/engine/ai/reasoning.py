@@ -26,9 +26,7 @@ REASONING_LEVELS: tuple[ReasoningLevel, ...] = (
     "xhigh",
     "max",
 )
-REASONING_FORMATS = frozenset(
-    {"openrouter", "openai", "deepseek", "anthropic_native", "gemini_native"}
-)
+REASONING_FORMATS = frozenset({"openrouter", "openai", "deepseek", "anthropic", "gemini"})
 
 # Raw provider fields owned by typed reasoning configuration. A caller may use
 # them only when no semantic reasoning level is configured for that request.
@@ -220,7 +218,7 @@ def reasoning_request_kwargs(resolved: ResolvedReasoning | None) -> dict[str, An
             "reasoning_effort": value,
         }
 
-    if format_name == "anthropic_native":
+    if format_name == "anthropic":
         if level == "off":
             return {"thinking": {"type": "disabled"}}
         return {
@@ -228,7 +226,7 @@ def reasoning_request_kwargs(resolved: ResolvedReasoning | None) -> dict[str, An
             "output_config": {"effort": value},
         }
 
-    if format_name == "gemini_native":
+    if format_name == "gemini":
         if level == "off":
             return {"thinking_config": {"thinking_budget": 0}}
         return {
