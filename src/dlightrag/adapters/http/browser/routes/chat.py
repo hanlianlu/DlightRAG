@@ -97,8 +97,14 @@ async def conversation_page(
 
 @page_router.get("/design-system", response_class=FileResponse)
 async def design_system_page() -> FileResponse:
-    """Serve the Vite design-system entry document."""
+    """Serve the isolated Vite design-system entry document."""
     return app_html_response("design-system.html")
+
+
+@page_router.get("/product-showcase", response_class=FileResponse)
+async def product_showcase_page() -> FileResponse:
+    """Serve the product-component showcase entry document."""
+    return app_html_response("product-showcase.html")
 
 
 @router.post("/answer", status_code=202, response_model=AcceptedAnswer)

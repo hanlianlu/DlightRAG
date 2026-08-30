@@ -20,6 +20,8 @@ function devWebPageFallback(): Plugin {
           request.url = '/static/app/';
         } else if (pathname === '/web/design-system') {
           request.url = '/static/app/design-system.html';
+        } else if (pathname === '/web/product-showcase') {
+          request.url = '/static/app/product-showcase.html';
         }
         next();
       });
@@ -38,7 +40,12 @@ function hashedThemeInit(): Plugin {
       if (!theme || theme.type !== 'chunk' || !options.dir) {
         throw new Error('Vite did not emit the pre-paint theme entry');
       }
-      for (const filename of ['index.html', 'login.html', 'design-system.html']) {
+      for (const filename of [
+        'index.html',
+        'login.html',
+        'design-system.html',
+        'product-showcase.html',
+      ]) {
         const path = resolve(options.dir, filename);
         const source = readFileSync(path, 'utf8');
         writeFileSync(path, source.replace('__THEME_INIT__', theme.fileName));
@@ -60,6 +67,7 @@ export default defineConfig({
         app: resolve(__dirname, 'index.html'),
         login: resolve(__dirname, 'login.html'),
         'design-system': resolve(__dirname, 'design-system.html'),
+        'product-showcase': resolve(__dirname, 'product-showcase.html'),
         'theme-init': resolve(__dirname, 'theme-init.ts'),
       },
       output: {

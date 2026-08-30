@@ -3,10 +3,10 @@
 import {expect} from '@esm-bundle/chai';
 
 const stylesheets = [
-  '../tokens/utopia.css',
+  '../design-system/index.css',
   '../styles/global.css',
-  '../styles/primitives.css',
   '../styles/layout.css',
+  '../styles/shared_components.css',
   '../styles/panels.css',
   '../styles/files.css',
   '../styles/sources.css',
@@ -97,7 +97,7 @@ it('assigns geometry by surface role rather than component size', () => {
   expect(radius('source-chunk')).to.equal('16px');
   expect(radius('source-doc')).to.equal('0px');
   expect(radius('panel')).to.equal('0px');
-  expect(radius('ui-popover')).to.equal('18px');
+  expect(radius('dl-popover')).to.equal('18px');
   expect(radius('workspace-dialog')).to.equal('22px');
   expect(radius('composer-form')).to.equal('24px');
   const app = element('app');
@@ -176,7 +176,7 @@ it('labels Canvas layout controls, truncates long titles, and preserves compact 
   layouts.setAttribute('role', 'group');
   layouts.setAttribute('aria-labelledby', title.id);
   const download = document.createElement('a');
-  download.className = 'ui-btn';
+  download.className = 'dl-btn';
   download.textContent = 'Download';
   actions.append(layouts, download);
   header.append(heading, actions);

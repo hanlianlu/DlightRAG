@@ -1,0 +1,62 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+.dl-icon {
+  display: block;
+  flex: none;
+  overflow: visible;
+  stroke-width: var(--dl-icon-stroke, 1.75);
+}
+
+.dl-icon :is(path, rect, circle, line, polyline, polygon, ellipse) {
+  vector-effect: non-scaling-stroke;
+}
+
+.dl-icon--xs {
+  height: var(--dl-icon-size-xs);
+  width: var(--dl-icon-size-xs);
+}
+
+.dl-icon--sm {
+  height: var(--dl-icon-size-sm);
+  width: var(--dl-icon-size-sm);
+}
+
+.dl-icon--md {
+  height: var(--dl-icon-size-md);
+  width: var(--dl-icon-size-md);
+}
+
+.dl-icon--lg {
+  height: var(--dl-icon-size-lg);
+  width: var(--dl-icon-size-lg);
+}
+
+.dl-icon-button {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
+  min-block-size: var(--control-hit-target);
+  min-inline-size: var(--control-hit-target);
+  padding: 0;
+}
+
+.dl-icon-button:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
+
+.dl-icon-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+@media (forced-colors: active) {
+  .dl-icon--stroke { stroke: CanvasText; }
+  .dl-icon--fill { fill: CanvasText; }
+}

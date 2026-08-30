@@ -11,15 +11,15 @@ Status: Python 3.14.7+. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
 ## Architecture At A Glance
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="DlightRAG system context showing callers, the service boundary, external integrations, PostgreSQL, and corpus artifacts" width="1080" />
+  <img src="docs/architecture.svg" alt="DlightRAG system context showing browser, REST, MCP, and embedded callers; optional enterprise identity and Web edge boundaries; external integrations; PostgreSQL; and corpus artifacts" width="1180" />
 </p>
 
 This is intentionally a system-context view: it shows DlightRAG as one system
 and does not mix internal modules, execution steps, package imports, or database
 entities into the same arrows.
 
-DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. Research mode runs the durable product-neutral Agent Session Runtime with seven Pi-parity filesystem tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`), durable per-run workspaces, independently leased foreground child sessions, streamed tool progress, and verified image snapshots attached straight into the model call. Fast and Research share one canonical parent-linked conversation tree; Fast creates no Agent Operation. The full runtime, deployment, and code-layer views are in
-[docs/architecture.md](docs/architecture.md).
+DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. Research mode runs the durable product-neutral Agent Session Runtime with seven Pi-parity filesystem tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`), durable per-run workspaces, independently leased foreground child sessions, streamed tool progress, and verified image snapshots attached straight into the model call. Fast and Research share one canonical parent-linked conversation tree; Fast creates no Agent Operation. The full runtime ownership, frontend ownership, deployment and storage, and
+code-layer views are in [docs/architecture.md](docs/architecture.md).
 
 The repository is one UV workspace with two lockstep distributions. The root
 `dlightrag` distribution's Engine contains `dlightrag.engine.ai` for model settings
@@ -443,10 +443,13 @@ deployments should enable auth:
 | `jwt` + `jwt_claims` access control | Workspace/action permissions from verified claims |
 
 DlightRAG verifies bearer tokens and can enforce workspace/action access
-control. It does not issue OAuth tokens or manage users. Use an external IdP or
-gateway for login and token issuance. Generic request-rate limiting, WAF rules,
-DDoS protection, TLS termination, and connection caps belong to your ingress
-(Front Door, Application Gateway, APIM, NGINX); DlightRAG ships no in-process
+control. [Access Rules](docs/security.md#authorization-model) map external IdP
+claims to Workspace and Action patterns; role presets are not stored user
+memberships. DlightRAG does not issue OAuth tokens or manage users. Use an
+external IdP or gateway for login and token issuance. Generic request-rate
+limiting, WAF rules, DDoS protection, TLS termination, and connection caps
+belong to your ingress (Front Door, Application Gateway, APIM, NGINX); DlightRAG
+ships no in-process
 rate limiter. Full guidance is in [docs/security.md](docs/security.md).
 
 ## Operations And Development

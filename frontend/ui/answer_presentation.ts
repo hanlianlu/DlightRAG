@@ -169,7 +169,7 @@ export class AnswerPresentationElement extends LightElement {
           <strong>${artifact.label}</strong>
           <span>${artifact.filename}</span>
         </div>
-        <button class="ui-btn" type="button" @click=${(event: Event) => {
+        <button class="dl-btn" type="button" @click=${(event: Event) => {
           this.#openArtifact(artifact, event.currentTarget as HTMLElement);
         }}>${primary ? msg('View report', {id: 'answerPresentation.viewReport'}) : msg('Open Artifact', {id: 'answerPresentation.openArtifact'})}</button>
       </article>

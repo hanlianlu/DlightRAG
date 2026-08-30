@@ -155,7 +155,7 @@ dl-artifact-canvas:not(.open) {
     flex: 0 0 auto;
 }
 
-.artifact-canvas-actions .ui-btn[aria-pressed='true'] {
+.artifact-canvas-actions .dl-btn[aria-pressed='true'] {
     background: var(--color-accent-surface);
     border-color: var(--color-accent-border);
 }

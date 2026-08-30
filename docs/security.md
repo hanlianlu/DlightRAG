@@ -344,19 +344,25 @@ corpus verdict, so neither turns an unauthenticated poll loop into database load
 
 ## Access Control
 
-Authentication answers "who is calling?" Access control answers "what can this
-authenticated caller do?"
+Authentication answers "who is calling?" Access control answers "what may this
+principal do to this product resource?"
 
-Access control is disabled by default:
+### Authorization model
 
-```yaml
-access:
-  control:
-    mode: allow_all
+DlightRAG uses an **IdP-backed, claim-based workspace ACL**. It is not a database
+membership RBAC system. The authorization path is:
+
+```text
+verified JWT claims
+  -> deployment-configured Access Rules
+  -> canonical Workspace + requested Action
+  -> allow or deny
 ```
 
-Enable claim-based workspace permissions when the JWT issuer already supplies
-verified group or role claims:
+An Access Rule contains four facts: JWT claim name, required claim value,
+Workspace patterns, and Action patterns. A request is allowed when one rule
+matches all four dimensions. Rules combine with OR semantics; there are no deny
+rules, and no matching allow means access is denied.
 
 ```yaml
 access:
@@ -364,18 +370,49 @@ access:
   control:
     mode: jwt_claims
     rules:
-      - claim: groups
-        value: finance-rag-readers
+      - claim: roles
+        value: finance.editors
         workspaces: [finance]
+        actions: [editor]
+      - claim: roles
+        value: legal.readers
+        workspaces: [legal]
         actions: [reader]
 ```
 
-`jwt_claims` requires `access.auth_mode: jwt` and at least one rule. Claim matching
-supports string claims and list-like claims. Workspace patterns support `*`.
-Action patterns support exact actions, `*`, prefixes such as `workspace.*`, and
-the named presets `reader`, `editor`, and `admin` (see below).
+The same principal can therefore be an editor in `finance`, a reader in `legal`,
+and unauthorized elsewhere. Claim matching supports strings and list-like
+claims. Workspace matching is canonical id or `*`. Action matching supports an
+exact Action, `*`, a prefix such as `workspace.*`, or an Action Preset.
 
-Actions enforced by REST, Web, and MCP include:
+`jwt_claims` requires `access.auth_mode: jwt` and at least one rule. The default
+is deliberately convenient for local development but performs no Workspace
+filtering:
+
+```yaml
+access:
+  control:
+    mode: allow_all
+```
+
+### Source of truth and non-goals
+
+The external IdP owns users and claim assignments; deployment configuration owns
+the mapping from claims to Workspaces and Actions. DlightRAG does not persist
+users, custom roles, or `user ↔ role ↔ workspace` memberships, and the Workspace
+registry does not own an ACL. `reader`, `editor`, and `admin` are Action Presets,
+not stored role assignments. There is no application-side invitation, delegated
+Workspace administration, or permission-management UI.
+
+Authorization and durable ownership are separate. JWT issuer plus subject scope
+conversations, runs, events, and artifacts to one owner. Access Rules decide
+which shared Corpus Workspaces that owner may use. PostgreSQL is trusted
+application storage: DlightRAG does not currently add row-level security, so
+this ACL is not a database tenant-isolation boundary.
+
+### Actions and presets
+
+REST, Web, and MCP enforce these Actions through the shared Access module:
 
 | Action | Meaning |
 |---|---|
@@ -387,19 +424,66 @@ Actions enforced by REST, Web, and MCP include:
 | `workspace.read_metadata` | Read metadata |
 | `workspace.update_metadata` | Update metadata |
 | `workspace.read_visual_asset` | Read rendered visual assets |
-| `workspace.create` | Create workspace |
-| `workspace.delete` | Delete workspace |
-| `workspace.reset` | Reset workspace |
-| `job.read` | Read ingest job status |
-| `job.cancel` | Stop a running ingest job |
+| `workspace.create` | Create a workspace |
+| `workspace.delete` | Delete a workspace |
+| `workspace.reset` | Reset a workspace |
+| `workspace.storage_status` | Read operator-facing storage and promotion state |
+| `job.read` | Read ingest job status in its workspace |
+| `job.cancel` | Stop an ingest job in its workspace |
+| `model_catalogue.write` | Change the deployment-wide model catalogue |
+
+Each `actions` entry may be exact, `workspace.*`, `*`, or one of these presets.
+Presets and exact Actions may be combined, for example
+`actions: [reader, workspace.update_metadata]`:
+
+| Preset | Expands to |
+|---|---|
+| `reader` | `workspace.query`, `workspace.list_files`, `workspace.download_source`, `workspace.read_metadata`, `workspace.read_visual_asset` |
+| `editor` | `reader` plus `workspace.ingest`, `workspace.update_metadata`, `workspace.delete_files`, `job.read`, `job.cancel` |
+| `admin` | `*` (every Action) |
+
+A preset expands only the Action dimension; it never bypasses the Workspace
+dimension. Deployment-wide Actions such as `model_catalogue.write` are checked
+without a Workspace and therefore require `workspaces: ["*"]`.
+
+### Authorization lifecycle and revocation
+
+Explicit Workspace requests are checked before acceptance. `all_workspaces`
+filters the catalog first and expands only to the caller's `workspace.query`
+Authorized Workspace Set. Source and visual routes independently recheck the
+Action against the resource's actual Workspace.
+
+An accepted Answer Run stores its resolved Workspace set, not a token or mutable
+claims. Later policy or IdP changes do not stop that accepted run; its owner may
+still cancel it. Follow-up and fork create new runs and recheck current
+`workspace.query` permission before acceptance. Because JWT claims are signed
+snapshots, an IdP assignment change becomes visible when the caller presents a
+new token; use appropriately short token lifetimes where revocation latency
+matters.
+
+### Enterprise fit
+
+This model is a good fit for an internal multi-user enterprise deployment when
+the external IdP is authoritative, Workspace policy is moderately stable, and
+Workspace-level reader/editor/admin permissions are sufficient. Use App Roles
+rather than raw Entra groups where possible, keep rules under configuration
+review, and minimize wildcard admin grants. Retain IdP and ingress audit trails;
+add durable application authorization-decision logging when compliance requires
+it.
+
+It is not by itself a complete IAM or hard multi-tenant isolation system. Add a
+membership/policy store when users must manage access inside DlightRAG, a policy
+engine when deny, hierarchy, or resource-level conditions are required, and a
+separate database/deployment or PostgreSQL RLS when regulatory policy requires
+database-enforced tenant isolation.
 
 ### Source download boundary
 
 Public source payloads expose stable `source_uri` provenance and, on HTTP
 surfaces, an adapter-projected `download_url` containing only a document ID and
-workspace. They never expose the stored `download_locator` or a server-local
+Workspace. They never expose the stored `download_locator` or a server-local
 path. REST `/files/raw` and Web `/web/api/files/raw` independently recheck
-`workspace.download_source` against the source's actual workspace before they
+`workspace.download_source` against the source's actual Workspace before they
 stream retained bytes or redirect to Azure, S3, or queryless public HTTPS.
 
 Signed/query-bearing HTTPS URLs are fetch credentials, not durable locators. A
@@ -411,28 +495,6 @@ Durable ingest jobs do retain the caller's complete fetch input in their request
 record so a worker can recover the job. Treat the ingest-job database as secret
 storage, restrict access, and keep job pruning enabled; this recovery record is
 not a public source/download field.
-
-**Action presets.** `actions` is a list, and each entry may be an exact action,
-a `workspace.*` prefix, `*`, or one of the built-in presets below. A caller is
-allowed when any entry matches, so presets and exact actions can be combined
-(for example `actions: [reader, workspace.update_metadata]`):
-
-| Preset | Expands to |
-|---|---|
-| `reader` | `workspace.query`, `workspace.list_files`, `workspace.download_source`, `workspace.read_metadata`, `workspace.read_visual_asset` |
-| `editor` | `reader` plus `workspace.ingest`, `workspace.update_metadata`, `workspace.delete_files`, `job.read`, `job.cancel` |
-| `admin` | `*` (every action, including `workspace.create`, `workspace.delete`, `workspace.reset`) |
-
-```yaml
-access:
-  control:
-    mode: jwt_claims
-    rules:
-      - claim: roles
-        value: finance.editors
-        workspaces: [finance]
-        actions: [editor]
-```
 
 ## Answer Attachment Resources
 
@@ -497,13 +559,7 @@ durable run, so deduplication never crosses an owner. Run-scoped fetched web
 bytes are stored only after the HTTPS, redirect, DNS, SSRF, and byte validation
 above passes, and the blob plus its run reference commit in one transaction
 before the ToolResult and HostDelta may settle in the Session transaction — a resumed run therefore reads the
-bytes it originally fetched rather than whatever the page serves now. Workspace
-authorization is evaluated once before the run-creation transaction and only the
-resulting workspace set is stored, never a token or mutable claims; a later policy
-change does not revoke an already accepted run, and its owner may cancel it.
-Follow-up and fork are new ordinary runs, not mutations of that accepted run, so
-every REST, MCP, Web, and in-process Application continuation rechecks current `workspace.query`
-authorization before its own acceptance transaction.
+bytes it originally fetched rather than whatever the page serves now.
 
 ### Answer Artifact browser boundary
 

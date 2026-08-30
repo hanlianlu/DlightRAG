@@ -344,6 +344,28 @@ class E2EConversationService:
             self._runs.clear()
             return count
 
+    def _project_submission(self, value: dict[str, Any], turn: LinkedTurn) -> WebAnswerSubmission:
+        return WebAnswerSubmission(
+            run=turn.run,
+            turn_id=turn.turn_id,
+            turn_number=turn.turn_number,
+            conversation=self._summary(value),
+            submission_id=turn.submission_id,
+            created_at=turn.created_at,
+        )
+
+    def _submission_for(self, submission_id: str) -> WebAnswerSubmission | None:
+        for candidate in self._conversations.values():
+            for turn in candidate["turns"]:
+                if turn.submission_id == submission_id:
+                    return self._project_submission(candidate, turn)
+        return None
+
+    async def submission(self, _user: Any, submission_id: str) -> WebAnswerSubmission | None:
+        """Recover one accepted E2E submission through the production seam."""
+        with self._lock:
+            return self._submission_for(submission_id)
+
     async def start_answer(
         self,
         _user: Any,
@@ -357,15 +379,9 @@ class E2EConversationService:
     ) -> WebAnswerSubmission | None:
         with self._lock:
             if conversation_id is None:
-                for candidate in self._conversations.values():
-                    for turn in candidate["turns"]:
-                        if turn.submission_id == submission_id:
-                            return WebAnswerSubmission(
-                                run=turn.run,
-                                turn_id=turn.turn_id,
-                                turn_number=turn.turn_number,
-                                conversation=self._summary(candidate),
-                            )
+                replay = self._submission_for(submission_id)
+                if replay is not None:
+                    return replay
                 now = datetime.now(UTC)
                 conversation_id = str(uuid4())
                 self._conversations[conversation_id] = {
@@ -380,12 +396,7 @@ class E2EConversationService:
                 return None
             for turn in value["turns"]:
                 if turn.submission_id == submission_id:
-                    return WebAnswerSubmission(
-                        run=turn.run,
-                        turn_id=turn.turn_id,
-                        turn_number=turn.turn_number,
-                        conversation=self._summary(value),
-                    )
+                    return self._project_submission(value, turn)
             run_id = str(uuid4())
             requested_mode = mode or "auto"
             request = _run_request(
@@ -412,12 +423,7 @@ class E2EConversationService:
                     for attachment in attachments
                 },
             }
-            return WebAnswerSubmission(
-                run=turn.run,
-                turn_id=turn.turn_id,
-                turn_number=turn.turn_number,
-                conversation=self._summary(value),
-            )
+            return self._project_submission(value, turn)
 
     async def turn_for_run(self, _user: Any, run_id: str) -> LinkedTurn | None:
         with self._lock:
@@ -805,9 +811,9 @@ def _failure_artifact_stem(nodeid: str) -> str:
     return f"{slug}-{digest}"
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="package")
 def browser() -> Generator[Browser, Any]:
-    """Session-scoped browser — reuse across tests for speed."""
+    """Reuse Chromium within E2E, then release its loop before async suites."""
     with sync_playwright() as pw:
         b = pw.chromium.launch(headless=True)
         try:

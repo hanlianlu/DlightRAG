@@ -3,6 +3,7 @@
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
+import {icon} from '../design-system/index.ts';
 import type {AnswerMode} from '../lib/answer_request.ts';
 import {formatFileSize} from '../lib/file_size.ts';
 import {LightElement} from '../lib/lit_host.ts';
@@ -194,11 +195,7 @@ export class DlChatComposer extends LightElement {
                     aria-disabled=${attachmentsAvailable ? 'false' : 'true'}
                     title=${attachmentsAvailable ? nothing : msg('Attachments are currently unavailable.', {id: 'chatComposer.attachmentsUnavailable'})}
                     @click=${this.#openAttachmentPicker}>
-              <svg class="composer-plus-icon" width="24" height="24" viewBox="0 0 24 24"
-                   fill="none" stroke="currentColor" stroke-linecap="round"
-                   stroke-linejoin="round" aria-hidden="true" focusable="false">
-                <path d="M12 5v14"></path><path d="M5 12h14"></path>
-              </svg>
+              ${icon('attach', {size: 'lg', className: 'composer-plus-icon'})}
             </button>
             <textarea name="query" aria-label=${msg('Message', {id: 'chatComposer.messageAria'})} placeholder=${msg('Ask anything', {id: 'chatComposer.placeholder'})}
                       class="composer-input" rows="1" autocomplete="off"
@@ -233,16 +230,8 @@ export class DlChatComposer extends LightElement {
                     ?disabled=${this.submissionPending
                       || (!hasText && !this.running) || this.stopping}
                     @click=${this.#sendClicked}>
-              <svg class="composer-send-icon composer-send-icon--send" width="18" height="18"
-                   viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                <line x1="22" y1="2" x2="11" y2="13"></line>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-              </svg>
-              <svg class="composer-send-icon composer-send-icon--stop" width="16" height="16"
-                   viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
-                <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-              </svg>
+              ${icon('send', {size: 'md', className: 'composer-send-icon composer-send-icon--send'})}
+              ${icon('stop', {size: 'sm', className: 'composer-send-icon composer-send-icon--stop'})}
             </button>
           </form>
         </div>
@@ -260,7 +249,7 @@ export class DlChatComposer extends LightElement {
           <img class=${chatStyles.thumbnailImg} src=${item.objectUrl} alt=${item.file.name}>
           <button type="button" class=${chatStyles.thumbnailRemove}
                   aria-label=${msg(str`Remove ${item.file.name}`, {id: 'chatComposer.removeAttachment'})}
-                  @click=${() => attachmentStore.remove(item.id)}>×</button>
+                  @click=${() => attachmentStore.remove(item.id)}>${icon('close', {size: 'xs'})}</button>
         </div>
       `;
     }
@@ -272,7 +261,7 @@ export class DlChatComposer extends LightElement {
         </span>
         <button type="button" class=${chatStyles.documentChipRemove}
                 aria-label=${msg(str`Remove ${item.file.name}`, {id: 'chatComposer.removeAttachment'})}
-                @click=${() => attachmentStore.remove(item.id)}>×</button>
+                @click=${() => attachmentStore.remove(item.id)}>${icon('close', {size: 'xs'})}</button>
       </span>
     `;
   }

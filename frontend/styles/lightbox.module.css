@@ -1,3 +1,4 @@
+@layer features {
 /* DlightRAG Web Frontend — Immersive Chat Design
  *
  * lightbox.module.css — CSS Module for image lightbox JS-generated DOM.
@@ -59,4 +60,6 @@
 .imageLightboxNext:hover {
   background: var(--color-accent-surface);
   color: var(--color-on-action);
+}
+
 }

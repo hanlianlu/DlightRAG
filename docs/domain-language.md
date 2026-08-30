@@ -56,6 +56,17 @@ _Avoid_: Workspace manager
 The concrete canonical Corpus Workspace ids a caller may use after authentication and access expansion are complete.
 _Avoid_: Workspace selector, raw claims
 
+**Access Rule**:
+One deployment-configured allow mapping from a verified JWT claim value to
+Workspace patterns and Action patterns. Rules are not durable user memberships.
+_Avoid_: Database role, Workspace membership, deny policy
+
+**Action Preset**:
+A named expansion (`reader`, `editor`, or `admin`) into product Actions inside an
+Access Rule. It is not a stored role assignment and never bypasses the rule's
+Workspace match.
+_Avoid_: Role record, user role, permission group
+
 ## Corpus And Research
 
 **Corpus Workspace**:

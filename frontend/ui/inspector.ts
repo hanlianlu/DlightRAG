@@ -3,6 +3,7 @@
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {AnswerPresentation} from '../api/conversations.ts';
+import {icon} from '../design-system/index.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit_host.ts';
@@ -203,7 +204,7 @@ export class DlInspector extends LightElement {
             .active=${files}
           ></dl-ingest-target>
           <button class="panel-close" id="panel-close-btn" type="button"
-                  aria-label=${msg('Close panel', {id: 'inspector.closePanel'})} @click=${() => this.close()}>✕</button>
+                  aria-label=${msg('Close panel', {id: 'inspector.closePanel'})} @click=${() => this.close()}>${icon('close', {size: 'sm'})}</button>
         </div>
         <div id="panel-content" class="panel-content">
           <dl-inspector-sources

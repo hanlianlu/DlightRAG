@@ -1020,10 +1020,12 @@ access:
 Set `interfaces.api.host: 0.0.0.0` only when the server is behind a trusted network or
 `access.auth_mode` is explicitly enabled.
 
-Use [security.md](security.md) for `simple`, static JWT, JWKS/OIDC issuer, and
-access-control deployment guidance. The related config fields are `access.auth_mode`,
-`access.api_token`, `access.jwt_verification_key`, `access.jwt_jwks_url`, `access.jwt_issuer`,
-`access.jwt_audience`, `access.jwt_algorithm`, `access.cors_allow_origins`, `access.control`, and
+Use [security.md](security.md) for `simple`, static JWT, and JWKS/OIDC issuer
+guidance, and its [authorization model](security.md#authorization-model) for
+Workspace Access Rules and enterprise non-goals. The related config fields are
+`access.auth_mode`, `access.api_token`, `access.jwt_verification_key`,
+`access.jwt_jwks_url`, `access.jwt_issuer`, `access.jwt_audience`,
+`access.jwt_algorithm`, `access.cors_allow_origins`, `access.control`, and
 `access.web_identity` (edge-asserted Web identity). Example:
 
 ```yaml

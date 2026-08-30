@@ -3,6 +3,7 @@
 import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import {WorkspaceApiError, createWorkspaceRequest} from '../api/workspaces.ts';
+import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import type {ToastRequestDetail} from './toast.ts';
@@ -23,7 +24,7 @@ export class DlWorkspaceCreate extends LightElement {
     super();
     updateWhenLocaleChanges(this);
     this.pending = false;
-    this.className = 'ui-popover-create';
+    this.className = 'dl-popover-create';
   }
 
   override connectedCallback(): void {
@@ -89,7 +90,7 @@ export class DlWorkspaceCreate extends LightElement {
 
   protected override render(): TemplateResult {
     return html`
-      <input class="ui-popover-input" type="text"
+      <input class="dl-popover-input" type="text"
              placeholder=${msg('New workspace...', {id: 'workspaceCreate.placeholder'})}
              aria-label=${msg('New workspace name', {id: 'workspaceCreate.nameAria'})} ?disabled=${this.pending}
              @click=${(event: Event) => { event.stopPropagation(); }}
@@ -98,15 +99,13 @@ export class DlWorkspaceCreate extends LightElement {
                event.preventDefault();
                void this.#submit();
              }}>
-      <button class="ui-popover-create-btn" type="button"
+      <button class="dl-popover-create-btn" type="button"
               aria-label=${msg('Create workspace', {id: 'workspaceCreate.createAria'})}
               ?disabled=${this.pending} @click=${(event: MouseEvent) => {
                 event.stopPropagation();
                 void this.#submit();
               }}>
-        <svg class="ui-popover-create-icon" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M8 2.75v10.5M2.75 8h10.5"></path>
-        </svg>
+        ${icon('add', {size: 'sm', className: 'dl-popover-create-icon'})}
       </button>
     `;
   }

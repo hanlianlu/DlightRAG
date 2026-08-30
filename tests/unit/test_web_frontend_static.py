@@ -47,7 +47,7 @@ def test_frontend_submits_only_the_unified_attachments_part() -> None:
 
 
 def test_vite_html_has_no_external_script_or_unresolved_theme_placeholder() -> None:
-    for name in ("index.html", "login.html"):
+    for name in ("index.html", "login.html", "design-system.html", "product-showcase.html"):
         source = (FRONTEND / name).read_text(encoding="utf-8")
         built = (ROOT / "src/dlightrag/adapters/http/browser/static/app" / name).read_text(
             encoding="utf-8"
@@ -111,7 +111,12 @@ def test_web_static_js_build_has_no_orphan_chunks() -> None:
     )
     html = "\n".join(
         (app_root / filename).read_text(encoding="utf-8")
-        for filename in ("index.html", "login.html", "design-system.html")
+        for filename in (
+            "index.html",
+            "login.html",
+            "design-system.html",
+            "product-showcase.html",
+        )
     )
     roots = set(re.findall(r'/static/app/assets/([^"/]+\.js)', html))
     expected = {path.name for path in assets.glob("*.js")}
@@ -254,34 +259,46 @@ def test_inspector_cutover_removes_legacy_setup_and_universal_panel_surface() ->
     assert "customElements.define('dl-inspector'" in inspector
 
 
-def test_panel_action_icons_are_accessible_svg_buttons() -> None:
+def test_panel_action_icons_use_the_accessible_semantic_registry() -> None:
     file_panel = (FRONTEND_UI / "inspector_files.ts").read_text(encoding="utf-8")
     source_panel = (FRONTEND_UI / "inspector_sources.ts").read_text(encoding="utf-8")
 
-    assert "&#10005;" not in file_panel
-    assert "&#x2B07;" not in source_panel
     assert "aria-label=${msg(str`Delete ${file.file_name}`," in file_panel
     assert "'inspectorFiles.deleteFileAria'" in file_panel
-    assert 'class="file-delete-icon"' in file_panel
-    assert 'class="source-action-icon-svg"' in source_panel
-    assert 'stroke="currentColor"' in source_panel
+    assert "icon('close', {size: 'sm', className: 'file-delete-icon'})" in file_panel
+    assert "icon('download', {size: 'sm', className: 'source-action-icon-svg'})" in source_panel
+    assert (
+        "icon('open-external', {size: 'sm', className: 'source-action-icon-svg'})" in source_panel
+    )
+    assert "<svg" not in file_panel + source_panel
 
 
-def test_split_panel_adapter_preserves_cancel_and_compact_guards() -> None:
-    split_panel = (FRONTEND_UI / "split_panel.ts").read_text(encoding="utf-8")
+def test_split_layout_separates_behavior_from_product_state() -> None:
+    split_adapter = (FRONTEND_UI / "split_panel.ts").read_text(encoding="utf-8")
+    split_element = (FRONTEND / "design-system" / "elements" / "split_layout.ts").read_text(
+        encoding="utf-8"
+    )
 
     assert not (FRONTEND_UI / "resize.ts").exists()
-    assert "document.dispatchEvent(new Event('pointerup'))" in split_panel
-    assert "['pointercancel', 'touchcancel', 'blur']" in split_panel
-    assert "['pointerup', 'mouseup', 'touchend']" in split_panel
-    assert "if (state.split.disabled) return" in split_panel
-    assert "event.stopImmediatePropagation()" in split_panel
+    assert "COMPACT_SHELL_MEDIA" in split_adapter
+    assert "dlightrag-panel-width" in split_adapter
+    assert "dlightrag-artifact-canvas-width" in split_adapter
+    assert "addEventListener('dl-split-change'" in split_adapter
+    assert "savePreferred(state)" in split_adapter
+    assert "dl-split-input" in split_element
+    assert "dl-split-change" in split_element
+    assert 'role="separator"' in split_element
+    assert "hasPointerCapture" in split_element
 
 
 def _css_blocks() -> list[tuple[str, str]]:
     """Every `selector { declarations }` pair across the served stylesheets."""
     blocks: list[tuple[str, str]] = []
-    for sheet in sorted(FRONTEND_STYLES.rglob("*.css")):
+    sheets = [
+        *FRONTEND_STYLES.rglob("*.css"),
+        *(FRONTEND / "design-system").rglob("*.css"),
+    ]
+    for sheet in sorted(sheets):
         css = re.sub(r"/\*.*?\*/", "", sheet.read_text(encoding="utf-8"), flags=re.S)
         for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
             blocks.append((selector.strip(), body))
@@ -320,29 +337,19 @@ def test_production_web_sources_have_no_htmx_contract() -> None:
         assert not re.search(r"\bhx-[a-z]", source)
 
 
-def test_webawesome_adoption_is_limited_to_split_panel_without_default_theme() -> None:
-    imports = [
-        (path.relative_to(FRONTEND), line.strip())
-        for path in FRONTEND.rglob("*.ts")
-        if "node_modules" not in path.parts
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if "@awesome.me/webawesome" in line
+def test_webawesome_is_absent_from_production_and_dependencies() -> None:
+    production_sources = [
+        path
+        for suffix in ("*.ts", "*.css", "*.html")
+        for path in FRONTEND.rglob(suffix)
+        if "node_modules" not in path.parts and not path.name.endswith(".test.ts")
     ]
-    assert imports == [
-        (
-            Path("ui/split_panel.ts"),
-            "import WaSplitPanel from "
-            "'@awesome.me/webawesome/dist/components/split-panel/split-panel.js';",
-        )
-    ]
-
-    production_css = "\n".join(
-        path.read_text(encoding="utf-8")
-        for root in (FRONTEND_STYLES, FRONTEND / "tokens")
-        for path in root.glob("*.css")
+    assert all(
+        "@awesome.me/webawesome" not in path.read_text(encoding="utf-8")
+        for path in production_sources
     )
-    assert "@awesome.me/webawesome" not in production_css
-    assert "webawesome/dist/styles" not in production_css
+    package = (FRONTEND / "package.json").read_text(encoding="utf-8")
+    assert "@awesome.me/webawesome" not in package
 
 
 def test_button_hover_rules_change_something() -> None:
@@ -424,7 +431,11 @@ def test_lit_shell_completion_has_one_owner_and_no_compatibility_layer() -> None
     assert "nextRequestId" not in toast and "id: request.id" not in toast
 
     design_system = (FRONTEND_UI / "design_system.ts").read_text(encoding="utf-8")
-    assert "import './notifications.ts'" in design_system
-    assert "<dl-notification-offer" in design_system
-    assert "data:image/png;base64," in design_system
-    assert "data:image/svg+xml" not in design_system
+    product_showcase = (FRONTEND_UI / "product_showcase.ts").read_text(encoding="utf-8")
+    for product_import in ("./notifications.ts", "./theme.ts", "./toast.ts"):
+        assert product_import not in design_system
+        assert product_import in product_showcase
+    assert "ICON_REGISTRY" in design_system
+    assert "<dl-split-layout" in design_system
+    assert "<dl-notification-offer" not in design_system
+    assert "<dl-notification-offer" in product_showcase

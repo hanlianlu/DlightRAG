@@ -1,8 +1,8 @@
 # Web Theme Design
 
-**Status:** Implemented — Mineral themes, Soft geometry, and token-bridged Split Panels
+**Status:** Implemented — Mineral themes, Soft geometry, and owned Split Layouts
 **Date:** 2026-07-23
-**Updated:** 2026-08-21
+**Updated:** 2026-08-31
 
 ## Purpose
 
@@ -23,11 +23,11 @@ This design does not add custom palettes, account-level preferences, or server-s
 
 ## Architecture Constraints
 
-- Keep theme state dependency-free. Do not add a theme framework, state-management layer, or icon runtime.
+- Keep theme state dependency-free. Do not add a theme framework, state-management layer, or external icon runtime.
 - Prefer semantic CSS tokens over component-specific light-mode overrides.
 - Reuse the existing popover dismissal and keyboard-navigation infrastructure.
-- DlightRAG tokens remain authoritative for third-party components; never load a full external default theme.
-- Web Awesome adoption is limited to Split Panel. Native Drawer/Dialog behavior remains product-owned.
+- The package-owned design system's runtime CSS remains authoritative and is projected deterministically for design tooling.
+- Native Drawer/Dialog behavior remains product-owned; split behavior belongs to the package-owned design system.
 
 ## State Model
 
@@ -94,7 +94,7 @@ The generic popover dismissal helper owns the menu lifecycle. The shared
 `installRovingArrowNavigation` helper accepts a role selector and provides the
 same keyboard model to theme, workspace, and file menus.
 
-Lucide SVG geometry is embedded statically with `currentColor`, a 24px viewBox, 17px rendered size, round caps/joins, and a quieter DlightRAG stroke. The repository NOTICE records the applicable Lucide license; no package dependency is added.
+Semantic icon geometry is generated from the pinned, generation-only `lucide-static` package into the checked-in design-system registry. Production bundles retain only selected geometry rendered with `currentColor`; controls own accessible names and the repository NOTICE records the Lucide license. No runtime icon dependency is loaded.
 
 ## Color System
 
@@ -114,7 +114,7 @@ can be read rather than measured.
 | Body text | `#d6d3d1` stone-300 | `#44403c` stone-700 |
 | Muted text | `#a8a29e` stone-400 | `#57534e` stone-600 |
 | Primary accent | `#d2b661` gold-200 | `#7e6c37` gold-400 |
-| Danger | `#f87171` | `#b42318` |
+| Danger | `#f87171` | `#b91c1c` |
 
 The light surfaces skip stone-100: measured in OKLCH it sits only 1.5 L\* from
 stone-50, a quarter of dark's first step. Stone-50/200/300 steps by 6.2 and 5.4
@@ -155,19 +155,19 @@ shells, docked sidebars/panels/reports, structural sections, and internal seams
 stay square at every viewport. This keeps Soft contained surfaces from rounding
 the application silhouette or opening dark corner wedges.
 
-Files/Sources and Report use nested Web Awesome Split Panel components on wide
-screens. DlightRAG imports that component directly, without Web Awesome's
-default theme, and bridges divider, focus-ring, border, width, and state through
-its own semantic tokens and adapter. Files/Sources and Report persist separate
-preferred pixel widths; clamping for the conversation sidebar and minimum chat
-width never overwrites those preferences. Mouse, touch, and keyboard resizing
-share the component's accessible separator.
+Files/Sources and Report use nested local `dl-split-layout` elements on wide
+screens. The design-system element owns axis layout, pointer and keyboard input,
+and separator ARIA; the app adapter owns open state, breakpoints, clamping, and
+persistence. Files/Sources and Report persist separate preferred pixel widths;
+clamping for the conversation sidebar and minimum chat width never overwrites
+those preferences. A single token-backed hairline has an invisible 12px hit area,
+so the previous double-border seam is not possible.
 
 Below 1200px resizing is disabled and the panel is an overlay: the primary app
 remains full viewport width under the scrim, while modal focus, inert state,
 Escape, and focus restoration remain native DlightRAG behavior. At phone widths
-the active panel becomes full bleed. Web Awesome Drawer and Dialog were
-explicitly rejected; existing native overlays keep these geometry rules.
+the active panel becomes full bleed. External Drawer and Dialog components remain
+rejected; existing native overlays keep these geometry rules.
 
 ## Rich Content
 

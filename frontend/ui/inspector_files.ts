@@ -12,6 +12,7 @@ import {
   type WebFilePanelSnapshot,
   type WebIngestStatus,
 } from '../api/files.ts';
+import {icon} from '../design-system/index.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
@@ -460,9 +461,9 @@ export class DlInspectorFiles extends LightElement {
         <form method="dialog">
           <h2 id="delete-file-title">${msg('Delete file', {id: 'inspectorFiles.deleteTitle'})}</h2>
           <p id="delete-file-message"></p>
-          <div class="ui-dialog-actions">
+          <div class="dl-dialog-actions">
             <button type="submit" value="cancel">${msg('Cancel', {id: 'inspectorFiles.cancel'})}</button>
-            <button type="submit" value="confirm" class="ui-dialog-danger">${msg('Delete', {id: 'inspectorFiles.delete'})}</button>
+            <button type="submit" value="confirm" class="dl-dialog-danger">${msg('Delete', {id: 'inspectorFiles.delete'})}</button>
           </div>
         </form>
       </dialog>
@@ -534,12 +535,7 @@ export class DlInspectorFiles extends LightElement {
                           this.#deleteTrigger = event.currentTarget as HTMLElement;
                           void this.#deleteFile(file.file_path);
                         }}>
-                  <svg class="file-delete-icon" width="14" height="14" viewBox="0 0 24 24"
-                       fill="none" stroke="currentColor" stroke-width="2"
-                       stroke-linecap="round">
-                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                    <line x1="6" y1="6" x2="18" y2="18"></line>
-                  </svg>
+                  ${icon('close', {size: 'sm', className: 'file-delete-icon'})}
                 </button>
               </div>
             `,

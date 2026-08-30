@@ -8,9 +8,6 @@
  * Imported by Vite and emitted as part of the hashed application stylesheet.
  */
 
-/* ── Universal reset ── */
-* { margin: 0; padding: 0; box-sizing: border-box; }
-
 dl-app,
 dl-answer-presentation { display: contents; }
 
@@ -90,116 +87,6 @@ body.conversation-drawer-open {
     background: var(--color-action-bg-hover);
     border-color: var(--color-action-border-hover);
     color: var(--color-on-action);
-}
-
-/* === Shared popovers === */
-
-.ui-popover {
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-popover);
-    box-shadow: var(--shadow-popover);
-    display: flex;
-    flex-direction: column;
-    left: 0;
-    max-height: clamp(280px, 19.0476vi + 205.714px, 480px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: var(--space-tight);
-    position: absolute;
-    top: calc(100% + var(--space-3xs));
-    z-index: 1000;
-}
-
-.ui-popover--workspace {
-    width: clamp(220px, 22vw, 280px);
-}
-
-.ui-popover--ingest {
-    width: clamp(200px, 20vw, 260px);
-}
-
-.ui-popover[hidden] {
-    display: none;
-}
-
-.ui-popover-item {
-    align-items: center;
-    border-radius: var(--radius-control);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    display: flex;
-    font: inherit;
-    font-size: var(--font-size-detail);
-    gap: var(--space-component);
-    padding: var(--space-tight) var(--space-component);
-    transition: background 0.1s;
-}
-
-.ui-popover-item:hover,
-.ui-popover-item:focus-visible {
-    background: var(--color-bg-hover);
-    outline: none;
-}
-
-.ui-popover-create {
-    align-items: center;
-    border-top: 1px solid var(--color-border-subtle);
-    display: flex;
-    gap: var(--space-tight);
-    margin-top: var(--space-tight);
-    padding: var(--space-tight) 0 0;
-}
-
-.ui-popover-input {
-    background: var(--color-bg-subtle);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-control);
-    color: var(--color-text-primary);
-    flex: 1;
-    font: inherit;
-    font-size: var(--font-size-detail);
-    min-width: 0;
-    outline: none;
-    padding: var(--space-tight);
-}
-
-.ui-popover-input:focus {
-    border-color: var(--color-accent-border);
-}
-
-.ui-popover-input::placeholder {
-    color: var(--color-text-dim);
-}
-
-.ui-popover-create-btn {
-    align-items: center;
-    background: var(--color-action-bg-subtle);
-    border: 1px solid var(--color-action-border);
-    border-radius: var(--radius-control);
-    color: var(--color-accent-action);
-    cursor: pointer;
-    display: flex;
-    flex-shrink: 0;
-    height: var(--size-button);
-    justify-content: center;
-    padding: 0;
-    transition: background 0.15s, border-color 0.15s;
-    width: var(--size-button);
-}
-
-.ui-popover-create-icon {
-    fill: none;
-    height: var(--size-icon-md);
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-width: 1.5;
-    width: var(--size-icon-md);
-}
-
-.ui-popover-create-btn:hover {
-    background: var(--color-action-bg-subtle-hover);
-    border-color: var(--color-action-border-hover);
 }
 
 /* === Streaming Indicator === */

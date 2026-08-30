@@ -1,8 +1,9 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
-import {html, nothing, svg, type TemplateResult} from 'lit';
+import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
+import {icon} from '../design-system/index.ts';
 import type {WorkspaceRecord} from '../events/bus.ts';
 import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
@@ -10,8 +11,6 @@ import {createAutoDismiss} from '../lib/popover.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import './workspace_create.ts';
-
-const CARET = svg`<path d="M2.5 4 L5 6.5 L7.5 4"/>`;
 
 /** Picks which workspace an upload lands in; shown only while Files is open. */
 export class DlIngestTarget extends LightElement {
@@ -65,7 +64,7 @@ export class DlIngestTarget extends LightElement {
         const selected = record.workspace === ingestStore.workspace;
         return html`
             <button
-                class="ui-popover-item"
+                class="dl-popover-item"
                 type="button"
                 data-ingest-workspace-choice
                 aria-pressed=${selected ? 'true' : 'false'}
@@ -87,7 +86,7 @@ export class DlIngestTarget extends LightElement {
             .sort((left, right) => left.displayName.localeCompare(right.displayName));
         return html`
             <div
-                class="ui-popover ui-popover--ingest"
+                class="dl-popover dl-popover--ingest"
                 id="ingest-target-popover"
                 role="dialog"
                 aria-label=${msg('Select ingest workspace', {id: 'ingestTarget.selectWorkspaceAria'})}
@@ -119,8 +118,7 @@ export class DlIngestTarget extends LightElement {
                     <span class="ingest-target-dot"></span>
                     <span class="ingest-target-name">${displayName}</span>
                     <span class="ingest-target-caret">
-                        <svg width="8" height="8" viewBox="0 0 10 10" fill="none"
-                             stroke="currentColor" stroke-width="1.5">${CARET}</svg>
+                        ${icon('chevron-down', {size: 'xs'})}
                     </span>
                 </button>
             ` : nothing}

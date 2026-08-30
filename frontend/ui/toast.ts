@@ -107,7 +107,7 @@ export class DlToastRegion extends LightElement {
     return html`
       <span class="toast-message">${request.message}</span>
       ${request.action ? html`
-        <button class="ui-btn toast-action" type="button" ?disabled=${this.pending}
+        <button class="dl-btn toast-action" type="button" ?disabled=${this.pending}
                 @click=${this.#runAction}>${request.action.actionLabel}</button>
       ` : nothing}
     `;

@@ -1,0 +1,18 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* Shared motion semantics; reduced-motion behavior is part of the contract. */
+
+:root {
+  --duration-instant: 100ms;
+  --duration-control: 150ms;
+  --duration-overlay: 200ms;
+  --easing-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-instant: 0ms;
+    --duration-control: 0ms;
+    --duration-overlay: 0ms;
+  }
+}

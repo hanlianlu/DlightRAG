@@ -44,7 +44,7 @@
     border-color: var(--color-accent-border-soft);
 }
 
-.ui-popover--ingest .ui-popover-item {
+.dl-popover--ingest .dl-popover-item {
     background: transparent;
     border: 0;
     text-align: left;
@@ -155,9 +155,7 @@
 }
 
 .file-delete-icon {
-    height: var(--size-icon-sm);
     pointer-events: none;
-    width: var(--size-icon-sm);
 }
 
 .file-page-control {

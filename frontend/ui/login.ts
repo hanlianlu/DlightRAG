@@ -1,8 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import '../tokens/utopia.css';
-import '../styles/global.css';
-import '../styles/layout.css';
+import '../design-system/index.css';
+import '../styles/app.css';
 
 import {initializeLanguagePreference} from '../i18n/locale.ts';
 

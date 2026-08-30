@@ -2,11 +2,12 @@
 /** Typographic and geometric invariants of the shared control primitives. */
 
 import {expect} from '@esm-bundle/chai';
+import {render} from 'lit';
+import {icon} from '../design-system/index.ts';
 
 const stylesheets = [
-  '../tokens/utopia.css',
+  '../design-system/index.css',
   '../styles/global.css',
-  '../styles/primitives.css',
 ];
 
 before(async () => {
@@ -56,10 +57,10 @@ it('a modal confirm dialog centers on both axes', () => {
 it('confirm-dialog checkbox labels match the body typography exactly', () => {
   const dialog = fixture('confirm-dialog', `
     <p class="confirm-body">Remembered preferences and facts will be forgotten.</p>
-    <label class="ui-dialog-checkbox"><input type="checkbox" /> Also clear Profile memory</label>
+    <label class="dl-dialog-checkbox"><input type="checkbox" /> Also clear Profile memory</label>
   `);
   const body = dialog.querySelector<HTMLElement>('.confirm-body')!;
-  const label = dialog.querySelector<HTMLElement>('.ui-dialog-checkbox')!;
+  const label = dialog.querySelector<HTMLElement>('.dl-dialog-checkbox')!;
   const bodyStyle = getComputedStyle(body);
   const labelStyle = getComputedStyle(label);
 
@@ -70,10 +71,10 @@ it('confirm-dialog checkbox labels match the body typography exactly', () => {
 
 it('confirm-dialog checkbox input centers against its label line', () => {
   const dialog = fixture('confirm-dialog', `
-    <label class="ui-dialog-checkbox"><input type="checkbox" /> Also clear Profile memory</label>
+    <label class="dl-dialog-checkbox"><input type="checkbox" /> Also clear Profile memory</label>
   `);
   const input = dialog.querySelector<HTMLInputElement>('input')!;
-  const label = dialog.querySelector<HTMLElement>('.ui-dialog-checkbox')!;
+  const label = dialog.querySelector<HTMLElement>('.dl-dialog-checkbox')!;
   const inputRect = input.getBoundingClientRect();
   const labelRect = label.getBoundingClientRect();
   const inputCenter = inputRect.top + inputRect.height / 2;
@@ -84,7 +85,7 @@ it('confirm-dialog checkbox input centers against its label line', () => {
 
 it('dialog radio inputs use the active theme accent', () => {
   const dialog = fixture('confirm-dialog', `
-    <label class="ui-dialog-checkbox"><input type="radio" checked /> Automatic</label>
+    <label class="dl-dialog-checkbox"><input type="radio" checked /> Automatic</label>
   `);
   const input = dialog.querySelector<HTMLInputElement>('input')!;
   const accentProbe = document.createElement('span');
@@ -95,17 +96,14 @@ it('dialog radio inputs use the active theme accent', () => {
 });
 
 it('popover create icon is geometrically centered inside its square button', () => {
-  const row = fixture('ui-popover-create', `
-    <button class="ui-popover-create-btn" aria-label="Create workspace">
-      <svg class="ui-popover-create-icon" viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M8 3.5v9M3.5 8h9"></path>
-      </svg>
-    </button>
+  const row = fixture('dl-popover-create', `
+    <button class="dl-popover-create-btn" aria-label="Create workspace"></button>
   `);
   const button = row.querySelector<HTMLButtonElement>('button')!;
-  const icon = row.querySelector<SVGElement>('svg')!;
+  render(icon('add', {size: 'sm', className: 'dl-popover-create-icon'}), button);
+  const iconElement = row.querySelector<SVGElement>('svg')!;
   const buttonRect = button.getBoundingClientRect();
-  const iconRect = icon.getBoundingClientRect();
+  const iconRect = iconElement.getBoundingClientRect();
 
   expect(buttonRect.width).to.equal(buttonRect.height);
   expect(Math.abs(buttonRect.left + buttonRect.width / 2 - iconRect.left - iconRect.width / 2))

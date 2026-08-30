@@ -23,16 +23,19 @@ const cssModulePlugin = {
   },
 };
 
+const browserProducts = (process.env.WTR_BROWSERS ?? 'chromium')
+  .split(',')
+  .map((product) => product.trim())
+  .filter(Boolean);
+
 export default {
-  files: ['ui/**/*.browser.test.ts'],
+  files: ['ui/**/*.browser.test.ts', 'design-system/**/*.browser.test.ts'],
   nodeResolve: {exportConditions: ['browser', 'development']},
   plugins: [
     cssModulePlugin,
     esbuildPlugin({ts: true, target: 'auto'}),
   ],
-  browsers: [
-    playwrightLauncher({product: 'chromium'}),
-  ],
+  browsers: browserProducts.map((product) => playwrightLauncher({product})),
   testFramework: {
     config: {
       timeout: 5000,

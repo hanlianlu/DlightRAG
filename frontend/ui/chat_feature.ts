@@ -380,20 +380,20 @@ export class DlChatFeature extends LightElement {
       <div role="alert" class="submission-failure">
         <span>${snapshot.error?.message || msg('The answer could not be submitted.', {id: 'chatFeature.submissionFailed'})}</span>
         ${snapshot.status === 'login' ? html`
-          <a class="ui-btn" href=${loginHref()} @click=${this.#loginSubmission}>
+          <a class="dl-btn" href=${loginHref()} @click=${this.#loginSubmission}>
             ${msg('Sign in', {id: 'chatFeature.submissionSignIn'})}
           </a>
         ` : html`
           ${snapshot.status === 'retryable' ? html`
-            <button class="ui-btn" type="button" @click=${this.#retrySubmission}>
+            <button class="dl-btn" type="button" @click=${this.#retrySubmission}>
               ${msg('Retry', {id: 'chatFeature.submissionRetry'})}
             </button>
           ` : null}
-          <button class="ui-btn" type="button" @click=${this.#editSubmission}>
+          <button class="dl-btn" type="button" @click=${this.#editSubmission}>
             ${msg('Edit', {id: 'chatFeature.submissionEdit'})}
           </button>
         `}
-        <button class="ui-btn" type="button" @click=${this.#discardSubmission}>
+        <button class="dl-btn" type="button" @click=${this.#discardSubmission}>
           ${msg('Discard', {id: 'chatFeature.submissionDiscard'})}
         </button>
       </div>

@@ -67,8 +67,8 @@ it('owns a native expanded trigger and closes after typed creation intent', asyn
   expect(trigger.getAttribute('aria-expanded')).to.equal('true');
   const createButton = scope.querySelector<HTMLButtonElement>('[aria-label="Create workspace"]')!;
   expect(createButton.textContent?.trim()).to.equal('');
-  expect(createButton.querySelector('svg.ui-popover-create-icon')?.getAttribute('viewBox'))
-    .to.equal('0 0 16 16');
+  expect(createButton.querySelector('svg.dl-popover-create-icon')?.getAttribute('viewBox'))
+    .to.equal('0 0 24 24');
 
   const input = scope.querySelector<HTMLInputElement>('[aria-label="New workspace name"]')!;
   input.value = 'Research';

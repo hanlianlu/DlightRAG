@@ -9,6 +9,7 @@ import type {
   ConversationAttachmentReference,
   ConversationTurn,
 } from '../api/conversations.ts';
+import {icon} from '../design-system/index.ts';
 import {localizedStoredRunError} from '../lib/run_errors.ts';
 import {formatFileSize} from '../lib/file_size.ts';
 import {LightElement} from '../lib/lit_host.ts';
@@ -376,7 +377,7 @@ export class DlChatMessageList extends LightElement {
       </div>
       <article class=${chatStyles.aiMessage} data-run-id=${turn.runId || nothing}>
         <header class=${chatStyles.aiMessageHeader}>
-          <span class=${chatStyles.dot} aria-hidden="true">●</span> DlightRAG
+          <span class=${chatStyles.dot} aria-hidden="true">${icon('status-dot', {size: 'xs'})}</span> DlightRAG
         </header>
         <div class="${chatStyles.aiMessageContent} ${turn.state === 'failed' ? chatStyles.textError : ''}">
           ${this.#answer(turn)}

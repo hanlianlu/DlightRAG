@@ -1,0 +1,20 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+@layer reset, foundations, primitives, components, features, utilities;
+
+@import url('./reset.css') layer(reset);
+@import url('./foundations/index.css') layer(foundations);
+@import url('./primitives/index.css') layer(primitives);
+
+@layer utilities {
+  .dl-sr-only {
+    border: 0;
+    clip-path: inset(50%);
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+}

@@ -3,6 +3,7 @@
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {clearMemory} from '../api/memory.ts';
+import {icon} from '../design-system/index.ts';
 import {DESKTOP_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, StoreController} from '../lib/lit_host.ts';
@@ -347,7 +348,7 @@ export class DlConversationSidebar extends LightElement {
 
   async #initialize(): Promise<void> {
     await conversationStore.loadList();
-    if (this.#releaseRouter) await this.#applyRoute(webRouter.current);
+    if (this.#releaseRouter) await this.#applyRoute(webRouter.current, false);
   }
 
   #renderCurrentConversationView(): void {
@@ -388,7 +389,7 @@ export class DlConversationSidebar extends LightElement {
     this.chatFeature.view = {kind: 'error'};
   }
 
-  async #applyRoute(route: WebRoute): Promise<void> {
+  async #applyRoute(route: WebRoute, closeDrawer = true): Promise<void> {
     const previous = conversationStore.activeConversationId;
     const next = route.kind === 'conversation' ? route.conversationId : null;
     if (previous !== next) {
@@ -405,7 +406,7 @@ export class DlConversationSidebar extends LightElement {
       await this.updateComplete;
       if (this.chatFeature) this.chatFeature.view = {kind: 'unavailable', hasRecent: false};
     }
-    await this.close(false);
+    if (closeDrawer) await this.close(false);
   }
 
   #announceRouteChange(previous: string | null, next: string | null): void {
@@ -636,11 +637,7 @@ export class DlConversationSidebar extends LightElement {
             ?disabled=${this.#busy}
             @click=${() => { void this.#requestNewConversation(); }}
           >
-            <svg class="new-chat-icon" width="14" height="14" viewBox="0 0 24 24"
-                 fill="none" stroke="currentColor" stroke-width="1.8"
-                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-            </svg>
+            ${icon('edit', {size: 'sm', className: 'new-chat-icon'})}
             ${msg('New chat', {id: 'conversationSidebar.newChat'})}
           </button>
           <button
@@ -652,12 +649,7 @@ export class DlConversationSidebar extends LightElement {
             aria-controls="chat-sidebar"
             @click=${this.#toggleSidebar}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
-                 stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-              <path d="M9 3v18"></path><path d="M14 10l-2 2 2 2"></path>
-            </svg>
+            ${icon('panel-collapse', {size: 'sm'})}
           </button>
         </div>
         <dl-conversation-list
@@ -671,11 +663,7 @@ export class DlConversationSidebar extends LightElement {
                 aria-label=${msg('Settings', {id: 'conversationSidebar.settings'})}
                 aria-controls="settings-dialog"
                 @click=${this.#requestSettings}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
+          ${icon('settings', {size: 'sm'})}
           <span class="sidebar-action-label">${msg('Settings', {id: 'conversationSidebar.settingsLabel'})}</span>
         </button>
       </nav>
@@ -696,12 +684,7 @@ export class DlConversationSidebar extends LightElement {
           void this.open(event.currentTarget as HTMLElement);
         }}
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
-             stroke-linejoin="round" aria-hidden="true">
-          <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-          <path d="M9 3v18"></path><path d="M10 10l2 2-2 2"></path>
-        </svg>
+        ${icon('panel-expand', {size: 'md'})}
       </button>
       ${this.#conversationDialogs()}
     `;
@@ -724,9 +707,9 @@ export class DlConversationSidebar extends LightElement {
               id: 'conversationSidebar.deleteConversationDraftWarning',
             })}
           </p>
-          <div class="ui-dialog-actions">
+          <div class="dl-dialog-actions">
             <button type="submit" value="cancel">${msg('Cancel', {id: 'conversationSidebar.cancel'})}</button>
-            <button type="submit" value="delete" class="ui-dialog-danger">${msg('Delete', {id: 'conversationSidebar.delete'})}</button>
+            <button type="submit" value="delete" class="dl-dialog-danger">${msg('Delete', {id: 'conversationSidebar.delete'})}</button>
           </div>
         </form>
       </dialog>
@@ -739,13 +722,13 @@ export class DlConversationSidebar extends LightElement {
               id: 'conversationSidebar.deleteAllDraftWarning',
             })}
           </p>
-          <label class="ui-dialog-checkbox">
+          <label class="dl-dialog-checkbox">
             <input type="checkbox" id="delete-all-also-clear-memory">
             ${msg('Also clear profile memories', {id: 'conversationSidebar.alsoClearMemories'})}
           </label>
-          <div class="ui-dialog-actions">
+          <div class="dl-dialog-actions">
             <button type="submit" value="cancel">${msg('Cancel', {id: 'conversationSidebar.cancelDeleteAll'})}</button>
-            <button type="submit" value="delete-all" class="ui-dialog-danger">${msg('Delete all', {id: 'conversationSidebar.deleteAll'})}</button>
+            <button type="submit" value="delete-all" class="dl-dialog-danger">${msg('Delete all', {id: 'conversationSidebar.deleteAll'})}</button>
           </div>
         </form>
       </dialog>
@@ -756,7 +739,7 @@ export class DlConversationSidebar extends LightElement {
           <p>${msg('Your unsent message and attachments will not move to another conversation.', {
             id: 'conversationSidebar.discardDraftBody',
           })}</p>
-          <div class="ui-dialog-actions">
+          <div class="dl-dialog-actions">
             <button type="submit" value="cancel">${msg('Keep editing', {id: 'conversationSidebar.keepEditing'})}</button>
             <button type="submit" value="discard">${msg('Discard and continue', {id: 'conversationSidebar.discardAndContinue'})}</button>
           </div>

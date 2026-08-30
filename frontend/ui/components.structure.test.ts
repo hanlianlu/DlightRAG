@@ -2,7 +2,7 @@
 /** Structural lock on the shared control layer.
 
  * Every <dialog> must carry one of the primitive dialog classes, and every
- * checkbox must live inside the .ui-dialog-checkbox primitive. New UI that
+ * checkbox must live inside the .dl-dialog-checkbox primitive. New UI that
  * bypasses primitives fails here instead of shipping UA styling.
  */
 
@@ -39,21 +39,21 @@ test('every dialog carries a primitive dialog class', () => {
   }
 });
 
-test('every checkbox lives inside the .ui-dialog-checkbox primitive', () => {
+test('every checkbox lives inside the .dl-dialog-checkbox primitive', () => {
   for (const file of uiSourceFiles()) {
     const source = readFileSync(file, 'utf8');
-    // A checkbox is legal only when a .ui-dialog-checkbox label appears
+    // A checkbox is legal only when a .dl-dialog-checkbox label appears
     // somewhere before it on the same template line region; walk label blocks.
-    const labelPattern = /<label[^>]*class="[^"]*ui-dialog-checkbox[^"]*"[^>]*>([\s\S]*?)<\/label>/g;
+    const labelPattern = /<label[^>]*class="[^"]*dl-dialog-checkbox[^"]*"[^>]*>([\s\S]*?)<\/label>/g;
     const barePattern = /<input[^>]*type="checkbox"[^>]*>/g;
     for (const match of source.matchAll(barePattern)) {
       const index = match.index ?? 0;
       const before = source.slice(0, index);
-      const lastLabelOpen = before.lastIndexOf('ui-dialog-checkbox');
+      const lastLabelOpen = before.lastIndexOf('dl-dialog-checkbox');
       const lastLabelClose = before.lastIndexOf('</label>');
       assert.ok(
         lastLabelOpen > lastLabelClose,
-        `${file}: checkbox must sit inside a .ui-dialog-checkbox label`,
+        `${file}: checkbox must sit inside a .dl-dialog-checkbox label`,
       );
     }
     void labelPattern;

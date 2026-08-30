@@ -12,7 +12,7 @@ const originalMatchMedia = window.matchMedia;
 
 function media(compact: boolean): (query: string) => MediaQueryList {
   return (query: string) => ({
-    matches: compact ? query === '(max-width: 1199px)' : query === '(min-width: 1200px)',
+    matches: compact ? query === '(width < 1200px)' : query === '(min-width: 1200px)',
     media: query,
     onchange: null,
     addListener() {},

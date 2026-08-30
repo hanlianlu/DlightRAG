@@ -470,7 +470,7 @@ Features raise typed toast intents and the Shell invokes the Toast Region's publ
 commands; no module-global notification channel exists. There are no
 legacy custom-element aliases, fixed-ID cross-Feature mutations, or UI
 choreography events on the domain bus. The only one-shot setup functions are the
-MathJax browser observer and Web Awesome split-panel integration.
+MathJax browser observer and the local split-layout product adapter.
 
 Browser navigation has two explicit page routes: `/web/` is an unpersisted New
 Chat, while `/web/conversations/{conversation_id}` identifies one durable
@@ -935,9 +935,10 @@ keep `download_url` null.
 
 `all` is authorization-relative, not deployment-global. If 14 workspaces are
 registered and the current caller may query 10, `all_workspaces: true` queries
-those 10. `None` and `[]` remain omission; omitting both selectors still uses
-the configured default workspace. A caller with no queryable workspaces receives
-an authorization error. Ingest remains single-workspace and does not support
+those 10 under the [Access Rule model](security.md#authorization-model). `None`
+and `[]` remain omission; omitting both selectors still uses the configured
+default workspace. A caller with no queryable workspaces receives an
+authorization error. Ingest remains single-workspace and does not support
 broadcast ingestion. The strings `"*"` and `"all"` are ordinary workspace names,
 not selector aliases.
 

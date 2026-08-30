@@ -97,7 +97,7 @@ def test_terminal_answer_exposes_minimal_agent_branch_controls(page):
     page.goto("/web/")
     page.locator(".composer-input").fill("Show controls")
     page.click(".composer-send")
-    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
+    page.get_by_role("button", name="Follow up").last.wait_for(timeout=10000)
 
     actions = page.locator('[class*="runActions"]').last
     assert actions.get_by_role("button", name="Follow up").is_visible()
@@ -116,9 +116,9 @@ def test_chat_history_appends_turns(page):
     page.click(".composer-send")
     page.wait_for_function("document.querySelector('.composer-input').value === ''")
     page.wait_for_selector(".app.has-messages", timeout=10000)
-    # One answer at a time: wait for the first stream to finish (the Send button
-    # returns from its Stop state) before submitting the next query.
-    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
+    # One answer at a time: wait for terminal answer controls before submitting
+    # the next query.
+    page.get_by_role("button", name="Follow up").last.wait_for(timeout=10000)
 
     initial_user_messages = page.locator('[class*="userMessageWrapper"]').count()
 
@@ -185,7 +185,7 @@ def test_a_replayed_submission_never_creates_a_second_turn(page, e2e_base_url):
     page.wait_for_selector(".composer-input", timeout=10000)
     page.locator(".composer-input").fill("What is DlightRAG?")
     page.click(".composer-send")
-    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=15000)
+    page.get_by_role("button", name="Follow up").last.wait_for(timeout=15000)
 
     replay = page.evaluate(
         """
@@ -212,7 +212,7 @@ def test_a_replayed_submission_never_creates_a_second_turn(page, e2e_base_url):
           ).json();
           return {
             status: response.status,
-            runId: descriptor.run_id,
+            runId: descriptor.turn?.answer_run_id,
             originalRunId: turn.answer_run_id,
             turnCount: after.turns.length,
           };

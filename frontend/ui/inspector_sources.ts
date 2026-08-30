@@ -4,6 +4,7 @@ import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {PresentationSource} from '../api/conversations.ts';
+import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {setSanitizedLlmHtml} from '../lib/safe_html.ts';
 import {safeExternalHttpHref, safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
@@ -122,7 +123,7 @@ export class DlInspectorSources extends LightElement {
         <div class="source-doc-header">
           <button class="source-doc-toggle" type="button" aria-expanded=${String(expanded)}
                   @click=${() => { this.#toggle(source.id); }}>
-            <span class="collapse-icon">▶</span>
+            <span class="collapse-icon">${icon('disclosure', {size: 'xs'})}</span>
             <span class="source-doc-title">${source.title}</span>
             <span class="source-doc-badge">${source.id}</span>
             <span class="source-doc-count">${source.chunks.length}</span>
@@ -131,7 +132,7 @@ export class DlInspectorSources extends LightElement {
             <a href=${download} class="source-action-icon"
                title=${msg('Download source', {id: 'inspectorSources.downloadSource'})}
                aria-label=${msg('Download source', {id: 'inspectorSources.downloadSource'})} download>
-              ${this.#downloadIcon()}
+              ${icon('download', {size: 'sm', className: 'source-action-icon-svg'})}
             </a>
           ` : nothing}
           ${external ? html`
@@ -139,7 +140,7 @@ export class DlInspectorSources extends LightElement {
                title=${msg('Open source', {id: 'inspectorSources.openSource'})}
                aria-label=${msg('Open source', {id: 'inspectorSources.openSource'})}
                target="_blank" rel="noopener noreferrer">
-              ${this.#externalIcon()}
+              ${icon('open-external', {size: 'sm', className: 'source-action-icon-svg'})}
             </a>
           ` : nothing}
         </div>
@@ -207,21 +208,6 @@ export class DlInspectorSources extends LightElement {
     }));
   }
 
-  #downloadIcon(): TemplateResult {
-    return html`<svg class="source-action-icon-svg" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-      <polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>
-    </svg>`;
-  }
-
-  #externalIcon(): TemplateResult {
-    return html`<svg class="source-action-icon-svg" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M14 3h7v7"></path><path d="M10 14L21 3"></path>
-      <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path>
-    </svg>`;
-  }
 }
 
 customElements.define('dl-inspector-sources', DlInspectorSources);

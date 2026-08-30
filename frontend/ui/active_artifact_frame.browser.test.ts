@@ -50,6 +50,9 @@ it('captures its private Escape signal before hostile Artifact listeners', async
   });
   frame.source = '<script>document.addEventListener("keydown",event=>' +
     'event.stopImmediatePropagation(),true);addEventListener("message",event=>{' +
+    'if(event.data==="dl-test-trigger-forged"){' +
+    'parent.postMessage({type:"dl-artifact-frame-escape",token:"forged"},"*");' +
+    'parent.postMessage("dl-test-forged-sent","*")}' +
     'if(event.data==="dl-test-trigger-escape")document.body.dispatchEvent(' +
     'new KeyboardEvent("keydown",{key:"Escape",bubbles:true,composed:true}))});' +
     'parent.postMessage("dl-test-escape-ready","*")</script>';
@@ -65,10 +68,16 @@ it('captures its private Escape signal before hostile Artifact listeners', async
   const iframe = frame.shadowRoot?.querySelector('iframe');
   await scriptReady;
 
-  window.dispatchEvent(new MessageEvent('message', {
-    source: iframe?.contentWindow,
-    data: {type: 'dl-artifact-frame-escape', token: 'forged'},
-  }));
+  const forgedSent = new Promise<void>((resolve) => {
+    const receive = (event: MessageEvent): void => {
+      if (event.data !== 'dl-test-forged-sent') return;
+      window.removeEventListener('message', receive);
+      resolve();
+    };
+    window.addEventListener('message', receive);
+  });
+  iframe?.contentWindow?.postMessage('dl-test-trigger-forged', '*');
+  await forgedSent;
   expect(escapes).to.equal(0);
   iframe?.contentWindow?.postMessage('dl-test-trigger-escape', '*');
   await escaped;

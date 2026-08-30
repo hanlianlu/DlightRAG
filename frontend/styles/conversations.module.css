@@ -1,3 +1,4 @@
+@layer features {
 /* Conversation lifecycle shell. Fine three-panel geometry is owned by Task 8. */
 /* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules global selectors */
 
@@ -366,14 +367,14 @@
     text-align: center;
 }
 
-:global(#delete-all-conversations-dialog .ui-dialog-actions) {
+:global(#delete-all-conversations-dialog .dl-dialog-actions) {
     justify-content: center;
 }
 
 /* Buttons take the ring; inputs signal focus with their border, as everywhere else. */
 :global(#chat-sidebar button:focus-visible),
 :global(#conversation-sidebar-open:focus-visible),
-:global(.ui-dialog-actions button:focus-visible) {
+:global(.dl-dialog-actions button:focus-visible) {
     outline: 2px solid var(--color-control-ring);
     outline-offset: 2px;
 }
@@ -421,4 +422,6 @@
     :global(.conversation-skeleton) {
         animation: none;
     }
+}
+
 }

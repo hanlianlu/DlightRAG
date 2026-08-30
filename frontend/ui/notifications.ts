@@ -86,8 +86,8 @@ export class DlNotificationOffer extends LightElement {
   protected override render(): TemplateResult {
     return html`
       <span class="notify-offer-text">${msg('Notify you when an answer finishes?', {id: 'notifications.offerText'})}</span>
-      <button class="ui-btn" type="button" @click=${this.#accept}>${msg('Enable', {id: 'notifications.enable'})}</button>
-      <button class="ui-btn" type="button" @click=${this.#decline}>${msg('Not now', {id: 'notifications.notNow'})}</button>
+      <button class="dl-btn" type="button" @click=${this.#accept}>${msg('Enable', {id: 'notifications.enable'})}</button>
+      <button class="dl-btn" type="button" @click=${this.#decline}>${msg('Not now', {id: 'notifications.notNow'})}</button>
     `;
   }
 

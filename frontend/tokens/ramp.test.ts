@@ -5,8 +5,11 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 
-const css = readFileSync(fileURLToPath(new URL('./utopia.css', import.meta.url)), 'utf8');
-const semantics = css.slice(css.indexOf('/* ── Color: Text ── */'));
+const css = readFileSync(
+    fileURLToPath(new URL('../design-system/foundations/color.css', import.meta.url)),
+    'utf8',
+);
+const semantics = css.slice(css.indexOf('  --color-text-primary'));
 
 /** Declared ramp steps, keyed by hex: #7e6c37 -> gold-400. */
 const ramps = new Map(

@@ -8,20 +8,23 @@ import {test} from 'node:test';
 import {DESIGN_SYSTEM_TOKEN_GROUPS} from './design_system_tokens.ts';
 
 const FRONTEND_DIR = fileURLToPath(new URL('..', import.meta.url));
-const CSS_DIRS = ['styles', 'tokens'].map((directory) => join(FRONTEND_DIR, directory));
+const CSS_DIRS = ['styles', 'design-system'].map((directory) => join(FRONTEND_DIR, directory));
 
 interface CssSource {
   path: string;
   source: string;
 }
 
+function cssSourcesIn(directory: string): CssSource[] {
+  return readdirSync(directory, {withFileTypes: true}).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return cssSourcesIn(path);
+    return entry.name.endsWith('.css') ? [{path, source: readFileSync(path, 'utf8')}] : [];
+  });
+}
+
 function cssSources(): CssSource[] {
-  return CSS_DIRS.flatMap((directory) => readdirSync(directory)
-    .filter((name) => name.endsWith('.css'))
-    .map((name) => ({
-      path: join(directory, name),
-      source: readFileSync(join(directory, name), 'utf8'),
-    })));
+  return CSS_DIRS.flatMap(cssSourcesIn);
 }
 
 function withoutComments(source: string): string {
@@ -35,7 +38,8 @@ function declaredCustomProperties(source: string): Set<string> {
 
 function sharedDeclarations(sources: readonly CssSource[]): Set<string> {
   return new Set(sources
-    .filter(({path}) => path.includes('/tokens/') || basename(path) === 'global.css')
+    .filter(({path}) => path.includes('/design-system/foundations/')
+      || basename(path) === 'global.css')
     .flatMap(({source}) => [...declaredCustomProperties(source)]));
 }
 

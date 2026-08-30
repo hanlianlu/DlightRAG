@@ -92,7 +92,7 @@ it('opens fail-closed when the authoritative memory read fails', async () => {
   await settings.open();
 
   expect(settings.querySelector<HTMLDialogElement>('dialog[open]')).not.to.equal(null);
-  expect(settings.querySelector<HTMLInputElement>('label.ui-dialog-checkbox input')?.disabled)
+  expect(settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')?.disabled)
     .to.equal(true);
   expect(buttonNamed(settings, 'Clear memory')?.hidden).to.equal(true);
 });
@@ -111,7 +111,7 @@ it('owns an explicit memory toggle mutation and its final visible state', async 
   };
   const settings = mount();
   await settings.open();
-  const toggle = settings.querySelector<HTMLInputElement>('label.ui-dialog-checkbox input')!;
+  const toggle = settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')!;
 
   toggle.checked = false;
   toggle.dispatchEvent(new Event('change'));
@@ -131,7 +131,7 @@ it('restores the authoritative checkbox state after a failed toggle mutation', a
   };
   const settings = mount();
   await settings.open();
-  const toggle = settings.querySelector<HTMLInputElement>('label.ui-dialog-checkbox input')!;
+  const toggle = settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')!;
 
   toggle.checked = false;
   toggle.dispatchEvent(new Event('change'));
@@ -175,7 +175,7 @@ it('rejects a delayed memory read after a newer toggle mutation settles', async 
   });
   await waitFor(() => reads === 1);
   await settings.open();
-  const toggle = settings.querySelector<HTMLInputElement>('label.ui-dialog-checkbox input')!;
+  const toggle = settings.querySelector<HTMLInputElement>('label.dl-dialog-checkbox input')!;
   toggle.checked = false;
   toggle.dispatchEvent(new Event('change'));
   await waitFor(() => methods.includes('PUT') && toggle.disabled === false);

@@ -63,11 +63,11 @@ export class DlContinuationDialog extends LightElement {
         <form method="dialog">
           <h2 id="dl-continuation-title">${title}</h2>
           <p>${note}</p>
-          <textarea class="ui-dialog-input" rows="3"
+          <textarea class="dl-dialog-input" rows="3"
                     placeholder=${msg('Ask a question…', {id: 'runDialogs.askPlaceholder'})}></textarea>
-          <div class="ui-dialog-actions">
+          <div class="dl-dialog-actions">
             <button type="submit" value="cancel">${msg('Cancel', {id: 'runDialogs.cancel'})}</button>
-            <button type="submit" value="continue" class="ui-btn">${msg('Continue', {id: 'runDialogs.continue'})}</button>
+            <button type="submit" value="continue" class="dl-btn">${msg('Continue', {id: 'runDialogs.continue'})}</button>
           </div>
         </form>
       </dialog>
@@ -296,8 +296,8 @@ export class DlChildrenRoster extends LightElement {
           <span class="sr-only" data-roster-status role="status" aria-live="polite">
             ${this.#announcement}
           </span>
-          <div class="ui-dialog-actions">
-            <button type="button" class="ui-btn" @click=${() => void this.refresh()}>${msg('Refresh', {id: 'runDialogs.refresh'})}</button>
+          <div class="dl-dialog-actions">
+            <button type="button" class="dl-btn" @click=${() => void this.refresh()}>${msg('Refresh', {id: 'runDialogs.refresh'})}</button>
             <button type="submit" value="close">${msg('Close', {id: 'runDialogs.close'})}</button>
           </div>
         </form>

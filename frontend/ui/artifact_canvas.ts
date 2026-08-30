@@ -3,6 +3,7 @@
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
+import {icon} from '../design-system/index.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit_host.ts';
@@ -165,19 +166,19 @@ export class DlArtifactCanvas extends LightElement {
         <div class="artifact-canvas-actions">
           <div class="artifact-canvas-layout-actions" role="group"
                aria-labelledby="artifact-canvas-title">
-            <button class="ui-btn" type="button" @click=${() => this.#setLayout('side')}
+            <button class="dl-btn" type="button" @click=${() => this.#setLayout('side')}
                     aria-pressed=${this.layout === 'side'}>${msg('Side', {id: 'artifactCanvas.layoutSide'})}</button>
-            <button class="ui-btn" type="button" @click=${() => this.#setLayout('wide')}
+            <button class="dl-btn" type="button" @click=${() => this.#setLayout('wide')}
                     aria-pressed=${this.layout === 'wide'}>${msg('Wide', {id: 'artifactCanvas.layoutWide'})}</button>
-            <button class="ui-btn" type="button" @click=${() => this.#setLayout('fullscreen')}
+            <button class="dl-btn" type="button" @click=${() => this.#setLayout('fullscreen')}
                     aria-pressed=${this.layout === 'fullscreen'}>${msg('Fullscreen', {id: 'artifactCanvas.layoutFullscreen'})}</button>
           </div>
           ${artifact?.download_url ? html`
-            <a class="ui-btn" href=${safeSameOriginHref(artifact.download_url) || '#'} download>
+            <a class="dl-btn" href=${safeSameOriginHref(artifact.download_url) || '#'} download>
               ${msg('Download', {id: 'artifactCanvas.download'})}
             </a>` : nothing}
           <button class="panel-close" data-action="close" type="button"
-                  aria-label=${msg('Close Artifact', {id: 'artifactCanvas.close'})} @click=${() => this.close()}>✕</button>
+                  aria-label=${msg('Close Artifact', {id: 'artifactCanvas.close'})} @click=${() => this.close()}>${icon('close', {size: 'sm'})}</button>
         </div>
       </div>
       <div class="artifact-canvas-content">
@@ -201,7 +202,7 @@ export class DlArtifactCanvas extends LightElement {
     if (this.canvasState === 'error') {
       return html`<div class="artifact-error" role="alert">
         <p>${msg('Could not load this Artifact safely.', {id: 'artifactCanvas.error'})}</p>
-        <button class="ui-btn" type="button" @click=${() => this.reload()}>${msg('Retry', {id: 'artifactCanvas.retry'})}</button>
+        <button class="dl-btn" type="button" @click=${() => this.reload()}>${msg('Retry', {id: 'artifactCanvas.retry'})}</button>
         ${this.textPreview ? html`<pre>${this.textPreview}</pre>` : nothing}
       </div>`;
     }
@@ -255,7 +256,7 @@ export class DlArtifactCanvas extends LightElement {
         <div class="artifact-active-consent">
           <strong>${msg('Untrusted interactive report', {id: 'artifactCanvas.untrustedTitle'})}</strong>
           <p>${msg('Active code is isolated from DlightRAG. Normal external loads are blocked by browser policy.', {id: 'artifactCanvas.untrustedDescription'})}</p>
-          <button class="ui-btn" type="button" @click=${() => { this.interactive = true; }}>
+          <button class="dl-btn" type="button" @click=${() => { this.interactive = true; }}>
             ${msg('Open interactive report', {id: 'artifactCanvas.openInteractive'})}
           </button>
         </div>
@@ -284,7 +285,7 @@ export class DlArtifactCanvas extends LightElement {
     return html`<div class="artifact-download-only">
       <p>${msg('No browser-safe inline preview is available for this file.', {id: 'artifactCanvas.downloadOnly'})}</p>
       ${this.artifact?.download_url ? html`
-        <a class="ui-btn" href=${safeSameOriginHref(this.artifact.download_url) || '#'} download>
+        <a class="dl-btn" href=${safeSameOriginHref(this.artifact.download_url) || '#'} download>
           ${msg(str`Download ${this.artifact.filename}`, {id: 'artifactCanvas.downloadFile'})}
         </a>` : nothing}
     </div>`;

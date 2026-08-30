@@ -6,29 +6,36 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --experimental-strip-types --test api/*.test.ts stores/*.test.ts lib/*.test.ts tokens/*.test.ts ui/components.structure.test.ts ui/i18n_catalog.structure.test.ts",
+    "test": "npm run check:generated && node --experimental-strip-types --test api/*.test.ts stores/*.test.ts lib/*.test.ts tokens/*.test.ts ui/components.structure.test.ts ui/i18n_catalog.structure.test.ts design-system/testing/architecture.test.ts",
     "test:browser": "web-test-runner --config web-test-runner.config.mjs",
     "typecheck": "tsc --noEmit",
-    "lint:css": "stylelint 'styles/**/*.css' 'styles/**/*.module.css'"
+    "lint:css": "stylelint 'styles/**/*.css' 'styles/**/*.module.css' 'design-system/**/*.css'",
+    "generate:icons": "node scripts/generate_icons.mjs",
+    "generate:tokens": "node scripts/generate_tokens.mjs",
+    "generate": "npm run generate:icons && npm run generate:tokens",
+    "check:icons": "node scripts/generate_icons.mjs --check",
+    "check:tokens": "node scripts/generate_tokens.mjs --check",
+    "check:generated": "npm run check:icons && npm run check:tokens",
+    "test:browser:cross-engine": "WTR_BROWSERS=chromium,firefox,webkit web-test-runner design-system/testing/design_system.browser.test.ts --config web-test-runner.config.mjs"
   },
   "devDependencies": {
     "@esm-bundle/chai": "^4.3.4-fix.0",
     "@types/mocha": "^10.0.10",
-    "@types/node": "^26.1.1",
-    "@web/dev-server-esbuild": "^1.0.4",
+    "@types/node": "^26.4.0",
+    "@web/dev-server-esbuild": "^2.0.0",
     "@web/test-runner": "^1.0.0",
     "@web/test-runner-playwright": "^1.0.0",
+    "lucide-static": "1.38.0",
     "stylelint": "^17.14.1",
     "stylelint-config-standard": "^40.0.0",
     "typescript": "^7.0.2",
-    "vite": "^8.1.5"
+    "vite": "^8.2.2"
   },
   "dependencies": {
-    "@awesome.me/webawesome": "^3.4.0",
     "@lit/localize": "^0.12.2",
-    "dompurify": "^3.4.12",
+    "dompurify": "^3.4.14",
     "lit": "^3.3.3",
-    "mermaid": "^11.16.0",
+    "mermaid": "^11.17.2",
     "nanoevents": "^10.0.0",
     "xstate": "^5.32.6"
   }

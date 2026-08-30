@@ -15,6 +15,7 @@ import {
   undoMemoryChange,
   type MemorySettings,
 } from '../api/memory.ts';
+import {icon} from '../design-system/index.ts';
 import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import type {ChatMemoryOperationDetail} from './chat_feature.ts';
@@ -172,11 +173,11 @@ export class DlSettingsDialog extends LightElement {
             <div class="settings-header">
               <h2 id="settings-title">${msg('Settings', {id: 'settings.title'})}</h2>
               <button class="panel-close settings-close" type="submit" value="close-settings"
-                      aria-label=${msg('Close settings', {id: 'settings.close'})}>✕</button>
+                      aria-label=${msg('Close settings', {id: 'settings.close'})}>${icon('close', {size: 'sm'})}</button>
             </div>
             <section class="settings-section">
               <h3 id="settings-memory">${msg('Profile Memory', {id: 'settings.profileMemory'})}</h3>
-              <label class="ui-dialog-checkbox">
+              <label class="dl-dialog-checkbox">
                 <input type="checkbox" id="memory-enabled-toggle"
                        .checked=${this.memory?.enabled ?? false}
                        ?disabled=${this.memoryLoading || this.memoryPending || !this.memory}
@@ -190,7 +191,7 @@ export class DlSettingsDialog extends LightElement {
                   : msg(str`${active ?? 0} stored items`, {id: 'settings.nStoredItems'})}
               </p>
               <div class="settings-actions">
-                <button type="button" id="memory-clear-btn" class="ui-btn ui-btn-danger-text"
+                <button type="button" id="memory-clear-btn" class="dl-btn dl-btn-danger-text"
                         ?hidden=${!this.memory?.enabled} ?disabled=${this.memoryPending}
                         @click=${this.#clearMemory}>${msg('Clear memory', {id: 'settings.clearMemory'})}</button>
               </div>
@@ -204,26 +205,26 @@ export class DlSettingsDialog extends LightElement {
                   : msg(str`${total} conversations`, {id: 'settings.nConversations'})}
               </p>
               <div class="settings-actions">
-                <button type="button" id="delete-all-btn" class="ui-btn ui-btn-danger-text"
+                <button type="button" id="delete-all-btn" class="dl-btn dl-btn-danger-text"
                         @click=${this.#deleteAll}>${msg('Delete all conversations', {id: 'settings.deleteAllConversations'})}</button>
               </div>
             </section>
             <section class="settings-section">
               <h3 id="settings-language">${msg('Language', {id: 'settings.language'})}</h3>
               <div id="language-options" role="radiogroup" aria-labelledby="settings-language">
-                <label class="ui-dialog-checkbox">
+                <label class="dl-dialog-checkbox">
                   <input type="radio" name="language" value="auto"
                          .checked=${this.language === 'auto'}
                          @change=${this.#setLanguage}>
                   ${msg('Automatic', {id: 'settings.language.automatic'})}
                 </label>
-                <label class="ui-dialog-checkbox">
+                <label class="dl-dialog-checkbox">
                   <input type="radio" name="language" value="en"
                          .checked=${this.language === 'en'}
                          @change=${this.#setLanguage}>
                   ${msg('English', {id: 'settings.language.english'})}
                 </label>
-                <label class="ui-dialog-checkbox">
+                <label class="dl-dialog-checkbox">
                   <input type="radio" name="language" value="zh"
                          .checked=${this.language === 'zh'}
                          @change=${this.#setLanguage}>
@@ -240,9 +241,9 @@ export class DlSettingsDialog extends LightElement {
           <p>${msg('Remembered preferences and facts will be forgotten. Conversations are not affected.', {
             id: 'settings.clearMemoryBody',
           })}</p>
-          <div class="ui-dialog-actions">
+          <div class="dl-dialog-actions">
             <button type="submit" value="cancel">${msg('Cancel', {id: 'settings.cancel'})}</button>
-            <button type="submit" value="clear" class="ui-dialog-danger">${msg('Clear memory', {id: 'settings.clearMemoryConfirm'})}</button>
+            <button type="submit" value="clear" class="dl-dialog-danger">${msg('Clear memory', {id: 'settings.clearMemoryConfirm'})}</button>
           </div>
         </form>
       </dialog>

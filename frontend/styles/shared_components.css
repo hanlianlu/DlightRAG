@@ -1,82 +1,5 @@
 /* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* The shared control primitives: buttons, checkboxes, dialogs, drawers.
-
- * Every model-visible control ships from this file. Adding a new control
- * without a primitive here (or a variant below) is a bug, not a choice.
- */
-
-/* ── Dialog actions ── */
-
-/* Shared by every confirm dialog so a new one cannot ship without hover. */
-
-.ui-dialog-checkbox {
-    align-items: center;
-    display: flex;
-    font-size: var(--font-size-caption);
-    gap: var(--space-tight);
-    margin-block: var(--space-component);
-}
-
-.ui-dialog-checkbox input:is([type='checkbox'], [type='radio']) {
-    accent-color: var(--color-accent-action);
-    cursor: pointer;
-    flex: 0 0 auto;
-    height: var(--size-icon-sm);
-    margin: 0;
-    width: var(--size-icon-sm);
-}
-
-.ui-dialog-actions {
-    display: flex;
-    gap: var(--space-tight);
-    justify-content: flex-end;
-    margin-top: var(--space-section);
-}
-
-.ui-dialog-actions button,
-.ui-btn {
-    background: transparent;
-    border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-control);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--font-size-detail);
-    padding: var(--space-tight) var(--space-component);
-    transition: background 150ms, border-color 150ms, color 150ms;
-}
-
-/* Destructive text affordance on the shared button geometry. */
-.ui-btn-danger-text {
-    color: var(--color-danger);
-}
-
-.ui-dialog-actions button:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-}
-
-.ui-dialog-actions button:hover:not(:disabled),
-.ui-btn:hover:not(:disabled) {
-    background: var(--color-bg-hover);
-    border-color: var(--color-control-border-hover);
-    color: var(--color-text-primary);
-}
-
-.ui-dialog-actions .ui-dialog-danger {
-    background: var(--color-danger-bg);
-    border-color: transparent;
-    color: var(--color-on-danger);
-}
-
-.ui-dialog-actions .ui-dialog-danger:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-danger-bg) 90%, var(--color-text-primary));
-    border-color: transparent;
-    color: var(--color-on-danger);
-}
-
-
 .panel-close {
     background: none;
     border: none;
@@ -103,48 +26,6 @@
     line-height: 1.5;
     padding-block: var(--space-inline);
 }
-
-/* === Confirm Dialog === */
-
-/* Shared by every destructive confirmation so none can ship with UA styling. */
-
-.confirm-dialog {
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-dialog);
-    box-shadow: var(--shadow-overlay);
-    color: var(--color-text-secondary);
-    inset: 0;
-    margin: auto;
-    max-width: min(420px, calc(100vw - 32px));
-    padding: var(--space-section);
-    width: min(380px, calc(100vw - 32px));
-}
-
-.confirm-dialog::backdrop {
-    background: var(--color-scrim-strong);
-}
-
-.confirm-dialog h2 {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-subhead);
-    font-weight: 600;
-    margin-bottom: var(--space-component);
-}
-
-.confirm-dialog p {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-detail);
-    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-    line-height: 1.5;
-    margin-bottom: var(--space-tight);
-}
-
-.confirm-dialog .ui-dialog-checkbox {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-detail);
-}
-
 
 /* === Settings Drawer === */
 
@@ -268,8 +149,6 @@
     font-size: var(--font-size-caption);
 }
 
-
-
 /* === Workspace Dialog === */
 
 .workspace-dialog {
@@ -309,23 +188,4 @@
     font-weight: 600;
     margin: var(--space-tight) 0;
     overflow-wrap: anywhere;
-}
-
-.ui-dialog-input,
-.workspace-dialog-input {
-    background: var(--color-bg-subtle);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-control);
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: var(--font-size-detail);
-    margin: var(--space-component) 0;
-    outline: none;
-    padding: var(--space-tight) var(--space-component);
-    width: 100%;
-}
-
-.ui-dialog-input:focus,
-.workspace-dialog-input:focus {
-    border-color: var(--color-accent-border);
 }

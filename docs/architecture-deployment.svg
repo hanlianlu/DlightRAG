@@ -1,100 +1,101 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820" role="img" aria-labelledby="title description">
   <title id="title">DlightRAG deployment and storage topology</title>
-  <desc id="description">Writer and reader DlightRAG processes share one PostgreSQL 18 primary and the same corpus artifact directory. Both process roles execute durable answers and write operational state; only the writer mutates corpus state and owns migrations. External AI, parser, and optional tool endpoints are separate runtimes.</desc>
+  <desc id="description">Writer and reader DlightRAG processes share one PostgreSQL 18 primary, the same corpus artifact working directory, and, when local Agent execution is enabled, a separate shared Agent Workspace root. Both process roles execute durable answers and write operational state; only the writer mutates corpus state and owns migrations. External AI, parser, and optional tool endpoints are separate runtimes.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 1.2 L 8 5 L 0 8.8 z" class="arrow-head"/>
     </marker>
     <style>
       :root { color-scheme: light dark; }
-      .canvas { fill: #f3efe8; }
-      .heading { fill: #1c1915; font: 600 25px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.03em; }
-      .subtitle, .note { fill: #6f6a63; font: 400 14px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .group-title { fill: #8a847c; font: 600 11px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: 0.14em; }
-      .node-title { fill: #1c1915; font: 600 16px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.01em; }
-      .node-copy { fill: #5c574f; font: 400 13.5px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .edge-label { fill: #8a847c; font: 500 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-      .process-group { fill: #ece7de; stroke: #ddd6ca; stroke-width: 1; }
-      .process { fill: #f3f6f8; stroke: #d3dbe2; stroke-width: 1; }
-      .external { fill: #f7f3ea; stroke: #e0d5c2; stroke-width: 1; }
-      .store { fill: #eef3ee; stroke: #d3ddd4; stroke-width: 1; }
-      .divider { stroke: #c9d4cb; stroke-width: 1; }
-      .external-divider { stroke: #e0d5c2; stroke-width: 1; }
-      .edge { fill: none; stroke: #b7b0a6; stroke-width: 1.35; marker-end: url(#arrow); }
-      .arrow-head { fill: #b7b0a6; }
+      .canvas { fill: #fafaf9; }
+      .heading { fill: #1c1917; font: 600 25px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.03em; }
+      .subtitle, .note { fill: #57534e; font: 400 14px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .group-title { fill: #57534e; font: 600 11px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: 0.14em; }
+      .node-title { fill: #292524; font: 600 16px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: -0.01em; }
+      .node-copy { fill: #57534e; font: 400 13.5px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .edge-label { fill: #57534e; font: 500 12px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .process-group { fill: #f5f5f4; stroke: #d6d3d1; stroke-width: 1; }
+      .process, .external { fill: #fff; stroke: #d6d3d1; stroke-width: 1; }
+      .store { fill: #f7de9d; fill-opacity: 0.24; stroke: #d2b661; stroke-width: 1; }
+      .divider { stroke: #d2b661; stroke-width: 1; }
+      .external-divider { stroke: #d6d3d1; stroke-width: 1; }
+      .edge { fill: none; stroke: #78716c; stroke-width: 1.35; marker-end: url(#arrow); }
+      .arrow-head { fill: #78716c; }
       @media (prefers-color-scheme: dark) {
-        .canvas { fill: #141210; }
-        .heading, .node-title { fill: #f4efe6; }
-        .subtitle, .note, .edge-label { fill: #9a948a; }
-        .group-title, .node-copy { fill: #c4bdb3; }
-        .process-group { fill: #1a1815; stroke: #2e2b26; }
-        .process { fill: #1c2228; stroke: #3a4650; }
-        .external { fill: #231f18; stroke: #4a4234; }
-        .store { fill: #1a221c; stroke: #3a4a3e; }
-        .divider { stroke: #3a4a3e; }
-        .external-divider { stroke: #4a4234; }
-        .edge { stroke: #6e6860; }
-        .arrow-head { fill: #6e6860; }
+        .canvas { fill: #0c0a09; }
+        .heading, .node-title { fill: #f5f5f4; }
+        .subtitle, .note, .edge-label { fill: #a8a29e; }
+        .group-title, .node-copy { fill: #d6d3d1; }
+        .process-group { fill: #1c1917; stroke: #292524; }
+        .process, .external { fill: #292524; stroke: #44403c; }
+        .store { fill: #574a24; fill-opacity: 0.55; stroke: #7e6c37; }
+        .divider { stroke: #7e6c37; }
+        .external-divider { stroke: #44403c; }
+        .edge { stroke: #78716c; }
+        .arrow-head { fill: #78716c; }
       }
     </style>
   </defs>
 
-  <rect class="canvas" width="1280" height="720"/>
-  <text class="heading" x="640" y="42" text-anchor="middle">DlightRAG — Deployment and Storage</text>
-  <text class="subtitle" x="640" y="70" text-anchor="middle">Process roles, shared state, and external runtimes</text>
+  <rect class="canvas" width="1400" height="820"/>
+  <text class="heading" x="700" y="42" text-anchor="middle">DlightRAG — Deployment and Storage</text>
+  <text class="subtitle" x="700" y="70" text-anchor="middle">Process roles, shared state, separate filesystem roots, and external runtimes</text>
 
-  <rect class="process-group" x="60" y="120" width="730" height="300" rx="16"/>
+  <rect class="process-group" x="60" y="120" width="820" height="300" rx="16"/>
   <text class="group-title" x="90" y="154">DLIGHTRAG SERVICE PROCESSES</text>
 
-  <rect class="process" x="100" y="185" width="300" height="175" rx="12"/>
-  <text class="node-title" x="250" y="225" text-anchor="middle">Writer role</text>
-  <text class="node-copy" x="250" y="260" text-anchor="middle">Answers and operational writes</text>
-  <text class="node-copy" x="250" y="286" text-anchor="middle">Corpus mutation and ingestion</text>
-  <text class="node-copy" x="250" y="312" text-anchor="middle">Schema migration owner</text>
+  <rect class="process" x="100" y="185" width="340" height="175" rx="12"/>
+  <text class="node-title" x="270" y="225" text-anchor="middle">Writer role</text>
+  <text class="node-copy" x="270" y="260" text-anchor="middle">Answers and operational writes</text>
+  <text class="node-copy" x="270" y="286" text-anchor="middle">Corpus mutation and ingestion</text>
+  <text class="node-copy" x="270" y="312" text-anchor="middle">Schema migration owner</text>
 
-  <rect class="process" x="450" y="185" width="300" height="175" rx="12"/>
-  <text class="node-title" x="600" y="225" text-anchor="middle">Reader role</text>
-  <text class="node-copy" x="600" y="260" text-anchor="middle">Answers and operational writes</text>
-  <text class="node-copy" x="600" y="286" text-anchor="middle">Corpus reads only</text>
-  <text class="node-copy" x="600" y="312" text-anchor="middle">No corpus administration</text>
+  <rect class="process" x="500" y="185" width="340" height="175" rx="12"/>
+  <text class="node-title" x="670" y="225" text-anchor="middle">Reader role</text>
+  <text class="node-copy" x="670" y="260" text-anchor="middle">Answers and operational writes</text>
+  <text class="node-copy" x="670" y="286" text-anchor="middle">Corpus reads only</text>
+  <text class="node-copy" x="670" y="312" text-anchor="middle">No corpus administration</text>
 
-  <rect class="external" x="860" y="120" width="350" height="300" rx="16"/>
-  <text class="group-title" x="890" y="154">EXTERNAL RUNTIMES</text>
-  <text class="node-title" x="1035" y="214" text-anchor="middle">AI provider endpoints</text>
-  <text class="node-copy" x="1035" y="243" text-anchor="middle">Chat · VLM · embedding · rerank</text>
-  <line class="external-divider" x1="910" y1="270" x2="1160" y2="270"/>
-  <text class="node-title" x="1035" y="312" text-anchor="middle">Parser sidecars</text>
-  <text class="node-copy" x="1035" y="341" text-anchor="middle">MinerU · Docling</text>
-  <text class="node-copy" x="1035" y="376" text-anchor="middle">Optional Exa and outbound MCP</text>
+  <rect class="external" x="930" y="120" width="410" height="300" rx="16"/>
+  <text class="group-title" x="960" y="154">EXTERNAL RUNTIMES</text>
+  <text class="node-title" x="1135" y="214" text-anchor="middle">AI provider endpoints</text>
+  <text class="node-copy" x="1135" y="243" text-anchor="middle">Chat · VLM · embedding · rerank</text>
+  <line class="external-divider" x1="980" y1="270" x2="1290" y2="270"/>
+  <text class="node-title" x="1135" y="312" text-anchor="middle">Parser sidecars</text>
+  <text class="node-copy" x="1135" y="341" text-anchor="middle">MinerU · Docling</text>
+  <text class="node-copy" x="1135" y="376" text-anchor="middle">Optional Exa and outbound MCP</text>
 
-  <rect class="store" x="60" y="500" width="730" height="160" rx="16"/>
-  <text class="node-title" x="425" y="536" text-anchor="middle">PostgreSQL 18 primary</text>
-  <line class="divider" x1="303" y1="553" x2="303" y2="640"/>
-  <line class="divider" x1="547" y1="553" x2="547" y2="640"/>
-  <text class="node-title" x="181" y="580" text-anchor="middle">Operational state</text>
-  <text class="node-copy" x="181" y="608" text-anchor="middle">runs · events · Web</text>
-  <text class="node-copy" x="181" y="631" text-anchor="middle">both roles write</text>
-  <text class="node-title" x="425" y="580" text-anchor="middle">Corpus state</text>
-  <text class="node-copy" x="425" y="608" text-anchor="middle">graph · vector · BM25</text>
-  <text class="node-copy" x="425" y="631" text-anchor="middle">writer mutates</text>
-  <text class="node-title" x="668" y="580" text-anchor="middle">Memory schema</text>
-  <text class="node-copy" x="668" y="608" text-anchor="middle">owner records</text>
-  <text class="node-copy" x="668" y="631" text-anchor="middle">package-owned migration</text>
+  <rect class="store" x="60" y="500" width="820" height="200" rx="16"/>
+  <text class="node-title" x="470" y="536" text-anchor="middle">PostgreSQL 18 primary</text>
+  <line class="divider" x1="333" y1="553" x2="333" y2="680"/>
+  <line class="divider" x1="607" y1="553" x2="607" y2="680"/>
+  <text class="node-title" x="196" y="590" text-anchor="middle">Operational state</text>
+  <text class="node-copy" x="196" y="620" text-anchor="middle">runs · events · Web</text>
+  <text class="node-copy" x="196" y="645" text-anchor="middle">both roles write</text>
+  <text class="node-title" x="470" y="590" text-anchor="middle">Corpus state</text>
+  <text class="node-copy" x="470" y="620" text-anchor="middle">graph · vector · BM25</text>
+  <text class="node-copy" x="470" y="645" text-anchor="middle">writer mutates</text>
+  <text class="node-title" x="744" y="590" text-anchor="middle">Memory schema</text>
+  <text class="node-copy" x="744" y="620" text-anchor="middle">owner records</text>
+  <text class="node-copy" x="744" y="645" text-anchor="middle">package-owned migration</text>
 
-  <rect class="store" x="860" y="500" width="350" height="160" rx="16"/>
-  <text class="node-title" x="1035" y="550" text-anchor="middle">Shared corpus artifacts</text>
-  <text class="node-copy" x="1035" y="585" text-anchor="middle">Same absolute working_dir</text>
-  <text class="node-copy" x="1035" y="611" text-anchor="middle">mounted by every process</text>
-  <text class="node-copy" x="1035" y="637" text-anchor="middle">Sources · parser output · visuals</text>
+  <rect class="store" x="930" y="500" width="410" height="200" rx="16"/>
+  <text class="node-title" x="1135" y="536" text-anchor="middle">Shared filesystem roots</text>
+  <text class="node-title" x="1135" y="578" text-anchor="middle">Corpus artifacts</text>
+  <text class="node-copy" x="1135" y="605" text-anchor="middle">deployment.working_dir · same absolute path</text>
+  <line class="divider" x1="980" y1="625" x2="1290" y2="625"/>
+  <text class="node-title" x="1135" y="655" text-anchor="middle">Agent Workspaces</text>
+  <text class="node-copy" x="1135" y="682" text-anchor="middle">separate shared RWX root for trust / sandbox</text>
 
-  <path class="edge" d="M 250 360 V 500"/>
-  <text class="edge-label" x="265" y="462">SQL · leases</text>
-  <path class="edge" d="M 600 360 V 500"/>
-  <text class="edge-label" x="585" y="462" text-anchor="end">SQL · leases</text>
-  <path class="edge" d="M 650 420 V 460 H 1035 V 500"/>
-  <text class="edge-label" x="825" y="449" text-anchor="middle">shared filesystem</text>
-  <path class="edge" d="M 790 270 H 860"/>
-  <text class="edge-label" x="825" y="256" text-anchor="middle">calls</text>
+  <path class="edge" d="M 270 360 V 500"/>
+  <text class="edge-label" x="285" y="462">SQL · leases</text>
+  <path class="edge" d="M 670 360 V 500"/>
+  <text class="edge-label" x="655" y="462" text-anchor="end">SQL · leases</text>
+  <path class="edge" d="M 760 420 V 460 H 1135 V 500"/>
+  <text class="edge-label" x="945" y="449" text-anchor="middle">shared filesystems</text>
+  <path class="edge" d="M 880 270 H 930"/>
+  <text class="edge-label" x="905" y="256" text-anchor="middle">calls</text>
 
-  <text class="note" x="640" y="700" text-anchor="middle">Reader means corpus-read-only, not process-read-only; both roles use the same primary endpoint.</text>
+  <text class="note" x="700" y="758" text-anchor="middle">Reader means corpus-read-only, not process-read-only; both roles use the same primary endpoint.</text>
+  <text class="note" x="700" y="782" text-anchor="middle">Ingress and identity topology are intentionally shown only in System Context and Security.</text>
 </svg>

@@ -2,30 +2,47 @@
 
 This page is for readers who need to understand DlightRAG's runtime boundaries.
 It owns the product architecture, the LightRAG/DlightRAG responsibility split,
-the storage topology, and the code-layering rule. Canonical product terms live
-in [domain-language.md](domain-language.md); interface contracts live in
-[interfaces.md](interfaces.md); retrieval internals live in
-[retrieval-answer.md](retrieval-answer.md); PostgreSQL deployment details live
-in [postgresql.md](postgresql.md).
+the browser ownership model, the storage topology, and the code-layering rule.
+Canonical product terms live in [domain-language.md](domain-language.md);
+interface contracts live in [interfaces.md](interfaces.md); identity, ingress,
+and authorization trust boundaries live in [security.md](security.md); retrieval
+internals live in [retrieval-answer.md](retrieval-answer.md); PostgreSQL
+deployment details live in [postgresql.md](postgresql.md).
 
 ## System Context
 
 <p align="center">
-  <img src="architecture.svg" alt="DlightRAG system context showing callers, the service boundary, external integrations, PostgreSQL, and corpus artifacts" width="1080" />
+  <img src="architecture.svg" alt="DlightRAG system context showing browser, REST, MCP, and embedded callers; optional enterprise identity and Web edge boundaries; external integrations; PostgreSQL; and corpus artifacts" width="1180" />
 </p>
 
 This view answers only who uses DlightRAG and which external systems it reaches.
 LightRAG, the Agent loop, and provider adapters are in-process implementation;
-they are deliberately absent here. Optional integrations have dashed borders.
+they are deliberately absent here. Dashed borders and paths are optional
+enterprise integrations or alternate request paths.
 
-The page uses three architectural viewpoints. An arrow keeps exactly one
+Browser authentication can terminate at a trusted Cloudflare, Azure, or AWS
+edge that forwards a signed credential, or DlightRAG can verify a Web bearer
+directly. REST and MCP callers present their credentials on their own transport.
+In JWT deployments the shared Access policy maps verified claims through
+[Access Rules](security.md#authorization-model); owner isolation remains a
+separate durable-data boundary. The in-process Python Application is trusted and
+has no transport authentication layer. The IdP and edge are absent from local
+`none` deployments and need not participate in `simple` mode.
+
+The page uses four architectural viewpoints. An arrow keeps one category of
 meaning inside each figure:
 
 | View | Question | Arrow meaning |
 |---|---|---|
-| System context | Who uses the system and what surrounds it? | System interaction |
-| Runtime ownership | Which in-process module owns each behavior? | Primary runtime invocation |
-| PostgreSQL topology | Where do processes and state live? | Cross-runtime or storage connection |
+| [System context](#system-context) | Who uses the system and what surrounds it? | System interaction |
+| [Runtime ownership](#runtime-ownership) | Which in-process owner provides or invokes each behavior? | Primary runtime dependency |
+| [Web frontend ownership](#web-frontend-ownership) | Which browser owner composes or invokes each UI capability? | Primary browser invocation |
+| [Deployment and storage](#deployment-and-storage) | Where do processes and state live? | Cross-runtime or storage connection |
+
+The SVGs embed the same standalone projection of the design system's stone and
+gold ramps, honor `prefers-color-scheme`, and carry accessible titles and
+descriptions. Their styles remain embedded so the figures render correctly on
+GitHub and in packaged documentation without a frontend CSS dependency.
 
 Fast/Research branching, ingestion, retrieval, and run recovery are dynamic
 flows. They stay in their owning sections rather than being mixed into a static
@@ -34,17 +51,27 @@ architecture overview.
 ## Runtime Ownership
 
 <p align="center">
-  <img src="architecture-runtime.svg" alt="DlightRAG runtime ownership from adapters.http and adapters.mcp through Application use cases to Engine runtime, Answer, RAG, Memory, Agent, AI, and LightRAG" width="1180" />
+  <img src="architecture-runtime.svg" alt="DlightRAG runtime ownership showing inbound adapters calling Access and the Application facade, the trusted embedded interface calling the facade directly, and Application services invoking Engine Runtime, Answer, RAG, Memory, Agent, AI, and LightRAG" width="1280" />
 </p>
 
-`create_application` is the private-composition entry point; `Application` owns lifecycle and use-case accessors.
-Inbound adapters and the embedded Application interface call those use cases.
-Answer Runs accept through Runtime then execute Engine Answer. Retrieval and
-Corpus Administration use Engine RAG. Memory is an Application capability over
-the independent Memory package. Web Conversations stay in Application.
-Agent and RAG both use the provider-neutral AI module without depending on each
-other. Persistence is omitted from this view and shown under
-[PostgreSQL Topology](#postgresql-topology).
+Public `create_application` enters the private composition root; `Application`
+owns configuration, lifecycle, health, and service accessors. HTTP and MCP
+adapters invoke the transport-neutral Access policy and Application services as
+separate calls, so an allow decision is not modeled as a call into a use case.
+The embedded Application interface is already trusted and calls the facade
+without a transport ACL.
+
+Web Conversations delegates acceptance to Answer Service so a browser turn and
+its durable run are linked atomically. Answer Service uses the Answer Capability
+Coordinator to pin model profiles and valid modes, then accepts work through
+Engine Runtime. `RunCoordinator` owns leases, fencing, and events and invokes
+Engine Answer for execution. Model Catalogue publication invalidates capability
+profiles before later requests resolve them. Retrieval and Corpus Administration
+use Engine RAG. Memory is an Application capability over the independent Memory
+package. Engine Answer uses Agent, RAG, and the provider-neutral AI module;
+Agent and RAG both use AI without depending on each other. Persistence is
+omitted from this view and shown under
+[Deployment and Storage](#deployment-and-storage).
 
 LightRAG remains the core RAG engine. It owns parser routing, staged ingest,
 document chunks, document status, vector storage, and the knowledge graph.
@@ -253,11 +280,15 @@ operational pools remain separate even when they use the same endpoint.
 
 ## Web Frontend Ownership
 
-The browser shell has three explicit owners. Vite owns `frontend/index.html`,
+<p align="center">
+  <img src="architecture-frontend.svg" alt="DlightRAG browser ownership from Vite startup and the dl-app Shell through Lit Feature owners, focused state, the package-owned design system, same-origin FastAPI APIs, and the opaque-origin artifact iframe" width="1220" />
+</p>
+
+The browser shell has three explicit platform owners. Vite owns `frontend/index.html`,
 the paste-token login entry, pre-paint theme initialization, and hashed build
 assets. Light-DOM Lit components own application composition and typed browser
-presentation. FastAPI serves only the two page routes, static/support assets,
-and the same-origin `/web/api/*` command/query/SSE boundary. There is no Jinja
+presentation. FastAPI serves page routes, static/support assets, and the
+same-origin `/web/api/*` command/query/SSE boundary. There is no Jinja
 or HTMX composition path and no backend-generated ordinary UI fragment.
 
 Browser state is split by lifetime rather than collected in one store. The
@@ -277,9 +308,9 @@ contains no migration adapters or fixed-ID cross-Feature mutations. Settings Dia
 Notification Offer, Theme Control, and workspace controls own their state, async
 work, accessibility, and browser lifecycle behind `dl-` interfaces. Answer Mode
 remains private to the Composer that owns its request state. Vite startup retains
-only the approved MathJax loader/scheduler and Web Awesome split integration;
-internal adapters retain DOMPurify, Mermaid, object URLs, and those two browser/
-third-party integrations.
+only the approved MathJax loader/scheduler and local split-layout adapter;
+internal adapters retain DOMPurify, Mermaid, object URLs, and the approved browser
+integrations.
 Server-sanitized semantic answer/source HTML is the only deliberate same-DOM HTML
 sink. Artifact Canvas remains separate and owns typed Artifact renderer selection and focus; active
 HTML is fetched as authenticated inert bytes and placed in `srcdoc` only after
@@ -287,17 +318,21 @@ explicit consent, inside an opaque-origin iframe that is destroyed on close or
 switch. Filenames, controls, links, galleries, panels, and system states remain
 typed values rendered by Lit.
 
-DlightRAG's Utopia/Mineral tokens remain the visual authority. The production
-uses only Web Awesome's Split Panel component, imported directly without its
-default theme and wrapped by DlightRAG persistence, clamping, accessibility,
-and compact-layout behavior. Nested split panels preserve simultaneous Artifact
-Canvas and Inspector Sources on wide layouts. Below 1200px the primary app remains a
-full-width fixed layer under the native backdrop while the active pane retains modal
-focus/inert semantics. Drawer and Dialog components were deliberately rejected;
-the existing native overlays use the same semantic geometry tokens.
+The package-owned internal design system is the visual authority. Its
+foundations own Utopia-derived type and spacing scales, Mineral color modes,
+semantic geometry, and the deterministic DTCG-style token projection used by
+tooling. Its public entries own semantic icons, native-first `.dl-*` primitives,
+and the explicitly registered `dl-split-layout`; Features do not import its
+private source modules. Product adapters retain persistence, clamping, and
+compact-layout meaning. Nested split layouts preserve simultaneous
+Artifact Canvas and Inspector Sources on wide layouts. Below 1200px the primary app
+remains a full-width fixed layer under the native backdrop while the active pane
+retains modal focus/inert semantics. External Drawer and Dialog components remain
+rejected; native overlays use the same semantic geometry tokens.
 
 Frontend verification is layered: pure API/store/router/token rules run under
-Node, Lit and CSS behavior runs in Chromium through Web Test Runner, integrated
+Node, Lit and CSS behavior runs in Chromium through Web Test Runner, and the
+icon/split-layout contract also runs in Chromium, Firefox, and WebKit. Integrated
 page and accessibility behavior runs in Playwright, and every distributable
 wheel is smoke-tested with the Vite build included.
 
@@ -344,10 +379,10 @@ around it form the DlightRAG hybrid layer.
 Use [retrieval-answer.md](retrieval-answer.md) for the detailed retrieval,
 filtering, reranking, citation, and multimodal-answer behavior.
 
-## PostgreSQL Topology
+## Deployment and Storage
 
 <p align="center">
-  <img src="architecture-deployment.svg" alt="DlightRAG deployment showing writer and reader process roles sharing one PostgreSQL primary and corpus artifact directory" width="1080" />
+  <img src="architecture-deployment.svg" alt="DlightRAG deployment showing writer and reader process roles sharing one PostgreSQL primary, one corpus artifact root, and a separate Agent Workspace root when local execution is enabled" width="1180" />
 </p>
 
 This deployment view shows process and storage connections only. Logical store
@@ -374,9 +409,15 @@ Core storage is PostgreSQL 18:
 | BM25 | pg_textsearch |
 
 Every process serving KB images or source downloads must see the same POSIX
-artifact tree at the same absolute `deployment.working_dir` path. See
+artifact tree at the same absolute `deployment.working_dir` path. Separately,
+when `answer.agent.execution_environment` is `trust` or `sandbox`, every Answer
+worker including readers must mount the same RWX `answer.agent.workspace_root`.
+The Agent Workspace root must not overlap the corpus working directory. See
 [postgresql.md](postgresql.md#service-roles-and-shared-artifacts) for the
-complete role, migration-order, and shared-artifact contract.
+complete role, migration-order, and corpus-artifact contract, and
+[operations.md](operations.md#durable-answer-runs) for the Answer
+worker storage requirement. Ingress and identity topology deliberately remain
+in [System Context](#system-context) and [Security](security.md).
 
 ## Code Layering
 
@@ -435,8 +476,8 @@ or physical Clear.
 
 Inside the root product the compile-time direction is three zones, not a numbered
 stack: inbound adapters import Application; Application imports Engine; only
-private `create_application` / `_compose` wires concrete adapters. Engine must
-not import Application or inbound adapters. PostgreSQL and Observability
+public `create_application` delegates to private `_compose`, which wires concrete
+adapters. Engine must not import Application or inbound adapters. PostgreSQL and Observability
 implement owner ports and are not a layer Application may import.
 
 The layering checks are part of local and CI verification:

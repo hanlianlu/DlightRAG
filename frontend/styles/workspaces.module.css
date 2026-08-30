@@ -1,3 +1,4 @@
+@layer features {
 /* DlightRAG Web Frontend — Immersive Chat Design
  *
  * workspaces.module.css — CSS Module for workspace popover JS-generated DOM.
@@ -40,15 +41,7 @@
 .workspacePopoverCheck.on {
   background: var(--color-action-bg);
   border-color: var(--color-action-bg);
-}
-
-.workspacePopoverCheck.on::after {
   color: var(--color-on-action);
-  content: '\2713';
-  font-size: var(--font-size-caption);
-  font-weight: 700;
-  /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-  line-height: 1;
 }
 
 .on {
@@ -95,4 +88,6 @@
 .workspacePopoverDelete:hover {
   background: var(--color-danger-surface);
   color: var(--color-danger);
+}
+
 }

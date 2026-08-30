@@ -1,0 +1,29 @@
+{
+  "add": {"source": "lucide", "name": "plus"},
+  "attach": {"source": "lucide", "name": "plus"},
+  "check": {"source": "lucide", "name": "check"},
+  "chevron-down": {"source": "lucide", "name": "chevron-down"},
+  "close": {"source": "lucide", "name": "x"},
+  "disclosure": {"source": "lucide", "name": "chevron-right"},
+  "download": {"source": "lucide", "name": "download"},
+  "edit": {"source": "lucide", "name": "pencil"},
+  "files": {"source": "lucide", "name": "folder"},
+  "moon": {"source": "lucide", "name": "moon"},
+  "next": {"source": "lucide", "name": "chevron-right"},
+  "open-external": {"source": "lucide", "name": "external-link"},
+  "panel-collapse": {"source": "lucide", "name": "panel-left-close"},
+  "panel-expand": {"source": "lucide", "name": "panel-left-open"},
+  "previous": {"source": "lucide", "name": "chevron-left"},
+  "send": {"source": "lucide", "name": "send"},
+  "settings": {"source": "lucide", "name": "settings"},
+  "status-dot": {
+    "source": "dlightrag",
+    "name": "status-dot",
+    "fill": "currentColor",
+    "stroke": "none",
+    "nodes": [["circle", {"cx": "12", "cy": "12", "r": "4"}]]
+  },
+  "stop": {"source": "lucide", "name": "square", "fill": "currentColor", "stroke": "none"},
+  "sun": {"source": "lucide", "name": "sun"},
+  "system": {"source": "lucide", "name": "monitor"}
+}

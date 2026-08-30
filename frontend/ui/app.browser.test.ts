@@ -5,6 +5,7 @@ import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
 import './app.ts';
 import type {DlApp} from './app.ts';
 import type {DlChatFeature} from './chat_feature.ts';
+import type {DlConversationSidebar} from './conversation_sidebar.ts';
 import type {ImageOpenDetail} from './image_lightbox.ts';
 import type {DlContinuationDialog} from './run_dialogs.ts';
 import type {DlSettingsDialog} from './settings.ts';
@@ -57,7 +58,7 @@ function desktopMedia(query: string): MediaQueryList {
 
 function compactMedia(query: string): MediaQueryList {
   return {
-    matches: query === '(max-width: 1199px)',
+    matches: query === '(width < 1200px)',
     media: query,
     onchange: null,
     addListener() {},
@@ -99,7 +100,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 beforeEach(() => {
-  // Bootstrap tests do not exercise WebAwesome split geometry; its observer can
+  // Bootstrap tests do not exercise split-layout geometry; its observer can
   // report a benign loop when the test document intentionally has no app CSS.
   window.ResizeObserver = class {
     observe(): void {}
@@ -145,6 +146,8 @@ it('keeps the composed compact conversation modal interactive and inerts sibling
   const offer = app.querySelector<HTMLElement>('#notify-offer')!;
   offer.hidden = false;
   const toast = app.querySelector<DlToastRegion>('dl-toast-region')!;
+  const sidebar = app.querySelector<DlConversationSidebar>('dl-conversation-sidebar')!;
+  await sidebar.updateComplete;
   const open = app.querySelector<HTMLButtonElement>('[aria-label="Open conversations"]')!;
   open.click();
   await waitFor(() => document.body.classList.contains('conversation-drawer-open'));

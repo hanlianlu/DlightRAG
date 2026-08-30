@@ -1020,9 +1020,10 @@ async def test_stale_lease_generation_cannot_complete_a_newer_claim(
     jobs = PGPromotionJobStore()
     await PGWorkspaceRegistry().upsert(workspace=other, display_name="Other", embedding_model="m")
     await jobs.enqueue(other)
-    now = datetime.datetime.now(datetime.UTC)
-
-    first = await jobs.claim_next(owner="worker-old", lease_until=now)
+    first = await jobs.claim_next(
+        owner="worker-old",
+        lease_until=datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=300),
+    )
     assert first is not None
     first_generation = int(first["lease_generation"])
 

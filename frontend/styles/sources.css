@@ -76,10 +76,9 @@
 }
 
 .collapse-icon {
-    font-size: var(--font-size-caption);
-    transition: transform 0.2s ease;
     color: var(--color-text-muted);
     flex-shrink: 0;
+    transition: transform var(--duration-overlay) var(--easing-standard);
     width: var(--space-component);
 }
 
@@ -375,8 +374,5 @@
 }
 
 .source-action-icon-svg {
-    width: var(--size-icon-md);
-    height: var(--size-icon-md);
     pointer-events: none;
-    stroke-width: 1.5;
 }

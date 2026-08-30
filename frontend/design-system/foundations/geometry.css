@@ -1,0 +1,33 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* Layout, radius, sizing, and drawing geometry foundations. */
+
+:root {
+  --panel-width: 420px;
+  --artifact-canvas-width: 420px;
+  --layout-content-width: clamp(340px, 55vw, 880px);
+  --layout-panel-min: 320px;
+  --radius-control: 0.625rem;
+  --radius-card: 1rem;
+  --radius-popover: 1.125rem;
+  --radius-dialog: 1.375rem;
+  --radius-composer: 1.5rem;
+  --radius-content: var(--radius-card);
+  --radius-message: var(--radius-card);
+  --radius-surface: var(--radius-card);
+  --radius-docked: 0;
+  --radius-pill: 999px;
+  --radius-circle: 50%;
+  --radius-highlight: 0.125rem;
+  --size-button: clamp(28px, 2.8vw, 34px);
+  --size-icon-sm: var(--space-xs);
+  --size-icon-md: var(--space-s);
+  --dl-icon-size-xs: 12px;
+  --dl-icon-size-sm: 16px;
+  --dl-icon-size-md: 20px;
+  --dl-icon-size-lg: 24px;
+  --dl-icon-stroke: 1.75;
+  --size-lightbox-nav-width: clamp(44px, 6vw, 72px);
+  --inset-lightbox-nav-block: max(var(--space-layout), 12vh);
+  --stroke-composer-plus-icon: 1.25;
+}

@@ -72,45 +72,19 @@ def _source_presentation(*, source_url: str | None = None, image_url: str | None
     }
 
 
-def _inject_answer_with_sources(page) -> None:
+def _inject_answer_with_sources(page, *, image_url: str | None = None) -> None:
     page.wait_for_selector("[aria-current='page']", timeout=10000)
     page.locator(".composer-input").fill("show cited source")
     page.click(".composer-send")
-    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
+    page.get_by_role("button", name="Follow up").last.wait_for(timeout=10000)
     page.locator("dl-answer-presentation").last.evaluate(
         """(element, presentation) => {
           element.presentation = presentation;
           return element.updateComplete;
         }""",
-        _source_presentation(),
+        _source_presentation(image_url=image_url),
     )
-
-
-def _inject_static_source_answer(page) -> None:
-    page.evaluate(
-        r"""(presentation) => {
-          const aiMessageClass = Array.from(document.styleSheets)
-            .flatMap((sheet) => Array.from(sheet.cssRules))
-            .flatMap((rule) => Array.from(rule.selectorText?.matchAll(/\.([\w-]*aiMessage[\w-]*)/g) ?? []))
-            .map((match) => match[1])
-            .find((className) => !className.includes('Content') && !className.includes('Header'));
-          const contentClass = Array.from(document.styleSheets)
-            .flatMap((sheet) => Array.from(sheet.cssRules))
-            .flatMap((rule) => Array.from(rule.selectorText?.matchAll(/\.([\w-]*aiMessageContent[\w-]*)/g) ?? []))
-            .map((match) => match[1])[0];
-          if (!aiMessageClass || !contentClass) throw new Error('AI message classes not found');
-          const answer = document.createElement('div');
-          answer.className = aiMessageClass;
-          const content = document.createElement('div');
-          content.className = contentClass;
-          const element = document.createElement('dl-answer-presentation');
-          element.presentation = presentation;
-          content.appendChild(element);
-          answer.appendChild(content);
-          document.querySelector('#chat-messages')?.appendChild(answer);
-        }""",
-        _source_presentation(),
-    )
+    page.locator(".answer-ref-item").last.wait_for()
 
 
 @pytest.mark.e2e
@@ -130,7 +104,7 @@ def test_reference_item_keyboard_opens_source_panel(page):
 @pytest.mark.e2e
 def test_conversation_route_change_closes_sources_panel(page):
     _open_ready_page(page)
-    _inject_static_source_answer(page)
+    _inject_answer_with_sources(page)
     page.locator(".answer-ref-item").last.click()
     page.wait_for_selector('#panel.open[data-panel-kind="sources"]')
 
@@ -144,7 +118,7 @@ def test_conversation_route_change_closes_sources_panel(page):
 def test_composer_attachment_picker_keeps_sources_panel_open(page):
     _open_ready_page(page)
     page.set_viewport_size({"width": 1440, "height": 900})
-    _inject_static_source_answer(page)
+    _inject_answer_with_sources(page)
     page.locator(".answer-ref-item").last.click()
 
     panel = page.locator("#panel")
@@ -167,7 +141,7 @@ def test_composer_attachment_picker_keeps_sources_panel_open(page):
 def test_theme_menu_and_selection_keep_sources_panel_open(page):
     _open_ready_page(page)
     page.set_viewport_size({"width": 1440, "height": 900})
-    _inject_static_source_answer(page)
+    _inject_answer_with_sources(page)
     page.locator(".answer-ref-item").last.click()
     panel = page.locator("#panel")
     page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
@@ -270,16 +244,7 @@ def test_escape_closes_source_lightbox_only_and_restores_image_focus(page):
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
         "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
     )
-    page.locator(".composer-input").fill("show source image")
-    page.click(".composer-send")
-    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
-    page.locator("dl-answer-presentation").last.evaluate(
-        """(element, presentation) => {
-          element.presentation = presentation;
-          return element.updateComplete;
-        }""",
-        _source_presentation(image_url=image_url),
-    )
+    _inject_answer_with_sources(page, image_url=image_url)
     page.locator(".answer-ref-item").press("Enter")
     page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
 

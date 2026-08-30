@@ -21,7 +21,6 @@ dl-inspector[aria-hidden='true'] {
 
 .panel {
     background: var(--color-bg-surface);
-    border-left: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-docked);
     backdrop-filter: blur(20px);
     display: flex;

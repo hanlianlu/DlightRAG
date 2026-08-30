@@ -3,6 +3,7 @@
 
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
+import {icon} from '../design-system/index.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {safeImageSrc} from '../lib/urls.ts';
@@ -107,10 +108,10 @@ export class DlImageLightbox extends LightElement {
     const multiple = this.gallery.length > 1;
     return html`
       <button class=${lightboxStyles.imageLightboxPrev} type="button" aria-label=${msg('Previous', {id: 'imageLightbox.previous'})}
-              ?hidden=${!multiple || index <= 0} @click=${() => this.#navigate(-1)}>‹</button>
+              ?hidden=${!multiple || index <= 0} @click=${() => this.#navigate(-1)}>${icon('previous', {size: 'lg'})}</button>
       <button class=${lightboxStyles.imageLightboxNext} type="button" aria-label=${msg('Next', {id: 'imageLightbox.next'})}
               ?hidden=${!multiple || index >= this.gallery.length - 1}
-              @click=${() => this.#navigate(1)}>›</button>
+              @click=${() => this.#navigate(1)}>${icon('next', {size: 'lg'})}</button>
       <img class=${lightboxStyles.imageLightboxImg} src=${this.current} alt=${msg('Source image', {id: 'imageLightbox.sourceImageAlt'})}>
     `;
   }

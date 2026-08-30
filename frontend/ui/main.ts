@@ -1,16 +1,14 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import '../tokens/utopia.css';
-import '../styles/global.css';
-import '../styles/primitives.css';
-import '../styles/layout.css';
-import '../styles/panels.css';
-import '../styles/artifacts.css';
-import '../styles/files.css';
-import '../styles/sources.css';
+import '../design-system/index.css';
+import '../styles/app.css';
 
 import type {DlApp} from './app.ts';
+import {defineDesignSystemElements} from '../design-system/index.ts';
 import {initializeLanguagePreference} from '../i18n/locale.ts';
+
+// Registration is explicit and happens before the app module can render.
+defineDesignSystemElements();
 
 // The language preference must resolve before the app element upgrades and
 // renders, so the application module is imported dynamically after it.

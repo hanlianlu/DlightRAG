@@ -140,7 +140,7 @@ it('renders Artifact intent and semantic Visual Evidence in approved order', asy
   element.addEventListener('dl-image-open', (event) => {
     imageSource = event.detail.src;
   });
-  element.querySelector<HTMLButtonElement>('.answer-artifact-card .ui-btn')?.click();
+  element.querySelector<HTMLButtonElement>('.answer-artifact-card .dl-btn')?.click();
   element.querySelector<HTMLButtonElement>('.answer-image-item')?.click();
 
   expect(opened).to.equal('artifact-report');

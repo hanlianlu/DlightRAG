@@ -1,9 +1,10 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
-import {html, nothing, svg, type PropertyValues, type TemplateResult} from 'lit';
+import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {WorkspaceApiError, deleteWorkspaceRequest} from '../api/workspaces.ts';
+import {icon} from '../design-system/index.ts';
 import type {WorkspaceRecord} from '../events/bus.ts';
 import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
@@ -13,8 +14,6 @@ import workspaceStyles from '../styles/workspaces.module.css';
 import {publishModalState, showOwnedModal} from './modal.ts';
 import type {ToastRequestDetail} from './toast.ts';
 import './workspace_create.ts';
-
-const CARET = svg`<path d="M2.5 4 L5 6.5 L7.5 4"/>`;
 
 /** Search-scope selection, workspace deletion, popover, and Dialog lifecycle. */
 export class DlWorkspaceScope extends LightElement {
@@ -111,9 +110,7 @@ export class DlWorkspaceScope extends LightElement {
               @click=${this.#togglePopover}>
         <span class="workspace-dot${multi ? ' multi' : ''}" id="workspace-dot"></span>
         <span class="workspace-label" id="workspace-label">${this.#label}</span>
-        <svg class="workspace-caret" width="10" height="10" viewBox="0 0 10 10"
-             fill="none" stroke="currentColor" stroke-width="1.5"
-             stroke-linecap="round">${CARET}</svg>
+        ${icon('chevron-down', {size: 'xs', className: 'workspace-caret'})}
       </button>
       ${this.#popover()}
       ${this.#deleteDialog()}
@@ -167,14 +164,14 @@ export class DlWorkspaceScope extends LightElement {
 
   #check(selected: boolean): TemplateResult {
     return html`<div class="${workspaceStyles.workspacePopoverCheck}${selected
-      ? ` ${workspaceStyles.on}` : ''}"></div>`;
+      ? ` ${workspaceStyles.on}` : ''}">${selected ? icon('check', {size: 'xs'}) : nothing}</div>`;
   }
 
   #popover(): TemplateResult {
     const sorted = [...workspaceStore.records]
       .sort((left, right) => left.displayName.localeCompare(right.displayName));
     return html`
-      <div class="ui-popover ui-popover--workspace" id="workspace-popover"
+      <div class="dl-popover dl-popover--workspace" id="workspace-popover"
            role="dialog" aria-label=${msg('Workspaces', {id: 'workspaceScope.workspacesAria'})}
            ?hidden=${!this.open}
            @keydown=${(event: KeyboardEvent) => {
@@ -197,7 +194,7 @@ export class DlWorkspaceScope extends LightElement {
     const state = workspaceStore.workspaceLoadMoreState;
     return html`
       <div class="workspace-load-more">
-        <button type="button" data-load-more-workspaces class="ui-popover-item"
+        <button type="button" data-load-more-workspaces class="dl-popover-item"
                 aria-busy=${state === 'loading' ? 'true' : 'false'}
                 ?disabled=${state === 'loading'} @click=${this.#loadMore}>
           ${state === 'error'
@@ -221,7 +218,7 @@ export class DlWorkspaceScope extends LightElement {
       workspaceStore.selectAll();
     };
     return html`
-      <button class="ui-popover-item ${workspaceStyles.workspacePopoverAll}" type="button"
+      <button class="dl-popover-item ${workspaceStyles.workspacePopoverAll}" type="button"
               data-workspace-choice data-workspace-all="true"
               aria-pressed=${selected ? 'true' : 'false'} @click=${selectAll}>
         ${this.#check(selected)}${msg('All workspaces', {id: 'workspaceScope.all'})}
@@ -237,7 +234,7 @@ export class DlWorkspaceScope extends LightElement {
     };
     return html`
       <div class=${workspaceStyles.workspacePopoverItem}>
-        <button class="ui-popover-item ${workspaceStyles.workspacePopoverOption}" type="button"
+        <button class="dl-popover-item ${workspaceStyles.workspacePopoverOption}" type="button"
                 data-workspace-choice aria-pressed=${selected ? 'true' : 'false'} @click=${toggle}>
           ${this.#check(selected)}
           <span class=${workspaceStyles.workspacePopoverName}>${record.displayName}</span>
@@ -248,7 +245,7 @@ export class DlWorkspaceScope extends LightElement {
                 @click=${(event: MouseEvent) => {
                   event.stopPropagation();
                   void this.#requestDelete(record.workspace, event.currentTarget as HTMLElement);
-                }}>✕</button>
+                }}>${icon('close', {size: 'xs'})}</button>
       </div>
     `;
   }
@@ -290,18 +287,18 @@ export class DlWorkspaceScope extends LightElement {
           <p class="workspace-dialog-text">${msg('This will permanently delete all data for', {id: 'workspaceScope.deleteWarning'})}</p>
           <p class="workspace-dialog-name">${displayName}</p>
           <p class="workspace-dialog-text">${msg('Type the workspace name to confirm', {id: 'workspaceScope.typeToConfirm'})}</p>
-          <input type="text" id="delete-workspace-confirm-input" class="workspace-dialog-input"
+          <input type="text" id="delete-workspace-confirm-input" class="dl-dialog-input"
                  autocomplete="off"
                  placeholder=${msg('Type workspace name...', {id: 'workspaceScope.confirmPlaceholder'})}
                  aria-label=${msg(str`Type ${displayName} to confirm`, {id: 'workspaceScope.typeNameToConfirmAria'})}
                  .readOnly=${this.deletePending}
                  @input=${this.#deleteInput}>
-          <div class="ui-dialog-actions">
+          <div class="dl-dialog-actions">
             <button type="button" ?disabled=${this.deletePending}
                     @click=${() => this.querySelector<HTMLDialogElement>(
                       '#delete-workspace-dialog',
                     )?.close()}>${msg('Cancel', {id: 'workspaceScope.cancel'})}</button>
-            <button type="submit" class="ui-dialog-danger"
+            <button type="submit" class="dl-dialog-danger"
                     ?disabled=${this.deletePending || !this.deleteConfirmed}>
               ${this.deletePending
                 ? msg('Deleting…', {id: 'workspaceScope.deleting'})

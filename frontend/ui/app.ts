@@ -4,6 +4,7 @@ import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import {getWebBootstrap, type WebBootstrap} from '../api/bootstrap.ts';
 import {getWorkspacesPage} from '../api/workspaces.ts';
+import {icon} from '../design-system/index.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
@@ -221,10 +222,10 @@ export class DlApp extends LightElement {
         aria-busy=${ready ? 'false' : 'true'}
         ?inert=${!ready || this.lightboxOpen}
       >
-        <wa-split-panel class="panel-split" id="panel-split" primary="end"
-                        position-in-pixels="0">
-          <wa-split-panel class="panel-split" id="artifact-canvas-split" slot="start"
-                          primary="end" position-in-pixels="0">
+        <dl-split-layout class="panel-split" id="panel-split" primary="end"
+                         orientation="horizontal" size="0" min="320">
+          <dl-split-layout class="panel-split" id="artifact-canvas-split" slot="start"
+                           primary="end" orientation="horizontal" size="0" min="320">
             <div class="primary-shell" slot="start">
               <div class="app-shell">
                 <header class="topbar" ?inert=${inspectorModal || this.canvasModal}>
@@ -237,10 +238,7 @@ export class DlApp extends LightElement {
                   <button class="topbar-btn" id="files-btn" type="button"
                           aria-label=${msg('Files', {id: 'app.files'})}
                           ?inert=${shellModal} @click=${this.#openFiles}>
-                    <svg class="files-button-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="1.8">
-                      <path d="M3.5 6.5h6l2 2h9v10h-17z"></path>
-                    </svg>
+                    ${icon('files', {size: 'sm', className: 'files-button-icon'})}
                     <span class="files-button-label">${msg('Files', {id: 'app.files'})}</span>
                   </button>
                   <dl-theme-control id="theme-control" ?inert=${shellModal}></dl-theme-control>
@@ -259,10 +257,10 @@ export class DlApp extends LightElement {
               aria-label="Artifact Canvas" aria-hidden="true"
               .activePreviewEnabled=${bootstrap.active_html_preview_enabled}
             ></dl-artifact-canvas>
-          </wa-split-panel>
+          </dl-split-layout>
           <dl-inspector id="inspector" slot="end"
             .shellInert=${this.canvasModal}></dl-inspector>
-        </wa-split-panel>
+        </dl-split-layout>
 
         <dl-toast-region class="toast" id="toast" role="status" aria-live="polite"
           aria-atomic="true"

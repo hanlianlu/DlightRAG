@@ -15,12 +15,12 @@ def test_workspace_popover_opens(page):
     selector.click()
 
     # Popover should be visible with at least one workspace item
-    page.wait_for_selector(".ui-popover--workspace", timeout=5000)
-    popover = page.locator(".ui-popover--workspace")
+    page.wait_for_selector(".dl-popover--workspace", timeout=5000)
+    popover = page.locator(".dl-popover--workspace")
     assert popover.is_visible()
 
     # "Default" workspace should be listed
-    items = popover.locator(".ui-popover-item")
+    items = popover.locator(".dl-popover-item")
     assert items.count() >= 1
 
 
@@ -31,12 +31,12 @@ def test_workspace_popover_closes(page):
     page.wait_for_selector("#workspace-selector", timeout=10000)
 
     page.locator("#workspace-selector").click()
-    page.wait_for_selector(".ui-popover--workspace", timeout=5000)
-    assert page.locator(".ui-popover--workspace").is_visible()
+    page.wait_for_selector(".dl-popover--workspace", timeout=5000)
+    assert page.locator(".dl-popover--workspace").is_visible()
 
     # Click outside — the popover should go away
     page.locator(".app").click(position={"x": 10, "y": 10})
-    expect(page.locator(".ui-popover--workspace")).to_be_hidden()
+    expect(page.locator(".dl-popover--workspace")).to_be_hidden()
 
 
 @pytest.mark.e2e
@@ -64,7 +64,7 @@ def test_workspace_popover_is_arrow_navigable(page):
     page.wait_for_selector("#workspace-selector", timeout=10000)
 
     page.locator("#workspace-selector").click()
-    page.wait_for_selector(".ui-popover--workspace", timeout=5000)
+    page.wait_for_selector(".dl-popover--workspace", timeout=5000)
 
     focused_index = """() => {
         const choices = [...document.querySelectorAll('[data-workspace-choice]')];
@@ -118,7 +118,7 @@ def test_workspace_create_input_visible(page):
     page.wait_for_selector("#workspace-selector", timeout=10000)
 
     page.locator("#workspace-selector").click()
-    page.wait_for_selector(".ui-popover--workspace", timeout=5000)
+    page.wait_for_selector(".dl-popover--workspace", timeout=5000)
 
     # The create-row with input and button should be present
     popover = page.get_by_role("dialog", name="Workspaces")
@@ -135,13 +135,13 @@ def test_workspace_selector_labels_all_when_scope_covers_every_workspace(page):
     page.wait_for_selector("#workspace-selector", timeout=10000)
 
     page.locator("#workspace-selector").click()
-    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
-    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
+    page.locator(".dl-popover--workspace .dl-popover-item", has_text="Research").click()
+    page.locator(".dl-popover--workspace .dl-popover-item", has_text="Research").click()
 
     assert page.locator("#workspace-label").text_content() == "All workspaces (2)"
     assert (
         page.locator(
-            ".ui-popover--workspace .ui-popover-item", has_text="All workspaces"
+            ".dl-popover--workspace .dl-popover-item", has_text="All workspaces"
         ).get_attribute("aria-pressed")
         == "true"
     )
@@ -154,9 +154,9 @@ def test_workspace_selector_all_sets_default_primary(page):
     page.wait_for_selector("#workspace-selector", timeout=10000)
 
     page.locator("#workspace-selector").click()
-    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
-    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
-    page.locator(".ui-popover--workspace .ui-popover-item", has_text="All workspaces").click()
+    page.locator(".dl-popover--workspace .dl-popover-item", has_text="Research").click()
+    page.locator(".dl-popover--workspace .dl-popover-item", has_text="Research").click()
+    page.locator(".dl-popover--workspace .dl-popover-item", has_text="All workspaces").click()
     page.locator("#files-btn").click()
 
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
@@ -171,8 +171,8 @@ def test_workspace_selector_auto_all_keeps_last_explicit_primary(page):
     page.wait_for_selector("#workspace-selector", timeout=10000)
 
     page.locator("#workspace-selector").click()
-    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
-    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
+    page.locator(".dl-popover--workspace .dl-popover-item", has_text="Research").click()
+    page.locator(".dl-popover--workspace .dl-popover-item", has_text="Research").click()
     page.locator("#files-btn").click()
 
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)

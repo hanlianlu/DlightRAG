@@ -18,7 +18,9 @@ def test_ingestion_panel_opens(page):
 
     page.wait_for_function("document.querySelector('#panel').classList.contains('open')")
     expect(page.get_by_role("heading", name="Files", exact=True)).to_be_visible()
-    assert page.locator(".ingest-target-label").text_content() == "Files in:"
+    expect(
+        page.get_by_role("button", name="Files in Default; choose file workspace")
+    ).to_be_visible()
     assert not page.locator("#files-btn").is_visible()
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
     upload_zone = page.locator("#upload-zone")
@@ -96,7 +98,7 @@ def test_file_panel_workspace_switch_replaces_loading_state(page):
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
 
     page.click(".ingest-target-pill")
-    page.locator(".ui-popover--ingest .ui-popover-item", has_text="Research").click()
+    page.locator(".dl-popover--ingest .dl-popover-item", has_text="Research").click()
 
     page.wait_for_function(
         "!document.querySelector('#panel-content')?.textContent.includes('Loading files...')"
@@ -112,7 +114,7 @@ def test_file_panel_uses_last_selected_topbar_workspace(page):
     page.wait_for_selector(".app", timeout=10000)
 
     page.click("#workspace-selector")
-    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Default").click()
+    page.locator(".dl-popover--workspace .dl-popover-item", has_text="Default").click()
     page.click("#files-btn")
 
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)

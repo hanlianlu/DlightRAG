@@ -89,6 +89,7 @@ def test_composing_line_break_does_not_submit_but_plain_line_break_does(page: Pa
 def test_mobile_shell_tracks_viewport_height(page: Page) -> None:
     page.set_viewport_size({"width": 390, "height": 700})
     page.goto("/web/")
+    page.wait_for_selector(".app", timeout=10000)
 
     for height in (700, 560):
         page.set_viewport_size({"width": 390, "height": height})

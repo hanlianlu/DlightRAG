@@ -186,7 +186,7 @@ it('requires explicit user intent before creating the active iframe', async () =
   expect(layoutGroup.getAttribute('aria-labelledby')).to.equal('artifact-canvas-title');
   expect(canvas.getAttribute('aria-modal')).to.equal('true');
   expect(canvas.querySelector('dl-active-artifact-frame')).to.equal(null);
-  const consent = canvas.querySelector<HTMLButtonElement>('.artifact-active-consent .ui-btn');
+  const consent = canvas.querySelector<HTMLButtonElement>('.artifact-active-consent .dl-btn');
   expect(consent?.textContent).to.contain('Open interactive report');
   consent?.click();
   await canvas.updateComplete;

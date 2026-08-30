@@ -30,7 +30,7 @@ const first: ConversationSummary = {
 
 function media(desktop: boolean): (query: string) => MediaQueryList {
   return (query) => ({
-    matches: desktop ? query === '(min-width: 1200px)' : query === '(max-width: 1199px)',
+    matches: desktop ? query === '(min-width: 1200px)' : query === '(width < 1200px)',
     media: query,
     onchange: null,
     addListener() {},

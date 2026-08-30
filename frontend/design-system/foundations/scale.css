@@ -1,0 +1,30 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+/* stylelint-disable -- generated Utopia formulas preserve source precision and names. */
+
+/* Generated Utopia type and spacing scales plus semantic spacing aliases. */
+
+:root {
+  --step--2: clamp(0.67330rem, 0.034199vi + 0.664962rem, 0.69574rem);
+  --step--1: clamp(0.79449rem, 0.040355vi + 0.784655rem, 0.82097rem);
+  --step-0: clamp(0.93750rem, 0.047619vi + 0.925893rem, 0.96875rem);
+  --step-1: clamp(1.10625rem, 0.056190vi + 1.092554rem, 1.14312rem);
+  --step-2: clamp(1.30537rem, 0.066305vi + 1.289213rem, 1.34889rem);
+  --step-3: clamp(1.54034rem, 0.078240vi + 1.521272rem, 1.59169rem);
+  --space-3xs: clamp(0.25000rem, 0.00071429vi + 0.232589rem, 0.29688rem);
+  --space-2xs: clamp(0.50000rem, 0.00142857vi + 0.465179rem, 0.59375rem);
+  --space-xs: clamp(0.75000rem, 0.00214286vi + 0.697768rem, 0.89062rem);
+  --space-s: clamp(1.00000rem, 0.00285714vi + 0.930357rem, 1.18750rem);
+  --space-m: clamp(1.50000rem, 0.00428571vi + 1.395536rem, 1.78125rem);
+  --space-l: clamp(2.00000rem, 0.00571429vi + 1.860714rem, 2.37500rem);
+  --space-message-block: var(--space-component);
+  --space-composer-y: calc(var(--space-tight) * 0.625);
+  --space-composer-x: var(--space-tight);
+  --space-composer-trailing: var(--space-composer-x);
+  --space-inline: var(--space-3xs);
+  --space-tight: var(--space-2xs);
+  --space-component: var(--space-xs);
+  --space-related: var(--space-s);
+  --space-section: var(--space-m);
+  --space-layout: var(--space-l);
+}

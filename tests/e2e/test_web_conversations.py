@@ -493,7 +493,7 @@ def test_delete_all_conversations_is_quiet_accessible_and_returns_to_new_chat(
 
     dialog = page.get_by_role("dialog", name="Delete all conversations?")
     title = dialog.get_by_role("heading", name="Delete all conversations?")
-    actions = dialog.locator(".ui-dialog-actions")
+    actions = dialog.locator(".dl-dialog-actions")
     assert dialog.evaluate(
         """element => {
             const bounds = element.getBoundingClientRect();
@@ -535,7 +535,7 @@ def test_delete_all_failure_preserves_conversations_draft_and_theme_tokens(page:
     settings.get_by_role("button", name="Delete all conversations").click()
     dialog = page.get_by_role("dialog", name="Delete all conversations?")
     danger = dialog.get_by_role("button", name="Delete all")
-    page.add_style_tag(content=".ui-dialog-actions button { transition: none !important; }")
+    page.add_style_tag(content=".dl-dialog-actions button { transition: none !important; }")
     for color_mode in ("light", "dark"):
         page.locator("html").evaluate(
             "(element, mode) => { element.dataset.colorMode = mode; }",
@@ -590,7 +590,7 @@ def test_delete_all_is_keyboard_accessible_and_centered_on_mobile(page: Page) ->
     title = dialog.get_by_role("heading", name="Delete all conversations?")
     assert title.evaluate("element => element.scrollWidth <= element.clientWidth")
     assert (
-        dialog.locator(".ui-dialog-actions").evaluate(
+        dialog.locator(".dl-dialog-actions").evaluate(
             "element => getComputedStyle(element).justifyContent"
         )
         == "center"
@@ -622,7 +622,9 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
     page.locator("#upload-zone").wait_for()
     assert closed_panel.get_attribute("aria-hidden") is None
     assert closed_panel.evaluate("element => element.inert") is False
-    assert page.get_by_text("Files in:", exact=True).is_visible()
+    expect(
+        page.get_by_role("button", name="Files in Default; choose file workspace")
+    ).to_be_visible()
     expect(page.get_by_role("heading", name="Files", exact=True)).to_be_visible()
     assert page.get_by_role("button", name="Choose folder").is_visible()
     assert page.get_by_role("button", name="Upload files").count() == 0
@@ -631,7 +633,7 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
 
     new_bottom = _text_bottom(page, "#new-conversation-btn")
     search_bottom = _text_bottom(page, ".topbar-scope-label")
-    files_bottom = _text_bottom(page, ".ingest-target-label")
+    files_bottom = _text_bottom(page, ".ingest-target-name")
     assert (
         max(new_bottom, search_bottom, files_bottom) - min(new_bottom, search_bottom, files_bottom)
         <= 1.5
@@ -821,13 +823,13 @@ def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     assert (
         notification_offer.evaluate("element => getComputedStyle(element).visibility") == "hidden"
     )
-    new_bottom = _text_bottom(page, "#new-conversation-btn")
-    search_bottom = _text_bottom(page, ".topbar-scope-label")
-    files_bottom = _text_bottom(page, ".ingest-target-label")
-    assert (
-        max(new_bottom, search_bottom, files_bottom) - min(new_bottom, search_bottom, files_bottom)
-        <= 1.5
-    )
+    bottoms = [
+        _text_bottom(page, "#new-conversation-btn"),
+        _text_bottom(page, ".ingest-target-name"),
+    ]
+    if viewport[0] > 640:
+        bottoms.append(_text_bottom(page, ".topbar-scope-label"))
+    assert max(bottoms) - min(bottoms) <= 1.5
     page.keyboard.press("Escape")
     page.wait_for_function("document.activeElement?.id === 'files-btn'")
 
@@ -927,11 +929,12 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
         )
 
     collapsed = shell_geometry()
-    assert collapsed["panelWidth"] == pytest.approx(920, abs=1)
+    assert collapsed["panelWidth"] == pytest.approx(919, abs=1)
     assert collapsed["effectiveWidth"] == pytest.approx(collapsed["panelWidth"], abs=1)
     assert collapsed["composerWidth"] == pytest.approx(520, abs=1)
     assert collapsed["composerRight"] == pytest.approx(collapsed["panelX"], abs=1)
-    assert page.evaluate("localStorage.getItem('dlightrag-panel-width')") == "920"
+    persisted_collapsed = int(page.evaluate("localStorage.getItem('dlightrag-panel-width')"))
+    assert persisted_collapsed == pytest.approx(collapsed["effectiveWidth"], abs=1)
 
     page.get_by_role("button", name="Open conversations").click()
     page.wait_for_timeout(220)
@@ -943,12 +946,14 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     )
     assert expanded["composerRight"] == pytest.approx(expanded["panelX"], abs=1)
     assert expanded["effectiveWidth"] == pytest.approx(expanded["panelWidth"], abs=1)
-    assert page.evaluate("localStorage.getItem('dlightrag-panel-width')") == "920"
+    assert page.evaluate("localStorage.getItem('dlightrag-panel-width')") == str(
+        persisted_collapsed
+    )
 
     page.set_viewport_size({"width": 1280, "height": 820})
     page.wait_for_timeout(220)
     narrower = shell_geometry()
-    # The one-pixel WA divider shares a half pixel with each adjacent track.
+    # The one-pixel owned divider shares subpixels with adjacent tracks.
     assert narrower["composerWidth"] >= 519
     assert narrower["composerRight"] == pytest.approx(narrower["panelX"], abs=1)
     assert narrower["effectiveWidth"] == pytest.approx(narrower["panelWidth"], abs=1)
@@ -963,7 +968,7 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     page.get_by_role("button", name="Collapse conversations").click()
     page.wait_for_timeout(220)
     recollapsed = shell_geometry()
-    assert recollapsed["panelWidth"] == pytest.approx(920, abs=1)
+    assert recollapsed["panelWidth"] == pytest.approx(persisted_collapsed, abs=1)
     assert recollapsed["composerWidth"] == pytest.approx(520, abs=1)
     assert recollapsed["composerRight"] == pytest.approx(recollapsed["panelX"], abs=1)
 
@@ -999,38 +1004,24 @@ def test_split_panel_supports_touch_resize(page: Page) -> None:
 
     divider = page.locator("#panel-split").get_by_role("separator", name="Resize Files or Sources")
     divider.evaluate(
-        """element => {
-            const touch = new Touch({
-                identifier: 1, target: element, clientX: 1020, clientY: 180,
-            });
-            element.dispatchEvent(new TouchEvent('touchstart', {
-                bubbles: true, cancelable: true,
-                touches: [touch], changedTouches: [touch],
-            }));
-        }"""
+        """element => element.dispatchEvent(new PointerEvent('pointerdown', {
+            bubbles: true, cancelable: true, button: 0,
+            clientX: 1020, clientY: 180, pointerId: 1, pointerType: 'touch',
+        }))"""
     )
     page.wait_for_function("document.body.hasAttribute('data-resizing')")
-    page.evaluate(
-        """() => document.dispatchEvent(new PointerEvent('pointermove', {
+    divider.evaluate(
+        """element => element.dispatchEvent(new PointerEvent('pointermove', {
             bubbles: true, clientX: 480, clientY: 180,
             pointerId: 1, pointerType: 'touch',
         }))"""
     )
     page.wait_for_timeout(50)
     divider.evaluate(
-        """element => {
-            document.dispatchEvent(new PointerEvent('pointerup', {
-                bubbles: true, clientX: 480, clientY: 180,
-                pointerId: 1, pointerType: 'touch',
-            }));
-            const touch = new Touch({
-                identifier: 1, target: element, clientX: 480, clientY: 180,
-            });
-            window.dispatchEvent(new TouchEvent('touchend', {
-                bubbles: true, cancelable: true,
-                touches: [], changedTouches: [touch],
-            }));
-        }"""
+        """element => element.dispatchEvent(new PointerEvent('pointerup', {
+            bubbles: true, clientX: 480, clientY: 180,
+            pointerId: 1, pointerType: 'touch',
+        }))"""
     )
     page.wait_for_function("!document.body.hasAttribute('data-resizing')")
     panel = page.locator("#panel").bounding_box()
