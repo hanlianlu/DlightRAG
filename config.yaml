@@ -1,4 +1,4 @@
-# DlightRAG 3.0 canonical configuration
+# DlightRAG 2.0 canonical configuration
 # Priority: env > .env > config.yaml > defaults
 
 models:
