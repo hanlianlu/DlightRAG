@@ -204,7 +204,7 @@ class Application:
             role: model_fingerprint(model_settings_for_role(self._config, role))
             for role in MODEL_ROLE_NAMES
         }
-        for requirement in await self._components.run_store.list_active_run_requirements():
+        async for requirement in self._components.run_store.iter_active_run_requirements():
             _require_compatible_run(requirement, current_fingerprints)
 
     async def _initialize_corpora(self) -> bool:

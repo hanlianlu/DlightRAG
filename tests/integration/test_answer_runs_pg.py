@@ -197,6 +197,44 @@ class TestSchema:
             "dlightrag_answer_memory_settings",
         }
 
+    async def test_bounded_operational_scans_use_their_ordered_indexes(
+        self,
+        store,
+        pool,
+    ) -> None:
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute("SET LOCAL enable_seqscan = off")
+            active_plan = await conn.fetch(
+                "EXPLAIN (COSTS OFF) "
+                "SELECT created_at, run_id, "
+                "prepared_input_json ->> 'context_policy_revision', "
+                "prepared_input_json -> 'pinned_models' "
+                "FROM dlightrag_answer_runs "
+                "WHERE status IN ('queued', 'running') "
+                "AND cancel_requested_at IS NULL "
+                "AND NOT (status = 'running' AND lease_expires_at < NOW() "
+                "         AND reclaims_without_progress >= $1) "
+                "ORDER BY created_at, run_id LIMIT 200",
+                MAX_RECLAIMS_WITHOUT_PROGRESS,
+            )
+            cancel_plan = await conn.fetch(
+                "EXPLAIN (COSTS OFF) "
+                "SELECT owner_id, run_id, created_at "
+                "FROM dlightrag_answer_runs "
+                "WHERE cancel_requested_at IS NOT NULL "
+                "AND status = 'running' AND lease_owner = $1 "
+                "AND lease_expires_at > NOW() "
+                "ORDER BY created_at, run_id LIMIT 200",
+                _WORKER,
+            )
+
+        assert "idx_dlightrag_answer_runs_claim" in "\n".join(
+            str(row["QUERY PLAN"]) for row in active_plan
+        )
+        assert "idx_dlightrag_answer_runs_cancel_pending" in "\n".join(
+            str(row["QUERY PLAN"]) for row in cancel_plan
+        )
+
     async def test_memory_settings_default_and_roundtrip(self, store, pool) -> None:
         """Enablement defaults on for absent rows and persists across updates."""
         from dlightrag.adapters.postgres.answer.memory_settings import PGMemorySettingsStore
@@ -955,12 +993,53 @@ class TestShutdownAndRecovery:
             request=_request(context_policy_revision="queued", pinned_models=[]),
         )
 
-        requirements = await store.list_active_run_requirements()
+        requirements = [
+            requirement async for requirement in store.iter_active_run_requirements(page_size=1)
+        ]
 
         assert {row["context_policy_revision"] for row in requirements} == {
             "queued",
             "recoverable",
         }
+        assert all(row["pinned_models"] == [] for row in requirements)
+
+    async def test_cancel_pending_rescan_keyset_pages_only_live_worker_leases(
+        self,
+        store,
+        pool,
+    ) -> None:
+        first = await store.create_run(owner_id=_OWNER, request=_request())
+        first_claim = await _claimed(store)
+        await store.request_cancellation(owner_id=_OWNER, run_id=first.run.run_id)
+
+        second = await store.create_run(owner_id=_OWNER, request=_request())
+        second_claim = await _claimed(store)
+        await store.request_cancellation(owner_id=_OWNER, run_id=second.run.run_id)
+
+        other = await store.create_run(owner_id=_OWNER, request=_request())
+        other_claim = await store.claim_next(worker_id="other-worker")
+        assert other_claim is not None
+        await store.request_cancellation(owner_id=_OWNER, run_id=other.run.run_id)
+
+        expired = await store.create_run(owner_id=_OWNER, request=_request())
+        expired_claim = await _claimed(store)
+        await store.request_cancellation(owner_id=_OWNER, run_id=expired.run.run_id)
+        await _expire_lease(pool, expired.run.run_id)
+
+        pending = [
+            item
+            async for item in store.iter_cancel_pending(
+                worker_id=_WORKER,
+                page_size=1,
+            )
+        ]
+
+        assert {run_id for _, run_id in pending} == {
+            first_claim.run.run_id,
+            second_claim.run.run_id,
+        }
+        assert other_claim.run.run_id not in {run_id for _, run_id in pending}
+        assert expired_claim.run.run_id not in {run_id for _, run_id in pending}
 
     async def test_shutdown_finalizes_a_cancel_pending_run(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())

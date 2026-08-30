@@ -2,6 +2,7 @@
 """Startup and shutdown contract of the local composition root."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import pytest
@@ -123,9 +124,10 @@ class _RunStore(_Collaborator):
         if self.initialize_error is not None:
             raise self.initialize_error
 
-    async def list_active_run_requirements(self) -> tuple[dict[str, Any], ...]:
-        self._record("list_active_run_requirements")
-        return self.requirements
+    async def iter_active_run_requirements(self) -> AsyncIterator[dict[str, Any]]:
+        self._record("iter_active_run_requirements")
+        for requirement in self.requirements:
+            yield requirement
 
 
 class _WebStore(_Collaborator):
@@ -334,7 +336,7 @@ async def test_application_exposes_only_typed_services_and_closes_in_dependency_
         "run_store:initialize:False",
         "web_store:initialize:False",
         "memory_store:initialize",
-        "run_store:list_active_run_requirements",
+        "run_store:iter_active_run_requirements",
         "corpora:initialize",
         "retrieval:planner_for",
         "capabilities:probe_all",
@@ -532,7 +534,7 @@ async def test_transient_startup_faults_warn_without_starting_the_run_coordinato
         "Web conversations unavailable",
     }
     started = parts.recorder.started()
-    assert "run_store:list_active_run_requirements" not in started
+    assert "run_store:iter_active_run_requirements" not in started
     assert "coordinator:start" not in started
     assert "web_conversations:start_retention" not in started
 

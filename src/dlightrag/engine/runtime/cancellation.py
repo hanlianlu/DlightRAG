@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
 
 CANCEL_CHANNEL = "dlightrag_answer_run_cancel"
@@ -38,7 +38,7 @@ class RunCancellationListener:
         self,
         *,
         open_connection: Callable[[], Awaitable[object]],
-        rescan: Callable[[], Awaitable[list[tuple[str, str]]]],
+        rescan: Callable[[], AsyncIterator[tuple[str, str]]],
         on_cancel: Callable[[str, str], Awaitable[None]],
     ) -> None:
         self._open_connection = open_connection
@@ -159,17 +159,17 @@ class RunCancellationListener:
 
     async def _rescan_cancel_pending(self) -> None:
         try:
-            pending = await self._rescan()
+            async for owner_id, run_id in self._rescan():
+                try:
+                    await self._on_cancel(owner_id, run_id)
+                except Exception:
+                    logger.warning(
+                        "Answer run cancel signal handler failed for %s",
+                        run_id,
+                        exc_info=True,
+                    )
         except Exception:
             logger.warning("Answer run cancel-pending rescan failed", exc_info=True)
-            return
-        for owner_id, run_id in pending:
-            try:
-                await self._on_cancel(owner_id, run_id)
-            except Exception:
-                logger.warning(
-                    "Answer run cancel signal handler failed for %s", run_id, exc_info=True
-                )
 
 
 __all__ = [

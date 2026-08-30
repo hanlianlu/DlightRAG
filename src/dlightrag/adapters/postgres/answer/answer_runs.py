@@ -448,6 +448,10 @@ _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_runs_retention "
     "ON dlightrag_answer_runs (finished_at) "
     "WHERE finished_at IS NOT NULL",
+    # Reconnect/notification rescans page only this worker's live cancellations.
+    "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_runs_cancel_pending "
+    "ON dlightrag_answer_runs (lease_owner, created_at, run_id) "
+    "WHERE cancel_requested_at IS NOT NULL AND status = 'running'",
     # Exactly one terminal event per run, enforced durably rather than by convention.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_dlightrag_answer_run_events_terminal "
     "ON dlightrag_answer_run_events (owner_id, run_id) "
@@ -535,6 +539,15 @@ ANSWER_RUN_MIGRATIONS = (
             "(owner_id, run_id, created_at DESC, child_session_id DESC)",
         ),
     ),
+    Migration(
+        "worker_cancel_pending_index",
+        "Index bounded worker-local cancellation rescans",
+        (
+            "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_runs_cancel_pending "
+            "ON dlightrag_answer_runs (lease_owner, created_at, run_id) "
+            "WHERE cancel_requested_at IS NOT NULL AND status = 'running'",
+        ),
+    ),
 )
 
 ANSWER_RUN_SCHEMA_TABLES = (
@@ -583,6 +596,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
         indexes=(
             "idx_dlightrag_answer_runs_claim",
             "idx_dlightrag_answer_runs_retention",
+            "idx_dlightrag_answer_runs_cancel_pending",
         ),
         unique_indexes=("idx_dlightrag_answer_runs_idempotency",),
     ),
@@ -996,6 +1010,78 @@ WHERE owner_id = $1 AND (created_at, run_id) > (
  WHERE owner_id = $1 AND run_id = $2)
 ORDER BY created_at, run_id LIMIT $3
 """  # noqa: S608 - interpolates only the trusted _RUN_COLUMNS constant
+
+_ACTIVE_REQUIREMENTS_FRONTIER = """
+SELECT created_at, run_id
+FROM dlightrag_answer_runs
+WHERE status IN ('queued', 'running')
+  AND cancel_requested_at IS NULL
+  AND NOT (status = 'running' AND lease_expires_at < NOW()
+           AND reclaims_without_progress >= $1)
+ORDER BY created_at DESC, run_id DESC
+LIMIT 1
+"""
+_ACTIVE_REQUIREMENTS_FIRST_PAGE = """
+SELECT created_at, run_id,
+       prepared_input_json ->> 'context_policy_revision' AS context_policy_revision,
+       prepared_input_json -> 'pinned_models' AS pinned_models
+FROM dlightrag_answer_runs
+WHERE status IN ('queued', 'running')
+  AND cancel_requested_at IS NULL
+  AND NOT (status = 'running' AND lease_expires_at < NOW()
+           AND reclaims_without_progress >= $1)
+  AND (created_at, run_id) <= ($2::timestamptz, $3::uuid)
+ORDER BY created_at, run_id
+LIMIT $4
+"""
+_ACTIVE_REQUIREMENTS_AFTER = """
+SELECT created_at, run_id,
+       prepared_input_json ->> 'context_policy_revision' AS context_policy_revision,
+       prepared_input_json -> 'pinned_models' AS pinned_models
+FROM dlightrag_answer_runs
+WHERE status IN ('queued', 'running')
+  AND cancel_requested_at IS NULL
+  AND NOT (status = 'running' AND lease_expires_at < NOW()
+           AND reclaims_without_progress >= $1)
+  AND (created_at, run_id) <= ($2::timestamptz, $3::uuid)
+  AND (created_at, run_id) > ($4::timestamptz, $5::uuid)
+ORDER BY created_at, run_id
+LIMIT $6
+"""
+
+_CANCEL_PENDING_FRONTIER = """
+SELECT created_at, run_id
+FROM dlightrag_answer_runs
+WHERE cancel_requested_at IS NOT NULL
+  AND status = 'running'
+  AND lease_owner = $1
+  AND lease_expires_at > NOW()
+ORDER BY created_at DESC, run_id DESC
+LIMIT 1
+"""
+_CANCEL_PENDING_FIRST_PAGE = """
+SELECT owner_id, run_id, created_at
+FROM dlightrag_answer_runs
+WHERE cancel_requested_at IS NOT NULL
+  AND status = 'running'
+  AND lease_owner = $1
+  AND lease_expires_at > NOW()
+  AND (created_at, run_id) <= ($2::timestamptz, $3::uuid)
+ORDER BY created_at, run_id
+LIMIT $4
+"""
+_CANCEL_PENDING_AFTER = """
+SELECT owner_id, run_id, created_at
+FROM dlightrag_answer_runs
+WHERE cancel_requested_at IS NOT NULL
+  AND status = 'running'
+  AND lease_owner = $1
+  AND lease_expires_at > NOW()
+  AND (created_at, run_id) <= ($2::timestamptz, $3::uuid)
+  AND (created_at, run_id) > ($4::timestamptz, $5::uuid)
+ORDER BY created_at, run_id
+LIMIT $6
+"""
 
 _INSERT_RUN = f"""
 INSERT INTO dlightrag_answer_runs (
@@ -2525,30 +2611,60 @@ class PGAnswerRunStore(PostgresOperationRunner):
         artifacts = await _delete_unreferenced(conn, *_digest_pairs(pairs))
         return RunDeletion(runs=int(deleted or 0), artifacts=artifacts)
 
-    async def list_active_run_requirements(self) -> tuple[Mapping[str, Any], ...]:
-        """Return pinned profile facts of active runs, read from prepared inputs."""
+    async def iter_active_run_requirements(
+        self,
+        *,
+        page_size: int = _BATCH_LIMIT,
+    ) -> AsyncIterator[Mapping[str, Any]]:
+        """Stream active-run compatibility facts in bounded keyset pages."""
+        cap = max(1, min(int(page_size), _BATCH_LIMIT))
 
-        async def _operation(conn: Any) -> tuple[Mapping[str, Any], ...]:
-            rows = await conn.fetch(
-                "SELECT prepared_input_json FROM dlightrag_answer_runs"
-                " WHERE status IN ('queued', 'running')"
-                " AND cancel_requested_at IS NULL"
-                " AND NOT (status = 'running' AND lease_expires_at < NOW()"
-                "          AND reclaims_without_progress >= $1)",
+        async def _frontier(conn: Any) -> Any:
+            return await conn.fetchrow(
+                _ACTIVE_REQUIREMENTS_FRONTIER,
                 MAX_RECLAIMS_WITHOUT_PROGRESS,
             )
-            requirements: list[Mapping[str, Any]] = []
-            for row in rows:
-                prepared = _json_object(row["prepared_input_json"])
-                requirements.append(
-                    {
-                        "context_policy_revision": prepared.get("context_policy_revision"),
-                        "pinned_models": prepared.get("pinned_models"),
-                    }
-                )
-            return tuple(requirements)
 
-        return await self._run_read(_operation)
+        upper = await self._run_read(_frontier)
+        if upper is None:
+            return
+        upper_position = (upper["created_at"], upper["run_id"])
+        position: tuple[Any, Any] | None = None
+        while True:
+
+            async def _page(
+                conn: Any,
+                after: tuple[Any, Any] | None = position,
+            ) -> list[Any]:
+                if after is None:
+                    return await conn.fetch(
+                        _ACTIVE_REQUIREMENTS_FIRST_PAGE,
+                        MAX_RECLAIMS_WITHOUT_PROGRESS,
+                        *upper_position,
+                        cap,
+                    )
+                return await conn.fetch(
+                    _ACTIVE_REQUIREMENTS_AFTER,
+                    MAX_RECLAIMS_WITHOUT_PROGRESS,
+                    *upper_position,
+                    *after,
+                    cap,
+                )
+
+            rows = await self._run_read(_page)
+            if not rows:
+                return
+            for row in rows:
+                yield {
+                    "context_policy_revision": row["context_policy_revision"],
+                    "pinned_models": _json_value(row["pinned_models"]),
+                }
+            if len(rows) < cap:
+                return
+            next_position = (rows[-1]["created_at"], rows[-1]["run_id"])
+            if position is not None and next_position <= position:
+                raise RuntimeError("active-run requirement cursor did not advance")
+            position = next_position
 
     async def delete_runs(self, *, owner_id: str, run_ids: Sequence[str]) -> RunDeletion:
         """Delete owned runs and orphaned blobs in one dedicated transaction."""
@@ -2684,24 +2800,55 @@ class PGAnswerRunStore(PostgresOperationRunner):
         return await self._run_read(_operation)
 
     # -- cancellation -------------------------------------------------
-    async def rescan_cancel_pending(self, *, worker_id: str) -> list[tuple[str, str]]:
-        """Return locally leased cancel-pending runs for this worker.
+    async def iter_cancel_pending(
+        self,
+        *,
+        worker_id: str,
+        page_size: int = _BATCH_LIMIT,
+    ) -> AsyncIterator[tuple[str, str]]:
+        """Stream this worker's live cancel-pending leases in bounded pages."""
+        cap = max(1, min(int(page_size), _BATCH_LIMIT))
 
-        The listener calls this on every connect/reconnect and on every wake
-        notification; the payload itself never cancels anything.
-        """
+        async def _frontier(conn: Any) -> Any:
+            return await conn.fetchrow(_CANCEL_PENDING_FRONTIER, worker_id)
 
-        async def _operation(conn: Any) -> list[tuple[str, str]]:
-            rows = await conn.fetch(
-                "SELECT owner_id, run_id FROM dlightrag_answer_runs"
-                " WHERE cancel_requested_at IS NOT NULL"
-                " AND status = 'running' AND lease_owner = $1"
-                " AND lease_expires_at > NOW()",
-                worker_id,
-            )
-            return [(str(row["owner_id"]), str(row["run_id"])) for row in rows]
+        upper = await self._run_read(_frontier)
+        if upper is None:
+            return
+        upper_position = (upper["created_at"], upper["run_id"])
+        position: tuple[Any, Any] | None = None
+        while True:
 
-        return await self._run_read(_operation)
+            async def _page(
+                conn: Any,
+                after: tuple[Any, Any] | None = position,
+            ) -> list[Any]:
+                if after is None:
+                    return await conn.fetch(
+                        _CANCEL_PENDING_FIRST_PAGE,
+                        worker_id,
+                        *upper_position,
+                        cap,
+                    )
+                return await conn.fetch(
+                    _CANCEL_PENDING_AFTER,
+                    worker_id,
+                    *upper_position,
+                    *after,
+                    cap,
+                )
+
+            rows = await self._run_read(_page)
+            if not rows:
+                return
+            for row in rows:
+                yield str(row["owner_id"]), str(row["run_id"])
+            if len(rows) < cap:
+                return
+            next_position = (rows[-1]["created_at"], rows[-1]["run_id"])
+            if position is not None and next_position <= position:
+                raise RuntimeError("cancel-pending cursor did not advance")
+            position = next_position
 
     def build_cancellation_listener(
         self,
@@ -2717,8 +2864,8 @@ class PGAnswerRunStore(PostgresOperationRunner):
             pool = await pg_pool.get()
             return await pool.acquire().__aenter__()
 
-        async def _rescan() -> list[tuple[str, str]]:
-            return await self.rescan_cancel_pending(worker_id=worker_id)
+        def _rescan() -> AsyncIterator[tuple[str, str]]:
+            return self.iter_cancel_pending(worker_id=worker_id)
 
         return RunCancellationListener(
             open_connection=_open_connection,

@@ -2,7 +2,7 @@
 """Tests for immediate durable-run cancellation across processes (Task 5)."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from dlightrag.engine.runtime.cancellation import (
     CANCEL_CHANNEL,
@@ -56,7 +56,7 @@ class _FakeConnection:
 def _listener(
     *,
     connections: list[_FakeConnection],
-    rescan: Callable[[], Awaitable[list[tuple[str, str]]]],
+    rescan: Callable[[], AsyncIterator[tuple[str, str]]],
     on_cancel: Callable[[str, str], Awaitable[None]],
 ) -> RunCancellationListener:
     async def _open() -> _FakeConnection:
@@ -70,8 +70,9 @@ async def test_payload_alone_never_cancels_without_authoritative_rescan() -> Non
     cancelled: list[tuple[str, str]] = []
     connection = _FakeConnection(payloads=[cancellation_notify_key("o", "r1")])
 
-    async def _rescan() -> list[tuple[str, str]]:
-        return list(pending)
+    async def _rescan() -> AsyncIterator[tuple[str, str]]:
+        for item in pending:
+            yield item
 
     async def _on_cancel(owner: str, run: str) -> None:
         cancelled.append((owner, run))
@@ -101,8 +102,8 @@ async def test_non_digest_payloads_are_ignored() -> None:
     cancelled: list[tuple[str, str]] = []
     connection = _FakeConnection(payloads=["not-a-digest", ""])
 
-    async def _rescan() -> list[tuple[str, str]]:
-        return [("o", "r9")]
+    async def _rescan() -> AsyncIterator[tuple[str, str]]:
+        yield ("o", "r9")
 
     async def _on_cancel(owner: str, run: str) -> None:
         cancelled.append((owner, run))
@@ -124,9 +125,10 @@ async def test_reconnect_rescans_and_catches_missed_cancels() -> None:
     first = _FakeConnection(payloads=[])
     second = _FakeConnection(payloads=[])
 
-    async def _rescan() -> list[tuple[str, str]]:
+    async def _rescan() -> AsyncIterator[tuple[str, str]]:
         rescan_calls.append(1)
-        return [("o", "r2")] if len(rescan_calls) > 1 else []
+        if len(rescan_calls) > 1:
+            yield ("o", "r2")
 
     async def _on_cancel(owner: str, run: str) -> None:
         cancelled.append((owner, run))
@@ -157,8 +159,9 @@ async def test_initial_connection_failure_keeps_readiness_false_and_retries() ->
             raise ConnectionError("refused")
         return _FakeConnection()
 
-    async def _rescan() -> list[tuple[str, str]]:
-        return []
+    async def _rescan() -> AsyncIterator[tuple[str, str]]:
+        for item in ():
+            yield item
 
     async def _on_cancel(owner: str, run: str) -> None:
         return None
