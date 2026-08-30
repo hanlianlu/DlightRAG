@@ -7,7 +7,6 @@ import './inspector_files.ts';
 import type {DlInspectorFiles} from './inspector_files.ts';
 
 const originalFetch = window.fetch;
-const originalConfirm = window.confirm;
 
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -15,6 +14,12 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error('condition did not become true');
+}
+
+function confirmDeleteDialog(panel: DlInspectorFiles, value: string): void {
+  const dialog = panel.querySelector<HTMLDialogElement>('#delete-file-dialog')!;
+  dialog.returnValue = value;
+  dialog.close();
 }
 
 beforeEach(() => {
@@ -28,7 +33,6 @@ beforeEach(() => {
 
 afterEach(() => {
   window.fetch = originalFetch;
-  window.confirm = originalConfirm;
   document.body.replaceChildren();
 });
 
@@ -239,7 +243,6 @@ it('preserves loaded files and cursor when an upload only changes ingest status'
 });
 
 it('deletion replaces loaded traversal with the returned fresh first page', async () => {
-  window.confirm = () => true;
   window.fetch = async (input, init) => {
     if (init?.method === 'DELETE') {
       return new Response(JSON.stringify(snapshot([
@@ -257,12 +260,49 @@ it('deletion replaces loaded traversal with the returned fresh first page', asyn
   await waitFor(() => panel.loading === false);
 
   panel.querySelector<HTMLButtonElement>('.file-delete')!.click();
+  await panel.updateComplete;
+  confirmDeleteDialog(panel, 'confirm');
   await waitFor(() => panel.snapshot?.files[0]?.file_path === '/replacement');
   await panel.updateComplete;
 
   expect(panel.snapshot?.files.map((item) => item.file_path)).to.deep.equal(['/replacement']);
   expect(panel.snapshot?.next_cursor).to.equal('replacement-older');
   expect(panel.querySelector('[data-load-older-files]')).not.to.equal(null);
+});
+
+it('cancelling the delete dialog keeps the file and restores trigger focus', async () => {
+  let deleteRequests = 0;
+  window.fetch = async (input, init) => {
+    if (init?.method === 'DELETE') {
+      deleteRequests += 1;
+      return new Response(null, {status: 204});
+    }
+    return new Response(JSON.stringify(snapshot([
+      {file_name: 'Keep me', file_path: '/keep'},
+    ], null)), {status: 200, headers: {'Content-Type': 'application/json'}});
+  };
+  const panel = document.createElement('dl-inspector-files') as DlInspectorFiles;
+  panel.active = true;
+  document.body.appendChild(panel);
+  await waitFor(() => panel.loading === false);
+  const deleteButton = panel.querySelector<HTMLButtonElement>('.file-delete')!;
+  deleteButton.focus();
+
+  deleteButton.click();
+  await panel.updateComplete;
+  const dialog = panel.querySelector<HTMLDialogElement>('#delete-file-dialog')!;
+  expect(dialog.open).to.equal(true);
+  expect(panel.querySelector<HTMLElement>('#delete-file-message')?.textContent).to.contain(
+    'keep',
+  );
+
+  confirmDeleteDialog(panel, 'cancel');
+  await panel.updateComplete;
+
+  expect(dialog.open).to.equal(false);
+  expect(deleteRequests).to.equal(0);
+  expect(panel.querySelector('.file-name')?.textContent).to.equal('Keep me');
+  expect(document.activeElement).to.equal(deleteButton);
 });
 
 it('clears prior-workspace rows when the selected workspace reload fails', async () => {
@@ -302,7 +342,6 @@ it('delete during an older-page flight cannot apply stale rows or latch loading 
   const older = deferredResponse();
   const deletion = deferredResponse();
   let olderRequests = 0;
-  window.confirm = () => true;
   window.fetch = async (input, init) => {
     const url = new URL(String(input), window.location.origin);
     if (init?.method === 'DELETE') return deletion.promise;
@@ -323,6 +362,9 @@ it('delete during an older-page flight cannot apply stale rows or latch loading 
   await panel.updateComplete;
   expect(panel.filesLoadMoreState).to.equal('loading');
   panel.querySelector<HTMLButtonElement>('.file-delete')!.click();
+  await panel.updateComplete;
+  confirmDeleteDialog(panel, 'confirm');
+  await waitFor(() => panel.hasActiveMutation);
   await panel.updateComplete;
   expect(panel.filesLoadMoreState).to.equal('idle');
   await panel.loadOlderFiles();
@@ -370,6 +412,12 @@ it('load older is a no-op while a same-workspace first-page reload is active', a
   document.body.appendChild(panel);
   panel.active = true;
   await waitFor(() => panel.loading === false);
+  await panel.updateComplete;
+  // Let any update-cycle-driven reload start and finish before exercising
+  // reload(false), so the test's own first-page request cannot be superseded
+  // by a straggler update while it is in flight.
+  await new Promise((resolve) => { setTimeout(resolve, 0); });
+  await panel.updateComplete;
 
   const reloadFlight = panel.reload(false);
   await panel.loadOlderFiles();
@@ -440,7 +488,6 @@ it('failed upload settles loading after superseding a pending visible reload', a
 it('failed deletion settles loading after superseding a pending visible reload', async () => {
   const staleReload = deferredResponse();
   let firstPageRequests = 0;
-  window.confirm = () => true;
   window.fetch = async (input, init) => {
     if (init?.method === 'DELETE') {
       return new Response(JSON.stringify({detail: 'Deletion rejected.'}), {
@@ -467,7 +514,9 @@ it('failed deletion settles loading after superseding a pending visible reload',
   const reloadFlight = panel.reload(true);
   expect(panel.loading).to.equal(true);
   deleteButton.click();
-  await waitFor(() => !panel.hasActiveMutation);
+  await panel.updateComplete;
+  confirmDeleteDialog(panel, 'confirm');
+  await waitFor(() => panel.error === 'Deletion rejected.');
   await panel.updateComplete;
 
   expect(panel.loading).to.equal(false);

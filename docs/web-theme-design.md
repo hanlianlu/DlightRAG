@@ -8,7 +8,7 @@
 
 The DlightRAG Web UI provides a polished `System / Light / Dark` appearance preference. It keeps the dark theme's identity, adds the warm-neutral **Mineral Light** palette, and makes the correct theme visible on the first painted frame. Its current appearance also includes role-based Soft geometry and token-bridged split panels.
 
-This design does not add internationalization, custom palettes, account-level preferences, or server-side preference storage.
+This design does not add custom palettes, account-level preferences, or server-side preference storage. Internationalization is a separate product concern with its own plan; it is not a theme-design constraint.
 
 ## Product Decisions
 

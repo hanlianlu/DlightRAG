@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {ConversationSummary} from '../api/conversations.ts';
@@ -36,9 +37,11 @@ export class DlConversationList extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.busy = false;
     this.openMenuId = null;
     this.renameId = null;
+    /** Store reads: conversations, listState, loadMoreState, hasOlderConversations, activeConversationId. */
     new StoreController(this, conversationStore);
   }
 
@@ -75,7 +78,7 @@ export class DlConversationList extends LightElement {
   }
 
   async focusActions(conversationId: string): Promise<boolean> {
-    return this.#focusAfterRender('[aria-label="Conversation actions"]', conversationId);
+    return this.#focusAfterRender('.conversation-actions-button', conversationId);
   }
 
   #row(conversationId: string): HTMLElement | null {
@@ -156,7 +159,7 @@ export class DlConversationList extends LightElement {
     return html`
       <input
         type="text"
-        aria-label="Conversation title"
+        aria-label=${msg('Conversation title', {id: 'conversationList.conversationTitle'})}
         maxlength="120"
         .value=${conversation.title ?? ''}
         @keydown=${(event: KeyboardEvent) => {
@@ -190,7 +193,7 @@ export class DlConversationList extends LightElement {
       <div
         class="conversation-actions-menu"
         role="menu"
-        aria-label="Conversation actions"
+        aria-label=${msg('Conversation actions', {id: 'conversationList.conversationActions'})}
         @keydown=${(event: KeyboardEvent) => {
           const items = [...(event.currentTarget as HTMLElement)
             .querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
@@ -211,7 +214,7 @@ export class DlConversationList extends LightElement {
           type="button"
           role="menuitem"
           @click=${() => { this.#startRename(conversationId); }}
-        >Rename</button>
+        >${msg('Rename', {id: 'conversationList.rename'})}</button>
         <button
           type="button"
           role="menuitem"
@@ -221,7 +224,7 @@ export class DlConversationList extends LightElement {
             this.openMenuId = null;
             this.#emit<ConversationIntentDetail>('dl-conversation-delete', {conversationId});
           }}
-        >Delete</button>
+        >${msg('Delete', {id: 'conversationList.delete'})}</button>
       </div>
     `;
   }
@@ -244,22 +247,27 @@ export class DlConversationList extends LightElement {
               type="button"
               class="conversation-select"
               ?disabled=${this.busy}
-              aria-label=${conversation.title ? nothing : 'Open untitled conversation'}
+              aria-label=${conversation.title
+                ? nothing
+                : msg('Open untitled conversation', {id: 'conversationList.openUntitled'})}
               @click=${() => {
                 this.#emit<ConversationIntentDetail>('dl-conversation-select', {conversationId});
               }}
-            >${conversation.title || 'New chat'}</button>
+            >${conversation.title || msg('New chat', {id: 'conversationList.newChat'})}</button>
           `}
           ${conversation.forked_from_title ? html`
-            <span class="conversation-lineage" title="Forked from another conversation">
-              Forked from ${conversation.forked_from_title}
+            <span
+              class="conversation-lineage"
+              title=${msg('Forked from another conversation', {id: 'conversationList.forkedFromTitle'})}
+            >
+              ${msg(str`Forked from ${conversation.forked_from_title}`, {id: 'conversationList.forkedFrom'})}
             </span>
           ` : nothing}
         </div>
         <button
           type="button"
           class="conversation-actions-button"
-          aria-label="Conversation actions"
+          aria-label=${msg('Conversation actions', {id: 'conversationList.conversationActionsButton'})}
           aria-haspopup="menu"
           aria-expanded=${expanded ? 'true' : 'false'}
           @click=${(event: MouseEvent) => {
@@ -286,15 +294,23 @@ export class DlConversationList extends LightElement {
         ${Array.from({length: SKELETON_COUNT}, () => html`
           <div class="conversation-skeleton" aria-hidden="true"></div>
         `)}
-        <span class="sr-only">Loading conversations</span>
+        <span class="sr-only">${msg('Loading conversations', {id: 'conversationList.loadingConversations'})}</span>
       `;
     }
     return html`
       ${listState === 'error'
-        ? this.#renderStatus('Could not load conversations.', 'Retry', 'reload')
+        ? this.#renderStatus(
+            msg('Could not load conversations.', {id: 'conversationList.couldNotLoad'}),
+            msg('Retry', {id: 'conversationList.retry'}),
+            'reload',
+          )
         : nothing}
       ${listState === 'empty-error'
-        ? this.#renderStatus('No conversation is open.', 'Retry New chat', 'new')
+        ? this.#renderStatus(
+            msg('No conversation is open.', {id: 'conversationList.noConversationOpen'}),
+            msg('Retry New chat', {id: 'conversationList.retryNewChat'}),
+            'new',
+          )
         : nothing}
       <div class="conversation-items" role="list" aria-live="polite">
         ${repeat(
@@ -306,10 +322,10 @@ export class DlConversationList extends LightElement {
       ${conversationStore.loadMoreState === 'error'
         ? html`
           <div class="conversation-list-status" role="status">
-            <span>Could not load older conversations.</span>
+            <span>${msg('Could not load older conversations.', {id: 'conversationList.couldNotLoadOlder'})}</span>
             <button type="button" @click=${() => {
               void conversationStore.loadOlder();
-            }}>Retry loading older conversations</button>
+            }}>${msg('Retry loading older conversations', {id: 'conversationList.retryLoadOlder'})}</button>
           </div>
         `
         : nothing}
@@ -319,9 +335,11 @@ export class DlConversationList extends LightElement {
             type="button"
             class="conversation-load-older"
             ?disabled=${conversationStore.loadMoreState === 'loading'}
-            aria-label="Load older conversations"
+            aria-label=${msg('Load older conversations', {id: 'conversationList.loadOlderAria'})}
             @click=${() => { void conversationStore.loadOlder(); }}
-          >${conversationStore.loadMoreState === 'loading' ? 'Loading older…' : 'Load older'}</button>
+          >${conversationStore.loadMoreState === 'loading'
+            ? msg('Loading older…', {id: 'conversationList.loadingOlder'})
+            : msg('Load older', {id: 'conversationList.loadOlder'})}</button>
         `
         : nothing}
     `;

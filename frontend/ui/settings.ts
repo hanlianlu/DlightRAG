@@ -1,7 +1,13 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Settings Dialog Feature: memory state, conversation commands, and dialog lifecycle. */
 
+import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
+import {
+  currentLanguagePreference,
+  setLanguagePreference,
+} from '../i18n/locale.ts';
+import {parseLanguagePreference, type LanguagePreference} from '../lib/language.ts';
 import {
   clearMemory,
   getMemorySettings,
@@ -21,12 +27,30 @@ type MemoryReadResult = 'loaded' | 'stale' | 'failed';
 function memorySummary(event: ChatMemoryOperationDetail): string {
   const body = String(event.body || '').replace(/\s+/g, ' ').trim();
   const concise = body.length > 120 ? body.slice(0, 117) + '…' : body;
-  if (event.outcome === 'unchanged') return 'Already remembered.';
-  if (event.outcome === 'conflict') return 'Profile Memory changed; recall it before retrying.';
-  if (event.outcome === 'rejected') return 'Profile Memory operation was rejected.';
-  if (event.operation === 'forget') return concise ? `Forgot: ${concise}` : 'Profile Memory forgotten.';
-  if (event.operation === 'undo') return concise ? `Restored: ${concise}` : 'Profile Memory restored.';
-  return concise ? `Remembered: ${concise}` : 'Saved to Profile Memory.';
+  if (event.outcome === 'unchanged') {
+    return msg('Already remembered.', {id: 'settings.memory.alreadyRemembered'});
+  }
+  if (event.outcome === 'conflict') {
+    return msg('Profile Memory changed; recall it before retrying.', {
+      id: 'settings.memory.conflict',
+    });
+  }
+  if (event.outcome === 'rejected') {
+    return msg('Profile Memory operation was rejected.', {id: 'settings.memory.rejected'});
+  }
+  if (event.operation === 'forget') {
+    return concise
+      ? msg(str`Forgot: ${concise}`, {id: 'settings.memory.forgot'})
+      : msg('Profile Memory forgotten.', {id: 'settings.memory.forgotten'});
+  }
+  if (event.operation === 'undo') {
+    return concise
+      ? msg(str`Restored: ${concise}`, {id: 'settings.memory.restored'})
+      : msg('Profile Memory restored.', {id: 'settings.memory.restoredEmpty'});
+  }
+  return concise
+    ? msg(str`Remembered: ${concise}`, {id: 'settings.memory.remembered'})
+    : msg('Saved to Profile Memory.', {id: 'settings.memory.saved'});
 }
 
 /** Owns Settings state, asynchronous mutations, focus, and native Dialog semantics. */
@@ -36,12 +60,14 @@ export class DlSettingsDialog extends LightElement {
     memory: {state: true},
     memoryLoading: {state: true},
     memoryPending: {state: true},
+    language: {state: true},
   };
 
   declare deleteAllConversations: (returnFocus?: HTMLElement | null) => Promise<boolean>;
   declare memory: MemorySettings | null;
   declare memoryLoading: boolean;
   declare memoryPending: boolean;
+  declare language: LanguagePreference;
 
   #events: AbortController | null = null;
   #returnFocus: HTMLElement | null = null;
@@ -50,10 +76,13 @@ export class DlSettingsDialog extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.deleteAllConversations = async () => false;
     this.memory = null;
     this.memoryLoading = false;
     this.memoryPending = false;
+    this.language = currentLanguagePreference();
+    /** Store reads: conversations.length. */
     new StoreController(this, conversationStore);
   }
 
@@ -82,7 +111,10 @@ export class DlSettingsDialog extends LightElement {
       const read = await this.#readMemory();
       if (read === 'failed') {
         this.memory = null;
-        this.#requestToast({message: 'Could not load memory settings.', duration: 3000});
+        this.#requestToast({
+          message: msg('Could not load memory settings.', {id: 'settings.memoryLoadFailed'}),
+          duration: 3000,
+        });
       }
       if (!signal.aborted) this.memoryLoading = false;
     }
@@ -115,14 +147,14 @@ export class DlSettingsDialog extends LightElement {
     this.#requestToast({
       message,
       action: {
-        actionLabel: 'Undo',
+        actionLabel: msg('Undo', {id: 'settings.memory.undo'}),
         duration: 3000,
         onAction: async () => {
           this.#invalidateMemoryReads();
           const receipt = await undoMemoryChange(changeId, signal);
           if (receipt.outcome !== 'changed') throw new Error('Memory undo conflicted');
           await this.#refreshMemory();
-          return 'Profile Memory change undone.';
+          return msg('Profile Memory change undone.', {id: 'settings.memory.changeUndone'});
         },
       },
     });
@@ -138,38 +170,65 @@ export class DlSettingsDialog extends LightElement {
         <form method="dialog">
           <div class="settings-drawer-body">
             <div class="settings-header">
-              <h2 id="settings-title">Settings</h2>
+              <h2 id="settings-title">${msg('Settings', {id: 'settings.title'})}</h2>
               <button class="panel-close settings-close" type="submit" value="close-settings"
-                      aria-label="Close settings">✕</button>
+                      aria-label=${msg('Close settings', {id: 'settings.close'})}>✕</button>
             </div>
             <section class="settings-section">
-              <h3 id="settings-memory">Profile Memory</h3>
+              <h3 id="settings-memory">${msg('Profile Memory', {id: 'settings.profileMemory'})}</h3>
               <label class="ui-dialog-checkbox">
                 <input type="checkbox" id="memory-enabled-toggle"
                        .checked=${this.memory?.enabled ?? false}
                        ?disabled=${this.memoryLoading || this.memoryPending || !this.memory}
                        @change=${this.#toggleMemory}>
-                Activate profile memories
+                ${msg('Activate profile memories', {id: 'settings.activateMemories'})}
               </label>
               <p id="memory-active-count" class="settings-count" aria-live="polite"
                  ?hidden=${active === null || active === undefined}>
-                ${active === 1 ? '1 stored item' : `${active ?? 0} stored items`}
+                ${active === 1
+                  ? msg('1 stored item', {id: 'settings.oneStoredItem'})
+                  : msg(str`${active ?? 0} stored items`, {id: 'settings.nStoredItems'})}
               </p>
               <div class="settings-actions">
                 <button type="button" id="memory-clear-btn" class="ui-btn ui-btn-danger-text"
                         ?hidden=${!this.memory?.enabled} ?disabled=${this.memoryPending}
-                        @click=${this.#clearMemory}>Clear memory</button>
+                        @click=${this.#clearMemory}>${msg('Clear memory', {id: 'settings.clearMemory'})}</button>
               </div>
             </section>
             <section class="settings-section">
-              <h3 id="settings-data">Conversation Sessions</h3>
-              <p class="settings-note">Conversations retain 365 days</p>
+              <h3 id="settings-data">${msg('Conversation Sessions', {id: 'settings.conversationSessions'})}</h3>
+              <p class="settings-note">${msg('Conversations retain 365 days', {id: 'settings.retentionNote'})}</p>
               <p id="conversation-count" class="settings-count" aria-live="polite">
-                ${total === 1 ? '1 conversation' : `${total} conversations`}
+                ${total === 1
+                  ? msg('1 conversation', {id: 'settings.oneConversation'})
+                  : msg(str`${total} conversations`, {id: 'settings.nConversations'})}
               </p>
               <div class="settings-actions">
                 <button type="button" id="delete-all-btn" class="ui-btn ui-btn-danger-text"
-                        @click=${this.#deleteAll}>Delete all conversations</button>
+                        @click=${this.#deleteAll}>${msg('Delete all conversations', {id: 'settings.deleteAllConversations'})}</button>
+              </div>
+            </section>
+            <section class="settings-section">
+              <h3 id="settings-language">${msg('Language', {id: 'settings.language'})}</h3>
+              <div id="language-options" role="radiogroup" aria-labelledby="settings-language">
+                <label class="ui-dialog-checkbox">
+                  <input type="radio" name="language" value="auto"
+                         .checked=${this.language === 'auto'}
+                         @change=${this.#setLanguage}>
+                  ${msg('Automatic', {id: 'settings.language.automatic'})}
+                </label>
+                <label class="ui-dialog-checkbox">
+                  <input type="radio" name="language" value="en"
+                         .checked=${this.language === 'en'}
+                         @change=${this.#setLanguage}>
+                  ${msg('English', {id: 'settings.language.english'})}
+                </label>
+                <label class="ui-dialog-checkbox">
+                  <input type="radio" name="language" value="zh"
+                         .checked=${this.language === 'zh'}
+                         @change=${this.#setLanguage}>
+                  中文
+                </label>
               </div>
             </section>
           </div>
@@ -177,11 +236,13 @@ export class DlSettingsDialog extends LightElement {
       </dialog>
       <dialog id="clear-memory-dialog" class="confirm-dialog" aria-labelledby="clear-memory-title">
         <form method="dialog">
-          <h2 id="clear-memory-title">Clear Profile memory?</h2>
-          <p>Remembered preferences and facts will be forgotten. Conversations are not affected.</p>
+          <h2 id="clear-memory-title">${msg('Clear Profile memory?', {id: 'settings.clearMemoryTitle'})}</h2>
+          <p>${msg('Remembered preferences and facts will be forgotten. Conversations are not affected.', {
+            id: 'settings.clearMemoryBody',
+          })}</p>
           <div class="ui-dialog-actions">
-            <button type="submit" value="cancel">Cancel</button>
-            <button type="submit" value="clear" class="ui-dialog-danger">Clear memory</button>
+            <button type="submit" value="cancel">${msg('Cancel', {id: 'settings.cancel'})}</button>
+            <button type="submit" value="clear" class="ui-dialog-danger">${msg('Clear memory', {id: 'settings.clearMemoryConfirm'})}</button>
           </div>
         </form>
       </dialog>
@@ -218,7 +279,10 @@ export class DlSettingsDialog extends LightElement {
     } catch {
       if (!signal.aborted) {
         input.checked = !requested;
-        this.#requestToast({message: 'Could not save memory settings.', duration: 3000});
+        this.#requestToast({
+          message: msg('Could not save memory settings.', {id: 'settings.memorySaveFailed'}),
+          duration: 3000,
+        });
       }
     } finally {
       if (!signal.aborted) this.memoryPending = false;
@@ -236,10 +300,18 @@ export class DlSettingsDialog extends LightElement {
     try {
       await clearMemory(signal);
       if (await this.#readMemory() === 'failed') throw new Error('Memory refresh failed');
-      if (!signal.aborted) this.#requestToast({message: 'Memory cleared.', duration: 3000});
+      if (!signal.aborted) {
+        this.#requestToast({
+          message: msg('Memory cleared.', {id: 'settings.memoryCleared'}),
+          duration: 3000,
+        });
+      }
     } catch {
       if (!signal.aborted) {
-        this.#requestToast({message: 'Could not clear memory.', duration: 3000});
+        this.#requestToast({
+          message: msg('Could not clear memory.', {id: 'settings.memoryClearFailedToast'}),
+          duration: 3000,
+        });
       }
     } finally {
       if (!signal.aborted) this.memoryPending = false;
@@ -249,6 +321,13 @@ export class DlSettingsDialog extends LightElement {
   #deleteAll = async (event: Event): Promise<void> => {
     const returnFocus = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     if (await this.deleteAllConversations(returnFocus)) this.#dialog()?.close();
+  };
+
+  #setLanguage = (event: Event): void => {
+    const input = event.currentTarget as HTMLInputElement;
+    const preference = parseLanguagePreference(input.value);
+    this.language = preference;
+    void setLanguagePreference(preference);
   };
 
   #requestToast(detail: ToastRequestDetail): void {

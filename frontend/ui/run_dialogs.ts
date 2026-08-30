@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Run continuation and child-roster dialogs as first-class Lit components. */
 
+import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing} from 'lit';
 import {LightElement} from '../lib/lit_host.ts';
 import {isAbortError} from '../lib/errors.ts';
@@ -15,6 +16,11 @@ export interface ContinuationResult {
 
 export class DlContinuationDialog extends LightElement {
   kind: ContinuationKind = 'follow-up';
+
+  constructor() {
+    super();
+    updateWhenLocaleChanges(this);
+  }
 
   open(kind: ContinuationKind): void {
     this.kind = kind;
@@ -41,10 +47,16 @@ export class DlContinuationDialog extends LightElement {
 
   override render() {
     const forking = this.kind === 'fork';
-    const title = forking ? 'Fork this answer' : 'Follow up';
+    const title = forking
+      ? msg('Fork this answer', {id: 'runDialogs.forkTitle'})
+      : msg('Follow up', {id: 'runDialogs.followUpTitle'});
     const note = forking
-      ? 'Start a new conversation from the same context. The previous answer is not carried over.'
-      : 'Ask a follow-up question; the previous answer is included as context.';
+      ? msg('Start a new conversation from the same context. The previous answer is not carried over.', {
+          id: 'runDialogs.forkNote',
+        })
+      : msg('Ask a follow-up question; the previous answer is included as context.', {
+          id: 'runDialogs.followUpNote',
+        });
     return html`
       <dialog class="confirm-dialog" aria-labelledby="dl-continuation-title"
               @close=${() => this.#emitClose()}>
@@ -52,10 +64,10 @@ export class DlContinuationDialog extends LightElement {
           <h2 id="dl-continuation-title">${title}</h2>
           <p>${note}</p>
           <textarea class="ui-dialog-input" rows="3"
-                    placeholder="Ask a question…"></textarea>
+                    placeholder=${msg('Ask a question…', {id: 'runDialogs.askPlaceholder'})}></textarea>
           <div class="ui-dialog-actions">
-            <button type="submit" value="cancel">Cancel</button>
-            <button type="submit" value="continue" class="ui-btn">Continue</button>
+            <button type="submit" value="cancel">${msg('Cancel', {id: 'runDialogs.cancel'})}</button>
+            <button type="submit" value="continue" class="ui-btn">${msg('Continue', {id: 'runDialogs.continue'})}</button>
           </div>
         </form>
       </dialog>
@@ -92,6 +104,12 @@ export type ChildRosterPageFetcher = (
 
 export class DlChildrenRoster extends LightElement {
   fetcher: (() => Promise<ChildRosterEntry[]>) | null = null;
+
+  constructor() {
+    super();
+    updateWhenLocaleChanges(this);
+  }
+
   #pageFetcher: ChildRosterPageFetcher | null = null;
   #entries: ChildRosterEntry[] = [];
   #nextCursor: string | null = null;
@@ -179,7 +197,7 @@ export class DlChildrenRoster extends LightElement {
     this.#controller = controller;
     const generation = this.#generation;
     this.#loadMoreState = 'loading';
-    this.#announcement = 'Loading older children…';
+    this.#announcement = msg('Loading older children…', {id: 'runDialogs.loadingOlderChildren'});
     this.requestUpdate();
     try {
       const page = await this.#pageFetcher!(cursor, controller.signal);
@@ -204,14 +222,16 @@ export class DlChildrenRoster extends LightElement {
       this.#nextCursor = page.next_cursor;
       this.#loadMoreState = 'idle';
       this.#announcement = appended.length === 1
-        ? 'Loaded 1 older child.'
-        : `Loaded ${appended.length} older children.`;
+        ? msg('Loaded 1 older child.', {id: 'runDialogs.loadedOneChild'})
+        : msg(str`Loaded ${appended.length} older children.`, {id: 'runDialogs.loadedOlderChildren'});
       this.requestUpdate();
     } catch (error) {
       if (controller !== this.#controller || generation !== this.#generation) return;
       if (isAbortError(error)) return;
       this.#loadMoreState = 'error';
-      this.#announcement = 'Older children could not be loaded.';
+      this.#announcement = msg('Older children could not be loaded.', {
+        id: 'runDialogs.olderChildrenFailed',
+      });
       this.requestUpdate();
     } finally {
       if (this.#controller === controller) this.#controller = null;
@@ -248,13 +268,13 @@ export class DlChildrenRoster extends LightElement {
       <dialog class="confirm-dialog" aria-labelledby="dl-roster-title"
               @close=${() => this.#close()}>
         <form method="dialog">
-          <h2 id="dl-roster-title">Child agents</h2>
+          <h2 id="dl-roster-title">${msg('Child agents', {id: 'runDialogs.childAgents'})}</h2>
           <ul class="roster-list" role="list">
             ${this.#failed ? html`
-              <li class="roster-error" role="alert">Child agents could not be loaded.</li>
+              <li class="roster-error" role="alert">${msg('Child agents could not be loaded.', {id: 'runDialogs.childAgentsFailed'})}</li>
             ` : nothing}
             ${showEmpty ? html`
-              <li>No child agents were started.</li>
+              <li>${msg('No child agents were started.', {id: 'runDialogs.noChildAgents'})}</li>
             ` : entries.map((child) => html`
               <li role="listitem">
                 ${child.status}: ${child.objective || child.child_session_id || ''}
@@ -268,8 +288,8 @@ export class DlChildrenRoster extends LightElement {
                       ?disabled=${this.#loadMoreState === 'loading'}
                       @click=${this.#loadOlder}>
                 ${this.#loadMoreState === 'error'
-                  ? 'Retry loading older children'
-                  : 'Load older children'}
+                  ? msg('Retry loading older children', {id: 'runDialogs.retryLoadOlderChildren'})
+                  : msg('Load older children', {id: 'runDialogs.loadOlderChildren'})}
               </button>
             </div>
           ` : nothing}
@@ -277,8 +297,8 @@ export class DlChildrenRoster extends LightElement {
             ${this.#announcement}
           </span>
           <div class="ui-dialog-actions">
-            <button type="button" class="ui-btn" @click=${() => void this.refresh()}>Refresh</button>
-            <button type="submit" value="close">Close</button>
+            <button type="button" class="ui-btn" @click=${() => void this.refresh()}>${msg('Refresh', {id: 'runDialogs.refresh'})}</button>
+            <button type="submit" value="close">${msg('Close', {id: 'runDialogs.close'})}</button>
           </div>
         </form>
       </dialog>

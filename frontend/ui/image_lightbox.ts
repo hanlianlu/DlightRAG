@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Image Lightbox Feature: gallery navigation, focus, keyboard, and safe URLs. */
 
+import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit_host.ts';
@@ -31,6 +32,7 @@ export class DlImageLightbox extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.openState = false;
     this.current = '';
     this.gallery = [];
@@ -42,7 +44,7 @@ export class DlImageLightbox extends LightElement {
     this.classList.add(lightboxStyles.imageLightbox);
     this.setAttribute('role', 'dialog');
     this.setAttribute('aria-modal', 'true');
-    this.setAttribute('aria-label', 'Image viewer');
+    this.setAttribute('aria-label', msg('Image viewer', {id: 'imageLightbox.ariaLabel'}));
     this.tabIndex = -1;
     const events = new AbortController();
     this.#events = events;
@@ -104,12 +106,12 @@ export class DlImageLightbox extends LightElement {
     const index = this.gallery.indexOf(this.current);
     const multiple = this.gallery.length > 1;
     return html`
-      <button class=${lightboxStyles.imageLightboxPrev} type="button" aria-label="Previous"
+      <button class=${lightboxStyles.imageLightboxPrev} type="button" aria-label=${msg('Previous', {id: 'imageLightbox.previous'})}
               ?hidden=${!multiple || index <= 0} @click=${() => this.#navigate(-1)}>‹</button>
-      <button class=${lightboxStyles.imageLightboxNext} type="button" aria-label="Next"
+      <button class=${lightboxStyles.imageLightboxNext} type="button" aria-label=${msg('Next', {id: 'imageLightbox.next'})}
               ?hidden=${!multiple || index >= this.gallery.length - 1}
               @click=${() => this.#navigate(1)}>›</button>
-      <img class=${lightboxStyles.imageLightboxImg} src=${this.current} alt="Source image">
+      <img class=${lightboxStyles.imageLightboxImg} src=${this.current} alt=${msg('Source image', {id: 'imageLightbox.sourceImageAlt'})}>
     `;
   }
 

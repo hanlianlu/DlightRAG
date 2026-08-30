@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {AnswerPresentation} from '../api/conversations.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
@@ -51,6 +52,7 @@ export class DlInspector extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.kind = null;
     this.presentation = null;
     this.sourceHasItems = false;
@@ -186,7 +188,7 @@ export class DlInspector extends LightElement {
         @keydown=${this.#panelKeydown}
       >
         <div class="panel-header">
-          <h2 id="panel-title">${files ? 'Files' : sources ? 'Sources' : ''}</h2>
+          <h2 id="panel-title">${files ? msg('Files', {id: 'inspector.files'}) : sources ? msg('Sources', {id: 'inspector.sources'}) : ''}</h2>
           <button
             class="source-toggle-all"
             id="source-toggle-all-btn"
@@ -194,14 +196,14 @@ export class DlInspector extends LightElement {
             aria-pressed=${this.sourcesExpanded ? 'true' : 'false'}
             ?hidden=${!sources || !this.sourceHasItems}
             @click=${this.#toggleAllSources}
-          >${this.sourcesExpanded ? 'Collapse all' : 'Show all'}</button>
+          >${this.sourcesExpanded ? msg('Collapse all', {id: 'inspector.collapseAll'}) : msg('Show all', {id: 'inspector.showAll'})}</button>
           <dl-ingest-target
             class="ingest-target"
             id="ingest-target"
             .active=${files}
           ></dl-ingest-target>
           <button class="panel-close" id="panel-close-btn" type="button"
-                  aria-label="Close panel" @click=${() => this.close()}>✕</button>
+                  aria-label=${msg('Close panel', {id: 'inspector.closePanel'})} @click=${() => this.close()}>✕</button>
         </div>
         <div id="panel-content" class="panel-content">
           <dl-inspector-sources

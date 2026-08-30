@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {formatFileSize} from '../lib/file_size.ts';
@@ -80,6 +81,7 @@ export class DlChatComposer extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.running = false;
     this.stopping = false;
     this.attachmentPolicy = null;
@@ -99,6 +101,7 @@ export class DlChatComposer extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    // Attachment store reads: list(), size, imageCount.
     this.#unsubscribe ??= attachmentStore.subscribe(() => {
       this.attachments = [...attachmentStore.list()];
     });
@@ -156,7 +159,7 @@ export class DlChatComposer extends LightElement {
       : false;
     return html`
       <div class="drop-overlay ${this.dragActive ? 'active' : ''}" aria-hidden="true">
-        <div class="drop-overlay-content">Drop files or folders here</div>
+        <div class="drop-overlay-content">${msg('Drop files or folders here', {id: 'chatComposer.dropCopy'})}</div>
       </div>
       <div class="composer" id="composer">
         <div class="composer-inner">
@@ -165,10 +168,10 @@ export class DlChatComposer extends LightElement {
           </div>
           <form id="query-form" class="composer-form ${this.multiline ? 'multiline' : ''}"
                 @submit=${this.#submitForm}>
-            <button type="button" class="composer-plus" id="composer-plus" aria-label="Attach files"
+            <button type="button" class="composer-plus" id="composer-plus" aria-label=${msg('Attach files', {id: 'chatComposer.attachFiles'})}
                     ?disabled=${!attachmentsAvailable}
                     aria-disabled=${attachmentsAvailable ? 'false' : 'true'}
-                    title=${attachmentsAvailable ? nothing : 'Attachments are currently unavailable.'}
+                    title=${attachmentsAvailable ? nothing : msg('Attachments are currently unavailable.', {id: 'chatComposer.attachmentsUnavailable'})}
                     @click=${this.#openAttachmentPicker}>
               <svg class="composer-plus-icon" width="24" height="24" viewBox="0 0 24 24"
                    fill="none" stroke="currentColor" stroke-linecap="round"
@@ -176,7 +179,7 @@ export class DlChatComposer extends LightElement {
                 <path d="M12 5v14"></path><path d="M5 12h14"></path>
               </svg>
             </button>
-            <textarea name="query" aria-label="Message" placeholder="Ask anything"
+            <textarea name="query" aria-label=${msg('Message', {id: 'chatComposer.messageAria'})} placeholder=${msg('Ask anything', {id: 'chatComposer.placeholder'})}
                       class="composer-input" rows="1" autocomplete="off"
                       .value=${this.draft}
                       @input=${this.#inputChanged}
@@ -186,22 +189,24 @@ export class DlChatComposer extends LightElement {
             <div class="composer-mode">
               <button type="button" class="composer-mode-trigger" id="composer-mode"
                       aria-haspopup="menu" aria-expanded=${String(this.modeOpen)}
-                      aria-label=${`Answer mode: ${MODE_LABELS[this.mode]}`}
+                      aria-label=${msg(str`Answer mode: ${MODE_LABELS[this.mode]}`, {id: `chatComposer.modeAria.${this.mode}`})}
                       @click=${this.#toggleModeMenu} @keydown=${this.#modeTriggerKeydown}>
-                ${MODE_LABELS[this.mode]}
+                ${msg(MODE_LABELS[this.mode], {id: `chatComposer.mode.${this.mode}`})}
               </button>
-              <div class="composer-mode-menu" id="composer-mode-menu" role="menu" aria-label="Answer mode"
+              <div class="composer-mode-menu" id="composer-mode-menu" role="menu" aria-label=${msg('Answer mode', {id: 'chatComposer.modeMenuAria'})}
                    ?hidden=${!this.modeOpen} @keydown=${this.#modeMenuKeydown}>
                 ${MODES.map((mode) => html`
                   <button type="button" role="menuitemradio" data-mode=${mode}
                           aria-checked=${String(this.mode === mode)} tabindex="-1"
-                          @click=${() => this.#selectMode(mode)}>${MODE_LABELS[mode]}</button>
+                          @click=${() => this.#selectMode(mode)}>${msg(MODE_LABELS[mode], {id: `chatComposer.mode.${mode}`})}</button>
                 `)}
               </div>
             </div>
             <button type="submit"
                     class="composer-send ${stop ? 'is-stop' : ''} ${steer ? 'is-steer' : ''}"
-                    aria-label=${this.running ? (hasText ? 'Steer' : 'Stop') : 'Send'}
+                    aria-label=${this.running
+                      ? (hasText ? msg('Steer', {id: 'chatComposer.steer'}) : msg('Stop', {id: 'chatComposer.stop'}))
+                      : msg('Send', {id: 'chatComposer.send'})}
                     ?disabled=${(!hasText && !this.running) || this.stopping}
                     @click=${this.#sendClicked}>
               <svg class="composer-send-icon composer-send-icon--send" width="18" height="18"
@@ -230,7 +235,7 @@ export class DlChatComposer extends LightElement {
         <div class=${chatStyles.thumbnailItem}>
           <img class=${chatStyles.thumbnailImg} src=${item.objectUrl} alt=${item.file.name}>
           <button type="button" class=${chatStyles.thumbnailRemove}
-                  aria-label=${`Remove ${item.file.name}`}
+                  aria-label=${msg(str`Remove ${item.file.name}`, {id: 'chatComposer.removeAttachment'})}
                   @click=${() => attachmentStore.remove(item.id)}>×</button>
         </div>
       `;
@@ -242,7 +247,7 @@ export class DlChatComposer extends LightElement {
           <span class=${chatStyles.documentChipMeta}>${formatFileSize(item.file.size)}</span>
         </span>
         <button type="button" class=${chatStyles.documentChipRemove}
-                aria-label=${`Remove ${item.file.name}`}
+                aria-label=${msg(str`Remove ${item.file.name}`, {id: 'chatComposer.removeAttachment'})}
                 @click=${() => attachmentStore.remove(item.id)}>×</button>
       </span>
     `;

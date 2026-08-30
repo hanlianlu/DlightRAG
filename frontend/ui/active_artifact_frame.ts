@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {css, html, LitElement, nothing, type TemplateResult} from 'lit';
 
 const PERMISSIONS = [
@@ -81,9 +82,10 @@ export class DlActiveArtifactFrame extends LitElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.source = null;
     this.active = false;
-    this.label = 'Artifact HTML preview';
+    this.label = msg('Artifact HTML preview', {id: 'activeArtifactFrame.defaultLabel'});
   }
 
   override connectedCallback(): void {
@@ -103,10 +105,12 @@ export class DlActiveArtifactFrame extends LitElement {
 
   protected override render(): TemplateResult | typeof nothing {
     if (this.source === null) return nothing;
-    const mode = this.active ? 'Untrusted active preview' : 'Static HTML preview';
+    const mode = this.active
+      ? msg('Untrusted active preview', {id: 'activeArtifactFrame.modeActive'})
+      : msg('Static HTML preview', {id: 'activeArtifactFrame.modeStatic'});
     return html`
       <div class="boundary">
-        <div class="notice" role="status">${mode} · isolated from DlightRAG</div>
+        <div class="notice" role="status">${msg(str`${mode} · isolated from DlightRAG`, {id: 'activeArtifactFrame.notice'})}</div>
         <iframe
           title=${this.label}
           sandbox=${this.active ? 'allow-scripts' : ''}

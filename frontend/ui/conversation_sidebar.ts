@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {clearMemory} from '../api/memory.ts';
 import {DESKTOP_SHELL_MEDIA} from '../lib/breakpoints.ts';
@@ -73,6 +74,7 @@ export class DlConversationSidebar extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.enabled = false;
     this.chatFeature = null;
     this.drawerOpen = false;
@@ -80,6 +82,7 @@ export class DlConversationSidebar extends LightElement {
     this.desktop = window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
     this.pendingLifecycleAction = false;
     this.shellInert = false;
+    /** Store reads: activeConversationId, fallbackConversationId, mutationPending. */
     new StoreController(this, conversationStore);
   }
 
@@ -190,7 +193,10 @@ export class DlConversationSidebar extends LightElement {
       result = await conversationStore.deleteAll(signal);
       if (signal.aborted) return false;
       if (result === 'error') {
-        this.#requestToast({message: 'Could not delete conversations.', duration: 3000});
+        this.#requestToast({
+          message: msg('Could not delete conversations.', {id: 'conversationSidebar.deleteAllFailed'}),
+          duration: 3000,
+        });
       } else {
         this.chatFeature?.clearDraft();
         if (alsoClearMemory) {
@@ -199,7 +205,9 @@ export class DlConversationSidebar extends LightElement {
           } catch {
             if (!signal.aborted) {
               this.#requestToast({
-                message: 'Conversations deleted; could not clear Profile memory.',
+                message: msg('Conversations deleted; could not clear Profile memory.', {
+                  id: 'conversationSidebar.memoryClearFailed',
+                }),
                 duration: 3000,
               });
             }
@@ -303,7 +311,12 @@ export class DlConversationSidebar extends LightElement {
 
   #lifecycleBlocked(): boolean {
     if (!this.chatFeature?.submissionPending) return false;
-    this.#requestToast({message: 'Wait for the current question to be accepted.', duration: 3000});
+    this.#requestToast({
+      message: msg('Wait for the current question to be accepted.', {
+        id: 'conversationSidebar.waitForAcceptedQuestion',
+      }),
+      duration: 3000,
+    });
     return true;
   }
 
@@ -435,13 +448,18 @@ export class DlConversationSidebar extends LightElement {
     const result = await conversationStore.rename(conversationId, title, signal);
     if (signal.aborted || result === 'ok') return;
     if (result === 'missing') {
-      this.#requestToast({message: 'Conversation unavailable.', duration: 3000});
+      this.#requestToast({
+        message: msg('Conversation unavailable.', {id: 'conversationSidebar.renameMissing'}),
+        duration: 3000,
+      });
       return;
     }
     this.#requestToast({
       message: title.trim().length > 120
-        ? 'Conversation titles must be 1 to 120 characters.'
-        : 'Could not rename the conversation.',
+        ? msg('Conversation titles must be 1 to 120 characters.', {
+            id: 'conversationSidebar.renameTooLong',
+          })
+        : msg('Could not rename the conversation.', {id: 'conversationSidebar.renameFailed'}),
       duration: 3000,
     });
   }
@@ -478,7 +496,12 @@ export class DlConversationSidebar extends LightElement {
       result = await conversationStore.delete(conversationId, signal);
       if (signal.aborted) return;
       if (result === 'error') {
-        this.#requestToast({message: 'Could not delete the conversation.', duration: 3000});
+        this.#requestToast({
+          message: msg('Could not delete the conversation.', {
+            id: 'conversationSidebar.deleteFailed',
+          }),
+          duration: 3000,
+        });
       } else if (wasActive) {
         this.chatFeature?.clearDraft();
         const fallback = conversationStore.fallbackConversationId;
@@ -532,7 +555,7 @@ export class DlConversationSidebar extends LightElement {
   #resize = (): void => {
     const desktop = window.matchMedia(DESKTOP_SHELL_MEDIA).matches;
     if (desktop === this.desktop) return;
-    const navigation = this.querySelector<HTMLElement>('nav[aria-label="Conversations"]');
+    const navigation = this.querySelector<HTMLElement>('#chat-sidebar');
     const focusWasInNavigation = Boolean(
       document.activeElement instanceof Node && navigation?.contains(document.activeElement),
     );
@@ -598,7 +621,7 @@ export class DlConversationSidebar extends LightElement {
       <nav
         id="chat-sidebar"
         class=${conversationStyles.root}
-        aria-label="Conversations"
+        aria-label=${msg('Conversations', {id: 'conversationSidebar.conversations'})}
         aria-hidden=${expanded ? nothing : 'true'}
         role=${modal ? 'dialog' : nothing}
         aria-modal=${modal ? 'true' : nothing}
@@ -617,12 +640,14 @@ export class DlConversationSidebar extends LightElement {
                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
             </svg>
-            New chat
+            ${msg('New chat', {id: 'conversationSidebar.newChat'})}
           </button>
           <button
             id="conversation-sidebar-toggle"
             type="button"
-            aria-label=${this.desktop ? 'Collapse conversations' : 'Close conversations'}
+            aria-label=${this.desktop
+              ? msg('Collapse conversations', {id: 'conversationSidebar.collapseConversations'})
+              : msg('Close conversations', {id: 'conversationSidebar.closeConversations'})}
             aria-controls="chat-sidebar"
             @click=${this.#toggleSidebar}
           >
@@ -641,14 +666,16 @@ export class DlConversationSidebar extends LightElement {
           @dl-conversation-rename=${this.#renameConversation}
           @dl-conversation-retry=${this.#retryConversation}
         ></dl-conversation-list>
-        <button id="settings-btn" type="button" aria-label="Settings" aria-controls="settings-dialog"
+        <button id="settings-btn" type="button"
+                aria-label=${msg('Settings', {id: 'conversationSidebar.settings'})}
+                aria-controls="settings-dialog"
                 @click=${this.#requestSettings}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="3"></circle>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
           </svg>
-          <span class="sidebar-action-label">Settings</span>
+          <span class="sidebar-action-label">${msg('Settings', {id: 'conversationSidebar.settingsLabel'})}</span>
         </button>
       </nav>
       <div
@@ -659,7 +686,7 @@ export class DlConversationSidebar extends LightElement {
       <button
         id="conversation-sidebar-open"
         type="button"
-        aria-label="Open conversations"
+        aria-label=${msg('Open conversations', {id: 'conversationSidebar.openConversations'})}
         aria-controls="chat-sidebar"
         aria-expanded=${expanded ? 'true' : 'false'}
         aria-hidden=${modal ? 'true' : nothing}
@@ -685,44 +712,52 @@ export class DlConversationSidebar extends LightElement {
               aria-labelledby="delete-conversation-title"
               aria-describedby="delete-conversation-message">
         <form method="dialog">
-          <h2 id="delete-conversation-title">Delete conversation</h2>
+          <h2 id="delete-conversation-title">${msg('Delete conversation', {id: 'conversationSidebar.deleteConversationTitle'})}</h2>
           <p id="delete-conversation-message">
-            This conversation and its history will be permanently deleted.
+            ${msg('This conversation and its history will be permanently deleted.', {
+              id: 'conversationSidebar.deleteConversationBody',
+            })}
           </p>
           <p id="delete-conversation-draft-warning" hidden>
-            Your unsent draft and attachments will also be discarded.
+            ${msg('Your unsent draft and attachments will also be discarded.', {
+              id: 'conversationSidebar.deleteConversationDraftWarning',
+            })}
           </p>
           <div class="ui-dialog-actions">
-            <button type="submit" value="cancel">Cancel</button>
-            <button type="submit" value="delete" class="ui-dialog-danger">Delete</button>
+            <button type="submit" value="cancel">${msg('Cancel', {id: 'conversationSidebar.cancel'})}</button>
+            <button type="submit" value="delete" class="ui-dialog-danger">${msg('Delete', {id: 'conversationSidebar.delete'})}</button>
           </div>
         </form>
       </dialog>
       <dialog id="delete-all-conversations-dialog" class="confirm-dialog"
               aria-labelledby="delete-all-conversations-title">
         <form method="dialog">
-          <h2 id="delete-all-conversations-title">Delete all conversations?</h2>
+          <h2 id="delete-all-conversations-title">${msg('Delete all conversations?', {id: 'conversationSidebar.deleteAllTitle'})}</h2>
           <p id="delete-all-conversations-draft-warning" hidden>
-            Draft and attachments will also be deleted.
+            ${msg('Draft and attachments will also be deleted.', {
+              id: 'conversationSidebar.deleteAllDraftWarning',
+            })}
           </p>
           <label class="ui-dialog-checkbox">
             <input type="checkbox" id="delete-all-also-clear-memory">
-            Also clear profile memories
+            ${msg('Also clear profile memories', {id: 'conversationSidebar.alsoClearMemories'})}
           </label>
           <div class="ui-dialog-actions">
-            <button type="submit" value="cancel">Cancel</button>
-            <button type="submit" value="delete-all" class="ui-dialog-danger">Delete all</button>
+            <button type="submit" value="cancel">${msg('Cancel', {id: 'conversationSidebar.cancelDeleteAll'})}</button>
+            <button type="submit" value="delete-all" class="ui-dialog-danger">${msg('Delete all', {id: 'conversationSidebar.deleteAll'})}</button>
           </div>
         </form>
       </dialog>
       <dialog id="discard-draft-dialog" class="confirm-dialog"
               aria-labelledby="discard-draft-title">
         <form method="dialog">
-          <h2 id="discard-draft-title">Discard draft?</h2>
-          <p>Your unsent message and attachments will not move to another conversation.</p>
+          <h2 id="discard-draft-title">${msg('Discard draft?', {id: 'conversationSidebar.discardDraftTitle'})}</h2>
+          <p>${msg('Your unsent message and attachments will not move to another conversation.', {
+            id: 'conversationSidebar.discardDraftBody',
+          })}</p>
           <div class="ui-dialog-actions">
-            <button type="submit" value="cancel">Keep editing</button>
-            <button type="submit" value="discard">Discard and continue</button>
+            <button type="submit" value="cancel">${msg('Keep editing', {id: 'conversationSidebar.keepEditing'})}</button>
+            <button type="submit" value="discard">${msg('Discard and continue', {id: 'conversationSidebar.discardAndContinue'})}</button>
           </div>
         </form>
       </dialog>

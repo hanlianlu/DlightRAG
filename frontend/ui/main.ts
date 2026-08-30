@@ -10,9 +10,16 @@ import '../styles/files.css';
 import '../styles/sources.css';
 
 import type {DlApp} from './app.ts';
-import './app.ts';
-import {setupMathRendering} from './mathjax.ts';
-import {setupPanelSplits} from './split_panel.ts';
+import {initializeLanguagePreference} from '../i18n/locale.ts';
+
+// The language preference must resolve before the app element upgrades and
+// renders, so the application module is imported dynamically after it.
+await initializeLanguagePreference();
+
+const appModule = await import('./app.ts');
+void appModule;
+const {setupMathRendering} = await import('./mathjax.ts');
+const {setupPanelSplits} = await import('./split_panel.ts');
 
 // Vite's one-shot entry is the approved seam for the two browser/third-party
 // adapters: MathJax loading/scheduling and Web Awesome split-panel binding.

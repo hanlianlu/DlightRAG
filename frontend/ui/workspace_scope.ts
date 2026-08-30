@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing, svg, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {WorkspaceApiError, deleteWorkspaceRequest} from '../api/workspaces.ts';
@@ -43,10 +44,12 @@ export class DlWorkspaceScope extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.open = false;
     this.deleteWorkspace = null;
     this.deletePending = false;
     this.deleteConfirmed = false;
+    /** Store reads: records, active, primary. */
     new StoreController(this, workspaceStore);
   }
 
@@ -74,10 +77,12 @@ export class DlWorkspaceScope extends LightElement {
     const previous = this.#lastLoadMoreState;
     if (state === previous) return;
     this.#lastLoadMoreState = state;
-    if (state === 'loading') this.#loadMoreAnnouncement = 'Loading workspaces…';
-    else if (state === 'error') this.#loadMoreAnnouncement = 'Workspaces could not be loaded.';
-    else if (previous === 'loading') {
-      this.#loadMoreAnnouncement = 'Loaded more workspaces.';
+    if (state === 'loading') {
+      this.#loadMoreAnnouncement = msg('Loading workspaces…', {id: 'workspaceScope.loadingMore'});
+    } else if (state === 'error') {
+      this.#loadMoreAnnouncement = msg('Workspaces could not be loaded.', {id: 'workspaceScope.loadMoreFailed'});
+    } else if (previous === 'loading') {
+      this.#loadMoreAnnouncement = msg('Loaded more workspaces.', {id: 'workspaceScope.loadedMore'});
       this.#settledFocusRestore = true;
     }
   }
@@ -100,7 +105,8 @@ export class DlWorkspaceScope extends LightElement {
     const multi = workspaceStore.active.length > 1 || this.#allSelected;
     return html`
       <button class="workspace-selector-trigger" id="workspace-trigger" type="button"
-              aria-label="Choose search workspaces" aria-haspopup="dialog"
+              aria-label=${msg('Choose search workspaces', {id: 'workspaceScope.chooseSearchWorkspaces'})}
+              aria-haspopup="dialog"
               aria-expanded=${this.open ? 'true' : 'false'} aria-controls="workspace-popover"
               @click=${this.#togglePopover}>
         <span class="workspace-dot${multi ? ' multi' : ''}" id="workspace-dot"></span>
@@ -149,7 +155,9 @@ export class DlWorkspaceScope extends LightElement {
     const total = workspaceStore.knownWorkspaces.length;
     const active = workspaceStore.active;
     if (active.length === 0 || this.#allSelected) {
-      return total > 0 ? `All workspaces (${total})` : 'All workspaces';
+      return total > 0
+        ? msg(str`All workspaces (${total})`, {id: 'workspaceScope.allWithCount'})
+        : msg('All workspaces', {id: 'workspaceScope.all'});
     }
     const anchor = active.includes(workspaceStore.primary) ? workspaceStore.primary : active[0];
     const name = workspaceStore.records.find((record) => record.workspace === anchor)?.displayName
@@ -167,7 +175,8 @@ export class DlWorkspaceScope extends LightElement {
       .sort((left, right) => left.displayName.localeCompare(right.displayName));
     return html`
       <div class="ui-popover ui-popover--workspace" id="workspace-popover"
-           role="dialog" aria-label="Workspaces" ?hidden=${!this.open}
+           role="dialog" aria-label=${msg('Workspaces', {id: 'workspaceScope.workspacesAria'})}
+           ?hidden=${!this.open}
            @keydown=${(event: KeyboardEvent) => {
              rovingArrowKeydown(event, '[data-workspace-choice]');
            }}
@@ -191,7 +200,9 @@ export class DlWorkspaceScope extends LightElement {
         <button type="button" data-load-more-workspaces class="ui-popover-item"
                 aria-busy=${state === 'loading' ? 'true' : 'false'}
                 ?disabled=${state === 'loading'} @click=${this.#loadMore}>
-          ${state === 'error' ? 'Retry loading workspaces' : 'Load more workspaces'}
+          ${state === 'error'
+            ? msg('Retry loading workspaces', {id: 'workspaceScope.retryLoadMore'})
+            : msg('Load more workspaces', {id: 'workspaceScope.loadMore'})}
         </button>
       </div>
     `;
@@ -213,7 +224,7 @@ export class DlWorkspaceScope extends LightElement {
       <button class="ui-popover-item ${workspaceStyles.workspacePopoverAll}" type="button"
               data-workspace-choice data-workspace-all="true"
               aria-pressed=${selected ? 'true' : 'false'} @click=${selectAll}>
-        ${this.#check(selected)}All workspaces
+        ${this.#check(selected)}${msg('All workspaces', {id: 'workspaceScope.all'})}
       </button>
     `;
   }
@@ -232,7 +243,8 @@ export class DlWorkspaceScope extends LightElement {
           <span class=${workspaceStyles.workspacePopoverName}>${record.displayName}</span>
         </button>
         <button type="button" class=${workspaceStyles.workspacePopoverDelete}
-                title="Delete workspace" aria-label=${`Delete workspace ${record.displayName}`}
+                title=${msg('Delete workspace', {id: 'workspaceScope.deleteTitle'})}
+                aria-label=${msg(str`Delete workspace ${record.displayName}`, {id: 'workspaceScope.deleteWorkspaceAria'})}
                 @click=${(event: MouseEvent) => {
                   event.stopPropagation();
                   void this.#requestDelete(record.workspace, event.currentTarget as HTMLElement);
@@ -274,22 +286,26 @@ export class DlWorkspaceScope extends LightElement {
               aria-labelledby="delete-workspace-title" @cancel=${this.#deleteCancelled}
               @close=${this.#deleteClosed}>
         <form @submit=${this.#submitDelete}>
-          <h3 class="workspace-dialog-title" id="delete-workspace-title">Delete workspace</h3>
-          <p class="workspace-dialog-text">This will permanently delete all data for</p>
+          <h3 class="workspace-dialog-title" id="delete-workspace-title">${msg('Delete workspace', {id: 'workspaceScope.deleteTitle'})}</h3>
+          <p class="workspace-dialog-text">${msg('This will permanently delete all data for', {id: 'workspaceScope.deleteWarning'})}</p>
           <p class="workspace-dialog-name">${displayName}</p>
-          <p class="workspace-dialog-text">Type the workspace name to confirm</p>
+          <p class="workspace-dialog-text">${msg('Type the workspace name to confirm', {id: 'workspaceScope.typeToConfirm'})}</p>
           <input type="text" id="delete-workspace-confirm-input" class="workspace-dialog-input"
-                 autocomplete="off" placeholder="Type workspace name..."
-                 aria-label=${`Type ${displayName} to confirm`} .readOnly=${this.deletePending}
+                 autocomplete="off"
+                 placeholder=${msg('Type workspace name...', {id: 'workspaceScope.confirmPlaceholder'})}
+                 aria-label=${msg(str`Type ${displayName} to confirm`, {id: 'workspaceScope.typeNameToConfirmAria'})}
+                 .readOnly=${this.deletePending}
                  @input=${this.#deleteInput}>
           <div class="ui-dialog-actions">
             <button type="button" ?disabled=${this.deletePending}
                     @click=${() => this.querySelector<HTMLDialogElement>(
                       '#delete-workspace-dialog',
-                    )?.close()}>Cancel</button>
+                    )?.close()}>${msg('Cancel', {id: 'workspaceScope.cancel'})}</button>
             <button type="submit" class="ui-dialog-danger"
                     ?disabled=${this.deletePending || !this.deleteConfirmed}>
-              ${this.deletePending ? 'Deleting…' : 'Delete'}
+              ${this.deletePending
+                ? msg('Deleting…', {id: 'workspaceScope.deleting'})
+                : msg('Delete', {id: 'workspaceScope.delete'})}
             </button>
           </div>
         </form>
@@ -320,13 +336,15 @@ export class DlWorkspaceScope extends LightElement {
       ) return;
       workspaceStore.remove(deleted.workspace, deleted.next_workspace);
       this.querySelector<HTMLDialogElement>('#delete-workspace-dialog')?.close();
-      this.#requestToast({message: `Workspace ${workspace} deleted.`});
+      this.#requestToast({
+        message: msg(str`Workspace ${workspace} deleted.`, {id: 'workspaceScope.deleted'}),
+      });
     } catch (error) {
       if (!operation.signal.aborted && this.#deleteOperation === operation) {
         this.#requestToast({
           message: error instanceof WorkspaceApiError
             ? error.message
-            : 'Could not delete workspace.',
+            : msg('Could not delete workspace.', {id: 'workspaceScope.deleteFailed'}),
           duration: 3000,
         });
       }

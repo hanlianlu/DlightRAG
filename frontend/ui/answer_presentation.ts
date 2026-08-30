@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {
@@ -45,6 +46,7 @@ export class AnswerPresentationElement extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.presentation = null;
   }
 
@@ -68,16 +70,16 @@ export class AnswerPresentationElement extends LightElement {
     return html`
       ${presentation.artifact_outcome.status === 'complete' ? nothing : html`
         <div class="artifact-publication-warning" role="alert">
-          Some requested Artifacts could not be published.
+          ${msg('Some requested Artifacts could not be published.', {id: 'answerPresentation.publicationWarning'})}
         </div>
       `}
       <div class="answer-parts" @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
         ${presentation.parts.map((part, index) => this.#part(part, index))}
       </div>
       ${presentation.evidence_images.length > 0 ? html`
-        <section class="answer-evidence" aria-label="Visual Evidence"
+        <section class="answer-evidence" aria-label=${msg('Visual Evidence', {id: 'answerPresentation.visualEvidenceAria'})}
                  @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
-          <h3>Visual Evidence</h3>
+          <h3>${msg('Visual Evidence', {id: 'answerPresentation.visualEvidence'})}</h3>
           <div class="answer-image-strip">
             ${repeat(
               presentation.evidence_images,
@@ -88,9 +90,9 @@ export class AnswerPresentationElement extends LightElement {
         </section>
       ` : nothing}
       ${presentation.sources.length > 0 ? html`
-        <section class="answer-references" aria-label="References"
+        <section class="answer-references" aria-label=${msg('References', {id: 'answerPresentation.referencesAria'})}
                  @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
-          <h3 class="answer-references-title">References</h3>
+          <h3 class="answer-references-title">${msg('References', {id: 'answerPresentation.references'})}</h3>
           ${repeat(
             presentation.sources,
             (source) => source.id,
@@ -121,10 +123,10 @@ export class AnswerPresentationElement extends LightElement {
     if (artifact.status === 'unavailable') {
       return html`
         <article class="answer-artifact-card answer-artifact-unavailable" role="group"
-                 aria-label=${`${artifact.label}, unavailable`}>
+                 aria-label=${msg(str`${artifact.label}, unavailable`, {id: 'answerPresentation.artifactUnavailableAria'})}>
           <strong>${artifact.label}</strong>
           <span>${artifact.filename}</span>
-          <p>${artifact.issue?.description || 'This Artifact is unavailable.'}</p>
+          <p>${artifact.issue?.description || msg('This Artifact is unavailable.', {id: 'answerPresentation.artifactUnavailable'})}</p>
         </article>
       `;
     }
@@ -134,7 +136,7 @@ export class AnswerPresentationElement extends LightElement {
         return html`
           <figure class="answer-artifact-image">
             <button type="button" data-answer-image data-src=${source}
-                    aria-label=${`Open image: ${artifact.label}`}>
+                    aria-label=${msg(str`Open image: ${artifact.label}`, {id: 'answerPresentation.openImage'})}>
               <img src=${source} alt=${artifact.label} loading="lazy">
             </button>
             <figcaption>${artifact.label}</figcaption>
@@ -151,7 +153,7 @@ export class AnswerPresentationElement extends LightElement {
         </div>
         <button class="ui-btn" type="button" @click=${(event: Event) => {
           this.#openArtifact(artifact, event.currentTarget as HTMLElement);
-        }}>${primary ? 'View report' : 'Open Artifact'}</button>
+        }}>${primary ? msg('View report', {id: 'answerPresentation.viewReport'}) : msg('Open Artifact', {id: 'answerPresentation.openArtifact'})}</button>
       </article>
     `;
   }
@@ -163,14 +165,14 @@ export class AnswerPresentationElement extends LightElement {
     return html`
       <div class="answer-evidence-image">
         <button class="answer-image-item" type="button" data-answer-image
-                data-src=${source} aria-label=${`Open image: ${image.label}`}>
+                data-src=${source} aria-label=${msg(str`Open image: ${image.label}`, {id: 'answerPresentation.openImage'})}>
           <img src=${thumbnail} alt=${image.label} loading="lazy">
           <span class="answer-image-label">${image.label}</span>
         </button>
         ${image.source_ref ? html`
           <button class="answer-image-source" type="button" data-ref=${image.source_ref}
-                  aria-label=${`Open source ${image.source_ref}`}>
-            Source ${image.source_ref}
+                  aria-label=${msg(str`Open source ${image.source_ref}`, {id: 'answerPresentation.openSourceAria'})}>
+            ${msg(str`Source ${image.source_ref}`, {id: 'answerPresentation.openSource'})}
           </button>
         ` : nothing}
       </div>

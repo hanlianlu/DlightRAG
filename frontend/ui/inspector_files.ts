@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
@@ -16,6 +17,7 @@ import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {bus} from '../events/bus.ts';
+import {modalResult} from './modal.ts';
 import {withRelativePath} from './folder-upload.ts';
 import type {ToastRequestDetail} from './toast.ts';
 
@@ -23,7 +25,9 @@ const POLL_INTERVAL_MS = 2000;
 
 function uploadLabel(files: readonly File[], label?: string | null): string {
   if (label) return label;
-  return files.length === 1 ? files[0].name : `${files.length} files`;
+  return files.length === 1
+    ? files[0].name
+    : msg(str`${files.length} files`, {id: 'inspectorFiles.nFiles'});
 }
 
 /** File-management content, async work, and upload intent owned by the Inspector. */
@@ -56,10 +60,12 @@ export class DlInspectorFiles extends LightElement {
   #olderFilesAnnouncement = '';
   #restoreOlderFocus = false;
   #activeMutations = 0;
+  #deleteTrigger: HTMLElement | null = null;
   #releaseWorkspaceEvents: (() => void)[] = [];
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.active = false;
     this.snapshot = null;
     this.loading = true;
@@ -68,6 +74,7 @@ export class DlInspectorFiles extends LightElement {
     this.acceptedFiles = 0;
     this.filesLoadMoreState = 'idle';
     this.#workspace = ingestStore.workspace;
+    /** Store reads: ingestStore.workspace. */
     new StoreController(this, ingestStore);
   }
 
@@ -130,7 +137,9 @@ export class DlInspectorFiles extends LightElement {
       if (snapshot.ingest.busy) this.#schedulePoll(workspace);
     } catch (error) {
       if (isAbortError(error) || !this.#isCurrent(controller, workspace)) return;
-      this.error = error instanceof FilesApiError ? error.message : 'Failed to load files.';
+      this.error = error instanceof FilesApiError
+        ? error.message
+        : msg('Failed to load files.', {id: 'inspectorFiles.loadFailed'});
     } finally {
       if (this.#request === controller) {
         this.#request = null;
@@ -169,7 +178,7 @@ export class DlInspectorFiles extends LightElement {
     const controller = new AbortController();
     this.#olderFilesController = controller;
     this.filesLoadMoreState = 'loading';
-    this.#olderFilesAnnouncement = 'Loading older files…';
+    this.#olderFilesAnnouncement = msg('Loading older files…', {id: 'inspectorFiles.loadingOlder'});
     try {
       const older = await getFilePanel(workspace, cursor, controller.signal);
       const current = this.snapshot;
@@ -202,8 +211,8 @@ export class DlInspectorFiles extends LightElement {
       };
       this.filesLoadMoreState = 'idle';
       this.#olderFilesAnnouncement = appended.length === 1
-        ? 'Loaded 1 older file.'
-        : `Loaded ${appended.length} older files.`;
+        ? msg('Loaded 1 older file.', {id: 'inspectorFiles.loadedOneOlder'})
+        : msg(str`Loaded ${appended.length} older files.`, {id: 'inspectorFiles.loadedOlder'});
       if (older.next_cursor === null && this.#restoreOlderFocus) {
         this.#restoreOlderFocus = false;
         await this.updateComplete;
@@ -216,7 +225,7 @@ export class DlInspectorFiles extends LightElement {
         || generation !== this.#olderFilesGeneration
       ) return;
       this.filesLoadMoreState = 'error';
-      this.#olderFilesAnnouncement = 'Older files could not be loaded.';
+      this.#olderFilesAnnouncement = msg('Older files could not be loaded.', {id: 'inspectorFiles.olderFilesFailed'});
     } finally {
       if (this.#olderFilesController === controller) this.#olderFilesController = null;
     }
@@ -233,7 +242,7 @@ export class DlInspectorFiles extends LightElement {
     this.uploading = true;
     this.error = null;
     const name = uploadLabel(files, label);
-    this.#requestToast({message: `Uploading ${name}...`});
+    this.#requestToast({message: msg(str`Uploading ${name}...`, {id: 'inspectorFiles.uploadingToast'})});
     try {
       const receipt = await uploadFileBatch(workspace, files, controller.signal);
       if (!this.#isCurrent(controller, workspace)) return;
@@ -246,11 +255,16 @@ export class DlInspectorFiles extends LightElement {
           : null,
       };
       this.acceptedFiles = receipt.file_count;
-      this.#requestToast({message: 'Files received — processing in background', duration: 3000});
+      this.#requestToast({
+        message: msg('Files received — processing in background', {id: 'inspectorFiles.filesReceived'}),
+        duration: 3000,
+      });
       this.#schedulePoll(workspace);
     } catch (error) {
       if (isAbortError(error) || !this.#isCurrent(controller, workspace)) return;
-      const message = error instanceof FilesApiError ? error.message : 'Upload failed.';
+      const message = error instanceof FilesApiError
+        ? error.message
+        : msg('Upload failed.', {id: 'inspectorFiles.uploadFailed'});
       this.error = message;
       this.#requestToast({message, duration: 3000});
     } finally {
@@ -274,7 +288,14 @@ export class DlInspectorFiles extends LightElement {
   async #deleteFile(filePath: string): Promise<void> {
     if (!filePath) return;
     const filename = filePath.split('/').pop() || filePath;
-    if (!window.confirm(`Delete ${filename}?`)) return;
+    const dialog = this.querySelector<HTMLDialogElement>('#delete-file-dialog');
+    const message = this.querySelector<HTMLElement>('#delete-file-message');
+    if (!dialog || !message) return;
+    message.textContent = msg(
+      str`${filename} will be permanently removed from this workspace.`,
+      {id: 'inspectorFiles.deleteNotice'},
+    );
+    if (await modalResult(this, dialog, () => this.#restoreDeleteTrigger()) !== 'confirm') return;
     const workspace = ingestStore.workspace;
     this.#invalidateOlderFiles();
     this.#stopPolling();
@@ -285,11 +306,16 @@ export class DlInspectorFiles extends LightElement {
       const snapshot = await deleteFileRequest(workspace, filePath, controller.signal);
       if (!this.#isCurrent(controller, workspace)) return;
       this.snapshot = snapshot;
-      this.#requestToast({message: 'File deleted.', duration: 3000});
+      this.#requestToast({
+        message: msg('File deleted.', {id: 'inspectorFiles.fileDeleted'}),
+        duration: 3000,
+      });
       if (snapshot.ingest.busy) this.#schedulePoll(workspace);
     } catch (error) {
       if (isAbortError(error) || !this.#isCurrent(controller, workspace)) return;
-      const message = error instanceof FilesApiError ? error.message : 'Deletion failed.';
+      const message = error instanceof FilesApiError
+        ? error.message
+        : msg('Deletion failed.', {id: 'inspectorFiles.deletionFailed'});
       this.error = message;
       this.#requestToast({message, duration: 3000});
     } finally {
@@ -421,27 +447,50 @@ export class DlInspectorFiles extends LightElement {
     }));
   }
 
+  #restoreDeleteTrigger(): void {
+    const trigger = this.#deleteTrigger;
+    this.#deleteTrigger = null;
+    if (trigger?.isConnected) trigger.focus();
+  }
+
+  #deleteDialog(): TemplateResult {
+    return html`
+      <dialog id="delete-file-dialog" class="confirm-dialog"
+              aria-labelledby="delete-file-title" aria-describedby="delete-file-message">
+        <form method="dialog">
+          <h2 id="delete-file-title">${msg('Delete file', {id: 'inspectorFiles.deleteTitle'})}</h2>
+          <p id="delete-file-message"></p>
+          <div class="ui-dialog-actions">
+            <button type="submit" value="cancel">${msg('Cancel', {id: 'inspectorFiles.cancel'})}</button>
+            <button type="submit" value="confirm" class="ui-dialog-danger">${msg('Delete', {id: 'inspectorFiles.delete'})}</button>
+          </div>
+        </form>
+      </dialog>
+    `;
+  }
+
   #progress(status: WebIngestStatus): TemplateResult | typeof nothing {
     if (!status.busy) return nothing;
     return html`
       <div id="ingest-progress">
         <div class="file-status">
           <div class="spinner"></div>
-          <span>${status.message || 'Ingesting...'}</span>
+          <span>${status.message || msg('Ingesting...', {id: 'inspectorFiles.ingesting'})}</span>
         </div>
         ${status.progress_percent === null ? nothing : html`
           <div class="progress-bar-track" role="progressbar"
                aria-valuenow=${String(status.progress_percent)} aria-valuemin="0"
-               aria-valuemax="100" aria-label="Ingest progress">
+               aria-valuemax="100"
+               aria-label=${msg('Ingest progress', {id: 'inspectorFiles.ingestProgressAria'})}>
             <div class="progress-bar-fill" data-pct=${String(status.progress_percent)}></div>
           </div>
           <div class="progress-label">
-            batch ${status.current_batch}/${status.total_batches} · ${status.documents} doc(s)
+            ${msg(str`batch ${status.current_batch}/${status.total_batches} · ${status.documents} doc(s)`, {id: 'inspectorFiles.batchProgress'})}
           </div>
         `}
         ${status.pending_enqueues > 0 ? html`
           <div class="ingest-queue-notice">
-            ${status.pending_enqueues} upload(s) queued — will process after current batch
+            ${msg(str`${status.pending_enqueues} upload(s) queued — will process after current batch`, {id: 'inspectorFiles.queueNotice'})}
           </div>
         ` : nothing}
       </div>
@@ -455,31 +504,36 @@ export class DlInspectorFiles extends LightElement {
       ${snapshot ? this.#progress(snapshot.ingest) : nothing}
       ${this.error ? html`<div class="file-error" role="alert">${this.error}</div>` : nothing}
       <div class="upload-zone${this.uploading ? ' is-uploading' : ''}" id="upload-zone">
-        <button type="button" class="upload-zone-file-action" aria-label="Choose files"
+        <button type="button" class="upload-zone-file-action"
+                aria-label=${msg('Choose files', {id: 'inspectorFiles.chooseFilesAria'})}
                 @click=${() => { this.#chooseFiles(); }}>
-          <span class="upload-text">Drop files or folders, or click to choose files</span>
+          <span class="upload-text">${msg('Drop files or folders, or click to choose files', {id: 'inspectorFiles.dropHint'})}</span>
         </button>
         <button type="button" class="upload-folder-action"
-                @click=${() => { this.#chooseFolder(); }}>Choose folder</button>
+                @click=${() => { this.#chooseFolder(); }}>${msg('Choose folder', {id: 'inspectorFiles.chooseFolder'})}</button>
         <input class="hidden" type="file" id="file-input" name="files" multiple
                @change=${(event: Event) => { this.#fileInputChanged(event); }}>
         <input class="hidden" type="file" id="folder-input" webkitdirectory directory multiple
                @change=${(event: Event) => { this.#folderInputChanged(event); }}>
-        <div id="upload-spinner" class="file-status">Uploading...</div>
+        <div id="upload-spinner" class="file-status">${msg('Uploading...', {id: 'inspectorFiles.uploadingStatus'})}</div>
       </div>
       ${this.loading ? html`
-        <div class="file-status file-status--loading"><div class="spinner"></div><span>Loading files...</span></div>
+        <div class="file-status file-status--loading"><div class="spinner"></div><span>${msg('Loading files...', {id: 'inspectorFiles.loadingFiles'})}</span></div>
       ` : nothing}
       ${!this.loading ? html`
-        <div id="file-list" role="list" aria-label="Processed files" tabindex="-1">
+        <div id="file-list" role="list" aria-label=${msg('Processed files', {id: 'inspectorFiles.processedFilesAria'})} tabindex="-1">
           ${repeat(
             files,
             (file) => file.file_path,
             (file) => html`
               <div class="file-item" role="listitem">
                 <span class="file-name" title=${file.file_path}>${file.file_name}</span>
-                <button class="file-delete" type="button" aria-label=${`Delete ${file.file_name}`}
-                        @click=${() => { void this.#deleteFile(file.file_path); }}>
+                <button class="file-delete" type="button"
+                        aria-label=${msg(str`Delete ${file.file_name}`, {id: 'inspectorFiles.deleteFileAria'})}
+                        @click=${(event: Event) => {
+                          this.#deleteTrigger = event.currentTarget as HTMLElement;
+                          void this.#deleteFile(file.file_path);
+                        }}>
                   <svg class="file-delete-icon" width="14" height="14" viewBox="0 0 24 24"
                        fill="none" stroke="currentColor" stroke-width="2"
                        stroke-linecap="round">
@@ -498,8 +552,8 @@ export class DlInspectorFiles extends LightElement {
                     ?disabled=${this.filesLoadMoreState === 'loading'}
                     @click=${this.#loadOlderFiles}>
               ${this.filesLoadMoreState === 'error'
-                ? 'Retry loading older files'
-                : 'Load older files'}
+                ? msg('Retry loading older files', {id: 'inspectorFiles.retryLoadOlder'})
+                : msg('Load older files', {id: 'inspectorFiles.loadOlder'})}
             </button>
           </div>
         ` : nothing}
@@ -508,13 +562,14 @@ export class DlInspectorFiles extends LightElement {
         </span>
       ` : nothing}
       ${!this.loading && !this.error && files.length === 0 && !snapshot?.ingest.busy ? html`
-        <div class="empty-state">No files ingested in workspace “${this.#workspace}”.</div>
+        <div class="empty-state">${msg(str`No files ingested in workspace “${this.#workspace}”.`, {id: 'inspectorFiles.emptyState'})}</div>
       ` : nothing}
       ${this.acceptedFiles > 0 && snapshot?.ingest.busy ? html`
         <div class="ingest-queue-notice ingest-queue-notice--inline">
-          ${this.acceptedFiles} new file(s) accepted for ingest
+          ${msg(str`${this.acceptedFiles} new file(s) accepted for ingest`, {id: 'inspectorFiles.acceptedForIngest'})}
         </div>
       ` : nothing}
+      ${this.#deleteDialog()}
     `;
   }
 }

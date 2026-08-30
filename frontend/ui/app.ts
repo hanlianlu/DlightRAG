@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type TemplateResult} from 'lit';
 import {getWebBootstrap, type WebBootstrap} from '../api/bootstrap.ts';
 import {getWorkspacesPage} from '../api/workspaces.ts';
@@ -108,6 +109,7 @@ export class DlApp extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.bootState = 'loading';
     this.hasMessages = false;
     this.conversationExpanded = false;
@@ -479,11 +481,15 @@ export class DlApp extends LightElement {
   #bootstrapStatus(): TemplateResult {
     if (this.bootState === 'ready') return html``;
     if (this.bootState === 'loading') {
-      return html`<div class="bootstrap-status" role="status">Loading DlightRAG…</div>`;
+      return html`<div class="bootstrap-status" role="status">
+        ${msg('Loading DlightRAG…', {id: 'bootstrap.loading'})}
+      </div>`;
     }
     return html`<div class="bootstrap-status bootstrap-status--error" role="alert">
-      <span>DlightRAG could not load.</span>
-      <button type="button" @click=${() => { void this.#load(); }}>Retry</button>
+      <span>${msg('DlightRAG could not load.', {id: 'bootstrap.error'})}</span>
+      <button type="button" @click=${() => { void this.#load(); }}>
+        ${msg('Retry', {id: 'bootstrap.retry'})}
+      </button>
     </div>`;
   }
 

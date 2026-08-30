@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {PresentationSource} from '../api/conversations.ts';
@@ -34,6 +35,7 @@ export class DlInspectorSources extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.sources = [];
     this.expandedRef = null;
     this.onlyChunk = null;
@@ -126,14 +128,17 @@ export class DlInspectorSources extends LightElement {
             <span class="source-doc-count">${source.chunks.length}</span>
           </button>
           ${download ? html`
-            <a href=${download} class="source-action-icon" title="Download source"
-               aria-label="Download source" download>
+            <a href=${download} class="source-action-icon"
+               title=${msg('Download source', {id: 'inspectorSources.downloadSource'})}
+               aria-label=${msg('Download source', {id: 'inspectorSources.downloadSource'})} download>
               ${this.#downloadIcon()}
             </a>
           ` : nothing}
           ${external ? html`
-            <a href=${external} class="source-action-icon" title="Open source"
-               aria-label="Open source" target="_blank" rel="noopener noreferrer">
+            <a href=${external} class="source-action-icon"
+               title=${msg('Open source', {id: 'inspectorSources.openSource'})}
+               aria-label=${msg('Open source', {id: 'inspectorSources.openSource'})}
+               target="_blank" rel="noopener noreferrer">
               ${this.#externalIcon()}
             </a>
           ` : nothing}
@@ -159,8 +164,10 @@ export class DlInspectorSources extends LightElement {
                   </div>
                   ${image && thumbnail ? html`
                     <div class="source-chunk-image">
-                      <img src=${thumbnail} alt=${`Page ${chunk.page_number ?? ''}`} loading="lazy"
-                           role="button" tabindex="0" aria-label="Open page image"
+                      <img src=${thumbnail}
+                           alt=${msg(str`Page ${chunk.page_number ?? ''}`, {id: 'inspectorSources.pageAlt'})}
+                           loading="lazy" role="button" tabindex="0"
+                           aria-label=${msg('Open page image', {id: 'inspectorSources.openPageImage'})}
                            @click=${(event: Event) => this.#openImage(
                              image,
                              event.currentTarget as HTMLElement,

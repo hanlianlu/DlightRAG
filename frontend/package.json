@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --experimental-strip-types --test api/*.test.ts stores/*.test.ts lib/*.test.ts tokens/*.test.ts ui/components.structure.test.ts",
+    "test": "node --experimental-strip-types --test api/*.test.ts stores/*.test.ts lib/*.test.ts tokens/*.test.ts ui/components.structure.test.ts ui/i18n_catalog.structure.test.ts",
     "test:browser": "web-test-runner --config web-test-runner.config.mjs",
     "typecheck": "tsc --noEmit",
     "lint:css": "stylelint 'styles/**/*.css' 'styles/**/*.module.css'"
@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@awesome.me/webawesome": "^3.4.0",
+    "@lit/localize": "^0.12.2",
     "dompurify": "^3.4.12",
     "lit": "^3.3.3",
     "mermaid": "^11.16.0",

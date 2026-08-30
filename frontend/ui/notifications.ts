@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Notification Offer Feature and browser Notification lifecycle. */
 
+import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
 import {LightElement} from '../lib/lit_host.ts';
 
@@ -46,6 +47,7 @@ export class DlNotificationOffer extends LightElement {
 
   constructor() {
     super();
+    updateWhenLocaleChanges(this);
     this.running = false;
     this.visible = false;
   }
@@ -83,9 +85,9 @@ export class DlNotificationOffer extends LightElement {
 
   protected override render(): TemplateResult {
     return html`
-      <span class="notify-offer-text">Notify you when an answer finishes?</span>
-      <button class="ui-btn" type="button" @click=${this.#accept}>Enable</button>
-      <button class="ui-btn" type="button" @click=${this.#decline}>Not now</button>
+      <span class="notify-offer-text">${msg('Notify you when an answer finishes?', {id: 'notifications.offerText'})}</span>
+      <button class="ui-btn" type="button" @click=${this.#accept}>${msg('Enable', {id: 'notifications.enable'})}</button>
+      <button class="ui-btn" type="button" @click=${this.#decline}>${msg('Not now', {id: 'notifications.notNow'})}</button>
     `;
   }
 
@@ -95,9 +97,10 @@ export class DlNotificationOffer extends LightElement {
 
   #notifyAnswerReady(): void {
     try {
-      const notification = new Notification('Answer ready', {
-        body: 'DlightRAG finished generating your answer.',
-      });
+      const notification = new Notification(
+        msg('Answer ready', {id: 'notifications.answerReadyTitle'}),
+        {body: msg('DlightRAG finished generating your answer.', {id: 'notifications.answerReadyBody'})},
+      );
       notification.onclick = () => {
         window.focus();
         notification.close();

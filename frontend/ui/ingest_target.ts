@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing, svg, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {WorkspaceRecord} from '../events/bus.ts';
@@ -30,8 +31,10 @@ export class DlIngestTarget extends LightElement {
 
     constructor() {
         super();
+        updateWhenLocaleChanges(this);
         this.active = false;
         this.open = false;
+        /** Store reads: workspaceStore.records, ingestStore.workspace. */
         new StoreController(this, workspaceStore, ingestStore);
     }
 
@@ -87,7 +90,7 @@ export class DlIngestTarget extends LightElement {
                 class="ui-popover ui-popover--ingest"
                 id="ingest-target-popover"
                 role="dialog"
-                aria-label="Select ingest workspace"
+                aria-label=${msg('Select ingest workspace', {id: 'ingestTarget.selectWorkspaceAria'})}
                 ?hidden=${!this.active || !this.open}
                 @keydown=${(event: KeyboardEvent) => {
                     rovingArrowKeydown(event, '[data-ingest-workspace-choice]');
@@ -103,12 +106,12 @@ export class DlIngestTarget extends LightElement {
         const displayName = this.#displayName;
         return html`
             ${this.active ? html`
-                <span class="ingest-target-label">Files in:</span>
+                <span class="ingest-target-label">${msg('Files in:', {id: 'ingestTarget.filesIn'})}</span>
                 <button
                     class="ingest-target-pill"
                     id="ingest-target-trigger"
                     type="button"
-                    aria-label="Files in ${displayName}; choose file workspace"
+                    aria-label=${msg(str`Files in ${displayName}; choose file workspace`, {id: 'ingestTarget.filesInAria'})}
                     aria-haspopup="dialog"
                     aria-expanded=${this.open ? 'true' : 'false'}
                     aria-controls="ingest-target-popover"

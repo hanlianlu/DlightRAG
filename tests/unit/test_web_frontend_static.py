@@ -174,7 +174,7 @@ def test_presentation_preserves_authorized_download_without_nesting_markup() -> 
     assert source.download_url == "/web/api/files/raw/doc-notes?workspace=default"
     assert source.title == "Source"
     assert "safeSameOriginHref(source.download_url)" in source_view
-    assert 'aria-label="Download source"' in source_view
+    assert "msg('Download source', {id: 'inspectorSources.downloadSource'})" in source_view
     assert "<a href=${download}" in source_view
 
 
@@ -260,7 +260,8 @@ def test_panel_action_icons_are_accessible_svg_buttons() -> None:
 
     assert "&#10005;" not in file_panel
     assert "&#x2B07;" not in source_panel
-    assert "aria-label=${`Delete ${file.file_name}`}" in file_panel
+    assert "aria-label=${msg(str`Delete ${file.file_name}`," in file_panel
+    assert "'inspectorFiles.deleteFileAria'" in file_panel
     assert 'class="file-delete-icon"' in file_panel
     assert 'class="source-action-icon-svg"' in source_panel
     assert 'stroke="currentColor"' in source_panel
