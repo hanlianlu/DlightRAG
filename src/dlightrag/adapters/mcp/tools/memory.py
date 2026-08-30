@@ -19,6 +19,7 @@ from dlightrag.application.answer_runs.errors import (
     MemoryUnavailableError,
     MemoryWriteRejectedError,
 )
+from dlightrag.application.memory.projections import memory_receipt_payload
 
 
 @mcp_app.tool(
@@ -70,7 +71,7 @@ async def remember_memory_tool(
         )
     except (MemoryUnavailableError, MemoryDisabledError, MemoryWriteRejectedError) as exc:
         raise ValueError(exc.public_message) from exc
-    return mcp_server._memory_receipt(receipt)
+    return memory_receipt_payload(receipt)
 
 
 @mcp_app.tool(
@@ -93,7 +94,7 @@ async def forget_memory_tool(
         )
     except (MemoryUnavailableError, MemoryDisabledError, MemoryWriteRejectedError) as exc:
         raise ValueError(exc.public_message) from exc
-    return mcp_server._memory_receipt(receipt)
+    return memory_receipt_payload(receipt)
 
 
 @mcp_app.tool(
@@ -116,7 +117,7 @@ async def undo_memory_change_tool(
         )
     except (MemoryUnavailableError, MemoryDisabledError, MemoryWriteRejectedError) as exc:
         raise ValueError(exc.public_message) from exc
-    return mcp_server._memory_receipt(receipt)
+    return memory_receipt_payload(receipt)
 
 
 @mcp_app.tool(

@@ -13,7 +13,6 @@ from dlightrag.application.config import set_config
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag.engine.rag.retrieval.filtering import metadata_filter_scope
-from dlightrag.engine.rag.retrieval.metadata_path import metadata_retrieve
 from tests.config_helpers import clone_config, mutate_config
 from tests.e2e.pg18_harness import (
     RUN_E2E_ENV,
@@ -121,9 +120,8 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
 
         assert service._metadata_index is not None
         assert service._lightrag_stores is not None
-        scope = await metadata_retrieve(
-            stores=service._lightrag_stores,
-            filters=MetadataFilter(custom={"e2e_case": "pg18"}),
+        scope = await service._lightrag_stores.resolve_scope(
+            MetadataFilter(custom={"e2e_case": "pg18"})
         )
         assert scope.doc_exists is True
         assert scope.candidate_count >= 1

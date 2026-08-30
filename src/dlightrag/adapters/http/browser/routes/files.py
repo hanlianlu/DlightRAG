@@ -16,6 +16,7 @@ from dlightrag.adapters.http.browser.file_models import (
     WebIngestStatus,
     WebUploadReceipt,
 )
+from dlightrag.adapters.http.source_download import source_download_response
 from dlightrag.application.access import AccessAction
 from dlightrag.application.corpus_admin import (
     FILE_PANEL_PAGE_DEFAULT_LIMIT,
@@ -23,12 +24,6 @@ from dlightrag.application.corpus_admin import (
     FilePanelCursorError,
     FilePanelPageRequest,
     IngestSpec,
-    LocalDownloadTarget,
-    RedirectDownloadTarget,
-    SourceDownloadInvalidError,
-    SourceDownloadNotFoundError,
-    SourceDownloadTarget,
-    SourceDownloadUnavailableError,
     UnsafeUploadNameError,
     UploadTooLargeError,
     safe_log_text,
@@ -65,32 +60,11 @@ async def download_source(
             )
         raise
 
-    try:
-        target = await get_application(request).corpora.prepare_source_download(
-            safe_workspace,
-            document_id,
-        )
-    except SourceDownloadInvalidError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except SourceDownloadNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except SourceDownloadUnavailableError as exc:
-        raise HTTPException(503, str(exc)) from exc
-    return _source_download_response(target)
-
-
-def _source_download_response(
-    target: SourceDownloadTarget,
-) -> FileResponse | RedirectResponse:
-    if isinstance(target, LocalDownloadTarget):
-        return FileResponse(
-            target.path,
-            media_type=target.media_type,
-            filename=target.filename,
-        )
-    if isinstance(target, RedirectDownloadTarget):
-        return RedirectResponse(url=target.url, status_code=302)
-    raise TypeError("Unsupported source download target")
+    return await source_download_response(
+        get_application(request).corpora,
+        workspace=safe_workspace,
+        document_id=document_id,
+    )
 
 
 def _resolve_workspace(requested: str | None, cookie_workspace: str) -> str:

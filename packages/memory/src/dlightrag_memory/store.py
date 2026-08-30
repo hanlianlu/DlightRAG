@@ -164,7 +164,7 @@ class InMemoryMemoryStore:
         if duplicate is not None:
             if operation.supersedes_id and duplicate.memory_id != operation.supersedes_id:
                 return (
-                    _receipt(
+                    operation_receipt(
                         operation,
                         change_id,
                         "conflict",
@@ -177,7 +177,7 @@ class InMemoryMemoryStore:
                     None,
                 )
             return (
-                _receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "unchanged",
@@ -196,7 +196,7 @@ class InMemoryMemoryStore:
             old = rows.get(old_key)
             if old is None or old.status != "active":
                 return (
-                    _receipt(operation, change_id, "conflict", body=body, now=now),
+                    operation_receipt(operation, change_id, "conflict", body=body, now=now),
                     (),
                     None,
                 )
@@ -217,7 +217,7 @@ class InMemoryMemoryStore:
         )
         rows[(operation.owner_id, memory_id)] = record
         return (
-            _receipt(
+            operation_receipt(
                 operation,
                 change_id,
                 "changed",
@@ -251,14 +251,14 @@ class InMemoryMemoryStore:
                 and normalized_body(record.body) == target
             ]
         if not matches:
-            return (_receipt(operation, change_id, "unchanged", now=now), (), None)
+            return (operation_receipt(operation, change_id, "unchanged", now=now), (), None)
         for record in matches:
             rows[(record.owner_id, record.memory_id)] = replace(
                 record, status="forgotten", updated_at=now
             )
         first = matches[0]
         return (
-            _receipt(
+            operation_receipt(
                 operation,
                 change_id,
                 "changed",
@@ -288,7 +288,7 @@ class InMemoryMemoryStore:
             or (operation.owner_id, target_id) in self._undone_by
         ):
             return (
-                _receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "conflict",
@@ -305,7 +305,7 @@ class InMemoryMemoryStore:
             current = rows.get((operation.owner_id, current_id))
             if current is None or current.status != "active":
                 return (
-                    _receipt(
+                    operation_receipt(
                         operation,
                         change_id,
                         "conflict",
@@ -332,7 +332,7 @@ class InMemoryMemoryStore:
                 )
                 rows[(operation.owner_id, restored_id)] = restored_record
                 return (
-                    _receipt(
+                    operation_receipt(
                         operation,
                         change_id,
                         "changed",
@@ -350,7 +350,7 @@ class InMemoryMemoryStore:
                 current, status="forgotten", updated_at=now
             )
             return (
-                _receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "changed",
@@ -379,7 +379,7 @@ class InMemoryMemoryStore:
             or tuple(old.memory_id for old in target.before_records) != target_receipt.memory_ids
         ):
             return (
-                _receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "conflict",
@@ -396,7 +396,7 @@ class InMemoryMemoryStore:
             current = rows.get((operation.owner_id, old.memory_id))
             if current is None or current.status != "forgotten":
                 return (
-                    _receipt(
+                    operation_receipt(
                         operation,
                         change_id,
                         "conflict",
@@ -426,7 +426,7 @@ class InMemoryMemoryStore:
             for record in rows.values()
         ):
             return (
-                _receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "conflict",
@@ -444,7 +444,7 @@ class InMemoryMemoryStore:
             rows[key] = record
         first = restored_records[0] if restored_records else None
         return (
-            _receipt(
+            operation_receipt(
                 operation,
                 change_id,
                 "changed",
@@ -558,18 +558,18 @@ class InMemoryMemoryStore:
     ) -> tuple[tuple[MemoryRecord, ...], tuple[datetime, str] | None]:
         cap = max(1, min(int(limit), 100))
         rows = self._active_records(owner_id=owner_id)
-        rows.sort(key=lambda record: (_cursor_time(record), record.memory_id), reverse=True)
+        rows.sort(key=lambda record: (recall_recency(record), record.memory_id), reverse=True)
         if after is not None:
             rows = [
                 record
                 for record in rows
-                if (_cursor_time(record), record.memory_id) < (after[0], after[1])
+                if (recall_recency(record), record.memory_id) < (after[0], after[1])
             ]
         page = tuple(rows[:cap])
         if len(rows) <= cap:
             return page, None
         last = rows[cap - 1]
-        return page, (_cursor_time(last), last.memory_id)
+        return page, (recall_recency(last), last.memory_id)
 
     async def purge_superseded(self, *, older_than: datetime) -> int:
         async with self._lock:
@@ -626,7 +626,7 @@ def operation_fingerprint(operation: MemoryOperation) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _receipt(
+def operation_receipt(
     operation: MemoryOperation,
     change_id: str,
     outcome: str,
@@ -660,10 +660,6 @@ def _receipt_scope(receipt: MemoryOperationReceipt) -> str | None:
     return receipt.mutation_scope
 
 
-def _cursor_time(record: MemoryRecord) -> datetime:
-    return record.updated_at or record.created_at or datetime.min.replace(tzinfo=UTC)
-
-
 def default_purge_cutoff(days: int = MEMORY_SUPERSEDE_RETENTION_DAYS) -> datetime:
     return datetime.now(UTC) - timedelta(days=days)
 
@@ -675,5 +671,6 @@ __all__ = [
     "default_purge_cutoff",
     "operation_change_id",
     "operation_fingerprint",
+    "operation_receipt",
     "operation_record_id",
 ]

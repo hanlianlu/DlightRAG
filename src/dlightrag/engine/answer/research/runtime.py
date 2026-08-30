@@ -777,7 +777,7 @@ async def run_child_session(
         status=status,
         summary=summary,
         handles=tuple(prepared.evidence.citation_handles()),
-        usage=_usage_from_snapshot(snapshot),
+        usage=_usage_from_snapshot_entries(snapshot_entries=snapshot.entries),
         delta=_delta_from_ledger(prepared.evidence),
         child_session_id=child_id.value,
         evidence_state=prepared.evidence.durable_state(),
@@ -839,19 +839,9 @@ async def _drive_child_with_lease_renewal(
         await asyncio.gather(drive_task, heartbeat_task, return_exceptions=True)
 
 
-def _child_status(reason: str) -> tuple[Literal["succeeded", "failed", "cancelled"], str]:
-    if reason == "cancelled":
-        return "cancelled", "cancelled"
-    return "succeeded", "completed"
-
-
 def _child_summary(prepared: Any, status: str) -> str:
     text = prepared.last_turn.assistant.text if prepared.last_turn is not None else ""
     return text.strip() or f"Child session {status}."
-
-
-def _usage_from_snapshot(snapshot: Any) -> dict[str, int] | None:
-    return _usage_from_snapshot_entries(snapshot_entries=snapshot.entries)
 
 
 def _usage_from_snapshot_entries(*, snapshot_entries: Any) -> dict[str, int] | None:

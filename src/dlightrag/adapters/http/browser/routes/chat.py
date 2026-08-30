@@ -12,6 +12,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from dlightrag.adapters.http.artifact_delivery import (
+    artifact_descriptor,
+    artifact_presentation_available,
+    artifact_range,
+    artifact_response,
+)
 from dlightrag.adapters.http.browser.answer_events import browser_frame
 from dlightrag.adapters.http.browser.app_shell import app_html_response
 from dlightrag.adapters.http.browser.attachment_requests import parse_web_answer_request
@@ -58,7 +64,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 page_router = APIRouter()
-_INERT_SVG_CSP = "sandbox; default-src 'none'; img-src data:"
 
 
 class _WebAgentControl(BaseModel):
@@ -87,8 +92,8 @@ async def conversation_page(
 
 @page_router.get("/design-system", response_class=FileResponse)
 async def design_system_page() -> FileResponse:
-    """Serve the application document for the shared-control reference page."""
-    return app_html_response("index.html")
+    """Serve the Vite design-system entry document."""
+    return app_html_response("design-system.html")
 
 
 @router.post("/answer", status_code=202, response_model=AnswerRunDescriptor)
@@ -332,45 +337,6 @@ async def cancel_answer_run(
     )
 
 
-def _artifact_descriptor(result: Mapping[str, Any], resource_id: str) -> Mapping[str, Any] | None:
-    for item in result.get("artifacts") or ():
-        if isinstance(item, Mapping) and item.get("resource_id") == resource_id:
-            return item
-    return None
-
-
-def _artifact_range(header: str, total: int) -> tuple[int, int | None, int, str | None]:
-    if not header:
-        return 0, None, 200, None
-    if not header.lower().startswith("bytes=") or "," in header:
-        raise HTTPException(
-            status_code=416,
-            detail="range not satisfiable",
-            headers={"Content-Range": f"bytes */{total}"},
-        )
-    start_s, _, end_s = header.split("=", 1)[1].partition("-")
-    try:
-        if start_s == "":
-            suffix = int(end_s)
-            if suffix <= 0 or total == 0:
-                raise ValueError
-            length = min(suffix, total)
-            offset = total - length
-        else:
-            offset = int(start_s)
-            end = int(end_s) if end_s else total - 1
-            if offset >= total or end < offset:
-                raise ValueError
-            length = min(end, total - 1) - offset + 1
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=416,
-            detail="range not satisfiable",
-            headers={"Content-Range": f"bytes */{total}"},
-        ) from exc
-    return offset, length, 206, f"bytes {offset}-{offset + length - 1}/{total}"
-
-
 @router.get("/answer/{run_id}/artifacts/{resource_id}")
 async def answer_artifact_data(
     run_id: str,
@@ -383,7 +349,7 @@ async def answer_artifact_data(
     user = getattr(request.state, "user_context", None)
     turn = await conversation_service.turn_for_run(user, run_id)
     result = turn.run.result if turn is not None else None
-    descriptor = _artifact_descriptor(result or {}, resource_id)
+    descriptor = artifact_descriptor(result, resource_id)
     if descriptor is None or descriptor.get("status") != "available":
         raise HTTPException(status_code=404, detail="Artifact not found")
     owner = owner_id_from_user(user)
@@ -393,7 +359,7 @@ async def answer_artifact_data(
     )
     if total is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
-    offset, length, status_code, content_range = _artifact_range(
+    offset, length, status_code, content_range = artifact_range(
         request.headers.get("range", "").strip(), total
     )
     stream = await application.answers.open_artifact(
@@ -405,24 +371,16 @@ async def answer_artifact_data(
     )
     if stream is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
-    media_type = str(descriptor.get("media_type") or "application/octet-stream")
-    safe_inline = media_type.startswith("image/") or media_type == "application/pdf"
-    filename = str(descriptor.get("filename") or "artifact").replace('"', "_")
-    disposition = "attachment" if download or not safe_inline else "inline"
+    media_type, headers = artifact_response(
+        descriptor,
+        download=download,
+        content_range=content_range,
+    )
     return StreamingResponse(
         stream,
-        media_type=media_type if safe_inline and not download else "application/octet-stream",
+        media_type=media_type,
         status_code=status_code,
-        headers={
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "private, no-store",
-            "Content-Disposition": f'{disposition}; filename="{filename}"',
-            "X-Content-Type-Options": "nosniff",
-            **(
-                {"Content-Security-Policy": _INERT_SVG_CSP} if media_type == "image/svg+xml" else {}
-            ),
-            **({"Content-Range": content_range} if content_range else {}),
-        },
+        headers=headers,
     )
 
 
@@ -442,8 +400,8 @@ async def answer_artifact_presentation(
     turn = await conversation_service.turn_for_run(user, run_id)
     if turn is None or turn.run.status != "succeeded" or turn.run.result is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
-    descriptor = _artifact_descriptor(turn.run.result, resource_id)
-    if descriptor is None or descriptor.get("media_type") != "text/markdown":
+    descriptor = artifact_descriptor(turn.run.result, resource_id)
+    if not artifact_presentation_available(descriptor):
         raise HTTPException(status_code=404, detail="Artifact presentation not found")
     blob = await get_application(request).answers.read_artifact(
         owner_id=owner_id_from_user(user), run_id=run_id, resource_id=resource_id

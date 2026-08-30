@@ -45,10 +45,12 @@ from dlightrag_memory.ports import (
     TextEmbedder,
     Vector,
 )
+from dlightrag_memory.recall import recall_recency
 from dlightrag_memory.store import (
     OperationGuard,
     operation_change_id,
     operation_fingerprint,
+    operation_receipt,
     operation_record_id,
 )
 
@@ -378,7 +380,7 @@ class PostgresMemoryStore:
                 else "unchanged"
             )
             return (
-                _operation_receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     outcome,
@@ -399,7 +401,7 @@ class PostgresMemoryStore:
             )
             if old_row is None or str(old_row["status"]) != "active":
                 return (
-                    _operation_receipt(operation, change_id, "conflict", body=body, now=now),
+                    operation_receipt(operation, change_id, "conflict", body=body, now=now),
                     (),
                 )
             old = _row(old_row)
@@ -424,7 +426,7 @@ class PostgresMemoryStore:
         )
         await _insert_record(self, conn, record=record, embedding=embedding)
         return (
-            _operation_receipt(
+            operation_receipt(
                 operation,
                 change_id,
                 "changed",
@@ -458,12 +460,12 @@ class PostgresMemoryStore:
             )
         matches = tuple(_row(row) for row in rows)
         if not matches:
-            return (_operation_receipt(operation, change_id, "unchanged", now=now), ())
+            return (operation_receipt(operation, change_id, "unchanged", now=now), ())
         ids = [_uuid(record.memory_id, label="memory_id") for record in matches]
         await conn.execute(_MARK_FORGOTTEN_IDS, operation.owner_id, ids)
         first = matches[0]
         return (
-            _operation_receipt(
+            operation_receipt(
                 operation,
                 change_id,
                 "changed",
@@ -491,7 +493,7 @@ class PostgresMemoryStore:
         )
         if target is None or target["undone_by"] is not None:
             return (
-                _operation_receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "conflict",
@@ -504,7 +506,7 @@ class PostgresMemoryStore:
         before = _records_json(target["before_records"])
         if not target_receipt.changed or target_receipt.action == "undo":
             return (
-                _operation_receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "conflict",
@@ -523,7 +525,7 @@ class PostgresMemoryStore:
             )
             if current_row is None or str(current_row["status"]) != "active":
                 return (
-                    _operation_receipt(
+                    operation_receipt(
                         operation,
                         change_id,
                         "conflict",
@@ -551,7 +553,7 @@ class PostgresMemoryStore:
                 )
                 await _insert_record(self, conn, record=restored, embedding=None)
                 return (
-                    _operation_receipt(
+                    operation_receipt(
                         operation,
                         change_id,
                         "changed",
@@ -570,7 +572,7 @@ class PostgresMemoryStore:
                 [_uuid(current_id, label="memory_id")],
             )
             return (
-                _operation_receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "changed",
@@ -598,7 +600,7 @@ class PostgresMemoryStore:
             or tuple(old.memory_id for old in before) != target_receipt.memory_ids
         ):
             return (
-                _operation_receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "conflict",
@@ -616,7 +618,7 @@ class PostgresMemoryStore:
             for old in before
         ):
             return (
-                _operation_receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "conflict",
@@ -630,7 +632,7 @@ class PostgresMemoryStore:
             _SELECT_ACTIVE_NORMALIZED_CONFLICT_EXISTS, operation.owner_id, bodies
         ):
             return (
-                _operation_receipt(
+                operation_receipt(
                     operation,
                     change_id,
                     "conflict",
@@ -670,7 +672,7 @@ class PostgresMemoryStore:
                 raise ValueError("memory id already exists with different content")
         first = restored_records[0] if restored_records else None
         return (
-            _operation_receipt(
+            operation_receipt(
                 operation,
                 change_id,
                 "changed",
@@ -804,7 +806,7 @@ class PostgresMemoryStore:
             if len(rows) <= cap:
                 return page, None
             last = _row(rows[cap - 1])
-            return page, (_cursor_time(last), last.memory_id)
+            return page, (recall_recency(last), last.memory_id)
 
         return await self._read(operation)
 
@@ -904,35 +906,6 @@ async def _insert_record(
             *_insert_params(store, record=record),
             _vector_text(embedding),
         )
-
-
-def _operation_receipt(
-    operation: MemoryOperation,
-    change_id: str,
-    outcome: str,
-    *,
-    memory_ids: tuple[str, ...] = (),
-    kind: str | None = None,
-    body: str = "",
-    supersedes_id: str | None = None,
-    target_change_id: str | None = None,
-    now: datetime,
-) -> MemoryOperationReceipt:
-    return MemoryOperationReceipt(
-        change_id=change_id,
-        action=operation.action,
-        outcome=outcome,  # type: ignore[arg-type]
-        memory_ids=memory_ids,
-        provenance=operation.provenance,
-        kind=kind,  # type: ignore[arg-type]
-        body=body,
-        supersedes_id=supersedes_id if supersedes_id is not None else operation.supersedes_id,
-        target_change_id=(
-            target_change_id if target_change_id is not None else operation.target_change_id
-        ),
-        mutation_scope=operation.mutation_scope,
-        created_at=now,
-    )
 
 
 def _receipt_json(receipt: MemoryOperationReceipt) -> dict[str, Any]:
@@ -1307,14 +1280,6 @@ WHERE owner_id = $1 AND status = 'active'
 ORDER BY embedding <=> $3::halfvec
 LIMIT $4
 """  # noqa: S608 - interpolates only the trusted _RECORD_COLUMNS constant
-
-
-def _cursor_time(record: MemoryRecord) -> datetime:
-    if record.updated_at is not None:
-        return record.updated_at
-    if record.created_at is not None:
-        return record.created_at
-    return datetime.min.replace(tzinfo=UTC)
 
 
 def _uuid(value: str, *, label: str) -> uuid.UUID:

@@ -8,7 +8,6 @@ to the same bounded projection directly.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
@@ -23,7 +22,7 @@ from dlightrag.engine.agent.session.entries import (
 from dlightrag.engine.agent.session.ids import EntryId
 from dlightrag.engine.agent.session.projection import render_compaction_summary
 from dlightrag.engine.agent.tool_content import tool_content_message_fields
-from dlightrag.engine.ai.messages import ToolCall
+from dlightrag.engine.ai.messages import tool_call_message as fold_tool_call
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
 
 
@@ -49,25 +48,6 @@ class PriorTurns:
     @property
     def episodic_summary(self) -> str:
         return self._episodic_summary
-
-
-def fold_tool_call(call: ToolCall) -> dict[str, Any]:
-    """Project one provider-neutral tool call to its model-message shape."""
-    message: dict[str, Any] = {
-        "id": call.id,
-        "type": "function",
-        "function": {
-            "name": call.name,
-            "arguments": json.dumps(
-                call.arguments,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-        },
-    }
-    if call.thought_signature is not None:
-        message["thought_signature"] = call.thought_signature
-    return message
 
 
 def fold_assistant_message(entry: AssistantMessageEntry) -> dict[str, Any]:

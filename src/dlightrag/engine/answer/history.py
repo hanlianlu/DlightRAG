@@ -224,22 +224,6 @@ def _fits(
     return history_tokens <= resolved.allowance_tokens
 
 
-def _fit_episodic_summary(
-    kept: list[dict[str, Any]],
-    omitted_pairs: Sequence[Sequence[dict[str, Any]]],
-    *,
-    resolved: Sequence[_ResolvedTarget],
-    max_tokens: int,
-) -> str:
-    """Fit the extractive continuation after preserving the recent-pair set."""
-    return _fit_summary_text(
-        kept,
-        _episodic_summary(omitted_pairs, max_tokens=max_tokens),
-        resolved=resolved,
-        max_tokens=max_tokens,
-    )
-
-
 def _fit_summary_text(
     kept: list[dict[str, Any]],
     summary: str,

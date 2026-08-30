@@ -42,6 +42,7 @@ from dlightrag.engine.agent.session.ids import (
     SessionId,
 )
 from dlightrag.engine.agent.session.interpreter import (
+    TOOL_DISPOSITION_OUTCOME,
     AssembleProviderRequest,
     BeginToolEffect,
     CallProvider,
@@ -1384,18 +1385,10 @@ class AgentSessionRuntime[HostDeltaT]:
         outcome_unknown: bool,
     ) -> None:
         if item.disposition != "executable":
-            outcomes: dict[ToolCallDisposition, ToolResultOutcome] = {
-                "executable": "interrupted",
-                "unknown_tool": "unknown_tool",
-                "invalid_arguments": "invalid_arguments",
-                "plan_denied": "plan_denied",
-                "truncated_call": "truncated_arguments",
-                "contract_changed": "tool_contract_changed",
-            }
             result = ToolResultEntry.text(
                 tool_name=item.tool_name,
                 call_id=item.call_id,
-                outcome=outcomes[item.disposition],
+                outcome=TOOL_DISPOSITION_OUTCOME[item.disposition],
                 text=item.synthetic_message,
             )
         else:

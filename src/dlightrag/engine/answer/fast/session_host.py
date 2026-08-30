@@ -31,6 +31,7 @@ from dlightrag.engine.agent.session.repository import (
     AgentSessionRepository,
     AgentSessionSnapshot,
     project_transaction_commit,
+    validate_snapshot_refresh,
 )
 from dlightrag.engine.agent.session.runtime import OperationConflictError, SessionLeaseLostError
 from dlightrag.engine.agent.session.transactions import (
@@ -96,18 +97,19 @@ class FastSessionHost:
             except BaseException:
                 self._snapshots.pop(session_id, None)
                 raise
-            if snapshot.session_id != session_id:
+            if previous is not None:
+                try:
+                    validate_snapshot_refresh(
+                        session_id,
+                        previous=previous,
+                        snapshot=snapshot,
+                    )
+                except ValueError:
+                    self._snapshots.pop(session_id, None)
+                    raise
+            elif snapshot.session_id != session_id:
                 self._snapshots.pop(session_id, None)
                 raise ValueError("Agent Session repository returned another Session")
-            if previous is not None and (
-                snapshot.commit_sequence < previous.commit_sequence
-                or snapshot.last_entry_sequence < previous.last_entry_sequence
-            ):
-                self._snapshots.pop(session_id, None)
-                raise ValueError("Agent Session refresh cursor regressed")
-            if previous is not None and snapshot.selected_lane_id != previous.selected_lane_id:
-                self._snapshots.pop(session_id, None)
-                raise ValueError("Agent Session refresh changed its selected Lane")
             self._snapshots[session_id] = snapshot
             if selected_lane_id is not None and snapshot.selected_lane_id != selected_lane_id:
                 return replace(snapshot, selected_lane_id=selected_lane_id)

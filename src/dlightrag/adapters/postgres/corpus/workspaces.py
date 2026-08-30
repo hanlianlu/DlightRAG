@@ -410,9 +410,8 @@ class PGWorkspaceRegistry(PostgresOperationRunner):
 
         return await self._run(_operation)
 
-    # -- Promotion control-plane foundation (no worker wiring yet) -----------
-    # These narrow interfaces exist for the Commit 3 promotion control plane.
-    # Nothing in this revision increments the counters or drives a job.
+    # -- Promotion control-plane state ---------------------------------------
+    # Ingestion and the promotion worker update these counters and lifecycle fields.
 
     async def add_ingested_counts(
         self,

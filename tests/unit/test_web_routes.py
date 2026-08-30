@@ -481,6 +481,14 @@ class TestWebIndex:
         assert conversation.status_code == 200
         assert conversation.text == index.text
 
+    async def test_design_system_route_serves_its_vite_entry(self, client: AsyncClient) -> None:
+        response = await client.get("/web/design-system")
+
+        assert response.status_code == 200
+        assert "DlightRAG Design System" in response.text
+        assert "/static/app/assets/design-system-" in response.text
+        assert "<dl-app>" not in response.text
+
     async def test_unknown_web_page_does_not_fall_through_to_the_shell(
         self, client: AsyncClient
     ) -> None:

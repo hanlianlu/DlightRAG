@@ -293,10 +293,8 @@ class AnswerOrchestrator:
         *,
         conversation_history: PriorTurns | None = None,
         query_images: list[dict[str, Any]] | None = None,
-        run: PreparedRun | None = None,
         boundaries: PhaseBoundaries | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        del run
         if self._resolved_mode != "fast":
             raise RuntimeError("Research must be driven by AgentSessionRuntime")
         limits = boundaries or _NoPhaseBoundaries()

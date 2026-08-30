@@ -2,7 +2,6 @@
 """Validate and execute one batch of provider-neutral tool calls."""
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -33,7 +32,7 @@ from dlightrag.engine.agent.tools.contracts import (
     ToolResultCapacityError,
     ToolRuntime,
 )
-from dlightrag.engine.ai.messages import AssistantTurn, ToolCall, ToolChoice
+from dlightrag.engine.ai.messages import AssistantTurn, ToolCall, ToolChoice, tool_call_message
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry
 from dlightrag.engine.ai.tokens import estimate_tokens, truncate_to_estimated_tokens
 
@@ -677,27 +676,9 @@ def _assistant_message(turn: AssistantTurn) -> dict[str, Any]:
         "content": turn.text,
     }
     if turn.tool_calls:
-        message["tool_calls"] = [_tool_call_message(call) for call in turn.tool_calls]
+        message["tool_calls"] = [tool_call_message(call) for call in turn.tool_calls]
     if turn.provider_state is not None:
         message["provider_state"] = turn.provider_state
-    return message
-
-
-def _tool_call_message(call: ToolCall) -> dict[str, Any]:
-    message: dict[str, Any] = {
-        "id": call.id,
-        "type": "function",
-        "function": {
-            "name": call.name,
-            "arguments": json.dumps(
-                call.arguments,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-        },
-    }
-    if call.thought_signature is not None:
-        message["thought_signature"] = call.thought_signature
     return message
 
 

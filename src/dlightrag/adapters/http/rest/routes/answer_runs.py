@@ -8,7 +8,7 @@ identities only, and each authenticated read projects fresh URLs from them.
 """
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import Annotated, Any
@@ -19,6 +19,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from dlightrag.adapters.http.artifact_delivery import (
+    artifact_descriptor,
+    artifact_presentation_available,
+    artifact_range,
+    artifact_response,
+)
 from dlightrag.adapters.http.rest.auth import get_current_user
 from dlightrag.adapters.http.rest.models import (
     ANSWER_REQUEST_PART_MAX_BYTES,
@@ -62,7 +68,6 @@ router = APIRouter()
 
 _ALLOWED_ANSWER_PARTS = {"request", "attachments"}
 _MAX_ANSWER_FORM_FIELDS = 8
-_INERT_SVG_CSP = "sandbox; default-src 'none'; img-src data:"
 
 
 class _AgentControlBody(BaseModel):
@@ -258,24 +263,6 @@ def _descriptor(record: AnswerRunRecord) -> dict[str, Any]:
     }
 
 
-def _published_artifact(
-    result: Mapping[str, Any] | None, resource_id: str
-) -> Mapping[str, Any] | None:
-    for item in (result or {}).get("artifacts") or ():
-        if isinstance(item, Mapping) and item.get("resource_id") == resource_id:
-            return item
-    return None
-
-
-def _artifact_response_headers(descriptor: Mapping[str, Any], *, download: bool) -> tuple[str, str]:
-    media_type = str(descriptor.get("media_type") or "application/octet-stream")
-    safe_inline = media_type.startswith("image/") or media_type == "application/pdf"
-    effective_type = media_type if safe_inline and not download else "application/octet-stream"
-    filename = str(descriptor.get("filename") or "artifact").replace('"', "_")
-    disposition = "attachment" if download or not safe_inline else "inline"
-    return effective_type, f'{disposition}; filename="{filename}"'
-
-
 async def _status_payload(
     request: Request, user: UserContext, record: AnswerRunRecord
 ) -> dict[str, Any]:
@@ -367,13 +354,11 @@ async def read_answer_artifact_presentation(
     application = get_application(request)
     owner_id = owner_id_from_user(user)
     record = await application.answers.get(owner_id=owner_id, run_id=run_id)
-    descriptor = _published_artifact(record.result if record else None, resource_id)
+    descriptor = artifact_descriptor(record.result if record else None, resource_id)
     if (
         record is None
         or record.status != "succeeded"
-        or descriptor is None
-        or descriptor.get("status") != "available"
-        or descriptor.get("media_type") != "text/markdown"
+        or not artifact_presentation_available(descriptor)
     ):
         raise HTTPException(status_code=404, detail="artifact presentation not found")
     blob = await application.answers.read_artifact(
@@ -440,7 +425,7 @@ async def read_answer_artifact(
     application = get_application(request)
     owner_id = owner_id_from_user(user)
     record = await application.answers.get(owner_id=owner_id, run_id=run_id)
-    descriptor = _published_artifact(record.result if record else None, resource_id)
+    descriptor = artifact_descriptor(record.result if record else None, resource_id)
     if descriptor is None or descriptor.get("status") != "available":
         raise HTTPException(status_code=404, detail="artifact not found")
     header = request.headers.get("range", "").strip()
@@ -451,42 +436,7 @@ async def read_answer_artifact(
     )
     if total is None:
         raise HTTPException(status_code=404, detail="artifact not found")
-    offset = 0
-    length = None
-    status_code = 200
-    content_range = None
-    if header:
-        if not header.lower().startswith("bytes=") or "," in header:
-            raise HTTPException(
-                status_code=416,
-                detail="range not satisfiable",
-                headers={"Content-Range": f"bytes */{total}"},
-            )
-        spec = header.split("=", 1)[1]
-        start_s, _, end_s = spec.partition("-")
-        try:
-            if start_s == "":
-                suffix = int(end_s)
-                if suffix <= 0 or total == 0:
-                    raise ValueError
-                suffix = min(suffix, total)
-                offset = total - suffix
-                length = suffix
-            else:
-                start = int(start_s)
-                end = int(end_s) if end_s else total - 1
-                if start >= total or end < start:
-                    raise ValueError
-                offset = start
-                length = min(end, total - 1) - start + 1
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=416,
-                detail="range not satisfiable",
-                headers={"Content-Range": f"bytes */{total}"},
-            ) from exc
-        status_code = 206
-        content_range = f"bytes {offset}-{offset + length - 1}/{total}"
+    offset, length, status_code, content_range = artifact_range(header, total)
     stream = await application.answers.open_artifact(
         owner_id=owner_id,
         run_id=run_id,
@@ -496,22 +446,15 @@ async def read_answer_artifact(
     )
     if stream is None:
         raise HTTPException(status_code=404, detail="artifact not found")
-    media_type, disposition = _artifact_response_headers(descriptor, download=download)
+    media_type, headers = artifact_response(
+        descriptor,
+        download=download,
+        content_range=content_range,
+    )
     return StreamingResponse(
         stream,
         media_type=media_type,
-        headers={
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "private, no-store",
-            "X-Content-Type-Options": "nosniff",
-            "Content-Disposition": disposition,
-            **(
-                {"Content-Security-Policy": _INERT_SVG_CSP}
-                if descriptor.get("media_type") == "image/svg+xml"
-                else {}
-            ),
-            **({"Content-Range": content_range} if content_range else {}),
-        },
+        headers=headers,
         status_code=status_code,
     )
 

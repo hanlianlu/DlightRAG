@@ -144,7 +144,6 @@ class Application:
         try:
             catalogue_ready = await self._initialize_model_catalogue()
             components.capabilities.resolve_profiles()
-            components.capabilities.validate_startup()
             await self._initialize_run_stores()
             await self._validate_active_runs()
             corpora_ready = await self._initialize_corpora()

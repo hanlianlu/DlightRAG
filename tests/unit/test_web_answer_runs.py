@@ -690,6 +690,22 @@ async def test_general_artifact_presentation_is_404_without_a_descriptor(
     assert response.status_code == 404
 
 
+async def test_general_artifact_presentation_rejects_an_unavailable_descriptor(
+    client: AsyncClient, service: AsyncMock, application_double: AsyncMock
+) -> None:
+    result = _with_primary_report(stored_result())
+    result["artifacts"][0]["status"] = "unavailable"
+    service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
+    application_double.answers.read_artifact = AsyncMock(return_value=b"must not be read")
+
+    response = await client.get(
+        f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}/presentation"
+    )
+
+    assert response.status_code == 404
+    application_double.answers.read_artifact.assert_not_awaited()
+
+
 async def test_cancelling_an_unowned_run_never_reaches_answer_service(
     client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:

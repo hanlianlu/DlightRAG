@@ -1,10 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Durable hot-workspace promotion jobs (schema + narrow adapter only).
+"""Durable hot-workspace promotion jobs and their fenced adapter.
 
-Commit 1 installs the durable job schema and the adapter interfaces the
-Commit 3 promotion worker will consume. Nothing here enqueues or drives work:
-no triggers, no worker loop, no cutover behavior. The table survives crashes,
-enforces its legal-state transitions, and exposes bounded claim scans.
+The application promotion worker enqueues and drives these jobs through the
+narrow claim/transition interface. The table survives crashes, enforces its
+legal-state transitions, and exposes bounded claim scans.
 
 Idempotency: at most one live/retrying job per workspace (partial unique
 index). Leasing/fencing: only the current owner + generation may transition an
@@ -231,11 +230,7 @@ _SCHEMA_TABLES = (
 
 
 class PGPromotionJobStore(PostgresOperationRunner):
-    """Durable promotion-job store for the Commit 3 promotion worker.
-
-    Commit 1 installs the schema and the claim/transition interfaces; the
-    worker that drives them does not exist yet.
-    """
+    """Durable promotion-job store used by the application promotion worker."""
 
     async def initialize(self, *, validate_only: bool = False) -> None:
         """Create/verify the promotion-job schema."""
@@ -277,7 +272,7 @@ class PGPromotionJobStore(PostgresOperationRunner):
         """Lease one pending, due-retry, or expired-lease job.
 
         Every successful claim increments and returns ``lease_generation``.
-        Commit 3 must carry that generation through every side effect and
+        The worker carries that generation through every side effect and
         transition, so an expired stale worker cannot complete a newer claim.
         """
         owner_id = _nonempty(owner, field="lease owner")

@@ -94,9 +94,6 @@ class _Capabilities(_Collaborator):
     def resolve_profiles(self) -> None:
         self._record("resolve_profiles")
 
-    def validate_startup(self) -> None:
-        self._record("validate_startup")
-
     async def probe_all(self) -> None:
         self._record("probe_all")
 
@@ -332,7 +329,6 @@ async def test_application_exposes_only_typed_services_and_closes_in_dependency_
 
     assert parts.recorder.started() == [
         "capabilities:resolve_profiles",
-        "capabilities:validate_startup",
         "run_store:initialize:False",
         "web_store:initialize:False",
         "memory_store:initialize",

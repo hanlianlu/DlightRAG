@@ -15,7 +15,6 @@ from dlightrag.engine.rag.retrieval import (
     rrf_fuse,
 )
 from dlightrag.engine.rag.retrieval.filtering import metadata_filter_scope
-from dlightrag.engine.rag.retrieval.metadata_path import metadata_retrieve
 from dlightrag.engine.rag.retrieval.ports import BM25Search, MetadataScopeStore, RetrievalBackend
 from dlightrag.engine.rag.retrieval.visual import (
     DirectVisualRetriever,
@@ -268,9 +267,14 @@ class UnifiedRetriever:
     async def _resolve_candidates(
         self, metadata_filter: MetadataFilter | None
     ) -> MetadataScope | None:
+        """Resolve filter facts without materializing document ids across the store seam."""
         if metadata_filter is None or metadata_filter.is_empty():
             return None
-        return await metadata_retrieve(
-            stores=self._stores,
-            filters=metadata_filter,
+        scope = await self._stores.resolve_scope(metadata_filter)
+        logger.info(
+            "[MetadataPath] filters matched_any=%s candidate_chunks=%s filename_mode=%s",
+            scope.doc_exists,
+            scope.render_candidate_count(),
+            scope.filename_mode,
         )
+        return scope

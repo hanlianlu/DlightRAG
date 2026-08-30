@@ -14,18 +14,13 @@ from dlightrag.adapters.http.rest.models import (
     FailedFilesResponse,
     FileListResponse,
 )
+from dlightrag.adapters.http.source_download import source_download_response
 from dlightrag.application.access import AccessAction, UserContext
 from dlightrag.application.corpus_admin import (
     FILE_PANEL_PAGE_DEFAULT_LIMIT,
     FILE_PANEL_PAGE_MAX_LIMIT,
     FilePanelCursorError,
     FilePanelPageRequest,
-    LocalDownloadTarget,
-    RedirectDownloadTarget,
-    SourceDownloadInvalidError,
-    SourceDownloadNotFoundError,
-    SourceDownloadTarget,
-    SourceDownloadUnavailableError,
     safe_log_text,
 )
 from dlightrag.application.errors import WorkspaceWriteFencedError
@@ -152,18 +147,11 @@ async def serve_file(
         user,
         workspace=safe_workspace,
     )
-    try:
-        target = await get_application(request).corpora.prepare_source_download(
-            safe_workspace,
-            document_id,
-        )
-    except SourceDownloadInvalidError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except SourceDownloadNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except SourceDownloadUnavailableError as exc:
-        raise HTTPException(503, str(exc)) from exc
-    return _download_response(target)
+    return await source_download_response(
+        get_application(request).corpora,
+        workspace=safe_workspace,
+        document_id=document_id,
+    )
 
 
 def _file_page_request(
@@ -215,15 +203,3 @@ async def _enforce_source_download_access(
                 extra={"outcome": "unauthorized", "workspace": safe_log_text(workspace)},
             )
         raise
-
-
-def _download_response(target: SourceDownloadTarget) -> FileResponse | RedirectResponse:
-    if isinstance(target, LocalDownloadTarget):
-        return FileResponse(
-            target.path,
-            media_type=target.media_type,
-            filename=target.filename,
-        )
-    if isinstance(target, RedirectDownloadTarget):
-        return RedirectResponse(url=target.url, status_code=302)
-    raise TypeError("Unsupported source download target")

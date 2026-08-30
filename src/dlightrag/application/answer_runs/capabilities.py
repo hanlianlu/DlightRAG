@@ -165,11 +165,6 @@ class AnswerCapabilityCoordinator:
             supports_images=declared.supports_images and status == "supported",
         )
 
-    def validate_startup(self) -> None:
-        # Every modern model is assumed tool-capable (the field was removed
-        # from the profile schema); no capability gate remains here.
-        return None
-
     async def probe_all(self) -> None:
         await self.probe_answer()
         await self.probe_vlm()

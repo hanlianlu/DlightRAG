@@ -3,7 +3,7 @@
 
 from typing import Annotated, Any, Literal
 
-from dlightrag_memory import MemoryOperationReceipt, MemoryProvenance
+from dlightrag_memory import MemoryProvenance
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,6 +21,7 @@ from dlightrag.application.memory import (
     MemoryListPageRequest,
     MemorySettings,
 )
+from dlightrag.application.memory.projections import memory_receipt_payload
 
 from .deps import get_application
 
@@ -104,7 +105,7 @@ async def remember_memory(
         raise _memory_http_error(exc) from exc
     except MemoryWriteRejectedError as exc:
         raise HTTPException(status_code=409, detail=exc.public_message) from exc
-    return _receipt_payload(receipt)
+    return memory_receipt_payload(receipt)
 
 
 @router.delete("/memory/{memory_id}")
@@ -127,7 +128,7 @@ async def forget_memory(
         raise _memory_http_error(exc) from exc
     except MemoryWriteRejectedError as exc:
         raise HTTPException(status_code=409, detail=exc.public_message) from exc
-    return _receipt_payload(receipt)
+    return memory_receipt_payload(receipt)
 
 
 @router.post("/memory/changes/{change_id}/undo")
@@ -150,7 +151,7 @@ async def undo_memory_change(
         raise _memory_http_error(exc) from exc
     except MemoryWriteRejectedError as exc:
         raise HTTPException(status_code=409, detail=exc.public_message) from exc
-    return _receipt_payload(receipt)
+    return memory_receipt_payload(receipt)
 
 
 @router.get("/memory/settings")
@@ -198,19 +199,6 @@ def _management_provenance(idempotency_key: str) -> MemoryProvenance:
 
 def _undo_provenance(idempotency_key: str) -> MemoryProvenance:
     return MemoryProvenance(origin_kind="undo", origin_id=idempotency_key)
-
-
-def _receipt_payload(receipt: MemoryOperationReceipt) -> dict[str, Any]:
-    return {
-        "action": receipt.action,
-        "body": receipt.body,
-        "change_id": receipt.change_id,
-        "kind": receipt.kind,
-        "memory_ids": list(receipt.memory_ids),
-        "outcome": receipt.outcome,
-        "supersedes_id": receipt.supersedes_id,
-        "target_change_id": receipt.target_change_id,
-    }
 
 
 def _settings_payload(settings: MemorySettings) -> dict[str, Any]:

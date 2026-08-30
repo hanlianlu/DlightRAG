@@ -2,6 +2,7 @@
 """Fast Host turns share the canonical Agent Session tree without an Operation."""
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -191,6 +192,20 @@ class _CountingFastRepository(MemoryAgentSessionRepository[None]):
 
     async def authoritative(self, session_id: SessionId) -> AgentSessionSnapshot:
         return await super().load(session_id)
+
+
+class _UncommittedMutationRepository(_CountingFastRepository):
+    async def refresh(
+        self,
+        session_id: SessionId,
+        *,
+        previous: AgentSessionSnapshot,
+    ) -> AgentSessionSnapshot:
+        snapshot = await super().refresh(session_id, previous=previous)
+        return replace(
+            snapshot,
+            registers=(RegisterRecord(LaneState(LaneId.main()), 1),),
+        )
 
 
 class _ForcedFastRepository(_CountingFastRepository):
@@ -426,6 +441,16 @@ async def test_routing_boundary_refresh_observes_a_turn_settled_after_the_initia
     assert [
         message["content"] for message in project_session_messages(boundary.tree.ancestry(), None)
     ] == ["earlier question", "earlier answer"]
+
+
+@pytest.mark.asyncio
+async def test_fast_host_rejects_refresh_mutation_without_commit_advancement() -> None:
+    repository = _UncommittedMutationRepository()
+    session_id = SessionId.new()
+    host = await _fast_host(repository, session_id)
+
+    with pytest.raises(ValueError, match="changed without commit advancement"):
+        await host.snapshot(session_id)
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,29 @@ from dlightrag.engine.agent.session.operation import (
     ToolEffectPending,
 )
 
+type SyntheticToolDisposition = Literal[
+    "unknown_tool",
+    "invalid_arguments",
+    "plan_denied",
+    "truncated_call",
+    "contract_changed",
+]
+type SyntheticToolResultOutcome = Literal[
+    "unknown_tool",
+    "invalid_arguments",
+    "plan_denied",
+    "truncated_arguments",
+    "tool_contract_changed",
+]
+
+TOOL_DISPOSITION_OUTCOME: dict[SyntheticToolDisposition, SyntheticToolResultOutcome] = {
+    "unknown_tool": "unknown_tool",
+    "invalid_arguments": "invalid_arguments",
+    "plan_denied": "plan_denied",
+    "truncated_call": "truncated_arguments",
+    "contract_changed": "tool_contract_changed",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class AssembleProviderRequest:
@@ -33,13 +56,7 @@ class CallProvider:
 @dataclass(frozen=True, slots=True)
 class CommitSyntheticToolResult:
     item: ToolBatchItem
-    outcome: Literal[
-        "unknown_tool",
-        "invalid_arguments",
-        "plan_denied",
-        "truncated_arguments",
-        "tool_contract_changed",
-    ]
+    outcome: SyntheticToolResultOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,23 +136,7 @@ def next_action(state: RunOperationState) -> NextAction:
         item = state.batch.items[state.next_source_index]
         if item.disposition == "executable":
             return BeginToolEffect(item)
-        outcomes: dict[
-            str,
-            Literal[
-                "unknown_tool",
-                "invalid_arguments",
-                "plan_denied",
-                "truncated_arguments",
-                "tool_contract_changed",
-            ],
-        ] = {
-            "unknown_tool": "unknown_tool",
-            "invalid_arguments": "invalid_arguments",
-            "plan_denied": "plan_denied",
-            "truncated_call": "truncated_arguments",
-            "contract_changed": "tool_contract_changed",
-        }
-        return CommitSyntheticToolResult(item, outcomes[item.disposition])
+        return CommitSyntheticToolResult(item, TOOL_DISPOSITION_OUTCOME[item.disposition])
     if isinstance(state, ToolEffectPending):
         item = state.batch.items[state.source_index]
         return RecoverToolEffect(item, replay=item.replay_policy == "replayable")
@@ -172,5 +173,6 @@ __all__ = [
     "NoAction",
     "RecoverToolEffect",
     "RunCompaction",
+    "TOOL_DISPOSITION_OUTCOME",
     "next_action",
 ]

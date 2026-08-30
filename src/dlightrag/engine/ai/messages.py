@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Provider-neutral contracts for one tool-capable model turn."""
 
+import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -32,6 +33,25 @@ class ToolCall:
     thought_signature: Any | None = None
 
 
+def tool_call_message(call: ToolCall) -> dict[str, Any]:
+    """Project one normalized tool call to its model-message shape."""
+    message: dict[str, Any] = {
+        "id": call.id,
+        "type": "function",
+        "function": {
+            "name": call.name,
+            "arguments": json.dumps(
+                call.arguments,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        },
+    }
+    if call.thought_signature is not None:
+        message["thought_signature"] = call.thought_signature
+    return message
+
+
 @dataclass(frozen=True, slots=True)
 class AssistantTurn:
     """Complete provider response with text, reasoning, or tool calls."""
@@ -52,4 +72,5 @@ __all__ = [
     "ToolChoice",
     "ToolDefinition",
     "ToolStopReason",
+    "tool_call_message",
 ]

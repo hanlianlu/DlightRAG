@@ -3,7 +3,7 @@
 
 from typing import Annotated, Any, Literal
 
-from dlightrag_memory import MemoryOperationReceipt, MemoryProvenance
+from dlightrag_memory import MemoryProvenance
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,6 +15,7 @@ from dlightrag.application.answer_runs.errors import (
     MemoryWriteRejectedError,
 )
 from dlightrag.application.memory import MemorySettings
+from dlightrag.application.memory.projections import memory_receipt_payload
 
 router = APIRouter()
 IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=255)]
@@ -84,7 +85,7 @@ async def remember_memory(
         raise _capability_error(exc) from exc
     except MemoryWriteRejectedError as exc:
         raise HTTPException(status_code=409, detail=exc.public_message) from exc
-    return _receipt(receipt)
+    return memory_receipt_payload(receipt)
 
 
 @router.delete("/memory/{memory_id}")
@@ -105,7 +106,7 @@ async def forget_memory(
         raise _capability_error(exc) from exc
     except MemoryWriteRejectedError as exc:
         raise HTTPException(status_code=409, detail=exc.public_message) from exc
-    return _receipt(receipt)
+    return memory_receipt_payload(receipt)
 
 
 @router.post("/memory/changes/{change_id}/undo")
@@ -126,7 +127,7 @@ async def undo_memory_change(
         raise _capability_error(exc) from exc
     except MemoryWriteRejectedError as exc:
         raise HTTPException(status_code=409, detail=exc.public_message) from exc
-    return _receipt(receipt)
+    return memory_receipt_payload(receipt)
 
 
 @router.post("/memory/clear", status_code=status.HTTP_204_NO_CONTENT)
@@ -141,19 +142,6 @@ async def clear_memory(request: Request) -> None:
 
 def _settings(settings: MemorySettings) -> dict[str, object]:
     return {"enabled": settings.enabled, "active_count": settings.active_count}
-
-
-def _receipt(receipt: MemoryOperationReceipt) -> dict[str, Any]:
-    return {
-        "action": receipt.action,
-        "body": receipt.body,
-        "change_id": receipt.change_id,
-        "kind": receipt.kind,
-        "memory_ids": list(receipt.memory_ids),
-        "outcome": receipt.outcome,
-        "supersedes_id": receipt.supersedes_id,
-        "target_change_id": receipt.target_change_id,
-    }
 
 
 def _capability_error(exc: Exception) -> HTTPException:

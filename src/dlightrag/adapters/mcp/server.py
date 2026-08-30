@@ -12,7 +12,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from dlightrag_memory import MemoryOperationReceipt
 from mcp import MCPError
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -118,19 +117,6 @@ def _owner_id() -> str:
         user_id=scope.user_id,
         issuer=str(scope.claims.get("iss") or "") or None,
     )
-
-
-def _memory_receipt(receipt: MemoryOperationReceipt) -> dict[str, Any]:
-    return {
-        "action": receipt.action,
-        "body": receipt.body,
-        "change_id": receipt.change_id,
-        "kind": receipt.kind,
-        "memory_ids": list(receipt.memory_ids),
-        "outcome": receipt.outcome,
-        "supersedes_id": receipt.supersedes_id,
-        "target_change_id": receipt.target_change_id,
-    }
 
 
 def _run_descriptor(record: AnswerRunRecord) -> dict[str, Any]:
