@@ -523,14 +523,15 @@ models:
         structured_output: json_object
 ```
 
-`structured_output` defaults to `auto`. Auto uses schema-constrained output for
-providers with a native schema path: OpenAI's default endpoint, Anthropic
-native `output_config.format`, and Gemini native `response_schema`.
-OpenAI-compatible endpoints with a custom `base_url` default to `json_object`
-because feature parity is provider-specific. Set `structured_output` to
-`json_schema` only for a custom OpenAI-compatible endpoint known to support
-strict JSON schema response formats. Anthropic native does not support the
-lower-confidence `json_object` mode; use `auto` or `json_schema`.
+`structured_output` defaults to `auto`, which requests the strongest
+schema-constrained output path for OpenAI and OpenAI-compatible endpoints,
+Anthropic native `output_config.format`, and Gemini native `response_schema`.
+For `provider: openai`, a failed strict JSON Schema request is retried once as
+`json_object` with the required JSON instruction. An explicit `json_schema` is
+therefore normally redundant. Set `structured_output: json_object` only for an
+endpoint already known not to support strict schemas, avoiding a predictably
+failed first request. Anthropic native does not support the lower-confidence
+`json_object` mode; use `auto` or `json_schema`.
 
 `model_kwargs` apply to ordinary calls. `agentic_model_kwargs` are a shallow
 top-level overlay used by research control and final calls. They remain an

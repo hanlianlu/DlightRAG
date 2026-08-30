@@ -255,7 +255,6 @@ class ModelRoleSettings(FrozenSettings):
             provider="openai",
             model="google/gemini-3.7-flash",
             base_url="https://openrouter.ai/api/v1",
-            structured_output="json_schema",
             temperature=1.0,
         )
     )
