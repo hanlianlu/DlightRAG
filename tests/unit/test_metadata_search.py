@@ -131,6 +131,16 @@ def test_metadata_search_cursor_rejects_tamper_malformed_scope_version_and_mode(
             secret,
             {
                 "after_doc_id": "doc-1",
+                "mode": ["exact"],
+                "scope": "metadata-match",
+                "v": 1,
+                "workspace": "finance",
+            },
+        ),
+        _signed_token(
+            secret,
+            {
+                "after_doc_id": "doc-1",
                 "mode": "exact",
                 "scope": "metadata-match",
                 "v": 1,

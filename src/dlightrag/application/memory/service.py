@@ -102,9 +102,9 @@ class MemoryService:
         self,
         store: Any,
         *,
+        memory_list_cursor_secret: bytes,
         settings_store: MemorySettingsStore | None = None,
         superseded_retention_days: int = MEMORY_SUPERSEDE_RETENTION_DAYS,
-        memory_list_cursor_secret: bytes | None = None,
     ) -> None:
         self._memory = Memory(store)
         self._settings = settings_store or NoopMemorySettingsStore()

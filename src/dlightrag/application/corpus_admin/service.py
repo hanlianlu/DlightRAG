@@ -493,9 +493,9 @@ class CorpusAdmin:
         file_panel: FilePanelStore,
         metadata_search: MetadataSearchStore,
         source_download_for: SourceDownloadFactory,
-        file_panel_cursor_secret: bytes | None = None,
-        metadata_search_cursor_secret: bytes | None = None,
-        workspace_catalog_cursor_secret: bytes | None = None,
+        file_panel_cursor_secret: bytes,
+        metadata_search_cursor_secret: bytes,
+        workspace_catalog_cursor_secret: bytes,
         promotion_worker: PromotionWorker | None = None,
     ) -> None:
         self._settings = settings

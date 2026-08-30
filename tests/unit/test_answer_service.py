@@ -489,6 +489,7 @@ def _service(
         resources=resources or _Resources(),
         model_fingerprint_for_role=_fingerprint,
         memory_capability=memory_capability,
+        child_roster_cursor_secret=b"answer-service-child-roster-test",
     )
 
 

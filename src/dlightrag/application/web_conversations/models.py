@@ -1,19 +1,14 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Durable Web Conversation records and persistence port."""
 
-import base64
-import binascii
 import datetime
-import hashlib
-import hmac
-import json
-import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from dlightrag.application.answer_runs.routing import RoutingAcceptance
+from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
 from dlightrag.engine.runtime import AnswerRunRecord, PendingArtifact, PendingArtifactReference
 
 
@@ -84,10 +79,6 @@ CONVERSATION_PAGE_MAX_LIMIT = 100
 CONVERSATION_HISTORY_PAGE_DEFAULT_LIMIT = 40
 CONVERSATION_HISTORY_PAGE_MAX_LIMIT = 100
 RECOVERY_PAGE_MAX_LIMIT = 128
-_CURSOR_MAC_BYTES = 16
-_BASE64URL_CHARACTERS = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-)
 
 
 class ConversationCursorError(ValueError):
@@ -234,43 +225,31 @@ class ConversationCursorCodec:
     """Encode paired ordering facts as an opaque, integrity-checked token.
 
     The cursor deliberately carries no principal. Ownership remains a mandatory
-    query predicate derived from authentication on every page.
+    query predicate derived from authentication on every page. Pre-governance
+    tokens without scope/version pins are intentionally invalidated because
+    continuation cursors are short-lived state.
     """
 
-    def __init__(self, secret: bytes | None = None) -> None:
-        self._secret = secret or secrets.token_bytes(32)
+    def __init__(self, secret: bytes) -> None:
+        self._envelope = OpaqueCursorEnvelope(
+            secret,
+            domain="conversation-list",
+            scope="conversation-list",
+            fields_by_version={1: {"conversation_id", "updated_at"}},
+            current_version=1,
+        )
 
     def encode(self, cursor: ConversationCursor) -> str:
-        payload = json.dumps(
+        return self._envelope.encode(
             {
                 "conversation_id": str(cursor.conversation_id),
                 "updated_at": _canonical_cursor_timestamp(cursor.updated_at),
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-        encoded = _base64url_encode(payload)
-        mac = _cursor_mac(self._secret, b"conversation-list\0", payload)
-        return f"{encoded}.{_base64url_encode(mac)}"
+            }
+        )
 
     def decode(self, token: str) -> ConversationCursor:
         try:
-            encoded, encoded_mac = token.split(".")
-            if not encoded or not encoded_mac:
-                raise ValueError
-            payload = _base64url_decode(encoded)
-            supplied_mac = _base64url_decode(encoded_mac)
-            expected_mac = _cursor_mac(self._secret, b"conversation-list\0", payload)
-            if len(supplied_mac) != _CURSOR_MAC_BYTES or not hmac.compare_digest(
-                supplied_mac, expected_mac
-            ):
-                raise ValueError
-            decoded = json.loads(payload)
-            if not isinstance(decoded, dict) or set(decoded) != {
-                "conversation_id",
-                "updated_at",
-            }:
-                raise ValueError
+            decoded = self._envelope.decode(token)
             conversation_id_text = decoded["conversation_id"]
             timestamp_text = decoded["updated_at"]
             if not isinstance(conversation_id_text, str) or not isinstance(timestamp_text, str):
@@ -285,52 +264,33 @@ class ConversationCursorCodec:
                 updated_at=updated_at,
                 conversation_id=conversation_id,
             )
-        except (binascii.Error, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        except ValueError as exc:
             raise ConversationCursorError("invalid conversation page cursor") from exc
 
 
 class ConversationHistoryCursorCodec:
     """Signed, opaque, conversation-bound turn cursor with canonical decoding."""
 
-    def __init__(self, secret: bytes | None = None) -> None:
-        self._secret = secret or secrets.token_bytes(32)
+    def __init__(self, secret: bytes) -> None:
+        self._envelope = OpaqueCursorEnvelope(
+            secret,
+            domain="conversation-history",
+            scope="conversation-history",
+            fields_by_version={1: {"before_turn_number", "conversation_id"}},
+            current_version=1,
+        )
 
     def encode(self, cursor: ConversationHistoryCursor) -> str:
-        payload = _canonical_json(
+        return self._envelope.encode(
             {
                 "before_turn_number": cursor.before_turn_number,
                 "conversation_id": str(cursor.conversation_id),
-                "scope": "conversation-history",
-                "v": 1,
             }
         )
-        mac = _cursor_mac(self._secret, b"conversation-history\0", payload)
-        return f"{_base64url_encode(payload)}.{_base64url_encode(mac)}"
 
     def decode(self, token: str) -> ConversationHistoryCursor:
         try:
-            encoded, encoded_mac = token.split(".")
-            if not encoded or not encoded_mac:
-                raise ValueError
-            payload = _base64url_decode(encoded)
-            supplied_mac = _base64url_decode(encoded_mac)
-            expected_mac = _cursor_mac(self._secret, b"conversation-history\0", payload)
-            if len(supplied_mac) != _CURSOR_MAC_BYTES or not hmac.compare_digest(
-                supplied_mac, expected_mac
-            ):
-                raise ValueError
-            decoded = json.loads(payload)
-            if not isinstance(decoded, dict) or set(decoded) != {
-                "before_turn_number",
-                "conversation_id",
-                "scope",
-                "v",
-            }:
-                raise ValueError
-            if _canonical_json(decoded) != payload:
-                raise ValueError
-            if decoded["v"] != 1 or decoded["scope"] != "conversation-history":
-                raise ValueError
+            decoded = self._envelope.decode(token)
             conversation_text = decoded["conversation_id"]
             before_turn_number = decoded["before_turn_number"]
             if not isinstance(conversation_text, str):
@@ -342,35 +302,14 @@ class ConversationHistoryCursorCodec:
                 conversation_id=conversation_id,
                 before_turn_number=before_turn_number,
             )
-        except (binascii.Error, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        except ValueError as exc:
             raise ConversationCursorError("invalid conversation history cursor") from exc
-
-
-def _cursor_mac(secret: bytes, domain: bytes, payload: bytes) -> bytes:
-    return hmac.new(secret, domain + payload, hashlib.sha256).digest()[:_CURSOR_MAC_BYTES]
-
-
-def _canonical_json(value: Mapping[str, Any]) -> bytes:
-    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 def _canonical_cursor_timestamp(value: datetime.datetime) -> str:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("conversation cursor timestamp must include a timezone")
     return value.astimezone(datetime.UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _base64url_encode(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
-
-
-def _base64url_decode(value: str) -> bytes:
-    if not value or any(character not in _BASE64URL_CHARACTERS for character in value):
-        raise ValueError("invalid base64url")
-    decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-    if _base64url_encode(decoded) != value:
-        raise ValueError("non-canonical base64url")
-    return decoded
 
 
 @dataclass(frozen=True, slots=True)

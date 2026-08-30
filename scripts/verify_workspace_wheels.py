@@ -1000,6 +1000,9 @@ def _smoke_root_interfaces() -> None:
             file_panel=cast(Any, SimpleNamespace()),
             metadata_search=cast(Any, SimpleNamespace()),
             source_download_for=cast(Any, lambda _workspace: SimpleNamespace()),
+            file_panel_cursor_secret=b"wheel-file-panel-cursor",
+            metadata_search_cursor_secret=b"wheel-metadata-search-cursor",
+            workspace_catalog_cursor_secret=b"wheel-workspace-catalog-cursor",
         )
         if await service.list_workspaces() != ["installed", "default"]:
             raise ValueError("installed CorpusAdmin did not expose its workspace catalog")

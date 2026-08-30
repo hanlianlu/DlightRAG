@@ -235,6 +235,7 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
         store=store,
         answers=answers,
         max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
     )
 
     submission = await service.start_answer(
@@ -294,7 +295,12 @@ async def test_durable_recovery_reads_more_than_100_succeeded_turns_in_bounded_p
     store.recovery_page.side_effect = recovery_page
     store.create_answer_turn.return_value = None
     answers = FakeAnswers()
-    service = WebConversationService(store=store, answers=answers, max_attachments=6)
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
 
     await service.start_answer(
         None,
@@ -328,7 +334,12 @@ async def test_service_continuation_uses_shared_answer_contract_and_branch_targe
     answers.continuation_request.return_value = SimpleNamespace()
     marker = web_answer_submission(conversation_id=_CID)
     answers.accept.return_value = marker
-    service = WebConversationService(store=store, answers=answers, max_attachments=6)
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
 
     result = await service.continue_answer(
         None,
@@ -362,6 +373,7 @@ async def test_first_submission_uses_one_stable_server_conversation_and_atomic_s
         store=store,
         answers=answers,
         max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
     )
 
     submission = await service.start_answer(
@@ -401,6 +413,7 @@ async def test_replaying_first_submission_returns_its_created_conversation_befor
         store=store,
         answers=answers,
         max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
     )
 
     submission = await service.start_answer(
@@ -734,6 +747,7 @@ async def scoped_client(application_double: AsyncMock, test_config):
         store=store,
         answers=FakeAnswers(),
         max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
     )
     application.state.application = application_double
     transport = ASGITransport(app=application)
@@ -1106,6 +1120,7 @@ async def test_terminal_attachment_is_read_through_the_answer_service() -> None:
         store=store,
         answers=answers,
         max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
     )
 
     attachment = await service.attachment(None, RUN_ID, 0)
@@ -1123,6 +1138,7 @@ async def test_an_unowned_run_never_reads_an_input_artifact() -> None:
         store=store,
         answers=answers,
         max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
     )
 
     assert await service.attachment(None, RUN_ID, 0) is None
@@ -1173,6 +1189,7 @@ async def test_history_attachments_load_from_the_run_that_accepted_them() -> Non
         store=store,
         answers=answers,
         max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
     )
 
     await service.start_answer(
@@ -1232,7 +1249,12 @@ async def test_terminal_turns_project_history_from_the_accepted_envelope() -> No
     store.replay_answer_turn.return_value = None
     store.create_answer_turn.return_value = None
     answers = FakeAnswers()
-    service = WebConversationService(store=store, answers=answers, max_attachments=6)
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
 
     await service.start_answer(
         None,

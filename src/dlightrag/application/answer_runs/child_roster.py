@@ -1,24 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Bounded child-roster pages and opaque continuation cursors."""
 
-import base64
-import binascii
 import datetime
-import hashlib
-import hmac
-import json
-import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
+
 CHILD_ROSTER_PAGE_DEFAULT_LIMIT = 50
 CHILD_ROSTER_PAGE_MAX_LIMIT = 100
-_CURSOR_MAC_BYTES = 16
-_BASE64URL_CHARACTERS = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-)
 
 
 class ChildRosterCursorError(ValueError):
@@ -83,51 +75,27 @@ class ChildRosterPage:
 class ChildRosterCursorCodec:
     """Encode roster ordering facts as a signed, opaque, run-bound token."""
 
-    def __init__(self, secret: bytes | None = None) -> None:
-        self._secret = secret or secrets.token_bytes(32)
+    def __init__(self, secret: bytes) -> None:
+        self._envelope = OpaqueCursorEnvelope(
+            secret,
+            domain="child-roster",
+            scope="child-roster",
+            fields_by_version={1: {"child_session_id", "created_at", "run_id"}},
+            current_version=1,
+        )
 
     def encode(self, cursor: ChildRosterCursor) -> str:
-        payload = _canonical_json(
+        return self._envelope.encode(
             {
                 "child_session_id": str(cursor.child_session_id),
                 "created_at": _canonical_timestamp(cursor.created_at),
                 "run_id": str(cursor.run_id),
-                "scope": "child-roster",
-                "v": 1,
             }
         )
-        mac = _cursor_mac(self._secret, payload)
-        return f"{_base64url_encode(payload)}.{_base64url_encode(mac)}"
 
     def decode(self, token: str) -> ChildRosterCursor:
         try:
-            encoded, encoded_mac = token.split(".")
-            if not encoded or not encoded_mac:
-                raise ValueError
-            payload = _base64url_decode(encoded)
-            supplied_mac = _base64url_decode(encoded_mac)
-            expected_mac = _cursor_mac(self._secret, payload)
-            if len(supplied_mac) != _CURSOR_MAC_BYTES or not hmac.compare_digest(
-                supplied_mac, expected_mac
-            ):
-                raise ValueError
-            decoded = json.loads(payload)
-            if not isinstance(decoded, dict) or set(decoded) != {
-                "child_session_id",
-                "created_at",
-                "run_id",
-                "scope",
-                "v",
-            }:
-                raise ValueError
-            if _canonical_json(decoded) != payload:
-                raise ValueError
-            if (
-                type(decoded["v"]) is not int
-                or decoded["v"] != 1
-                or decoded["scope"] != "child-roster"
-            ):
-                raise ValueError
+            decoded = self._envelope.decode(token)
             run_id_text = decoded["run_id"]
             child_session_text = decoded["child_session_id"]
             timestamp_text = decoded["created_at"]
@@ -149,37 +117,14 @@ class ChildRosterCursorCodec:
                 created_at=created_at,
                 child_session_id=child_session_id,
             )
-        except (binascii.Error, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        except ValueError as exc:
             raise ChildRosterCursorError("invalid child-roster page cursor") from exc
-
-
-def _cursor_mac(secret: bytes, payload: bytes) -> bytes:
-    return hmac.new(secret, b"child-roster\0" + payload, hashlib.sha256).digest()[
-        :_CURSOR_MAC_BYTES
-    ]
-
-
-def _canonical_json(value: Mapping[str, Any]) -> bytes:
-    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 def _canonical_timestamp(value: datetime.datetime) -> str:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("child-roster cursor timestamp must include a timezone")
     return value.astimezone(datetime.UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _base64url_encode(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
-
-
-def _base64url_decode(value: str) -> bytes:
-    if not value or any(character not in _BASE64URL_CHARACTERS for character in value):
-        raise ValueError("invalid base64url")
-    decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-    if _base64url_encode(decoded) != value:
-        raise ValueError("non-canonical base64url")
-    return decoded
 
 
 __all__ = [

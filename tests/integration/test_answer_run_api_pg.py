@@ -238,6 +238,7 @@ class _StoreBackedApplication:
             models=cast(Any, SimpleNamespace(query_image_describer=lambda: MagicMock())),
             resources=cast(Any, _Resources()),
             model_fingerprint_for_role=_fingerprint,
+            child_roster_cursor_secret=b"answer-run-api-child-roster-test",
         )
 
     @staticmethod

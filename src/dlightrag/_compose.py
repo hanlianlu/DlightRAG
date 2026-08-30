@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -11,6 +10,7 @@ from typing import Any
 
 from dlightrag.application.application import Application, _ApplicationComponents
 from dlightrag.application.config import DlightragConfig, get_config
+from dlightrag.application.opaque_cursor import CursorSecretBox
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import Telemetry
@@ -166,6 +166,13 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         return runtime
 
     pool = WorkspacePool(build=build_workspace)
+    cursor_secrets = CursorSecretBox(
+        (
+            f"{config.storage.postgres.host}\0"
+            f"{config.storage.postgres.database}\0"
+            f"{config.storage.postgres.password}"
+        ).encode()
+    )
 
     source_download_settings = rag_settings(config)
     corpora = CorpusAdmin(
@@ -187,30 +194,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         ),
         # Stable across workers sharing the operational database. The cursor
         # carries no authorization state and expires on credential rotation.
-        file_panel_cursor_secret=hashlib.sha256(
-            (
-                "dlightrag-file-panel-cursor\0"
-                f"{config.storage.postgres.host}\0"
-                f"{config.storage.postgres.database}\0"
-                f"{config.storage.postgres.password}"
-            ).encode()
-        ).digest(),
-        metadata_search_cursor_secret=hashlib.sha256(
-            (
-                "dlightrag-metadata-search-cursor\0"
-                f"{config.storage.postgres.host}\0"
-                f"{config.storage.postgres.database}\0"
-                f"{config.storage.postgres.password}"
-            ).encode()
-        ).digest(),
-        workspace_catalog_cursor_secret=hashlib.sha256(
-            (
-                "dlightrag-workspace-catalog-cursor\0"
-                f"{config.storage.postgres.host}\0"
-                f"{config.storage.postgres.database}\0"
-                f"{config.storage.postgres.password}"
-            ).encode()
-        ).digest(),
+        file_panel_cursor_secret=cursor_secrets.derive("dlightrag-file-panel-cursor"),
+        metadata_search_cursor_secret=cursor_secrets.derive("dlightrag-metadata-search-cursor"),
+        workspace_catalog_cursor_secret=cursor_secrets.derive("dlightrag-workspace-catalog-cursor"),
     )
 
     models = AnswerModelRuntime(
@@ -261,14 +247,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         superseded_retention_days=config.answer.runtime.answer_run_retention_days,
         # Stable across workers sharing the operational database. Cursors
         # carry no authorization state and expire on credential rotation.
-        memory_list_cursor_secret=hashlib.sha256(
-            (
-                "dlightrag-memory-list-cursor\0"
-                f"{config.storage.postgres.host}\0"
-                f"{config.storage.postgres.database}\0"
-                f"{config.storage.postgres.password}"
-            ).encode()
-        ).digest(),
+        memory_list_cursor_secret=cursor_secrets.derive("dlightrag-memory-list-cursor"),
     )
     from dlightrag.adapters.mcp.outbound import OutboundMcpServer, outbound_mcp_tools
 
@@ -337,14 +316,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         memory_capability=memory.execution_capability,
         # Stable across workers sharing the operational database. Cursors
         # carry no authorization state and expire on credential rotation.
-        child_roster_cursor_secret=hashlib.sha256(
-            (
-                "dlightrag-child-roster-cursor\0"
-                f"{config.storage.postgres.host}\0"
-                f"{config.storage.postgres.database}\0"
-                f"{config.storage.postgres.password}"
-            ).encode()
-        ).digest(),
+        child_roster_cursor_secret=cursor_secrets.derive("dlightrag-child-roster-cursor"),
     )
     web_store = PGWebConversationStore(run_store=run_store)
     return _ApplicationComponents(
@@ -368,14 +340,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             max_attachments=config.answer.generation.max_attachments,
             # Stable across workers sharing the operational database. Cursors
             # carry no authorization state and naturally expire on credential rotation.
-            cursor_secret=hashlib.sha256(
-                (
-                    "dlightrag-web-conversation-cursor\0"
-                    f"{config.storage.postgres.host}\0"
-                    f"{config.storage.postgres.database}\0"
-                    f"{config.storage.postgres.password}"
-                ).encode()
-            ).digest(),
+            cursor_secret=cursor_secrets.derive("dlightrag-web-conversation-cursor"),
         ),
         initialize_process=_initialize_process,
         close_process=_close_process,

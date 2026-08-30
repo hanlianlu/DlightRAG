@@ -99,6 +99,9 @@ def _corpus_admin(config: Any) -> Any:
         file_panel=cast(Any, SimpleNamespace()),
         metadata_search=cast(Any, SimpleNamespace()),
         source_download_for=cast(Any, lambda _workspace: SimpleNamespace()),
+        file_panel_cursor_secret=b"pg-storage-file-panel-test",
+        metadata_search_cursor_secret=b"pg-storage-metadata-search-test",
+        workspace_catalog_cursor_secret=b"pg-storage-workspace-catalog-test",
     )
 
 

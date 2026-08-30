@@ -119,6 +119,9 @@ def _admin(
         file_panel=cast(Any, file_panel),
         metadata_search=cast(Any, metadata_store),
         source_download_for=MagicMock(return_value=download),
+        file_panel_cursor_secret=b"corpus-file-panel-test",
+        metadata_search_cursor_secret=b"corpus-metadata-search-test",
+        workspace_catalog_cursor_secret=b"corpus-workspace-catalog-test",
     )
     return admin, pool, maintenance, jobs, file_panel, download
 

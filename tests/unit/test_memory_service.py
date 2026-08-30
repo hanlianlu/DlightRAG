@@ -11,7 +11,11 @@ from dlightrag.engine.answer.memory import MemoryCapability
 
 
 def _service() -> MemoryService:
-    return MemoryService(InMemoryMemoryStore(), settings_store=InMemoryMemorySettingsStore())
+    return MemoryService(
+        InMemoryMemoryStore(),
+        settings_store=InMemoryMemorySettingsStore(),
+        memory_list_cursor_secret=b"memory-service-list-test",
+    )
 
 
 def _provenance() -> MemoryProvenance:
@@ -52,7 +56,11 @@ async def test_mutation_rechecks_activation_inside_the_store_settlement() -> Non
             return MemoryCapability(enabled=self.reads == 1, epoch=int(self.reads > 1))
 
     store = InMemoryMemoryStore()
-    service = MemoryService(store, settings_store=DeactivatingSettings())
+    service = MemoryService(
+        store,
+        settings_store=DeactivatingSettings(),
+        memory_list_cursor_secret=b"memory-service-list-test",
+    )
     with pytest.raises(MemoryDisabledError):
         await service.remember(
             owner_id="alpha",

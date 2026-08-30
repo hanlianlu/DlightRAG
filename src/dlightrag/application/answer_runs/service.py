@@ -481,9 +481,9 @@ class AnswerService:
         models: _QueryImageRuntime,
         resources: _AnswerResourcePreparer,
         model_fingerprint_for_role: Callable[[ModelRole], ModelFingerprint],
+        child_roster_cursor_secret: bytes,
         research_tool_supplements: Callable[[], Sequence[AgentTool]] | None = None,
         memory_capability: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
-        child_roster_cursor_secret: bytes | None = None,
     ) -> None:
         self._store = store
         self._coordinator = coordinator

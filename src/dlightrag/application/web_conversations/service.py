@@ -175,7 +175,7 @@ class WebConversationService:
         store: WebConversationStore,
         answers: AnswerService,
         max_attachments: int,
-        cursor_secret: bytes | None = None,
+        cursor_secret: bytes,
     ) -> None:
         self._store = store
         self._answers = answers

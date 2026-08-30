@@ -181,7 +181,11 @@ async def test_pg_owner_lock_rechecks_deactivation_before_mutation_commit(
     async with pool.acquire() as conn:
         for statement in MEMORY_SETTINGS_DDL:
             await conn.execute(statement)
-    service = MemoryService(store, settings_store=PGMemorySettingsStore(pool=pool))
+    service = MemoryService(
+        store,
+        settings_store=PGMemorySettingsStore(pool=pool),
+        memory_list_cursor_secret=b"memory-pg-list-test",
+    )
 
     async with pool.acquire() as conn, conn.transaction():
         await conn.fetchval("SELECT pg_advisory_xact_lock(hashtext($1))", "alpha")
