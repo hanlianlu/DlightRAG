@@ -9,7 +9,7 @@ import type {
   ConversationAttachmentReference,
   ConversationTurn,
 } from '../api/conversations.ts';
-import {answerErrorMessage} from '../lib/errors.ts';
+import {localizedStoredRunError} from '../lib/run_errors.ts';
 import {formatFileSize} from '../lib/file_size.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
@@ -653,7 +653,7 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     }
   } else if (stored.status === 'failed') {
     state = 'failed';
-    error = answerErrorMessage({message: stored.error_message});
+    error = localizedStoredRunError(stored.error_kind, stored.error_message);
   } else if (stored.status === 'cancelled') {
     state = 'cancelled';
   }

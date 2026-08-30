@@ -13,7 +13,7 @@ import {
   type ConversationTurn,
 } from '../api/conversations.ts';
 import {buildAnswerRequest} from '../lib/answer_request.ts';
-import {answerErrorMessage} from '../lib/errors.ts';
+import {localizedRunErrorPayload} from '../lib/run_errors.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {
   RunController,
@@ -669,7 +669,7 @@ export class DlChatFeature extends LightElement {
         continue;
       }
       if (event.kind === 'error') {
-        const message = answerErrorMessage(event.payload);
+        const message = localizedRunErrorPayload(event.payload);
         apply({state: 'failed', error: message, progress: '', liveStatus: message});
         continue;
       }

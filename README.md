@@ -212,7 +212,9 @@ composition root: all DlightRAG custom elements use `dl-`, sibling intent crosse
 typed events and small commands, and no migration adapters or fixed-ID
 cross-Feature mutations remain. It supports workspace selection, file/folder upload,
 durable principal-scoped conversations and answer attachments, citations,
-Sources, semantic highlights, and typed Answer Artifacts. Presentable files open
+Sources, semantic highlights, and typed Answer Artifacts. The interface ships in
+English and Chinese, selectable under Settings → Language with an Automatic mode
+that follows the browser preference. Presentable files open
 in Artifact Canvas with side, wide, and fullscreen layouts; a Primary Report is
 one Artifact role rather than a second answer pane. Active HTML requires an
 explicit click and runs only in an opaque-origin sandboxed iframe with restrictive
