@@ -252,6 +252,39 @@ class TestAnthropicProvider:
             assert "system" not in call_kwargs
 
     @pytest.mark.asyncio
+    async def test_json_schema_and_reasoning_effort_share_output_config(self):
+        p = get_provider("anthropic", api_key="test-key")
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(type="text", text='{"answer": "ok"}')]
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        }
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+            MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
+            cast(Any, p)._client = None
+            await p.complete(
+                [{"role": "user", "content": "hi"}],
+                "claude-opus-5",
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "demo_plan", "schema": schema, "strict": True},
+                },
+                model_kwargs={
+                    "thinking": {"type": "adaptive"},
+                    "output_config": {"effort": "high"},
+                },
+            )
+            call_kwargs = MockSDK.return_value.messages.create.call_args[1]
+            assert call_kwargs["thinking"] == {"type": "adaptive"}
+            assert call_kwargs["output_config"] == {
+                "format": {"type": "json_schema", "schema": schema},
+                "effort": "high",
+            }
+
+    @pytest.mark.asyncio
     async def test_complete_converts_https_image_url(self):
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()

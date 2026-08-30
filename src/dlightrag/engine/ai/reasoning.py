@@ -225,7 +225,7 @@ def reasoning_request_kwargs(resolved: ResolvedReasoning | None) -> dict[str, An
             return {"thinking": {"type": "disabled"}}
         return {
             "thinking": {"type": "adaptive"},
-            "output_config": {"thinking": {"effort": value}},
+            "output_config": {"effort": value},
         }
 
     if format_name == "gemini_native":

@@ -1,5 +1,5 @@
 {
-  "revision": "sha256:281717e9a5976f325da6519c1bf0f13673d439ba436a62bdf28eb0357a7fa9f7",
+  "revision": "sha256:41e945d68b765a0d5dc6bb253652140ace189fe5a65720c5c3cba63981c61e75",
   "models": [
     {
       "provider": "openai",
@@ -54,7 +54,7 @@
       "profile": {
         "context_window_tokens": 1048576,
         "max_input_tokens": null,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 65536,
         "supports_images": true,
         "reasoning": {
           "format": "openrouter",
@@ -106,6 +106,167 @@
           "format": "deepseek",
           "levels": {
             "off": "disabled",
+            "minimal": null,
+            "low": "low",
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.6-sol",
+      "base_url": null,
+      "profile": {
+        "context_window_tokens": 1050000,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openai",
+          "levels": {
+            "off": "none",
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.6-terra",
+      "base_url": null,
+      "profile": {
+        "context_window_tokens": 1050000,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openai",
+          "levels": {
+            "off": "none",
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.6-luna",
+      "base_url": null,
+      "profile": {
+        "context_window_tokens": 1050000,
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openai",
+          "levels": {
+            "off": "none",
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-fable-5",
+      "base_url": null,
+      "profile": {
+        "context_window_tokens": 1000000,
+        "max_input_tokens": null,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "anthropic_native",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-opus-5",
+      "base_url": null,
+      "profile": {
+        "context_window_tokens": 1000000,
+        "max_input_tokens": null,
+        "max_output_tokens": 128000,
+        "supports_images": true,
+        "reasoning": {
+          "format": "anthropic_native",
+          "levels": {
+            "off": "disabled",
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.7-flash",
+      "base_url": null,
+      "profile": {
+        "context_window_tokens": 1048576,
+        "max_input_tokens": null,
+        "max_output_tokens": 65536,
+        "supports_images": true,
+        "reasoning": {
+          "format": "gemini_native",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": null,
+            "max": null
+          }
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "kimi-k3",
+      "base_url": "https://api.moonshot.ai/v1",
+      "profile": {
+        "context_window_tokens": 1048576,
+        "max_input_tokens": null,
+        "max_output_tokens": 1048576,
+        "supports_images": true,
+        "reasoning": {
+          "format": "openai",
+          "levels": {
+            "off": null,
             "minimal": null,
             "low": "low",
             "medium": null,

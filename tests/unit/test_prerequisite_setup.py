@@ -137,7 +137,7 @@ def test_known_llm_resolves_capacity_from_shared_catalog(wiz):
     profile = wiz.catalog_model_profile(block)
 
     assert profile["context_window_tokens"] == 1_048_576
-    assert profile["max_output_tokens"] == 262_144
+    assert profile["max_output_tokens"] == 65_536
 
 
 def test_malformed_endpoint_is_unknown_instead_of_crashing_catalog_resolution(wiz):

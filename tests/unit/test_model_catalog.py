@@ -16,6 +16,43 @@ from dlightrag.engine.ai.catalog import CatalogueEntry
 from dlightrag.engine.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
 from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 
+_OPENAI_LEVELS = {
+    "off": "none",
+    "minimal": None,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max",
+}
+_ANTHROPIC_LEVELS = {
+    "off": "disabled",
+    "minimal": None,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max",
+}
+_GEMINI_LEVELS = {
+    "off": None,
+    "minimal": None,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": None,
+    "max": None,
+}
+_KIMI_LEVELS = {
+    "off": None,
+    "minimal": None,
+    "low": "low",
+    "medium": None,
+    "high": "high",
+    "xhigh": None,
+    "max": "max",
+}
+
 
 def _canonical_revision(models: Sequence[object]) -> str:
     canonical = json.dumps(
@@ -97,6 +134,127 @@ def test_packaged_catalog_revision_is_bound_to_canonical_models() -> None:
 
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", payload["revision"])
     assert payload["revision"] == _canonical_revision(payload["models"])
+
+
+@pytest.mark.parametrize(
+    (
+        "provider",
+        "model",
+        "endpoint",
+        "context_window",
+        "max_input",
+        "max_output",
+        "reasoning_format",
+        "reasoning_levels",
+    ),
+    [
+        (
+            "openai",
+            "gpt-5.6-sol",
+            None,
+            1_050_000,
+            922_000,
+            128_000,
+            "openai",
+            _OPENAI_LEVELS,
+        ),
+        (
+            "openai",
+            "gpt-5.6-terra",
+            None,
+            1_050_000,
+            922_000,
+            128_000,
+            "openai",
+            _OPENAI_LEVELS,
+        ),
+        (
+            "openai",
+            "gpt-5.6-luna",
+            None,
+            1_050_000,
+            922_000,
+            128_000,
+            "openai",
+            _OPENAI_LEVELS,
+        ),
+        (
+            "anthropic",
+            "claude-fable-5",
+            None,
+            1_000_000,
+            None,
+            128_000,
+            "anthropic_native",
+            {**_ANTHROPIC_LEVELS, "off": None},
+        ),
+        (
+            "anthropic",
+            "claude-opus-5",
+            None,
+            1_000_000,
+            None,
+            128_000,
+            "anthropic_native",
+            _ANTHROPIC_LEVELS,
+        ),
+        (
+            "openai",
+            "google/gemini-3.7-flash",
+            "https://openrouter.ai/api/v1",
+            1_048_576,
+            None,
+            65_536,
+            "openrouter",
+            _GEMINI_LEVELS,
+        ),
+        (
+            "gemini",
+            "gemini-3.7-flash",
+            None,
+            1_048_576,
+            None,
+            65_536,
+            "gemini_native",
+            _GEMINI_LEVELS,
+        ),
+        (
+            "openai",
+            "kimi-k3",
+            "https://api.moonshot.ai/v1",
+            1_048_576,
+            None,
+            1_048_576,
+            "openai",
+            _KIMI_LEVELS,
+        ),
+    ],
+)
+def test_packaged_catalogue_contains_requested_endpoint_profiles(
+    provider: str,
+    model: str,
+    endpoint: str | None,
+    context_window: int,
+    max_input: int | None,
+    max_output: int,
+    reasoning_format: str,
+    reasoning_levels: dict[str, str | None],
+) -> None:
+    matches = [
+        entry
+        for entry in catalog._BUILTIN_MODEL_ENTRIES
+        if (entry.provider, entry.model, entry.base_url) == (provider, model, endpoint)
+    ]
+
+    assert len(matches) == 1
+    profile = matches[0].profile
+    assert profile.context_window_tokens == context_window
+    assert profile.max_input_tokens == max_input
+    assert profile.max_output_tokens == max_output
+    assert profile.supports_images is True
+    assert profile.reasoning is not None
+    assert profile.reasoning.format == reasoning_format
+    assert profile.reasoning.levels.as_dict() == reasoning_levels
 
 
 def test_catalog_rejects_malformed_json_without_leaking_source(

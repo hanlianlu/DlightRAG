@@ -84,7 +84,7 @@ def test_compaction_selects_cheapest_supported_control() -> None:
             "high",
             {
                 "thinking": {"type": "adaptive"},
-                "output_config": {"thinking": {"effort": "high"}},
+                "output_config": {"effort": "high"},
             },
         ),
         ("anthropic_native", "off", {"thinking": {"type": "disabled"}}),
