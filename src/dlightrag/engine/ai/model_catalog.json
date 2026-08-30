@@ -1,5 +1,5 @@
 {
-  "revision": "sha256:1c388f26d909d231b07e6e06d4d2cfff2f9af4cd6069473a76650d7756d7908d",
+  "revision": "sha256:9171ce50bd616240ad2c453e91e101802dea9995059ce94f485a6cd102562ba9",
   "models": [
     {
       "provider": "anthropic",
@@ -535,9 +535,9 @@
       "model": "z-ai/glm-5.3-flash",
       "base_url": "https://openrouter.ai/api/v1",
       "profile": {
-        "context_window_tokens": 1050000,
+        "context_window_tokens": 1000000,
         "max_input_tokens": null,
-        "max_output_tokens": 163840,
+        "max_output_tokens": 131072,
         "supports_images": true,
         "reasoning": {
           "format": "openrouter",

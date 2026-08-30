@@ -387,9 +387,9 @@ def test_packaged_catalogue_contains_requested_endpoint_profiles(
         ),
         (
             "z-ai/glm-5.3-flash",
-            1_050_000,
+            1_000_000,
             None,
-            163_840,
+            131_072,
             True,
             _KIMI_LEVELS,
         ),
