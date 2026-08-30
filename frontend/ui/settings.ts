@@ -19,6 +19,7 @@ import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import type {ChatMemoryOperationDetail} from './chat_feature.ts';
 import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
+import './model_catalogue.ts';
 import type {ToastRequestDetail} from './toast.ts';
 
 const MAX_SEEN_MEMORY_OPERATIONS = 500;
@@ -207,6 +208,11 @@ export class DlSettingsDialog extends LightElement {
                 <button type="button" id="delete-all-btn" class="ui-btn ui-btn-danger-text"
                         @click=${this.#deleteAll}>${msg('Delete all conversations', {id: 'settings.deleteAllConversations'})}</button>
               </div>
+            </section>
+            <section class="settings-section">
+              <h3 id="settings-model-catalogue">${msg('Runtime Model Catalogue', {id: 'settings.modelCatalogue'})}</h3>
+              <p class="settings-note">${msg('Administrators can publish complete endpoint profiles. Writes require the latest revision.', {id: 'settings.modelCatalogue.note'})}</p>
+              <dl-model-catalogue></dl-model-catalogue>
             </section>
             <section class="settings-section">
               <h3 id="settings-language">${msg('Language', {id: 'settings.language'})}</h3>

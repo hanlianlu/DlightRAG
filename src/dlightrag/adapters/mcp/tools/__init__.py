@@ -3,4 +3,4 @@
 
 
 def register() -> None:
-    from . import answer_runs, corpus_admin, memory, retrieval  # noqa: F401
+    from . import answer_runs, corpus_admin, memory, model_catalogue, retrieval  # noqa: F401

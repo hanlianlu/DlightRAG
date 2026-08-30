@@ -15,7 +15,6 @@ from dlightrag.application.answer_runs.routing import RoutingAcceptance
 from dlightrag.application.config import DlightragConfig, reset_config, set_config
 from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
-    ModelCapacityOverrideSettings,
     ModelRoleSettings,
     ModelSettings,
 )
@@ -140,20 +139,11 @@ def test_config(tmp_working_dir: Path) -> DlightragConfig:
         models={
             "chat": ModelRoleSettings(
                 default=ModelSettings(
-                    model="gpt-5.4-mini",
+                    model="z-ai/glm-5.3-flash",
+                    base_url="https://openrouter.ai/api/v1",
                     api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
                 )
             ),
-            "capacity_overrides": [
-                ModelCapacityOverrideSettings(
-                    provider="openai",
-                    model="gpt-5.4-mini",
-                    context_window_tokens=400_000,
-                    max_output_tokens=128_000,
-                    supports_images=True,
-                    supports_reasoning=True,
-                )
-            ],
             "embedding": EmbeddingSettings(
                 provider="voyage",
                 model="voyage-multimodal-3.5",

@@ -13,6 +13,8 @@ from dlightrag.engine.ai.capacity import (
 )
 from dlightrag.engine.ai.catalog import (
     FALLBACK_MODEL_PROFILE,
+    MODEL_CATALOGUE,
+    parse_catalogue_entry,
     resolve_model_profile,
 )
 from dlightrag.engine.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
@@ -24,7 +26,6 @@ def test_context_policy_applies_explicit_model_aware_reserves() -> None:
         max_input_tokens=180_000,
         max_output_tokens=16_000,
         supports_images=True,
-        supports_reasoning=True,
     )
     policy = ContextPolicy()
 
@@ -40,38 +41,38 @@ def test_context_policy_applies_explicit_model_aware_reserves() -> None:
         profile.context_window_tokens = 1  # type: ignore[misc]
 
 
-def test_profile_resolution_prefers_the_complete_override_before_adapter_facts() -> None:
+def test_profile_resolution_prefers_runtime_complete_overlay_before_builtin() -> None:
     fingerprint = ModelFingerprint(
         provider="openai",
         model="xiaomi/mimo-v2.5",
         endpoint_fingerprint=normalized_endpoint_fingerprint("https://openrouter.ai/api/v1"),
     )
-    override = ModelProfile(
-        context_window_tokens=90_000,
-        max_output_tokens=10_000,
-        supports_images=True,
-        supports_reasoning=True,
+    overlay = parse_catalogue_entry(
+        {
+            "provider": "openai",
+            "model": "xiaomi/mimo-v2.5",
+            "base_url": "https://openrouter.ai/api/v1",
+            "profile": {
+                "context_window_tokens": 90_000,
+                "max_input_tokens": None,
+                "max_output_tokens": 10_000,
+                "supports_images": False,
+                "reasoning": None,
+            },
+        }
     )
-    adapter = ModelProfile(
-        context_window_tokens=80_000,
-        supports_images=False,
-        supports_reasoning=False,
-    )
+    previous = MODEL_CATALOGUE.overlay
+    try:
+        MODEL_CATALOGUE.replace_overlay((overlay,))
+        assert resolve_model_profile(fingerprint) == overlay.profile
+    finally:
+        MODEL_CATALOGUE.replace_overlay(previous)
 
-    assert (
-        resolve_model_profile(
-            fingerprint,
-            override=override,
-            adapter_profile=adapter,
-        )
-        is override
-    )
-    assert resolve_model_profile(fingerprint, adapter_profile=adapter) is adapter
     catalog_profile = resolve_model_profile(fingerprint)
     assert catalog_profile.context_window_tokens == 1_050_000
     assert catalog_profile.max_output_tokens == 131_072
     assert catalog_profile.supports_images is True
-    assert catalog_profile.supports_reasoning is True
+    assert catalog_profile.reasoning is not None
 
 
 def test_unknown_model_resolves_to_the_fallback_profile() -> None:
@@ -87,7 +88,7 @@ def test_unknown_model_resolves_to_the_fallback_profile() -> None:
     assert resolved.context_window_tokens == 1_048_576
     assert resolved.max_output_tokens == 262_144
     assert resolved.supports_images is True
-    assert resolved.supports_reasoning is True
+    assert resolved.reasoning is None
     assert not hasattr(resolved, "supports_tools")
 
 

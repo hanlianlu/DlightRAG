@@ -63,7 +63,6 @@ def answer_model_profile(**overrides: int | bool | None) -> ModelProfile:
         "max_input_tokens": None,
         "max_output_tokens": 128_000,
         "supports_images": True,
-        "supports_reasoning": True,
     }
     return ModelProfile(**(fields | overrides))  # type: ignore[arg-type]
 

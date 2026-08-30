@@ -29,6 +29,10 @@ from dlightrag.application.answer_runs.client_contracts import MAX_QUERY_IMAGES
 from dlightrag.application.answer_runs.errors import AnswerInputError, InvalidToolConfigurationError
 from dlightrag.application.corpus_admin import MetadataValidationError
 from dlightrag.application.errors import RunSchemaError, StorageSchemaError
+from dlightrag.application.model_catalogue import (
+    ModelCatalogueSchemaError,
+    ModelCatalogueUnavailableError,
+)
 from dlightrag.application.retrieval import CorpusUnavailableError, RetrievalTimeoutError
 from dlightrag.application.web_conversations import WebConversationSchemaError
 
@@ -166,9 +170,15 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
     @application.exception_handler(ApplicationClosedError)
     @application.exception_handler(CorpusUnavailableError)
     @application.exception_handler(AnswerRuntimeUnavailableError)
+    @application.exception_handler(ModelCatalogueUnavailableError)
     async def rag_unavailable_handler(
         request: Request,  # noqa: ARG001
-        exc: ApplicationClosedError | CorpusUnavailableError | AnswerRuntimeUnavailableError,
+        exc: (
+            ApplicationClosedError
+            | CorpusUnavailableError
+            | AnswerRuntimeUnavailableError
+            | ModelCatalogueUnavailableError
+        ),
     ) -> JSONResponse:
         body = ErrorDetail(detail=str(exc), error_type="unavailable")
         return JSONResponse(status_code=503, content=body.model_dump())
@@ -237,6 +247,7 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         StorageSchemaError,
         RunSchemaError,
         WebConversationSchemaError,
+        ModelCatalogueSchemaError,
     ):
         application.add_exception_handler(schema_error, schema_validation_error_handler)
 

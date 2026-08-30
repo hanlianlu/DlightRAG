@@ -104,27 +104,39 @@ class ModelImageCapabilities:
         self._outcomes: dict[str, ImageProbeOutcome] = {}
         self._last_probe: dict[str, float] = {}
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._generation = 0
 
     async def resolve(self, settings: ModelSettings) -> ImageProbeOutcome:
         """Return the cached capability, probing unknown settings under single flight."""
         identity = self._identity(settings)
-        cached = self._outcomes.get(identity)
-        if cached is not None and cached.status != "unknown":
-            return cached
-        async with self._locks[identity]:
+        while True:
             cached = self._outcomes.get(identity)
             if cached is not None and cached.status != "unknown":
                 return cached
-            now = time.monotonic()
-            last = self._last_probe.get(identity)
-            if cached is not None and last is not None and now - last < self._cooldown_seconds:
-                return cached
-            outcome = await self._probe(settings)
-            self._outcomes[identity] = outcome
-            # Stamp after completion so a probe that consumes its timeout does
-            # not also consume the cooldown and immediately permit a retry.
-            self._last_probe[identity] = time.monotonic()
-            return outcome
+            async with self._locks[identity]:
+                cached = self._outcomes.get(identity)
+                if cached is not None and cached.status != "unknown":
+                    return cached
+                now = time.monotonic()
+                last = self._last_probe.get(identity)
+                if cached is not None and last is not None and now - last < self._cooldown_seconds:
+                    return cached
+                generation = self._generation
+                outcome = await self._probe(settings)
+                if generation != self._generation:
+                    continue
+                self._outcomes[identity] = outcome
+                # Stamp after completion so a probe that consumes its timeout does
+                # not also consume the cooldown and immediately permit a retry.
+                self._last_probe[identity] = time.monotonic()
+                return outcome
+
+    def clear(self) -> None:
+        """Invalidate every cached probe after model catalogue publication."""
+        self._generation += 1
+        self._outcomes.clear()
+        self._last_probe.clear()
+        self._locks.clear()
 
     async def _probe(self, settings: ModelSettings) -> ImageProbeOutcome:
         provider: Any = None

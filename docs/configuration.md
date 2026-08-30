@@ -390,46 +390,66 @@ OpenRouter are `provider: openai` plus their `base_url` — there is no
 `provider: deepseek` or `provider: openrouter`, and any unknown value is
 rejected when the config loads.
 
-### Model capacity profiles
+### Runtime model catalogue and reasoning profiles
 
-Each chat model resolves an endpoint-scoped capacity profile containing its
-context window (`C`), optional maximum input (`I`), optional maximum output
-(`O`), and image/tool/reasoning capabilities. DlightRAG matches the normalized
+Each chat model resolves an endpoint-scoped profile containing its context
+window (`C`), optional maximum input (`I`), optional maximum output (`O`), image
+capability, and an optional reasoning profile. DlightRAG matches the normalized
 `provider`, exact `model`, and normalized `base_url`; the same model name at a
-different endpoint is a different profile. Resolution precedence is an
-explicit root override, trusted provider-adapter facts, then the versioned
-catalog shipped inside the root wheel at `dlightrag.engine.ai`. Unknown endpoints fail closed instead of
-inheriting a global default or being probed.
+different endpoint is a different profile.
 
-Adapter facts are an optional, static class-level declaration: DlightRAG asks
-the selected adapter without constructing a client or making a network call.
-An adapter that publishes no model facts returns no profile and resolution
-continues to the catalog. The currently cataloged endpoints remain in the
-shared catalog so runtime and the stdlib-only setup wizard use identical facts.
+Resolution is deterministic: a PostgreSQL runtime overlay replaces a matching
+built-in profile, the versioned JSON catalogue supplies the shipped defaults,
+and an unknown endpoint receives a permissive fallback profile. DlightRAG
+does not probe model endpoints. Runtime overlay rows are complete profiles, not
+field patches. PostgreSQL publishes updates atomically with an optimistic
+revision and `NOTIFY`; every process reloads the committed snapshot and clears
+its capability cache. Startup and reconnect synchronize the current value.
+Invalid updates, stale revisions, and updates that would make a configured role
+invalid are rejected before publication.
 
-The setup wizard reads that same catalog. It asks for an override only when a
-selected endpoint is unknown. For a manually configured private or newly
-released model, provide one complete override at the root:
+Administrators can read and edit the effective catalogue through:
+
+- REST: `GET|PUT|DELETE /models/catalogue`
+- Web: Settings → Runtime Model Catalogue
+- MCP: `get_model_catalogue`, `upsert_model_catalogue_entry`, and
+  `remove_model_catalogue_entry`
+
+A write sends the revision returned by the preceding read (`If-Match` for
+HTTP, `expected_revision` for MCP). Each PUT contains `provider`, `model`,
+optional `base_url`, and one complete `profile`. A DELETE removes the overlay;
+a built-in endpoint then resolves to its shipped profile. Catalogue writes use
+the admin-only `model_catalogue.write` action and are disabled entirely on
+reader-only deployments.
+
+A reasoning profile is either `null` (unsupported) or a request `format` plus
+an explicit mapping for all seven levels: `off`, `minimal`, `low`, `medium`,
+`high`, `xhigh`, and `max`. Each mapping value is the provider-native value or
+`null` when that level is unavailable. `off: null` means reasoning cannot be
+disabled. A non-off request is deterministically clamped to the nearest
+supported level; an impossible `off` request is a configuration error.
+Supported request formats are `openrouter`, `openai`, `deepseek`,
+`anthropic_native`, and
+`gemini_native`; an unknown format is rejected rather than silently dropping a
+reasoning control.
+
+Model configuration uses only the typed, provider-independent levels:
 
 ```yaml
 models:
-  capacity_overrides:
-    - provider: openai
-      model: private-model
-      base_url: http://localhost:8888/v1
-      context_window_tokens: 262144
-      max_input_tokens: 200000
-      max_output_tokens: 32768
-      supports_images: true
-      supports_tools: true
-      supports_reasoning: false
+  chat:
+    default:
+      reasoning: max
+    roles:
+      query:
+        reasoning: "off"
+        agentic_reasoning: high
 ```
 
-`context_window_tokens` is required. `max_input_tokens` and
-`max_output_tokens` may be omitted only when the endpoint does not publish
-those separate limits. Capability flags default to `false`; set them from
-trusted endpoint documentation. Duplicate normalized endpoint identities and
-an input limit greater than the context window are configuration errors.
+`agentic_reasoning` inherits `reasoning` when omitted. Compaction requests the
+cheapest supported level rather than assuming every endpoint accepts `off`.
+The selected profile format is the only owner of translation to provider-native
+request kwargs.
 
 Capacity arithmetic is owned by one immutable, revisioned policy. It applies
 explicit output (16,384), dynamic-context (40,000), safety (1,024), retained-tail
@@ -469,58 +489,18 @@ strict JSON schema response formats. Anthropic native does not support the
 lower-confidence `json_object` mode; use `auto` or `json_schema`.
 
 `model_kwargs` apply to ordinary calls. `agentic_model_kwargs` are a shallow
-top-level overlay used by research control and final calls. This keeps fast-path
-answers inexpensive while allowing explicit provider-native thinking for
-research turns without guessing a cross-provider flag:
-
-```yaml
-models:
-  chat:
-    default:
-      model_kwargs:
-        reasoning: {enabled: false}
-      agentic_model_kwargs:
-        reasoning: {enabled: true}
-    roles:
-      query:
-        model_kwargs:
-          reasoning: {enabled: false}
-        agentic_model_kwargs:
-          reasoning: {enabled: true}
-```
-
-The overlay is unconditional key merging, not fallback selection. DlightRAG
-copies `model_kwargs` and then replaces any same-named top-level key supplied by
-`agentic_model_kwargs`. With the example above, ordinary calls receive
-`reasoning.enabled: false`, while research control/final calls receive
-`reasoning.enabled: true`; unrelated ordinary options remain present.
-The explicit `query` block follows the same shape because it replaces the
-default role as a complete model configuration rather than deep-merging with it.
+top-level overlay used by research control and final calls. They remain an
+explicit escape hatch for provider options that DlightRAG does not type.
+Reasoning parameters have one owner: when typed `reasoning` (or inherited/typed
+`agentic_reasoning`) is configured, raw reasoning keys such as `reasoning`,
+`reasoning_effort`, `thinking`, `thinking_config`, `enable_thinking`, and
+`chat_template_kwargs` are rejected at config load. When no typed reasoning is
+configured, those raw keys remain available for an unknown endpoint.
 
 Research final generation starts with the agentic overlay. If the provider
-finishes without user-visible text, DlightRAG retries once with `model_kwargs`;
-a second empty response fails instead of storing an empty answer. Use the
-endpoint's actual reasoning switch in the ordinary options. For OpenRouter
-reasoning models such as MiMo and GLM, that switch is
-`reasoning: {enabled: false}`; `thinking: {type: disabled}` does not disable
-their reasoning tokens.
-
-Self-hosted Unsloth, llama.cpp, or vLLM deployments commonly expose the switch
-through the chat template instead. Configure the field the endpoint actually
-supports:
-
-```yaml
-models:
-  chat:
-    roles:
-      query:
-        model_kwargs:
-          chat_template_kwargs: {enable_thinking: false}
-        agentic_model_kwargs:
-          chat_template_kwargs: {enable_thinking: true}
-```
-
-If `roles.query` is absent or incomplete, both sets of options come from
+finishes without user-visible text, DlightRAG retries once with ordinary
+`model_kwargs`; a second empty response fails instead of storing an empty
+answer. If `roles.query` is absent or incomplete, both sets of options come from
 `models.chat.default` through the normal role fallback.
 
 ## Remote Source URLs

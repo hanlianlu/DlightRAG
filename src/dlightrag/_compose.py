@@ -80,6 +80,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
     from dlightrag.adapters.postgres.corpus.pg_metadata_search import PGMetadataSearchStore
+    from dlightrag.adapters.postgres.model_catalogue import PGModelCatalogueStore
     from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
     from dlightrag.application.answer_runs import AnswerService
     from dlightrag.application.answer_runs.capabilities import (
@@ -89,6 +90,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.application.corpus_admin import CorpusAdmin
     from dlightrag.application.health import ApplicationHealth
     from dlightrag.application.memory import MemoryService
+    from dlightrag.application.model_catalogue import ModelCatalogueAdmin
     from dlightrag.application.retrieval import RetrievalService
     from dlightrag.application.retrieval._answer_projection import (
         AnswerQueryImagePreparer,
@@ -107,9 +109,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         retrieval_settings,
     )
     from dlightrag.application.web_conversations import WebConversationService
+    from dlightrag.engine.ai.catalog import catalogue_overlay_revision
     from dlightrag.engine.ai.fingerprints import model_fingerprint
     from dlightrag.engine.ai.media import MAX_DECODE_IMAGE_PIXELS
     from dlightrag.engine.ai.scheduler import ModelScheduler
+    from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES
     from dlightrag.engine.ai.telemetry import safe_log_text
     from dlightrag.engine.ai.vision import ModelImageCapabilities
     from dlightrag.engine.answer.execution import AnswerExecutor, AnswerResourceResolver
@@ -197,6 +201,18 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         file_panel_cursor_secret=cursor_secrets.derive("dlightrag-file-panel-cursor"),
         metadata_search_cursor_secret=cursor_secrets.derive("dlightrag-metadata-search-cursor"),
         workspace_catalog_cursor_secret=cursor_secrets.derive("dlightrag-workspace-catalog-cursor"),
+    )
+
+    model_catalogue = ModelCatalogueAdmin(
+        store=PGModelCatalogueStore(
+            initial_revision=catalogue_overlay_revision(()),
+            connection_kwargs=config.pg_connection_kwargs(),
+        ),
+        configured_models=lambda: tuple(
+            config.models.chat.resolve(role) for role in MODEL_ROLE_NAMES
+        ),
+        on_publish=lambda _snapshot: capabilities.invalidate_model_catalogue(),
+        read_only=config.is_reader,
     )
 
     models = AnswerModelRuntime(
@@ -322,6 +338,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     return _ApplicationComponents(
         health=health,
         capabilities=capabilities,
+        model_catalogue=model_catalogue,
         pool=pool,
         models=models,
         run_store=run_store,

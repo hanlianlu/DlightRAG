@@ -5,7 +5,6 @@ import asyncio
 import operator
 from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -16,13 +15,11 @@ from dlightrag.application.settings import (
     model_settings_for_role,
     rerank_scoring_model_settings,
 )
-from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.completion import CompletionModel
 from dlightrag.engine.ai.providers.base import CompletionOutput
 from dlightrag.engine.ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
-    ModelCapacityOverrideSettings,
     ModelRoleOverrides,
     ModelRoleSettings,
     ModelSettings,
@@ -131,17 +128,6 @@ def test_root_resolves_model_profiles_independently_per_role() -> None:
                     ),
                 ),
             ),
-            "capacity_overrides": [
-                ModelCapacityOverrideSettings(
-                    provider="openai",
-                    model="private-query",
-                    base_url="http://localhost:8888/v1",
-                    context_window_tokens=262_144,
-                    max_input_tokens=200_000,
-                    max_output_tokens=32_768,
-                    supports_reasoning=True,
-                )
-            ],
             "embedding": _embedding_config(),
         },
     )
@@ -149,70 +135,8 @@ def test_root_resolves_model_profiles_independently_per_role() -> None:
     assert model_profile_for_role(config, "keyword").max_output_tokens == 262_144
     assert model_profile_for_role(config, "extract").max_output_tokens == 393_216
     query = model_profile_for_role(config, "query")
-    assert query.context_window_tokens == 262_144
-    assert query.max_input_tokens == 200_000
-
-
-def test_root_consults_adapter_profile_before_catalog(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    adapter_profile = ModelProfile(
-        context_window_tokens=200_000,
-        max_output_tokens=8_192,
-        supports_images=True,
-        supports_reasoning=True,
-    )
-    metadata = MagicMock(return_value=adapter_profile)
-    monkeypatch.setattr(
-        "dlightrag.application.settings.projections.get_adapter_model_profile", metadata
-    )
-    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
-        models={
-            "chat": ModelRoleSettings(
-                default=ModelSettings(
-                    model="google/gemini-3.7-flash",
-                    base_url="https://openrouter.ai/api/v1",
-                )
-            ),
-            "embedding": _embedding_config(),
-        },
-    )
-
-    profile = model_profile_for_role(config, "query")
-
-    assert profile is adapter_profile
-    metadata.assert_called_once_with(
-        "openai",
-        model="google/gemini-3.7-flash",
-        base_url="https://openrouter.ai/api/v1",
-    )
-
-
-def test_root_override_short_circuits_adapter_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    metadata = MagicMock(side_effect=AssertionError("override must win before adapter loading"))
-    monkeypatch.setattr(
-        "dlightrag.application.settings.projections.get_adapter_model_profile", metadata
-    )
-    config = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
-        models={
-            "chat": ModelRoleSettings(default=ModelSettings(model="private-model")),
-            "capacity_overrides": [
-                ModelCapacityOverrideSettings(
-                    provider="openai",
-                    model="private-model",
-                    context_window_tokens=200_000,
-                )
-            ],
-            "embedding": _embedding_config(),
-        },
-    )
-
-    profile = model_profile_for_role(config, "query")
-
-    assert profile.context_window_tokens == 200_000
-    metadata.assert_not_called()
+    assert query.context_window_tokens == 1_048_576
+    assert query.max_input_tokens is None
 
 
 def test_model_fingerprint_canonicalizes_endpoint_without_retaining_url() -> None:

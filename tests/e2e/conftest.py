@@ -80,7 +80,6 @@ from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
 from dlightrag.engine.ai.settings import (
     MODEL_ROLE_NAMES,
     EmbeddingSettings,
-    ModelCapacityOverrideSettings,
     ModelRoleSettings,
     ModelSettings,
 )
@@ -105,7 +104,6 @@ _E2E_PROFILE = ModelProfile(
     context_window_tokens=1_000_000,
     max_output_tokens=128_000,
     supports_images=True,
-    supports_reasoning=True,
 )
 
 
@@ -589,17 +587,13 @@ def e2e_base_url(
     application_config = DlightragConfig(
         deployment={"working_dir": working_directory.name},
         models={
-            "chat": ModelRoleSettings(default=ModelSettings(model="gpt-5.4-mini", api_key="test")),
-            "capacity_overrides": [
-                ModelCapacityOverrideSettings(
-                    provider="openai",
-                    model="gpt-5.4-mini",
-                    context_window_tokens=400_000,
-                    max_output_tokens=128_000,
-                    supports_images=True,
-                    supports_reasoning=True,
+            "chat": ModelRoleSettings(
+                default=ModelSettings(
+                    model="google/gemini-3.7-flash",
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key="test",
                 )
-            ],
+            ),
             "embedding": EmbeddingSettings(
                 provider="voyage",
                 model="voyage-multimodal-3.5",

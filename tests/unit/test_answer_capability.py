@@ -29,10 +29,10 @@ from dlightrag.application.settings import (
     model_settings_for_role,
     rerank_scoring_model_settings,
 )
+from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
-    ModelCapacityOverrideSettings,
     ModelRoleOverrides,
     ModelRoleSettings,
     ModelSettings,
@@ -81,11 +81,12 @@ def _coordinator(
     config: DlightragConfig,
     *,
     image_capabilities: ModelImageCapabilities | None = None,
+    profile_for_role: Any | None = None,
 ) -> tuple[AnswerCapabilityCoordinator, list[dict[str, object]]]:
     health_updates: list[dict[str, object]] = []
     coordinator = AnswerCapabilityCoordinator(
         settings=answer_capability_settings(config),
-        profile_for_role=lambda role: model_profile_for_role(config, role),
+        profile_for_role=profile_for_role or (lambda role: model_profile_for_role(config, role)),
         model_settings_for_role=lambda role: model_settings_for_role(config, role),
         rerank_model_settings=lambda: rerank_scoring_model_settings(config),
         image_capabilities=image_capabilities
@@ -114,6 +115,41 @@ def test_public_capability_snapshot_is_frozen() -> None:
         snapshot.vlm_status = "supported"  # type: ignore[misc]
 
 
+async def test_catalogue_invalidation_during_answer_probe_cannot_recache_old_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    profile = ModelProfile(context_window_tokens=100_000, supports_images=True)
+    profiles = {role: profile for role in ("extract", "query", "vlm")}
+    image_capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
+
+    async def resolve(_settings: ModelSettings) -> ImageProbeOutcome:
+        started.set()
+        await release.wait()
+        return ImageProbeOutcome(status="supported")
+
+    resolve_mock = AsyncMock(side_effect=resolve)
+    monkeypatch.setattr(image_capabilities, "resolve", resolve_mock)
+    coordinator, _updates = _coordinator(
+        _reprobe_config(),
+        image_capabilities=image_capabilities,
+        profile_for_role=lambda role: profiles[role],
+    )
+
+    pending = asyncio.create_task(coordinator.probe_answer())
+    await started.wait()
+    profiles["query"] = dataclasses.replace(profile, supports_images=False)
+    coordinator.invalidate_model_catalogue()
+    release.set()
+    await pending
+
+    assert coordinator.answer_image_capability is not None
+    assert coordinator.answer_image_capability.status == "unsupported"
+    assert coordinator.answer_image_capability.failure_kind == "profile_declared_unsupported"
+    resolve_mock.assert_awaited_once()
+
+
 async def test_capability_probe_targets_resolved_query_role_without_borrowing_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -129,16 +165,6 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
                     )
                 ),
             ),
-            "capacity_overrides": [
-                ModelCapacityOverrideSettings(
-                    provider="openai",
-                    model="local-query",
-                    base_url="http://host.docker.internal:8888/v1",
-                    context_window_tokens=100_000,
-                    max_output_tokens=10_000,
-                    supports_images=True,
-                )
-            ],
             "embedding": EmbeddingSettings(
                 provider="voyage",
                 model="voyage-multimodal-3.5",
@@ -181,17 +207,6 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
 def _reprobe_config() -> DlightragConfig:
     return DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         models={
-            "capacity_overrides": [
-                ModelCapacityOverrideSettings(
-                    provider="openai",
-                    model="google/gemini-3.7-flash",
-                    base_url="https://openrouter.ai/api/v1",
-                    context_window_tokens=1_048_576,
-                    max_output_tokens=262_144,
-                    supports_images=True,
-                    supports_reasoning=True,
-                )
-            ],
             "embedding": EmbeddingSettings(
                 provider="voyage",
                 model="voyage-multimodal-3.5",
@@ -433,6 +448,43 @@ async def test_distinct_capability_probes_share_scheduler_limit(
     assert calls == 2
 
 
+async def test_clear_during_inflight_probe_discards_the_stale_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    calls = 0
+
+    async def probe(_provider, *, model, model_kwargs=None):
+        nonlocal calls
+        del model, model_kwargs
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            await release_first.wait()
+            return ImageProbeOutcome(status="supported")
+        return ImageProbeOutcome(status="unsupported")
+
+    class Provider:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("dlightrag.engine.ai.vision.get_provider", lambda *_a, **_k: Provider())
+    monkeypatch.setattr("dlightrag.engine.ai.vision.probe_image_capability", probe)
+    capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
+    settings = ModelSettings(provider="openai", model="changed", api_key="k")
+
+    pending = asyncio.create_task(capabilities.resolve(settings))
+    await first_started.wait()
+    capabilities.clear()
+    release_first.set()
+
+    assert (await pending).status == "unsupported"
+    assert calls == 2
+    assert (await capabilities.resolve(settings)).status == "unsupported"
+    assert calls == 2
+
+
 async def test_same_endpoint_with_a_different_key_is_not_deduplicated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -558,24 +610,12 @@ async def test_cancelled_probe_finishes_provider_close(
 
 def _role_config(**roles: ModelSettings) -> DlightragConfig:
     default = ModelSettings(model="default-model", api_key="default-key")
-    profiles: dict[tuple[str, str, str | None], ModelCapacityOverrideSettings] = {}
-    for model in (default, *roles.values()):
-        identity = (model.provider, model.model, model.base_url)
-        profiles[identity] = ModelCapacityOverrideSettings(
-            provider=model.provider,
-            model=model.model,
-            base_url=model.base_url,
-            context_window_tokens=100_000,
-            max_output_tokens=10_000,
-            supports_images=True,
-        )
     return DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
         models={
             "chat": ModelRoleSettings(
                 default=default,
                 roles=ModelRoleOverrides(**roles),
             ),
-            "capacity_overrides": list(profiles.values()),
             "embedding": EmbeddingSettings(
                 provider="voyage",
                 model="voyage-multimodal-3.5",
@@ -668,17 +708,6 @@ async def test_live_probe_cannot_widen_profile_declared_image_support(
                     )
                 )
             ),
-            "capacity_overrides": [
-                ModelCapacityOverrideSettings(
-                    provider="openai",
-                    model="declared-text-only",
-                    base_url="https://example.invalid/v1",
-                    context_window_tokens=1_048_576,
-                    max_output_tokens=262_144,
-                    supports_images=False,
-                    supports_reasoning=True,
-                )
-            ],
             "embedding": EmbeddingSettings(
                 provider="voyage",
                 model="voyage-multimodal-3.5",
@@ -688,7 +717,19 @@ async def test_live_probe_cannot_widen_profile_declared_image_support(
         },
     )
     image_capabilities, resolve = _stub_capabilities(monkeypatch, "supported")
-    coordinator, _health_updates = _coordinator(config, image_capabilities=image_capabilities)
+    coordinator, _health_updates = _coordinator(
+        config,
+        image_capabilities=image_capabilities,
+        profile_for_role=lambda role: (
+            ModelProfile(
+                context_window_tokens=1_048_576,
+                max_output_tokens=262_144,
+                supports_images=False,
+            )
+            if role == "query"
+            else model_profile_for_role(config, role)
+        ),
+    )
 
     await coordinator.probe_answer()
 

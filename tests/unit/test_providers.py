@@ -28,20 +28,6 @@ class TestProviderRegistry:
         p = get_provider(provider_name, api_key="test-key")
         assert isinstance(p, CompletionProvider)
 
-    @pytest.mark.parametrize(
-        ("provider_name", "expected"),
-        [
-            ("openai", {"reasoning": {"enabled": False}}),
-            ("anthropic", {"thinking": {"type": "disabled"}}),
-            ("gemini", {"thinking_config": None}),
-        ],
-    )
-    def test_thinking_off_kwargs_are_provider_shaped(
-        self, provider_name: str, expected: dict[str, Any]
-    ):
-        p = get_provider(provider_name, api_key="test-key")
-        assert p.thinking_off_kwargs() == expected
-
     def test_unknown_provider_raises(self):
         with pytest.raises(ValueError, match="Unknown provider"):
             get_provider("unknown_provider")

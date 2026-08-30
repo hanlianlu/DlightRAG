@@ -162,6 +162,8 @@ async def test_editor_preset_allows_ingest_and_job_read_but_not_workspace_admin(
         await access_control.check(user, AccessAction.WORKSPACE_DELETE, workspace="finance")
     with pytest.raises(AccessDeniedError):
         await access_control.check(user, AccessAction.WORKSPACE_RESET, workspace="finance")
+    with pytest.raises(AccessDeniedError):
+        await access_control.check(user, AccessAction.MODEL_CATALOGUE_WRITE)
 
 
 async def test_admin_preset_allows_every_action(test_config: DlightragConfig) -> None:
@@ -174,6 +176,7 @@ async def test_admin_preset_allows_every_action(test_config: DlightragConfig) ->
         AccessAction.WORKSPACE_DELETE,
         AccessAction.WORKSPACE_RESET,
         AccessAction.JOB_READ,
+        AccessAction.MODEL_CATALOGUE_WRITE,
     ):
         await access_control.check(user, action, workspace="finance")
 

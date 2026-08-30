@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from dlightrag.application.corpus_admin import CorpusAdmin
     from dlightrag.application.health import ApplicationHealth
     from dlightrag.application.memory import MemoryService
+    from dlightrag.application.model_catalogue import ModelCatalogueAdmin
     from dlightrag.application.retrieval import RetrievalService
     from dlightrag.application.web_conversations import WebConversationService
     from dlightrag.engine.ai.fingerprints import ModelFingerprint
@@ -52,6 +53,7 @@ class _ApplicationComponents:
     memory_store: Any
     memory_embedder: Any
     web_conversations: WebConversationService
+    model_catalogue: ModelCatalogueAdmin | None = None
     initialize_process: Callable[[DlightragConfig], None] = _noop_initialize_process
     close_process: Callable[[], Awaitable[None]] = _noop_close_process
 
@@ -97,6 +99,15 @@ class Application:
         return self._open().retrieval
 
     @property
+    def model_catalogue(self) -> ModelCatalogueAdmin:
+        from dlightrag.application.model_catalogue import ModelCatalogueUnavailableError
+
+        catalogue = self._open().model_catalogue
+        if catalogue is None:
+            raise ModelCatalogueUnavailableError("runtime model catalogue is unavailable")
+        return catalogue
+
+    @property
     def corpora(self) -> CorpusAdmin:
         return self._open().corpora
 
@@ -122,8 +133,6 @@ class Application:
         store, recovery, or default-workspace fault only degrades the process.
         """
         components = self._components
-        components.capabilities.resolve_profiles()
-        components.capabilities.validate_startup()
         from dlightrag.engine.answer.execution_settings import validate_agent_execution
 
         self._workspace_root = validate_agent_execution(
@@ -133,6 +142,9 @@ class Application:
         )
         components.initialize_process(self._config)
         try:
+            catalogue_ready = await self._initialize_model_catalogue()
+            components.capabilities.resolve_profiles()
+            components.capabilities.validate_startup()
             await self._initialize_run_stores()
             await self._validate_active_runs()
             corpora_ready = await self._initialize_corpora()
@@ -158,10 +170,36 @@ class Application:
             logger.error("DlightRAG started in degraded mode: %s", degraded)
         if not self._runs_ready:
             components.health.add_warning("Answer runtime unavailable")
-        if self._runs_ready and corpora_ready and recovery_ready and degraded is None:
+        if (
+            catalogue_ready
+            and self._runs_ready
+            and corpora_ready
+            and recovery_ready
+            and degraded is None
+        ):
             components.health.mark_ready()
         else:
             components.health.mark_degraded()
+
+    async def _initialize_model_catalogue(self) -> bool:
+        """Synchronize the runtime overlay before resolving any model profile."""
+        catalogue = self._components.model_catalogue
+        if catalogue is None:
+            return True
+        from dlightrag.application.model_catalogue import (
+            ModelCatalogueSchemaError,
+            ModelCatalogueValidationError,
+        )
+
+        try:
+            await catalogue.start(validate_only=self._config.is_reader)
+        except ModelCatalogueSchemaError, ModelCatalogueValidationError:
+            raise
+        except Exception as exc:
+            self._components.health.add_warning("Runtime model catalogue unavailable")
+            logger.warning("Runtime model catalogue initialization failed: %s", exc)
+            return False
+        return True
 
     async def _initialize_run_stores(self) -> None:
         """Migrate the durable operational schema, or validate it on a reader.
@@ -368,6 +406,12 @@ class Application:
             ("the cancellation listener", components.cancellation_listener.aclose),
             ("Web conversation retention", components.web_conversations.aclose),
             ("the Retrieval service", components.retrieval.aclose),
+            (
+                "the runtime model catalogue",
+                components.model_catalogue.aclose
+                if components.model_catalogue is not None
+                else _noop_close_process,
+            ),
             ("the Answer model runtime", components.models.aclose),
             ("the workspace pool", components.pool.aclose),
             ("the memory embedder", components.memory_embedder.aclose),

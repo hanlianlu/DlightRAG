@@ -359,7 +359,10 @@ class ResearchRuntimeEffects:
             )
         )
         try:
-            assistant = await self._orchestrator.call_runtime_provider(request)
+            assistant = await self._orchestrator.call_runtime_provider(
+                request,
+                model_profile=self._prepared.model_profile,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -187,6 +187,7 @@ class AnswerSynthesizer:
             "messages": prepared.messages,
             "stream": True,
             "usage_holder": usage,
+            "model_profile": self._model_profile,
         }
         if prepared.max_output_tokens is not None:
             call_kwargs["max_tokens"] = prepared.max_output_tokens

@@ -31,6 +31,7 @@ from dlightrag.engine.agent.session.projection import (
 )
 from dlightrag.engine.agent.session.repository import AgentSessionSnapshot
 from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
+from dlightrag.engine.ai.reasoning import cheapest_supported_reasoning
 from dlightrag.engine.ai.tokens import estimate_messages_tokens, estimate_tokens
 from dlightrag.engine.answer.prompts.compaction import (
     COMPACTION_SYSTEM_PROMPT,
@@ -332,8 +333,8 @@ class CompactionCoordinator:
                 ),
             },
         ]
-        # One single-attempt, thinking-off call bounded by the same physical
-        # input/output policy as every other provider call.
+        # One single-attempt call at the cheapest supported reasoning level,
+        # bounded by the same physical input/output policy as every other call.
         input_tokens = estimate_messages_tokens(messages)
         max_tokens = self._context_policy.output_allowance(
             self._model_profile,
@@ -342,7 +343,12 @@ class CompactionCoordinator:
         kwargs: dict[str, Any] = {}
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
-        stream = self._stream_model(messages=messages, model_kwargs=kwargs, thinking="off")  # type: ignore[call-arg]
+        stream = self._stream_model(
+            messages=messages,
+            model_kwargs=kwargs,
+            reasoning=cheapest_supported_reasoning(self._model_profile.reasoning),
+            model_profile=self._model_profile,
+        )  # type: ignore[call-arg]
         chunks: list[str] = []
         async for chunk in stream:
             chunks.append(chunk)

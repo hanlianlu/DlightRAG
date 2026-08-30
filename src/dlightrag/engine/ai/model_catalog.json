@@ -1,5 +1,5 @@
 {
-  "revision": "sha256:6c9444ad9888d78c0fe69c3ebfdcff34473402e40411d745810812732d0cc5d9",
+  "revision": "sha256:281717e9a5976f325da6519c1bf0f13673d439ba436a62bdf28eb0357a7fa9f7",
   "models": [
     {
       "provider": "openai",
@@ -10,7 +10,18 @@
         "max_input_tokens": null,
         "max_output_tokens": 131072,
         "supports_images": true,
-        "supports_reasoning": true
+        "reasoning": {
+          "format": "openrouter",
+          "levels": {
+            "off": "disabled",
+            "minimal": null,
+            "low": "enabled",
+            "medium": null,
+            "high": null,
+            "xhigh": null,
+            "max": null
+          }
+        }
       }
     },
     {
@@ -22,7 +33,18 @@
         "max_input_tokens": null,
         "max_output_tokens": 163840,
         "supports_images": true,
-        "supports_reasoning": true
+        "reasoning": {
+          "format": "openrouter",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": "max"
+          }
+        }
       }
     },
     {
@@ -34,7 +56,18 @@
         "max_input_tokens": null,
         "max_output_tokens": 262144,
         "supports_images": true,
-        "supports_reasoning": true
+        "reasoning": {
+          "format": "openrouter",
+          "levels": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": null,
+            "max": null
+          }
+        }
       }
     },
     {
@@ -46,7 +79,18 @@
         "max_input_tokens": null,
         "max_output_tokens": 393216,
         "supports_images": false,
-        "supports_reasoning": true
+        "reasoning": {
+          "format": "deepseek",
+          "levels": {
+            "off": "disabled",
+            "minimal": null,
+            "low": "low",
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": "max"
+          }
+        }
       }
     },
     {
@@ -58,7 +102,18 @@
         "max_input_tokens": null,
         "max_output_tokens": 393216,
         "supports_images": true,
-        "supports_reasoning": true
+        "reasoning": {
+          "format": "deepseek",
+          "levels": {
+            "off": "disabled",
+            "minimal": null,
+            "low": "low",
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": "max"
+          }
+        }
       }
     }
   ]

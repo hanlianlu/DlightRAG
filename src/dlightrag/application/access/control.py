@@ -51,6 +51,7 @@ class AccessAction:
     # explicitly granted rules) carry this action; ordinary readers/editors
     # never see tier, promotion state, or retry details.
     WORKSPACE_STORAGE_STATUS = "workspace.storage_status"
+    MODEL_CATALOGUE_WRITE = "model_catalogue.write"
 
 
 _READER_ACTIONS: tuple[str, ...] = (

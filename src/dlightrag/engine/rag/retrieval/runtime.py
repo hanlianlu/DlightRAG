@@ -3,6 +3,7 @@
 
 import asyncio
 from collections.abc import Callable
+from functools import partial
 
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.ai.completion import CompletionModel
@@ -47,7 +48,7 @@ class RetrievalPlannerRuntime:
                 telemetry=self._telemetry,
             )
         planner = RetrievalPlanner(
-            llm_func=self._model,
+            llm_func=partial(self._model, model_profile=profile),
             model_profile=profile,
             context_policy=CONTEXT_POLICY,
         )

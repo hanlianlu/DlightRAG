@@ -132,14 +132,14 @@ def test_auth_validation_uses_nested_access() -> None:
     assert config.access.auth_mode == "simple"
 
 
-def test_duplicate_capacity_overrides_rejected() -> None:
+def test_removed_capacity_overrides_seam_is_rejected() -> None:
     row = {
         "provider": "openai",
         "model": "x",
         "context_window_tokens": 100,
     }
-    with pytest.raises(ValidationError, match="duplicate model capacity override"):
-        DlightragConfig(models=ModelsSettings(capacity_overrides=(row, row)))  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ModelsSettings(capacity_overrides=(row,))  # type: ignore[call-arg]
 
 
 def test_postgres_projection_and_reader_settings() -> None:

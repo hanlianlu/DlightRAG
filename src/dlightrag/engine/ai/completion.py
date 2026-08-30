@@ -8,9 +8,17 @@ from contextlib import aclosing
 from datetime import UTC, datetime
 from typing import Any
 
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_fingerprint
 from dlightrag.engine.ai.providers import get_provider
 from dlightrag.engine.ai.providers.base import CompletionProvider
+from dlightrag.engine.ai.reasoning import (
+    REASONING_LEVELS,
+    ResolvedReasoning,
+    merge_reasoning_kwargs,
+    resolve_reasoning,
+)
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.structured import StructuredOutput
@@ -128,7 +136,7 @@ class CompletionModel:
             {
                 key: value
                 for key, value in request.items()
-                if key not in {"structured_output", "response_format"}
+                if key not in {"structured_output", "response_format", "model_profile", "reasoning"}
             }
         )
         model_parameters = {
@@ -153,10 +161,30 @@ class CompletionModel:
             "model_parameters": model_parameters or None,
         }
 
-    def _request_options(self, request: dict[str, Any]) -> tuple[dict[str, Any], Any, Any]:
+    def _request_options(
+        self,
+        request: dict[str, Any],
+    ) -> tuple[dict[str, Any], Any, Any, ResolvedReasoning | None]:
         response_format = request.pop("response_format", None)
         max_tokens = request.pop("max_tokens", None)
         structured_output = request.pop("structured_output", None)
+        model_profile = request.pop("model_profile", None)
+        if model_profile is not None and not isinstance(model_profile, ModelProfile):
+            raise TypeError("model_profile must be a ModelProfile")
+        requested = request.pop("reasoning", self.settings.reasoning)
+        if requested is not None and requested not in REASONING_LEVELS:
+            raise ValueError(f"unsupported reasoning level: {requested!r}")
+        resolved = resolve_reasoning(
+            (model_profile or resolve_model_profile(self.fingerprint)).reasoning,
+            requested,
+        )
+        if resolved is not None and resolved.requested != resolved.effective:
+            logger.info(
+                "Clamped reasoning level for %s from %s to %s",
+                self.settings.model,
+                resolved.requested,
+                resolved.effective,
+            )
         if structured_output is not None:
             if not isinstance(structured_output, StructuredOutput):
                 raise TypeError("structured_output must be a StructuredOutput")
@@ -165,17 +193,29 @@ class CompletionModel:
                 self.settings,
                 provider=self._provider,
             )
-        model_kwargs = {**self.settings.model_kwargs_copy(), **request}
-        return model_kwargs, response_format, max_tokens
+        raw = {**self.settings.model_kwargs_copy(), **request}
+        return merge_reasoning_kwargs(raw, resolved), response_format, max_tokens, resolved
+
+    @staticmethod
+    def _reasoning_metadata(resolved: ResolvedReasoning | None) -> dict[str, str]:
+        if resolved is None:
+            return {}
+        return {
+            "reasoning_requested": resolved.requested,
+            "reasoning_effective": resolved.effective,
+        }
 
     async def _complete(
         self,
         messages: list[dict[str, Any]],
         request: dict[str, Any],
     ) -> Any:
-        observation_kwargs = self._observation_kwargs(messages, request)
         structured_output = request.get("structured_output")
-        model_kwargs, response_format, max_tokens = self._request_options(dict(request))
+        model_kwargs, response_format, max_tokens, resolved = self._request_options(dict(request))
+        observation_kwargs = self._observation_kwargs(
+            messages,
+            {**request, **self._reasoning_metadata(resolved)},
+        )
         async with self._telemetry.observe(
             f"llm_{self.settings.model}",
             **observation_kwargs,
@@ -244,8 +284,11 @@ class CompletionModel:
         *,
         usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:
-        observation_kwargs = self._observation_kwargs(messages, request)
-        model_kwargs, response_format, max_tokens = self._request_options(dict(request))
+        model_kwargs, response_format, max_tokens, resolved = self._request_options(dict(request))
+        observation_kwargs = self._observation_kwargs(
+            messages,
+            {**request, **self._reasoning_metadata(resolved)},
+        )
         active_usage_holder = usage_holder if usage_holder is not None else {}
         chunks: list[str] = []
         text_length = 0

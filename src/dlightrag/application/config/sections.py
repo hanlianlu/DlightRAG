@@ -32,7 +32,6 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from dlightrag.engine.ai.fingerprints import ModelFingerprint, model_endpoint_fingerprint
 from dlightrag.engine.ai.settings import (
     FrozenSettings,
     ModelsSettings,
@@ -682,18 +681,6 @@ class DlightragConfig(BaseSettings):
             raise ValueError("bm25_profiles names must be unique")
         if self.corpus.retrieval.bm25_enabled and not any(p.fallback for p in profiles):
             raise ValueError("bm25_profiles must include at least one fallback profile")
-        seen: set[ModelFingerprint] = set()
-        for override in self.models.capacity_overrides:
-            key = model_endpoint_fingerprint(
-                override.provider,
-                override.model,
-                override.base_url,
-            )
-            if key in seen:
-                raise ValueError(
-                    f"duplicate model capacity override for provider={override.provider!r}, model={override.model!r}"
-                )
-            seen.add(key)
         self._validate_auth()
         return self
 

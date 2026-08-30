@@ -27,7 +27,6 @@ from dlightrag.application.config import (
 )
 from dlightrag.engine.ai.settings import (
     EmbeddingSettings,
-    ModelCapacityOverrideSettings,
     ModelSettings,
     ModelsSettings,
     RerankSettings,
@@ -96,21 +95,9 @@ def test_invalid_model_settings_are_rejected(values: dict[str, Any]) -> None:
         ModelSettings(**values)  # type: ignore[arg-type]
 
 
-def test_capacity_override_accepts_complete_facts_and_rejects_input_overflow() -> None:
-    ModelCapacityOverrideSettings(
-        provider="openai",
-        model="private-model",
-        context_window_tokens=262_144,
-        max_input_tokens=200_000,
-        max_output_tokens=32_768,
-        supports_images=True,
-    )
-    with pytest.raises(ValidationError, match="max_input_tokens"):
-        ModelCapacityOverrideSettings(
-            model="invalid",
-            context_window_tokens=100,
-            max_input_tokens=101,
-        )
+def test_capacity_overrides_are_not_configuration() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        ModelsSettings(capacity_overrides=[])  # type: ignore[call-arg]
 
 
 @pytest.mark.parametrize("values", [{"dim": 0}, {"max_token_size": 0}, {"batch_size": 0}])

@@ -158,10 +158,14 @@ general description when the current image is already visible.
 Full resource bytes never enter model context. Only bounded text windows, capped
 tool observations, and budgeted image blocks do. Every reachable model endpoint
 has an immutable `ModelProfile`: context window (`C`), optional provider input
-limit (`I`), optional output limit (`O`), and capability flags. Facts resolve by
-normalized provider/model/endpoint identity from an explicit root override, a
-trusted adapter, or the versioned AI catalog; an unknown identity fails closed.
-The revisioned `ContextPolicy` reserves output, observation, safety, retained
+limit (`I`), optional output limit (`O`), image support, and a reasoning
+profile. Facts resolve by normalized provider/model/endpoint identity from a
+PostgreSQL complete-profile overlay, then the versioned built-in AI catalogue;
+an unknown identity receives the permissive fallback profile. Runtime updates
+publish atomically under an optimistic revision, notify every process, and are
+rejected if they invalidate a configured role. Reasoning support is an explicit
+per-level map plus request format, not a boolean capability flag. The revisioned
+`ContextPolicy` reserves output, observation, safety, retained
 tail, episodic continuation, and minimum input directly from the pinned model
 facts. Its provider input ceiling is `min(I if known else C, C)`; output is
 bounded independently by the provider output limit and physical remaining

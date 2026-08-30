@@ -16,6 +16,7 @@ from dlightrag.application.answer_runs.mode import canonical_answer_mode
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
+from dlightrag.engine.ai.reasoning import REASONING_LEVELS, ReasoningLevels, ReasoningProfile
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.runtime.errors import RunExecutionError
 
@@ -136,7 +137,9 @@ class PinnedModelProfile:
                 "max_input_tokens": self.profile.max_input_tokens,
                 "max_output_tokens": self.profile.max_output_tokens,
                 "supports_images": self.profile.supports_images,
-                "supports_reasoning": self.profile.supports_reasoning,
+                "reasoning": (
+                    self.profile.reasoning.as_dict() if self.profile.reasoning is not None else None
+                ),
             },
         }
 
@@ -146,6 +149,8 @@ class PinnedModelProfile:
         profile = value.get("profile")
         if not isinstance(fingerprint, Mapping) or not isinstance(profile, Mapping):
             raise ValueError("pinned model profile requires fingerprint and profile objects")
+        if "reasoning" not in profile:
+            raise ValueError("pinned model profile requires explicit reasoning facts")
         return cls(
             role=str(value.get("role") or ""),
             fingerprint=ModelFingerprint(
@@ -162,7 +167,7 @@ class PinnedModelProfile:
                 max_input_tokens=_optional_int(profile.get("max_input_tokens")),
                 max_output_tokens=_optional_int(profile.get("max_output_tokens")),
                 supports_images=bool(profile.get("supports_images")),
-                supports_reasoning=bool(profile.get("supports_reasoning")),
+                reasoning=_reasoning_profile_from_json(profile.get("reasoning")),
             ),
         )
 
@@ -392,6 +397,26 @@ def _link_references(value: Any) -> tuple[LinkReference, ...]:
             mime_type=(str(item["mime_type"]) if item.get("mime_type") else None),
         )
         for item in value or ()
+    )
+
+
+def _reasoning_profile_from_json(value: Any) -> ReasoningProfile | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"format", "levels"}:
+        raise ValueError("pinned reasoning profile has an invalid shape")
+    raw_levels = value.get("levels")
+    if not isinstance(raw_levels, Mapping) or set(raw_levels) != set(REASONING_LEVELS):
+        raise ValueError("pinned reasoning profile requires every explicit level")
+    levels: dict[str, str | None] = {}
+    for level in REASONING_LEVELS:
+        raw = raw_levels[level]
+        if raw is not None and not isinstance(raw, str):
+            raise ValueError(f"pinned reasoning level {level} must be a string or null")
+        levels[level] = raw
+    return ReasoningProfile(
+        format=str(value["format"]),
+        levels=ReasoningLevels(**levels),  # type: ignore[arg-type]
     )
 
 

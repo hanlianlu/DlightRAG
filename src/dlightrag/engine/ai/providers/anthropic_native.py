@@ -21,7 +21,7 @@ from dlightrag.engine.ai.structured import json_schema_from_response_format
 
 logger = logging.getLogger(__name__)
 
-_ANTHROPIC_TOP_LEVEL_KEYS = frozenset({"thinking", "metadata", "extra_headers"})
+_ANTHROPIC_TOP_LEVEL_KEYS = frozenset({"thinking", "output_config", "metadata", "extra_headers"})
 _DATA_URI_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$", re.DOTALL)
 
 
@@ -152,6 +152,31 @@ def _anthropic_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, A
     return converted
 
 
+def _apply_model_kwargs(
+    call_kwargs: dict[str, Any],
+    model_kwargs: dict[str, Any] | None,
+) -> None:
+    if not model_kwargs:
+        return
+    for key in _ANTHROPIC_TOP_LEVEL_KEYS:
+        if key not in model_kwargs:
+            continue
+        value = model_kwargs[key]
+        if key == "output_config" and isinstance(value, dict):
+            existing = call_kwargs.get(key)
+            call_kwargs[key] = {
+                **(existing if isinstance(existing, dict) else {}),
+                **value,
+            }
+        else:
+            call_kwargs[key] = value
+    extra = {
+        key: value for key, value in model_kwargs.items() if key not in _ANTHROPIC_TOP_LEVEL_KEYS
+    }
+    if extra:
+        call_kwargs["extra_body"] = extra
+
+
 def _apply_response_format(
     call_kwargs: dict[str, Any],
     response_format: dict[str, Any] | None,
@@ -182,11 +207,6 @@ class AnthropicProvider(CompletionProvider):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._client: Any = None
-
-    def thinking_off_kwargs(self) -> dict[str, Any]:
-        # Native Anthropic disable: the ``thinking`` top-level key accepts a
-        # config dict whose ``type`` is ``disabled``.
-        return {"thinking": {"type": "disabled"}}
 
     async def aclose(self) -> None:
         if self._client is not None:
@@ -229,13 +249,7 @@ class AnthropicProvider(CompletionProvider):
 
         _apply_response_format(call_kwargs, response_format)
 
-        if model_kwargs:
-            for key in _ANTHROPIC_TOP_LEVEL_KEYS:
-                if key in model_kwargs:
-                    call_kwargs[key] = model_kwargs[key]
-            extra = {k: v for k, v in model_kwargs.items() if k not in _ANTHROPIC_TOP_LEVEL_KEYS}
-            if extra:
-                call_kwargs["extra_body"] = extra
+        _apply_model_kwargs(call_kwargs, model_kwargs)
 
         response = await self._get_client().messages.create(**call_kwargs)
         content = response.content
@@ -280,17 +294,7 @@ class AnthropicProvider(CompletionProvider):
             }[tool_choice]
         if temperature is not None:
             call_kwargs["temperature"] = temperature
-        if model_kwargs:
-            for key in _ANTHROPIC_TOP_LEVEL_KEYS:
-                if key in model_kwargs:
-                    call_kwargs[key] = model_kwargs[key]
-            extra = {
-                key: value
-                for key, value in model_kwargs.items()
-                if key not in _ANTHROPIC_TOP_LEVEL_KEYS
-            }
-            if extra:
-                call_kwargs["extra_body"] = extra
+        _apply_model_kwargs(call_kwargs, model_kwargs)
 
         response = await self._get_client().messages.create(**call_kwargs)
         content = response.content
@@ -396,13 +400,7 @@ class AnthropicProvider(CompletionProvider):
 
         _apply_response_format(call_kwargs, response_format)
 
-        if model_kwargs:
-            for key in _ANTHROPIC_TOP_LEVEL_KEYS:
-                if key in model_kwargs:
-                    call_kwargs[key] = model_kwargs[key]
-            extra = {k: v for k, v in model_kwargs.items() if k not in _ANTHROPIC_TOP_LEVEL_KEYS}
-            if extra:
-                call_kwargs["extra_body"] = extra
+        _apply_model_kwargs(call_kwargs, model_kwargs)
 
         response = await self._get_client().messages.create(**call_kwargs)
         reasoning_parts: list[str] = []

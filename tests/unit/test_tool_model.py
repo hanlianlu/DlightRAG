@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from dlightrag.engine.agent.tools import ToolTurnExecutor
+from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
+from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 from dlightrag.engine.ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.tool_model import ToolModel
@@ -232,11 +234,10 @@ async def test_query_tool_model_streams_final_text_through_owned_provider(monkey
     }
 
 
-async def test_stream_text_thinking_off_merges_provider_switch_under_cap(
+async def test_stream_text_reasoning_off_uses_profile_format_under_cap(
     monkeypatch,
 ) -> None:
     provider = AsyncMock()
-    provider.thinking_off_kwargs = lambda: {"reasoning": {"enabled": False}}
     seen: dict[str, object] = {}
 
     async def tokens():
@@ -258,7 +259,22 @@ async def test_stream_text_thinking_off_merges_provider_switch_under_cap(
         async for token in model.stream_text(
             messages=[{"role": "user", "content": "summarize"}],
             model_kwargs={"max_tokens": 4000},
-            thinking="off",
+            reasoning="off",
+            model_profile=ModelProfile(
+                context_window_tokens=100_000,
+                reasoning=ReasoningProfile(
+                    format="openrouter",
+                    levels=ReasoningLevels(
+                        off="none",
+                        minimal="minimal",
+                        low="low",
+                        medium="medium",
+                        high="high",
+                        xhigh=None,
+                        max=None,
+                    ),
+                ),
+            ),
         )
     ]
 
@@ -266,7 +282,7 @@ async def test_stream_text_thinking_off_merges_provider_switch_under_cap(
     # The explicit cap wins; the provider switch sits underneath it.
     seen_kwargs = cast(dict[str, Any], seen["kwargs"])
     assert seen_kwargs["model_kwargs"] == {
-        "reasoning": {"enabled": False},
+        "reasoning": {"effort": "none"},
         "max_tokens": 4000,
     }
 

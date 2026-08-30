@@ -150,31 +150,18 @@ def test_malformed_endpoint_is_unknown_instead_of_crashing_catalog_resolution(wi
     assert wiz.catalog_model_profile(block) is None
 
 
-def test_unknown_llm_prompts_for_one_complete_capacity_override(wiz):
+def test_unknown_llm_uses_permissive_fallback_without_config_override(wiz):
     block, _ = wiz.resolve_llm_choice(
         "Other (OpenAI-compatible)",
         model="private-model",
         base_url="http://localhost:8888/v1",
     )
-    prompter = _ScriptedPrompter(
-        [
-            "262144",
-            "200000",
-            "32768",
-            True,
-            False,
-        ]
-    )
 
-    override = wiz.ask_model_capacity_override(prompter, block)
-
-    assert override == {
-        **block,
-        "context_window_tokens": 262_144,
-        "max_input_tokens": 200_000,
-        "max_output_tokens": 32_768,
-        "supports_images": True,
-        "supports_reasoning": False,
+    assert wiz._capacity_summary(block) == {
+        "source": "fallback",
+        "context_window_tokens": 1_048_576,
+        "max_input_tokens": None,
+        "max_output_tokens": 262_144,
     }
 
 
@@ -1438,9 +1425,6 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "    base_url: https://api.voyageai.com/v1\n"
         "  rerank:\n    enabled: true\n    strategy: voyage_reranker\n"
         "    model: rerank-2.5-lite\n"
-        "  capacity_overrides:\n"
-        "    - provider: openai\n      model: gpt-x\n      base_url: https://api.x\n"
-        "      context_window_tokens: 123456\n      max_output_tokens: 8192\n"
         "answer:\n  generation:\n    max_attachments: 6\n"
         "    max_attachment_bytes: 104857600\n"
         "    max_total_attachment_bytes: 134217728\n"
@@ -1476,9 +1460,9 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
     assert s["workspace"] == "default"
     assert s["keys_set"] == {"LLM": True, "Embedding": True, "Rerank": False}
     assert "sk-a" not in repr(s) and "sk-b" not in repr(s)
-    assert s["model_capacities"]["default"]["source"] == "override"
-    assert s["model_capacities"]["default"]["context_window_tokens"] == 123456
-    assert s["model_capacities"]["extract"] == {"source": "unknown"}
+    assert s["model_capacities"]["default"]["source"] == "fallback"
+    assert s["model_capacities"]["default"]["context_window_tokens"] == 1_048_576
+    assert s["model_capacities"]["extract"]["source"] == "fallback"
     # Attachment settings are surfaced independently from model capacity.
     assert s["answer"] == {
         "max_attachments": 6,
@@ -1543,13 +1527,6 @@ def test_read_config_summary_uses_answer_defaults_when_absent(wiz, tmp_path):
     assert s["answer"]["max_total_attachment_bytes"] == 128 * 1024 * 1024
 
 
-def test_model_capacity_note_explains_catalog_and_unknown_overrides(wiz):
-    note = wiz.MODEL_CAPACITY_NOTE
-    assert "versioned catalog" in note
-    assert "unknown or private endpoint" in note
-    assert "never guesses or probes" in note
-
-
 def test_render_summary_shows_context_and_attachment_settings(wiz, tmp_path):
     from rich.console import Console
 
@@ -1561,10 +1538,6 @@ def test_render_summary_shows_context_and_attachment_settings(wiz, tmp_path):
         "      base_url: https://api.x/v1\n"
         "  embedding:\n    provider: voyage\n    model: voyage-x\n    dim: 1024\n"
         "  rerank:\n    strategy: chat_llm_reranker\n"
-        "  capacity_overrides:\n"
-        "    - provider: openai\n      model: gpt-x\n"
-        "      base_url: https://api.x/v1\n"
-        "      context_window_tokens: 123456\n      max_output_tokens: 8192\n"
         "corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n"
         "deployment:\n  workspace: default\n"
         "answer:\n  generation:\n    max_attachments: 7\n"
@@ -1577,7 +1550,7 @@ def test_render_summary_shows_context_and_attachment_settings(wiz, tmp_path):
     console = Console(record=True, width=100)
     wiz.render_summary(console, wiz.read_config_summary(cfg, env))
     text = console.export_text()
-    assert "override · C 123,456 · I = C · O 8,192" in text
+    assert "fallback · C 1,048,576 · I = C · O 262,144" in text
     assert "7 max" in text
     assert "3 MiB each" in text
     assert "visual inspection" in text.lower()

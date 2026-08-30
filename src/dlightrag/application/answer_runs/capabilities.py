@@ -84,11 +84,12 @@ class AnswerCapabilityCoordinator:
         self._rerank_model_settings = rerank_model_settings
         self._image_capabilities = image_capabilities
         self._on_answer_capability = on_answer_capability
-        self._declared_profiles: dict[ModelRole, ModelProfile] = {}
+        self._catalogue_profiles: dict[ModelRole, ModelProfile] = {}
         self._profiles: dict[ModelRole, ModelProfile] = {}
         self._answer_image_capability: AnswerImageCapability | None = None
         self._vlm_image_status: ImageCapabilityStatus = "unknown"
         self._rerank_supports_vision: bool | None = None
+        self._catalogue_generation = 0
 
     @property
     def snapshot(self) -> AnswerCapabilities:
@@ -106,21 +107,31 @@ class AnswerCapabilityCoordinator:
         return self._rerank_supports_vision
 
     def resolve_profiles(self) -> None:
-        self._declared_profiles = {role: self._profile_for_role(role) for role in MODEL_ROLE_NAMES}
-        self._profiles = dict(self._declared_profiles)
+        self._catalogue_profiles = {role: self._profile_for_role(role) for role in MODEL_ROLE_NAMES}
+        self._profiles = dict(self._catalogue_profiles)
 
-    def declared_model_profile(self, role: ModelRole) -> ModelProfile:
-        profile = self._declared_profiles.get(role)
+    def invalidate_model_catalogue(self) -> None:
+        """Drop profile and probe caches after one atomic catalogue publication."""
+        self._catalogue_generation += 1
+        self._catalogue_profiles.clear()
+        self._profiles.clear()
+        self._answer_image_capability = None
+        self._vlm_image_status = "unknown"
+        self._rerank_supports_vision = None
+        self._image_capabilities.clear()
+
+    def catalogue_profile(self, role: ModelRole) -> ModelProfile:
+        profile = self._catalogue_profiles.get(role)
         if profile is None:
             profile = self._profile_for_role(role)
-            self._declared_profiles[role] = profile
+            self._catalogue_profiles[role] = profile
             self._profiles.setdefault(role, profile)
         return profile
 
     def model_profile(self, role: ModelRole) -> ModelProfile:
         profile = self._profiles.get(role)
         if profile is None:
-            profile = self.declared_model_profile(role)
+            profile = self.catalogue_profile(role)
             self._profiles[role] = profile
         return profile
 
@@ -148,7 +159,7 @@ class AnswerCapabilityCoordinator:
         role: ModelRole,
         status: ImageCapabilityStatus,
     ) -> None:
-        declared = self.declared_model_profile(role)
+        declared = self.catalogue_profile(role)
         self._profiles[role] = replace(
             declared,
             supports_images=declared.supports_images and status == "supported",
@@ -167,13 +178,20 @@ class AnswerCapabilityCoordinator:
     async def probe_answer(self) -> None:
         if self._answer_image_capability is not None:
             return
-        self._cache_answer_capability(await self._discover_answer_capability())
+        self._cache_answer_capability(await self._discover_current_answer_capability())
 
     async def refresh_answer(self) -> AnswerCapabilities:
         capability = self._answer_image_capability
         if capability is None or capability.status == "unknown":
-            self._cache_answer_capability(await self._discover_answer_capability())
+            self._cache_answer_capability(await self._discover_current_answer_capability())
         return self.snapshot
+
+    async def _discover_current_answer_capability(self) -> AnswerImageCapability:
+        while True:
+            generation = self._catalogue_generation
+            capability = await self._discover_answer_capability()
+            if generation == self._catalogue_generation:
+                return capability
 
     def _cache_answer_capability(self, capability: AnswerImageCapability) -> None:
         self._answer_image_capability = capability
@@ -198,7 +216,7 @@ class AnswerCapabilityCoordinator:
         model_settings = self._model_settings_for_role("query")
         if ceiling <= 0:
             outcome = ImageProbeOutcome(status="unsupported", failure_kind="config_disabled")
-        elif not self.declared_model_profile("query").supports_images:
+        elif not self.catalogue_profile("query").supports_images:
             outcome = ImageProbeOutcome(
                 status="unsupported",
                 failure_kind="profile_declared_unsupported",
@@ -216,14 +234,21 @@ class AnswerCapabilityCoordinator:
         )
 
     async def probe_vlm(self) -> None:
-        if self._settings.images.max_images <= 0:
-            self._vlm_image_status = "unsupported"
-        elif not self.declared_model_profile("vlm").supports_images:
-            self._vlm_image_status = "unsupported"
-        else:
-            outcome = await self._image_capabilities.resolve(self._model_settings_for_role("vlm"))
-            self._vlm_image_status = outcome.status
-        self.narrow_role_image_profile("vlm", self._vlm_image_status)
+        while True:
+            generation = self._catalogue_generation
+            if self._settings.images.max_images <= 0:
+                status: ImageCapabilityStatus = "unsupported"
+            elif not self.catalogue_profile("vlm").supports_images:
+                status = "unsupported"
+            else:
+                outcome = await self._image_capabilities.resolve(
+                    self._model_settings_for_role("vlm")
+                )
+                status = outcome.status
+            if generation == self._catalogue_generation:
+                self._vlm_image_status = status
+                self.narrow_role_image_profile("vlm", status)
+                return
 
     async def refresh_vlm(self) -> AnswerCapabilities:
         if self._vlm_image_status == "unknown":
@@ -237,11 +262,15 @@ class AnswerCapabilityCoordinator:
             self._settings.rerank_enabled and self._settings.rerank_strategy == "chat_llm_reranker"
         ):
             return
-        outcome = await self._image_capabilities.resolve(self._rerank_model_settings())
-        self._rerank_supports_vision = {
-            "supported": True,
-            "unsupported": False,
-        }.get(outcome.status)
+        while True:
+            generation = self._catalogue_generation
+            outcome = await self._image_capabilities.resolve(self._rerank_model_settings())
+            if generation == self._catalogue_generation:
+                self._rerank_supports_vision = {
+                    "supported": True,
+                    "unsupported": False,
+                }.get(outcome.status)
+                return
 
     def answer_image_policy(self, profile: ModelProfile) -> AnswerImagePolicy:
         return self._image_policy(

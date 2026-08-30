@@ -4,6 +4,8 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
+from dlightrag.engine.ai.reasoning import ReasoningProfile
+
 CONTEXT_POLICY_REVISION = "agent-v4-dynamic-context"
 type ModelInputOverflowKind = Literal[
     "hard_input_limit_exceeded",
@@ -46,7 +48,7 @@ class ModelProfile:
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     supports_images: bool = False
-    supports_reasoning: bool = False
+    reasoning: ReasoningProfile | None = None
 
     def __post_init__(self) -> None:
         if self.context_window_tokens <= 0:

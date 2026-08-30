@@ -17,6 +17,10 @@ from pydantic import (
 )
 
 from dlightrag.engine.ai.contracts import ChatProvider, InputModality
+from dlightrag.engine.ai.reasoning import (
+    ReasoningLevel,
+    conflicting_reasoning_keys,
+)
 
 type ModelRole = Literal["extract", "keyword", "query", "vlm"]
 MODEL_ROLE_NAMES: tuple[ModelRole, ...] = ("extract", "keyword", "query", "vlm")
@@ -74,6 +78,8 @@ class ModelSettings(FrozenSettings):
     temperature: float | None = Field(default=None, ge=0)
     timeout: float = Field(default=240.0, gt=0)
     max_retries: int = Field(default=3, ge=0)
+    reasoning: ReasoningLevel | None = None
+    agentic_reasoning: ReasoningLevel | None = None
     model_kwargs: Mapping[str, Any] = Field(default_factory=dict)
     agentic_model_kwargs: Mapping[str, Any] = Field(default_factory=dict)
 
@@ -88,10 +94,32 @@ class ModelSettings(FrozenSettings):
         return freeze_settings_value(value)
 
     @model_validator(mode="after")
-    def _validate_structured_output(self) -> Self:
+    def _validate_model_options(self) -> Self:
         if self.provider == "anthropic" and self.structured_output == "json_object":
             raise ValueError("Anthropic native structured output requires json_schema")
+        if self.reasoning is not None:
+            conflicts = conflicting_reasoning_keys(self.model_kwargs)
+            if conflicts:
+                raise ValueError(
+                    "reasoning conflicts with model_kwargs fields: " + ", ".join(conflicts)
+                )
+        if self.effective_agentic_reasoning is not None:
+            conflicts = conflicting_reasoning_keys(
+                {**self.model_kwargs, **self.agentic_model_kwargs}
+            )
+            if conflicts:
+                raise ValueError(
+                    "agentic_reasoning conflicts with agentic model kwargs fields: "
+                    + ", ".join(conflicts)
+                )
         return self
+
+    @property
+    def effective_agentic_reasoning(self) -> ReasoningLevel | None:
+        """Inherit ordinary reasoning only when the agentic field was omitted."""
+        if "agentic_reasoning" in self.model_fields_set:
+            return self.agentic_reasoning
+        return self.reasoning
 
     @property
     def has_explicit_auth(self) -> bool:
@@ -144,9 +172,12 @@ class ModelRoleSettings(FrozenSettings):
         shipped = cls.model_fields["default"].get_default(call_default_factory=True)
         if not isinstance(shipped, ModelSettings):
             raise TypeError("default model factory did not return ModelSettings")
+        supplied = dict(value["default"])
         merged = {name: getattr(shipped, name) for name in ModelSettings.model_fields}
-        merged.update(value["default"])
-        payload["default"] = merged
+        merged.update(supplied)
+        settings = ModelSettings.model_validate(merged)
+        object.__setattr__(settings, "__pydantic_fields_set__", set(supplied))
+        payload["default"] = settings
         return payload
 
     @property
@@ -162,36 +193,6 @@ class ModelRoleSettings(FrozenSettings):
 
     def resolve(self, role: ModelRole) -> ModelSettings:
         return self.overrides.get(role, self.default)
-
-
-class ModelCapacityOverrideSettings(FrozenSettings):
-    provider: ChatProvider = "openai"
-    model: str
-    base_url: str | None = None
-    context_window_tokens: int = Field(ge=1)
-    max_input_tokens: int | None = Field(default=None, ge=1)
-    max_output_tokens: int | None = Field(default=None, ge=1)
-    supports_images: bool = False
-    supports_reasoning: bool = False
-
-    @field_validator("provider", mode="before")
-    @classmethod
-    def _fold_provider(cls, value: Any) -> Any:
-        return _canonical_provider(value)
-
-    @field_validator("model")
-    @classmethod
-    def _model_nonempty(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("model must be non-empty")
-        return value
-
-    @model_validator(mode="after")
-    def _validate_input_limit(self) -> Self:
-        if self.max_input_tokens is not None and self.max_input_tokens > self.context_window_tokens:
-            raise ValueError("max_input_tokens cannot exceed context_window_tokens")
-        return self
 
 
 class EmbeddingSettings(FrozenSettings):
@@ -266,7 +267,6 @@ class RerankSettings(FrozenSettings):
 
 class ModelsSettings(FrozenSettings):
     chat: ModelRoleSettings = Field(default_factory=ModelRoleSettings)
-    capacity_overrides: tuple[ModelCapacityOverrideSettings, ...] = ()
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     rerank: RerankSettings = Field(default_factory=RerankSettings)
     max_concurrency: int = Field(default=16, ge=1)
@@ -276,7 +276,6 @@ __all__ = [
     "EmbeddingSettings",
     "FrozenSettings",
     "MODEL_ROLE_NAMES",
-    "ModelCapacityOverrideSettings",
     "ModelRole",
     "ModelRoleOverrides",
     "ModelRoleSettings",

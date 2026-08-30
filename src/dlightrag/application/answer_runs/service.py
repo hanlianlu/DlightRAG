@@ -46,7 +46,7 @@ from dlightrag.engine.ai.capacity import (
     CONTEXT_POLICY_REVISION,
     ModelProfile,
 )
-from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
+from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag.engine.answer.evidence import EvidenceLedger
@@ -1202,7 +1202,7 @@ class AnswerService:
             history_attachments=request.history_attachments,
             pinned_models=projection.pinned_models,
             context_policy_revision=CONTEXT_POLICY_REVISION,
-            model_catalog_revision=MODEL_CATALOG_REVISION,
+            model_catalog_revision=current_model_catalog_revision(),
             idempotency_fingerprint=idempotency_fingerprint,
             agent_run_plan=projection.agent_run_plan,
             image_descriptions=projection.image_descriptions,

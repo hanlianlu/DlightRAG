@@ -1,16 +1,21 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Versioned model-capacity catalog and deterministic resolution."""
+"""Strict built-in model catalogue plus an atomically replaceable runtime overlay."""
+
+from __future__ import annotations
 
 import hashlib
 import json
 import logging
 import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from importlib.resources import files
 from types import MappingProxyType
 from typing import Never, cast
 
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
+from dlightrag.engine.ai.reasoning import REASONING_LEVELS, ReasoningLevels, ReasoningProfile
 
 _logger = logging.getLogger(__name__)
 
@@ -22,9 +27,11 @@ _PROFILE_KEYS = frozenset(
         "max_input_tokens",
         "max_output_tokens",
         "supports_images",
-        "supports_reasoning",
+        "reasoning",
     }
 )
+_REASONING_KEYS = frozenset({"format", "levels"})
+_REASONING_LEVEL_KEYS = frozenset(REASONING_LEVELS)
 _REVISION_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
@@ -36,7 +43,7 @@ class _JSONObject:
 
 
 class UnknownModelProfileError(ValueError):
-    """Raised when no trusted capacity facts exist for a model endpoint."""
+    """Raised by callers that require catalogue facts instead of fallback facts."""
 
     def __init__(self, fingerprint: ModelFingerprint) -> None:
         self.fingerprint = fingerprint
@@ -44,7 +51,137 @@ class UnknownModelProfileError(ValueError):
         super().__init__(
             "No trusted model profile for "
             f"provider={fingerprint.provider!r}, model={fingerprint.model!r}, "
-            f"endpoint={endpoint[:12]!r}; configure an explicit per-model capacity override"
+            f"endpoint={endpoint[:12]!r}; publish an explicit runtime catalogue entry"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogueEntry:
+    """One complete endpoint profile; runtime overlays never patch fields."""
+
+    provider: str
+    model: str
+    base_url: str | None
+    profile: ModelProfile
+    fingerprint: ModelFingerprint
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "base_url": self.base_url,
+            "profile": model_profile_data(self.profile),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogueSnapshot:
+    """One immutable effective catalogue and its single content revision."""
+
+    revision: str
+    entries: tuple[CatalogueEntry, ...]
+    profiles: Mapping[ModelFingerprint, ModelProfile]
+    overlay_fingerprints: frozenset[ModelFingerprint]
+
+    def resolve(self, fingerprint: ModelFingerprint) -> ModelProfile | None:
+        return self.profiles.get(fingerprint)
+
+
+class ModelCatalogue:
+    """Own the process's atomic built-in-plus-overlay snapshot."""
+
+    def __init__(
+        self,
+        *,
+        builtin_revision: str,
+        builtin_entries: Sequence[CatalogueEntry],
+    ) -> None:
+        self._builtin_revision = builtin_revision
+        self._builtin_entries = tuple(builtin_entries)
+        self._builtin = MappingProxyType(
+            {entry.fingerprint: entry for entry in self._builtin_entries}
+        )
+        self._overlay: tuple[CatalogueEntry, ...] = ()
+        self._snapshot = self._merge(())
+        if self._snapshot.revision != builtin_revision:
+            raise RuntimeError("built-in model catalogue revision changed during loading")
+
+    @property
+    def builtin_revision(self) -> str:
+        return self._builtin_revision
+
+    @property
+    def revision(self) -> str:
+        return self._snapshot.revision
+
+    @property
+    def snapshot(self) -> CatalogueSnapshot:
+        return self._snapshot
+
+    @property
+    def overlay(self) -> tuple[CatalogueEntry, ...]:
+        return self._overlay
+
+    def is_builtin(self, fingerprint: ModelFingerprint) -> bool:
+        return fingerprint in self._builtin
+
+    def preview(self, overlay: Sequence[CatalogueEntry]) -> CatalogueSnapshot:
+        return self._merge(tuple(overlay))
+
+    def replace_overlay(self, overlay: Sequence[CatalogueEntry]) -> CatalogueSnapshot:
+        candidate = tuple(overlay)
+        snapshot = self._merge(candidate)
+        # One assignment publishes all effective facts and their revision.
+        self._overlay = candidate
+        self._snapshot = snapshot
+        return snapshot
+
+    def _merge(self, overlay: tuple[CatalogueEntry, ...]) -> CatalogueSnapshot:
+        overrides: dict[ModelFingerprint, CatalogueEntry] = {}
+        for entry in overlay:
+            if entry.fingerprint in overrides:
+                raise ValueError("runtime model catalogue overlay contains a duplicate endpoint")
+            overrides[entry.fingerprint] = entry
+
+        effective: list[CatalogueEntry] = []
+        builtin_fingerprints: set[ModelFingerprint] = set()
+        for builtin in self._builtin_entries:
+            builtin_fingerprints.add(builtin.fingerprint)
+            effective.append(overrides.get(builtin.fingerprint, builtin))
+        custom = sorted(
+            (
+                entry
+                for fingerprint, entry in overrides.items()
+                if fingerprint not in builtin_fingerprints
+            ),
+            key=lambda entry: (
+                entry.provider,
+                entry.model,
+                entry.fingerprint.endpoint_fingerprint or "",
+            ),
+        )
+        effective.extend(custom)
+        models = [entry.as_dict() for entry in effective]
+        profiles = MappingProxyType({entry.fingerprint: entry.profile for entry in effective})
+        effective_revision = _model_catalog_revision(cast(list[object], models))
+        revision = (
+            effective_revision
+            if not overlay
+            else _model_catalog_revision(
+                cast(
+                    list[object],
+                    [
+                        {"effective_revision": effective_revision},
+                        {"overlay_revision": catalogue_overlay_revision(overlay)},
+                    ],
+                )
+            )
+        )
+        return CatalogueSnapshot(
+            revision=revision,
+            entries=tuple(effective),
+            profiles=profiles,
+            overlay_fingerprints=frozenset(overrides),
         )
 
 
@@ -134,6 +271,40 @@ def _profile_boolean(profile: dict[str, object], field: str, *, path: str) -> bo
     return cast(bool, value)
 
 
+def _profile_reasoning(value: object, *, path: str) -> ReasoningProfile | None:
+    if value is None:
+        return None
+    reasoning = _require_object(value, path=path, keys=_REASONING_KEYS)
+    format_name = _canonical_identity(
+        reasoning["format"],
+        path=f"{path}.format",
+        lowercase=True,
+    )
+    levels = _require_object(
+        reasoning["levels"],
+        path=f"{path}.levels",
+        keys=_REASONING_LEVEL_KEYS,
+    )
+    parsed: dict[str, str | None] = {}
+    for level in REASONING_LEVELS:
+        raw = levels[level]
+        if raw is None:
+            parsed[level] = None
+        else:
+            parsed[level] = _canonical_identity(
+                raw,
+                path=f"{path}.levels.{level}",
+                lowercase=False,
+            )
+    try:
+        return ReasoningProfile(
+            format=format_name,
+            levels=ReasoningLevels(**parsed),  # type: ignore[arg-type]
+        )
+    except ValueError as exc:
+        raise RuntimeError(f"{path}: {exc}") from None
+
+
 def _validated_profile(value: object, *, path: str) -> ModelProfile:
     facts = _require_object(value, path=path, keys=_PROFILE_KEYS)
     context_window_tokens = cast(
@@ -158,14 +329,14 @@ def _validated_profile(value: object, *, path: str) -> ModelProfile:
         optional=True,
     )
     supports_images = _profile_boolean(facts, "supports_images", path=path)
-    supports_reasoning = _profile_boolean(facts, "supports_reasoning", path=path)
+    reasoning = _profile_reasoning(facts["reasoning"], path=f"{path}.reasoning")
     try:
         return ModelProfile(
             context_window_tokens=context_window_tokens,
             max_input_tokens=max_input_tokens,
             max_output_tokens=max_output_tokens,
             supports_images=supports_images,
-            supports_reasoning=supports_reasoning,
+            reasoning=reasoning,
         )
     except ValueError as exc:
         field = next(
@@ -183,6 +354,72 @@ def _validated_profile(value: object, *, path: str) -> ModelProfile:
         raise RuntimeError(f"{path}.{field}: {exc}") from None
 
 
+def model_profile_data(profile: ModelProfile) -> dict[str, object]:
+    return {
+        "context_window_tokens": profile.context_window_tokens,
+        "max_input_tokens": profile.max_input_tokens,
+        "max_output_tokens": profile.max_output_tokens,
+        "supports_images": profile.supports_images,
+        "reasoning": profile.reasoning.as_dict() if profile.reasoning is not None else None,
+    }
+
+
+def parse_catalogue_entry(value: object, *, path: str = "entry") -> CatalogueEntry:
+    item = _require_object(value, path=path, keys=_MODEL_KEYS)
+    provider = _canonical_identity(item["provider"], path=f"{path}.provider", lowercase=True)
+    model = _canonical_identity(item["model"], path=f"{path}.model", lowercase=False)
+    base_url = item["base_url"]
+    if base_url is None:
+        canonical_base_url = None
+        endpoint_fingerprint = None
+    else:
+        if type(base_url) is not str or not base_url:
+            raise RuntimeError(f"{path}.base_url must be null or a valid HTTP(S) URL")
+        endpoint_fingerprint = normalized_endpoint_fingerprint(base_url)
+        if endpoint_fingerprint is None:
+            raise RuntimeError(f"{path}.base_url must be null or a valid HTTP(S) URL")
+        canonical_base_url = cast(str, base_url)
+    profile = _validated_profile(item["profile"], path=f"{path}.profile")
+    fingerprint = ModelFingerprint(
+        provider=provider,
+        model=model,
+        endpoint_fingerprint=endpoint_fingerprint,
+    )
+    return CatalogueEntry(
+        provider=provider,
+        model=model,
+        base_url=canonical_base_url,
+        profile=profile,
+        fingerprint=fingerprint,
+    )
+
+
+def parse_catalogue_overlay(value: object) -> tuple[CatalogueEntry, ...]:
+    if type(value) is not list:
+        raise RuntimeError("runtime model catalogue overlay must be an array")
+    entries: list[CatalogueEntry] = []
+    seen: dict[ModelFingerprint, int] = {}
+    for index, raw in enumerate(cast(list[object], value)):
+        entry = parse_catalogue_entry(raw, path=f"overlay[{index}]")
+        if entry.fingerprint in seen:
+            raise RuntimeError(
+                f"overlay[{index}] duplicates the normalized fingerprint from "
+                f"overlay[{seen[entry.fingerprint]}]"
+            )
+        seen[entry.fingerprint] = index
+        entries.append(entry)
+    return tuple(entries)
+
+
+def catalogue_overlay_data(entries: Sequence[CatalogueEntry]) -> list[dict[str, object]]:
+    return [entry.as_dict() for entry in entries]
+
+
+def catalogue_overlay_revision(entries: Sequence[CatalogueEntry]) -> str:
+    """Return the built-in-independent CAS revision for one complete overlay."""
+    return _model_catalog_revision(cast(list[object], catalogue_overlay_data(entries)))
+
+
 def _model_catalog_revision(models: list[object]) -> str:
     """Hash canonical parsed model content, excluding top-level revision metadata."""
     canonical = json.dumps(
@@ -195,47 +432,25 @@ def _model_catalog_revision(models: list[object]) -> str:
     return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
-def _parse_catalog(
-    text: str,
-) -> tuple[str, MappingProxyType[ModelFingerprint, ModelProfile]]:
-    """Parse and validate model-catalog JSON without I/O or fallback behavior."""
+def _parse_catalog(text: str) -> tuple[str, tuple[CatalogueEntry, ...]]:
+    """Parse and validate built-in catalogue JSON without fallback behavior."""
     root = _require_object(_decode_catalog_json(text), path="root", keys=_ROOT_KEYS)
     models_value = root["models"]
     if type(models_value) is not list:
         raise RuntimeError("root.models must be an array")
     models = cast(list[object], models_value)
 
-    parsed: dict[ModelFingerprint, ModelProfile] = {}
+    entries: list[CatalogueEntry] = []
     fingerprint_indices: dict[ModelFingerprint, int] = {}
     for index, value in enumerate(models):
-        path = f"models[{index}]"
-        item = _require_object(value, path=path, keys=_MODEL_KEYS)
-        provider = _canonical_identity(item["provider"], path=f"{path}.provider", lowercase=True)
-        model = _canonical_identity(item["model"], path=f"{path}.model", lowercase=False)
-
-        base_url = item["base_url"]
-        if base_url is None:
-            endpoint_fingerprint = None
-        else:
-            if type(base_url) is not str or not base_url:
-                raise RuntimeError(f"{path}.base_url must be null or a valid HTTP(S) URL")
-            endpoint_fingerprint = normalized_endpoint_fingerprint(base_url)
-            if endpoint_fingerprint is None:
-                raise RuntimeError(f"{path}.base_url must be null or a valid HTTP(S) URL")
-
-        profile = _validated_profile(item["profile"], path=f"{path}.profile")
-        fingerprint = ModelFingerprint(
-            provider=provider,
-            model=model,
-            endpoint_fingerprint=endpoint_fingerprint,
-        )
-        if fingerprint in parsed:
-            first_index = fingerprint_indices[fingerprint]
+        entry = parse_catalogue_entry(value, path=f"models[{index}]")
+        if entry.fingerprint in fingerprint_indices:
+            first_index = fingerprint_indices[entry.fingerprint]
             raise RuntimeError(
                 f"models[{index}] duplicates the normalized fingerprint from models[{first_index}]"
             )
-        parsed[fingerprint] = profile
-        fingerprint_indices[fingerprint] = index
+        entries.append(entry)
+        fingerprint_indices[entry.fingerprint] = index
 
     revision_value = root["revision"]
     if type(revision_value) is not str or _REVISION_PATTERN.fullmatch(revision_value) is None:
@@ -244,45 +459,39 @@ def _parse_catalog(
     expected_revision = _model_catalog_revision(models)
     if revision != expected_revision:
         raise RuntimeError("root.revision does not match canonical models content")
-    return revision, MappingProxyType(parsed)
+    return revision, tuple(entries)
 
 
-def _load_catalog() -> tuple[str, MappingProxyType[ModelFingerprint, ModelProfile]]:
+def _load_catalog() -> tuple[str, tuple[CatalogueEntry, ...]]:
     text = files("dlightrag.engine.ai").joinpath("model_catalog.json").read_text("utf-8")
     return _parse_catalog(text)
 
 
-MODEL_CATALOG_REVISION, _MODEL_CATALOG = _load_catalog()
+MODEL_CATALOG_REVISION, _BUILTIN_MODEL_ENTRIES = _load_catalog()
+MODEL_CATALOGUE = ModelCatalogue(
+    builtin_revision=MODEL_CATALOG_REVISION,
+    builtin_entries=_BUILTIN_MODEL_ENTRIES,
+)
 
-#: The unconditional capacity guess for endpoints the catalog does not know.
+#: The unconditional capacity guess for endpoints the catalogue does not know.
 #: It is deliberately generous: the first real provider rejection is the
-#: calibration signal, never a wasted probe call.
+#: calibration signal, never a wasted probe call. Semantic reasoning is absent.
 FALLBACK_MODEL_PROFILE = ModelProfile(
     context_window_tokens=1_048_576,
     max_input_tokens=None,
     max_output_tokens=262_144,
     supports_images=True,
-    supports_reasoning=True,
+    reasoning=None,
 )
 
 
-def resolve_model_profile(
-    fingerprint: ModelFingerprint,
-    *,
-    override: ModelProfile | None = None,
-    adapter_profile: ModelProfile | None = None,
-) -> ModelProfile:
-    """Resolve override, trusted adapter facts, then the versioned catalog.
+def current_model_catalog_revision() -> str:
+    return MODEL_CATALOGUE.revision
 
-    Unknown endpoints resolve to the shared fallback profile instead of
-    failing: uncatalogued models work out of the box, and any mistake in
-    capacity facts surfaces as an ordinary provider rejection at first use.
-    """
-    if override is not None:
-        return override
-    if adapter_profile is not None:
-        return adapter_profile
-    profile = _MODEL_CATALOG.get(fingerprint)
+
+def resolve_model_profile(fingerprint: ModelFingerprint) -> ModelProfile:
+    """Resolve runtime overlay, built-in catalogue, then permissive fallback."""
+    profile = MODEL_CATALOGUE.snapshot.resolve(fingerprint)
     if profile is not None:
         return profile
     _logger.warning(
@@ -295,8 +504,18 @@ def resolve_model_profile(
 
 
 __all__ = [
+    "CatalogueEntry",
+    "CatalogueSnapshot",
     "FALLBACK_MODEL_PROFILE",
+    "MODEL_CATALOGUE",
     "MODEL_CATALOG_REVISION",
+    "ModelCatalogue",
     "UnknownModelProfileError",
+    "catalogue_overlay_data",
+    "catalogue_overlay_revision",
+    "current_model_catalog_revision",
+    "model_profile_data",
+    "parse_catalogue_entry",
+    "parse_catalogue_overlay",
     "resolve_model_profile",
 ]

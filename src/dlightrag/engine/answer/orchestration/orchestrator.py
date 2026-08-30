@@ -392,7 +392,12 @@ class AnswerOrchestrator:
             max_tokens=max_tokens,
         )
 
-    async def call_runtime_provider(self, request: RequestSnapshot) -> AssistantTurn:
+    async def call_runtime_provider(
+        self,
+        request: RequestSnapshot,
+        *,
+        model_profile: ModelProfile | None = None,
+    ) -> AssistantTurn:
         """Execute one already-persisted exact provider Request Snapshot."""
         definitions = [ToolDefinition(**definition) for definition in request.tools]
         kwargs: dict[str, Any] = {
@@ -402,6 +407,7 @@ class AnswerOrchestrator:
         }
         if request.max_tokens is not None:
             kwargs["max_tokens"] = request.max_tokens
+        kwargs["model_profile"] = model_profile or self._model_profile
         return await cast(ToolModelFunc, self._model_func)(**kwargs)
 
     async def compact_runtime_context(

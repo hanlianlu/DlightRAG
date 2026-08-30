@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
-from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.messages import (
     AssistantTurn,
     ToolCallingUnavailableError,
@@ -191,27 +190,6 @@ class CompletionProvider(ABC):
     (Anthropic, Gemini).  Providers without native support fall back to
     ``json_object`` mode or a strict-mode json_schema via the OpenAI API.
     """
-
-    def thinking_off_kwargs(self) -> dict[str, Any]:
-        """Return model kwargs that disable extended thinking for this provider.
-
-        The default is no knob: providers whose SDKs already default to
-        thinking off (or that have no reasoning surface) return nothing.
-        Providers with a real disable switch override this with their own
-        key shape (see the per-provider docstrings).
-        """
-        return {}
-
-    @classmethod
-    def declared_model_profile(
-        cls,
-        *,
-        model: str,
-        base_url: str | None,
-    ) -> ModelProfile | None:
-        """Return trusted static endpoint facts when this adapter publishes them."""
-        del model, base_url
-        return None
 
     def __init__(
         self,

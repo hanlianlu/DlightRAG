@@ -65,7 +65,6 @@ class FakeAnswers(AnswerService):
                 max_input_tokens=None,
                 max_output_tokens=1_000,
                 supports_images=True,
-                supports_reasoning=True,
             )
 
             def measure_history(messages: list[dict[str, Any]], projected_summary: str = "") -> int:
@@ -150,7 +149,7 @@ def run_request(**overrides: Any) -> dict[str, Any]:
                     "max_input_tokens": None,
                     "max_output_tokens": 128_000,
                     "supports_images": True,
-                    "supports_reasoning": True,
+                    "reasoning": None,
                 },
             }
         ],

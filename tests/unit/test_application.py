@@ -276,7 +276,7 @@ def _pinned(fingerprint: ModelFingerprint, role: str) -> dict[str, Any]:
             "max_input_tokens": None,
             "max_output_tokens": 32_000,
             "supports_images": False,
-            "supports_reasoning": False,
+            "reasoning": None,
         },
     }
 

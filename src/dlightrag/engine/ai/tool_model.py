@@ -5,12 +5,21 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
-from typing import Any, Literal
+from typing import Any
 
+from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_fingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolChoice, ToolDefinition
 from dlightrag.engine.ai.providers import get_provider
 from dlightrag.engine.ai.providers.base import CompletionProvider
+from dlightrag.engine.ai.reasoning import (
+    ReasoningLevel,
+    ResolvedReasoning,
+    merge_reasoning_kwargs,
+    resolve_reasoning,
+)
+from dlightrag.engine.ai.replay import bind_provider_replay, messages_for_model
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
@@ -49,6 +58,7 @@ class ToolModel:
         tools: list[ToolDefinition],
         tool_choice: ToolChoice = "auto",
         max_tokens: int | None = None,
+        model_profile: ModelProfile | None = None,
     ) -> AssistantTurn:
         return await self._scheduler.run(
             lambda: self._complete_tool_turn(
@@ -56,6 +66,7 @@ class ToolModel:
                 tools=tools,
                 tool_choice=tool_choice,
                 max_tokens=max_tokens,
+                model_profile=model_profile,
             )
         )
 
@@ -66,7 +77,13 @@ class ToolModel:
         tools: list[ToolDefinition],
         tool_choice: ToolChoice,
         max_tokens: int | None,
+        model_profile: ModelProfile | None,
     ) -> AssistantTurn:
+        resolved = self._resolve_reasoning(
+            self.settings.effective_agentic_reasoning,
+            model_profile,
+        )
+        model_kwargs = merge_reasoning_kwargs(self._agentic_model_kwargs, resolved)
         async with self._telemetry.observe(
             "agent_model_turn",
             as_type="generation",
@@ -77,19 +94,21 @@ class ToolModel:
                 "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
                 "tool_names": [tool.name for tool in tools],
                 "tool_choice": tool_choice,
+                **self._reasoning_metadata(resolved),
             },
             model=self.settings.model,
         ) as observation:
             try:
                 turn = await self._provider.complete_tool_turn(
-                    messages,
+                    messages_for_model(messages, self.fingerprint),
                     self.settings.model,
                     tools=tools,
                     tool_choice=tool_choice,
                     temperature=self.settings.temperature,
                     max_tokens=max_tokens,
-                    model_kwargs=self._agentic_model_kwargs,
+                    model_kwargs=model_kwargs,
                 )
+                turn = bind_provider_replay(turn, self.fingerprint)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -114,20 +133,20 @@ class ToolModel:
         *,
         messages: list[dict[str, Any]],
         model_kwargs: dict[str, Any] | None = None,
-        thinking: Literal["off"] | None = None,
+        reasoning: ReasoningLevel | None = None,
+        model_profile: ModelProfile | None = None,
     ) -> AsyncGenerator[str]:
         """Stream a tools-disabled final answer from a rich tool transcript.
 
-        An explicit ``model_kwargs`` replaces the agentic-then-ordinary retry
-        sequence with one single attempt using exactly those kwargs: the
-        compaction summarizer uses this to force a profile output cap with no
-        silent empty-output retry. ``thinking="off"`` additionally merges the
-        provider's extended-thinking disable switch under those kwargs, so a
-        reasoning model cannot burn the output cap on hidden reasoning.
+        Explicit ``model_kwargs`` selects one attempt. Typed ``reasoning`` is
+        still resolved from the pinned profile and owns its provider fields.
         """
         return self._scheduler.stream(
             lambda: self._stream_text(
-                messages=messages, model_kwargs=model_kwargs, thinking=thinking
+                messages=messages,
+                model_kwargs=model_kwargs,
+                reasoning=reasoning,
+                model_profile=model_profile,
             )
         )
 
@@ -136,7 +155,8 @@ class ToolModel:
         *,
         messages: list[dict[str, Any]],
         model_kwargs: dict[str, Any] | None = None,
-        thinking: Literal["off"] | None = None,
+        reasoning: ReasoningLevel | None = None,
+        model_profile: ModelProfile | None = None,
     ) -> AsyncGenerator[str]:
         record_text = self._telemetry.capture_sensitive_data
         streamed: list[str] = []
@@ -144,6 +164,13 @@ class ToolModel:
         cost_details: dict[str, int | float] = {}
         text_length = 0
         attempts = 0
+        reasoning_attempts: list[dict[str, str]] = []
+        attempt_options = self._final_attempt_options(
+            model_kwargs=model_kwargs,
+            reasoning=reasoning,
+            model_profile=model_profile,
+        )
+        prepared_messages = messages_for_model(messages, self.fingerprint)
         async with self._telemetry.observe(
             "agent_final_answer",
             as_type="generation",
@@ -156,25 +183,14 @@ class ToolModel:
             model=self.settings.model,
         ) as observation:
             try:
-                if thinking is not None and thinking != "off":
-                    raise ValueError(f"unsupported thinking mode: {thinking}")
-                if thinking == "off":
-                    attempts_kwargs = (
-                        {
-                            **self._provider.thinking_off_kwargs(),
-                            **(model_kwargs or {}),
-                        },
-                    )
-                elif model_kwargs is not None:
-                    attempts_kwargs = (model_kwargs,)
-                else:
-                    attempts_kwargs = self._final_attempt_kwargs()
-                for attempt_kwargs in attempts_kwargs:
+                for attempt_kwargs, resolved in attempt_options:
                     attempts += 1
+                    if resolved is not None:
+                        reasoning_attempts.append(self._reasoning_metadata(resolved))
                     attempt_usage: dict[str, Any] = {}
                     substantive_text = False
                     stream = self._provider.stream_tool_text(
-                        messages,
+                        prepared_messages,
                         self.settings.model,
                         temperature=self.settings.temperature,
                         model_kwargs=attempt_kwargs,
@@ -191,7 +207,7 @@ class ToolModel:
                     _accumulate_metrics(cost_details, attempt_usage.get("cost_details"))
                     if substantive_text:
                         return
-                    if attempts == 1:
+                    if attempts == 1 and len(attempt_options) > 1:
                         logger.warning(
                             "Agent final answer returned no text; retrying with ordinary model options"
                         )
@@ -206,6 +222,8 @@ class ToolModel:
                 raise
             finally:
                 output: dict[str, Any] = {"text_length": text_length, "attempts": attempts}
+                if reasoning_attempts:
+                    output["reasoning"] = reasoning_attempts
                 if record_text:
                     output["text"] = "".join(streamed)
                 observation.update(
@@ -218,19 +236,30 @@ class ToolModel:
         self,
         *,
         messages: list[dict[str, Any]],
+        model_profile: ModelProfile | None = None,
     ) -> str:
         """Return a tools-disabled final answer from a rich tool transcript."""
-        return await self._scheduler.run(lambda: self._complete_text(messages=messages))
+        return await self._scheduler.run(
+            lambda: self._complete_text(messages=messages, model_profile=model_profile)
+        )
 
     async def _complete_text(
         self,
         *,
         messages: list[dict[str, Any]],
+        model_profile: ModelProfile | None,
     ) -> str:
         usage_details: dict[str, int | float] = {}
         cost_details: dict[str, int | float] = {}
         text = ""
         attempts = 0
+        reasoning_attempts: list[dict[str, str]] = []
+        attempt_options = self._final_attempt_options(
+            model_kwargs=None,
+            reasoning=None,
+            model_profile=model_profile,
+        )
+        prepared_messages = messages_for_model(messages, self.fingerprint)
         async with self._telemetry.observe(
             "agent_final_answer",
             as_type="generation",
@@ -243,10 +272,12 @@ class ToolModel:
             model=self.settings.model,
         ) as observation:
             try:
-                for model_kwargs in self._final_attempt_kwargs():
+                for model_kwargs, resolved in attempt_options:
                     attempts += 1
+                    if resolved is not None:
+                        reasoning_attempts.append(self._reasoning_metadata(resolved))
                     turn = await self._provider.complete_tool_turn(
-                        messages,
+                        prepared_messages,
                         self.settings.model,
                         tools=[],
                         temperature=self.settings.temperature,
@@ -257,7 +288,7 @@ class ToolModel:
                     text = turn.text
                     if text.strip():
                         return text
-                    if attempts == 1:
+                    if attempts == 1 and len(attempt_options) > 1:
                         logger.warning(
                             "Agent final answer returned no text; "
                             "retrying with ordinary model options"
@@ -273,6 +304,8 @@ class ToolModel:
                 raise
             finally:
                 output: dict[str, Any] = {"text_length": len(text), "attempts": attempts}
+                if reasoning_attempts:
+                    output["reasoning"] = reasoning_attempts
                 if self._telemetry.capture_sensitive_data:
                     output["text"] = text
                 observation.update(
@@ -281,8 +314,51 @@ class ToolModel:
                     cost_details=cost_details or None,
                 )
 
-    def _final_attempt_kwargs(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        return self._agentic_model_kwargs, self._ordinary_model_kwargs
+    def _final_attempt_options(
+        self,
+        *,
+        model_kwargs: dict[str, Any] | None,
+        reasoning: ReasoningLevel | None,
+        model_profile: ModelProfile | None,
+    ) -> tuple[tuple[dict[str, Any], ResolvedReasoning | None], ...]:
+        if model_kwargs is not None or reasoning is not None:
+            requested = reasoning if reasoning is not None else self.settings.reasoning
+            resolved = self._resolve_reasoning(requested, model_profile)
+            return ((merge_reasoning_kwargs(model_kwargs or {}, resolved), resolved),)
+        agentic = self._resolve_reasoning(
+            self.settings.effective_agentic_reasoning,
+            model_profile,
+        )
+        ordinary = self._resolve_reasoning(self.settings.reasoning, model_profile)
+        return (
+            (merge_reasoning_kwargs(self._agentic_model_kwargs, agentic), agentic),
+            (merge_reasoning_kwargs(self._ordinary_model_kwargs, ordinary), ordinary),
+        )
+
+    def _resolve_reasoning(
+        self,
+        requested: ReasoningLevel | None,
+        model_profile: ModelProfile | None,
+    ) -> ResolvedReasoning | None:
+        profile = model_profile or resolve_model_profile(self.fingerprint)
+        resolved = resolve_reasoning(profile.reasoning, requested)
+        if resolved is not None and resolved.requested != resolved.effective:
+            logger.info(
+                "Clamped reasoning level for %s from %s to %s",
+                self.settings.model,
+                resolved.requested,
+                resolved.effective,
+            )
+        return resolved
+
+    @staticmethod
+    def _reasoning_metadata(resolved: ResolvedReasoning | None) -> dict[str, str]:
+        if resolved is None:
+            return {}
+        return {
+            "reasoning_requested": resolved.requested,
+            "reasoning_effective": resolved.effective,
+        }
 
     async def aclose(self) -> None:
         """Release the provider SDK client and its connection pools."""

@@ -4,7 +4,6 @@
 import importlib
 from typing import Any, cast
 
-from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.providers.base import CompletionProvider
 
 _PROVIDER_CLASSES: dict[str, str] = {
@@ -24,17 +23,6 @@ def _provider_class(provider: str) -> type[CompletionProvider]:
     return cast(type[CompletionProvider], getattr(module, class_name))
 
 
-def get_adapter_model_profile(
-    provider: str,
-    *,
-    model: str,
-    base_url: str | None,
-) -> ModelProfile | None:
-    """Read optional static model facts from the selected provider adapter."""
-    provider_class = _provider_class(provider)
-    return provider_class.declared_model_profile(model=model, base_url=base_url)
-
-
 def get_provider(
     provider: str,
     *,
@@ -48,4 +36,4 @@ def get_provider(
     return cls(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=max_retries)
 
 
-__all__ = ["get_adapter_model_profile", "get_provider"]
+__all__ = ["get_provider"]

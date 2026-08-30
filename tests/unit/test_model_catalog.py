@@ -6,14 +6,15 @@ import json
 import re
 from collections.abc import Sequence
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 import pytest
 
 from dlightrag.engine.ai import catalog
 from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.catalog import CatalogueEntry
 from dlightrag.engine.ai.fingerprints import ModelFingerprint, normalized_endpoint_fingerprint
+from dlightrag.engine.ai.reasoning import ReasoningLevels, ReasoningProfile
 
 
 def _canonical_revision(models: Sequence[object]) -> str:
@@ -42,7 +43,18 @@ def _valid_model(
             "max_input_tokens": None,
             "max_output_tokens": 128,
             "supports_images": False,
-            "supports_reasoning": True,
+            "reasoning": {
+                "format": "openai",
+                "levels": {
+                    "off": "none",
+                    "minimal": "minimal",
+                    "low": "low",
+                    "medium": "medium",
+                    "high": "high",
+                    "xhigh": None,
+                    "max": None,
+                },
+            },
         },
     }
 
@@ -60,7 +72,7 @@ def _load_text(
     *,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> tuple[str, MappingProxyType[ModelFingerprint, ModelProfile]]:
+) -> tuple[str, tuple[CatalogueEntry, ...]]:
     (tmp_path / "model_catalog.json").write_text(text, encoding="utf-8")
     monkeypatch.setattr(catalog, "files", lambda _package: tmp_path)
     return catalog._load_catalog()
@@ -71,7 +83,7 @@ def _load_payload(
     *,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> tuple[str, MappingProxyType[ModelFingerprint, ModelProfile]]:
+) -> tuple[str, tuple[CatalogueEntry, ...]]:
     return _load_text(
         json.dumps(payload, ensure_ascii=False, allow_nan=False),
         monkeypatch=monkeypatch,
@@ -178,7 +190,7 @@ def test_catalog_rejects_string_integer_coercion(
         ("max_input_tokens", False),
         ("max_output_tokens", 128.0),
         ("supports_images", 0),
-        ("supports_reasoning", "true"),
+        ("reasoning", True),
     ],
 )
 def test_catalog_rejects_non_exact_profile_json_types(
@@ -394,22 +406,29 @@ def test_catalog_accepts_complete_profiles_with_null_and_valid_http_endpoints(
     revision, parsed = _load_payload(payload, monkeypatch=monkeypatch, tmp_path=tmp_path)
 
     assert revision == _canonical_revision(models)
-    assert isinstance(parsed, MappingProxyType)
-    assert parsed[
-        ModelFingerprint(provider="openai", model="default-endpoint", endpoint_fingerprint=None)
-    ] == ModelProfile(
+    assert isinstance(parsed, tuple)
+    assert parsed[0].fingerprint == ModelFingerprint(
+        provider="openai", model="default-endpoint", endpoint_fingerprint=None
+    )
+    assert parsed[0].profile == ModelProfile(
         context_window_tokens=1024,
         max_output_tokens=128,
         supports_images=False,
-        supports_reasoning=True,
+        reasoning=ReasoningProfile(
+            format="openai",
+            levels=ReasoningLevels(
+                off="none",
+                minimal="minimal",
+                low="low",
+                medium="medium",
+                high="high",
+                xhigh=None,
+                max=None,
+            ),
+        ),
     )
-    assert (
-        ModelFingerprint(
-            provider="openai",
-            model="routed-endpoint",
-            endpoint_fingerprint=normalized_endpoint_fingerprint("http://api.example.test:8080/v1"),
-        )
-        in parsed
+    assert parsed[1].fingerprint == ModelFingerprint(
+        provider="openai",
+        model="routed-endpoint",
+        endpoint_fingerprint=normalized_endpoint_fingerprint("http://api.example.test:8080/v1"),
     )
-    with pytest.raises(TypeError):
-        parsed[ModelFingerprint("openai", "other", None)] = ModelProfile(1)  # type: ignore[index]

@@ -15,13 +15,9 @@ from dlightrag.application.corpus_admin import CorpusAdminSettings
 from dlightrag.application.retrieval import RetrievalSettings
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
-from dlightrag.engine.ai.fingerprints import model_endpoint_fingerprint, model_fingerprint
-from dlightrag.engine.ai.providers import get_adapter_model_profile
-from dlightrag.engine.ai.settings import (
-    ModelCapacityOverrideSettings,
-    ModelRole,
-    ModelSettings,
-)
+from dlightrag.engine.ai.fingerprints import model_fingerprint
+from dlightrag.engine.ai.reasoning import resolve_reasoning
+from dlightrag.engine.ai.settings import ModelRole, ModelSettings
 from dlightrag.engine.answer.execution import (
     AnswerExecutorSettings,
     AnswerResourceSettings,
@@ -168,49 +164,16 @@ def model_settings_for_role(config: DlightragConfig, role: ModelRole) -> ModelSe
     return config.models.chat.resolve(role)
 
 
-def _profile_from_override(config: ModelCapacityOverrideSettings) -> ModelProfile:
-    return ModelProfile(
-        context_window_tokens=config.context_window_tokens,
-        max_input_tokens=config.max_input_tokens,
-        max_output_tokens=config.max_output_tokens,
-        supports_images=config.supports_images,
-        supports_reasoning=config.supports_reasoning,
-    )
-
-
 def model_profile_for_settings(
     config: DlightragConfig,
     settings: ModelSettings,
-    *,
-    adapter_profile: ModelProfile | None = None,
 ) -> ModelProfile:
-    """Resolve immutable capacity facts for one fully resolved model endpoint."""
-    fingerprint = model_fingerprint(settings)
-    override = next(
-        (
-            _profile_from_override(candidate)
-            for candidate in config.models.capacity_overrides
-            if model_endpoint_fingerprint(
-                candidate.provider,
-                candidate.model,
-                candidate.base_url,
-            )
-            == fingerprint
-        ),
-        None,
-    )
-    if override is not None:
-        return resolve_model_profile(fingerprint, override=override)
-    if adapter_profile is None:
-        adapter_profile = get_adapter_model_profile(
-            settings.provider,
-            model=settings.model,
-            base_url=settings.base_url,
-        )
-    return resolve_model_profile(
-        fingerprint,
-        adapter_profile=adapter_profile,
-    )
+    """Resolve endpoint facts and validate its configured semantic reasoning."""
+    del config
+    profile = resolve_model_profile(model_fingerprint(settings))
+    resolve_reasoning(profile.reasoning, settings.reasoning)
+    resolve_reasoning(profile.reasoning, settings.effective_agentic_reasoning)
+    return profile
 
 
 def model_profile_for_role(config: DlightragConfig, role: ModelRole) -> ModelProfile:

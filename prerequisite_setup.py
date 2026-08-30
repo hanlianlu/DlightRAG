@@ -238,51 +238,6 @@ def catalog_model_profile(block: dict) -> dict | None:
     return None
 
 
-def _optional_positive_int(value: str, *, field: str) -> int | None:
-    text = value.strip()
-    if not text:
-        return None
-    parsed = int(text)
-    if parsed < 1:
-        raise ValueError(f"{field} must be positive")
-    return parsed
-
-
-def ask_model_capacity_override(prompter: Prompter, block: dict) -> dict:
-    """Collect complete operator facts for a model absent from the catalog."""
-    context_window = int(
-        _ask_required(
-            lambda: prompter.text(f"Context window tokens for {block['model']} (required)")
-        )
-    )
-    if context_window < 1:
-        raise ValueError("context_window_tokens must be positive")
-    max_input = _optional_positive_int(
-        prompter.text("Maximum request input tokens (optional)"),
-        field="max_input_tokens",
-    )
-    if max_input is not None and max_input > context_window:
-        raise ValueError("max_input_tokens cannot exceed context_window_tokens")
-    max_output = _optional_positive_int(
-        prompter.text("Maximum completion output tokens (optional)"),
-        field="max_output_tokens",
-    )
-    identity = {
-        "provider": block["provider"],
-        "model": block["model"],
-    }
-    if block.get("base_url") is not None:
-        identity["base_url"] = block["base_url"]
-    return {
-        **identity,
-        "context_window_tokens": context_window,
-        "max_input_tokens": max_input,
-        "max_output_tokens": max_output,
-        "supports_images": prompter.confirm("Does this model accept image input?"),
-        "supports_reasoning": prompter.confirm("Does this model support reasoning tokens?"),
-    }
-
-
 def resolve_embedding_choice(
     provider_name: str, *, model: str, base_url: str | None
 ) -> tuple[dict, str]:
@@ -340,7 +295,6 @@ def write_config_yaml(
     *,
     llm_default: dict | None = None,
     llm_roles: dict[str, dict] | None = None,
-    model_capacity_overrides: list[dict] | None = None,
     embedding: dict | None = None,
     rerank: dict | None = None,
     parser_kind: str | None = None,
@@ -384,11 +338,7 @@ def write_config_yaml(
             for role, block in llm_roles.items():
                 roles.setdefault(role, {})
                 _apply_model_block(roles[role], block)
-    if model_capacity_overrides is not None:
-        if model_capacity_overrides:
-            models["capacity_overrides"] = model_capacity_overrides
-        else:
-            models.pop("capacity_overrides", None)
+    models.pop("capacity_overrides", None)
     if embedding is not None:
         _apply_model_block(models.setdefault("embedding", {}), embedding)
     if rerank is not None:
@@ -833,7 +783,6 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
 
     mode = prompter.select(MODEL_MODE_PROMPT, MODEL_MODE_CHOICES)
 
-    console.print(MODEL_CAPACITY_NOTE)
     name, model, base_url, key = _ask_model(prompter, PROVIDERS_LLM, "LLM")
     llm_block, llm_env = resolve_llm_choice(name, model=model, base_url=base_url)
     if key is None:
@@ -853,20 +802,6 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
             else:
                 env_values[LLM_ROLE_ENV_KEYS[role]] = rk
             llm_roles[role] = block
-
-    capacity_overrides: list[dict] = []
-    seen_models: set[tuple[str, str, str | None]] = set()
-    for block in (llm_block, *llm_roles.values()):
-        identity = (
-            str(block.get("provider") or ""),
-            str(block.get("model") or ""),
-            _normalized_endpoint(block.get("base_url")),
-        )
-        if identity in seen_models:
-            continue
-        seen_models.add(identity)
-        if catalog_model_profile(block) is None:
-            capacity_overrides.append(ask_model_capacity_override(prompter, block))
 
     console.print(EMBEDDING_MODALITY_NOTE)
     ename, emodel, ebase, ekey = _ask_model(prompter, PROVIDERS_EMBED, "Embedding")
@@ -929,7 +864,6 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
         CONFIG_PATH,
         llm_default=llm_block,
         llm_roles=llm_roles,
-        model_capacity_overrides=capacity_overrides,
         embedding=embed_block,
         rerank=rerank_block,
     )
@@ -987,14 +921,6 @@ EMBEDDING_MODALITY_NOTE = (
     "Jina v4, or Cohere Embed v4) upgrades each visual chunk to one canonical "
     "text+image vector. A text-only model still works, but visual evidence is then "
     "retrieved through its VLM description alone.[/dim]"
-)
-
-# Shown before the LLM provider list: known models resolve without operator input,
-# while private/proxied endpoints require explicit facts rather than a probe.
-MODEL_CAPACITY_NOTE = (
-    "[dim]DlightRAG resolves known model capacity from its versioned catalog. "
-    "For an unknown or private endpoint, this wizard asks for an explicit capacity "
-    "override; it never guesses or probes the context window.[/dim]"
 )
 
 MODELS_OVERWRITE_CONFIRM = (
@@ -1104,22 +1030,16 @@ def is_configured(
     return default_ready and embedding_ready
 
 
-def _capacity_summary(block: dict, overrides: list[dict]) -> dict:
-    identity = (
-        str(block.get("provider") or ""),
-        str(block.get("model") or ""),
-        _normalized_endpoint(block.get("base_url")),
-    )
-    for override in overrides:
-        candidate = (
-            str(override.get("provider") or ""),
-            str(override.get("model") or ""),
-            _normalized_endpoint(override.get("base_url")),
-        )
-        if candidate == identity:
-            return {"source": "override", **dict(override)}
+def _capacity_summary(block: dict) -> dict:
     profile = catalog_model_profile(block)
-    return {"source": "catalog", **profile} if profile is not None else {"source": "unknown"}
+    if profile is not None:
+        return {"source": "catalog", **profile}
+    return {
+        "source": "fallback",
+        "context_window_tokens": 1_048_576,
+        "max_input_tokens": None,
+        "max_output_tokens": 262_144,
+    }
 
 
 def _public_model_block(settings) -> dict:
@@ -1137,7 +1057,6 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
     role_settings = dict(config.models.chat.overrides)
     default = _public_model_block(default_settings)
     roles = {role: _public_model_block(settings) for role, settings in role_settings.items()}
-    capacity_overrides = [override.model_dump() for override in config.models.capacity_overrides]
     embedding = config.models.embedding
     rerank = config.models.rerank
     answer = config.answer.generation
@@ -1157,8 +1076,8 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
         "llm_default": default,
         "llm_roles": roles,
         "model_capacities": {
-            "default": _capacity_summary(default, capacity_overrides),
-            **{role: _capacity_summary(block, capacity_overrides) for role, block in roles.items()},
+            "default": _capacity_summary(default),
+            **{role: _capacity_summary(block) for role, block in roles.items()},
         },
         "embedding": {
             "provider": embedding.provider,
@@ -1248,8 +1167,6 @@ def render_summary(console, summary: dict) -> None:
 
 
 def _capacity_label(capacity: dict) -> str:
-    if capacity["source"] == "unknown":
-        return "unknown · configure an override"
     context = f"C {int(capacity['context_window_tokens']):,}"
     max_input = capacity.get("max_input_tokens")
     max_output = capacity.get("max_output_tokens")
