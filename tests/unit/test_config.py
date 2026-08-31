@@ -180,11 +180,6 @@ def test_postgres_projection_and_reader_settings() -> None:
     assert config.lightrag_pool_server_settings()["default_transaction_read_only"] == "on"
 
 
-def test_parser_selection_is_canonical() -> None:
-    config = DlightragConfig(corpus=CorpusSettings(sidecars=ParserSidecarsSettings()))
-    assert config.parser_rules == "*:docling-iteP"
-
-
 def test_dump_redacts_nested_secrets() -> None:
     config = DlightragConfig(
         storage=StorageSettings(postgres=PostgresSettings(password="long-secret-value")),

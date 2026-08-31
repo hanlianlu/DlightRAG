@@ -136,8 +136,8 @@ class DoclingSidecarSettings(FrozenSettings):
 
 class ParserSidecarsSettings(FrozenSettings):
     vlm: VLMSidecarSettings = Field(default_factory=VLMSidecarSettings)
-    mineru: MinerUSidecarSettings | None = None
-    docling: DoclingSidecarSettings | None = Field(default_factory=DoclingSidecarSettings)
+    mineru: MinerUSidecarSettings | None = Field(default_factory=MinerUSidecarSettings)
+    docling: DoclingSidecarSettings | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -149,7 +149,7 @@ class ParserSidecarsSettings(FrozenSettings):
             elif value.get("docling") is not None and "mineru" not in value:
                 value["mineru"] = None
             elif value.get("mineru") is None and value.get("docling") is None:
-                value["docling"] = {}
+                value["mineru"] = {}
         return value
 
     @property

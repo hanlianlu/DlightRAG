@@ -59,9 +59,11 @@ deployment:
 
 corpus:
   sidecars:
-    docling:
-      endpoint: http://host.docker.internal:5001
-      code_formula_preset: granite_docling
+    mineru:
+      api_mode: local
+      local_endpoint: http://host.docker.internal:8210
+      language: ch
+      backend: hybrid-engine
   ingestion:
     pipeline:
       max_concurrency: 16

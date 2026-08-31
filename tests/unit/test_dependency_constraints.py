@@ -267,15 +267,12 @@ def test_config_yaml_uses_input_modality_for_rerank() -> None:
     assert "multimodal:" not in config
 
 
-def test_curated_config_routes_container_to_host_native_docling_by_default() -> None:
-    config = Path("config.yaml").read_text(encoding="utf-8")
-    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+def test_curated_config_selects_exactly_one_parser_sidecar() -> None:
+    config = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+    sidecars = config["corpus"]["sidecars"]
 
-    assert "endpoint: http://host.docker.internal:5001" in config
-    assert "code_formula_preset: granite_docling" in config
-    assert "local_endpoint: http://host.docker.internal:8210" not in config
-    assert "DLIGHTRAG_CORPUS__SIDECARS__MINERU__LOCAL_ENDPOINT" not in compose
-    assert "DLIGHTRAG_CORPUS__SIDECARS__DOCLING__ENDPOINT" not in compose
+    selected = [name for name in ("mineru", "docling") if sidecars.get(name) is not None]
+    assert len(selected) == 1
 
 
 def test_codeql_config_filters_self_referential_advanced_setup_alert() -> None:

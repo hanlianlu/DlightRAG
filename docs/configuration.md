@@ -63,14 +63,14 @@ they need to change:
 
 The configured external sidecar selects the parser automatically. Configure
 exactly one `docling` or `mineru` block; DlightRAG derives the internal LightRAG
-wildcard. With neither block, the code default is Docling at
-`http://127.0.0.1:5001`. If both are present, MinerU remains effective for
+wildcard. With neither block, the code default is self-hosted MinerU at
+`http://127.0.0.1:8210`. If both are present, MinerU remains effective for
 backward compatibility, so do not configure both. Docling and MinerU are durable
 ingestion parsers only; answer attachments are decoded and converted
 request-locally and never invoke them.
 
-The checked-in Docker-first configuration consumes the host-native
-Docling Serve MPS service rather than enabling the optional Compose profile:
+The checked-in Docker-first configuration consumes the host-native MinerU
+service managed by DlightRAG's service scripts:
 
 ```yaml
 corpus:
@@ -84,10 +84,11 @@ corpus:
       max_image_bytes: 5242880
       # DlightRAG default 80px, above LightRAG's native 64px minimum.
       min_image_pixel: 80
-    docling:
-      endpoint: http://host.docker.internal:5001
-      code_formula_preset: granite_docling
-      # force_ocr: false
+    mineru:
+      api_mode: local
+      local_endpoint: http://host.docker.internal:8210
+      language: ch
+      backend: hybrid-engine
 ```
 
 `corpus.extraction.language` defaults to `English`. It is a free-form target
@@ -101,7 +102,7 @@ data; reset and reingest the corpus for a consistent change.
 
 Changing the selected parser affects new parses; it does not rewrite an
 existing workspace's chunks, vectors, graph, or parser cache. Explicitly reset
-and reingest a corpus when it must be rebuilt with Docling artifacts.
+and reingest a corpus when it must be rebuilt with the newly selected parser.
 
 `corpus.sidecars.docling.do_formula_enrichment` transcribes detected formula
 regions and defaults on, matching MinerU's `enable_formula`, so the parser
@@ -164,10 +165,13 @@ validation, and retry semantics remain owned by LightRAG and the parser service.
 Dockerized DlightRAG reaches a host-native service through
 `host.docker.internal`; a native DlightRAG process uses `127.0.0.1` when the
 parser runs on the same host. The optional Compose profile starts with
-`docker compose --profile docling up -d`; point its block to
-`http://docling:5001` and set `code_formula_preset: null`.
+`docker compose --profile docling up -d`; replace the MinerU block with a
+Docling block pointing to `http://docling:5001` and set
+`code_formula_preset: null`. A host-native Apple Silicon Docling service can
+instead use `http://host.docker.internal:5001` with
+`code_formula_preset: granite_docling`.
 
-To use MinerU instead, remove the Docling block and configure only:
+The checked-in self-hosted MinerU configuration is:
 
 ```yaml
 corpus:

@@ -49,7 +49,7 @@ DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES = 128 * 1024 * 1024
 DEFAULT_MAX_ANSWER_IMAGES = 12
 
-DOCLING_EXTERNAL_CHOICE = "Docling external endpoint (recommended)"
+DOCLING_EXTERNAL_CHOICE = "Docling external endpoint"
 DOCLING_MPS_DEVICE_CHOICE = "Apple Silicon MPS (granite_docling)"
 DOCLING_SERVICE_DEFAULT_DEVICE_CHOICE = "CUDA, XPU, or CPU (service default)"
 
@@ -651,9 +651,9 @@ def run_parser_step(
     choice = prompter.select(
         "Document parser",
         [
-            DOCLING_EXTERNAL_CHOICE,
             "MinerU local",
             "MinerU official cloud API",
+            DOCLING_EXTERNAL_CHOICE,
             "Docling bundled (Compose)",
         ],
     )

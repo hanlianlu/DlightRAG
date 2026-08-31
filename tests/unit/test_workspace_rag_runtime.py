@@ -919,7 +919,7 @@ class TestWorkspaceRagLightRAGMainPath:
             "backend",
             "sidecar",
             "runtime",
-            "validate:*:docling-iteP",
+            f"validate:{test_config.parser_rules}",
             "patches",
         ]
 

@@ -40,24 +40,24 @@ projected by status interfaces.
 
 | Path | Use this when | PostgreSQL | Parser endpoint | Security | Start here |
 |---|---|---|---|---|---|
-| Local Docker | Developer machine, Web UI, smoke tests | Compose PG18 | Host-native Docling service (default); optional bundled Docling or MinerU | `access.auth_mode: none` on loopback | [Quick Start](#quick-start) |
+| Local Docker | Developer machine, Web UI, smoke tests | Compose PG18 | Self-hosted MinerU service (default); optional Docling or MinerU cloud | `access.auth_mode: none` on loopback | [Quick Start](#quick-start) |
 | Native API | API process runs on host, PostgreSQL stays in Docker | Compose PG18 | Any reachable configured Docling or MinerU endpoint | Local or explicit auth | [Native API Variant](#native-api-variant) |
 | Shared service | Remote users, agents, team workspace | Managed or self-hosted PG18 | Independently operated parser service | `simple` or `jwt` | [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md), [Security](docs/security.md) |
 | Enterprise | Multi-user internal product | Managed PG18 | Independently operated parser service | `jwt` + JWKS, optional claim access control | [Security](docs/security.md), [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md) |
 
 Do not install a parser into the DlightRAG app container. The checked-in config
-consumes an independently operated Docling service at
-`http://host.docker.internal:5001`; it does not start the optional Compose
-Docling container. On Apple Silicon, the matching host service is
-[docling-serve-mps](https://github.com/hanlianlu/docling-serve-mps). The bundled
-CPU Docling profile and MinerU infrastructure remain available as alternatives.
+consumes a self-hosted MinerU service at
+`http://host.docker.internal:8210`; DlightRAG manages that host service through
+the `make mineru-service-*` targets. External or bundled Docling and MinerU's
+official cloud API remain available as alternatives.
 
 ## Quick Start
 
 **Prerequisites.** Install [Docker + Compose](https://docs.docker.com/get-docker/)
 (runs the API and PostgreSQL), [`uv`](https://docs.astral.sh/uv/) (runs setup and
-native development commands), plus `git` and `make`. Start a reachable Docling
-service before ingesting documents. DlightRAG targets **Python 3.14.7+**; `uv`
+native development commands), plus `git` and `make`. Install and start the
+self-hosted MinerU service before ingesting documents. DlightRAG targets
+**Python 3.14.7+**; `uv`
 installs it for you (`uv python install 3.14.7`), so a system Python is not
 required for the Docker path.
 
@@ -82,9 +82,9 @@ inside containers. Run `uv sync` only for the
 
 ### One-command setup (recommended)
 
-From a fresh clone, an interactive wizard configures your models, recommends an
-external Docling endpoint, retains bundled Docling and MinerU as alternatives,
-brings up the stack, and ends with a clickable Web UI link:
+From a fresh clone, an interactive wizard configures your models, defaults to
+self-hosted MinerU, retains MinerU cloud and Docling as alternatives, brings up
+the stack, and ends with a clickable Web UI link:
 
 ```bash
 git clone https://github.com/hanlianlu/dlightrag.git
@@ -134,28 +134,26 @@ sidecar settings, metadata schema, retrieval breadth, auth mode, Langfuse
 behavior, and deployment endpoints. Deep config reference is in
 [docs/configuration.md](docs/configuration.md).
 
-2. Start the external Docling service selected by the checked-in config. On
-Apple Silicon, the local default is:
+2. Install and start the self-hosted MinerU service selected by the checked-in
+config:
 
 ```bash
-uv tool install docling-serve-mps
-docling-serve-mps start
-curl http://127.0.0.1:5001/health
+make mineru-install
+make mineru-service-install  # installs and starts the background service
+curl http://127.0.0.1:8210/health
 ```
 
 The service binds to host loopback, while DlightRAG's Docker containers consume
-it through `http://host.docker.internal:5001`. Do not enable the Compose Docling
-profile at the same time because both services use host port 5001.
+it through `http://host.docker.internal:8210`. Use `make mineru-api` instead when
+the platform cannot install a background user service.
 
-For another independently operated Docling service, change the checked-in
-`corpus.sidecars.docling.endpoint`. The optional official CPU image remains
-available with `docker compose --profile docling up -d`; in that case use
-`http://docling:5001` and set `code_formula_preset: null`. MinerU remains
-supported: replace the Docling block with a MinerU block, then use the existing
-`make mineru-install`, `make mineru-api`, or `make mineru-service-install`
-tooling described in [configuration](docs/configuration.md). Changing this
-selection does not reparse an existing corpus; reset and reingest only when you
-intend to rebuild it with the new parser.
+To use Docling instead, replace the MinerU block with a Docling block. A
+host-native Apple Silicon service is available from
+[docling-serve-mps](https://github.com/hanlianlu/docling-serve-mps); the optional
+official CPU image remains available with
+`docker compose --profile docling up -d`. Changing parser selection does not
+reparse an existing corpus; reset and reingest only when you intend to rebuild
+it with the new parser.
 
 3. Start DlightRAG and PostgreSQL:
 
@@ -504,8 +502,8 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 - [docs/web-theme-design.md](docs/web-theme-design.md) - current Web appearance, semantic geometry, panel, interaction, and accessibility design.
 - [LightRAG API Server docs](https://github.com/HKUDS/LightRAG/blob/main/docs/LightRAG-API-Server.md) - upstream parser routing and external parser contracts.
 - [Docling Serve](https://github.com/docling-project/docling-serve) - official Docling HTTP service and container images.
-- [Docling Serve MPS](https://github.com/hanlianlu/docling-serve-mps) - host-native Apple Silicon service used by the checked-in local configuration.
-- [MinerU Docker deployment docs](https://opendatalab.github.io/MinerU/quick_start/docker_deployment/) - optional Linux/WSL2 deployment and macOS warning.
+- [Docling Serve MPS](https://github.com/hanlianlu/docling-serve-mps) - optional host-native Apple Silicon Docling service.
+- [MinerU Docker deployment docs](https://opendatalab.github.io/MinerU/quick_start/docker_deployment/) - upstream deployment reference; the checked-in default uses DlightRAG's host service scripts.
 
 ## License
 

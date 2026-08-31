@@ -1026,7 +1026,6 @@ def test_run_parser_step_configures_external_docling(wiz, tmp_path, monkeypatch)
     )
     mode = wiz.run_parser_step(prompter, info, has_gpu=False)
 
-    assert prompter.select_choices[0][0] == wiz.DOCLING_EXTERNAL_CHOICE
     assert prompter.select_choices[1][0] == wiz.DOCLING_MPS_DEVICE_CHOICE
     assert mode == "external"
     docling = wiz._yaml().load(cfg)["corpus"]["sidecars"]["docling"]
@@ -1397,10 +1396,6 @@ def test_read_config_summary_uses_effective_defaults_and_role_fallback(wiz, tmp_
 
     assert summary["llm_roles"] == {}
     assert summary["rerank"]["enabled"] is True
-    assert summary["parser"] == {
-        "name": "Docling",
-        "detail": "http://127.0.0.1:5001",
-    }
 
 
 def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):

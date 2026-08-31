@@ -105,12 +105,13 @@ can leave a partial release that must be completed by rerunning the workflow.
 
 Parser selection comes from `config.yaml`: keep exactly one
 `corpus.sidecars.docling` or `corpus.sidecars.mineru` block. The checked-in
-default consumes a host-native Docling service through
-`http://host.docker.internal:5001`; DlightRAG does not own that service's
-lifecycle. On Apple Silicon, `docling-serve-mps start` provides the matching
-loopback service.
+default consumes the self-hosted MinerU service through
+`http://host.docker.internal:8210`. Install and manage that host service with
+`make mineru-install` and the `make mineru-service-*` targets; use
+`make mineru-api` for foreground operation on platforms without a background
+user service.
 
-The optional Compose CPU service remains available with:
+The optional Compose Docling CPU service remains available with:
 
 ```bash
 docker compose --profile docling up -d
@@ -118,11 +119,10 @@ docker compose --profile docling up -d
 
 It uses `quay.io/docling-project/docling-serve-cpu:latest` with
 `pull_policy: always`, publishes only `127.0.0.1:5001`, and exposes `/health`.
-Point the Docling block at `http://docling:5001` and set
+Point a Docling block at `http://docling:5001` and set
 `code_formula_preset: null` when using that profile; do not run it alongside a
-host service on the same port. MinerU's independent
-install and service-management scripts remain available when a MinerU block is
-selected.
+host Docling service on the same port. A host-native Docling endpoint remains
+supported as an independently managed alternative.
 
 ## Workspace BM25 Rebuild
 

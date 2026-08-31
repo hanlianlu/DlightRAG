@@ -290,14 +290,16 @@ def test_invalid_bm25_profiles_are_rejected(profile: dict[str, Any]) -> None:
         BM25ProfileSettings(**profile)
 
 
-def test_parser_defaults_to_external_docling_and_explicit_mineru_still_works() -> None:
+def test_parser_defaults_to_self_hosted_mineru() -> None:
     defaults = ParserSidecarsSettings()
-    assert defaults.active_parser == "docling"
-    assert defaults.mineru is None
-    assert defaults.docling == DoclingSidecarSettings(
-        endpoint="http://127.0.0.1:5001",
-        code_formula_preset="granite_docling",
+    assert defaults.active_parser == "mineru"
+    assert defaults.mineru == MinerUSidecarSettings(
+        api_mode="local",
+        local_endpoint="http://127.0.0.1:8210",
+        language="ch",
+        backend="hybrid-engine",
     )
+    assert defaults.docling is None
 
     mineru_only = ParserSidecarsSettings(mineru=MinerUSidecarSettings())
     assert mineru_only.active_parser == "mineru"
