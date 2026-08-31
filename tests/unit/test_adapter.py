@@ -3,7 +3,9 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from lightrag.utils import is_truncated_response
 
+from dlightrag.engine.ai.providers.base import CompletionOutput
 from dlightrag.engine.rag.lightrag.models import adapt_completion_for_lightrag
 
 
@@ -22,6 +24,16 @@ class TestAdaptForLightrag:
         assert len(messages) == 2
         assert messages[0] == {"role": "system", "content": "You are helpful"}
         assert messages[1] == {"role": "user", "content": "What is AI?"}
+
+    @pytest.mark.asyncio
+    async def test_token_limit_response_preserves_lightrag_truncation_marker(self):
+        inner = AsyncMock(return_value=CompletionOutput("partial response", stop_reason="length"))
+        adapted = adapt_completion_for_lightrag(inner)
+
+        result = await adapted("test")
+
+        assert result == "partial response"
+        assert is_truncated_response(result)
 
     @pytest.mark.asyncio
     async def test_no_system_prompt(self):

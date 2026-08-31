@@ -181,12 +181,17 @@ class OpenAICompatibleProvider(CompletionProvider):
         if model_kwargs:
             call_kwargs["extra_body"] = model_kwargs
         response = await self._get_client().chat.completions.create(**call_kwargs)
-        message = response.choices[0].message
+        choice = response.choices[0]
+        message = choice.message
         self.last_reasoning = self._extract_reasoning(message)
         return CompletionOutput(
             message.content or "",
             usage_details=usage_to_dict(getattr(response, "usage", None)),
             cost_details=_cost_to_dict(getattr(response, "usage", None)),
+            stop_reason=_openai_stop_reason(
+                getattr(choice, "finish_reason", None),
+                has_tool_calls=False,
+            ),
         )
 
     async def complete_tool_turn(

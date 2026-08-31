@@ -11,6 +11,7 @@ from dlightrag.engine.ai.messages import (
     ToolCallingUnavailableError,
     ToolChoice,
     ToolDefinition,
+    ToolStopReason,
 )
 
 #: Provider rejection texts that mean the request exceeded the model's
@@ -149,11 +150,12 @@ class CompletionOutput(str):
     """Completion text with optional observability metadata.
 
     The value behaves as a plain string for existing callers while allowing
-    providers to attach token usage and cost details for tracing integrations.
+    providers to attach token usage, cost, and normalized stop-reason metadata.
     """
 
     usage_details: dict[str, int] | None
     cost_details: dict[str, float] | None
+    stop_reason: ToolStopReason | None
 
     def __new__(
         cls,
@@ -161,10 +163,12 @@ class CompletionOutput(str):
         *,
         usage_details: dict[str, int] | None = None,
         cost_details: dict[str, float] | None = None,
+        stop_reason: ToolStopReason | None = None,
     ) -> CompletionOutput:
         value = str.__new__(cls, text)
         value.usage_details = usage_details
         value.cost_details = cost_details
+        value.stop_reason = stop_reason
         return value
 
 

@@ -258,9 +258,14 @@ class GeminiProvider(CompletionProvider):
         response = await self._get_client().aio.models.generate_content(
             model=model_id, contents=contents, config=config
         )
+        candidate = response.candidates[0] if response.candidates else None
         return CompletionOutput(
             response.text or "",
             usage_details=_gemini_usage(response),
+            stop_reason=_gemini_stop_reason(
+                getattr(candidate, "finish_reason", None),
+                has_tool_calls=False,
+            ),
         )
 
     async def complete_tool_turn(

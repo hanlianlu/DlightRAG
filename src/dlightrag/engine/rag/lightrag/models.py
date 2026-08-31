@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 from lightrag import RoleLLMConfig
-from lightrag.utils import EmbeddingFunc
+from lightrag.utils import EmbeddingFunc, TruncatedResponse
 
 from dlightrag.engine.ai.completion import CompletionModel
 from dlightrag.engine.ai.scheduler import ModelScheduler
@@ -37,7 +37,10 @@ def adapt_completion_for_lightrag(completion: Callable[..., Any]) -> Callable[..
         if history_messages:
             messages.extend(history_messages)
         messages.append({"role": "user", "content": prompt})
-        return await completion(messages=messages, **kwargs)
+        result = await completion(messages=messages, **kwargs)
+        if getattr(result, "stop_reason", None) == "length":
+            return TruncatedResponse(str(result))
+        return result
 
     return wrapper
 

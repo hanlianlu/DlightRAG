@@ -257,7 +257,14 @@ class AnthropicProvider(CompletionProvider):
             b.thinking for b in content if getattr(b, "type", None) == "thinking"
         )
         text = "".join(b.text for b in content if getattr(b, "type", None) == "text")
-        return CompletionOutput(text, usage_details=usage_to_dict(getattr(response, "usage", None)))
+        return CompletionOutput(
+            text,
+            usage_details=usage_to_dict(getattr(response, "usage", None)),
+            stop_reason=_anthropic_stop_reason(
+                getattr(response, "stop_reason", None),
+                has_tool_calls=False,
+            ),
+        )
 
     async def complete_tool_turn(
         self,

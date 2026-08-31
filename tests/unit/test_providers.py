@@ -59,6 +59,25 @@ class TestAnthropicProvider:
         assert result == "reply"
 
     @pytest.mark.asyncio
+    async def test_complete_preserves_token_limit_stop_reason(self):
+        p = get_provider("anthropic", api_key="test-key")
+        response = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="partial")],
+            stop_reason="max_tokens",
+            usage=None,
+        )
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as sdk:
+            sdk.return_value.messages.create = AsyncMock(return_value=response)
+            cast(Any, p)._client = None
+            result = await p.complete(
+                [{"role": "user", "content": "hi"}],
+                "claude-sonnet-4-20250514",
+            )
+
+        assert result == "partial"
+        assert result.stop_reason == "length"
+
+    @pytest.mark.asyncio
     async def test_complete_defaults_max_tokens(self):
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
@@ -446,6 +465,25 @@ class TestOpenAICompatibleProvider:
             mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
             result = await p.complete([{"role": "user", "content": "hi"}], "gpt-5.4-mini")
         assert result == "hello"
+
+    @pytest.mark.asyncio
+    async def test_complete_preserves_token_limit_stop_reason(self):
+        p = get_provider("openai", api_key="test-key")
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="partial", model_extra=None),
+                    finish_reason="length",
+                )
+            ],
+            usage=None,
+        )
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=response)
+            result = await p.complete([{"role": "user", "content": "hi"}], "gpt-5.4-mini")
+
+        assert result == "partial"
+        assert result.stop_reason == "length"
 
     @pytest.mark.asyncio
     async def test_complete_tool_turn_sends_tools_and_normalizes_calls(self):
@@ -1005,6 +1043,27 @@ class TestGeminiProvider:
             call_kwargs = mock_client.aio.models.generate_content.call_args[1]
             assert "Be concise." in str(call_kwargs.get("config", {}).get("system_instruction", ""))
         assert result == "reply"
+
+    @pytest.mark.asyncio
+    async def test_complete_preserves_token_limit_stop_reason(self):
+        p = get_provider("gemini", api_key="test-key")
+        response = SimpleNamespace(
+            text="partial",
+            candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")],
+            usage_metadata=None,
+        )
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as genai:
+            client = MagicMock()
+            genai.Client.return_value = client
+            client.aio.models.generate_content = AsyncMock(return_value=response)
+            cast(Any, p)._client = None
+            result = await p.complete(
+                [{"role": "user", "content": "hi"}],
+                "gemini-2.0-flash",
+            )
+
+        assert result == "partial"
+        assert result.stop_reason == "length"
 
     @pytest.mark.asyncio
     async def test_role_mapping_assistant_to_model(self):
