@@ -1,88 +1,27 @@
 # Security
 
-This page is for operators exposing DlightRAG beyond local loopback. It owns
-authentication, token verification, identity-provider boundaries, and
-workspace/action access control. Configuration field defaults live in
-[configuration.md](configuration.md); interface request shapes live in
-[interfaces.md](interfaces.md).
+This document owns authentication, identity-provider boundaries, authorization,
+ingress responsibility, resource handling, and browser Artifact isolation. Field
+defaults live in [Configuration](configuration.md); public payloads in
+[Interfaces](interfaces.md).
 
-## Security Model
-
-DlightRAG authenticates bearer tokens and can enforce workspace/action
-authorization. It does not issue OAuth tokens, manage users, store passwords, or
-host a full identity-provider login system.
-
-For enterprise deployments, use an external identity provider or gateway to
-authenticate users and issue tokens. DlightRAG verifies those tokens and maps
-verified claims to workspace permissions when access control is enabled.
-The browser still pastes that bearer into an HttpOnly cookie when no
-`access.web_identity` edge is configured; the edge-asserted Web identity path is
-described below.
-
-## Edge-Asserted Web Identity
-
-The Web frontend is never bare-exposed: an edge (Cloudflare Access, Azure Easy
-Auth, or AWS Amplify/CloudFront auth) authenticates the human, and the Web
-surface verifies the edge credential per request — statelessly, with no login
-page, no DlightRAG-issued cookie, and no token in any response JSON. REST and
-MCP keep verifying their own bearer JWTs and never accept edge assertions.
-
-```yaml
-access:
-  auth_mode: jwt
-  web_identity:
-    edge: cloudflare        # cloudflare | azure | aws
-    issuer: https://<team>.cloudflareaccess.com
-    audience: <application-aud-tag>
-```
-
-Per edge:
-
-| Edge | Verified credential | Config |
-|---|---|---|
-| Cloudflare Access | `Cf-Access-Jwt-Assertion` header (fallback: `CF_Authorization` cookie JWT) | `issuer` = team domain; `audience` = application AUD tag; team certs derived automatically |
-| Azure Easy Auth | `X-MS-TOKEN-AAD-ID-TOKEN` (a real AAD ID token) | `issuer` = `https://login.microsoftonline.com/<tenant>/v2.0` (or without `/v2.0`); `audience` = App Registration client id; discovery keys derived automatically |
-| AWS Amplify / CloudFront | bearer token the edge forwards in the `Authorization` header | `issuer` = IdP issuer (e.g. Cognito user pool); `jwks_url` required; `audience` = app client id |
-
-The verified token's `iss` and `sub` project the owner exactly like a REST
-bearer: a human who used paste-token login and the same human via the edge are
-**different owners** (different issuers). Migrating from paste to edge starts
-with fresh owner-scoped data.
-
-The unsigned Azure principal header (`X-MS-CLIENT-PRINCIPAL`) is parsed only as
-display enrichment and never influences authorization. A missing, expired, or
-unverifiable edge credential is `401`; the Web surface renders no login page.
-
-### Edge trust and state-changing routes
-
-The origin must only accept connections from the edge (deployment firewalling:
-Cloudflare IP ranges, or the platform's own injection point). Header injection
-is otherwise spoofable — the code verifies cryptography, never trust alone.
-
-State-changing `/web` routes are hardened with a JS-readable double-submit
-cookie (`dlightrag_web_csrf`) that browsers must echo as `X-CSRF-Token`,
-plus exact same-origin `Origin` checks; cookie-authenticated (paste)
-mutations always require an `Origin` header, and login POSTs reject
-cross-origin browsers. `secrets.compare_digest` compares the token.
+DlightRAG verifies credentials and maps claims to workspace/actions. It does
+not issue OAuth tokens, manage users/passwords, or provide an identity-provider
+login system.
 
 ## Authentication Modes
 
-| Mode | Use case |
+| Mode | Intended use |
 |---|---|
-| `none` | Local loopback development only |
-| `simple` | One shared bearer token for trusted internal deployments |
-| `jwt` | User-scoped deployments with externally issued signed tokens |
+| `none` | Loopback development only |
+| `simple` | One shared bearer behind a trusted internal boundary |
+| `jwt` | Externally issued, user-scoped signed tokens |
 
-`access.auth_mode: none` returns an anonymous user context. Non-loopback REST or MCP
-HTTP listeners are refused unless `access.allow_insecure_no_auth: true` explicitly
-accepts that risk.
+A non-loopback REST/MCP listener with `none` is refused unless
+`access.allow_insecure_no_auth: true`. With browser credentials, replace wildcard
+CORS with explicit origins.
 
-When auth is enabled, replace wildcard CORS origins with explicit origins.
-Browsers reject credentialed cross-origin requests with `["*"]`.
-
-## Simple Bearer Token
-
-`simple` mode compares the bearer token with `access.api_token`.
+### Simple Bearer
 
 ```bash
 openssl rand -base64 32
@@ -90,39 +29,28 @@ DLIGHTRAG_ACCESS__AUTH_MODE=simple
 DLIGHTRAG_ACCESS__API_TOKEN=<generated>
 ```
 
-Clients send:
+Clients send `Authorization: Bearer <generated>`. REST may accept `X-User-Id`
+for request scope; MCP remains one anonymous principal. `simple` is admission
+control, not multi-user authorization.
 
-```http
-Authorization: Bearer <generated>
-```
+### Static JWT
 
-REST can receive `X-User-Id` in simple mode for request scoping. MCP treats the
-shared token as one anonymous principal; it does not accept caller-selected
-identity. `simple` is admission control, not per-user authorization.
-
-## Static JWT
-
-`jwt` mode verifies externally issued JWTs. Tokens must include `sub`; DlightRAG
-uses it as the authenticated `user_id`.
+JWT mode requires `sub`, which becomes `user_id`.
 
 ```bash
-openssl rand -base64 64
 DLIGHTRAG_ACCESS__AUTH_MODE=jwt
-DLIGHTRAG_ACCESS__JWT_VERIFICATION_KEY=<generated>
+DLIGHTRAG_ACCESS__JWT_VERIFICATION_KEY=<key-or-public-pem>
 DLIGHTRAG_ACCESS__JWT_ALGORITHM=HS256
 ```
 
-For `HS*` algorithms, `access.jwt_verification_key` is the shared HMAC key. For
-`RS*`/`ES*` algorithms, it is the public key PEM from the issuer. DlightRAG
-does not sign, renew, or mint these tokens.
+Use the shared secret for `HS*`; use issuer public-key PEM for `RS*`/`ES*`.
+Issuer/audience claims are validated when configured. DlightRAG never signs,
+renews, or mints tokens.
 
-If `access.jwt_audience` is unset, audience verification is disabled. If `access.jwt_issuer`
-or `access.jwt_audience` is set, PyJWT validates those claims during token decoding.
+### JWKS / OIDC
 
-## JWKS / OIDC Issuers
-
-For Azure Entra, Okta, Auth0, Keycloak, and other OIDC-style issuers, prefer
-JWKS so signing-key rotation is handled by PyJWT's `PyJWKClient`.
+Prefer JWKS for rotating keys from Entra, Okta, Auth0, Keycloak, and similar
+issuers:
 
 ```yaml
 access:
@@ -133,20 +61,13 @@ access:
   jwt_audience: api://dlightrag
 ```
 
-`access.jwt_issuer` and `access.jwt_audience` are required when `access.jwt_jwks_url` is set.
+`issuer` and `audience` are required with `jwt_jwks_url`. Audience may be one
+value or a list; any match passes.
 
-`access.jwt_audience` may be a single value or a list; a token passes when its `aud`
-matches any entry, so one deployment can trust tokens minted for different
-audiences (for example a browser front door and direct API clients).
+### MCP OAuth Discovery
 
-## MCP OAuth Discovery
-
-MCP 2.0 can expose the HTTP listener as an OAuth 2.1 resource server. DlightRAG
-still does not issue tokens: the configured issuer signs users in and issues an
-access token, while DlightRAG verifies it through the existing JWT/JWKS settings.
-
-Enable standards-based MCP client discovery by adding the externally reachable
-MCP endpoint:
+DlightRAG can advertise its MCP HTTP listener as an OAuth 2.1 resource server;
+the external issuer still authenticates users and issues tokens.
 
 ```yaml
 access:
@@ -161,208 +82,115 @@ interfaces:
     resource_server_url: https://rag.example.com/mcp
 ```
 
-The MCP server then publishes RFC 9728 Protected Resource Metadata and returns a
-standard `WWW-Authenticate` challenge that points clients to it. The public URL
-cannot be inferred from `interfaces.mcp.host`: a bind such as `0.0.0.0:8101` does not reveal
-the reverse-proxy URL clients use.
+This publishes RFC 9728 metadata and a `WWW-Authenticate` discovery challenge.
+The externally reachable URL cannot be inferred from a bind address. For native
+MCP OAuth it is also the exact expected token audience, independent of broader
+REST/Web audience settings. Omit it when MCP clients already hold directly
+supplied JWTs.
 
-For native MCP OAuth, this public URL is also the exact expected JWT audience.
-REST may keep its own `access.jwt_audience`; the MCP verifier narrows validation to the
-resource URL instead of accepting a broader REST audience list.
+## Edge-Asserted Web Identity
 
-Omit `interfaces.mcp.resource_server_url` when clients already hold a directly supplied
-static-key JWT. JWT verification and claim-based access control continue to work,
-but clients do not receive OAuth discovery metadata. TLS keys and JWT signing
-keys remain separate.
+Web can verify a credential forwarded by an authenticating edge. REST and MCP
+continue to verify their own bearer JWTs and never accept edge assertions.
 
-## Azure Entra ID (MSAL + JWKS)
+```yaml
+access:
+  auth_mode: jwt
+  web_identity:
+    edge: cloudflare        # cloudflare | azure | aws
+    issuer: https://<team>.cloudflareaccess.com
+    audience: <application-aud-tag>
+```
 
-A concrete instance of the JWKS setup above. DlightRAG is the resource server:
-a browser client acquires a token from Entra with MSAL, then calls DlightRAG,
-which validates it against Entra's published keys. DlightRAG holds no secret and
-never contacts MSAL itself.
-
-Register one **App Registration** for the API and copy three values into config:
-
-| Entra value | Where to find it | Used for |
+| Edge | Verified credential | Required configuration |
 |---|---|---|
-| Directory (tenant) ID | App registration → Overview | building `access.jwt_jwks_url` and `access.jwt_issuer` |
-| Application (client) ID | App registration → Overview | `access.jwt_audience` (v2 access tokens) |
-| Application ID URI | Expose an API | the resource clients request a scope on |
+| Cloudflare Access | `Cf-Access-Jwt-Assertion`, fallback `CF_Authorization` JWT cookie | Team issuer + application AUD |
+| Azure Easy Auth | `X-MS-TOKEN-AAD-ID-TOKEN` | Entra issuer + App Registration client ID |
+| AWS Amplify/CloudFront | Forwarded `Authorization` bearer | IdP issuer + JWKS URL + app client ID |
 
-Set the API app's `accessTokenAcceptedVersion` to `2` (Manifest) so tokens carry
-the v2 issuer and audience below, and expose at least one delegated scope such as
-`access_as_user`. The client must request that scope: a token's audience is
-derived from the requested scope, so without it Entra never mints a token
-audienced for DlightRAG.
+Owner identity is `(iss, sub)`, so changing issuer creates a different owner even
+for the same human. Azure's unsigned `X-MS-CLIENT-PRINCIPAL` is display-only.
+Missing/invalid edge credentials return 401; DlightRAG renders no login page.
+
+The origin must accept traffic only from the configured edge. Cryptographic
+verification does not make arbitrary header injection safe. State-changing Web
+routes also require exact same-origin `Origin` and a double-submit
+`dlightrag_web_csrf` cookie echoed as `X-CSRF-Token`.
+
+### Entra Example
+
+Use one API App Registration with access-token version 2, an exposed delegated
+scope, and optionally App Roles assigned to groups.
 
 ```yaml
 access:
   auth_mode: jwt
   jwt_algorithm: RS256
   jwt_jwks_url: https://login.microsoftonline.com/<TENANT_ID>/discovery/v2.0/keys
-  jwt_issuer:  https://login.microsoftonline.com/<TENANT_ID>/v2.0
+  jwt_issuer: https://login.microsoftonline.com/<TENANT_ID>/v2.0
   jwt_audience: <API_CLIENT_ID>
 ```
 
-JWKS serves public keys, so these values are not secret and can live in
-`config.yaml`. DlightRAG uses the token's `sub` claim as `user_id`.
+Common mistakes:
 
-For per-workspace authorization, define **App Roles** on the API registration and
-assign AD groups to them in the matching Enterprise Application. Assigned roles
-land in the token's `roles` claim (including delegated user tokens), which
-`access.control: jwt_claims` matches:
+- v2 tokens use the `/v2.0` issuer and client-ID GUID audience; v1 differs.
+- Entra signs with RS256, not the HS256 default.
+- App Roles provide stable strings in `roles`; raw `groups` contains object IDs
+  and can overage around 200 groups.
+- A client must request the exposed API scope to receive the API audience.
 
-```yaml
-access:
-  control:
-    mode: jwt_claims
-    rules:
-      - claim: roles
-        value: finance.readers
-        workspaces: [finance]
-        actions: [reader]
-```
-
-| Gotcha | Detail |
-|---|---|
-| v1 vs v2 | With `accessTokenAcceptedVersion: 2`, `iss` ends in `/v2.0` and `aud` is the client-id GUID. Left at v1, `iss` is `https://sts.windows.net/<tenant>/` and `aud` is `api://<client-id>`. Decode a real token at jwt.ms and match `iss`/`aud` exactly. |
-| Roles, not groups | Entra `groups` holds group object IDs (not names) and is replaced by an overage reference past ~200 groups. App Roles emit stable string values in `roles`. |
-| Algorithm | Entra signs with `RS256`; do not leave the `HS256` default. |
-| CORS | The bundled `/web` UI is same-origin, so `access.cors_allow_origins` does not affect it. Pin explicit origins for a separately hosted SPA; browsers reject `["*"]` once that SPA sends credentials. |
-
-## Ingress Topology (Per-Surface Front Doors)
-
-REST and Web share one process on `interfaces.api.port` (8100); MCP is a separate
-streamable-http listener on `interfaces.mcp.port` (8101). All surfaces share one
-`access.auth_mode`, yet each can sit behind a different front door -- as long as every
-request carries a bearer JWT that the single `access.auth_mode: jwt` can verify.
-
-| Surface | Port · path | Caller | Front door |
-|---|---|---|---|
-| Web UI | 8100 · `/web` | Browsers | oauth2-proxy injects `Authorization: Bearer` |
-| REST API | 8100 · `/retrieve`, `/answer`, … | Programmatic | none -- client sends its own bearer |
-| MCP | 8101 · `/mcp` | Agents | none -- client sends its own bearer |
-
-Only browsers need an interactive redirect, so oauth2-proxy fronts `/web` alone;
-API and MCP clients already hold a token, so DlightRAG verifies them directly --
-no proxy, and no Easy Auth (unavailable on AKS regardless).
-
-Apply the auth annotation to the `/web` route only:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: dlightrag-web            # browser UI -- gated by oauth2-proxy
-  annotations:
-    nginx.ingress.kubernetes.io/auth-url: https://oauth2-proxy.example.com/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://oauth2-proxy.example.com/oauth2/start?rd=$escaped_request_uri
-spec:
-  rules:
-    - host: rag.example.com
-      http:
-        paths:
-          - path: /web
-            pathType: Prefix
-            backend:
-              service: { name: dlightrag, port: { number: 8100 } }
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: dlightrag-api            # REST + MCP -- DlightRAG verifies the bearer itself
-spec:
-  rules:
-    - host: rag.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service: { name: dlightrag, port: { number: 8100 } }
-          - path: /mcp
-            pathType: Prefix
-            backend:
-              service: { name: dlightrag-mcp, port: { number: 8101 } }
-```
-
-If oauth2-proxy forwards a token whose `aud` differs from direct REST clients,
-list both REST/Web audiences in `access.jwt_audience`:
-
-```yaml
-access:
-  jwt_audience:
-    - api://dlightrag             # direct REST clients
-    - <oauth2-proxy-client-id>    # browser token forwarded by the proxy
-```
-
-Native MCP OAuth remains separate: its token audience must exactly equal
-`interfaces.mcp.resource_server_url`, regardless of the broader REST/Web audience list.
+Map App Roles through `access.control.rules`, described below.
 
 ## Ingress Responsibilities
 
-DlightRAG owns the semantic invariants no generic edge device can evaluate, and
-deliberately owns nothing else at the network layer.
+The application enforces semantic invariants:
 
-**The application enforces:**
+- authentication, authorization, and owner scope;
+- idempotency and changed-input conflict;
+- URL redirect/DNS/SSRF checks and upload/fetch byte, archive, part, and pixel
+  bounds;
+- a streaming receive cap before parsers;
+- durable lease fencing;
+- client/model output sanitization; and
+- provider concurrency and per-call timeouts.
 
-- authentication, authorization, and owner scope on every run, event, artifact,
-  workspace, and conversation read or write;
-- idempotency keys and their 409 conflict on changed input;
-- public HTTP(S) fetches with redirect, DNS, and SSRF validation (no scheme rewrite, no https-to-http downgrade), plus byte,
-  decompression, part-count, and pixel limits on uploads and fetched bytes;
-- a receive-layer streaming body cap so an oversized or chunked body never
-  reaches a parser, in addition to each route's semantic attachment limits;
-- durable lease fencing, so a worker that lost its lease cannot mutate state the
-  new owner holds;
-- sanitized model-visible and client-visible output, with exception class and
-  traceback kept for operators only; and
-- provider concurrency and per-call timeouts on every external model, embedding,
-  rerank, fetch, and parser request.
+Ingress owns TLS/certificates, DDoS and volumetric protection, WAF signatures,
+IP/geo/bot policy, request quotas/rates, and connection caps. DlightRAG ships no
+in-process WAF or rate limiter. SIEM systems such as Sentinel observe/correlate;
+they are not an inline blocker.
 
-**The ingress owns** generic request-rate and quota limits, DDoS and volumetric
-protection, WAF signature rules, IP/geo/bot reputation policy, TLS termination
-and certificate lifecycle, and connection/concurrency caps. Use Azure Front Door,
-Application Gateway WAF, API Management, NGINX, or the equivalent for your
-platform. **DlightRAG ships no in-process rate limiter and no WAF**, and adding
-one would duplicate ingress policy with worse context.
+Accepted answer runs queue rather than fail under local worker saturation, so
+monitor PostgreSQL/blob growth and rate-limit acceptance. `none` and `simple`
+collapse callers into one deployment owner and require an already restricted
+network boundary.
 
-Microsoft Sentinel is SIEM/SOAR: it monitors, correlates, and drives response
-playbooks over ingress and application logs. It is not the inline WAF and must
-not be relied on to block a request in flight.
+`GET /health` and `GET /ready` are unauthenticated by design. Health never
+queries PostgreSQL; readiness short-caches its database/corpus verdict.
 
-Because accepted answer runs queue rather than fail on capacity, a deployment
-must bound and monitor PostgreSQL storage and apply ingress rate limits
-appropriate to its `access.auth_mode`. `access.auth_mode: none` and `access.auth_mode: simple`
-collapse every caller into one deployment owner, so they are only safe behind an
-ingress that already restricts who can reach the port.
+### Per-Surface Front Doors
 
-Both probe endpoints are unauthenticated by design: `GET /health` is liveness
-only and never queries PostgreSQL, and `GET /ready` short-caches its database and
-corpus verdict, so neither turns an unauthenticated poll loop into database load.
+REST and Web share the API process (default port 8100); MCP uses a separate
+listener (8101). A browser redirect proxy may front only `/web`, while direct
+REST/MCP clients supply their bearer tokens. All tokens must remain verifiable
+under the one configured JWT policy. If browser and REST audiences differ, list
+both under `jwt_audience`; native MCP OAuth still requires the exact public MCP
+resource URL as audience.
 
-## Access Control
+## Authorization Model
 
-Authentication answers "who is calling?" Access control answers "what may this
-principal do to this product resource?"
-
-### Authorization model
-
-DlightRAG uses an **IdP-backed, claim-based workspace ACL**. It is not a database
-membership RBAC system. The authorization path is:
+Authentication asks who; authorization asks which product action on which
+workspace.
 
 ```text
 verified JWT claims
-  -> deployment-configured Access Rules
-  -> canonical Workspace + requested Action
+  -> deployment Access Rules
+  -> canonical Workspace + Action
   -> allow or deny
 ```
 
-An Access Rule contains four facts: JWT claim name, required claim value,
-Workspace patterns, and Action patterns. A request is allowed when one rule
-matches all four dimensions. Rules combine with OR semantics; there are no deny
-rules, and no matching allow means access is denied.
+A rule matches claim name/value, workspace pattern, and action pattern. Rules
+combine with OR semantics; there are no deny rules, and no allow match means
+deny.
 
 ```yaml
 access:
@@ -380,227 +208,138 @@ access:
         actions: [reader]
 ```
 
-The same principal can therefore be an editor in `finance`, a reader in `legal`,
-and unauthorized elsewhere. Claim matching supports strings and list-like
-claims. Workspace matching is canonical id or `*`. Action matching supports an
-exact Action, `*`, a prefix such as `workspace.*`, or an Action Preset.
+`jwt_claims` requires JWT auth and at least one rule. Local development defaults
+to `allow_all`. Claim values may be strings or list members. Workspace patterns
+are a canonical ID or `*`. Action patterns may be exact, `*`, a prefix such as
+`workspace.*`, or a preset.
 
-`jwt_claims` requires `access.auth_mode: jwt` and at least one rule. The default
-is deliberately convenient for local development but performs no Workspace
-filtering:
-
-```yaml
-access:
-  control:
-    mode: allow_all
-```
-
-### Source of truth and non-goals
-
-The external IdP owns users and claim assignments; deployment configuration owns
-the mapping from claims to Workspaces and Actions. DlightRAG does not persist
-users, custom roles, or `user ↔ role ↔ workspace` memberships, and the Workspace
-registry does not own an ACL. `reader`, `editor`, and `admin` are Action Presets,
-not stored role assignments. There is no application-side invitation, delegated
-Workspace administration, or permission-management UI.
-
-Authorization and durable ownership are separate. JWT issuer plus subject scope
-conversations, runs, events, and artifacts to one owner. Access Rules decide
-which shared Corpus Workspaces that owner may use. PostgreSQL is trusted
-application storage: DlightRAG does not currently add row-level security, so
-this ACL is not a database tenant-isolation boundary.
-
-### Actions and presets
-
-REST, Web, and MCP enforce these Actions through the shared Access module:
+### Actions And Presets
 
 | Action | Meaning |
 |---|---|
-| `workspace.query` | Retrieve and answer |
+| `workspace.query` | Retrieve/answer |
 | `workspace.ingest` | Start ingestion |
 | `workspace.list_files` | List files |
 | `workspace.delete_files` | Delete files |
-| `workspace.download_source` | Download source files |
+| `workspace.download_source` | Download retained source |
 | `workspace.read_metadata` | Read metadata |
 | `workspace.update_metadata` | Update metadata |
-| `workspace.read_visual_asset` | Read rendered visual assets |
-| `workspace.create` | Create a workspace |
-| `workspace.delete` | Delete a workspace |
-| `workspace.reset` | Reset a workspace |
-| `workspace.storage_status` | Read operator-facing storage and promotion state |
-| `job.read` | Read ingest job status in its workspace |
-| `job.cancel` | Stop an ingest job in its workspace |
-| `model_catalogue.write` | Change the deployment-wide model catalogue |
+| `workspace.read_visual_asset` | Read rendered visuals |
+| `workspace.create`, `.delete`, `.reset` | Workspace lifecycle |
+| `workspace.storage_status` | Read storage/promotion state |
+| `job.read`, `job.cancel` | Read/cancel ingest jobs |
+| `model_catalogue.write` | Change deployment-wide model catalogue |
 
-Each `actions` entry may be exact, `workspace.*`, `*`, or one of these presets.
-Presets and exact Actions may be combined, for example
-`actions: [reader, workspace.update_metadata]`:
-
-| Preset | Expands to |
+| Preset | Expansion |
 |---|---|
-| `reader` | `workspace.query`, `workspace.list_files`, `workspace.download_source`, `workspace.read_metadata`, `workspace.read_visual_asset` |
-| `editor` | `reader` plus `workspace.ingest`, `workspace.update_metadata`, `workspace.delete_files`, `job.read`, `job.cancel` |
-| `admin` | `*` (every Action) |
+| `reader` | query, list/download files, read metadata/visual assets |
+| `editor` | reader + ingest, metadata/file mutation, job read/cancel |
+| `admin` | every action |
 
-A preset expands only the Action dimension; it never bypasses the Workspace
-dimension. Deployment-wide Actions such as `model_catalogue.write` are checked
-without a Workspace and therefore require `workspaces: ["*"]`.
+Presets affect only Actions, never Workspace matching. Deployment-wide actions
+require `workspaces: ["*"]`.
 
-### Authorization lifecycle and revocation
+### Source Of Truth And Revocation
 
-Explicit Workspace requests are checked before acceptance. `all_workspaces`
-filters the catalog first and expands only to the caller's `workspace.query`
-Authorized Workspace Set. Source and visual routes independently recheck the
-Action against the resource's actual Workspace.
+The IdP owns users/claims; deployment configuration owns claim-to-workspace
+rules. DlightRAG stores no users, custom roles, invitations, or membership ACLs.
+PostgreSQL is trusted application storage without row-level security; this is
+not database-enforced tenant isolation.
 
-An accepted Answer Run stores its resolved Workspace set, not a token or mutable
-claims. Later policy or IdP changes do not stop that accepted run; its owner may
-still cancel it. Follow-up and fork create new runs and recheck current
-`workspace.query` permission before acceptance. Because JWT claims are signed
-snapshots, an IdP assignment change becomes visible when the caller presents a
-new token; use appropriately short token lifetimes where revocation latency
-matters.
+Explicit workspace requests are checked before acceptance. `all_workspaces`
+expands only to currently authorized query workspaces. Source/visual routes
+recheck permission against the actual workspace.
 
-### Enterprise fit
+An accepted run pins its resolved workspace set, not mutable claims. Later rule
+or IdP changes do not revoke that run; follow-up/fork recheck current access.
+JWT changes become visible when a new token arrives, so use short lifetimes where
+revocation latency matters.
 
-This model is a good fit for an internal multi-user enterprise deployment when
-the external IdP is authoritative, Workspace policy is moderately stable, and
-Workspace-level reader/editor/admin permissions are sufficient. Use App Roles
-rather than raw Entra groups where possible, keep rules under configuration
-review, and minimize wildcard admin grants. Retain IdP and ingress audit trails;
-add durable application authorization-decision logging when compliance requires
-it.
+Use a policy/membership store for user-managed, deny, hierarchy, or resource-level
+policy. Use separate deployments/databases or PostgreSQL RLS where regulation
+requires database-enforced tenant separation.
 
-It is not by itself a complete IAM or hard multi-tenant isolation system. Add a
-membership/policy store when users must manage access inside DlightRAG, a policy
-engine when deny, hierarchy, or resource-level conditions are required, and a
-separate database/deployment or PostgreSQL RLS when regulatory policy requires
-database-enforced tenant isolation.
+## Source Download Boundary
 
-### Source download boundary
+Public source payloads expose stable `source_uri` and, on HTTP surfaces, a
+projected `download_url` containing only document ID and workspace. They never
+expose local paths or stored locators. REST/Web download routes recheck
+`workspace.download_source` before streaming retained bytes or redirecting to
+Azure, S3, or queryless HTTPS.
 
-Public source payloads expose stable `source_uri` provenance and, on HTTP
-surfaces, an adapter-projected `download_url` containing only a document ID and
-Workspace. They never expose the stored `download_locator` or a server-local
-path. REST `/files/raw` and Web `/web/api/files/raw` independently recheck
-`workspace.download_source` against the source's actual Workspace before they
-stream retained bytes or redirect to Azure, S3, or queryless public HTTPS.
+Signed/query-bearing URLs are fetch credentials, not durable locators. Retain
+the bytes or provide a separate queryless `download_uri`; signed queries never
+become public provenance or source-contract logs.
 
-Signed/query-bearing HTTPS URLs are fetch credentials, not durable locators. A
-caller must retain the bytes or provide a separate queryless durable
-`download_uri`. DlightRAG never promotes the signed query into `source_uri`,
-`download_locator`, public source payloads, or source-contract logs.
+Durable ingest jobs necessarily retain complete fetch input for recovery. Treat
+that database as secret storage, restrict access, and keep pruning enabled.
 
-Durable ingest jobs do retain the caller's complete fetch input in their request
-record so a worker can recover the job. Treat the ingest-job database as secret
-storage, restrict access, and keep job pruning enabled; this recovery record is
-not a public source/download field.
+## Answer Resources And Execution
 
-## Answer Attachment Resources
+Attachments are bounded by count, per-item bytes, total bytes, archive expansion,
+and decoded pixels before orchestration. Link resources admit HTTP(S) without
+embedded credentials and repeat scheme/host/DNS/SSRF/redirect checks on each
+live read. HTTPS never downgrades to HTTP.
 
-Answer attachments are read as request-local resources and are bounded on every
-channel before the orchestrator runs. `answer.generation.max_attachments` (default 6) caps
-the count, `answer.generation.max_attachment_bytes` (100 MiB) caps each item, and
-`answer.generation.max_total_attachment_bytes` (128 MiB) caps the request; REST multipart
-uploads are refused with a stable 4xx before the body is buffered.
+MarkItDown runs without plugins/network. OOXML files pass central-directory
+zip-bomb checks before conversion. Full bytes never enter model context—only
+bounded text windows, safe observations, and budgeted images. Only Evidence
+ledger entries become citable; Profile Memory, Skills metadata, and incidental
+child summaries do not.
 
-HTTPS link attachments are inert handles until they are read. Only `https` URLs
-are admitted, embedded credentials are rejected, and full scheme/host/SSRF
-validation is repeated on every fetch — a link cannot resolve to a private,
-loopback, or link-local address. Fetched bytes pass the same per/total size and
-decoded-pixel limits as uploads.
+Admitted bytes are content-addressed within one owner. A fetched resource is
+stored only after validation and is linked atomically before its effect settles,
+so recovery reads the same bytes. Deduplication never crosses owners.
 
-Binary conversion is defensive. MarkItDown runs with plugins disabled and no
-network access, and OOXML archives (DOCX/PPTX/XLSX) pass a central-directory
-zip-bomb preflight — entry-count, per-entry size, total size, and expansion-ratio
-limits — before any converter opens them, so an archive that is admissible by
-byte size can still be rejected if its internal expansion looks like a bomb.
-Images pass MIME and decoded-pixel checks before inspection.
+Execution modes:
 
-Full attachment bytes never enter model context: only bounded text windows,
-capped tool observations, and budgeted image blocks do. Research Context
-assembly does not make Profile Memory, Skills metadata, or child summaries
-citable; only rows admitted to the Evidence ledger can become
-sources. Child Evidence carries child-session and parent-call provenance before
-the parent spawn effect settles.
+- `disabled`: no local execution tools;
+- `trust`: rooted file tools, but Bash retains all host/container filesystem and
+  network authority of the service user; and
+- `sandbox`: fails because this distribution ships no backend; it never
+  downgrades to trust.
 
-Every Agent Session mutation is predicated on owner, run lease owner, unexpired
-lease, and fencing epoch, then applies exact register-sequence CAS. Child Sessions
-renew a separate lease under both the live parent epoch and current child epoch;
-a takeover fences the prior provider/tool drive. A terminal Child roster row
-pins the exact parent-visible outcome, so `spawn_agent` replay cannot re-enter a
-completed child. Fast uses an atomic HostTurnReservation; its canonical result is
-staged under the fenced run before Assistant settlement, and settled replay reads
-that exact payload instead of issuing another model call. Research rejects a Lane
-while a Fast reservation is active.
+Root checks are not a shell sandbox. Outbound MCP endpoints/tools are deployment
+allowlists; there is no discovery, OAuth brokerage, or management plane. Protect
+tool credentials and egress at deployment level. Exa Web Search exists only
+when its API key is configured.
 
-The execution modes are exactly `disabled`, `trust`, and `sandbox`. The shipped
-default is `trust`. Trust runs as the service user and Bash can access the
-host/container network and every path that user can reach; rooted file-tool
-checks are not a shell sandbox. Set `disabled` to expose no local execution tools.
-Sandbox selection fails explicitly because this distribution ships no backend;
-there is no extension wrapper, package discovery, lifecycle hook, model-facing
-approval, or generic permission system. Concrete rooted tools enforce local
-execution policy, and deployment-allowlisted MCP tools enter the same closed
-ToolRegistry and immutable AgentRunPlan.
+All Agent/child/Fast mutations are fenced by owner, run lease, epoch, and
+register sequence. A completed child outcome is persisted so replay cannot
+re-enter it. A staged Fast result replays without another model call.
 
-Outbound MCP endpoints and tool names are deployment allowlists. Remote tools
-run in foreground sessions and receive only their declared arguments; DlightRAG
-does not provide endpoint discovery, OAuth token brokerage, or a management
-plane. Protect endpoint credentials and network egress at deployment level.
+## Answer Artifact Browser Boundary
 
-The optional Exa
-web-search capability is gated solely by the presence of
-`DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY`; keep it in `.env`, and its absence removes the
-capability entirely.
+Artifact descriptors expose validated media and owner-scoped URLs, never raw
+blob bytes or Agent Workspace paths. Authenticated data/Markdown uses
+`Cache-Control: private, no-store`; active/unknown formats download with
+`nosniff`.
 
-Admitted bytes become owner-scoped content-addressed artifacts owned by the
-durable run, so deduplication never crosses an owner. Run-scoped fetched web
-bytes are stored only after the HTTPS, redirect, DNS, SSRF, and byte validation
-above passes, and the blob plus its run reference commit in one transaction
-before the ToolResult and HostDelta may settle in the Session transaction — a resumed run therefore reads the
-bytes it originally fetched rather than whatever the page serves now.
+Published SVG is sanitized of scripts, handlers, external loads, and nested SVG
+data URLs, then served under CSP sandbox. PDF preview is sandboxed without
+same-origin capability.
 
-### Answer Artifact browser boundary
+HTML never executes as a same-origin document. After explicit consent, the
+browser inserts authenticated inert bytes into one `srcdoc` iframe with
+`sandbox="allow-scripts"` but without same-origin, forms, popups, downloads,
+frames, workers, storage, device permissions, or application bridge. A prepended
+CSP blocks normal fetch/subresource paths. The wrapper's only parent signal is a
+private one-way Escape-close token removed before Artifact code executes. Close
+or switch destroys the iframe.
 
-Artifact descriptors expose validated media and owner-scoped URLs, never Blob
-bytes or Agent Workspace paths. Authenticated Artifact data and Markdown
-presentation responses use `Cache-Control: private, no-store`; active and unknown
-formats are attachments with `nosniff`. Published SVG removes scripts, event
-handlers, external references, styles with external loads, and nested SVG data
-URLs; its inline data response also carries a CSP `sandbox` without script or
-same-origin capability. PDF preview is sandboxed and carries no same-origin
-capability.
-
-HTML Artifact bytes are never served as executable same-origin documents. The
-browser fetches them through the authenticated inert data route and, only after
-explicit user consent, creates one `srcdoc` iframe with `sandbox="allow-scripts"`
-but no `allow-same-origin`, forms, popups, downloads, frames, workers, storage,
-device permissions, or application bridge. A CSP inserted before Artifact bytes
-blocks normal fetches and subresources. The only parent signal is a private,
-one-way Escape close token installed by the wrapper and removed before Artifact
-code runs; malformed messages and all Tool/MCP-shaped messages are ignored.
-Closing or switching Artifact Canvas aborts loading and destroys the iframe.
-
-This boundary isolates DlightRAG's authenticated DOM, cookies, and storage. It
-does not provide CPU or memory quotas, execute server code, or justify a claim of
-absolute browser network denial: browser engines do not expose a complete
-all-egress primitive for arbitrary JavaScript. Chromium is the security-
-regression baseline for active preview.
+This isolates DlightRAG cookies, storage, and authenticated DOM. It provides no
+CPU/memory quota, executes no server code, and is not an absolute browser-egress
+guarantee. Chromium is the active-preview security regression baseline.
 
 ## Deployment Posture
 
 | Deployment | Recommended posture |
 |---|---|
-| Local development | Bind REST/MCP to loopback and use `access.auth_mode: none` |
-| Internal shared service | Use `simple` only behind trusted network boundaries |
-| Enterprise multi-user | Use `jwt` with JWKS from the external IdP and enable `jwt_claims` when workspace permissions are required |
+| Local | Loopback REST/MCP + `none` |
+| Trusted internal | `simple` behind network restriction |
+| Enterprise multi-user | `jwt` + JWKS; `jwt_claims` for workspace policy |
 
-MCP streamable HTTP binds to loopback (`127.0.0.1`) by default, reachable only
-from the local machine. To make it reachable from other hosts, set a
-non-loopback `interfaces.mcp.host` and enable auth -- an unauthenticated non-loopback MCP
-would let any client call ingest/delete. Host/Origin DNS-rebinding protection is
-always enabled, including when bearer auth is active. Public deployments must
-add the externally visible host and browser origins to `interfaces.mcp.allowed_hosts` and
-`interfaces.mcp.allowed_origins`; browser clients must also be allowed by
-`access.cors_allow_origins`. Authentication does not replace Host validation.
+Public MCP requires non-loopback bind, authentication, and explicit
+`interfaces.mcp.allowed_hosts`/`allowed_origins`; browser clients also need
+`access.cors_allow_origins`. Host/Origin DNS-rebinding protection remains active
+even with bearer auth.

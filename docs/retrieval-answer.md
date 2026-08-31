@@ -1,556 +1,304 @@
 # Retrieval And Answer
 
-This page is for maintainers and advanced users who need to understand how
-queries become contexts, answers, sources, and citations. It owns retrieval and
-answer behavior. Interface payloads live in [interfaces.md](interfaces.md);
-configuration fields live in [configuration.md](configuration.md);
-runtime ownership lives in [architecture.md](architecture.md).
+This document owns how queries become contexts, answers, sources, and citations.
+Payloads live in [Interfaces](interfaces.md), fields in
+[Configuration](configuration.md), runtime ownership in
+[Architecture](architecture.md), and recovery in
+[Durable Answer Runs](durable-answer-runs.md).
 
-DlightRAG exposes one runtime path: LightRAG main is the base graph/vector
-engine, always queried in `mix` mode, while DlightRAG adds metadata
-management, optional direct multimodal image search, PostgreSQL BM25, RRF
-fusion, reranking, citations, and answer generation.
+DlightRAG always uses LightRAG `mix` as its graph/vector base. It adds metadata
+filtering, optional direct image retrieval, PostgreSQL BM25, RRF fusion,
+provenance hydration, reranking, answer packing, and citation validation.
 
-`/retrieve` is a knowledge-base-only path: it accepts `query_images` for visual
-search and every `top_k`/`chunk_top_k`/`direct_visual`/KG/BM25/RRF/rerank control.
-`/answer` takes a query plus optional **attachments** and routes through one
-`AnswerOrchestrator`. The public Answer Mode is ``auto | fast | research`` (omitted means auto).
-Fast and Research are resolved from that selector and the Valid Mode Set;
-configuring Web Search does not by itself force Research. When ``auto`` can
-legally choose either path, a dedicated router call defaults to Research unless
-the conversation context — history plus this turn, not the query line alone —
-shows a knowledge-base question or continuing corpus-grounded work.
+- `/retrieve` is knowledge-base-only and may take `query_images`.
+- `/answer` takes a query plus optional request-local attachments, then resolves
+  `auto | fast | research`.
+- `auto` considers the valid mode set and conversation context. When both paths
+  are legal, routing defaults to Research unless the turn is corpus-grounded.
 
-REST, MCP, and Python answer/retrieve calls require no client-managed conversation ID.
-Each accepted Answer run durably pins its query, bounded caller-supplied history,
-resources, search scope, and execution facts so recovery and server-owned
-follow-up/fork remain equivalent. The Web conversation lifecycle is a
-principal-scoped adapter around the same Answer pipeline. Its history endpoint
-returns signed keyset pages (40 turns by default, at most 100 per request), while
-exact accepted-run recovery scans bounded durable batches until the reachable
-model envelopes are full. Run retention follows the shared configured floor.
+Every accepted answer pins query, bounded history, resources, authorized search
+scope, model profiles, and execution facts. The Web conversation layer wraps the
+same pipeline; it does not define another answer path.
 
 ## Ingestion Shape
 
 ```text
-source file
+source
   -> LightRAG parser/routing
-       sidecar-backed text, tables, equations, and images when available;
-       LightRAG raw parser route otherwise
-  -> LightRAG ingest
-       chunks, entities, relationships, graph, vectors, doc status
-  -> fused visual-vector alignment when direct image embedding is active
-       successful LightRAG drawing multimodal chunks keep their VLM text,
-       sidecar provenance, BM25, and KG identity; DlightRAG overwrites the
-       existing chunk vector with one fused vector interleaving the VLM
-       description and the image, so text queries still retrieve the figure
-  -> DlightRAG metadata/BM25 layer
-       metadata index, in-filter scope, pg_textsearch BM25
+  -> LightRAG chunks, entities, relationships, vectors, and document status
+  -> optional fused visual-vector alignment
+  -> DlightRAG metadata and BM25 maintenance
 ```
 
-All source files that LightRAG can ingest, including native image files, go
-through LightRAG parser/routing. DlightRAG derives one internal wildcard from
-the configured MinerU or Docling sidecar block; if both blocks exist, MinerU is
-effective. Tables, equations, text, and document-derived image sidecars stay
-aligned with the LightRAG document record.
-LightRAG raw-route documents can have no sidecar artifacts; those documents
-still participate in LightRAG text/KG/vector retrieval but do not receive
-fused visual-vector alignment.
-The selected engine applies only to suffixes it supports. LightRAG routes other
-suffixes to their native/default or legacy path without first calling the
-external parser.
+The configured MinerU or Docling block produces one internal wildcard parser
+rule. Unsupported suffixes use LightRAG's native/legacy route. Parser outputs
+remain aligned to the LightRAG document record.
 
-Successful drawing sidecars have one canonical chunk identity. LightRAG's
-multimodal semantic chunk owns `llm_analyze_result` text and exposes it through
-`text_chunks`, BM25, and KG extraction. DlightRAG then overwrites that existing
-chunk's vector with a single fused vector that interleaves the VLM description
-and the image. A bare image-crop vector reintroduces the text/image modality
-gap, so text queries cannot reach the figure; fusing the description back into
-the vector closes that gap while keeping the native multimodal alignment. It
-does not create a second visual-only chunk, so the same VLM description is not
-exposed twice as independent retrieved evidence. The overwrite is skipped --
-leaving LightRAG's native VLM->text vector untouched -- when
-`models.embedding.input_modality` resolves to text or the provider cannot fuse text and
-image into one vector. In auto mode, a failed native image probe produces the
-same safe downgrade; explicit multimodal mode instead treats probe failure as a
-startup error.
+A successful drawing has one canonical chunk. LightRAG supplies its VLM text;
+when native multimodal embedding is active, DlightRAG replaces the same chunk's
+vector with one fused text+image vector. It does not add a second visual-only
+chunk. Text-only or safely downgraded `auto` mode retains LightRAG's text vector;
+explicit multimodal probe failure aborts startup.
 
 ## Query Pipeline
 
-This pipeline is used by `/retrieve`. Durable Answer execution reuses the same
-planner and workspace-set schema provider but owns its retrieval call and has no
-inline request timeout. In the research path retrieval runs lazily only when the
-agent selects `search_knowledge_base`. The agent's tool query remains the
-semantic search query; `RetrievalPlanner` is an internal retrieval node that
-contributes BM25 terms, metadata filters, and current-image retrieval context
-without rewriting that query. Attachment resources are not planner inputs.
-
 ```text
-RetrievalService.retrieve(RetrieveRequest(...))
-  |
-  |-- RetrievalPlanner
-  |     built-in metadata fields plus custom_metadata keys
-  |     explicit filters are strict
-  |     LLM-inferred empty candidates fall back to unfiltered retrieval
-  |
-  |-- Query image preparation (retrieve only; query_images)
-  |     current-request images only
-  |     VLM semantic descriptions for text/BM25/KG retrieval
-  |     raw image payloads for direct multimodal embedding when active
-  |
-  |-- LightRAGMixBackend
-  |     QueryParam(mode="mix")
-  |     KG entities + relationships + text chunks
-  |
-  |-- Direct image->image path, when fused visual embedding is active
-  |     query images -> image embedding (batched) -> fused visual chunks
-  |
-  |-- BM25 path
-  |     pg_textsearch over candidate-scoped chunks
-  |
-  |-- RRF fusion + dedup + chunk candidate budget
-  |
-  |-- Provenance hydration
-  |     page labels, visual sidecars, image bytes for fused chunks
-  |
-  |-- Final rerank
-  |     multimodal listwise or external reranker over fused candidates
-  |
-  |-- Metadata enrichment + reference canonicalization
-  |
-  `-- AnswerSynthesizer
-        text excerpts, KG context, source metadata, optional images
+Retrieval request
+  -> resolve authorized concrete workspaces and warm them
+  -> plan lexical terms and optional metadata filters once
+  -> per workspace:
+       LightRAG mix
+       optional direct image-vector retrieval
+       PostgreSQL BM25
+       RRF fusion + dedup + candidate limit
+       provenance/image hydration
+       final rerank
+  -> federated round-robin merge
+  -> reference canonicalization
+  -> optional answer packing/generation
 ```
 
-Each interface resolves an authorized concrete workspace set before entering
-`RetrievalService`, which starts cold-service warm-up. A multi-workspace request plans once over the selected
-workspace set, then dispatches that one resolved retrieval request to each
-workspace before round-robin merging.
+`RetrievalPlanner` sees the query, schema, bounded prior turns when appropriate,
+and current-image hints. It never sees answer attachment bytes/text/manifests.
+Explicit BM25 terms and metadata filters remain authoritative. A Research KB
+tool's chosen semantic query is preserved while the planner derives only its
+supporting lexical/filter/image context.
 
-LightRAG's `hybrid` mode is not used as a public downgrade path; the pipeline
-above is the DlightRAG hybrid layer. In retrieval implementation and log
-vocabulary, `lightrag_mix_chunks` are specifically the chunks returned by that
-LightRAG `mix` call, before direct-visual and BM25 fusion. The retrieval trace
-reports their pre-fusion size as `lightrag_mix_chunk_count`; public
-`contexts.chunks` remains the final fused and reranked chunk list.
+The `LightRAG mix` and BM25 lanes degrade independently. If one fails, the other
+may return results and trace records `lightrag_error_type` or `bm25_error_type`.
+If both fail, retrieval raises the LightRAG error with BM25 chained. Trace
+`lightrag_mix_chunk_count` records the LightRAG count before fusion;
+`contexts.chunks` is the final fused/reranked set.
 
-BM25 runs against the same LightRAG `LIGHTRAG_DOC_CHUNKS` rows through
-DlightRAG-managed pg_textsearch profiles. During ingest, DlightRAG labels each
-chunk with `dlightrag_bm25_language` using the shared Lingua-based classifier.
-Primary startup creates one partial BM25 index per configured language profile
-and one full-table `simple` fallback index. Query-time language detection routes
-Chinese, English, German, Swedish, Spanish, French, Italian, Portuguese, Dutch,
-Russian, Danish, and Finnish queries to the matching partial index;
-unsupported, unknown, or ambiguous queries use the `simple`
-fallback. `corpus.retrieval.bm25_profiles`, `corpus.retrieval.bm25_k1`, and
-`corpus.retrieval.bm25_b` define the index signatures;
-changing them for an existing corpus requires the offline workspace BM25
-rebuild before query workers attach. Each non-fallback BM25 profile maps to
-exactly one language; the fallback profile must not declare languages.
-`corpus.retrieval.bm25_enabled` controls this workspace PostgreSQL lane only. The answer research
-path reads attachments through request-local resources, whose lexical ranking is
-in-memory and has no workspace index or shared configuration.
+### BM25
 
-The LightRAG mix and workspace BM25 lanes degrade independently. A BM25 query
-failure retains successful LightRAG mix results and records `bm25_error_type`
-in trace; a LightRAG failure can return BM25-only results and records
-`lightrag_error_type`. If both lanes fail, retrieval raises the LightRAG error
-with the BM25 failure chained as its cause.
+BM25 queries the same `LIGHTRAG_DOC_CHUNKS` rows. Ingestion labels each chunk's
+language. Startup maintains partial pg_textsearch indexes for configured
+languages plus a full-table `simple` fallback. Supported query languages select
+their profile; unknown/ambiguous languages use `simple`.
+
+Changing profile signatures, `k1`, or `b` for an existing workspace requires an
+offline BM25 rebuild. Disabling BM25 removes only this PostgreSQL lane;
+attachment lexical search remains request-local and in memory.
 
 ## Metadata In-Filtering
 
-Metadata filtering is explicit-schema first:
+Named filters map to typed columns: `filename`, `file_extension`, `title`,
+`author`, and creation-date bounds. Arbitrary keys use `filters.custom` against
+one JSONB column, with case-insensitive comparison.
 
-- Named fields (`filename`, `file_extension`, `title`, `author`,
-  `creation_date_from`/`creation_date_to`) are typed columns. Custom metadata is
-  one JSONB column, matched by `filters.custom` under the same case-insensitive
-  rule; no key needs declaring first.
-- A named file is one filter field, `filename`. Callers and the planner write the
-  name as it was said — complete or partial, with or without an extension — and
-  retrieval resolves it: exact match against the stored name or its stem first,
-  then a contains match if neither hits. Splitting that into separate exact,
-  stem, and pattern fields asked the planner to choose a match operator for a
-  corpus it cannot see, and the schema deliberately shows it column names rather
-  than values because a workspace's document count is unbounded.
-- User/API filters are strict. If they resolve to zero candidate documents or
-  chunks, retrieval returns no matches.
-- LLM-inferred filters include `filter_confidence` and evidence spans for
-  observability. DlightRAG does not use hand-written fuzzy/static rules to
-  invent or reject filters. If an inferred filter resolves to zero candidates
-  or filtered retrieval returns no chunks, DlightRAG retries without that
-  inferred filter because the planner may have over-inferred.
-- Non-empty inferred candidate sets constrain semantic search and BM25 unless
-  that inferred-filter retry path is needed.
+Filename matching is corpus-aware: exact stored name/stem first, then literal
+substring. The caller/planner supplies one `filename` value rather than guessing
+which operator will match unseen data.
 
-A document scope has to reach every leg that contributes chunks, and LightRAG
-`mix` has three. The semantic leg goes through `FilteredVectorStorage`, which
-applies the candidate set before ranking: empty strict candidates return
-immediately, small candidate sets use exact vector scoring in a materialized
-candidate CTE, and larger ones use pgvector HNSW with iterative scan settings.
-The entity and relation legs never vector-search for their chunks — they resolve
-the chunk ids baked into graph nodes at ingest time by primary key — so
-`FilteredChunkStore` scopes them at the `text_chunks` lookup instead, returning
-the same `None` the storage already returns for ids it cannot resolve. Both
-wrappers read one contextvar, so ingest and delete paths run unscoped and pass
-through untouched. `metadata_kg_chunks_dropped` in the retrieval trace counts
-what the graph legs asked for and did not get.
+- Explicit caller filters are strict; zero candidates means zero results.
+- Inferred filters carry confidence/evidence for observability. If they resolve
+  to no candidates or retrieve no chunks, DlightRAG retries unfiltered.
+- Non-empty inferred candidates constrain semantic and BM25 legs.
 
-Filtering the vector lookup that *selects* those graph-referenced ids is not an
-option: LightRAG reads a short result from `chunks_vdb.get_vectors_by_ids` as
-storage corruption and falls back to an unfiltered ranking method. Scoping after
-the fact costs recall — the selection budget is still spent on out-of-scope
-chunks — but that budget is internal to LightRAG.
+Every chunk-producing leg is scoped:
 
-What a filter scopes is the evidence: every chunk the answer can quote comes
-from a filtered leg. It does not scope the entity and relationship *summaries*
-that `mix` also puts in the prompt. Those are LightRAG's own context sections,
-and their descriptions are corpus-level syntheses — one entity's description is
-merged across every document that mentioned it, so there is no per-document
-share of it to keep or drop. Restricting them would not narrow the answer, it
-would replace LightRAG's `mix` mode with a different retrieval semantic.
-DlightRAG keeps the native one. Entities and relationships are therefore
-retained independently of chunk admission and reranking: DlightRAG does not
-post-filter graph rows when `source_id` is absent, does not match a retained
-chunk, or contains multiple chunk ids.
+- `FilteredVectorStorage` returns immediately for empty candidates, uses exact
+  scoring for small sets, and HNSW iterative scan for larger sets.
+- Graph entity/relation legs resolve source chunks by ID, so
+  `FilteredChunkStore` scopes that lookup.
+- Both wrappers use a context variable; ingest/delete run unscoped.
 
-## Multimodal Queries
+The filter controls quotable chunk evidence. It does not rewrite LightRAG's
+corpus-level entity/relationship summaries, which may merge descriptions from
+multiple documents and have no separable per-document share. Trace
+`metadata_kg_chunks_dropped` counts graph-referenced chunks rejected by scope.
 
-This is the `/retrieve` visual path (`query_images`). Text queries go through
-LightRAG `mix`, BM25, fused-candidate hydration, and reranking. Image-bearing
-queries add a direct image vector path only when the configured
-`models.embedding.input_modality` resolves to multimodal and its startup probe
-succeeds:
+## Multimodal Retrieval
+
+`query_images` adds two transient paths:
 
 ```text
-query + images
-  |-- text query -> LightRAG mix + BM25
-  `-- images -> multimodal embedding(context="query") -> image chunks
+query image
+  |-- VLM description -> LightRAG text/KG + BM25
+  `-- native image embedding -> fused visual chunks (when active)
 ```
 
-Sidecar visual chunks are embedded as fused (VLM description + image) document
-vectors at ingestion. The executor splits them at provider input, token, and
-image-byte limits without changing order. Query images are embedded image-only.
-Known retrieval models always receive their official task semantics: provider
-query/document fields, Gemini text prefixes, or Cohere's image input type;
-symmetric protocols remain symmetric.
+Document visuals use fused VLM-description+image vectors; query images use
+image-only query vectors. Provider adapters apply official query/document task
+semantics and split batches at provider input/token/image limits without
+reordering. RRF and dedup resolve overlap between semantic and visual hits.
 
-Images also produce VLM semantic text through LightRAG's multimodal sidecar
-path. That text feeds BM25 and KG extraction. For successful drawing chunks,
-visual similarity search uses the same LightRAG chunk id after DlightRAG
-overwrites its vector with a fused text+image embedding, preserving sidecar
-provenance and avoiding duplicate VLM text exposure. The image->image query leg
-is lossless where the VLM-description text path is lossy, so partial overlap
-between the two is expected and resolved by RRF, dedup, and reranking.
+With text modality, direct image embedding is skipped but VLM descriptions may
+still drive text retrieval. `auto` can make that safe downgrade after probe
+failure; explicit multimodal mode fails startup.
 
-With `models.embedding.input_modality: text`, DlightRAG skips both image-vector
-overwrite and query-image vector retrieval. Query images can still be described
-by the VLM for text/BM25/KG retrieval, and document images still follow
-LightRAG's native semantic multimodal path. Auto mode may make the same safe
-downgrade after a failed native-provider probe; explicit multimodal mode fails
-startup instead. See [Embedding configuration](configuration.md#embeddings) for
-the provider and modality matrix.
+## Fusion And Reranking
 
-## Reranking
+DlightRAG disables LightRAG's query reranker. It reranks the fused set after
+provenance hydration so LightRAG, BM25, and direct-image candidates compete in
+one list with page/image data attached.
 
-`models.rerank.strategy` chooses the final ranker. DlightRAG does not pass
-`rerank_model_func` into LightRAG; it disables LightRAG query reranking and
-reranks the DlightRAG fused candidate set after provenance hydration. This lets
-BM25-only hits, direct image matches, and LightRAG `mix` chunks compete in one
-list with page/image data already attached.
+Ranker classes are:
 
-| Strategy | How it works |
-|---|---|
-| `chat_llm_reranker` | Batched listwise scoring through the configured rerank model, or `models.chat.default` when no rerank model is set. With `input_modality: auto`, the selected scoring model reuses the startup vision probe: vision-capable models get bounded image payloads plus text; non-vision models get VLM text only. |
-| `jina_reranker` | Calls Jina `/v1/rerank`. Default model `jina-reranker-v3` (text). Set `input_modality: multimodal` with `jina-reranker-m0` to send bounded image documents when chunks have `image_data`. |
-| `aliyun_reranker` | Calls Alibaba Model Studio rerank. `qwen3-rerank` uses the compatible text payload; `qwen3-vl-rerank` with `input_modality: multimodal` uses the DashScope multimodal payload. `base_url` must point at the matching workspace/region endpoint. |
-| `local_reranker` | Generic entry for any standard `/rerank` endpoint (self-hosted or hosted) in the `{model, query, documents, top_n} -> {results}` shape. `auto` is text; set `input_modality: multimodal` when the endpoint accepts image documents. |
-| `voyage_reranker` | Calls Voyage AI `/v1/rerank` with text documents. |
-| `cohere_reranker` | Calls Cohere `/v2/rerank` with text documents. |
-| `azure_cohere` | Calls Azure AI Services Cohere rerank with text documents. Model endpoint roots use `/v1/rerank`; Foundry project roots use `/providers/cohere/v2/rerank`; a full `/rerank` URL is used as-is. |
+- chat-model listwise reranking, optionally with images when the selected model
+  passed its vision probe;
+- multimodal or text HTTP `/rerank` adapters;
+- Voyage, Cohere, and Azure Cohere text rerankers.
 
-When `models.rerank.score_threshold` is set, post-rerank filtering removes chunks below
-that score. The threshold is hard: if every candidate in a workspace scores
-below it, that workspace contributes no reranked chunks to federated round-robin
-merge. When omitted, all strategies keep scored candidates before taking
-`top_k`. If the reranker itself fails at request time, DlightRAG treats that as
-infrastructure degradation and falls back to the pre-rerank fused order for that
-request.
+A configured score threshold is hard: candidates below it disappear, even if a
+workspace then contributes none. Runtime reranker failure falls back to the
+pre-rerank fused order. Configuration failures (for example, a selected provider
+without credentials) fail startup instead of changing strategy.
 
-Configuration errors fail fast instead of falling back. For example, explicitly
-choosing `voyage_reranker`, `cohere_reranker`, or another provider reranker
-without the required API key prevents service initialization; DlightRAG does not
-silently switch that configuration to `chat_llm_reranker`.
-
-Reranking has an independent image budget because it runs after retrieval
-hydration but before answer-context packing. `chat_llm_reranker` and
-image-capable HTTP rerankers bound each request with fixed rerank-stage image
-size, byte, and quality limits before constructing model payloads. Visual chunks
-whose images cannot fit fall back to their text, if present, rather than sending
-unbounded data URIs.
-
-## Answer Orchestration
-
-`AnswerExecutor` owns the product workflow; `AnswerOrchestrator` prepares typed
-Host context, tools, and effects for the durable Resolved Mode:
-
-- **Fast Answer** — requested or routed `fast`. Planning, KB retrieval, and one
-  lightweight model invocation use shared Context Contribution, Evidence,
-  citation, model-call, and usage infrastructure. Fast never enters Profile
-  Memory or the Agent interpreter and creates no Agent Operation, workspace,
-  tools, or publication; atomic Host turns still share the canonical Session Tree.
-- **Research** — requested or routed `research`. Product-neutral
-  `AgentSessionRuntime` selects one Lane ancestry and resolves its immutable Plan
-  through the
-  run-local ToolRegistry: KB/resource/Web tools, the seven-tool filesystem set
-  (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, in Pi order with
-  metadata-only live tool progress), parent Profile Memory
-  remember/forget/recall tools (children recall only), progressive
-  `load_skill`, outbound MCP tools, and
-  `spawn_agent` plus child status/wait/cancel. Foreground Child Sessions may run
-  in parallel with explicit ContextSnapshot, pinned tools/budget, and an
-  independently renewed lease; their EvidenceDelta is parent-citable and
-  persists with the parent ToolResult settlement. A no-tool assistant turn
-  ends Research and its text is the answer. There is no hidden finalizer model
-  call. One explicitly referenced, non-blank `artifacts/report.md`,
-  `artifacts/report.html`, or `artifacts/report.pdf` may publish as the typed
-  Primary Report Artifact.
-
-Both paths use deterministic citation/source finalization and expose the same
-result shape, including ordered `parts`, `sources`, `evidence_images`, typed
-`artifacts` with `artifact_outcome`, `usage`, and Evidence counts.
-Resource reads are deterministic first: `read` decodes UTF-8/CSV
-directly and converts HTML/PDF/DOCX/PPTX/XLSX through selected MarkItDown
-converters (plugins disabled, no network, OOXML zip-bomb preflight).
-`inspect` performs focused VLM inspection through the VLM role (or the
-default LLM), and marks every visual observation as VLM-derived evidence with its
-exact source/page/sheet/cell locator. Full resource bytes never enter model
-context — only bounded text windows, capped tool observations, and budgeted image
-blocks do.
-
-Each model call uses the immutable profile pinned for its normalized endpoint.
-The Context Policy reserves output, dynamic context, safety, retained tail,
-episodic continuation, and minimum input directly; a provider input limit is
-respected independently rather than nested under percentages. Evidence,
-resource reads, schemas, history, and parallel observations share the measured
-request residual. Before parallel tools execute, the exact next-control residual
-is divided by call count. Provider output is capped by its own limit and
-physical remaining context. Unknown endpoint capacity fails before acceptance.
-
-## Answer Generation
-
-The answer prompt receives:
-
-- chunk text excerpts
-- KG entities and relationships from LightRAG `mix`
-- LightRAG's doc-level `reference_id`/`references` mapping as the seed for
-  source numbering
-- document/source metadata
-- quality-preserving bounded inline page or image previews when available
-- attachment evidence: bounded text windows from `read` and VLM-derived
-  observations from `inspect`, each carrying its source locator
-
-### Answer LLM Input Shape
-
-The answer model does not receive the raw `contexts` JSON. `AnswerSynthesizer`
-builds OpenAI-style messages with explicit evidence and task boundaries:
-
-```python
-[
-    {"role": "system", "content": get_answer_system_prompt()},
-    # optional server-prepared Web text history
-    {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "## User-attached images\n"},
-            {"type": "image_url", "image_url": {"url": "..."}},
-            {"type": "text", "text": "## User-attached documents"},
-            {"type": "text", "text": "### Document [att-1]: upload.pdf"},
-            {"type": "text", "text": "[att-1-1] upload.pdf\nAttachment evidence..."},
-            {"type": "text", "text": "## Knowledge-base evidence"},
-            {"type": "text", "text": "### Document [1]: report.pdf"},
-            {"type": "text", "text": "[1-1] report.pdf, Page 3\nEvidence text..."},
-            {"type": "text", "text": '[1-2] "Doc Title" Page 4'},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
-            {
-                "type": "text",
-                "text": (
-                    "## Knowledge Graph Context\n...\n\n## Question\nWhat are the key findings?"
-                ),
-            },
-        ],
-    },
-]
-```
-
-The `## User-attached images` blocks are omitted when the request has no image
-attachments. An image resource that cannot fit its budget is skipped and its
-VLM-derived text observation remains. Server-prepared Web text history, when
-present, is inserted as prior messages before the current user message.
-
-The sections are intentional:
-
-- `## User-attached images` are part of the user's question, not retrieved evidence.
-- `## User-attached documents` contains attachment evidence read through
-  `read`. Each answer assigns compact document labels such as `att-1`;
-  its chunk markers use the `[att-1-1]` form.
-- `## Knowledge-base evidence` contains LightRAG excerpts and page/image previews.
-- Excerpt labels such as `[1-1] report.pdf, Page 3` give the model the citation marker it must use.
-- Retrieved document images are preceded by a text label, then sent as an `image_url` block only if they fit the answer image budget.
-- `## Knowledge Graph Context` gives entity/relationship facts, with source document tags when available.
-- `## Question` is the actual user task and is placed last.
-
-Every citation marker is defined exactly once, on the evidence it labels: `[n]`
-on the `### Document [n]` heading and `[n-m]` on the excerpt label line. There
-is no separate reference list, so the model cannot pick a marker from a
-content-free menu without reading the excerpt it points at.
-
-Attachment `att-N` labels are answer-scoped citation identities for the
-request-local resources, not durable IDs. They are computed per answer from the
-resources registered for that request; nothing about them is persisted as a
-parsed chunk or vector.
-
-Answer generation uses one image transport budget for current attachment images
-and retrieved workspace visuals, bounded by `answer.generation.max_images` and the answer
-byte/geometry fields. Focused inspection is a separate VLM call; every inspection
-uses the same byte/geometry fields as per-call limits without consuming the final
-answer budget. Budgeted JPEG, PNG, and WebP payloads are preserved as-is. When
-recompression is needed, DlightRAG
-enforces both a long-edge floor and a JPEG quality floor; an image that cannot
-fit within those limits is skipped instead of being degraded into a low-quality
-preview, and its text observation remains.
-
-`/retrieve` and `/answer` both accept an explicit `chunk_top_k` request to
-override the configured chunk/visual candidate budget; otherwise DlightRAG uses
-`config.chunk_top_k`. For `/answer`, retrieval deliberately over-fetches those
-candidates, then the answer stage packs evidence into the resolved query
-model's remaining input capacity. `chunk_top_k` maps to LightRAG
-`QueryParam.chunk_top_k`; LightRAG `top_k` remains the separate KG
-entity/relationship breadth. Retrieved
-visual chunks are admitted in reranked order within the answer image
-budget. Pure visual chunks whose image cannot be sent are removed from the
-answer context and the packer backfills from later candidates; mixed text+image
-chunks keep their text even if the image is skipped. The final exact serializer
-then removes whole chunks from the reranked tail and rebuilds the complete
-prompt and citation index until the request fits; it never truncates a chunk,
-reorders survivors, or retrieves again. Initial image packing filters KG rows
-to its packed chunk set, but exact token-capacity tail removal does not further
-prune those already-admitted corpus-level entity and relationship summaries.
-Streamed contexts and returned sources use the final admitted chunk set. Use
-`retrieve` when callers need the broader pre-answer retrieval set.
-
-DlightRAG does not use LightRAG `aquery_llm()` for final answer generation
-because post-LightRAG context can include BM25 results, direct image matches,
-federated chunks, and reranked multimodal pages.
-Instead, it uses LightRAG `aquery_data()` as the base context and reference
-seed, then validates inline `[n]` and `[n-m]` citations against the final
-post-fusion context. The system prompt tells the model not to generate a
-reference section; the output boundary still normalizes provider drift by
-discarding generated bibliography tails and deriving `sources` deterministically
-from validated inline markers. Validation has two outcomes. A marker resolving
-to no chunk is dropped. A `[n-m]` marker resolving to an excerpt of nothing but
-Markdown headings degrades to its document marker `[n]`: that excerpt states no
-fact, so the claim is credited to the document rather than to a passage the
-model only guessed at. Returned `sources` contain only
-cited documents and chunks.
-Answer finalization also derives the `evidence_images` registry and ordered
-`parts` from validated cited sources and explicit Artifact references before
-transport projection. REST, MCP, Web, and in-process Application therefore expose the same typed
-image and Artifact presentation data, including `artifacts` and
-`artifact_outcome`, without trusting model-generated Markdown image URLs.
-Streaming callers receive tokens immediately and a final normalized answer plus
-cited sources after validation.
-
-## Semantic Highlights
-
-Semantic highlights are answer-source enrichment, not retrieval. They run only
-after answer finalization has validated inline citations and built `sources`.
-The highlighter uses the finalized answer text plus cited source chunk content
-to fill `sources[].chunks[].highlight_phrases`.
-
-Web streaming attempts highlight enrichment by default after the answer and
-source panel are finalized. REST, MCP, and in-process Application answer calls default to no
-semantic highlights; pass `semantic_highlights=True` or
-`semantic_highlights: true` on an answer request to opt in. `/retrieve` never
-emits highlights because it has no finalized answer citations.
-
-`answer.citations.highlights.enabled` is the global kill switch. When enabled, the
-highlighter uses the keyword LLM role, runs with its own timeout/concurrency
-limits, and returns the original sources unchanged on timeout or failure.
+Reranking has its own image budget. Oversized visual candidates fall back to
+text where available; unbounded data URIs are never sent.
 
 ## Multi-Workspace Retrieval
 
-Federated retrieval plans the query once, then queries requested workspaces
-concurrently. Each workspace runs the full single-workspace pipeline, including
-metadata filtering, LightRAG `mix`, BM25 fusion, provenance hydration, and final
-rerank thresholding. The federation layer then tags chunks with `_workspace`,
-canonicalizes reference ids across workspaces, round-robin interleaves the
-already-thresholded per-workspace lists, and truncates to `chunk_top_k`.
+The planner runs once, selected workspaces execute concurrently, and each runs
+the complete filtering/fusion/rerank pipeline. The federation layer tags chunks
+with `_workspace`, canonicalizes references, round-robin interleaves the
+per-workspace lists, then truncates to `chunk_top_k`.
 
-There is no cross-workspace global rerank. Round-robin is intentional: it keeps
-workspace representation stable without assuming rerank scores from different
-workspace/model calls are globally calibrated.
+There is no cross-workspace global rerank. Round-robin preserves representation
+without pretending scores from different workspace/model calls are calibrated.
+
+## Answer Orchestration
+
+`AnswerExecutor` owns the workflow; `AnswerOrchestrator` prepares typed Host
+context, tools, and effects.
+
+### Fast
+
+Fast performs planning, KB retrieval, and one lightweight generation call. It
+uses shared Context Contribution, Evidence, citation, model-call, usage, and
+Agent Session infrastructure, but creates no Agent Operation, workspace, tools,
+publication, or Profile Memory interaction.
+
+### Research
+
+Research drives `AgentSessionRuntime` over one selected Lane. Its closed
+run-local registry may include:
+
+- knowledge-base, resource, and optional Exa Web tools;
+- rooted file/Bash tools when execution is enabled;
+- Profile Memory tools for the parent (children recall only);
+- progressive `load_skill`;
+- allowlisted outbound MCP tools; and
+- bounded foreground child Sessions with explicit snapshots and Evidence
+  return.
+
+Tool errors return to the model for correction; they do not terminate research.
+A no-tool assistant turn ends the run, and that text is the answer. One explicitly
+referenced, nonblank `artifacts/report.md`, `.html`, or `.pdf` may become the
+Primary Report Artifact. There is no hidden finalizer call.
+
+Both modes produce the same canonical result: ordered `parts`, cited `sources`,
+`references`, `evidence_images`, Artifacts/outcome, usage, and Evidence counts.
+
+## Context And Model Budgets
+
+Each call uses an immutable model profile pinned by normalized provider, model,
+and endpoint. It supplies context, input, output, image, and reasoning facts.
+Uncatalogued endpoints first receive the best-effort fallback profile; acceptance
+fails only if the resolved profile still cannot provide usable capacity.
+
+The Context Policy independently reserves output, dynamic context, safety,
+retained tail, episodic continuation, and minimum input. Evidence, history,
+resource windows, tool schemas, and observations share the measured residual.
+Parallel tools divide the exact next-control residual before execution. Provider
+output is limited by both model output capacity and remaining physical context.
+
+Full attachment bytes never enter model context. Only bounded text windows,
+capped observations, and budgeted images do.
+
+## Answer Input And Packing
+
+The answer model receives structured messages, not raw `contexts` JSON:
+
+```text
+system policy
+bounded prior text history (when supplied)
+current user message:
+  User-attached images
+  User-attached document evidence, labeled [att-N-M]
+  Knowledge-base evidence, labeled [N-M]
+  Knowledge Graph Context
+  Question (last)
+```
+
+Each citation marker is defined once on the evidence it labels. Attachment
+`att-N` identities exist only for that answer; they are not durable chunks or
+vectors. Retrieved document images are preceded by their text label and sent
+only when they fit.
+
+`top_k` controls KG breadth. `chunk_top_k` controls retrieved text/visual
+candidates. Answer retrieval over-fetches candidates, then packs them to the
+query model's remaining input capacity and image budget.
+
+- Pure visual chunks whose image cannot fit are removed and later candidates
+  backfill them.
+- Mixed text+image chunks keep text when the image is skipped.
+- Final exact serialization removes whole chunks from the reranked tail and
+  rebuilds prompt/citation indexes until it fits; it never truncates a chunk,
+  reorders survivors, or retrieves again.
+- Returned contexts/sources use the final admitted chunks. Use `/retrieve` for
+  the broader pre-answer set.
+
+Images already within JPEG/PNG/WebP limits pass through unchanged. Recompression
+honors configured quality and geometry floors; images that still do not fit are
+skipped rather than degraded further. Focused VLM inspection is a separate call
+with per-call limits and does not consume the final answer image budget.
+
+DlightRAG uses LightRAG `aquery_data()` as the context/reference seed rather than
+`aquery_llm()`, because final evidence may include BM25, direct visual, federated,
+and reranked results.
+
+## Citation And Presentation Finalization
+
+After generation, DlightRAG validates inline markers against the final packed
+context:
+
+- unknown markers are removed;
+- a chunk marker pointing only to Markdown headings degrades to its document
+  marker because the chunk supports no factual claim;
+- generated bibliography tails are discarded; and
+- cited sources/references are derived from the surviving inline markers.
+
+Finalization also derives `evidence_images` and ordered Markdown/Artifact/image
+`parts`; transports never trust model-generated Markdown image URLs. Streaming
+may expose tokens immediately, but the final `done` result contains normalized
+text and authoritative metadata.
+
+Semantic highlights run only after citation validation. They enrich cited source
+chunks with phrases from the finalized answer. Web requests them by default;
+REST, MCP, and Application callers opt in. `/retrieve` never emits them. Timeout
+or failure leaves original sources unchanged.
 
 ## Answer Attachments And Resources
 
-Answer attachments are read as request-local resources; they are never parsed
-into workspace documents, never written to LightRAG `full_docs`, `doc_status`,
-chunks, vectors, BM25, LLM cache, or KG rows, and never enter `/retrieve`. A
-request-local `ResourceRegistry` owns every resource for the lifetime of one
-answer: inline bytes stay in memory, public HTTP(S) links are fetched lazily and
-revalidated on every live read (http or https, no scheme rewrite, no
-https-to-http downgrade, SSRF guard, per/total byte and pixel limits). Fetched bytes settled on an effect already passed that gate and are
-replayed from the Blob store without another network request. Full bytes never enter model
-context — only bounded text windows, capped observations, and budgeted image
-blocks do.
+Attachments are request-local resources, never workspace data. `ResourceRegistry`
+owns inline bytes or lazy public HTTP(S) references for one answer. URL reads
+revalidate scheme, redirect, DNS, SSRF, byte, and pixel limits; settled fetched
+bytes replay from owner-scoped blob storage after recovery rather than making a
+second network request.
 
-`read` is deterministic. UTF-8 and CSV text decode directly; HTML, PDF,
-DOCX, PPTX, and XLSX are converted through selected MarkItDown converters with
-plugins disabled and no network access. A fresh converter is built per call, and
-OOXML archives pass a central-directory zip-bomb preflight (entry-count,
-per-entry, total-size, and expansion-ratio limits) before any converter opens
-them. Continuation cursors are opaque, request-local tokens bound to a resource
-and focus; they expose no path, offset, or provider locator and never cross
-requests. A cursor is single-use. Its compact durable state records the original
-focus-plan budget, current rank position, and absolute character offset; the
-deterministic focus plan is cached in memory and rebuilt once after recovery.
-Changing a later observation budget therefore neither skips nor repeats text,
-and consumed cursors do not accumulate in Session registers.
+`read` is deterministic:
 
-`inspect` performs focused visual inspection through the VLM role
-(falling back to the default LLM). Images are bounded through the one canonical
-image path and `ImagePayloadBudget`; PDFs are rasterized with pypdfium2 off the
-event loop as a bounded low-resolution overview and, on request, one higher-
-resolution page. Every result is marked `derived_by_vlm` and carries its exact
-source/page/sheet/cell/visual locator, so the model can cite where a claim came
-from and never treats a VLM description as the final answer.
+- UTF-8 and CSV decode directly;
+- HTML, PDF, DOCX, PPTX, and XLSX use selected offline MarkItDown converters;
+- OOXML archives pass zip-bomb preflight; and
+- opaque single-use cursors continue bounded text without exposing offsets or
+  provider locators.
 
-For a current source image, automatic image description, image-aware planning,
-direct visual retrieval, and bounded final-model visibility happen before the
-agent decides whether more research is needed. `inspect` is therefore
-optional: it re-examines the bounded whole image with a concrete focus and adds
-the result as located, citable VLM evidence. It does not currently accept a
-bounding box or crop arbitrary regions. PDF page locators and embedded visual
-handles provide the narrower structural inspection paths.
+`inspect` sends a bounded image or PDF page to the VLM role (default model as
+fallback) and marks output `derived_by_vlm` with its exact locator. It does not
+accept arbitrary bounding boxes; page and embedded-visual handles provide
+structural narrowing.
 
-When `answer.web_search.api_key` (Exa) is set, the research path can also call Exa
-Search as a peer tool. Exa passages come back already scored against the query;
-they belong to no workspace and are packed beside corpus evidence. Unique URLs
-that produced evidence become inert request-local handles, and only an explicit
-`read` call fetches one under the normal SSRF, redirect, and byte
-limits. Exa Contents is a bounded internal fallback when direct extraction
-fails or is empty, not a model-visible tool. It does not supply cookies,
-authenticated sessions, or Playwright interaction. Login-gated content must be
-provided by the caller as attachment bytes or a screenshot. When the key is
-unset, both Web capabilities are removed and answers stay corpus-only. A
-rejected or unpaid key parks the capability for a short window rather than
-retrying every turn.
+When Exa is configured, Research can search Web passages as peer evidence.
+Result URLs become inert resource handles and are fetched only by explicit
+`read` under normal guards. Exa Contents is a bounded internal extraction
+fallback, not a model-visible tool. DlightRAG supplies no cookies, authenticated
+browser session, or Playwright; callers must attach protected bytes/screenshots.
 
-The Web channel stores uploaded answer attachments once as owner-scoped
-content-addressed blobs owned by the durable Answer run, not by a Web-owned
-table. There is no parsed-chunk table and no vector cache. Historical attachments
-are re-registered as lazy request-local resources on every follow-up, newest
-first up to the available attachment-count limit. An attachment-bearing
-conversation therefore remains on the research path. Browser thumbnails are
-derived on demand. Manual delete and the shared run-retention floor delete
-linked runs and release blobs no surviving run references; nothing crosses a
-conversation or principal boundary.
+Web uploads are content-addressed blobs owned by durable runs. Follow-up
+re-registers historical attachments lazily, newest first within limits. There
+is no parsed attachment table or vector cache. Deleting conversations/runs and
+retention cleanup release only blobs with no surviving reference.

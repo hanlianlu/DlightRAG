@@ -1,13 +1,10 @@
 # Architecture
 
-This page is for readers who need to understand DlightRAG's runtime boundaries.
-It owns the product architecture, the LightRAG/DlightRAG responsibility split,
-the browser ownership model, the storage topology, and the code-layering rule.
-Canonical product terms live in [domain-language.md](domain-language.md);
-interface contracts live in [interfaces.md](interfaces.md); identity, ingress,
-and authorization trust boundaries live in [security.md](security.md); retrieval
-internals live in [retrieval-answer.md](retrieval-answer.md); PostgreSQL
-deployment details live in [postgresql.md](postgresql.md).
+This document owns DlightRAG's major runtime boundaries, the LightRAG/DlightRAG
+responsibility split, browser ownership, deployment topology, and code-layering
+rules. See [Domain Language](domain-language.md) for canonical terms,
+[Interfaces](interfaces.md) for contracts, [Security](security.md) for trust
+boundaries, and [Retrieval and Answer](retrieval-answer.md) for query behavior.
 
 ## System Context
 
@@ -15,38 +12,23 @@ deployment details live in [postgresql.md](postgresql.md).
   <img src="architecture.svg" alt="DlightRAG system context showing browser, REST, MCP, and embedded callers; optional enterprise identity and Web edge boundaries; external integrations; PostgreSQL; and corpus artifacts" width="1180" />
 </p>
 
-This view answers only who uses DlightRAG and which external systems it reaches.
-LightRAG, the Agent loop, and provider adapters are in-process implementation;
-they are deliberately absent here. Dashed borders and paths are optional
-enterprise integrations or alternate request paths.
+Browsers, REST clients, MCP agents, and trusted embedded callers use the same
+Application services. External dependencies are PostgreSQL, configured model
+providers, one parser sidecar, optional Exa Web Search, and optional outbound
+MCP endpoints.
 
-Browser authentication can terminate at a trusted Cloudflare, Azure, or AWS
-edge that forwards a signed credential, or DlightRAG can verify a Web bearer
-directly. REST and MCP callers present their credentials on their own transport.
-In JWT deployments the shared Access policy maps verified claims through
-[Access Rules](security.md#authorization-model); owner isolation remains a
-separate durable-data boundary. The in-process Python Application is trusted and
-has no transport authentication layer. The IdP and edge are absent from local
-`none` deployments and need not participate in `simple` mode.
-
-The page uses four architectural viewpoints. An arrow keeps one category of
-meaning inside each figure:
+Browser identity may terminate at a trusted Cloudflare/Azure/AWS edge or at
+DlightRAG's bearer verifier. REST and MCP authenticate on their transports. The
+in-process Application is trusted and has no transport authentication layer.
+Verified identities flow through one Access policy; owner isolation remains a
+separate durable-data boundary.
 
 | View | Question | Arrow meaning |
 |---|---|---|
-| [System context](#system-context) | Who uses the system and what surrounds it? | System interaction |
-| [Runtime ownership](#runtime-ownership) | Which in-process owner provides or invokes each behavior? | Primary runtime dependency |
-| [Web frontend ownership](#web-frontend-ownership) | Which browser owner composes or invokes each UI capability? | Primary browser invocation |
-| [Deployment and storage](#deployment-and-storage) | Where do processes and state live? | Cross-runtime or storage connection |
-
-The SVGs embed the same standalone projection of the design system's stone and
-gold ramps, honor `prefers-color-scheme`, and carry accessible titles and
-descriptions. Their styles remain embedded so the figures render correctly on
-GitHub and in packaged documentation without a frontend CSS dependency.
-
-Fast/Research branching, ingestion, retrieval, and run recovery are dynamic
-flows. They stay in their owning sections rather than being mixed into a static
-architecture overview.
+| [System context](#system-context) | What surrounds DlightRAG? | System interaction |
+| [Runtime ownership](#runtime-ownership) | Which process owner provides behavior? | Runtime dependency |
+| [Web frontend](#web-frontend-ownership) | Which browser owner composes UI? | Browser invocation |
+| [Deployment](#deployment-and-storage) | Where do processes and state live? | Runtime/storage connection |
 
 ## Runtime Ownership
 
@@ -54,229 +36,138 @@ architecture overview.
   <img src="architecture-runtime.svg" alt="DlightRAG runtime ownership showing inbound adapters calling Access and the Application facade, the trusted embedded interface calling the facade directly, and Application services invoking Engine Runtime, Answer, RAG, Memory, Agent, AI, and LightRAG" width="1280" />
 </p>
 
-Public `create_application` enters the private composition root; `Application`
-owns configuration, lifecycle, health, and service accessors. HTTP and MCP
-adapters invoke the transport-neutral Access policy and Application services as
-separate calls, so an allow decision is not modeled as a call into a use case.
-The embedded Application interface is already trusted and calls the facade
-without a transport ACL.
+`create_application` enters the private composition root. `Application` owns
+configuration, lifecycle, health, and service accessors. HTTP and MCP adapters
+invoke transport-neutral Access policy, then Application services. Embedded
+callers invoke the facade directly.
 
-Web Conversations delegates acceptance to Answer Service so a browser turn and
-its durable run are linked atomically. Answer Service uses the Answer Capability
-Coordinator to pin model profiles and valid modes, then accepts work through
-Engine Runtime. `RunCoordinator` owns leases, fencing, and events and invokes
-Engine Answer for execution. Model Catalogue publication invalidates capability
-profiles before later requests resolve them. Retrieval and Corpus Administration
-use Engine RAG. Memory is an Application capability over the independent Memory
-package. Engine Answer uses Agent, RAG, and the provider-neutral AI module;
-Agent and RAG both use AI without depending on each other. Persistence is
-omitted from this view and shown under
-[Deployment and Storage](#deployment-and-storage).
+Answer Service pins capabilities and accepts work through Engine Runtime.
+`RunCoordinator` owns durable leases, fencing, events, and execution dispatch.
+Engine Answer uses Agent, RAG, Runtime, and provider-neutral AI. Retrieval and
+Corpus Administration use Engine RAG. Memory is an independent package exposed
+through an Application capability. Concrete PostgreSQL adapters are injected by
+the composition root and remain outside Engine.
 
-LightRAG remains the core RAG engine. It owns parser routing, staged ingest,
-document chunks, document status, vector storage, and the knowledge graph.
-DlightRAG adds product-layer source staging, metadata governance, durable ingest
-jobs, PostgreSQL BM25, fused visual-vector alignment, answer orchestration,
-citations, REST, Web, MCP, and in-process Application interfaces.
+### LightRAG Versus DlightRAG
 
-DlightRAG does not reimplement LightRAG parser sidecars, document status, KG
-extraction, or LightRAG `mix` retrieval.
+| LightRAG owns | DlightRAG adds |
+|---|---|
+| Parser routing and staged ingest | Source staging and metadata governance |
+| Document chunks and status | Durable ingest/answer jobs |
+| Vector store and knowledge graph | PostgreSQL BM25 and RRF fusion |
+| `mix` retrieval | Filtered/federated retrieval and direct visual alignment |
+| Multimodal chunk analysis | Answer orchestration, resources, citations, and artifacts |
+| Core RAG data model | REST, MCP, Web, and Application interfaces |
 
-## Ingestion Flow
+DlightRAG does not reimplement parser sidecars, document status, KG extraction,
+or LightRAG `mix` retrieval.
 
-```text
-source file or upload
-  -> DlightRAG source staging and metadata normalization
-  -> LightRAG parser routing
-     one internal wildcard derived from the configured MinerU or Docling block
-     unsupported engine/suffix combinations use LightRAG native/legacy fallback
-  -> LightRAG staged ingest
-       chunks, multimodal semantic text, KG entities/relations, vector rows
-  -> DlightRAG post-ingest maintenance
-       active fused text+image embedding overwrites canonical LightRAG drawing chunk vectors
-       chunk language labels update BM25 partial indexes
-       caller metadata updates the document metadata row
-```
+## Core Flows
 
-Source files and parser-extracted images both go through LightRAG's multimodal
-path. When the configured embedding provider is a unified multimodal model and
-the startup probe succeeds, DlightRAG aligns the existing canonical LightRAG
-visual chunk with a fused vector that interleaves the VLM description and the
-image. With a text-only embedding model, this alignment is skipped and
-LightRAG's semantic visual chunk remains the multimodal ingestion path.
-
-Parser adapters converge on LightRAG's shared IR and sidecars. DlightRAG does
-not branch on MinerU versus Docling after that boundary. That derived parser
-policy drives durable workspace ingestion only. Tables and equations remain
-structured text evidence, while successful drawings use the shared VLM and
-fused-vector path. MinerU and Docling are the only durable ingestion parsers,
-and the temporary Answer resource path never invokes them.
-
-## Answer Resource Flow
-
-Every answer runs through one `AnswerOrchestrator`. Public callers attach files
-and HTTPS references as **answer attachments**; the same contract is used by
-REST, MCP, the Web UI, and in-process Application. Attachments become request-local
-resources for the lifetime of one answer and are never promoted into a
-workspace, LightRAG storage, or a durable cache:
+### Ingestion
 
 ```text
-answer request (query + optional attachments + mode auto|fast|research)
-  -> Access + capability → Valid Mode Set; Prepared Input pins profiles
-  -> Routing Record stores requested / valid / nullable resolved mode
-  -> Agent Session/Lane mapping selects canonical parent-linked ancestry
-  -> Fast Host turn: atomically reserve + append UserMessage; planner/retrieval/
-       generation stages the canonical Host result before AssistantMessage settles;
-       replay terminalizes from that result without regenerating; no Agent Operation,
-       workspace, tools, or publication
-  -> Research: product-neutral AgentSessionRuntime accepts and drives one or
-       more bounded linked Operations on the selected Lane
-       typed Host ContextAssembler projects ancestry, working state, Evidence,
-       Profile Memory, and Skills metadata without side effects
-       AgentRunPlan + closed ToolRegistry expose first-party and allowlisted MCP tools
-       foreground spawn_agent children use explicit ContextSnapshot and their
-       own renewed lease/epoch; EvidenceDelta returns through the parent ToolResult
-       explicitly referenced outputs publish as typed Artifacts; one non-blank
-       report.md, report.html, or report.pdf may hold the Primary Report role
+source
+  -> DlightRAG staging + metadata normalization
+  -> LightRAG parser routing (MinerU or Docling wildcard; native fallback)
+  -> LightRAG staged ingest (chunks, KG, vectors, document status)
+  -> DlightRAG maintenance (fused visual vector, BM25 language, metadata)
 ```
 
-The Agent kernel exposes three Host-facing concepts: `AgentSessionRepository`
-for immutable reads plus the atomic transaction adapter, `AgentSessionRuntime`
-for Operation lifecycle, and `AgentSessionTree` for ancestry/Lane queries.
-`SessionTransactionPort[HostDelta]` is the storage adapter seam. Append/fork/
-archive pass-through stores, custom Entries, generic registers, and extension
-hooks do not exist.
+Both parser adapters converge on LightRAG's shared intermediate representation.
+Tables and equations remain structured text. Successful visual chunks keep one
+LightRAG chunk identity: when the embedding provider supports fused text+image
+input, DlightRAG replaces that chunk's vector with one fused vector combining
+its VLM description and image. Text-only configurations retain LightRAG's
+semantic text vector.
 
-The execution setting is exactly `disabled | trust | sandbox`. Trust binds the
-concrete rooted local adapter; Bash is intentionally host/network capable while
-rooted file tools reject traversal and symlink escape. Sandbox fails explicitly
-because this distribution ships no sandbox backend and never downgrades to host
-execution. The access scheduler uses Path, Workspace, and External claims: Bash
-conflicts with workspace file operations but not independent retrieval. There is
-no Python extension wrapper or lifecycle-hook surface.
+Parser policy applies only to durable workspace ingestion. Answer attachments
+never invoke MinerU or Docling.
 
-Skills are progressively disclosed from `~/.agents/skills/` and the Agent
-Workspace `.agents/skills/`; initial context carries metadata only and
-`load_skill` reads contained files on demand. Deployment-declared outbound MCP
-endpoints become thin foreground tools with explicit allowlists; no registry,
-OAuth service, or management plane is introduced.
-
-Resource reads are deterministic first. `read` decodes UTF-8/CSV text
-directly and converts HTML, PDF, DOCX, PPTX, and XLSX through selected MarkItDown
-converters with plugins disabled and no network access; OOXML archives pass a
-zip-bomb preflight before any converter opens them. `inspect` performs
-focused visual inspection through the VLM role (falling back to the default
-LLM), rasterizing PDFs off the event loop and bounding images through the one
-canonical image path. Every visual observation is marked as VLM-derived evidence
-with its exact source/page/sheet/cell locator, so the model cites where a claim
-came from and never treats a description as the final answer.
-
-Current image attachments reach the research agent and final generation as
-bounded image blocks, while the same verified bytes remain request-local
-resources for optional focused evidence. If the agent selects a knowledge-base
-search, one VLM description and the raw image feed that retrieval's text and
-direct-visual legs; no KB call means no query-image planning work. A source-image
-inspection sends the bounded whole image with a concrete focus; it does not crop
-or zoom an arbitrary region.
-Structural zoom-in is available for a selected PDF page or an extracted embedded
-visual handle. The control prompt tells the model not to repeat inspection for a
-general description when the current image is already visible.
-
-Full resource bytes never enter model context. Only bounded text windows, capped
-tool observations, and budgeted image blocks do. Every reachable model endpoint
-has an immutable `ModelProfile`: context window (`C`), optional provider input
-limit (`I`), optional output limit (`O`), image support, and a reasoning
-profile. Facts resolve by normalized provider/model/endpoint identity from a
-PostgreSQL complete-profile overlay, then the versioned built-in AI catalogue;
-an unknown identity receives the permissive fallback profile. Runtime updates
-publish atomically under an optimistic revision, notify every process, and are
-rejected if they invalidate a configured role. Reasoning support is an explicit
-per-level map plus request format, not a boolean capability flag. The revisioned
-`ContextPolicy` reserves output, observation, safety, retained
-tail, episodic continuation, and minimum input directly from the pinned model
-facts. Its provider input ceiling is `min(I if known else C, C)`; output is
-bounded independently by the provider output limit and physical remaining
-context. Evidence, resource windows, history, tool schemas, and observations
-consume the measured residual rather than nested percentages.
-
-`RetrievalPlanner` is an internal node of the canonical retrieval operation; the
-answer workflow never creates or injects a plan. It never receives attachment
-bytes, converted attachment text, or resource manifests. Fast answers give
-retrieval the bounded prior turns so the planner can resolve references. Public
-retrieve calls are history-free. Research KB tool calls receive the one pinned
-history projection, but `preserve_query` keeps their caller-chosen semantic query
-unchanged while lexical terms, inferred metadata filters, and optional
-current-image hints are derived. Explicit filters and BM25 terms remain
-authoritative.
-
-Workspace resolution stays at each interface's Access boundary. Retrieval starts cold
-workspace initialization before retrieval planning for retrieve-only, fast-answer,
-and research-answer requests; the later retrieval joins those same services.
-
-Research control turns receive identity, tool-selection policy, trust
-boundaries, and stopping rules. The last no-tool assistant text is the answer;
-citation/source finalization is deterministic and never makes a hidden second
-LLM call. Fast never enters `AgentSessionRuntime`, but uses the same typed Context,
-Evidence identity, citation, Profile Memory, and usage infrastructure. It shares
-the canonical Agent Session Tree through an atomic Host reservation and creates
-no Agent Operation.
-
-When `answer.web_search.api_key` (Exa) is set, Exa Search is an optional peer
-capability. Its passages belong to no workspace and are packed beside corpus
-evidence; evidence-producing result URLs become inert request-local resource
-handles that the model may deep-read with `read`. Exa Contents is not a
-peer tool: it is a bounded internal fallback only when a selected public URL
-cannot be read directly. A missing key removes both capabilities.
-
-## Durable Answer Runs
-
-Every answer — REST, MCP, Web, in-process Application, CLI, and evaluation — is one durable
-run with one identifier and one lifecycle owned by PostgreSQL. `POST /answer`
-validates, persists, and returns HTTP 202; the run outlives its creating request,
-and a disconnected client only detaches.
+### Retrieval And Answer
 
 ```text
-create (202)  -> run row + routing row + Prepared Input + blobs (one txn)
-claim         -> FOR UPDATE SKIP LOCKED, fencing epoch++, lease heartbeat
-execute       -> phase progress, coalesced token batches, Session transactions / Fast stages
-finish        -> canonical result + exactly one terminal event, same txn
-recover       -> expired lease reclaimed; Runtime restores total OperationState
+query
+  -> planning and optional metadata filter inference
+  -> LightRAG mix + optional direct visual retrieval + PostgreSQL BM25
+  -> RRF fusion, provenance hydration, and final rerank
+  -> answer packing with citations and bounded images
 ```
 
-A process restart opens the canonical Agent Session and restores the selected
-Lane's total OperationState, exact RequestSnapshot, ToolBatchPlan, and typed
-registers. Immutable Entries retain parent links and multiple durable Lane heads.
-Fast replays unfinished Answer stages while its unanswered UserMessage and Host
-reservation remain durable. Interrupted generation emits `reset` and regenerates
-from pinned input. Steers become ControlMessage Entries at stable checkpoints;
-queued follow-ups and terminal-race steers become fresh linked Operations, while
-fork creates a new Lane on the same Session.
-See [durable-answer-runs.md](durable-answer-runs.md) for the contract and
-[postgresql.md](postgresql.md#durable-answer-run-state) for the schema.
+`/retrieve` returns the broader knowledge-base result. `/answer` first resolves
+`auto | fast | research`, then uses the same retrieval capability when needed:
 
-`dlightrag.engine.runtime` owns the storage-neutral records, store protocol,
-subscription, coordinator, fenced session, and caller-wait failures. It imports
-neither Answer policy nor PostgreSQL. The Answer executor classifies product
-errors into `RunExecutionError` before they cross that boundary;
-`dlightrag.adapters.postgres.answer.answer_runs.PGAnswerRunStore` implements the runtime
-store port.
+- **Fast** reserves one Host turn on the canonical Agent Session, plans,
+  retrieves, and generates without an Agent Operation, tools, workspace, or
+  publication.
+- **Research** drives product-neutral `AgentSessionRuntime` on one Lane with a
+  closed run-local tool registry. Tools may read attachments, search the corpus
+  or Web, use rooted files/Bash when enabled, call allowlisted MCP endpoints,
+  use Profile Memory, load Skills, and run bounded child Sessions.
 
-`dlightrag.engine.rag` groups one workspace runtime into `workspace`, internal
-`lightrag`, `corpus`, and `retrieval` owners. Workspace owns the coherent
-`WorkspaceCorpusBackend` bundle: coordination and maintenance, durable ingest
-jobs, plus a runtime binder for metadata, chunk, filtered-vector, and BM25
-stores. The root PostgreSQL adapter implements those ports and hides environment
-translation, server/version/extension checks, advisory-lock lifetimes, reader
-attachment, catalog scans, workspace maintenance, schema DDL, and SQL
-identifiers. Startup availability failures are translated to corpus errors;
-operation-specific failures retain their adapter context for the current product
-error policy.
-Private `create_application` / `_compose` wires the PostgreSQL adapter into the
-process. Application itself does not import adapters. The online RAG runtime,
-Runtime, status routes, API, Web, and MCP never import PostgreSQL. The two
-exclusive offline rebuild modules under `engine.rag.corpus` compose Engine RAG
-with PostgreSQL directly and require writers to be stopped. Corpus and
-operational pools remain separate even when they use the same endpoint.
+The last Research assistant turn with no tool call is the answer. Citation,
+source, media, usage, and Artifact finalization is deterministic for both paths;
+there is no hidden finalizer model call.
+
+`RetrievalPlanner` is internal to retrieval. It may derive lexical terms,
+metadata filters, and image context but never receives attachment bytes or
+rewrites an agent-selected semantic query. Workspace authorization resolves at
+the interface Access boundary before Engine RAG runs.
+
+Detailed filtering, reranking, multimodal, and packing behavior lives in
+[Retrieval and Answer](retrieval-answer.md).
+
+### Answer Resources
+
+```text
+query + attachments
+  -> request-local ResourceRegistry
+  -> deterministic read or focused VLM inspect
+  -> bounded text/image evidence
+  -> Fast or Research context
+```
+
+Full resource bytes never enter model context. `read` handles UTF-8/CSV directly
+and converts HTML, PDF, DOCX, PPTX, and XLSX through selected offline
+converters; OOXML passes a zip-bomb preflight. `inspect` performs focused VLM
+inspection and records exact source/page/sheet/cell provenance. Current images
+may also feed retrieval and final generation within separate budgets.
+
+Resources are request-local during execution. Accepted uploads and settled URL
+fetches use owner-scoped content-addressed blobs so recovery does not re-fetch
+or cross owner boundaries. They never become corpus documents, chunks, vectors,
+BM25 rows, or KG data.
+
+Agent execution is `disabled`, `trust`, or `sandbox`. `trust` exposes rooted
+file tools but Bash retains host/network capability. This distribution has no
+sandbox backend, so `sandbox` fails instead of downgrading. Skills are discovered
+from global/workspace `.agents/skills/` paths and loaded progressively. Outbound
+MCP tools come only from deployment allowlists.
+
+## Durable Execution
+
+Every answer across REST, MCP, Web, Application, CLI, and evaluation is one
+PostgreSQL-owned run:
+
+```text
+accept -> run + routing + pinned input + blobs (one transaction)
+claim  -> oldest eligible row; lease + fencing epoch
+execute -> durable progress/events and Agent or Fast state
+finish -> canonical result + exactly one terminal event (one transaction)
+recover -> reclaim expired lease and restore total durable state
+```
+
+A disconnected client only detaches. Research restores immutable Session
+entries, typed registers, exact request/effect state, and selected Lane. Fast
+restores staged answer phases and can terminalize an already staged result
+without regeneration. Interrupted generation emits `reset` before regenerated
+tokens.
+
+Engine Runtime owns storage-neutral lifecycle records, its store protocol,
+subscriptions, fencing, and coordination. Engine Answer maps product failures
+into Runtime errors. `PGAnswerRunStore` implements the port. Full lifecycle,
+recovery, cancellation, event, blob, and conversation rules are centralized in
+[Durable Answer Runs](durable-answer-runs.md).
 
 ## Web Frontend Ownership
 
@@ -284,219 +175,96 @@ operational pools remain separate even when they use the same endpoint.
   <img src="architecture-frontend.svg" alt="DlightRAG browser ownership from Vite startup and the dl-app Shell through Lit Feature owners, focused state, the package-owned design system, same-origin FastAPI APIs, and the opaque-origin artifact iframe" width="1220" />
 </p>
 
-The browser shell has three explicit platform owners. Vite owns `frontend/index.html`,
-the paste-token login entry, pre-paint theme initialization, and hashed build
-assets. Light-DOM Lit components own application composition and typed browser
-presentation. FastAPI serves page routes, static/support assets, and the
-same-origin `/web/api/*` command/query/SSE boundary. There is no Jinja
-or HTMX composition path and no backend-generated ordinary UI fragment.
+Vite owns the static entry, pre-paint theme, and built assets. Light-DOM Lit
+components own typed presentation and interaction. FastAPI serves page/static
+assets plus same-origin `/web/api/*` commands, queries, and SSE. There is no
+Jinja or HTMX UI path.
 
-Browser state is split by lifetime rather than collected in one store. The
-History API route is the active-conversation authority; focused stores own
-conversation, workspace, attachment, ingest, and Answer-run state. The Lit-native
-Chat Feature composes its Message List and Composer while one RunController owns
-SSE replay/resume, reconnect timers, cancellation, and reader aborts. The
-Conversation Sidebar owns route lifecycle, drawer accessibility, and conversation
-commands, and composes a Conversation List that emits typed item intent. Inspector
-separately owns its Sources/Files pane state, responsive accessibility, focus, and
-commands; its Sources and Files content modules own list intent and async file work.
-Citation intent reaches Inspector through a typed AnswerPresentation event composed
-by the Shell. The Message List classifies conversation-background clicks and raises
-a typed intent, so the Shell never inspects Chat DOM. The Shell consumes typed state
-events to coordinate layout and inertness through public Feature properties; it
-contains no migration adapters or fixed-ID cross-Feature mutations. Settings Dialog, Toast Region, Image Lightbox,
-Notification Offer, Theme Control, and workspace controls own their state, async
-work, accessibility, and browser lifecycle behind `dl-` interfaces. Answer Mode
-remains private to the Composer that owns its request state. Vite startup retains
-only the approved MathJax loader/scheduler and local split-layout adapter;
-internal adapters retain DOMPurify, Mermaid, object URLs, and the approved browser
-integrations.
-Server-sanitized semantic answer/source HTML is the only deliberate same-DOM HTML
-sink. Artifact Canvas remains separate and owns typed Artifact renderer selection and focus; active
-HTML is fetched as authenticated inert bytes and placed in `srcdoc` only after
-explicit consent, inside an opaque-origin iframe that is destroyed on close or
-switch. Filenames, controls, links, galleries, panels, and system states remain
-typed values rendered by Lit.
+State is divided by lifetime: the History API owns active conversation routing;
+focused stores own conversations, workspaces, attachments, ingest, and answer
+runs. Feature components receive properties and raise typed events. The Shell
+coordinates siblings without inspecting their DOM or using module-global
+notification channels.
 
-The package-owned internal design system is the visual authority. Its
-foundations own Utopia-derived type and spacing scales, Mineral color modes,
-semantic geometry, and the deterministic DTCG-style token projection used by
-tooling. Its public entries own semantic icons, native-first `.dl-*` primitives,
-and the explicitly registered `dl-split-layout`; Features do not import its
-private source modules. Product adapters retain persistence, clamping, and
-compact-layout meaning. Nested split layouts preserve simultaneous
-Artifact Canvas and Inspector Sources on wide layouts. Below 1200px the primary app
-remains a full-width fixed layer under the native backdrop while the active pane
-retains modal focus/inert semantics. External Drawer and Dialog components remain
-rejected; native overlays use the same semantic geometry tokens.
+The package design system owns tokens, icons, primitives, and split layout.
+Sanitized answer/source HTML is the only same-DOM HTML sink. Active HTML
+Artifacts require explicit consent and render in a destroyed-on-close,
+opaque-origin iframe. Security details live in
+[Security](security.md#answer-artifact-browser-boundary).
 
-Frontend verification is layered: pure API/store/router/token rules run under
-Node, Lit and CSS behavior runs in Chromium through Web Test Runner, and the
-icon/split-layout contract also runs in Chromium, Firefox, and WebKit. Integrated
-page and accessibility behavior runs in Playwright, and every distributable
-wheel is smoke-tested with the Vite build included.
+### Web Conversation Boundary
 
-## Web Conversation Boundary
+A Web conversation owns navigation/history, not execution. Each turn links to
+the Answer run that owns input, blobs, events, and result. The turn and run are
+inserted in the same acceptance transaction.
 
-The browser channel wraps the same durable runs with a principal-scoped
-conversation lifecycle. A conversation owns navigation and history only: each
-turn is one row linking to the Answer run that owns the request input, the
-uploaded bytes, the streamed events, and the canonical result. The turn is
-inserted inside the run's own creation transaction, so history exists before the
-202 response.
+Attachments are stored once as owner-scoped blobs and linked by run references.
+Follow-ups re-register them lazily, newest first within the count limit. There
+is no Web attachment cache, parsed-chunk table, or vector cache. Run retention
+and conversation deletion release blobs only after no surviving run references
+them. See [Interfaces](interfaces.md#web) for browser contracts.
 
-Uploaded answer attachments are stored once as owner-scoped content-addressed
-chunked blobs in `dlightrag_blobs`/`dlightrag_blob_chunks` and referenced by
-`dlightrag_answer_run_artifacts`; there is no Web-owned raw attachment table, no
-parsed-chunk table, and no vector cache. Historical attachments are re-registered
-lazily as request-local resources on every follow-up, newest first up to the
-available attachment-count limit. An attachment-bearing conversation therefore
-remains on the research path. Browser thumbnails are derived on demand. Manual
-deletion and the shared `answer.runtime.answer_run_retention_days` floor (default 365,
-counted from `finished_at`) delete linked runs, cascade events/references, and
-release blobs no surviving run references. The final routing-row deletion also
-removes the Agent Session tree; an empty conversation row may remain briefly as
-navigation identity but owns no hidden model history. If reused before the empty
-sweep, it starts from a fresh `main` Lane.
-
-## Retrieval And Answer Flow
-
-```text
-query
-  -> query planning and optional metadata filter inference
-  -> strict metadata in-filtering when filters are explicit
-  -> LightRAG mix retrieval
-  -> direct image->image retrieval when fused visual embedding is active
-  -> pg_textsearch BM25 over the same candidate scope
-  -> RRF fusion
-  -> provenance hydration and final rerank
-  -> answer packing with citations, bounded images, and optional highlights
-```
-
-DlightRAG uses LightRAG `mix` as the base retrieval mode; the steps shown
-around it form the DlightRAG hybrid layer.
-
-Use [retrieval-answer.md](retrieval-answer.md) for the detailed retrieval,
-filtering, reranking, citation, and multimodal-answer behavior.
-
-## Deployment and Storage
+## Deployment And Storage
 
 <p align="center">
   <img src="architecture-deployment.svg" alt="DlightRAG deployment showing writer and reader process roles sharing one PostgreSQL primary, one corpus artifact root, and a separate Agent Workspace root when local execution is enabled" width="1180" />
 </p>
 
-This deployment view shows process and storage connections only. Logical store
-ownership is separated inside PostgreSQL even though the current deployment
-uses one primary endpoint.
-
-DlightRAG uses one PostgreSQL endpoint per service process. A writer process (the
-default) serves REST, Web, MCP, and in-process Application operations and owns schema migrations.
-A `reader` process is **corpus-read-only, not process-read-only**: it may create
-and execute answer runs and write DlightRAG operational state (runs, events,
-artifacts, Web conversations), while `CorpusAdmin` rejects ingestion, workspace
-creation/reset, metadata mutation, retry, and deletion. Both roles
-therefore use the same primary endpoint; DlightRAG makes no physical-standby or
-read-endpoint promise.
-
-Core storage is PostgreSQL 18:
+All service processes use the same PostgreSQL 18 primary. The default `writer`
+owns migrations, corpus mutations, and every interface. A `reader` is
+**corpus-read-only**, not process-read-only: it may write operational state for
+answers, events, artifacts, and Web conversations while rejecting ingestion,
+workspace changes, metadata mutation, retry, and file deletion.
 
 | Component | Backend |
 |---|---|
-| Vector store | `PGVectorStorage` with pgvector |
-| Graph store | `PGTableGraphStorage` (plain tables) |
-| KV store | `PGKVStorage` |
+| Vectors | `PGVectorStorage` + pgvector |
+| Graph | `PGTableGraphStorage` |
+| KV | `PGKVStorage` |
 | Document status | `PGDocStatusStorage` |
-| BM25 | pg_textsearch |
+| Lexical retrieval | pg_textsearch BM25 |
+| Product/runtime state | DlightRAG PostgreSQL tables |
 
-Every process serving KB images or source downloads must see the same POSIX
-artifact tree at the same absolute `deployment.working_dir` path. Separately,
-when `answer.agent.execution_environment` is `trust` or `sandbox`, every Answer
-worker including readers must mount the same RWX `answer.agent.workspace_root`.
-The Agent Workspace root must not overlap the corpus working directory. See
-[postgresql.md](postgresql.md#service-roles-and-shared-artifacts) for the
-complete role, migration-order, and corpus-artifact contract, and
-[operations.md](operations.md#durable-answer-runs) for the Answer
-worker storage requirement. Ingress and identity topology deliberately remain
-in [System Context](#system-context) and [Security](security.md).
+Every process that serves corpus images/downloads must mount one shared POSIX
+`deployment.working_dir` at the same absolute path. Every process executing
+trusted/sandboxed Research must also mount one shared RWX
+`answer.agent.workspace_root`; it must not overlap the corpus working directory.
+Writer migrations must run before readers start. See
+[PostgreSQL](postgresql.md) for deployment details.
 
 ## Code Layering
 
-The repository is one UV workspace with two lockstep distributions. The root
-wheel contains five Engine modules—AI, Agent, Runtime, RAG, and Answer—whose
-import direction remains machine-enforced and matches Runtime Ownership above.
-Independently installable Memory remains a separate distribution seam. There is
-no second compile-time diagram: arrows on this page never mean “may import”.
+The UV workspace contains the root DlightRAG wheel and the independently
+installable `dlightrag-memory` distribution.
 
-Agent and RAG may depend on AI but not on product modules or each other. Answer
-lives at `dlightrag.engine.answer` and may depend on AI, Agent, RAG, and Runtime.
-RAG owns its direct LightRAG dependency and never imports concrete PostgreSQL
-adapters. The root product is batteries-included: all provider and source SDKs
-are direct dependencies, while provider modules remain lazy imports. Memory
-imports no root, AI, Agent, or RAG module; it declares `asyncpg` directly and
-owns the independent `dlightrag_memory_records` schema and migration path. Root
-`LangfuseTelemetry` is injected into internal model operations; standalone
-Memory has no telemetry dependency.
+```text
+inbound adapters -> Application -> Engine
+                           |          |
+                  composition root    +-> AI
+                                      +-> Agent -> AI
+                                      +-> RAG -> AI + LightRAG APIs
+                                      +-> Runtime
+                                      +-> Answer -> AI + Agent + RAG + Runtime
 
-Configuration follows the same ownership direction. `DlightragConfig` has
-exactly eight operator-facing sections and directly composes deeply frozen
-Pydantic settings from the lowest owning module: AI owns model, embedding, and
-rerank settings; RAG owns corpus settings; root modules own product-only
-sections. Runtime code consumes those canonical values or narrow derived
-policies—there is no second dataclass snapshot of model or corpus fields. The
-3.0 schema is strict: removed Agent aliases, flat YAML, and old environment
-names are rejected rather than emulated.
+concrete PostgreSQL/observability adapters implement owner ports
+```
 
-### Memory package surface
+Only public `create_application` delegates to private composition. Application
+does not import concrete adapters; Engine does not import Application or inbound
+transports. RAG owns the direct LightRAG dependency and never imports concrete
+PostgreSQL code. Runtime imports neither Answer/RAG nor storage/transports.
 
-`dlightrag-memory` is host-neutral and independently installable. Storage is
-its own PostgreSQL schema (`dlightrag_memory_records`) with its own migration
-registry; PG is the only backend (`--dsn`), no SQLite. Recall fuses RRF(k=60)
-over exact (normalized btree), sparse (pg_textsearch BM25, both textsearch
-configs merged by best score), and dense (opt-in TextEmbedder) legs; time
-never enters the score — exact matches pin first, the rest follow
-chronologically, and no threshold means an empty result is simply not
-injected. Transport is `dlightrag-memory-mcp`, a stdio-only MCP server: the
-subject is bound at launch and never accepted from a tool argument, a
-launched server is authorized for its subject, and exactly four tools exist
-— `memory_recall(query)`, `memory_remember(kind, body, idempotency_key,
-supersedes_id?)`, `memory_forget(memory_id | body, idempotency_key)`, and
-`memory_undo(change_id, idempotency_key)` — with no browse, no observe, and no
-HTTP. Every mutation returns a replay-stable operation receipt. The package-owned
-operation journal commits idempotency, mutation limits, record transitions, and
-compensating undo through one atomic storage seam; forget writes a tombstone.
-Eligibility and rendering stay host
-concerns: the package never judges auth mode or renders prompts. DlightRAG binds
-a JWT owner or stable local single-user owner, rejects shared simple-auth
-personalization, and places recalled facts as low-authority non-citable context.
-DlightRAG's owner setting is a hard capability gate: when inactive, acceptance
-reserves no Memory capacity, Answer composes no Memory prompt or tools, and all
-record operations are unavailable except reading or changing the setting. A
-monotonic owner epoch invalidates already-running mutation hosts after deactivate
-or physical Clear.
+`dlightrag-memory` owns its PostgreSQL schema, migrations, retrieval, operation
+journal, and stdio MCP server. It imports no root, AI, Agent, or RAG module.
+DlightRAG supplies owner identity, eligibility, rendering, and the hard
+capability gate; Memory records are low-authority, non-citable context.
 
-Inside the root product the compile-time direction is three zones, not a numbered
-stack: inbound adapters import Application; Application imports Engine; only
-public `create_application` delegates to private `_compose`, which wires concrete
-adapters. Engine must not import Application or inbound adapters. PostgreSQL and Observability
-implement owner ports and are not a layer Application may import.
+`DlightragConfig` mirrors ownership through eight frozen sections. AI owns model
+settings, RAG owns corpus settings, and root modules own product-only settings.
+Removed aliases and flat schemas are rejected rather than emulated.
 
-The layering checks are part of local and CI verification:
+Import contracts enforce these directions in source and built wheels:
 
 ```bash
 uv run lint-imports
 ```
-
-`lint-imports` enforces contracts over the root and Memory distributions plus
-the internal Engine module seams: AI cannot import product, Agent, RAG,
-LightRAG, PostgreSQL, or transport modules; Agent may use AI but not
-product/RAG/storage/transport code; RAG may use AI and LightRAG APIs but cannot
-import product, Agent, PostgreSQL, or transport modules; and Answer cannot
-import access, PostgreSQL, or inbound transports. Existing root contracts continue to
-keep `adapters.http`/`adapters.mcp` out of internal modules, order the foundation and core
-coordination stacks, keep Runtime free of Answer/RAG/storage/transport code,
-make status routes depend only on `ApplicationHealth`, and separate resources
-from model-visible tool adapters.
-The same checks run against installed wheel contents so an editable workspace
-cannot hide an undeclared dependency; that artifact gate also rejects imports
-of LightRAG's concrete PostgreSQL backend, whose external submodule path cannot
-be represented by import-linter.

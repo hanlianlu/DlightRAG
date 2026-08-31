@@ -132,15 +132,15 @@ _Avoid_: Answer Event Log, Agent Journal, browser cache, out-of-band undo snapsh
 _Avoid_: state rollback, silent transcript promotion, confidence score
 
 **Retention Floor**:
-The single deployment clock (`answer.runtime.answer_run_retention_days`, default 365) that bounds how long terminal Answer runs, their event logs, routed Agent Session history, and superseded Memory history stay durable. The sweep is best-effort: it may reclaim later, never earlier.
+The single deployment clock bounding terminal Answer runs, event logs, routed Agent Session history, and superseded Memory history. Reclamation may happen later, never earlier.
 _Avoid_: deadline, SLA, per-aggregate TTL, inactivity expiry
 
 **Conversation History Page**:
-One signed turn-number keyset page returned by the Web history endpoint: 40 recent turns by default and at most 100 per request. It is a UI and payload bound, not retention or model recovery: older turns stay durable until the Retention Floor reclaims their runs.
+One signed turn-number keyset page from Web history. It bounds one read, not retention or exact model recovery.
 _Avoid_: snapshot, max_turns, trim window, retention window
 
 **File Panel Page**:
-One workspace-bound signed keyset page of processed files, ordered by `updated_at DESC, id ASC`: 50 files by default and at most 100. It is a presentation/read-work bound rather than an inventory snapshot; upload and delete settle by replacing traversal state with a fresh first page.
+One workspace-bound signed keyset page of processed files in durable server order. It bounds presentation/read work, not inventory or retention.
 _Avoid_: full file snapshot, OFFSET page, workspace catalog scan, retention window
 
 ## Session Entries And Effects
@@ -208,7 +208,7 @@ An owner-visible, run-scoped output descriptor created by fenced publication of 
 _Avoid_: Spill, Blob when referring to the reference rather than the bytes, unreferenced workspace file
 
 **Primary Report**:
-The optional single Published Artifact occupying `artifacts/report.md`, `artifacts/report.html`, or `artifacts/report.pdf`. It must be non-blank, media-valid, and explicitly referenced by the Main Answer. It opens in Artifact Canvas rather than becoming a second chat body.
+The optional single Published Artifact with the report role. It opens in Artifact Canvas rather than becoming a second chat body.
 _Avoid_: answer body, chat column, Spill, Compaction Summary, required report, parallel result pointer
 
 **Artifact Canvas**:
@@ -260,5 +260,5 @@ The monotonically increasing write-generation of one Answer Run lease; every dur
 _Avoid_: Workspace Epoch, Durable Progress
 
 **Full Development Reset**:
-The explicit replacement of the development database and local runtime/corpus files. It recreates the required PostgreSQL extensions and leaves baseline schema creation to the next writer startup.
+The explicit replacement of development database and local runtime/corpus data; see [Operations](operations.md#full-development-reset).
 _Avoid_: Migration, Workspace reset, compatibility cutover

@@ -116,33 +116,14 @@ can be read rather than measured.
 | Primary accent | `#d2b661` gold-200 | `#7e6c37` gold-400 |
 | Danger | `#f87171` | `#b91c1c` |
 
-The light surfaces skip stone-100: measured in OKLCH it sits only 1.5 L\* from
-stone-50, a quarter of dark's first step. Stone-50/200/300 steps by 6.2 and 5.4
-against dark's 6.9 and 5.2, so both themes separate their surfaces by the same
-perceived amount.
+The mirrored stone ramps keep perceptual surface steps comparable; the gold
+ramp supplies an accessible accent in each mode. Borders and row tints use
+low-alpha stone values. `frontend/tokens/ramp.test.ts` enforces ramp membership
+and elevation direction.
 
-The gold ramp is perceptually even by construction — 12.33 L\* per step, hue
-held within 2° — so each theme takes the step that clears its canvas rather than
-a value tuned by hand. Borders, dividers and row tints are stone at low alpha:
-stone-500 in dark, stone-700 in light. Scrims and overlay shadows are stone-950
-and stone-900 respectively.
-
-Each ramp steps away from the page background as elevation rises, so the
-conversation always holds the strongest contrast against its text: lighter in
-dark, darker in light. `frontend/tokens/ramp.test.ts` asserts that direction and
-rejects any colour that is not a member of a declared ramp.
-
-Full-height docked panels are edges rather than floating cards, so they are
-separated by that tone step plus a hairline border. Neither theme casts a panel
-shadow: in light the surface sits below the canvas, and in dark a black shadow
-over `#0c0a09` resolves to `rgb(8,7,6)`. Only floating elements that overlap the
-conversation — popovers, menus, dialogs, toasts — carry one.
-
-The token layer defines the complete light values needed by existing semantic roles, including hover, active, border, source surface, overlays, selection, shadow, and on-accent text.
-
-Components consume purpose-based aliases such as action accent, strong accent,
-muted accent, and on-accent text. Primitive palette values remain internal to
-the token file.
+Docked panels use tone plus a hairline border, not shadows. Only overlapping
+popovers, menus, dialogs, and toasts cast shadows. Components consume semantic
+aliases; primitive palette values remain private to the token layer.
 
 Spacing and typography remain unchanged by the theme. Geometry and panel behavior follow the separate role rules below.
 

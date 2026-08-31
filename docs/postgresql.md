@@ -19,9 +19,10 @@ and over any key of the `custom_metadata` JSONB column.
 
 ## Required Version
 
-Startup checks require PostgreSQL 18 or newer. Workspaces should not mix
-embedding models or dimensions after data has been indexed; changing
-`models.embedding.dim` requires clearing the workspace and rebuilding vector indexes.
+Startup checks require PostgreSQL 18 or newer and `lightrag-hku>=1.5.6`.
+DlightRAG carries no patches against LightRAG's PostgreSQL layer. Workspaces
+should not mix embedding models or dimensions after indexing; changing
+`models.embedding.dim` requires clearing/rebuilding vectors.
 
 The checked-in Docker Compose stack builds `dlightrag-postgres:pg18` from the
 local `postgres/` image definition and preloads `pg_textsearch,pg_jieba`.
@@ -193,32 +194,14 @@ nothing about one answer is stored twice. The baseline schema creates only this
 run-link representation; no duplicated-answer or Web-owned attachment tables
 exist.
 
-### Retention
+### Retention Implementation
 
-Retention uses `answer.runtime.answer_run_retention_days` (default 365). Every
-run-owning process sweeps hourly in bounded `SKIP LOCKED` batches, so it is safe
-on every host and needs no leader election:
-
-- **Event logs** are deleted after the `answer.runtime.answer_run_retention_days` floor (default 365) counted from `finished_at` for every terminal run,
-  even one a conversation still shows. That transaction sets `events_trimmed_at`,
-  after which the run's event endpoint returns HTTP 410 and clients read the
-  canonical result from the status endpoint instead.
-- **Terminal run rows** are pruned after the same floor counted from `finished_at`,
-  conversation-linked or not; the turn cascade empties the conversation and an
-  hourly sweep reclaims conversation rows with no turns left.
-- **Agent Sessions** named by deleted routing or child rows are candidates in
-  that same transaction. A Session is deleted when no remaining routing row names
-  its owner/session identity. Session-row locks serialize that decision with new
-  routing inserts: a concurrent accepted route either preserves the existing tree
-  or observes deletion and starts fresh. Empty Web Conversation rows do not extend
-  history retention; their next accepted turn rebases to a fresh `main` Lane.
-- **Blobs** are released in the same transaction once no run-artifact row
-  references the digest for that owner. A digest linked by a concurrent run is
-  left alone and released when that run is itself deleted.
-
-Conversation deletion removes linked runs before the conversation row, matching
-the retention lock order. Conversation history uses bounded signed keyset pages
-(default 40, maximum 100) and never trims durable rows.
+Every run-owning process sweeps hourly in bounded `SKIP LOCKED` batches, so no
+leader or cron job is required. Row locks, cascades, Session reference checks,
+and the run-artifact/blob foreign key serialize pruning against new references.
+Conversation deletion follows the same run-first lock order. Lifecycle and HTTP
+410 semantics are defined in [Durable Answer Runs](durable-answer-runs.md); the
+field/default is in [Configuration](configuration.md).
 
 ## Graph Storage
 
@@ -236,11 +219,8 @@ undirected: LightRAG canonicalizes each pair in Python before writing, never
 with SQL `LEAST`/`GREATEST`, so endpoint ordering cannot drift with the
 database collation.
 
-Keeping the graph in ordinary tables is why no compiled graph extension,
-`shared_preload_libraries` entry, or per-workspace schema DDL appears anywhere
-in the operational surface, and why the graph alone would run on stock
-PostgreSQL 14. Upstream measures `get_knowledge_graph` at 39ms against the
-former Apache AGE backend's 1099ms on the same data.
+Ordinary tables require no compiled graph extension,
+`shared_preload_libraries` entry, or per-workspace schema DDL.
 
 The tables are created by `initialize()` under an advisory lock, so any process
 may be first. Workspace isolation is a column, not a schema, so resetting a
@@ -299,27 +279,7 @@ DlightRAG makes no physical-standby or read-endpoint promise: both roles use the
 same primary endpoint. Read-replica routing would need a separate corpus endpoint
 and is outside this design.
 
-Deployment requirements:
-
-- Apply writer migrations first, then roll readers onto the new revision. A
-  reader started against an older schema fails fast rather than degrading.
-- An operator-set `default_transaction_read_only=on` on the **domain** session
-  fails `/ready` for **both** roles, because both write operational state.
-- Route traffic only to instances whose unauthenticated `GET /ready` returns HTTP
-  200. `/ready` probes the database and short-caches its verdict; `GET /health`
-  is liveness only and never touches PostgreSQL.
-- Every process serving KB images or retained source downloads must see the same
-  POSIX artifact tree at the **same absolute `deployment.working_dir` path**. Single host:
-  the existing volume or a shared named volume. Multi-host: one shared POSIX
-  mount such as EFS, NFS, or Azure Files. DlightRAG emulates no object store:
-  LightRAG writes `file://` sidecar URIs under `INPUT_DIR/__parsed__` and its
-  installed resolver returns `None` for remote schemes.
-- All Answer workers sharing one database must run a compatible software revision
-  and the same effective model-role, Answer image-policy, and agent-limit
-  configuration. Drain or cancel active and queued runs before an incompatible
-  rolling change.
-
-## Version Support Log
-
-`lightrag-hku>=1.5.6` is required: `PGTableGraphStorage` first ships there.
-DlightRAG carries no patches against LightRAG's PostgreSQL layer.
+A domain session forced read-only fails `/ready` for both roles because both
+write operational state. Migration order, probes, shared mounts, homogeneous
+worker requirements, and rollout commands are in
+[Operations](operations.md#durable-answer-runs).

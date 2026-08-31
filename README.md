@@ -4,87 +4,44 @@
 [![CI](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml/badge.svg)](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
 
-DlightRAG is a production-ready multimodal RAG service built on LightRAG. It offers superior context intelligence, great accuracy with citation / highlight grounding, and unified interfaces for REST, Web, MCP, and in-process Application. It is designed for developers, seasoned users and teams who need a reliable RAG core service with cutting edge features integrated into their workflows and products.
+DlightRAG is a production multimodal RAG service built on LightRAG. It combines
+knowledge-graph and vector retrieval with metadata filtering, BM25, visual
+retrieval, reranking, citations, highlights, and durable agentic answers. The
+same runtime is available through Web, REST, MCP, and an in-process Python API.
 
-Status: Python 3.14.7+. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
+**Runtime:** Python ≥3.14.7,<3.15 · PostgreSQL 18 ecosystem · Apache-2.0
 
-## Architecture At A Glance
+## Architecture
 
 <p align="center">
   <img src="docs/architecture.svg" alt="DlightRAG system context showing browser, REST, MCP, and embedded callers; optional enterprise identity and Web edge boundaries; external integrations; PostgreSQL; and corpus artifacts" width="1180" />
 </p>
 
-This is intentionally a system-context view: it shows DlightRAG as one system
-and does not mix internal modules, execution steps, package imports, or database
-entities into the same arrows.
+LightRAG supplies graph and vector retrieval. DlightRAG owns product policy,
+multimodal alignment, durable ingestion and answers, security, storage adapters,
+and public interfaces. Fast and Research answers share one durable conversation
+tree; Research adds a per-run workspace, tools, memory, and child agents.
+See [Architecture](docs/architecture.md) for module and storage ownership.
 
-DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. Research mode runs the durable product-neutral Agent Session Runtime with seven Pi-parity filesystem tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`), durable per-run workspaces, independently leased foreground child sessions, streamed tool progress, and verified image snapshots attached straight into the model call. Fast and Research share one canonical parent-linked conversation tree; Fast creates no Agent Operation. The full runtime ownership, frontend ownership, deployment and storage, and
-code-layer views are in [docs/architecture.md](docs/architecture.md).
+## Deployment Paths
 
-The repository is one UV workspace with two lockstep distributions. The root
-`dlightrag` distribution's Engine contains `dlightrag.engine.ai` for model settings
-and provider lifecycles, `dlightrag.engine.agent` for generic tool and turn
-mechanics, `dlightrag.engine.runtime` for durable coordination, and
-`dlightrag.engine.rag` for one workspace runtime with internal LightRAG, corpus,
-and retrieval owners. The root composes those modules into the REST, Web, MCP,
-and PostgreSQL-backed product, plus in-process Application. Owner Profile Memory
-remains the independently installable `dlightrag-memory` distribution for both
-DlightRAG and external stdio MCP hosts. CI builds and inspects the root and
-Memory wheels outside the editable workspace. `dlightrag.engine.runtime` owns
-storage-neutral durable-run contracts and coordination;
-`dlightrag.adapters.postgres` owns every concrete product PostgreSQL
-implementation; and `ApplicationHealth` is the single process-health state
-projected by status interfaces.
+| Path | PostgreSQL | Parser | Security |
+|---|---|---|---|
+| Local Docker | Compose PG18 | Self-hosted MinerU by default | Loopback, `auth_mode: none` |
+| Native API | Compose or external PG18 | Any reachable MinerU or Docling | Local or explicit auth |
+| Shared service | Managed or self-hosted PG18 | Independently operated parser | `simple` or `jwt` |
+| Enterprise | Managed PG18 | Independently operated parser | JWKS plus claim access control |
 
-## Choose Your Deployment Path
-
-| Path | Use this when | PostgreSQL | Parser endpoint | Security | Start here |
-|---|---|---|---|---|---|
-| Local Docker | Developer machine, Web UI, smoke tests | Compose PG18 | Self-hosted MinerU service (default); optional Docling or MinerU cloud | `access.auth_mode: none` on loopback | [Quick Start](#quick-start) |
-| Native API | API process runs on host, PostgreSQL stays in Docker | Compose PG18 | Any reachable configured Docling or MinerU endpoint | Local or explicit auth | [Native API Variant](#native-api-variant) |
-| Shared service | Remote users, agents, team workspace | Managed or self-hosted PG18 | Independently operated parser service | `simple` or `jwt` | [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md), [Security](docs/security.md) |
-| Enterprise | Multi-user internal product | Managed PG18 | Independently operated parser service | `jwt` + JWKS, optional claim access control | [Security](docs/security.md), [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md) |
-
-Do not install a parser into the DlightRAG app container. The checked-in config
-consumes a self-hosted MinerU service at
-`http://host.docker.internal:8210`; DlightRAG manages that host service through
-the `make mineru-service-*` targets. External or bundled Docling and MinerU's
-official cloud API remain available as alternatives.
+The parser runs outside the DlightRAG app container. The checked-in Docker
+configuration uses self-hosted MinerU at
+`http://host.docker.internal:8210`. Docling and MinerU cloud remain supported.
 
 ## Quick Start
 
-**Prerequisites.** Install [Docker + Compose](https://docs.docker.com/get-docker/)
-(runs the API and PostgreSQL), [`uv`](https://docs.astral.sh/uv/) (runs setup and
-native development commands), plus `git` and `make`. Install and start the
-self-hosted MinerU service before ingesting documents. DlightRAG targets
-**Python 3.14.7+**; `uv`
-installs it for you (`uv python install 3.14.7`), so a system Python is not
-required for the Docker path.
+Install [Docker + Compose](https://docs.docker.com/get-docker/),
+[`uv`](https://docs.astral.sh/uv/), `git`, and `make`.
 
-```bash
-# Install uv — macOS/Linux (see the uv docs for the Windows PowerShell command)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install make if you don't have it (git is usually already present):
-#   macOS          xcode-select --install       # or: brew install make
-#   Debian/Ubuntu  sudo apt-get install -y make
-#   Fedora/RHEL    sudo dnf install -y make
-#   Windows        no POSIX make on Windows — use WSL2 (Ubuntu): install Docker
-#                  Desktop with the WSL2 backend, then inside WSL2 follow the
-#                  Debian/Ubuntu line above. uv, make, and Python 3.14.7+ all live
-#                  inside WSL2 (a Linux environment), not on Windows.
-```
-
-The Docker Quick Start does **not** require `uv sync` — DlightRAG itself runs
-inside containers. Run `uv sync` only for the
-[Native API Variant](#native-api-variant) or
-[development](#operations-and-development).
-
-### One-command setup (recommended)
-
-From a fresh clone, an interactive wizard configures your models, defaults to
-self-hosted MinerU, retains MinerU cloud and Docling as alternatives, brings up
-the stack, and ends with a clickable Web UI link:
+### Interactive setup
 
 ```bash
 git clone https://github.com/hanlianlu/dlightrag.git
@@ -92,15 +49,10 @@ cd dlightrag
 uv run prerequisite_setup.py
 ```
 
-It writes `config.yaml` and `.env` for you (with timestamped backups) and is safe
-to re-run. The wizard does not preserve the checked-in model choices: the minimum
-path writes only `models.chat.default` plus `models.embedding`, while the custom path replaces
-role-specific LLM blocks with the roles you choose. Prefer the manual steps below
-if you'd rather configure everything by hand.
+The wizard configures models, parser, secrets, and the local stack. It defaults
+to self-hosted MinerU and is safe to rerun.
 
 ### Manual setup
-
-1. Clone the repo and create a secrets file:
 
 ```bash
 git clone https://github.com/hanlianlu/dlightrag.git
@@ -108,7 +60,7 @@ cd dlightrag
 cp .env.example .env
 ```
 
-Fill secrets in `.env`:
+Add the keys required by your `config.yaml` model blocks:
 
 ```bash
 DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=...
@@ -120,241 +72,80 @@ DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY=...
 DLIGHTRAG_MODELS__RERANK__API_KEY=...
 ```
 
-These match the checked-in `config.yaml`, which configures DeepSeek extract and
-keyword roles, OpenRouter default, query, and VLM roles, plus Voyage reranking.
-Role overrides are
-atomic: an omitted or blank key falls back to the complete default model
-configuration instead of combining its endpoint with the default key. If you
-remove role-specific model blocks or switch rerank back to `chat_llm_reranker`,
-the corresponding role/rerank keys can be omitted. Reserve `api_key: null` for
-a genuinely unauthenticated endpoint.
-
-Normal behavior lives in [config.yaml](config.yaml): model names, parser
-sidecar settings, metadata schema, retrieval breadth, auth mode, Langfuse
-behavior, and deployment endpoints. Deep config reference is in
-[docs/configuration.md](docs/configuration.md).
-
-2. Install and start the self-hosted MinerU service selected by the checked-in
-config:
+Install and start MinerU, then start DlightRAG:
 
 ```bash
 make mineru-install
 make mineru-service-install  # installs and starts the background service
 curl http://127.0.0.1:8210/health
-```
 
-The service binds to host loopback, while DlightRAG's Docker containers consume
-it through `http://host.docker.internal:8210`. Use `make mineru-api` instead when
-the platform cannot install a background user service.
-
-To use Docling instead, replace the MinerU block with a Docling block. A
-host-native Apple Silicon service is available from
-[docling-serve-mps](https://github.com/hanlianlu/docling-serve-mps); the optional
-official CPU image remains available with
-`docker compose --profile docling up -d`. Changing parser selection does not
-reparse an existing corpus; reset and reingest only when you intend to rebuild
-it with the new parser.
-
-3. Start DlightRAG and PostgreSQL:
-
-```bash
 docker compose up -d
 docker compose ps
 ```
 
-This starts:
+Open <http://localhost:8100/web/>. The stack publishes:
 
-| Service | Purpose | Host port |
-|---|---|---|
-| `dlightrag-api` | REST API + Web UI | `127.0.0.1:8100` |
-| `dlightrag-mcp` | MCP streamable HTTP server | `127.0.0.1:8101` |
-| `postgres` | PG18 ecosystem | `5432` |
+| Service | Address |
+|---|---|
+| REST API and Web | `http://127.0.0.1:8100` |
+| MCP streamable HTTP | `http://127.0.0.1:8101` |
+| PostgreSQL | `127.0.0.1:5432` |
 
-4. Open the Web UI:
+Use `make mineru-api` when the platform cannot install a background user
+service. To use Docling, replace the MinerU block in `config.yaml`; a commented
+example is included there. Parser changes affect only new parses.
 
-```text
-http://localhost:8100/web/
-```
+Configuration fields and parser operations are documented in
+[Configuration](docs/configuration.md) and [Operations](docs/operations.md).
 
-Upload documents or images from the Files panel, then ask a question.
+### Native API
 
-### Native API Variant
-
-Use this when the API process should run on the host while PostgreSQL stays in
-Docker:
+Run PostgreSQL in Docker and the API on the host:
 
 ```bash
 docker compose up -d postgres
 uv sync
-DLIGHTRAG_CORPUS__SIDECARS__DOCLING__ENDPOINT=http://127.0.0.1:5001 \
+DLIGHTRAG_CORPUS__SIDECARS__MINERU__LOCAL_ENDPOINT=http://127.0.0.1:8210 \
   uv run dlightrag-api
 ```
 
-A native run's managed input root is the host `./dlightrag_storage/inputs/<workspace>`,
-so files dropped there are ingested by name; paths outside it are rejected on
-every surface. The checked config is Docker-first, so the
-command overrides its Docker host alias with the native loopback endpoint.
+The checked-in config is Docker-first, so a native process overrides the parser
+host alias with loopback. Native managed inputs live under
+`./dlightrag_storage/inputs/<workspace>`.
 
 ## Use DlightRAG
 
 ### Web
 
-The Web UI is served by the REST API at `/web/`. Vite owns its static document
-and hashed assets, while light-DOM Lit Features own browser presentation,
-route-driven state, async work, focus, and accessibility. `dl-app` is only the
-composition root: all DlightRAG custom elements use `dl-`, sibling intent crosses
-typed events and small commands, and no migration adapters or fixed-ID
-cross-Feature mutations remain. It supports workspace selection, file/folder upload,
-durable principal-scoped conversations and answer attachments, citations,
-Sources, semantic highlights, and typed Answer Artifacts. The interface ships in
-English and Chinese, selectable under Settings → Language with an Automatic mode
-that follows the browser preference. Presentable files open
-in Artifact Canvas with side, wide, and fullscreen layouts; a Primary Report is
-one Artifact role rather than a second answer pane. Active HTML requires an
-explicit click and runs only in an opaque-origin sandboxed iframe with restrictive
-CSP; closing or switching the Canvas destroys it. This protects DlightRAG's DOM,
-storage, and credentials but is not a server-code sandbox or an absolute network-
-egress guarantee. Desktop panel resizing uses the Web Awesome Split Panel
-component behind DlightRAG tokens and persisted-width state; compact layouts
-retain the native modal overlay behavior. The Web-only
-conversation lifecycle provides New chat, select, rename, delete, reload,
-durable resume/cancel, Research steering and child status, and minimal
-follow-up/fork controls. Its recent-turn read window is not retention: linked
-runs follow the configured retention floor. `Search in: All authorized
-workspaces` is the answer default; the independent `Files in` selector remains a
-single-workspace file-management target. That Files panel loads 50 processed
-files initially and exposes an accessible **Load older files** control backed by
-signed workspace-bound keyset pages (maximum 100 per request), rather than
-materializing the full workspace inventory.
-
-REST, MCP, and Python answer/retrieve calls require no Web conversation ID.
-Answer calls accept optional caller-supplied `history`; an independent request
-re-sends the turns it wants, while the accepted run pins that bounded history
-for recovery and server-owned follow-up/fork. All
-channels take the same answer inputs: a query plus optional **attachments**
-(images, PDFs, Office documents, HTML/CSV, or HTTPS references). Attachments
-become request-local resources read on demand — deterministic text decoding and
-conversion first, focused VLM inspection for figures — and are bounded by
-`answer.generation.max_attachments` (default 6), a per-attachment size cap (100 MiB), and a
-per-request total (128 MiB). Uploaded bytes are stored once as owner-scoped
-content-addressed artifacts owned by the run, and historical ones are
-re-registered lazily on follow-ups. The separate `/retrieve` path keeps its own
-`query_images` current-image inputs for knowledge-base visual search.
-
-### Durable answers
-
-Every answer is one durable run with one identifier and one lifecycle, shared by
-REST, MCP, Web, in-process Application, and evaluation. `POST /answer` returns HTTP 202
-with the run's status, events, and cancel URLs; the run outlives its creating
-request, so a disconnected client only detaches. Events are reconnectable SSE
-resumed by durable sequence, and a restart restores typed Agent OperationState
-or restarts an unfinished Fast stage. Clients may inspect status, usage,
-evidence, and child lineage; steer a live Research run; start follow-up or fork
-continuations; resume observation; or explicitly cancel. Event logs and
-terminal rows follow `answer.runtime.answer_run_retention_days` (default 365);
-an expired event log returns 410 while an unpruned result remains readable.
-Run pruning deletes an Agent Session once no remaining run routing row names it.
-A Web Conversation identity does not extend Session history; Sessions shared by
-another routed run remain durable.
-See [docs/durable-answer-runs.md](docs/durable-answer-runs.md).
+The Web UI supports workspace and file management, durable Fast and Research
+conversations, answer attachments, citations, source highlights, child-agent
+status, and typed Answer Artifacts. English, Chinese, and automatic browser
+language modes are available under Settings.
 
 ### REST
 
-REST ingest starts durable background jobs. Poll the job endpoint for status.
+Ingestion creates a background job; answers create durable runs and return
+`202 Accepted`.
 
 ```bash
-curl -X POST http://localhost:8100/ingest \
+JOB=$(curl -sS -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
-  -d '{"source_type": "local", "path": "report.pdf"}'
+  -d '{"source_type":"local","path":"report.pdf"}' | jq -r .job_id)
+curl "http://localhost:8100/ingest/jobs/$JOB"
 
-curl http://localhost:8100/ingest/jobs/<job_id>
-
-# Answers are durable runs: POST returns 202 with the run's URLs.
 RUN=$(curl -sS -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
-  -d '{"query": "What are the key findings?"}' | jq -r .run_id)
-
-curl -N "http://localhost:8100/answer/$RUN/events"   # follow, resumable by id
-curl "http://localhost:8100/answer/$RUN"             # status + canonical result
+  -d '{"query":"What are the key findings?"}' | jq -r .run_id)
+curl -N "http://localhost:8100/answer/$RUN/events"
+curl "http://localhost:8100/answer/$RUN"
 ```
 
-All Application, REST, MCP, and Web contracts and response shapes are in
-[docs/interfaces.md](docs/interfaces.md).
-
-### In-process Application
-
-```bash
-uv add dlightrag
-```
-
-```python
-import asyncio
-import os
-
-from dlightrag import create_application
-from dlightrag.application.access import DEPLOYMENT_OWNER_ID
-from dlightrag.engine.ai.settings import (
-    EmbeddingSettings,
-    ModelRoleSettings,
-    ModelSettings,
-    ModelsSettings,
-)
-from dlightrag.application.config import DeploymentSettings, DlightragConfig
-from dlightrag.application.answer_runs import AnswerRequest
-from dlightrag.application.corpus_admin import IngestSpec
-
-
-async def main() -> None:
-    workspace = "research_notes"
-    config = DlightragConfig(
-        deployment=DeploymentSettings(
-            workspace=workspace,
-            working_dir="./dlightrag_storage/sdk_demo",
-        ),
-        models=ModelsSettings(
-            chat=ModelRoleSettings(
-                default=ModelSettings(
-                    provider="openai",  # protocol family: openai | anthropic | gemini (vendor via base_url)
-                    model="gpt-5.6-luna",
-                    api_key=os.environ["OPENAI_API_KEY"],
-                    temperature=1.0,
-                ),
-            ),
-            embedding=EmbeddingSettings(
-                provider="openai",
-                model="text-embedding-3-large",
-                api_key=os.environ["OPENAI_API_KEY"],
-                base_url="https://api.openai.com/v1",
-                dim=3072,
-            ),
-        ),
-    )
-    application = await create_application(config)
-    try:
-        await application.corpora.ingest(
-            workspace,
-            IngestSpec(source_type="local", path="./docs"),
-        )
-        answer = await application.answers.answer(
-            AnswerRequest(
-                query="What are the key findings?",
-                workspaces=(workspace,),
-            ),
-            owner_id=DEPLOYMENT_OWNER_ID,
-        )
-        print(answer.answer)
-    finally:
-        await application.aclose()
-
-
-asyncio.run(main())
-```
-
-`config.yaml` is optional for in-process Application users; constructor values take precedence.
+See [Interfaces](docs/interfaces.md) for requests, responses, pagination, SSE,
+attachments, citations, and all transport contracts.
 
 ### MCP
 
-Use stdio when an agent starts DlightRAG as a subprocess:
+For a local stdio client:
 
 ```json
 {
@@ -367,143 +158,74 @@ Use stdio when an agent starts DlightRAG as a subprocess:
 }
 ```
 
-Use streamable HTTP when multiple clients connect to a running service:
+The Compose stack also exposes streamable HTTP on port 8101. MCP supports
+retrieval, durable answers, steering, follow-up/fork/resume, child status,
+corpus administration, and capability discovery. The authoritative tool list
+is in [Interfaces](docs/interfaces.md#mcp-server).
+
+### Python
 
 ```bash
-DLIGHTRAG_INTERFACES__MCP__TRANSPORT=streamable-http \
-DLIGHTRAG_INTERFACES__MCP__HOST=127.0.0.1 \
-dlightrag-mcp
+uv add dlightrag
 ```
 
-MCP tools include retrieval, durable Answer start/status/cancel, steer,
-follow-up, fork, resume, transcript and child-roster operations, plus corpus and
-ingest administration and `get_capabilities`. See
-[docs/interfaces.md](docs/interfaces.md#mcp-server)
-for the authoritative tool-result contract.
+Create an application with `create_application(config)`, use
+`application.corpora` for ingestion and `application.answers` for durable
+answers, then call `application.aclose()`. Complete typed examples are in
+[Interfaces](docs/interfaces.md#in-process-application).
 
 ## Core Concepts
 
-**Workspaces.** A workspace is the primitive isolation unit for indexed data,
-metadata, jobs, files, and queries. Query calls can target one workspace or
-federate across multiple workspaces.
+| Concept | Meaning | Reference |
+|---|---|---|
+| Workspace | Isolation unit for indexed data, metadata, jobs, files, and queries | [Domain language](docs/domain-language.md) |
+| Ingestion | One durable contract for local files, uploads, object storage, URLs, and SDK sources | [Interfaces](docs/interfaces.md#ingestion) |
+| Retrieval | LightRAG mix retrieval plus metadata, BM25, visual fusion, rerank, and packing | [Retrieval and Answer](docs/retrieval-answer.md) |
+| Answer run | One durable lifecycle shared by REST, MCP, Web, Python, and evaluation | [Durable Answer Runs](docs/durable-answer-runs.md) |
+| Resource | Request-local attachment read deterministically or inspected visually on demand | [Retrieval and Answer](docs/retrieval-answer.md#answer-attachments-and-resources) |
+| Source | Durable provenance and download contract for an ingested document | [Interfaces](docs/interfaces.md#sources) |
 
-**Ingestion sources.** Local files, Web uploads, S3, Azure Blob, public/signed
-HTTPS URLs, and SDK `AsyncDataSource` connectors flow through the same ingest
-contract. Web and REST uploads are staged under DlightRAG's managed
-`deployment.working_dir/inputs/<workspace>/` tree, then copied into the workspace input
-root as retained local sources. Upload batch staging under `__uploads__/` is
-cleaned by the durable ingest job after the handoff.
+## Security
 
-**Source downloads.** Every successful ingest remains downloadable, whether or
-not DlightRAG retains a local copy. `source_uri` is stable provenance;
-`download_uri` is the durable S3, Azure, or queryless public HTTPS locator used
-when `retain_source_file` is false. Signed HTTPS fetch URLs need either a
-separate durable locator or retention. A non-retained custom SDK connector must
-provide `SourceDocument.download_uri` (or `download_uri_for_key`). DlightRAG
-rejects a document before materialization when this contract cannot be met; it
-never silently changes the caller's retention choice.
+Loopback development can use `access.auth_mode: none`. Shared deployments should
+use a bearer token or externally issued JWT; JWKS and claim-based workspace/action
+rules are supported. DlightRAG does not issue tokens or replace an ingress WAF,
+rate limiter, TLS terminator, or identity provider. See
+[Security](docs/security.md).
 
-**Runtime storage.** Docker Compose stores `deployment.working_dir` in the
-`dlightrag_data` named volume mounted at `/app/dlightrag_storage`; the host
-`./dlightrag_storage` directory is only used by native, non-Docker runs.
-
-**Metadata.** Pass any custom fields through `metadata` on ingest; they are
-stored as sent and are filterable without being declared first. Request-level
-metadata is the batch default; manifest or `SourceDocument` metadata overlays it
-per document.
-
-**Retrieval and answers.** DlightRAG uses LightRAG `mix` as the base retrieval
-mode, then adds metadata filtering, BM25, optional direct image retrieval, RRF
-fusion, reranking, answer packing, citations, and optional semantic highlights.
-Research mode turns the answer into an agent run: the model works in a durable
-per-run workspace with the seven-tool filesystem set in Pi order (`read`,
-`bash`, `edit`, `write`, `grep`, `find`, `ls`), knowledge-base and web search,
-memory, skills, and spawnable child agents; tool progress streams to Web as
-metadata-only events, and reading a verified image attaches the original
-snapshot to the next model call. The detailed mechanism is in
-[docs/retrieval-answer.md](docs/retrieval-answer.md).
-
-**Observability.** Langfuse tracing is optional. Non-secret SDK behavior is set
-in [docs/configuration.md](docs/configuration.md). To run the bundled local
-Langfuse stack (`make langfuse-up`) and view traces, see
-[docs/operations.md](docs/operations.md#local-langfuse-observability).
-
-## Security Model
-
-Local loopback development can use `access.auth_mode: none`. Shared or exposed
-deployments should enable auth:
-
-| Mode | Use case |
-|---|---|
-| `simple` | One shared bearer token |
-| `jwt` | Externally issued signed tokens |
-| `jwt` + JWKS | OIDC-style issuers with key rotation |
-| `jwt` + `jwt_claims` access control | Workspace/action permissions from verified claims |
-
-DlightRAG verifies bearer tokens and can enforce workspace/action access
-control. [Access Rules](docs/security.md#authorization-model) map external IdP
-claims to Workspace and Action patterns; role presets are not stored user
-memberships. DlightRAG does not issue OAuth tokens or manage users. Use an
-external IdP or gateway for login and token issuance. Generic request-rate
-limiting, WAF rules, DDoS protection, TLS termination, and connection caps
-belong to your ingress (Front Door, Application Gateway, APIM, NGINX); DlightRAG
-ships no in-process
-rate limiter. Full guidance is in [docs/security.md](docs/security.md).
-
-## Operations And Development
-
-Use [docs/operations.md](docs/operations.md) for the full stop/rebuild/restart
-sequence and maintenance safety notes.
-
-### Development setup:
+## Development
 
 ```bash
 uv sync
-cd frontend && npm ci && cd ..
+npm --prefix frontend ci
 make hooks
+make ci          # lint, security, format, types, architecture, frontend, unit
+make ci-full     # plus integration tests
+make ci-e2e      # plus E2E smoke
 ```
 
-Verification:
+Use [Operations](docs/operations.md) for reset, rebuild, parser, Langfuse, and
+maintenance runbooks. RAGAS evaluation is documented in
+[Evaluation](docs/evaluation.md).
 
-```bash
-make ci          # the fast gate: lint, security, format, types, architecture, shell, frontend, unit tests
-make ci-full     # above + integration tests
-make ci-e2e      # above + E2E smoke
-```
+## Documentation
 
-Frontend checks after editing `frontend/`:
+| Document | Owns |
+|---|---|
+| [Architecture](docs/architecture.md) | Runtime ownership, flows, storage topology, layering |
+| [Domain Language](docs/domain-language.md) | Canonical product vocabulary |
+| [Configuration](docs/configuration.md) | Configuration precedence, fields, defaults, examples |
+| [Interfaces](docs/interfaces.md) | Python, REST, MCP, and Web contracts |
+| [Retrieval and Answer](docs/retrieval-answer.md) | Retrieval, fusion, rerank, packing, citations, highlights |
+| [Durable Answer Runs](docs/durable-answer-runs.md) | State machine, leases, events, recovery, retention |
+| [Security](docs/security.md) | Authentication, authorization, ingress and content boundaries |
+| [PostgreSQL](docs/postgresql.md) | PostgreSQL requirements, schema ownership, tuning |
+| [Operations](docs/operations.md) | Executable runbooks and recovery workflows |
+| [Evaluation](docs/evaluation.md) | RAGAS workflow |
+| [Web Theme Design](docs/web-theme-design.md) | Web appearance and interaction decisions |
 
-```bash
-make frontend-ci  # install, typecheck, CSS lint, Node + browser tests, build, audit
-```
-
-For an individual check, run its script under `frontend/` (`typecheck`, `test`,
-`test:browser`, `build`, or `lint:css`). `npm run build` writes Vite-owned HTML
-and hashed browser assets to `src/dlightrag/adapters/http/browser/static/app/`. For HMR, run
-`npm run dev`; the Vite server proxies authenticated browser APIs and support
-assets to FastAPI on `127.0.0.1:8100`.
-That directory is gitignored and rebuilt by `make ci`; the wheel and source
-distribution include it through their Hatch artifact settings.
-
-Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
-
-## Documentation Map
-
-- [docs/architecture.md](docs/architecture.md) - runtime ownership, storage topology, and code layering.
-- [docs/domain-language.md](docs/domain-language.md) - the project's shared vocabulary for domain terms.
-- [docs/interfaces.md](docs/interfaces.md) - Application, REST, MCP, and Web contracts.
-- [docs/security.md](docs/security.md) - auth, JWT/JWKS, IdP boundaries, and access control.
-- [docs/configuration.md](docs/configuration.md) - configuration precedence, fields, and defaults.
-- [docs/retrieval-answer.md](docs/retrieval-answer.md) - retrieval, filters, BM25, fusion, rerank, answers, citations, and highlights.
-- [docs/postgresql.md](docs/postgresql.md) - PostgreSQL requirements and tuning.
-- [docs/durable-answer-runs.md](docs/durable-answer-runs.md) - the durable Answer run contract.
-- [docs/operations.md](docs/operations.md) - maintenance commands and recovery workflows.
-- [docs/evaluation.md](docs/evaluation.md) - RAGAS evaluation workflow.
-- [docs/web-theme-design.md](docs/web-theme-design.md) - current Web appearance, semantic geometry, panel, interaction, and accessibility design.
-- [LightRAG API Server docs](https://github.com/HKUDS/LightRAG/blob/main/docs/LightRAG-API-Server.md) - upstream parser routing and external parser contracts.
-- [Docling Serve](https://github.com/docling-project/docling-serve) - official Docling HTTP service and container images.
-- [Docling Serve MPS](https://github.com/hanlianlu/docling-serve-mps) - optional host-native Apple Silicon Docling service.
-- [MinerU Docker deployment docs](https://opendatalab.github.io/MinerU/quick_start/docker_deployment/) - upstream deployment reference; the checked-in default uses DlightRAG's host service scripts.
+Plans, ADRs, and research notes under `docs/` are historical design evidence,
+not required reading for operating DlightRAG.
 
 ## License
 

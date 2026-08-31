@@ -170,30 +170,8 @@ ragas_eval_results/
 └── results_20260610_143052.json  # Full results with details
 ```
 
-Console output shows a per-question table and a summary:
-
-```
-===================================================================================================================
-📊 EVALUATION RESULTS SUMMARY
-===================================================================================================================
-#    | Question                                             | Faith  | AnswRel | CtxRec | CtxPrec | RAGAS  | Status
--------------------------------------------------------------------------------------------------------------------
-1    | What is the cancellation policy?                     | 0.8523 | 0.9100  | 0.7800 | 0.9200  | 0.8656 | ✓
-2    | Who is the CTO of the company?                       | 0.9400 | 0.8700  | 0.6500 | 0.8800  | 0.8350 | ✓
-===================================================================================================================
-
-======================================================================
-📈 BENCHMARK RESULTS (Average)
-======================================================================
-Average Faithfulness:      0.8962
-Average Answer Relevance:  0.8900
-Average Context Recall:    0.7150
-Average Context Precision: 0.9000
-Average RAGAS Score:       0.8503
-----------------------------------------------------------------------
-Min RAGAS Score:           0.8350
-Max RAGAS Score:           0.8656
-```
+Console output shows one row per question plus aggregate, minimum, and maximum
+scores.
 
 ## Manual release evaluation
 
@@ -204,14 +182,6 @@ Operators run `scripts/ragas_eval.py` with the commands above and review the
 result artifacts before release. Do not turn example or synthetic outputs into
 a PR quality gate; RAGAS scores depend on the selected corpus and evaluator
 models and are not deterministic fixtures.
-
-## Adapter Note
-
-This is a thin format-adapter — all evaluation logic lives in LightRAG's
-`lightrag.evaluation` module. The adapter owns only the `/answer` call and the
-text-context projection; answer media rendering stays with SDK/REST/MCP/Web/CLI
-clients. When LightRAG updates `RAGEvaluator` (new metrics, better concurrency,
-bug fixes), DlightRAG gets the improvements without code changes.
 
 ## Troubleshooting
 
