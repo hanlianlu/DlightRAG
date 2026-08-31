@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -15,7 +14,6 @@ from dlightrag.engine.ai.embedding_inputs import (
     MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
-from dlightrag.engine.ai.tokens import estimate_tokens
 
 EmbeddingContext = Literal["query", "document"]
 ImageInputCapability = Literal["unsupported", "native"]
@@ -61,10 +59,7 @@ class EmbedModelCapabilities:
     fused_inputs: bool = False
     asymmetric: bool = False
     max_inputs: int = 64
-    max_tokens_per_input: int | None = None
-    max_tokens_per_request: int | None = None
     max_image_bytes_per_request: int | None = None
-    token_safety_margin: float = 1.2
     output_dimension: OutputDimensionPolicy = OutputDimensionPolicy()
 
     @property
@@ -78,13 +73,6 @@ def input_parts(item: EmbeddingInput) -> list[TextEmbeddingInput | ImageEmbeddin
     if isinstance(item, MultimodalEmbeddingInput):
         return item.parts
     return [item]
-
-
-def input_text(item: EmbeddingInput) -> str:
-    """Join the text-bearing parts used for request budgeting."""
-    return "\n".join(
-        part.text for part in input_parts(item) if isinstance(part, TextEmbeddingInput)
-    )
 
 
 def input_image_bytes(item: EmbeddingInput) -> int:
@@ -175,12 +163,6 @@ class EmbedProvider(ABC):
         output_dimension: int | None,
     ) -> dict[str, Any]:
         """Serialize an already validated embedding batch."""
-
-    def estimate_input_tokens(self, model: str, item: EmbeddingInput) -> int:
-        """Conservatively estimate text tokens for non-OpenAI providers."""
-        capabilities = self.capabilities(model)
-        raw = estimate_tokens(input_text(item))
-        return math.ceil(raw * capabilities.token_safety_margin)
 
     def parse_response(self, data: Mapping[str, Any], *, expected_count: int) -> list[list[float]]:
         """Extract vectors from an ordered ``data`` response."""

@@ -53,12 +53,10 @@ def test_openai_official_payload_sends_dimensions_only_for_v3_models() -> None:
     assert "dimensions" not in ada
 
 
-def test_openai_official_limits_match_the_published_request_contract() -> None:
+def test_openai_official_batch_limit_matches_the_published_request_contract() -> None:
     capabilities = OpenAIEmbedProvider().capabilities("text-embedding-3-large")
 
     assert capabilities.max_inputs == 2048
-    assert capabilities.max_tokens_per_input == 8192
-    assert capabilities.max_tokens_per_request == 300_000
 
 
 def test_openai_official_rejects_wrong_fixed_dimension() -> None:
@@ -313,11 +311,10 @@ def test_cohere_v4_text_query_and_float_response_contract() -> None:
     ]
 
 
-def test_cohere_v4_limits_match_the_published_request_contract() -> None:
+def test_cohere_v4_batch_limits_match_the_published_request_contract() -> None:
     capabilities = CohereEmbedProvider().capabilities("embed-v4.0")
 
     assert capabilities.max_inputs == 96
-    assert capabilities.max_tokens_per_input == 128_000
     assert capabilities.max_image_bytes_per_request == 20_000_000
 
 

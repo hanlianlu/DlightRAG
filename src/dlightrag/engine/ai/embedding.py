@@ -44,7 +44,6 @@ _RETRY_JITTER_SECONDS = 0.25
 class _EmbeddingRequest:
     payload: dict[str, Any]
     expected_count: int
-    estimated_tokens: int
     estimated_image_bytes: int
 
 
@@ -86,8 +85,6 @@ class MultimodalEmbedder:
         dim: int,
         provider: EmbedProvider,
         input_modality: InputModality = "auto",
-        max_token_size: int = 8192,
-        batch_size: int = 64,
         timeout: float = 120.0,
         fingerprint: ModelFingerprint,
         scheduler: ModelScheduler,
@@ -95,10 +92,6 @@ class MultimodalEmbedder:
     ) -> None:
         if dim < 1:
             raise ValueError("Embedding dimension must be positive")
-        if max_token_size < 1:
-            raise ValueError("Embedding max_token_size must be positive")
-        if batch_size < 1:
-            raise ValueError("Embedding batch_size must be positive")
         self.model = model
         self.provider = provider
         self.base_url = (base_url or provider.default_base_url).rstrip("/")
@@ -106,8 +99,6 @@ class MultimodalEmbedder:
             raise ValueError(f"{provider.__class__.__name__} requires an embedding base_url")
         self.request_url = provider.request_url(self.base_url, model)
         self.dim = dim
-        self._max_token_size = max_token_size
-        self._batch_size = batch_size
         self._capabilities = provider.capabilities(model)
         self._capabilities.output_dimension.request_value(dim, model=model)
         self.input_modality = resolve_embedding_input_modality(provider, model, input_modality)
@@ -251,65 +242,31 @@ class MultimodalEmbedder:
         if not inputs:
             raise ValueError("Embedding request requires at least one input")
         capabilities = self._capabilities
-        max_inputs = min(self._batch_size, capabilities.max_inputs)
-        input_limit = min(
-            limit
-            for limit in (self._max_token_size, capabilities.max_tokens_per_input)
-            if limit is not None
-        )
-        token_counts: list[int] = []
-        image_byte_counts: list[int] = []
-        for index, item in enumerate(inputs):
-            estimated = self.provider.estimate_input_tokens(self.model, item)
-            if estimated > input_limit:
-                raise ValueError(
-                    f"Embedding input {index} for model {self.model!r} is over the token limit: "
-                    f"estimated {estimated}, limit {input_limit}"
-                )
-            image_bytes = input_image_bytes(item)
-            token_counts.append(estimated)
-            image_byte_counts.append(image_bytes)
+        image_byte_counts = [input_image_bytes(item) for item in inputs]
 
-        batches: list[tuple[list[EmbeddingInput], int, int]] = []
+        batches: list[tuple[list[EmbeddingInput], int]] = []
         current: list[EmbeddingInput] = []
-        current_tokens = 0
         current_image_bytes = 0
-        request_limit = capabilities.max_tokens_per_request
         image_request_limit = capabilities.max_image_bytes_per_request
-        for item, estimated, image_bytes in zip(
-            inputs,
-            token_counts,
-            image_byte_counts,
-            strict=True,
-        ):
-            if request_limit is not None and estimated > request_limit:
-                raise ValueError(
-                    f"One embedding input for model {self.model!r} exceeds the request token "
-                    f"limit: estimated {estimated}, limit {request_limit}"
-                )
+        for item, image_bytes in zip(inputs, image_byte_counts, strict=True):
             if image_request_limit is not None and image_bytes > image_request_limit:
                 raise ValueError(
                     f"One embedding input for model {self.model!r} exceeds the request image-byte "
                     f"limit: estimated {image_bytes}, limit {image_request_limit}"
                 )
-            token_overflow = (
-                current and request_limit is not None and current_tokens + estimated > request_limit
-            )
             image_overflow = (
                 current
                 and image_request_limit is not None
                 and current_image_bytes + image_bytes > image_request_limit
             )
-            if current and (len(current) >= max_inputs or token_overflow or image_overflow):
-                batches.append((current, current_tokens, current_image_bytes))
+            if current and (len(current) >= capabilities.max_inputs or image_overflow):
+                batches.append((current, current_image_bytes))
                 current = []
-                current_tokens = 0
                 current_image_bytes = 0
             current.append(item)
-            current_tokens += estimated
             current_image_bytes += image_bytes
         if current:
-            batches.append((current, current_tokens, current_image_bytes))
+            batches.append((current, current_image_bytes))
 
         return [
             _EmbeddingRequest(
@@ -320,10 +277,9 @@ class MultimodalEmbedder:
                     output_dimension=self.dim,
                 ),
                 expected_count=len(batch),
-                estimated_tokens=estimated,
                 estimated_image_bytes=image_bytes,
             )
-            for batch, estimated, image_bytes in batches
+            for batch, image_bytes in batches
         ]
 
     async def _execute_requests(
@@ -344,7 +300,6 @@ class MultimodalEmbedder:
                 "provider": self.fingerprint.provider,
                 "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
                 "request_count": len(requests),
-                "estimated_input_tokens": sum(item.estimated_tokens for item in requests),
                 "inline_image_bytes": sum(item.estimated_image_bytes for item in requests),
             },
             model=self.fingerprint.model,
@@ -493,8 +448,6 @@ def create_embedding_model(
         dim=settings.dim,
         provider=provider,
         input_modality=settings.input_modality,
-        max_token_size=settings.max_token_size,
-        batch_size=settings.batch_size,
         timeout=settings.timeout,
         fingerprint=model_endpoint_fingerprint(
             settings.provider,

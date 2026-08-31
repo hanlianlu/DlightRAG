@@ -169,12 +169,12 @@ supported by their corresponding adapters.
 | `api_key` | unset | Put secrets in `.env` |
 | `base_url` | provider default | Protocol root or accepted complete endpoint |
 | `dim` | `1024` | Vector/schema dimension; every response is validated |
-| `max_token_size` | `8192` | Local per-input ceiling |
+| `max_token_size` | `8192` | LightRAG embedding-content truncation budget |
 | `input_modality` | `auto` | `auto`, `text`, or `multimodal` |
 | `startup_probe` | `true` | Verify configured visual paths |
 | `timeout` | `120` | Request timeout in seconds |
 | `max_concurrency` | `16` | Process-wide scheduler admission |
-| `batch_size` | `64` | Local maximum before provider-aware splitting |
+| `batch_size` | `64` | LightRAG embedding batch size |
 
 `auto` enables native fused document vectors and image-query retrieval for
 known multimodal models. `text` disables both image paths. `multimodal` requires
@@ -433,7 +433,7 @@ the same absolute path. Production sizing, SSL, indexes, and role details are in
 | `answer.runtime.answer_worker_concurrency` | `16` | Durable answer runs per process |
 | `corpus.ingestion.pipeline.max_concurrency` | `16` | One workspace's LightRAG pipeline |
 | `models.embedding.max_concurrency` | `16` | Embedding calls |
-| `models.embedding.batch_size` | `64` | Local batch before provider-aware splitting |
+| `models.embedding.batch_size` | `64` | LightRAG embedding batch size |
 | `corpus.ingestion.chunk_token_size` | `2000` | LightRAG chunk size |
 | `corpus.ingestion.replace_default` | `false` | Default replacement policy |
 | `corpus.ingestion.retain_remote_source_files` | `false` | Default remote-byte retention |

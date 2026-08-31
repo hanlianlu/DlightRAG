@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from lightrag.utils import TiktokenTokenizer
 from PIL import Image
 
 from dlightrag.engine.ai.contracts import InputModality, ResolvedInputModality
@@ -25,7 +26,6 @@ from dlightrag.engine.ai.providers.embed_providers import (
 from dlightrag.engine.ai.providers.embed_providers import (
     JinaEmbedProvider,
     OpenAICompatibleEmbedProvider,
-    OpenAIEmbedProvider,
 )
 from dlightrag.engine.ai.providers.embed_providers import (
     VoyageEmbedProvider as _VoyageEmbedProvider,
@@ -64,19 +64,18 @@ class GeminiEmbedProvider(_GeminiEmbedProvider):
         return _relaxed_test_dimensions(super().capabilities(model))
 
 
-class TinyRequestBudgetVoyageProvider(VoyageEmbedProvider):
-    """Expose deterministic tiny limits for transport splitting tests."""
+class TwoInputVoyageProvider(VoyageEmbedProvider):
+    """Expose a tiny provider input-count limit for transport splitting tests."""
 
     def capabilities(self, model: str):
-        return replace(
-            super().capabilities(model),
-            max_tokens_per_request=3,
-            max_image_bytes_per_request=100,
-        )
+        return replace(super().capabilities(model), max_inputs=2)
 
-    def estimate_input_tokens(self, model: str, item: Any) -> int:
-        del model, item
-        return 2
+
+class TinyImageBudgetVoyageProvider(VoyageEmbedProvider):
+    """Expose a tiny provider image-byte limit for transport splitting tests."""
+
+    def capabilities(self, model: str):
+        return replace(super().capabilities(model), max_image_bytes_per_request=100)
 
 
 def MultimodalEmbedder(**kwargs):
@@ -335,30 +334,40 @@ async def test_empty_batch_and_blank_text_are_rejected_without_network() -> None
     embedder._client.post.assert_not_awaited()  # pyright: ignore[reportPrivateUsage]
 
 
-async def test_configured_input_token_budget_fails_explicitly() -> None:
+async def test_lightrag_truncated_input_is_forwarded_without_local_token_guard() -> None:
+    tokenizer = TiktokenTokenizer("gpt-4o-mini")
+    original = "economic development and monetary policy " * 4_000
+    span = tokenizer.truncate_by_token_limit(original, 8_192)
+    text = original[span.start : span.end]
+    provider = VoyageEmbedProvider()
+    assert len(tokenizer.encode(text)) == 8_192
+
     embedder = MultimodalEmbedder(
-        model="text-embedding-3-large",
-        base_url="https://api.openai.com/v1",
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
         api_key="key",
         dim=3,
-        max_token_size=1,
-        provider=OpenAIEmbedProvider(),
+        provider=provider,
+    )
+    embedder._client.post = AsyncMock(  # pyright: ignore[reportPrivateUsage]
+        return_value=_response(200, {"data": [{"embedding": [0.1, 0.2, 0.3]}]})
     )
     try:
-        with pytest.raises(ValueError, match="estimated .* limit 1"):
-            await embedder.embed_texts(["hello world"])
+        result = await embedder.embed_texts([text])
     finally:
         await embedder.aclose()
 
+    assert result == [[0.1, 0.2, 0.3]]
+    embedder._client.post.assert_awaited_once()  # pyright: ignore[reportPrivateUsage]
 
-async def test_batch_size_auto_splits_and_preserves_order() -> None:
+
+async def test_provider_input_count_auto_splits_and_preserves_order() -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
         base_url="https://api.voyageai.com/v1",
         api_key="key",
         dim=2,
-        batch_size=2,
-        provider=VoyageEmbedProvider(),
+        provider=TwoInputVoyageProvider(),
     )
     next_value = 1
 
@@ -380,41 +389,13 @@ async def test_batch_size_auto_splits_and_preserves_order() -> None:
     assert embedder._client.post.await_count == 3  # pyright: ignore[reportPrivateUsage]
 
 
-async def test_total_request_token_budget_auto_splits_without_reordering() -> None:
-    embedder = MultimodalEmbedder(
-        model="voyage-multimodal-3.5",
-        base_url="https://api.voyageai.com/v1",
-        api_key="key",
-        dim=2,
-        batch_size=64,
-        provider=TinyRequestBudgetVoyageProvider(),
-    )
-    next_value = 1
-
-    async def post(_url: str, *, json: dict[str, Any]) -> httpx.Response:
-        nonlocal next_value
-        value = next_value
-        next_value += 1
-        assert len(json["inputs"]) == 1
-        return _response(200, {"data": [{"embedding": [float(value), 1.0]}]})
-
-    embedder._client.post = AsyncMock(side_effect=post)  # pyright: ignore[reportPrivateUsage]
-    try:
-        vectors = await embedder.embed_texts(["a", "b", "c"])
-    finally:
-        await embedder.aclose()
-
-    assert vectors == [[1.0, 1.0], [2.0, 1.0], [3.0, 1.0]]
-    assert embedder._client.post.await_count == 3  # pyright: ignore[reportPrivateUsage]
-
-
 async def test_combined_image_byte_budget_auto_splits_requests() -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
         base_url="https://api.voyageai.com/v1",
         api_key="key",
         dim=2,
-        provider=TinyRequestBudgetVoyageProvider(),
+        provider=TinyImageBudgetVoyageProvider(),
     )
 
     async def post(_url: str, *, json: dict[str, Any]) -> httpx.Response:

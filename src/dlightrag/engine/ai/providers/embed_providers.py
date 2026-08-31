@@ -8,8 +8,6 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-import tiktoken
-
 from dlightrag.engine.ai.embedding_inputs import (
     EmbeddingInput,
     ImageEmbeddingInput,
@@ -21,7 +19,6 @@ from dlightrag.engine.ai.providers.embed_base import (
     EmbedProvider,
     OutputDimensionPolicy,
     input_parts,
-    input_text,
     numeric_usage,
 )
 
@@ -227,9 +224,6 @@ class OpenAIEmbedProvider(OpenAICompatibleEmbedProvider):
     def capabilities(self, model: str) -> EmbedModelCapabilities:
         return EmbedModelCapabilities(
             max_inputs=2048,
-            max_tokens_per_input=8192,
-            max_tokens_per_request=300_000,
-            token_safety_margin=1.0 if model in _OPENAI_DIMENSIONS else 1.2,
             output_dimension=_OPENAI_DIMENSIONS.get(model, OutputDimensionPolicy()),
         )
 
@@ -259,23 +253,12 @@ class OpenAIEmbedProvider(OpenAICompatibleEmbedProvider):
             payload["dimensions"] = output_dimension
         return payload
 
-    def estimate_input_tokens(self, model: str, item: EmbeddingInput) -> int:
-        if model not in _OPENAI_DIMENSIONS:
-            return super().estimate_input_tokens(model, item)
-        try:
-            encoding = tiktoken.encoding_for_model(model)
-        except KeyError:
-            encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(input_text(item)))
-
 
 _VOYAGE_MULTIMODAL = EmbedModelCapabilities(
     image_input="native",
     fused_inputs=True,
     asymmetric=True,
     max_inputs=1000,
-    max_tokens_per_input=32_000,
-    max_tokens_per_request=320_000,
     output_dimension=OutputDimensionPolicy(
         send_upstream=True,
         allowed=(256, 512, 1024, 2048),
@@ -321,7 +304,6 @@ _JINA_V4 = EmbedModelCapabilities(
     fused_inputs=True,
     asymmetric=True,
     max_inputs=64,
-    max_tokens_per_input=32_768,
     output_dimension=OutputDimensionPolicy(
         send_upstream=True,
         minimum=128,
@@ -371,7 +353,6 @@ _GEMINI_EMBEDDING_2 = EmbedModelCapabilities(
     fused_inputs=True,
     asymmetric=True,
     max_inputs=1,
-    max_tokens_per_input=8192,
     output_dimension=OutputDimensionPolicy(
         send_upstream=True,
         minimum=128,
@@ -432,7 +413,6 @@ _COHERE_V4 = EmbedModelCapabilities(
     fused_inputs=True,
     asymmetric=True,
     max_inputs=96,
-    max_tokens_per_input=128_000,
     max_image_bytes_per_request=20_000_000,
     output_dimension=OutputDimensionPolicy(
         send_upstream=True,
