@@ -94,6 +94,39 @@ Point its block at `http://docling:5001` with `code_formula_preset: null`. It
 publishes only `127.0.0.1:5001`; do not run it beside a host Docling service on
 the same port. Independently managed Docling endpoints are also supported.
 
+## Failed Ingestion Cleanup
+
+Failed documents are terminal and are not automatically retried. First inspect
+the workspace:
+
+```bash
+curl 'http://127.0.0.1:8100/files/failed?workspace=personel'
+```
+
+If the stored source/download locator is still available, retry every failed
+document with the currently configured parser:
+
+```bash
+curl -X POST 'http://127.0.0.1:8100/files/retry?workspace=personel'
+```
+
+If retry is unwanted or the source is unavailable, preview exact deletion by
+filename, then repeat with `dry_run: false`:
+
+```bash
+curl -X DELETE http://127.0.0.1:8100/files \
+  -H 'Content-Type: application/json' \
+  -d '{"workspace":"personel","filenames":["failed.pdf"],"dry_run":true}'
+
+curl -X DELETE http://127.0.0.1:8100/files \
+  -H 'Content-Type: application/json' \
+  -d '{"workspace":"personel","filenames":["failed.pdf"],"dry_run":false}'
+```
+
+Deletion cascades the failed status, full document, metadata, chunks/vectors/KG
+when present, source file, and `.parsed`/`.mineru_raw`/`.docling_raw` directories.
+The terminal ingest-job row remains as operational history and is pruned after seven days.
+
 ## Workspace BM25 Rebuild
 
 `dlightrag-rebuild-bm25` creates configured pg_textsearch indexes and refreshes

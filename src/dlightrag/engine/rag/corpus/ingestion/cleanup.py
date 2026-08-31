@@ -150,9 +150,10 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
     Handles the full LightRAG parser artifact layout:
 
     - Source files in ``input_dir/``
-    - Parsed artifacts under ``input_dir/__parsed__/``:
-      ``<name>.parsed/``, ``<name>.mineru_raw/``, ``<name>.docling_raw/``
-    - Collision-suffixed variants (``<name>_001.parsed/``, etc.)
+    - Parsed artifacts under ``input_dir/__parsed__/`` using either the full
+      filename or its stem: ``<name>.pdf.parsed/`` or ``<name>.parsed/`` plus
+      the corresponding ``.mineru_raw`` / ``.docling_raw`` directories
+    - Collision-suffixed variants (``<name>.pdf_001.parsed/``, etc.)
 
     Best-effort — failures are logged but never raised, so a missing file
     on disk does not block the DB-level deletion from succeeding.
@@ -180,6 +181,7 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
         path = Path(fp)
         filename = path.name
         stem = path.stem
+        artifact_bases = {filename, stem}
         source_root = _source_root_for_stored_path(path, input_root)
         parsed_roots = [source_root / PARSED_DIR_NAME]
         if default_parsed_root not in parsed_roots:
@@ -199,10 +201,9 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
             except OSError:
                 logger.debug("Failed to remove source file: %s", candidate, exc_info=True)
 
-        # 2. Remove parsed artifact directories under __parsed__/.
-        #    LightRAG creates:  <stem>.parsed/, <stem>.mineru_raw/,
-        #    <stem>.docling_raw/, plus collision-suffixed variants
-        #    (<stem>_001.parsed/, etc.).
+        # 2. Remove parsed artifact directories under __parsed__/. LightRAG
+        #    versions have used both the full source filename and its stem as
+        #    the artifact base, with optional collision suffixes.
         for parsed_root in parsed_roots:
             try:
                 if not parsed_root.exists() or not parsed_root.is_dir():
@@ -212,11 +213,10 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
                         continue
                     entry_name = entry.name
                     for suffix in PARSED_ARTIFACT_DIR_SUFFIXES:
-                        expected = f"{stem}{suffix}"
-                        if entry_name == expected or (
-                            entry_name.endswith(suffix)
-                            and _collision_re.sub("", entry_name[: -len(suffix)]) == stem
-                        ):
+                        if not entry_name.endswith(suffix):
+                            continue
+                        artifact_base = _collision_re.sub("", entry_name[: -len(suffix)])
+                        if artifact_base in artifact_bases:
                             shutil.rmtree(entry, ignore_errors=True)
                             removed += 1
                             break

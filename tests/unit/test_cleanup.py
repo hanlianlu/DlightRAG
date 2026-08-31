@@ -198,6 +198,23 @@ class TestRemoveDeletedFiles:
         assert removed == 0
         assert local_copy.read_bytes() == b"local"
 
+    def test_full_filename_parser_artifacts_removed_when_source_is_missing(self, tmp_path) -> None:
+        workspace_input = tmp_path / "inputs" / "default"
+        parsed_root = workspace_input / "__parsed__"
+        artifact_dirs = [
+            parsed_root / "report.pdf.parsed",
+            parsed_root / "report.pdf.docling_raw",
+            parsed_root / "report.pdf.mineru_raw",
+        ]
+        for artifact_dir in artifact_dirs:
+            artifact_dir.mkdir(parents=True)
+            (artifact_dir / "artifact.txt").write_text("stale")
+
+        removed = remove_deleted_files({"report.pdf"}, str(workspace_input))
+
+        assert removed == len(artifact_dirs)
+        assert all(not artifact_dir.exists() for artifact_dir in artifact_dirs)
+
     def test_nested_remote_parser_path_removes_artifacts_not_remote_source(self, tmp_path) -> None:
         workspace_input = tmp_path / "inputs" / "default"
         batch_root = workspace_input / "__remote_ingest__" / "s3" / "batch-1"
