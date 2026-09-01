@@ -93,8 +93,13 @@ def _browser_payload(
                 "output_bytes",
                 "spill_state",
                 "attachment_count",
+                "object_label",
             }
-            return {key: value for key, value in payload.items() if key in allowed}
+            projected = {key: value for key, value in payload.items() if key in allowed}
+            label = projected.get("object_label")
+            if isinstance(label, str):
+                projected["object_label"] = label[:64]
+            return projected
         case "memory_operation_settled":
             allowed = {
                 "body",

@@ -567,6 +567,7 @@ def _answer_runtime_event_sink(
             "outcome",
             "text_chars",
             "attempt_id",
+            "object_label",
         }
         payload = {
             key: value

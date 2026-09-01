@@ -12,6 +12,8 @@ import type {
 import {icon} from '../design-system/index.ts';
 import {localizedStoredRunError} from '../lib/run_errors.ts';
 import {formatFileSize} from '../lib/file_size.ts';
+import type {ToolRow} from '../lib/tool_events.ts';
+import {toolVerbText} from '../lib/tool_display.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import chatStyles from '../styles/chat.module.css';
@@ -48,6 +50,9 @@ export interface ChatTurnView {
   sawChildren: boolean;
   cancelRequested: boolean;
   steeringMessages: readonly string[];
+  toolRows: readonly ToolRow[];
+  toolTotal: number;
+  toolExpanded: boolean;
 }
 
 export interface ChatRunActionDetail {
@@ -57,6 +62,16 @@ export interface ChatRunActionDetail {
 
 export interface ChatReconnectDetail {
   runId: string;
+}
+
+export interface ChatToolTraceToggleDetail {
+  runId: string;
+}
+
+function formatToolDuration(durationMs: number | null): string {
+  if (durationMs === null) return '';
+  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+  return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
 export interface ChatViewActionDetail {
@@ -411,10 +426,10 @@ export class DlChatMessageList extends LightElement {
 
   #answerBody(turn: ChatTurnView): TemplateResult | typeof nothing {
     if (turn.state === 'succeeded' && turn.presentation) {
-      return html`<dl-answer-presentation .presentation=${turn.presentation}></dl-answer-presentation>`;
+      return html`<dl-answer-presentation .presentation=${turn.presentation}></dl-answer-presentation>${this.#toolSummary(turn)}`;
     }
     if (turn.state === 'failed') {
-      return html`${turn.error || msg('Service error. Please try again.', {id: 'chatFeature.serviceError'})}`;
+      return html`${turn.error || msg('Service error. Please try again.', {id: 'chatFeature.serviceError'})}${this.#toolSummary(turn)}`;
     }
     return html`
       ${turn.streamText ? html`<span class="stream-tail">${turn.streamText}</span>` : nothing}
@@ -426,10 +441,12 @@ export class DlChatMessageList extends LightElement {
         <span class="${chatStyles.streamingDot} ${chatStyles.progressPhase}"
               data-phase=${msg('Answer in progress...', {id: 'chatFeature.answerInProgress'})}></span>
       ` : nothing}
+      ${turn.toolRows.length > 0 ? this.#toolTrace(turn) : nothing}
       ${turn.state === 'retryable' ? this.#reconnectNotice(turn) : nothing}
       ${turn.state === 'cancelled' ? html`
         <div class=${chatStyles.stoppedNote}>${msg('Stopped', {id: 'chatMessageList.stopped'})}</div>
       ` : nothing}
+      ${turn.state === 'cancelled' ? this.#toolSummary(turn) : nothing}
     `;
   }
 
@@ -627,6 +644,53 @@ export class DlChatMessageList extends LightElement {
       detail: {action},
     }));
   }
+
+  #toggleToolTrace(runId: string): void {
+    this.dispatchEvent(new CustomEvent<ChatToolTraceToggleDetail>('dl-chat-tool-trace-toggle', {
+      bubbles: true,
+      composed: true,
+      detail: {runId},
+    }));
+  }
+
+  #toolTrace(turn: ChatTurnView): TemplateResult {
+    return html`
+      <div class=${chatStyles.toolTrace} role="status"
+           aria-label=${msg('Tool activity', {id: 'chatMessageList.toolActivity'})}>
+        ${turn.toolRows.map((row) => html`
+          <div class="${chatStyles.toolRow} ${row.state === 'failed' ? chatStyles.toolRowFailed : ''}">
+            <span class=${chatStyles.toolState}>
+              ${row.state === 'running' ? html`<span class=${chatStyles.toolSpinner}></span>`
+                : row.state === 'failed' ? icon('close', {size: 'xs', className: 'tool-state-icon tool-state-icon--failed'})
+                  : icon('check', {size: 'xs', className: 'tool-state-icon tool-state-icon--done'})}
+            </span>
+            <span class=${chatStyles.toolLabel}>${row.object
+              ? `${toolVerbText(row.verb, row.verbId)} ${row.object}`
+              : toolVerbText(row.verb, row.verbId)}</span>
+            ${row.durationMs !== null
+              ? html`<span class=${chatStyles.toolDuration}>${formatToolDuration(row.durationMs)}</span>`
+              : nothing}
+          </div>
+        `)}
+      </div>
+    `;
+  }
+
+  #toolSummary(turn: ChatTurnView): TemplateResult | typeof nothing {
+    if (turn.toolTotal === 0) return nothing;
+    return html`
+      <button type="button" class=${chatStyles.toolSummary}
+              aria-expanded=${String(turn.toolExpanded)}
+              aria-label=${msg('Tool activity', {id: 'chatMessageList.toolActivity'})}
+              @click=${() => this.#toggleToolTrace(turn.runId)}>
+        <span>${msg(str`${turn.toolTotal} tool call(s)`, {id: 'chatMessageList.toolSummaryCount'})}</span>
+        <span class=${chatStyles.toolSummaryToggle}>${turn.toolExpanded
+          ? icon('chevron-down', {size: 'xs'})
+          : icon('disclosure', {size: 'xs'})}</span>
+      </button>
+      ${turn.toolExpanded ? this.#toolTrace(turn) : nothing}
+    `;
+  }
 }
 
 customElements.define('dl-chat-message-list', DlChatMessageList);
@@ -638,6 +702,7 @@ declare global {
 
   interface HTMLElementEventMap {
     'dl-chat-background-click': CustomEvent<void>;
+    'dl-chat-tool-trace-toggle': CustomEvent<ChatToolTraceToggleDetail>;
   }
 }
 
@@ -675,5 +740,8 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     sawChildren: false,
     cancelRequested: stored.cancel_requested,
     steeringMessages: [],
+    toolRows: [],
+    toolTotal: 0,
+    toolExpanded: false,
   };
 }

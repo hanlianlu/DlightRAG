@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.skills import (
     DeleteSkillInput,
     LoadSkillInput,
@@ -15,6 +16,7 @@ from dlightrag.engine.agent.skills import (
     owner_skill_root,
     publish_skill_tool,
 )
+from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from tests.tool_helpers import tool_runtime
 
 
@@ -250,3 +252,38 @@ async def test_delete_skill_is_idempotent(tmp_path: Path) -> None:
     assert not (owner_root / "review").exists()
     assert "does not exist" in missing.text_content
     assert not missing.is_error
+
+
+@pytest.mark.asyncio
+async def test_skill_tools_report_their_object_label_live(tmp_path: Path) -> None:
+    updates: list[ToolResult] = []
+
+    async def sink(result: ToolResult) -> None:
+        updates.append(result)
+
+    def runtime(tool_name: str) -> ToolRuntime:
+        return ToolRuntime(
+            call_id="test-call",
+            tool_name=tool_name,
+            intent_id=IntentId.new(),
+            execution_scope="test-scope",
+            _update_sink=sink,
+        )
+
+    owner_root = tmp_path / "owner"
+    _skill(owner_root, "review", name="review", description="reference", body="body")
+    catalog = SkillCatalog.discover(owner_root=owner_root)
+    await load_skill_tool(catalog).execute(LoadSkillInput(name="review"), runtime("load_skill"))
+    await publish_skill_tool(owner_root).execute(
+        PublishSkillInput(
+            name="weekly-report",
+            files=_skill_files(name="weekly-report", description="d", body="b"),
+        ),
+        runtime("publish_skill"),
+    )
+    await delete_skill_tool(owner_root).execute(
+        DeleteSkillInput(name="weekly-report"), runtime("delete_skill")
+    )
+
+    labels = [update.details["object_label"] for update in updates if update.details]
+    assert labels == ["review", "weekly-report", "weekly-report"]

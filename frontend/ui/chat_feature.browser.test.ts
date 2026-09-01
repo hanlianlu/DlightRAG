@@ -16,11 +16,11 @@ import type {DlConversationSidebar} from './conversation_sidebar.ts';
 import './conversation_sidebar.ts';
 import {
   ANSWER_PHASE_LABELS,
-  ANSWER_TOOL_EVENT_LABELS,
   answerPhaseLabel,
-  answerToolEventLabel,
   type DlChatFeature,
 } from './chat_feature.ts';
+import {applyToolEvent, toolStatusText} from '../lib/tool_events.ts';
+import {toolDisplay} from '../lib/tool_display.ts';
 import {
   ANSWER_RECONNECT_COPY,
   answerReconnectState,
@@ -197,7 +197,7 @@ it('renders cancelled history without a simultaneous stopping phase', async () =
   expect(feature.turns[0].progress).to.equal('');
 });
 
-it('maps every server answer phase and tool event to qualitative deterministic copy', () => {
+it('maps every server answer phase and tool name to qualitative deterministic copy', () => {
   expect(ANSWER_PHASE_LABELS).to.deep.equal({
     routing: 'Routing answer...',
     planning: 'Planning answer...',
@@ -205,25 +205,23 @@ it('maps every server answer phase and tool event to qualitative deterministic c
     researching: 'Researching sources...',
     generating: 'Generating answer...',
   });
-  expect(ANSWER_TOOL_EVENT_LABELS).to.deep.equal({
-    tool_start: 'Tool started...',
-    tool_progress: 'Tool working...',
-    tool_end: 'Tool finished...',
-  });
   for (const [phase, label] of Object.entries(ANSWER_PHASE_LABELS)) {
     expect(answerPhaseLabel(phase)).to.equal(label);
-  }
-  for (const [eventType, label] of Object.entries(ANSWER_TOOL_EVENT_LABELS)) {
-    expect(answerToolEventLabel(eventType)).to.equal(label);
   }
   for (const unknown of ['provider-secret-phase', 'toString', '__proto__']) {
     expect(answerPhaseLabel(unknown)).to.equal(null);
   }
-  for (const unknown of ['tool_telemetry', 'toString', 'constructor']) {
-    expect(answerToolEventLabel(unknown)).to.equal(null);
-  }
-  expect(Object.values({...ANSWER_PHASE_LABELS, ...ANSWER_TOOL_EVENT_LABELS}).join(' '))
-    .not.to.match(/\b(?:bytes?|elapsed|model|remaining)\b|\d+\s*(?:ms|%)/i);
+  const known = toolDisplay('load_skill');
+  expect(known.known).to.equal(true);
+  expect(known.verbId).to.equal('chatFeature.tool.load_skill');
+  const unknown = toolDisplay('acme_custom_tool');
+  expect(unknown.known).to.equal(false);
+  expect(unknown.verb).to.equal('Acme Custom Tool');
+  expect(unknown.verbId).to.equal(null);
+  const rows = applyToolEvent([], 'tool_start', {tool_name: 'load_skill', call_id: 'c1'});
+  expect(toolStatusText(applyToolEvent(rows, 'tool_progress', {
+    call_id: 'c1', object_label: 'code-review',
+  }))).to.contain('code-review');
 });
 
 it('maps and renders every reconnect state with one visible status and action', async () => {
@@ -257,6 +255,9 @@ it('maps and renders every reconnect state with one visible status and action', 
     sawChildren: false,
     cancelRequested,
     steeringMessages: [],
+    toolRows: [],
+    toolTotal: 0,
+    toolExpanded: false,
   });
   list.turns = [retryable(false), retryable(true)];
   document.body.appendChild(list);
@@ -1026,6 +1027,10 @@ it('Message List anchors the completed turn at its latest user question', async 
     userAttachments: [], streamText: presentation.answer_text, presentation, usage: {}, evidence: {},
     error: '', progress: '', liveStatus: '', sawChildren: false, cancelRequested: false,
     steeringMessages: [],
+    toolRows: [],
+    toolTotal: 0,
+    toolExpanded: false,
+
   };
   const latest: ChatTurnView = {
     ...earlier,
@@ -1078,6 +1083,9 @@ it('Message List bounds steering wrappers within one retained turn', async () =>
     userAttachments: [], streamText: 'Working', presentation: null, usage: {}, evidence: {},
     error: '', progress: '', liveStatus: '', sawChildren: false, cancelRequested: false,
     steeringMessages: Array.from({length: 51}, (_, index) => `Steering ${index}`),
+    toolRows: [],
+    toolTotal: 0,
+    toolExpanded: false,
   };
   list.turns = [turn];
   document.body.appendChild(list);
@@ -1106,6 +1114,10 @@ it('Message List exposes child-agent progress and roster intent through public s
     sawChildren: true,
     cancelRequested: false,
     steeringMessages: [],
+    toolRows: [],
+    toolTotal: 0,
+    toolExpanded: false,
+
   };
   list.turns = [turn];
   document.body.appendChild(list);
@@ -1150,6 +1162,10 @@ it('Message List announces image state and prunes it with the owning turns', asy
     sawChildren: false,
     cancelRequested: false,
     steeringMessages: [],
+    toolRows: [],
+    toolTotal: 0,
+    toolExpanded: false,
+
   };
   list.turns = [imageTurn];
   document.body.appendChild(list);
@@ -1483,6 +1499,10 @@ it('Message List revokes live attachment URLs when a turn is evicted', async () 
     }],
     streamText: '', presentation: null, usage: {}, evidence: {}, error: '', progress: '',
     liveStatus: '', sawChildren: false, cancelRequested: false, steeringMessages: [],
+    toolRows: [],
+    toolTotal: 0,
+    toolExpanded: false,
+
   };
   try {
     list.turns = [turn];

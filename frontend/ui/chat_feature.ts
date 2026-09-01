@@ -13,6 +13,7 @@ import {
   type ConversationTurn,
 } from '../api/conversations.ts';
 import {localizedRunErrorPayload} from '../lib/run_errors.ts';
+import {applyToolEvent, toolStatusText} from '../lib/tool_events.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {
   RunController,
@@ -43,6 +44,7 @@ import {
   answerReconnectState,
   storedTurnView,
   type ChatReconnectDetail,
+  type ChatToolTraceToggleDetail,
   type ChatTurnView,
   type ChatView,
 } from './chat_message_list.ts';
@@ -62,20 +64,10 @@ export const ANSWER_PHASE_LABELS = {
 } as const satisfies Record<AnswerPhase, string>;
 
 export type ToolEventType = 'tool_start' | 'tool_progress' | 'tool_end';
-export const ANSWER_TOOL_EVENT_LABELS = {
-  tool_start: 'Tool started...',
-  tool_progress: 'Tool working...',
-  tool_end: 'Tool finished...',
-} as const satisfies Record<ToolEventType, string>;
 
 export function answerPhaseLabel(phase: string): string | null {
   if (!Object.hasOwn(ANSWER_PHASE_LABELS, phase)) return null;
   return ANSWER_PHASE_LABELS[phase as AnswerPhase];
-}
-
-export function answerToolEventLabel(eventType: string): string | null {
-  if (!Object.hasOwn(ANSWER_TOOL_EVENT_LABELS, eventType)) return null;
-  return ANSWER_TOOL_EVENT_LABELS[eventType as ToolEventType];
 }
 
 function terminalTurn(turn: ChatTurnView): boolean {
@@ -91,6 +83,10 @@ interface DonePayload {
 
 interface ToolProgressPayload {
   tool_name?: string;
+  call_id?: string;
+  object_label?: string;
+  outcome?: string;
+  duration_ms?: number;
 }
 
 export interface ChatRunningChangeDetail {
@@ -146,6 +142,9 @@ function optimisticTurn(
     sawChildren: false,
     cancelRequested: false,
     steeringMessages: [],
+    toolRows: [],
+    toolTotal: 0,
+    toolExpanded: false,
   };
 }
 
@@ -356,6 +355,7 @@ export class DlChatFeature extends LightElement {
         .scrollRequest=${this.#scrollRequest}
         .interactionLocked=${this.interactionLocked}
         @dl-chat-reconnect=${this.#reconnect}
+        @dl-chat-tool-trace-toggle=${this.#toggleToolTrace}
         @dl-chat-load-older=${this.#loadOlderMessages}></dl-chat-message-list>
       ${this.#submissionFailureControls()}
       <dl-chat-composer
@@ -776,13 +776,18 @@ export class DlChatFeature extends LightElement {
       if (event.kind === 'tool') {
         const info = event.payload as ToolProgressPayload;
         if (!info || typeof info.tool_name !== 'string') continue;
-        const label = answerToolEventLabel(event.eventType);
-        if (label === null) continue;
-        const text = msg(label, {id: `chatFeature.toolEvent.${event.eventType}`});
+        const current = currentTurn();
+        const toolRows = applyToolEvent(current.toolRows, event.eventType, info);
+        const toolTotal = event.eventType === 'tool_start'
+          ? current.toolTotal + 1
+          : current.toolTotal;
+        const text = toolStatusText(toolRows);
         apply({
+          toolRows,
+          toolTotal,
           progress: text,
           liveStatus: text,
-          sawChildren: currentTurn().sawChildren || info.tool_name === 'spawn_agent',
+          sawChildren: current.sawChildren || info.tool_name === 'spawn_agent',
           error: '',
         });
         continue;
@@ -838,6 +843,13 @@ export class DlChatFeature extends LightElement {
   #setTurn(turnId: string, patch: Partial<ChatTurnView>): void {
     this.turns = this.turns.map((turn) => turn.id === turnId ? {...turn, ...patch} : turn);
   }
+
+  #toggleToolTrace = (event: CustomEvent<ChatToolTraceToggleDetail>): void => {
+    event.stopPropagation();
+    const turn = this.turns.find((candidate) => candidate.runId === event.detail.runId);
+    if (!turn) return;
+    this.#setTurn(turn.id, {toolExpanded: !turn.toolExpanded});
+  };
 }
 
 customElements.define('dl-chat-feature', DlChatFeature);
