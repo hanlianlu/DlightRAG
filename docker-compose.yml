@@ -37,6 +37,11 @@ services:
       - dlightrag_data:/app/dlightrag_storage
       - dlightrag_agent_workspaces:/app/dlightrag_agent_workspaces
       - ./config.yaml:/app/config.yaml:ro
+      # Global Agent Skills for the answer agent. Read-only: skills are
+      # untrusted context shared by every web user's runs — operators (or
+      # CI) provision this directory, never the agent itself.
+      # Host-side location overridable via DLIGHTRAG_SKILLS_DIR in .env.
+      - ${DLIGHTRAG_SKILLS_DIR:-${HOME}/.dlightrag/skills}:/home/app/.dlightrag/skills:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,6 +78,11 @@ services:
       - dlightrag_data:/app/dlightrag_storage
       - dlightrag_agent_workspaces:/app/dlightrag_agent_workspaces
       - ./config.yaml:/app/config.yaml:ro
+      # Global Agent Skills for the answer agent. Read-only: skills are
+      # untrusted context shared by every web user's runs — operators (or
+      # CI) provision this directory, never the agent itself.
+      # Host-side location overridable via DLIGHTRAG_SKILLS_DIR in .env.
+      - ${DLIGHTRAG_SKILLS_DIR:-${HOME}/.dlightrag/skills}:/home/app/.dlightrag/skills:ro
     depends_on:
       postgres:
         condition: service_healthy

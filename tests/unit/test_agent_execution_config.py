@@ -122,3 +122,14 @@ def test_unknown_agent_key_is_rejected() -> None:
         DlightragConfig.model_validate(
             {"agent": {"execution_environment": "disabled", "sandbox": True}}
         )
+
+
+def test_skills_root_defaults_to_none_and_accepts_absolute() -> None:
+    assert AgentExecutionConfig().skills_root is None
+    config = AgentExecutionConfig.model_validate({"skills_root": "/opt/dlightrag/skills"})
+    assert config.skills_root == "/opt/dlightrag/skills"
+
+
+def test_skills_root_rejects_a_relative_path() -> None:
+    with pytest.raises(ValidationError, match="skills_root must be an absolute path"):
+        AgentExecutionConfig.model_validate({"skills_root": "skills"})

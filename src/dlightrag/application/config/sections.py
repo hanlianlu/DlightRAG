@@ -283,6 +283,13 @@ class AgentExecutionConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    @field_validator("skills_root")
+    @classmethod
+    def _validate_skills_root(cls, value: str | None) -> str | None:
+        if value is not None and not Path(value).expanduser().is_absolute():
+            raise ValueError("skills_root must be an absolute path when set")
+        return value
+
     execution_environment: Literal["disabled", "trust", "sandbox"] = Field(
         default="trust",
         description=(
@@ -297,6 +304,14 @@ class AgentExecutionConfig(BaseModel):
             "Absolute Agent Workspace root. When trust or sandbox and unset, "
             "defaults to ~/.dlightrag/agent_workspaces. Multi-host deployments "
             "must set the same absolute path on every worker."
+        ),
+    )
+    skills_root: str | None = Field(
+        default=None,
+        description=(
+            "Absolute global Agent Skills root. When unset, defaults to "
+            "~/.dlightrag/skills. Multi-host deployments must set the same "
+            "shared absolute path on every worker."
         ),
     )
     publication: ArtifactPublicationConfig = Field(default_factory=ArtifactPublicationConfig)

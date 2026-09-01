@@ -541,6 +541,7 @@ answer:
   agent:
     execution_environment: trust   # disabled | trust | sandbox
     workspace_root: null
+    skills_root: null              # absolute path; null → ~/.dlightrag/skills
     outbound_mcp: []
     publication:
       max_artifacts: 20
@@ -583,8 +584,10 @@ answer:
 ```
 
 There is no endpoint discovery, marketplace, OAuth service, or plugin runtime.
-Research discovers Skill metadata under global and workspace `.agents/skills/`
-directories and loads content on demand.
+Research discovers Skill metadata under global and workspace skill directories
+and loads content on demand. The global root is `answer.agent.skills_root`,
+defaulting to `~/.dlightrag/skills`; each worker must see the same shared path.
+The workspace root is the per-run Agent Workspace's `.agents/skills/`.
 
 ## Web Search
 

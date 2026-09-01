@@ -68,6 +68,19 @@ async def _close_process() -> None:
         shutdown_tracing()
 
 
+def _resolve_agent_skills_root(config: DlightragConfig) -> Path:
+    """Resolve the global Agent Skills root and ensure it exists.
+
+    Unset resolves to ~/.dlightrag/skills, mirroring the Agent Workspace
+    default. The directory is created eagerly so operators can drop skills
+    in without a restart; discovery itself tolerates an absent root.
+    """
+    configured = config.answer.agent.skills_root
+    root = Path(configured).expanduser() if configured else Path.home() / ".dlightrag" / "skills"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def _compose(config: DlightragConfig) -> _ApplicationComponents:
     """Construct this process's collaborators from one resolved configuration."""
     from dlightrag_memory.postgres import PostgresMemoryStore
@@ -310,7 +323,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         memory_recall_enabled=memory.recall_enabled,
         memory_capability_current=memory.capability_current,
         external_tools=outbound_tools,
-        skills_global_root=Path.home() / ".agents" / "skills",
+        skills_global_root=_resolve_agent_skills_root(config),
     )
     coordinator = RunCoordinator(
         store=run_store,

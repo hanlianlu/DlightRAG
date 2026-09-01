@@ -141,7 +141,8 @@ BM25 rows, or KG data.
 Agent execution is `disabled`, `trust`, or `sandbox`. `trust` exposes rooted
 file tools but Bash retains host/network capability. This distribution has no
 sandbox backend, so `sandbox` fails instead of downgrading. Skills are discovered
-from global/workspace `.agents/skills/` paths and loaded progressively. Outbound
+from the configured global root (default `~/.dlightrag/skills`) and the per-run
+Agent Workspace's `.agents/skills/`, and loaded progressively. Outbound
 MCP tools come only from deployment allowlists.
 
 ## Durable Execution
