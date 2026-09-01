@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Build or edit personal DlightRAG skills. Use when the user wants to create, improve, or delete a skill (interview → draft → publish_skill).
+description: Guide the user through creating, improving, or removing personal DlightRAG skills. Use when the user wants to make, edit, or delete a skill (interview → draft → publish_skill).
 ---
 
 # Skill Creator
