@@ -141,8 +141,7 @@ export const templates: Record<
   'chatComposer.skillMenuAria': '可用技能',
   'chatComposer.skillSource.owner': '我的',
   'chatComposer.skillSource.global': '内置',
-  'chatComposer.skillQuestionRequired':
-    '技能指令需要具体问题，例如 /skill:review 审查这个计划（简写 /review 亦可）。',
+  'chatComposer.skillQuestionRequired': '技能指令需要具体问题。',
   'chatComposer.removeAttachment': str`移除 ${0}`,
 
   // Conversation list

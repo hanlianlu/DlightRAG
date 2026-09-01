@@ -282,7 +282,7 @@ export class DlChatComposer extends LightElement {
           </form>
           ${this.skillNotice ? html`
             <div class="skill-notice" role="alert">
-              ${msg('A skill directive needs a question, e.g. /skill:review Check this plan.', {id: 'chatComposer.skillQuestionRequired'})}
+              ${msg('A skill directive needs a question.', {id: 'chatComposer.skillQuestionRequired'})}
             </div>` : nothing}
         </div>
         <input class="hidden" type="file" id="attachment-input"
