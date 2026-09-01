@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Guide users through creating, refining, and removing their personal DlightRAG skills. Use when the user wants to create a skill, turn a repeated workflow into a skill, or edit an existing one. Flow: interview → draft → publish_skill → verify.
+description: Create, refine, or remove personal DlightRAG skills (interview → draft → publish_skill). Use when the user asks to make, improve, or delete a skill.
 ---
 
 # Skill Creator
