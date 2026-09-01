@@ -2051,16 +2051,7 @@ class WorkspaceRag:
             raise RuntimeError("Ingestion engine not initialized")
 
         input_root = self._workspace_input_root()
-        batch_root = remote_ingest_batch_root(
-            input_root=input_root,
-            source_type="retry",
-            batch_id=uuid.uuid4().hex,
-        )
-        parser_path = remote_parser_input_path(
-            batch_root=batch_root,
-            source_uri=source_uri,
-            key=parser_filename,
-        )
+        parser_path = input_root / parser_filename
         item = PreparedIngestFile(
             parser_path=parser_path,
             source_uri=source_uri,
@@ -2075,7 +2066,6 @@ class WorkspaceRag:
             return self._single_file_result(result)
         finally:
             await asyncio.to_thread(_remove_remote_parser_sources, [item])
-            await asyncio.to_thread(_remove_empty_parents, batch_root, input_root)
 
     async def adelete_files(
         self,

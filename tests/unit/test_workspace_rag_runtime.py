@@ -3241,6 +3241,7 @@ class TestWorkspaceRagLightRAGMainPath:
         items = service._ingestion_engine.aingest_files.await_args.args[0]
         assert len(items) == 1
         assert items[0].download_locator == str(original)
+        assert items[0].parser_path.parent == input_root
         assert moved.is_file()
 
     async def test_download_locator_dispatch_rejects_invalid_remote_locator(
