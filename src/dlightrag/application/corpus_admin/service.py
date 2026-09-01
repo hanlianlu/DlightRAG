@@ -681,8 +681,15 @@ class CorpusAdmin:
         if job is None:
             return None
         workspace = require_canonical_workspace_id(str(job.get("workspace") or ""))
-        await self._ingest_jobs.cancel_job(job_id, workspace=workspace)
-        return await self._ingest_jobs.get_job(job_id)
+        cancelled = await self._ingest_jobs.cancel_job(job_id, workspace=workspace)
+        current = await self._ingest_jobs.get_job(job_id)
+        if (
+            not cancelled
+            and current is not None
+            and str(current.get("status") or "") in {"queued", "running"}
+        ):
+            raise CorpusIngestError("Ingest job cancellation was not committed")
+        return current
 
     async def file_panel_snapshot(
         self,

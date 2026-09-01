@@ -2,6 +2,7 @@
 """Bounded file-panel pages and opaque continuation cursors."""
 
 import datetime
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,47 @@ from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspac
 
 FILE_PANEL_PAGE_DEFAULT_LIMIT = 50
 FILE_PANEL_PAGE_MAX_LIMIT = 100
+PUBLIC_FAILURE_DIAGNOSTIC_MAX_CHARS = 512
+_GENERIC_PUBLIC_FAILURE_DIAGNOSTIC = "Document processing failed."
+# Arbitrary parser/provider/storage exception text is not a safe public
+# protocol. Only diagnostics authored by this application and containing no
+# caller-controlled interpolation are allowed through.
+_SAFE_PUBLIC_FAILURE_DIAGNOSTICS = {
+    "document processing failed.": _GENERIC_PUBLIC_FAILURE_DIAGNOSTIC,
+    "source metadata unavailable": "Source metadata unavailable.",
+    "source metadata incomplete": "Source metadata incomplete.",
+    "source metadata invalid": "Source metadata invalid.",
+    "retry ingestion failed": "Retry ingestion failed.",
+    "document post-processing failed": "Document post-processing failed.",
+    "document replacement was interrupted": "Document replacement was interrupted.",
+    "ingest job cancelled": "Ingest job cancelled.",
+    "retry cancelled before completion": "Retry cancelled before completion.",
+    "retry ingestion returned mismatched document identity": (
+        "Retry ingestion returned mismatched document identity."
+    ),
+    "lightrag document processing failed": "Document processing failed.",
+}
+
+
+def _diagnostic_text(value: object) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    chars: list[str] = []
+    for char in normalized:
+        category = unicodedata.category(char)
+        if category in {"Cc", "Cf"}:
+            if char.isspace():
+                chars.append(" ")
+            continue
+        chars.append(char)
+    return " ".join("".join(chars).split())
+
+
+def public_failure_diagnostic(value: object) -> str:
+    """Project only application-authored diagnostics; never arbitrary exceptions."""
+    text = _diagnostic_text(value)
+    if not text:
+        return ""
+    return _SAFE_PUBLIC_FAILURE_DIAGNOSTICS.get(text.casefold(), _GENERIC_PUBLIC_FAILURE_DIAGNOSTIC)
 
 
 class FilePanelCursorError(ValueError):
@@ -124,7 +166,7 @@ class FailedFileRow:
         return {
             "doc_id": self.doc_id,
             "file_path": self.file_path,
-            "error": self.error,
+            "error": public_failure_diagnostic(self.error),
             "updated_at": (
                 self.updated_at.isoformat(timespec="microseconds")
                 if self.updated_at is not None
@@ -214,4 +256,6 @@ __all__ = [
     "FilePanelPageRequest",
     "FilePanelRowPage",
     "ProcessedFileRow",
+    "PUBLIC_FAILURE_DIAGNOSTIC_MAX_CHARS",
+    "public_failure_diagnostic",
 ]

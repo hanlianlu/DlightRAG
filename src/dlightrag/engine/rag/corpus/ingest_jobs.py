@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Durable ingest-job persistence interface and lifecycle policy."""
 
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol
 
@@ -21,6 +22,10 @@ class IngestJobSchemaError(RuntimeError):
     """The durable ingest-job schema is incompatible with this revision."""
 
 
+class RetryOutcomeUncertainError(RuntimeError):
+    """A retry may have committed, but its authoritative status is unavailable."""
+
+
 class IngestJobStore(Protocol):
     async def initialize(self) -> None: ...
 
@@ -33,6 +38,14 @@ class IngestJobStore(Protocol):
         request: dict[str, Any],
     ) -> None: ...
 
+    async def start_or_join_failed_retry(
+        self,
+        *,
+        job_id: str,
+        workspace: str,
+        request: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
     async def claim_running(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool: ...
 
     async def release_running(self, job_id: str, *, lease_owner: str) -> bool:
@@ -43,8 +56,32 @@ class IngestJobStore(Protocol):
         """Refresh one still-queued job's liveness; false if gone or claimed."""
         ...
 
+    async def cancel(
+        self,
+        job_id: str,
+        *,
+        workspace: str,
+        error: str,
+    ) -> bool:
+        """Durably cancel an active job independent of process-local ownership."""
+        ...
+
+    async def cancel_failed_retry(
+        self,
+        job_id: str,
+        *,
+        error: str,
+        lease_owner: str | None,
+    ) -> bool:
+        """Cancel retry while projecting its durable item-ledger totals."""
+        ...
+
     async def cancel_queued(self, job_id: str, *, error: str) -> bool:
         """Terminally fail one still-queued job (explicit user cancellation)."""
+        ...
+
+    async def fail_invalid_recoverable(self, job_id: str, *, error: str) -> bool:
+        """Fail a queued or expired-running malformed row without write-fence arbitration."""
         ...
 
     async def is_workspace_fenced(self, workspace: str) -> bool:
@@ -73,11 +110,37 @@ class IngestJobStore(Protocol):
 
     async def finish(self, job_id: str, *, result: dict[str, Any], lease_owner: str) -> bool: ...
 
+    async def seal_failed_retry_cohort(
+        self,
+        job_id: str,
+        *,
+        doc_ids: Sequence[str],
+        lease_owner: str,
+    ) -> bool: ...
+
+    async def list_unfinished_failed_retry_items(
+        self,
+        job_id: str,
+        *,
+        lease_owner: str,
+    ) -> tuple[str, ...] | None:
+        """Return unfinished IDs, or None when the durable cohort is unsealed."""
+        ...
+
+    async def record_failed_retry_outcome(
+        self,
+        job_id: str,
+        *,
+        doc_id: str,
+        outcome: str,
+        summary: dict[str, Any],
+        lease_owner: str,
+    ) -> bool: ...
+
     async def finish_failed_retry(
         self,
         job_id: str,
         *,
-        result: dict[str, Any],
         lease_owner: str,
     ) -> bool: ...
 
@@ -85,12 +148,7 @@ class IngestJobStore(Protocol):
 
     async def get(self, job_id: str) -> dict[str, Any] | None: ...
 
-    async def get_active_for_workspace(
-        self,
-        workspace: str,
-        *,
-        source_type: str,
-    ) -> dict[str, Any] | None: ...
+    async def get_active_failed_retry(self, workspace: str) -> dict[str, Any] | None: ...
 
     async def list_recoverable(self) -> list[dict[str, Any]]: ...
 
@@ -102,6 +160,7 @@ class IngestJobStore(Protocol):
 __all__ = [
     "IngestJobSchemaError",
     "IngestJobStore",
+    "RetryOutcomeUncertainError",
     "JOB_ABANDONED_ERROR",
     "JOB_HEARTBEAT_SECONDS",
     "JOB_LEASE_SECONDS",

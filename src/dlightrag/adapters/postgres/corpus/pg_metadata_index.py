@@ -23,6 +23,7 @@ from dlightrag.adapters.postgres.corpus.partition_foundation import (
 from dlightrag.engine.rag.retrieval import MetadataFilter
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
+    INGEST_FINALIZATION_COMPLETE_FIELD,
     METADATA_FIELD_IDS,
 )
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
@@ -53,6 +54,9 @@ _PG_FIELD_TYPES = {
 _PG_INDEXED_FIELDS = frozenset(
     {"filename", "filename_stem", "file_extension", "title", "author", "creation_date"}
 )
+# Application-owned crash journal. It is deliberately outside the public RAG
+# metadata registry: callers cannot filter on or supply it as custom metadata.
+_FINALIZATION_COMPLETE_COLUMN = INGEST_FINALIZATION_COMPLETE_FIELD
 if set(_PG_FIELD_TYPES) != set(METADATA_FIELD_IDS):
     raise RuntimeError("PostgreSQL metadata columns do not match the RAG metadata field registry")
 _PG_METADATA_COLUMNS = tuple(
@@ -75,6 +79,7 @@ def _build_create_table() -> str:
     ]
     for f in _PG_METADATA_COLUMNS:
         cols.append(f"    {f.field_id}    {f.pg_type}")
+    cols.append(f"    {_FINALIZATION_COMPLETE_COLUMN}    BOOLEAN DEFAULT FALSE")
     cols.append("    PRIMARY KEY (workspace, doc_id)")
     return (
         "CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (\n"
@@ -285,6 +290,9 @@ _BACKFILL_WORKSPACE_FIELD_STATS = _backfill_field_stats("metadata.workspace = $1
 def _metadata_partition_spec() -> PartitionedTableSpec:
     return PartitionedTableSpec(
         name=_METADATA_TABLE,
+        # Foundation validation runs before append-only migrations. New
+        # storage-internal columns therefore belong to _SCHEMA_TABLES below,
+        # not this pre-migration compatibility gate.
         required_columns=("workspace", "doc_id", *METADATA_FIELD_IDS, _SEARCH_COLUMN),
         primary_key=("workspace", "doc_id"),
         required_indexes=(
@@ -414,6 +422,17 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             ),
         )
     )
+    migrations.append(
+        Migration(
+            "column_finalization_complete",
+            "Persist the application-owned ingestion finalization journal",
+            (
+                "ALTER TABLE dlightrag_doc_metadata "
+                f"ADD COLUMN IF NOT EXISTS {_FINALIZATION_COMPLETE_COLUMN} "
+                "BOOLEAN DEFAULT FALSE",
+            ),
+        )
+    )
     return tuple(migrations)
 
 
@@ -422,7 +441,13 @@ _SCHEMA_MIGRATIONS = _build_schema_migrations()
 _SCHEMA_TABLES = (
     TableRequirement(
         name="dlightrag_doc_metadata",
-        columns=("workspace", "doc_id", *METADATA_FIELD_IDS, "custom_metadata_search"),
+        columns=(
+            "workspace",
+            "doc_id",
+            *METADATA_FIELD_IDS,
+            "custom_metadata_search",
+            _FINALIZATION_COMPLETE_COLUMN,
+        ),
         primary_key=("workspace", "doc_id"),
         indexes=(
             "idx_dm_workspace_download_locator",
@@ -442,7 +467,10 @@ _SCHEMA_TABLES = (
 )
 
 _CUSTOM = "custom_metadata"
-_UPSERT_FIELD_IDS = tuple(field_id for field_id in METADATA_FIELD_IDS if field_id != "ingested_at")
+_UPSERT_FIELD_IDS = (
+    *(field_id for field_id in METADATA_FIELD_IDS if field_id != "ingested_at"),
+    _FINALIZATION_COMPLETE_COLUMN,
+)
 
 
 def _field_assignment(field_id: str, placeholder: str, table_qualified: str) -> str:

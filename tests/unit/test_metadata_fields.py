@@ -10,6 +10,7 @@ import pytest
 from dlightrag.engine.rag.retrieval import MetadataFilter
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
+    INGEST_FINALIZATION_COMPLETE_FIELD,
     METADATA_FIELD_IDS,
     NormalizedUserMetadata,
     extract_system_metadata,
@@ -160,3 +161,7 @@ class TestReservedMetadataKeys:
     def test_filter_names_are_rejected_rather_than_stored_in_jsonb(self, key: str) -> None:
         with pytest.raises(ValueError, match="built-in metadata field"):
             normalize_user_metadata({key: "x"})
+
+    def test_finalization_journal_is_reserved_from_user_metadata(self) -> None:
+        with pytest.raises(ValueError, match="built-in metadata field"):
+            normalize_user_metadata({INGEST_FINALIZATION_COMPLETE_FIELD: True})

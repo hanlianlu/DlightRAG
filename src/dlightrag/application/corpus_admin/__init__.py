@@ -32,6 +32,7 @@ from .file_panel import (
     FilePanelPageRequest,
     FilePanelRowPage,
     ProcessedFileRow,
+    public_failure_diagnostic,
 )
 from .metadata_search import (
     METADATA_SEARCH_PAGE_DEFAULT_LIMIT,
@@ -108,6 +109,7 @@ __all__ = [
     "METADATA_SEARCH_PAGE_DEFAULT_LIMIT",
     "METADATA_SEARCH_PAGE_MAX_LIMIT",
     "ProcessedFileRow",
+    "public_failure_diagnostic",
     "RedirectDownloadTarget",
     "SourceDownloadFactory",
     "SourceDownloadInvalidError",

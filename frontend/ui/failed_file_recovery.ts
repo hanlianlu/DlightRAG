@@ -90,7 +90,8 @@ export class DlFailedFileRecovery extends LightElement {
   #modalController: AbortController | null = null;
   #pollController: AbortController | null = null;
   #pollTimer: number | null = null;
-  #generation = 0;
+  #contextGeneration = 0;
+  #listGeneration = 0;
   #retryTrigger: HTMLElement | null = null;
 
   constructor() {
@@ -131,7 +132,7 @@ export class DlFailedFileRecovery extends LightElement {
   async refresh(showLoading = true): Promise<void> {
     if (!this.active || !this.workspace) return;
     const workspace = this.workspace;
-    const generation = ++this.#generation;
+    const generation = ++this.#listGeneration;
     const observedRecovery = this.recovery;
     this.#listController?.abort();
     this.#loadMoreController?.abort();
@@ -146,7 +147,13 @@ export class DlFailedFileRecovery extends LightElement {
       if (!this.#isCurrent(controller, workspace, generation)) return;
       const page = normalizePage(response);
       this.page = page;
-      const recovery = page.active_recovery;
+      const pageRecovery = page.active_recovery;
+      const liveRecovery = this.recovery;
+      // A mutation or poll that completed after this request began owns newer
+      // state even when the delayed page still reports an older non-null job.
+      const recovery = liveRecovery !== observedRecovery
+        ? liveRecovery
+        : pageRecovery ?? (isRecoveryActive(liveRecovery) ? liveRecovery : null);
       this.recovery = recovery;
       if (isRecoveryActive(recovery)) this.#schedulePoll(workspace, recovery.job_id);
     } catch (error) {
@@ -158,8 +165,9 @@ export class DlFailedFileRecovery extends LightElement {
           id: 'inspectorFiles.recovery.loadFailed',
         }),
       );
-      if (isRecoveryActive(observedRecovery)) {
-        this.#schedulePoll(workspace, observedRecovery.job_id);
+      const liveRecovery = this.recovery;
+      if (isRecoveryActive(liveRecovery)) {
+        this.#schedulePoll(workspace, liveRecovery.job_id);
       }
     } finally {
       if (this.#listController === controller) {
@@ -174,7 +182,8 @@ export class DlFailedFileRecovery extends LightElement {
   }
 
   #cancelContext(): void {
-    this.#generation += 1;
+    this.#contextGeneration += 1;
+    this.#listGeneration += 1;
     this.#listController?.abort();
     this.#listController = null;
     this.#loadMoreController?.abort();
@@ -210,6 +219,7 @@ export class DlFailedFileRecovery extends LightElement {
 
     const failed = this.page?.failed ?? [];
     const recoveryActive = isRecoveryActive(this.recovery);
+    const recoveryBusy = this.recovery !== null;
     if (failed.length === 0 && !recoveryActive) return nothing;
     const count = `${failed.length}${this.page?.next_cursor ? '+' : ''}`;
     const heading = recoveryActive
@@ -292,7 +302,7 @@ export class DlFailedFileRecovery extends LightElement {
           </div>
         </details>
         <button class="dl-btn failed-file-retry" type="button"
-                ?disabled=${recoveryActive || this.recoveryPending || failed.length === 0}
+                ?disabled=${recoveryBusy || this.recoveryPending || failed.length === 0}
                 aria-busy=${this.recoveryPending ? 'true' : 'false'}
                 @click=${this.#confirmRetry}>
           ${recoveryActive
@@ -312,34 +322,50 @@ export class DlFailedFileRecovery extends LightElement {
     this.#loadMoreController?.abort();
     const controller = new AbortController();
     this.#loadMoreController = controller;
-    const generation = this.#generation;
+    const generation = this.#contextGeneration;
+    const observedRecovery = this.recovery;
     this.loadMoreState = 'loading';
     try {
       const response = await getFailedFiles(workspace, cursor, controller.signal);
       if (
         controller !== this.#loadMoreController
-        || generation !== this.#generation
+        || generation !== this.#contextGeneration
         || workspace !== this.workspace
         || this.page?.next_cursor !== cursor
       ) return;
       const older = normalizePage(response);
       const seen = new Set(page.failed.map((item) => item.document_id));
       const appended = older.failed.filter((item) => !seen.has(item.document_id));
+      const liveRecovery = this.recovery;
+      const recovery = liveRecovery !== observedRecovery
+        ? liveRecovery
+        : older.active_recovery ?? liveRecovery;
       this.page = {
         ...page,
         failed: [...page.failed, ...appended],
         next_cursor: older.next_cursor,
-        active_recovery: older.active_recovery,
+        active_recovery: recovery,
       };
-      if (older.active_recovery !== null) {
-        this.recovery = older.active_recovery;
-        if (isRecoveryActive(older.active_recovery)) {
-          this.#schedulePoll(workspace, older.active_recovery.job_id);
-        }
+      this.recovery = recovery;
+      if (isRecoveryActive(recovery)) {
+        this.#schedulePoll(workspace, recovery.job_id);
       }
       this.loadMoreState = 'idle';
     } catch (error) {
       if (isAbortError(error) || controller !== this.#loadMoreController) return;
+      if (error instanceof FilesApiError && [401, 403, 409].includes(error.status)) {
+        this.#stopPolling();
+        this.page = null;
+        this.recovery = null;
+        this.error = recoveryRequestError(
+          error,
+          msg('Document status is temporarily unavailable.', {
+            id: 'inspectorFiles.recovery.loadFailed',
+          }),
+        );
+        this.loadMoreState = 'idle';
+        return;
+      }
       this.loadMoreState = 'error';
     } finally {
       if (this.#loadMoreController === controller) this.#loadMoreController = null;
@@ -367,11 +393,11 @@ export class DlFailedFileRecovery extends LightElement {
 
   async #startRetry(): Promise<void> {
     const workspace = this.workspace;
-    if (!workspace || this.recoveryPending) return;
+    if (!workspace || this.recoveryPending || this.recovery !== null) return;
     this.#mutationController?.abort();
     const controller = new AbortController();
     this.#mutationController = controller;
-    const generation = this.#generation;
+    const generation = this.#contextGeneration;
     this.recoveryPending = true;
     try {
       const job = await startFailedFileRetry(workspace, controller.signal);
@@ -410,7 +436,12 @@ export class DlFailedFileRecovery extends LightElement {
     this.#pollController = controller;
     try {
       const job = await getFailedFileRetryStatus(workspace, jobId, controller.signal);
-      if (workspace !== this.workspace || !this.active || !this.isConnected) return;
+      if (
+        controller !== this.#pollController
+        || workspace !== this.workspace
+        || !this.active
+        || !this.isConnected
+      ) return;
       this.recovery = job;
       if (isRecoveryActive(job)) {
         this.#schedulePoll(workspace, jobId);
@@ -419,7 +450,12 @@ export class DlFailedFileRecovery extends LightElement {
       await this.#settleRecovery(job);
     } catch (error) {
       if (isAbortError(error)) return;
-      if (workspace !== this.workspace || !this.active || !this.isConnected) return;
+      if (
+        controller !== this.#pollController
+        || workspace !== this.workspace
+        || !this.active
+        || !this.isConnected
+      ) return;
       if (error instanceof FilesApiError && [401, 403, 404, 409].includes(error.status)) {
         this.page = null;
         this.recovery = null;
@@ -438,8 +474,16 @@ export class DlFailedFileRecovery extends LightElement {
   }
 
   async #settleRecovery(job: WebFailedRecoveryJob): Promise<void> {
+    const workspace = this.workspace;
+    const generation = this.#contextGeneration;
     this.recovery = job;
     await this.refresh(false);
+    if (
+      workspace !== this.workspace
+      || generation !== this.#contextGeneration
+      || !this.active
+      || !this.isConnected
+    ) return;
     this.dispatchEvent(new CustomEvent('dl-failed-file-recovery-complete', {
       bubbles: true,
       composed: true,
@@ -481,7 +525,7 @@ export class DlFailedFileRecovery extends LightElement {
   #isCurrent(controller: AbortController, workspace: string, generation: number): boolean {
     return this.#listController === controller
       && workspace === this.workspace
-      && generation === this.#generation
+      && generation === this.#listGeneration
       && this.active;
   }
 
@@ -492,7 +536,7 @@ export class DlFailedFileRecovery extends LightElement {
   ): boolean {
     return this.#mutationController === controller
       && workspace === this.workspace
-      && generation === this.#generation
+      && generation === this.#contextGeneration
       && this.active;
   }
 

@@ -242,6 +242,59 @@ async def writer_corpus() -> AsyncIterator[WriterCorpus]:
         reset_config()
 
 
+async def test_finalization_marker_round_trips_and_partial_updates_preserve_true(
+    writer_corpus: WriterCorpus,
+) -> None:
+    from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
+
+    index = PGMetadataIndex(workspace="ms_finalization_marker")
+    await index.clear()
+
+    await index.upsert(
+        "doc-marker",
+        {
+            "filename": "marker.pdf",
+            "_dlightrag_finalization_complete": False,
+        },
+    )
+    first = await index.get("doc-marker")
+    assert first is not None
+    assert first["_dlightrag_finalization_complete"] is False
+
+    await index.upsert(
+        "doc-marker",
+        {"_dlightrag_finalization_complete": True},
+    )
+    complete = await index.get("doc-marker")
+    assert complete is not None
+    assert complete["_dlightrag_finalization_complete"] is True
+
+    await index.upsert("doc-marker", {"title": "partial update"})
+    preserved = await index.get("doc-marker")
+    assert preserved is not None
+    assert preserved["title"] == "partial update"
+    assert preserved["_dlightrag_finalization_complete"] is True
+
+    # Reproduce an already-partitioned pre-marker schema. Foundation validation
+    # must allow the append-only migration to add the column before the final
+    # schema verifier requires it.
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        await conn.execute(
+            "DELETE FROM dlightrag_schema_migrations "
+            "WHERE scope = 'doc_metadata' AND version = 'column_finalization_complete'"
+        )
+        await conn.execute(
+            "ALTER TABLE dlightrag_doc_metadata DROP COLUMN _dlightrag_finalization_complete"
+        )
+    finally:
+        await conn.close()
+    await index.initialize()
+    migrated = await index.get("doc-marker")
+    assert migrated is not None
+    assert migrated["_dlightrag_finalization_complete"] is False
+
+
 async def test_field_schema_stats_follow_writes_deletes_clear_and_workspace_union(
     writer_corpus: WriterCorpus,
 ) -> None:

@@ -39,6 +39,10 @@ def _coerce_creation_date(value: Any) -> datetime:
     return parsed.astimezone(UTC).replace(tzinfo=None)
 
 
+# Application-owned crash journal shared with metadata adapters. It is not a
+# public filter and callers may never supply it through user metadata.
+INGEST_FINALIZATION_COMPLETE_FIELD = "_dlightrag_finalization_complete"
+
 # The one built-in column a caller may set through `metadata`. Everything else
 # about a document is derived from the file, and title/author have their own
 # ingest parameters.
@@ -125,5 +129,7 @@ FILTER_FIELD_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType(
 # the table declares outside the registry. Accepting one as user metadata would
 # store the value in JSONB where no filter ever reads it.
 _RESERVED_METADATA_KEYS: frozenset[str] = (
-    frozenset(FILTER_FIELD_COLUMNS) | set(METADATA_FIELD_IDS) | {"workspace", "doc_id"}
+    frozenset(FILTER_FIELD_COLUMNS)
+    | set(METADATA_FIELD_IDS)
+    | {"workspace", "doc_id", INGEST_FINALIZATION_COMPLETE_FIELD}
 ) - {_CALLER_SETTABLE_COLUMN}

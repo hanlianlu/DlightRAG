@@ -8,7 +8,10 @@ from typing import Any
 from dlightrag.adapters.postgres.corpus import pg_metadata_index
 from dlightrag.adapters.postgres.corpus.pg_metadata_index import _SCHEMA_MIGRATIONS, _UPSERT
 from dlightrag.engine.rag.retrieval import MetadataFilter
-from dlightrag.engine.rag.retrieval.metadata_fields import METADATA_FIELD_IDS
+from dlightrag.engine.rag.retrieval.metadata_fields import (
+    INGEST_FINALIZATION_COMPLETE_FIELD,
+    METADATA_FIELD_IDS,
+)
 
 
 def _index_sql() -> str:
@@ -199,8 +202,11 @@ class TestMetadataSQL:
         assert "ON dlightrag_doc_metadata (workspace, download_locator)" in sql
 
     def test_upsert_fields_follow_metadata_registry(self):
-        expected = tuple(field_id for field_id in METADATA_FIELD_IDS if field_id != "ingested_at")
+        public_fields = tuple(
+            field_id for field_id in METADATA_FIELD_IDS if field_id != "ingested_at"
+        )
 
+        expected = (*public_fields, INGEST_FINALIZATION_COMPLETE_FIELD)
         assert pg_metadata_index._UPSERT_FIELD_IDS == expected
 
         insert_columns = _UPSERT.split("VALUES", 1)[0]
@@ -263,6 +269,7 @@ class TestMetadataSQL:
         allowed = (
             {
                 "document_metadata",
+                "column_finalization_complete",
                 "partition_default_child",
                 "function_canonical_custom_metadata",
                 "column_custom_metadata_search",

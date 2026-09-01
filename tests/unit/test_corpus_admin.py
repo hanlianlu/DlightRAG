@@ -29,6 +29,7 @@ from dlightrag.application.corpus_admin import (
     RedirectDownloadTarget,
     WorkspaceCatalogCursor,
     WorkspaceCatalogPageRequest,
+    public_failure_diagnostic,
 )
 from dlightrag.engine.rag.retrieval import MetadataFilter
 
@@ -466,6 +467,16 @@ async def test_cancel_ingest_job_uses_stored_canonical_workspace_and_returns_lat
     assert result["status"] == "cancelled"
 
 
+async def test_cancel_ingest_job_rejects_unchanged_active_row() -> None:
+    admin, _, _, jobs, _, _ = _admin()
+    active = {"job_id": "job-1", "workspace": "finance", "status": "running"}
+    jobs.get_job.side_effect = [active, active]
+    jobs.cancel_job.return_value = False
+
+    with pytest.raises(CorpusIngestError, match="cancellation was not committed"):
+        await admin.cancel_ingest_job("job-1")
+
+
 async def test_file_panel_and_source_download_do_not_warm_cold_runtime() -> None:
     from dlightrag.engine.rag.corpus.downloads import (
         RedirectDownloadTarget as RagRedirectDownloadTarget,
@@ -596,7 +607,7 @@ async def test_reader_does_not_initialize_retry_coordinator_for_active_status() 
     jobs.start_recovery.assert_not_awaited()
 
 
-async def test_failed_file_snapshot_is_bounded_and_preserves_error_text() -> None:
+async def test_failed_file_snapshot_is_bounded_and_projects_public_diagnostics() -> None:
     admin, pool, _, _, file_panel, _ = _admin()
     timestamp = datetime(2026, 3, 4, 5, 6, 7, 123456)
     file_panel.list_failed_files.return_value = FailedFileRowPage(
@@ -604,7 +615,10 @@ async def test_failed_file_snapshot_is_bounded_and_preserves_error_text() -> Non
             FailedFileRow(
                 doc_id="doc-failed",
                 file_path="/failed.pdf",
-                error="parser failed",
+                error=(
+                    "parser failed at /srv/private/report.pdf "
+                    "https://user:password@example.test/file?token=secret " + "x" * 700
+                ),
                 updated_at=timestamp,
             ),
         ),
@@ -622,7 +636,7 @@ async def test_failed_file_snapshot_is_bounded_and_preserves_error_text() -> Non
             {
                 "doc_id": "doc-failed",
                 "file_path": "/failed.pdf",
-                "error": "parser failed",
+                "error": snapshot["failed"][0]["error"],
                 "updated_at": "2026-03-04T05:06:07.123456",
             }
         ],
@@ -634,7 +648,68 @@ async def test_failed_file_snapshot_is_bounded_and_preserves_error_text() -> Non
         ),
         "fetched_rows": 2,
     }
+    diagnostic = snapshot["failed"][0]["error"]
+    assert diagnostic == "Document processing failed."
+    assert len(diagnostic) <= 512
     pool.acquire.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "private_value",
+    [
+        "Authorization: Bearer sk-live-123",
+        "Authorization:Bearer private-token",
+        r'headers={"Authorization":"Bearer sk-ant-api03-private\\\",continued"}',
+        "Proxy-Authorization: Basic dXNlcjpwYXNz",
+        "Authorization: Session private-value",
+        "Cookie: session=private-value",
+        "Cookie: PHPSESSID=private-session; sid=other-private",
+        "Cookie: theme=light; session-id=private-value; locale=en",
+        "headers={'Authorization': 'Basic dXNlcjpwYXNz'}",
+        'headers={"Proxy-Authorization": "Basic cHJveHk6c2VjcmV0"}',
+        "headers={'Cookie': 'session=private-value'}",
+        'headers={"Set-Cookie": "session=private-value; HttpOnly"}',
+        "client_secret=top-secret",
+        "access_token=abc",
+        "refresh-token='refresh private value'",
+        'OPENAI_API_KEY="sk-live-provider"',
+        "AWS_SECRET_ACCESS_KEY=provider-private",
+        'password="correct horse"',
+        "postgresql://user:password@db.internal/app",
+        "urn:customer:private-record",
+        "archive/private/report.pdf",
+        "file:///srv/private/report.pdf",
+        "/home dir/alice/report.pdf",
+        r"C:\\Users\\Alice Smith\\report.pdf",
+        r"客户\报告.pdf",
+        r"\\server\share\private report.pdf",
+        "../private/report.pdf",
+        "pass\u200bword=secret\x00\u202e",
+    ],
+)
+def test_public_failure_diagnostic_redacts_common_private_values(private_value: str) -> None:
+    diagnostic = public_failure_diagnostic(f"parser failed: {private_value}")
+
+    assert diagnostic == "Document processing failed."
+    assert len(diagnostic) <= 512
+    assert public_failure_diagnostic(diagnostic) == diagnostic
+
+
+def test_public_failure_diagnostic_nfkc_normalizes_before_redaction() -> None:
+    diagnostic = public_failure_diagnostic(
+        'headers={"Ａｕｔｈｏｒｉｚａｔｉｏｎ": "Ｂａｓｉｃ dXNlcjpwYXNz"}'
+    )
+
+    assert diagnostic == "Document processing failed."
+    assert public_failure_diagnostic(diagnostic) == diagnostic
+
+
+def test_public_failure_diagnostic_allows_only_known_application_messages() -> None:
+    assert public_failure_diagnostic("source metadata unavailable") == (
+        "Source metadata unavailable."
+    )
+    assert public_failure_diagnostic("retry ingestion failed") == "Retry ingestion failed."
+    assert public_failure_diagnostic("") == ""
 
 
 async def test_workspace_exists_uses_default_fast_path_and_bounded_maintenance_lookup() -> None:

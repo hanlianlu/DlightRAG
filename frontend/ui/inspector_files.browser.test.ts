@@ -4,6 +4,7 @@ import {expect} from '@esm-bundle/chai';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import './inspector_files.ts';
+import type {DlFailedFileRecovery} from './failed_file_recovery.ts';
 import type {DlInspectorFiles} from './inspector_files.ts';
 
 const originalFetch = window.fetch;
@@ -327,6 +328,10 @@ it('clears prior-workspace rows when the selected workspace reload fails', async
   expect(panel.querySelector('.file-delete')).not.to.equal(null);
 
   ingestStore.set('secondary');
+  await panel.updateComplete;
+  expect(
+    panel.querySelector<DlFailedFileRecovery>('dl-failed-file-recovery')?.workspace,
+  ).to.equal('secondary');
   await waitFor(() => panel.loading === false && panel.error !== null);
   await panel.updateComplete;
 

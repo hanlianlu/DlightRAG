@@ -197,6 +197,8 @@ async def file_list(
         )
         if decoded_cursor is not None and decoded_cursor.workspace != selected_workspace:
             raise FilePanelCursorError("file-panel cursor belongs to another workspace")
+        if decoded_cursor is not None and decoded_cursor.view != "processed":
+            raise FilePanelCursorError("file-panel cursor belongs to another view")
         page = FilePanelPageRequest(limit=limit, cursor=decoded_cursor)
     except (FilePanelCursorError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

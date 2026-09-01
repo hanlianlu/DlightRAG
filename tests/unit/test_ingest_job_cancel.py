@@ -2,6 +2,7 @@
 """Cancellation contract for in-flight ingest jobs."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -16,11 +17,16 @@ def _coordinator(store: Any | None = None) -> IngestJobCoordinator:
     async def _unused(workspace: str):  # pragma: no cover - never awaited here
         raise AssertionError("service lookup is not part of cancellation")
 
-    return IngestJobCoordinator(
+    selected = store if store is not None else AsyncMock()
+    if store is None:
+        selected.cancel.return_value = False
+    coordinator = IngestJobCoordinator(
         _unused,
         input_root=Path("/tmp/dlightrag-test"),
-        store=cast(Any, store if store is not None else AsyncMock()),
+        store=cast(Any, selected),
     )
+    coordinator._store_started = True
+    return coordinator
 
 
 async def _register(coordinator: IngestJobCoordinator, job_id: str, workspace: str) -> None:
@@ -41,6 +47,17 @@ async def test_cancel_job_stops_the_task_and_forgets_it() -> None:
 
     assert await coordinator.cancel_job("job-1", workspace="alpha") is True
     assert "job-1" not in coordinator._tasks
+
+
+async def test_cancel_job_commits_without_a_process_local_task() -> None:
+    store = AsyncMock()
+    store.cancel.return_value = True
+    coordinator = _coordinator(store)
+
+    assert await coordinator.cancel_job("remote-job", workspace="alpha") is True
+    store.cancel.assert_awaited_once_with(
+        "remote-job", workspace="alpha", error="ingest job cancelled"
+    )
 
 
 async def test_cancel_job_refuses_a_job_owned_by_another_workspace() -> None:
@@ -204,8 +221,10 @@ async def test_terminal_docs_are_left_alone() -> None:
     assert await service.afail_unfinished_docs(reason="x") == 0
 
 
-async def test_the_sweeper_runs_at_startup_and_then_on_a_schedule(monkeypatch) -> None:
-    """It replaces the one-shot startup prune, so the first pass must not wait."""
+async def test_the_sweeper_recovers_on_lease_cadence_and_prunes_independently(
+    monkeypatch,
+) -> None:
+    """Startup recovery is in get_store; the background sweep intentionally sleeps first."""
 
     slept: list[float] = []
 
@@ -215,23 +234,30 @@ async def test_the_sweeper_runs_at_startup_and_then_on_a_schedule(monkeypatch) -
             raise asyncio.CancelledError
 
     monkeypatch.setattr(asyncio, "sleep", _sleep)
+    monkeypatch.setattr("dlightrag.engine.rag.corpus.ingestion.jobs._JOB_PRUNE_SECONDS", 0)
 
     class _Store:
         def __init__(self) -> None:
-            self.passes = 0
+            self.recovery_passes = 0
+            self.prune_passes = 0
+
+        async def list_recoverable(self) -> list[dict[str, Any]]:
+            self.recovery_passes += 1
+            return []
 
         async def prune(self) -> dict[str, int]:
-            self.passes += 1
+            self.prune_passes += 1
             return {"failed_abandoned": 0, "deleted_completed": 0}
 
     store = _Store()
     with pytest.raises(asyncio.CancelledError):
         await _coordinator()._sweep_jobs(cast(Any, store))
 
-    assert store.passes == 2
-    from dlightrag.engine.rag.corpus.ingest_jobs import JOB_ORPHAN_AFTER_SECONDS
+    assert store.recovery_passes == 1
+    assert store.prune_passes == 1
+    from dlightrag.engine.rag.corpus.ingestion.jobs import _JOB_SWEEP_SECONDS
 
-    assert slept == [JOB_ORPHAN_AFTER_SECONDS // 2] * 2
+    assert slept == [_JOB_SWEEP_SECONDS] * 2
 
 
 async def test_a_failing_sweep_does_not_stop_the_schedule(monkeypatch) -> None:
@@ -243,8 +269,12 @@ async def test_a_failing_sweep_does_not_stop_the_schedule(monkeypatch) -> None:
             raise asyncio.CancelledError
 
     monkeypatch.setattr(asyncio, "sleep", _sleep)
+    monkeypatch.setattr("dlightrag.engine.rag.corpus.ingestion.jobs._JOB_PRUNE_SECONDS", 0)
 
     class _Store:
+        async def list_recoverable(self) -> list[dict[str, Any]]:
+            return []
+
         async def prune(self) -> dict[str, int]:
             calls.append(1)
             raise RuntimeError("database down")
@@ -253,3 +283,63 @@ async def test_a_failing_sweep_does_not_stop_the_schedule(monkeypatch) -> None:
         await _coordinator()._sweep_jobs(cast(Any, _Store()))
 
     assert len(calls) == 2
+
+
+async def test_running_retry_cancellation_uses_ledger_aware_transition() -> None:
+    started = asyncio.Event()
+    store = AsyncMock()
+    store.is_workspace_fenced.return_value = False
+    store.claim_running.return_value = True
+    store.list_unfinished_failed_retry_items.return_value = None
+    store.seal_failed_retry_cohort.return_value = True
+    store.cancel_failed_retry.return_value = True
+
+    @asynccontextmanager
+    async def gate(_workspace: str):
+        yield None
+
+    store.workspace_write_gate = gate
+
+    class _Service:
+        async def aregister_workspace(self) -> None:
+            return None
+
+        async def aretry_failed_docs(self, **kwargs: Any) -> dict[str, Any]:
+            await kwargs["cohort_callback"](("doc-a", "doc-b"))
+            started.set()
+            await asyncio.sleep(3600)
+            return {}
+
+        async def afail_unfinished_docs(self, *, reason: str) -> int:
+            assert reason == "ingest job cancelled"
+            return 0
+
+    async def get_service(_workspace: str) -> Any:
+        return _Service()
+
+    coordinator = IngestJobCoordinator(
+        get_service,
+        input_root=Path("/tmp/dlightrag-test"),
+        store=store,
+    )
+    coordinator._store_started = True
+    task = asyncio.create_task(
+        coordinator._run_job(
+            job_id="retry-job",
+            workspace="alpha",
+            job_type="retry_failed",
+            kwargs={},
+            cleanup_paths=(),
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    store.cancel_failed_retry.assert_awaited_once_with(
+        "retry-job",
+        error="ingest job cancelled",
+        lease_owner=coordinator._lease_owner,
+    )
+    store.fail.assert_not_awaited()

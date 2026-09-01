@@ -523,7 +523,7 @@ export class DlInspectorFiles extends LightElement {
         <div id="upload-spinner" class="file-status">${msg('Uploading...', {id: 'inspectorFiles.uploadingStatus'})}</div>
       </div>
       <dl-failed-file-recovery
-        .workspace=${this.#workspace || ingestStore.workspace}
+        .workspace=${ingestStore.workspace}
         .active=${this.active}
         @dl-failed-file-recovery-complete=${() => { void this.reload(false); }}
       ></dl-failed-file-recovery>

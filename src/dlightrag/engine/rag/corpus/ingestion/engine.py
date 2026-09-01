@@ -10,7 +10,7 @@ from contextlib import AsyncExitStack
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from lightrag.constants import FULL_DOCS_FORMAT_PENDING_PARSE
 from lightrag.parser.routing import (
@@ -23,6 +23,7 @@ from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path, resolve_sidecar_uri
 
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY, Telemetry
+from dlightrag.engine.rag.corpus.ingest_jobs import RetryOutcomeUncertainError
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     DocumentEmbeddingInput,
     RobustDocumentEmbedder,
@@ -34,11 +35,15 @@ from dlightrag.engine.rag.corpus.sources.source_contract import (
     safe_source_filename,
 )
 from dlightrag.engine.rag.retrieval.metadata_fields import (
+    INGEST_FINALIZATION_COMPLETE_FIELD,
     extract_system_metadata,
     normalize_user_metadata,
 )
+from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup, defer_cancellation
 
 logger = logging.getLogger(__name__)
+
+_FINALIZATION_COMPLETE_KEY = INGEST_FINALIZATION_COMPLETE_FIELD
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,10 @@ class PreparedIngestFile:
     source_uri_explicit: bool = True
     download_locator_explicit: bool = True
     display_filename_explicit: bool = False
+    replacement_doc_ids: tuple[str, ...] = ()
+    # (doc_id, accepted download locator, accepted stable source URI).
+    # The engine revalidates this ownership under the per-document lock.
+    replacement_ownership: tuple[tuple[str, str, str], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "parser_path", Path(self.parser_path))
@@ -75,6 +84,8 @@ class _PendingDocumentIngest:
     parse_engine: str | None
     process_options: str | None
     chunk_options: dict[str, Any] | None
+    replacement_doc_ids: tuple[str, ...]
+    replacement_ownership: tuple[tuple[str, str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -83,6 +94,7 @@ class _DocumentIngestDecision:
     cleanup_kind: str | None = None
     result: dict[str, Any] | None = None
     metadata_update: bool = False
+    finalize_only: bool = False
 
 
 class UnifiedIngestionEngine:
@@ -136,70 +148,40 @@ class UnifiedIngestionEngine:
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Ingest a local file through the unified path."""
+        """Ingest one file through the same locked compensation core as batches."""
         file_path = Path(path)
-        resolved_source_uri = source_uri or _raw_path_source_uri(
-            file_path, workspace=self._workspace
-        )
-        resolved_download_locator = download_locator or str(file_path.resolve())
-        entry = self._prepare_pending_document(
-            index=0,
-            item=PreparedIngestFile(
-                parser_path=file_path,
-                source_uri=resolved_source_uri,
-                download_locator=resolved_download_locator,
-                display_filename=display_filename,
-                title=title,
-                author=author,
-                metadata=metadata,
-                source_uri_explicit=(
-                    source_uri is not None if source_uri_explicit is None else source_uri_explicit
-                ),
-                download_locator_explicit=(
-                    download_locator is not None
-                    if download_locator_explicit is None
-                    else download_locator_explicit
-                ),
-                display_filename_explicit=(
-                    display_filename is not None
-                    if display_filename_explicit is None
-                    else display_filename_explicit
-                ),
+        item = PreparedIngestFile(
+            parser_path=file_path,
+            source_uri=source_uri or _raw_path_source_uri(file_path, workspace=self._workspace),
+            download_locator=download_locator or str(file_path.resolve()),
+            display_filename=display_filename,
+            title=title,
+            author=author,
+            metadata=metadata,
+            source_uri_explicit=(
+                source_uri is not None if source_uri_explicit is None else source_uri_explicit
             ),
-            resolve_parser_directives=False,
+            download_locator_explicit=(
+                download_locator is not None
+                if download_locator_explicit is None
+                else download_locator_explicit
+            ),
+            display_filename_explicit=(
+                display_filename is not None
+                if display_filename_explicit is None
+                else display_filename_explicit
+            ),
         )
-        decision = await self._decide_document_ingest(entry, replace=replace)
-        if decision.result is not None:
-            if decision.metadata_update:
-                async with self._get_ingest_lock(entry.doc_id):
-                    await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
-            return decision.result
-        entry = self._ensure_enqueue_entry(entry)
-        parse_engine, process_options = _required_enqueue_fields(entry)
-        if decision.cleanup_kind == "replace":
-            await self._cleanup_partial_doc(entry.doc_id)
-
-        async with self._get_ingest_lock(entry.doc_id):
-            await self._cleanup_partial_before_enqueue(entry.doc_id)
-            await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
-            await self._lightrag.apipeline_enqueue_documents(
-                input="",
-                file_paths=[str(entry.parser_path)],
-                docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
-                parse_engine=parse_engine,
-                process_options=process_options,
-                chunk_options=entry.chunk_options
-                if entry.chunk_options is not None
-                else self._chunk_options or None,
-            )
-            await self._process_enqueued([entry.doc_id])
-
-            return await self._finalize_ingested_document(
-                doc_id=entry.doc_id,
-                metadata_record=entry.metadata_record,
-                parse_engine=parse_engine,
-                process_options=process_options,
-            )
+        batch = await self.aingest_files([item], replace=replace, _raise_finalization_errors=True)
+        results = batch.get("results")
+        if isinstance(results, list) and results:
+            result = results[0]
+            if isinstance(result, dict):
+                return result
+        errors = batch.get("errors")
+        if isinstance(errors, list) and errors:
+            raise RuntimeError(str(errors[0]))
+        raise RuntimeError("document ingestion produced no result")
 
     async def aingest_files(
         self,
@@ -209,6 +191,7 @@ class UnifiedIngestionEngine:
         title: str | None = None,
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        _raise_finalization_errors: bool = False,
     ) -> dict[str, Any]:
         """Ingest local files as one LightRAG staged batch.
 
@@ -235,19 +218,34 @@ class UnifiedIngestionEngine:
                 )
             )
 
+        doc_ids = [entry.doc_id for entry in entries]
+        duplicate_doc_ids = sorted(doc_id for doc_id in set(doc_ids) if doc_ids.count(doc_id) > 1)
+        if duplicate_doc_ids:
+            raise ValueError(
+                "ingest batch contains duplicate canonical document IDs: "
+                + ", ".join(duplicate_doc_ids)
+            )
+
         results_by_index: dict[int, dict[str, Any]] = {}
         errors: list[str] = []
         deferred_metadata_updates: list[tuple[_PendingDocumentIngest, dict[str, Any]]] = []
+        deferred_finalizations: list[_PendingDocumentIngest] = []
         to_enqueue: list[tuple[_PendingDocumentIngest, _DocumentIngestDecision]] = []
 
         async with AsyncExitStack() as stack:
-            for doc_id in sorted({entry.doc_id for entry in entries}):
+            locked_doc_ids = {
+                doc_id for entry in entries for doc_id in (entry.doc_id, *entry.replacement_doc_ids)
+            }
+            for doc_id in sorted(locked_doc_ids):
                 await stack.enter_async_context(self._get_ingest_lock(doc_id))
 
             for entry in entries:
                 decision = await self._decide_document_ingest(entry, replace=replace)
                 if decision.enqueue:
                     to_enqueue.append((entry, decision))
+                    continue
+                if decision.finalize_only:
+                    deferred_finalizations.append(self._ensure_enqueue_entry(entry))
                     continue
                 if decision.metadata_update and decision.result is not None:
                     deferred_metadata_updates.append((entry, decision.result))
@@ -258,46 +256,169 @@ class UnifiedIngestionEngine:
                 (self._ensure_enqueue_entry(entry), decision) for entry, decision in to_enqueue
             ]
 
-            for entry, decision in validated_to_enqueue:
-                if decision.cleanup_kind is not None:
-                    await self._cleanup_partial_doc(entry.doc_id)
+            cleanup_snapshots: dict[str, tuple[dict[str, Any] | None, dict[str, Any] | None]] = {}
+            cleanup_ids_by_entry: dict[int, tuple[str, ...]] = {}
+            try:
+                for entry, decision in validated_to_enqueue:
+                    if any(old_doc_id != entry.doc_id for old_doc_id in entry.replacement_doc_ids):
+                        await self._validate_candidate_ownership_if_present(entry)
+                    cleanup_ids = tuple(
+                        dict.fromkeys(
+                            (
+                                *((entry.doc_id,) if decision.cleanup_kind is not None else ()),
+                                *entry.replacement_doc_ids,
+                            )
+                        )
+                    )
+                    cleanup_ids_by_entry[entry.index] = cleanup_ids
+                    for cleanup_doc_id in cleanup_ids:
+                        if cleanup_doc_id in cleanup_snapshots:
+                            continue
+                        external_replacement = cleanup_doc_id in entry.replacement_doc_ids
+                        if external_replacement:
+                            await self._validate_replacement_ownership(entry, cleanup_doc_id)
+                        cleanup_snapshots[cleanup_doc_id] = await self._cleanup_partial_doc(
+                            cleanup_doc_id,
+                            allow_metadata_tombstone=external_replacement,
+                        )
 
-            for entry, result in deferred_metadata_updates:
-                await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
-                results_by_index[entry.index] = result
+                for entry, result in deferred_metadata_updates:
+                    finalized_metadata = dict(entry.metadata_record)
+                    finalized_metadata[_FINALIZATION_COMPLETE_KEY] = True
+                    await self._metadata_index.upsert(entry.doc_id, finalized_metadata)
+                    results_by_index[entry.index] = result
 
-            if validated_to_enqueue:
-                enqueue_entries = [entry for entry, _decision in validated_to_enqueue]
-                chunk_options = self._batch_chunk_options(enqueue_entries)
-                for entry in enqueue_entries:
-                    await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
-                await self._lightrag.apipeline_enqueue_documents(
-                    input=[""] * len(enqueue_entries),
-                    file_paths=[str(entry.parser_path) for entry in enqueue_entries],
-                    docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
-                    parse_engine=[entry.parse_engine for entry in enqueue_entries],
-                    process_options=[entry.process_options for entry in enqueue_entries],
-                    chunk_options=chunk_options,
-                )
-                await self._process_enqueued([entry.doc_id for entry in enqueue_entries])
-
-                for entry in enqueue_entries:
+                for entry in deferred_finalizations:
+                    parse_engine, process_options = _required_enqueue_fields(entry)
+                    external_ids = tuple(
+                        dict.fromkeys(
+                            doc_id for doc_id in entry.replacement_doc_ids if doc_id != entry.doc_id
+                        )
+                    )
+                    recovered_snapshots: dict[
+                        str, tuple[dict[str, Any] | None, dict[str, Any] | None]
+                    ] = {}
                     try:
-                        parse_engine, process_options = _required_enqueue_fields(entry)
-                        results_by_index[entry.index] = await self._finalize_ingested_document(
+                        if external_ids:
+                            await self._validate_candidate_ownership_if_present(entry)
+                        present_external_ids: list[str] = []
+                        for external_id in external_ids:
+                            current = await self._metadata_index.get(external_id)
+                            if current is None:
+                                if await self._stores.get_doc_status(external_id) is not None:
+                                    raise RuntimeError("replacement document ownership changed")
+                                continue
+                            await self._validate_replacement_ownership(entry, external_id)
+                            present_external_ids.append(external_id)
+                        for external_id in present_external_ids:
+                            recovered_snapshots[external_id] = await self._cleanup_partial_doc(
+                                external_id,
+                                allow_metadata_tombstone=True,
+                            )
+                        durable_result = await self._finalize_ingested_document(
                             doc_id=entry.doc_id,
                             metadata_record=entry.metadata_record,
                             parse_engine=parse_engine,
                             process_options=process_options,
+                            commit_complete=not present_external_ids,
                         )
-                    except Exception:  # noqa: BLE001
-                        filename = safe_source_filename(
-                            str(entry.metadata_record.get("filename") or entry.parser_path.name)
+                        for external_id in present_external_ids:
+                            await self._metadata_index.delete(external_id)
+                            recovered_snapshots.pop(external_id, None)
+                        if present_external_ids:
+                            await self._commit_finalization_complete(
+                                entry.doc_id,
+                                entry.metadata_record,
+                            )
+                        results_by_index[entry.index] = durable_result
+                    except BaseException as error:
+                        await self._restore_cleanup_after_error(
+                            recovered_snapshots,
+                            error,
                         )
-                        logger.warning(
-                            "Document finalization failed for %s", filename, exc_info=True
-                        )
-                        errors.append(f"{filename}: document processing failed")
+                        raise
+
+                if validated_to_enqueue:
+                    enqueue_entries = [entry for entry, _decision in validated_to_enqueue]
+                    chunk_options = self._batch_chunk_options(enqueue_entries)
+                    for entry in enqueue_entries:
+                        await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
+                    await self._lightrag.apipeline_enqueue_documents(
+                        input=[""] * len(enqueue_entries),
+                        file_paths=[str(entry.parser_path) for entry in enqueue_entries],
+                        docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
+                        parse_engine=[entry.parse_engine for entry in enqueue_entries],
+                        process_options=[entry.process_options for entry in enqueue_entries],
+                        chunk_options=chunk_options,
+                    )
+                    await self._process_enqueued([entry.doc_id for entry in enqueue_entries])
+
+                    for entry in enqueue_entries:
+                        try:
+                            parse_engine, process_options = _required_enqueue_fields(entry)
+                            external_cleanup_ids = tuple(
+                                cleanup_doc_id
+                                for cleanup_doc_id in cleanup_ids_by_entry.get(entry.index, ())
+                                if cleanup_doc_id != entry.doc_id
+                            )
+                            durable_result = await self._finalize_ingested_document(
+                                doc_id=entry.doc_id,
+                                metadata_record=entry.metadata_record,
+                                parse_engine=parse_engine,
+                                process_options=process_options,
+                                commit_complete=not external_cleanup_ids,
+                            )
+                            for cleanup_doc_id in cleanup_ids_by_entry.get(entry.index, ()):
+                                if cleanup_doc_id != entry.doc_id:
+                                    await self._metadata_index.delete(cleanup_doc_id)
+                                cleanup_snapshots.pop(cleanup_doc_id, None)
+                            if external_cleanup_ids:
+                                # Replacement completion is authoritative only
+                                # after every old locator owner is retired.
+                                await self._commit_finalization_complete(
+                                    entry.doc_id,
+                                    entry.metadata_record,
+                                )
+                            # Publish only after old locator metadata retirement
+                            # and the final completion marker commit.
+                            results_by_index[entry.index] = durable_result
+                        except BaseException as error:  # noqa: BLE001
+                            entry_snapshots = {
+                                cleanup_doc_id: cleanup_snapshots[cleanup_doc_id]
+                                for cleanup_doc_id in cleanup_ids_by_entry.get(entry.index, ())
+                                if cleanup_doc_id in cleanup_snapshots
+                            }
+                            await self._settle_failed_replacement(entry, entry_snapshots, error)
+                            for cleanup_doc_id in entry_snapshots:
+                                cleanup_snapshots.pop(cleanup_doc_id, None)
+                            if isinstance(error, asyncio.CancelledError):
+                                raise
+                            if _raise_finalization_errors:
+                                raise
+                            filename = safe_source_filename(
+                                str(entry.metadata_record.get("filename") or entry.parser_path.name)
+                            )
+                            logger.warning(
+                                "Document finalization failed for %s", filename, exc_info=True
+                            )
+                            errors.append(f"{filename}: document processing failed")
+            except BaseException as error:
+                # Enqueue/process can partially create candidate rows before it
+                # raises. Settle every affected replacement, rather than merely
+                # restoring old snapshots and leaving two locator owners.
+                for entry, _decision in validated_to_enqueue:
+                    entry_snapshots = {
+                        cleanup_doc_id: cleanup_snapshots[cleanup_doc_id]
+                        for cleanup_doc_id in cleanup_ids_by_entry.get(entry.index, ())
+                        if cleanup_doc_id in cleanup_snapshots
+                    }
+                    if not entry_snapshots:
+                        continue
+                    await self._settle_failed_replacement(entry, entry_snapshots, error)
+                    for cleanup_doc_id in entry_snapshots:
+                        cleanup_snapshots.pop(cleanup_doc_id, None)
+                await self._restore_cleanup_after_error(cleanup_snapshots, error)
+                raise
 
         return {
             "processed": len(results_by_index),
@@ -347,6 +468,8 @@ class UnifiedIngestionEngine:
             parse_engine=parse_engine,
             process_options=process_options,
             chunk_options=chunk_options,
+            replacement_doc_ids=tuple(dict.fromkeys(item.replacement_doc_ids)),
+            replacement_ownership=tuple(dict.fromkeys(item.replacement_ownership)),
         )
 
     def _ensure_enqueue_entry(self, entry: _PendingDocumentIngest) -> _PendingDocumentIngest:
@@ -364,6 +487,8 @@ class UnifiedIngestionEngine:
             parse_engine=parse_engine,
             process_options=process_options,
             chunk_options=chunk_options,
+            replacement_doc_ids=entry.replacement_doc_ids,
+            replacement_ownership=entry.replacement_ownership,
         )
 
     async def _decide_document_ingest(
@@ -384,7 +509,9 @@ class UnifiedIngestionEngine:
             return hash_match_decision
 
         if _normalized_status(existing_status) == "processed":
-            return _DocumentIngestDecision(enqueue=True)
+            # LightRAG rejects an existing canonical ID as a duplicate. A hash
+            # mismatch must therefore delete the old corpus before enqueue.
+            return _DocumentIngestDecision(enqueue=True, cleanup_kind="replace")
 
         return _DocumentIngestDecision(
             enqueue=True,
@@ -404,7 +531,13 @@ class UnifiedIngestionEngine:
             return None
 
         chunks = list(_mapping_get(existing_status, "chunks_list") or [])
-        if not await self._metadata_update_required(entry):
+        persisted = await self._metadata_index.get(entry.doc_id)
+        if not ingest_finalization_complete(persisted):
+            # LightRAG may have committed PROCESSED immediately before a hard
+            # crash. Replay only DlightRAG's idempotent required finalization.
+            return _DocumentIngestDecision(enqueue=False, finalize_only=True)
+
+        if not await self._metadata_update_required(entry, persisted=persisted):
             return _DocumentIngestDecision(
                 enqueue=False,
                 result={
@@ -426,10 +559,16 @@ class UnifiedIngestionEngine:
             },
         )
 
-    async def _metadata_update_required(self, entry: _PendingDocumentIngest) -> bool:
+    async def _metadata_update_required(
+        self,
+        entry: _PendingDocumentIngest,
+        *,
+        persisted: Mapping[str, Any] | None = None,
+    ) -> bool:
         if not entry.metadata_update_requested:
             return False
-        persisted = await self._metadata_index.get(entry.doc_id)
+        if persisted is None:
+            persisted = await self._metadata_index.get(entry.doc_id)
         if not isinstance(persisted, Mapping):
             return True
         return _hash_match_metadata_record(entry.metadata_record) != _hash_match_metadata_record(
@@ -462,6 +601,8 @@ class UnifiedIngestionEngine:
         return {
             **system_metadata,
             "custom_metadata": normalized_metadata.custom_metadata,
+            # Application-owned crash journal; user metadata cannot override it.
+            _FINALIZATION_COMPLETE_KEY: False,
         }
 
     def _get_ingest_lock(self, doc_id: str) -> asyncio.Lock:
@@ -472,27 +613,244 @@ class UnifiedIngestionEngine:
             self._ingest_locks[doc_id] = lock
         return lock
 
-    async def _cleanup_partial_doc(self, doc_id: str) -> None:
-        """Remove all traces of a partial/failed document before re-ingest."""
+    async def _settle_failed_replacement(
+        self,
+        entry: _PendingDocumentIngest,
+        snapshots: dict[str, tuple[dict[str, Any] | None, dict[str, Any] | None]],
+        error: BaseException,
+    ) -> None:
+        """Leave exactly one retry identity after an old-ID replacement fails."""
+        external = tuple(doc_id for doc_id in entry.replacement_doc_ids if doc_id != entry.doc_id)
+        if not external:
+            await self._restore_cleanup_after_error(snapshots, error)
+            return
+
+        candidate_status = await self._stores.get_doc_status(entry.doc_id)
+        # A metadata-only old tombstone cannot safely be recreated. Once the
+        # candidate has a status, it is the authoritative failed identity.
+        if any(snapshots.get(doc_id, (None, None))[0] is None for doc_id in external):
+            if candidate_status is not None:
+                for old_doc_id in external:
+                    await self._metadata_index.delete(old_doc_id)
+                return
+
+            # Enqueue failed before it created a candidate status. The intent
+            # metadata written immediately before enqueue must not overwrite a
+            # pre-existing canonical candidate that owned another locator.
+            candidate_snapshot = snapshots.get(entry.doc_id)
+            if candidate_snapshot is not None and candidate_snapshot[0] is not None:
+                await self._restore_cleanup_snapshots({entry.doc_id: candidate_snapshot})
+            else:
+                await self._metadata_index.delete(entry.doc_id)
+
+            # Every external ID was ownership-validated for the incoming
+            # locator under its lock. Retain one deterministic retry tombstone
+            # and retire only surplus owners, restoring its status when one was
+            # available before cleanup.
+            authoritative_old = external[0]
+            authoritative_snapshot = snapshots.get(authoritative_old)
+            if authoritative_snapshot is not None and authoritative_snapshot[0] is not None:
+                await self._restore_cleanup_snapshots({authoritative_old: authoritative_snapshot})
+            for old_doc_id in external[1:]:
+                await self._metadata_index.delete(old_doc_id)
+            return
+
+        if candidate_status is None:
+            await self._metadata_index.delete(entry.doc_id)
+            await self._restore_cleanup_after_error(snapshots, error)
+            return
+
+        cancellation = (
+            defer_cancellation(None, error) if isinstance(error, asyncio.CancelledError) else None
+        )
+        delete_task = asyncio.create_task(
+            self._lightrag.adelete_by_doc_id(entry.doc_id, delete_llm_cache=True)
+        )
+        try:
+            deletion = await await_shared_cleanup(delete_task)
+        except asyncio.CancelledError as exc:
+            cancellation = defer_cancellation(cancellation, exc)
+            deletion = None
+        except Exception:
+            deletion = None
+        deletion_status = str(_mapping_get(deletion, "status") or "").lower()
+        candidate_gone = await self._stores.get_doc_status(entry.doc_id) is None
+        if deletion_status in {"success", "not_found"} or candidate_gone:
+            await self._metadata_index.delete(entry.doc_id)
+            await self._restore_cleanup_snapshots(snapshots)
+        else:
+            # Candidate remains authoritative; retire only the already-deleted
+            # old locator tombstones so the next retry cannot see two owners.
+            for old_doc_id in external:
+                await self._metadata_index.delete(old_doc_id)
+        # The caller re-raises the original cancellation after removing these
+        # settled snapshots from the outer compensation set.
+
+    async def _validate_candidate_ownership_if_present(self, entry: _PendingDocumentIngest) -> None:
+        """Never replace an unrelated pre-existing canonical candidate."""
+        current = await self._metadata_index.get(entry.doc_id)
+        if current is None:
+            if await self._stores.get_doc_status(entry.doc_id) is not None:
+                raise RuntimeError("replacement candidate ownership changed")
+            return
+        if not isinstance(current, Mapping):
+            raise RuntimeError("replacement candidate ownership changed")
+        expected_locator = entry.metadata_record.get("download_locator")
+        expected_source = entry.metadata_record.get("source_uri")
+        if (
+            current.get("download_locator") != expected_locator
+            or current.get("source_uri") != expected_source
+        ):
+            await self._collapse_safe_external_tombstones(entry)
+            raise RuntimeError("replacement candidate ownership changed")
+
+    async def _collapse_safe_external_tombstones(
+        self,
+        entry: _PendingDocumentIngest,
+    ) -> None:
+        """Retain one proven metadata-only owner without touching corpus rows."""
+        external = tuple(
+            dict.fromkeys(doc_id for doc_id in entry.replacement_doc_ids if doc_id != entry.doc_id)
+        )
+        if len(external) < 2:
+            return
+
+        # Validate every owner and every status before the first mutation. If
+        # any row is uncertain or status-bearing, candidate collision remains
+        # a pure fail-closed no-op.
+        for doc_id in external:
+            await self._validate_replacement_ownership(entry, doc_id)
+            if await self._stores.get_doc_status(doc_id) is not None:
+                return
+        for surplus_doc_id in external[1:]:
+            await self._metadata_index.delete(surplus_doc_id)
+
+    async def _validate_replacement_ownership(
+        self, entry: _PendingDocumentIngest, doc_id: str
+    ) -> None:
+        """Prove locator ownership under the already-acquired document lock."""
+        accepted = tuple(
+            (locator, source_uri)
+            for owned_id, locator, source_uri in entry.replacement_ownership
+            if owned_id == doc_id
+        )
+        if not accepted:
+            raise RuntimeError("replacement document ownership is unavailable")
+        current = await self._metadata_index.get(doc_id)
+        if not isinstance(current, Mapping):
+            raise RuntimeError("replacement document ownership changed")
+        if not any(
+            current.get("download_locator") == locator and current.get("source_uri") == source_uri
+            for locator, source_uri in accepted
+        ):
+            raise RuntimeError("replacement document ownership changed")
+
+    async def _restore_cleanup_snapshots(
+        self,
+        snapshots: dict[str, tuple[dict[str, Any] | None, dict[str, Any] | None]],
+    ) -> None:
+        """Restore only safe missing anchors, never overwrite a committed replacement."""
+        for doc_id, (status_snapshot, metadata_snapshot) in snapshots.items():
+            current_status = await self._stores.get_doc_status(doc_id)
+            status_missing = current_status is None
+            if status_missing and status_snapshot is not None:
+                marker = dict(status_snapshot)
+                marker.update(
+                    status="failed",
+                    error_msg="document replacement was interrupted",
+                    chunks_list=[],
+                    chunks_count=0,
+                )
+                await self._stores.doc_status.upsert({doc_id: marker})
+            if metadata_snapshot is not None:
+                current_metadata = await self._metadata_index.get(doc_id)
+                if (status_snapshot is not None and status_missing) or current_metadata is None:
+                    await self._metadata_index.upsert(doc_id, metadata_snapshot)
+
+    async def _restore_cleanup_after_error(
+        self,
+        snapshots: dict[str, tuple[dict[str, Any] | None, dict[str, Any] | None]],
+        error: BaseException,
+    ) -> None:
+        cancellation = (
+            defer_cancellation(None, error) if isinstance(error, asyncio.CancelledError) else None
+        )
+        cleanup_task = asyncio.create_task(self._restore_cleanup_snapshots(snapshots))
+        try:
+            await await_shared_cleanup(cleanup_task)
+        except asyncio.CancelledError as exc:
+            cancellation = defer_cancellation(cancellation, exc)
+        except Exception:
+            logger.warning("Failed to restore cleaned document snapshots", exc_info=True)
+        if cancellation is not None:
+            raise cancellation from None
+
+    async def _cleanup_partial_doc(
+        self,
+        doc_id: str,
+        *,
+        allow_metadata_tombstone: bool = False,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Remove a document, accepting only a validated metadata-only tombstone."""
+        status_snapshot = await self._stores.get_doc_status(doc_id)
+        metadata_snapshot = await self._metadata_index.get(doc_id)
+        if not isinstance(status_snapshot, Mapping):
+            if allow_metadata_tombstone and isinstance(metadata_snapshot, Mapping):
+                # A prior owner committed deletion but crashed before enqueue.
+                # Ownership was revalidated under this doc lock by the caller.
+                return None, dict(metadata_snapshot)
+            raise RuntimeError("document status snapshot is unavailable")
         full_doc = await self._stores.get_full_doc(doc_id)
         sidecar_uri = _mapping_get(full_doc, "sidecar_location")
 
-        result = await self._lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
-        status = _mapping_get(result, "status")
-        if status in {"fail", "not_allowed"}:
-            message = _mapping_get(result, "message") or "LightRAG document deletion failed"
-            raise RuntimeError(str(message))
+        try:
+            result = await self._lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
+        except BaseException as error:
+            current_status = await self._stores.get_doc_status(doc_id)
+            if current_status is not None:
+                await self._restore_cleanup_after_error(
+                    {
+                        doc_id: (
+                            dict(status_snapshot),
+                            dict(metadata_snapshot)
+                            if isinstance(metadata_snapshot, Mapping)
+                            else None,
+                        )
+                    },
+                    error,
+                )
+            raise
+        raw_status = _mapping_get(result, "status")
+        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        if status != "success":
+            current_status = await self._stores.get_doc_status(doc_id)
+            if current_status is None:
+                # Pinned LightRAG deletes doc_status first at its final stage and
+                # intentionally treats a later retry as already deleted. Never
+                # recreate that row as a zombie.
+                return (
+                    None,
+                    dict(metadata_snapshot) if isinstance(metadata_snapshot, Mapping) else None,
+                )
+            await self._restore_cleanup_snapshots(
+                {
+                    doc_id: (
+                        dict(status_snapshot),
+                        dict(metadata_snapshot) if isinstance(metadata_snapshot, Mapping) else None,
+                    )
+                }
+            )
+            raise RuntimeError("LightRAG document deletion was not acknowledged")
 
-        await self._metadata_index.delete(doc_id)
-
+        # Keep source metadata until the replacement record is durably written.
+        # A hard process exit after deletion can then reconstruct the same ID.
         artifact_dir = resolve_sidecar_uri(sidecar_uri)
         if artifact_dir is not None and artifact_dir.exists():
             shutil.rmtree(artifact_dir, ignore_errors=True)
-
-    async def _cleanup_partial_before_enqueue(self, doc_id: str) -> None:
-        existing_status = await self._stores.get_doc_status(doc_id)
-        if existing_status is not None and _normalized_status(existing_status) != "processed":
-            await self._cleanup_partial_doc(doc_id)
+        return (
+            dict(status_snapshot),
+            dict(metadata_snapshot) if isinstance(metadata_snapshot, Mapping) else None,
+        )
 
     async def _finalize_ingested_document(
         self,
@@ -501,6 +859,7 @@ class UnifiedIngestionEngine:
         metadata_record: dict[str, Any],
         parse_engine: str,
         process_options: str,
+        commit_complete: bool = True,
     ) -> dict[str, Any]:
         doc_status = await self._stores.get_doc_status(doc_id)
         if _normalized_status(doc_status) != "processed":
@@ -512,14 +871,19 @@ class UnifiedIngestionEngine:
         full_doc = await self._stores.get_full_doc(doc_id)
         light_chunks = list((doc_status or {}).get("chunks_list") or [])
         finalized_metadata = _with_finalized_local_download_locator(metadata_record)
-        await self._metadata_index.upsert(doc_id, finalized_metadata)
-
-        await self._overwrite_sidecar_image_vectors(
-            doc_id=doc_id,
-            sidecar_location=_mapping_get(full_doc, "sidecar_location"),
-            chunk_ids=set(light_chunks),
-        )
-        await self._label_bm25_languages(light_chunks)
+        finalized_metadata[_FINALIZATION_COMPLETE_KEY] = commit_complete
+        try:
+            await self._overwrite_sidecar_image_vectors(
+                doc_id=doc_id,
+                sidecar_location=_mapping_get(full_doc, "sidecar_location"),
+                chunk_ids=set(light_chunks),
+            )
+            await self._label_bm25_languages(light_chunks)
+            # The marker is the commit point: never advertise complete until
+            # every required product-layer finalizer has succeeded.
+            await self._metadata_index.upsert(doc_id, finalized_metadata)
+        except BaseException as error:
+            await self._raise_finalization_error(doc_id, doc_status, error)
 
         return {
             "doc_id": doc_id,
@@ -528,6 +892,57 @@ class UnifiedIngestionEngine:
             "parse_engine": parse_engine,
             "process_options": process_options,
         }
+
+    async def _commit_finalization_complete(
+        self,
+        doc_id: str,
+        metadata_record: dict[str, Any],
+    ) -> None:
+        """Commit replacement completion only after old-owner retirement."""
+        try:
+            doc_status = await self._stores.get_doc_status(doc_id)
+        except Exception as error:
+            raise RetryOutcomeUncertainError(
+                "replacement finalization status is uncertain"
+            ) from error
+        if _normalized_status(doc_status) != "processed":
+            raise RetryOutcomeUncertainError("replacement finalization status is uncertain")
+        completed = _with_finalized_local_download_locator(metadata_record)
+        completed[_FINALIZATION_COMPLETE_KEY] = True
+        try:
+            await self._metadata_index.upsert(doc_id, completed)
+        except BaseException as error:
+            await self._raise_finalization_error(doc_id, doc_status, error)
+
+    async def _raise_finalization_error(
+        self,
+        doc_id: str,
+        doc_status: Mapping[str, Any],
+        error: BaseException,
+    ) -> NoReturn:
+        """Park a committed corpus row before propagating finalizer failure."""
+        failed = dict(doc_status)
+        failed.update(status="failed", error_msg="document post-processing failed")
+        cancellation = (
+            defer_cancellation(None, error) if isinstance(error, asyncio.CancelledError) else None
+        )
+        marker_task = asyncio.create_task(self._stores.doc_status.upsert({doc_id: failed}))
+        marker_error: BaseException | None = None
+        try:
+            await await_shared_cleanup(marker_task)
+        except asyncio.CancelledError as exc:
+            cancellation = defer_cancellation(cancellation, exc)
+        except BaseException as exc:  # noqa: BLE001
+            marker_error = exc
+        if cancellation is not None:
+            # The incomplete metadata marker makes the processed row replayable
+            # even when the FAILED marker write also failed.
+            raise cancellation from None
+        if marker_error is not None:
+            raise RetryOutcomeUncertainError(
+                "document finalization failure marker is uncertain"
+            ) from marker_error
+        raise error
 
     def _parser_directives_for(self, file_path: Path) -> tuple[str, str, dict[str, Any] | None]:
         directives = resolve_parser_directives(
@@ -673,6 +1088,11 @@ def _file_sha256(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def ingest_finalization_complete(metadata: object) -> bool:
+    """Return whether required application finalization durably committed."""
+    return isinstance(metadata, Mapping) and metadata.get(_FINALIZATION_COMPLETE_KEY) is True
+
+
 def _prepare_ingest_item(
     path: str | Path | PreparedIngestFile, *, workspace: str
 ) -> PreparedIngestFile:
@@ -775,4 +1195,8 @@ def _canonical_file_doc_id(path: Path) -> str:
     return compute_mdhash_id(normalize_document_file_path(path), prefix="doc-")
 
 
-__all__ = ["PreparedIngestFile", "UnifiedIngestionEngine"]
+__all__ = [
+    "PreparedIngestFile",
+    "UnifiedIngestionEngine",
+    "ingest_finalization_complete",
+]

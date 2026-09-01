@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for unified LightRAG sidecar ingestion engine."""
 
+import asyncio
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -18,6 +20,7 @@ from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     DocumentEmbeddingVector,
 )
 from dlightrag.engine.rag.corpus.ingestion.engine import (
+    _FINALIZATION_COMPLETE_KEY,
     PreparedIngestFile,
     UnifiedIngestionEngine,
     _prepare_ingest_item,
@@ -32,6 +35,7 @@ def _sha256(content: bytes) -> str:
 def _make_engine(**overrides):
     lightrag = AsyncMock()
     lightrag.apipeline_enqueue_documents.return_value = "track-1"
+    lightrag.adelete_by_doc_id.return_value = SimpleNamespace(status="success")
     stores = AsyncMock()
     stores.fetch_chunk_contents.return_value = []
     stores.get_doc_status.return_value = {
@@ -76,6 +80,7 @@ async def test_replace_false_keeps_idempotent_skip(tmp_path: Path) -> None:
         "content_hash": _sha256(content),
         "status": "processed",
     }
+    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
     result = await engine.aingest_file(source, replace=False)
 
@@ -91,7 +96,7 @@ async def test_replace_true_bypasses_idempotent_skip(tmp_path: Path) -> None:
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
         {"chunks_list": ["old-chunk"], "content_hash": _sha256(content), "status": "processed"},
-        None,
+        {"chunks_list": ["old-chunk"], "content_hash": _sha256(content), "status": "processed"},
         {"chunks_list": ["new-chunk"], "content_hash": _sha256(content), "status": "processed"},
     ]
 
@@ -109,6 +114,7 @@ async def test_batch_replace_true_bypasses_idempotent_skip(tmp_path: Path) -> No
     source.write_bytes(content)
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
+        {"chunks_list": ["old-chunk"], "content_hash": _sha256(content), "status": "processed"},
         {"chunks_list": ["old-chunk"], "content_hash": _sha256(content), "status": "processed"},
         {"chunks_list": ["new-chunk"], "content_hash": _sha256(content), "status": "processed"},
     ]
@@ -131,8 +137,8 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["docs_format"] == "pending_parse"
     assert "ids" not in kwargs
-    assert kwargs["parse_engine"] == "mineru"
-    assert kwargs["process_options"] == "iteP"
+    assert kwargs["parse_engine"] == ["mineru"]
+    assert kwargs["process_options"] == ["iteP"]
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
     assert deps["metadata_index"].upsert.await_count == 2
 
@@ -164,7 +170,6 @@ async def test_document_ingest_raises_when_pipeline_finishes_failed(tmp_path: Pa
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
         None,
-        None,
         {
             "status": DocStatus.FAILED,
             "chunks_list": [],
@@ -191,7 +196,7 @@ async def test_document_ingest_preserves_lightrag_parser_engine_params(
     await engine.aingest_file(source, replace=False)
 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
-    assert kwargs["parse_engine"] == "mineru(page_range=1-3)"
+    assert kwargs["parse_engine"] == ["mineru(page_range=1-3)"]
 
 
 async def test_document_ingest_labels_bm25_chunk_languages(tmp_path: Path) -> None:
@@ -399,6 +404,7 @@ async def test_metadata_only_update_forwards_explicit_source_contract(
         "content_hash": _sha256(content),
         "status": "processed",
     }
+    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
     prepare_metadata = MagicMock(wraps=engine._prepare_metadata_record)
     monkeypatch.setattr(engine, "_prepare_metadata_record", prepare_metadata)
 
@@ -436,6 +442,7 @@ async def test_single_hash_match_bypasses_parser_directives(
         "content_hash": _sha256(content),
         "status": "processed",
     }
+    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
     def fail_parser_directives(_path: Path) -> tuple[str, str, dict[str, object] | None]:
         raise AssertionError("parser directives should not be resolved for hash-match fast path")
@@ -459,6 +466,7 @@ async def test_batch_hash_match_skip_does_not_resolve_invalid_parser_directives(
         "content_hash": _sha256(content),
         "status": "processed",
     }
+    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
     result = await engine.aingest_files([source], replace=False)
     single_result = await engine.aingest_file(source, replace=False)
@@ -550,6 +558,255 @@ async def test_batch_hash_match_metadata_update_waits_for_enqueue_validation(
     deps["lightrag"].apipeline_process_enqueue_documents.assert_not_awaited()
 
 
+async def test_failed_document_cleanup_requires_documented_delete_success(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "failed.pdf"
+    source.write_bytes(b"%PDF-1.4 failed")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": [],
+        "content_hash": None,
+        "status": "failed",
+        "error_msg": "parser failed",
+    }
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["lightrag"].adelete_by_doc_id.return_value = None
+
+    with pytest.raises(RuntimeError, match="deletion was not acknowledged"):
+        await engine.aingest_files([source], replace=False)
+
+    deps["metadata_index"].delete.assert_not_awaited()
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+async def test_failed_document_ingest_fails_closed_when_status_snapshot_disappears(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "failed.pdf"
+    source.write_bytes(b"%PDF-1.4 failed")
+    engine, deps = _make_engine()
+    failed_status = {"chunks_list": [], "content_hash": None, "status": "failed"}
+    deps["stores"].get_doc_status.side_effect = [failed_status, None]
+
+    with pytest.raises(RuntimeError, match="status snapshot is unavailable"):
+        await engine.aingest_files([source], replace=False)
+
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["metadata_index"].delete.assert_not_awaited()
+    deps["metadata_index"].upsert.assert_not_awaited()
+
+
+async def test_failed_document_retry_cancellation_restores_discoverability(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "failed.pdf"
+    source.write_bytes(b"%PDF-1.4 failed")
+    engine, deps = _make_engine()
+    original_status = {
+        "chunks_list": [],
+        "content_hash": None,
+        "status": "failed",
+        "error_msg": "parser failed",
+    }
+    original_metadata = {
+        "filename": "failed.pdf",
+        "source_uri": "local://default/failed.pdf",
+        "download_locator": str(source),
+        "title": "Preserved title",
+        "custom_metadata": {"department": "finance"},
+    }
+    deps["stores"].get_doc_status.side_effect = [original_status, original_status, None]
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.return_value = original_metadata
+    deps["lightrag"].adelete_by_doc_id.return_value = SimpleNamespace(status="success")
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await engine.aingest_files([source], replace=False)
+
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    restored = deps["stores"].doc_status.upsert.await_args.args[0][doc_id]
+    assert restored["status"] == "failed"
+    assert restored["chunks_list"] == []
+    assert restored["error_msg"] == "document replacement was interrupted"
+    restored_metadata = deps["metadata_index"].upsert.await_args.args[1]
+    assert restored_metadata["title"] == original_metadata["title"]
+    assert restored_metadata["custom_metadata"] == original_metadata["custom_metadata"]
+
+
+async def test_concurrent_single_file_replacements_serialize_cleanup(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    statuses = {doc_id: {"status": "processed", "chunks_list": ["old"]}}
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    active_deletes = 0
+    max_active_deletes = 0
+
+    async def delete(current: str, **_kwargs: object) -> SimpleNamespace:
+        nonlocal active_deletes, max_active_deletes
+        active_deletes += 1
+        max_active_deletes = max(max_active_deletes, active_deletes)
+        await asyncio.sleep(0.01)
+        statuses.pop(current, None)
+        active_deletes -= 1
+        return SimpleNamespace(status="success")
+
+    async def process() -> None:
+        statuses[doc_id] = {"status": "processed", "chunks_list": ["new"]}
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = delete
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+
+    first, second = await asyncio.gather(
+        engine.aingest_file(source, replace=True),
+        engine.aingest_file(source, replace=True),
+    )
+
+    assert first["doc_id"] == doc_id
+    assert second["doc_id"] == doc_id
+    assert max_active_deletes == 1
+    assert deps["lightrag"].adelete_by_doc_id.await_count == 2
+
+
+async def test_delete_time_cancellation_after_status_delete_does_not_restore_zombie(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "failed.pdf"
+    source.write_bytes(b"%PDF-1.4 failed")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    status = {"status": "failed", "chunks_list": ["stale"], "content_hash": None}
+    statuses = {doc_id: dict(status)}
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+
+    async def cancel_delete(current: str, **_kwargs: object) -> None:
+        statuses.pop(current, None)
+        raise asyncio.CancelledError
+
+    async def upsert(rows: dict[str, dict[str, object]]) -> None:
+        statuses.update({key: dict(value) for key, value in rows.items()})
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = cancel_delete
+    deps["stores"].doc_status.upsert.side_effect = upsert
+
+    with pytest.raises(asyncio.CancelledError):
+        await engine.aingest_files([source])
+
+    assert doc_id not in statuses
+    deps["stores"].doc_status.upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+async def test_cancellation_after_processing_commit_marks_replacement_failed(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "failed.pdf"
+    source.write_bytes(b"%PDF-1.4 failed")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    original = {"status": "failed", "chunks_list": [], "content_hash": None}
+    statuses = {doc_id: dict(original)}
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+
+    async def upsert_status(rows: dict[str, dict[str, object]]) -> None:
+        statuses.update({key: dict(value) for key, value in rows.items()})
+
+    deps["stores"].doc_status.upsert.side_effect = upsert_status
+
+    async def delete(current: str, **_kwargs: object) -> SimpleNamespace:
+        statuses.pop(current, None)
+        return SimpleNamespace(status="success")
+
+    async def process() -> None:
+        statuses[doc_id] = {"status": "processed", "chunks_list": ["new-chunk"]}
+
+    metadata_writes = 0
+
+    async def upsert_metadata(*_args: object) -> None:
+        nonlocal metadata_writes
+        metadata_writes += 1
+        if metadata_writes == 2:
+            raise asyncio.CancelledError
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = delete
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["metadata_index"].upsert.side_effect = upsert_metadata
+
+    with pytest.raises(asyncio.CancelledError):
+        await engine.aingest_files([source])
+
+    assert statuses[doc_id]["status"] == "failed"
+    assert statuses[doc_id]["chunks_list"] == ["new-chunk"]
+    assert statuses[doc_id]["error_msg"] == "document post-processing failed"
+    deps["stores"].doc_status.upsert.assert_awaited_once()
+
+
+async def test_remote_locator_replacement_deletes_old_metadata_only_after_new_commit(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "renamed.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    new_doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_doc_id = "doc-old-locator"
+    statuses = {
+        old_doc_id: {"status": "processed", "chunks_list": ["old-chunk"]},
+    }
+    metadata = {
+        old_doc_id: {
+            "download_locator": "s3://bucket/report.pdf",
+            "source_uri": "s3://bucket/report.pdf",
+        }
+    }
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def delete(current: str, **_kwargs: object) -> SimpleNamespace:
+        statuses.pop(current, None)
+        return SimpleNamespace(status="success")
+
+    async def process() -> None:
+        statuses[new_doc_id] = {"status": "processed", "chunks_list": ["new-chunk"]}
+
+    async def delete_metadata(current: str) -> None:
+        assert statuses.get(new_doc_id, {}).get("status") == "processed"
+        metadata.pop(current, None)
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = delete
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["metadata_index"].delete.side_effect = delete_metadata
+
+    result = await engine.aingest_files(
+        [
+            PreparedIngestFile(
+                parser_path=source,
+                source_uri="s3://bucket/report.pdf",
+                download_locator="s3://bucket/report.pdf",
+                replacement_doc_ids=(old_doc_id,),
+                replacement_ownership=(
+                    (old_doc_id, "s3://bucket/report.pdf", "s3://bucket/report.pdf"),
+                ),
+            )
+        ],
+        replace=True,
+    )
+
+    assert result["processed"] == 1
+    assert statuses[new_doc_id]["status"] == "processed"
+    assert old_doc_id not in metadata
+    deps["metadata_index"].delete.assert_awaited_once_with(old_doc_id)
+
+
 async def test_batch_partial_cleanup_waits_for_enqueue_validation(
     tmp_path: Path,
 ) -> None:
@@ -593,6 +850,7 @@ async def test_single_hash_match_source_contract_change_updates_metadata(
         "download_locator": "https://cdn.example.com/old-sample.pdf",
         "file_extension": "pdf",
         "custom_metadata": {},
+        _FINALIZATION_COMPLETE_KEY: True,
     }
 
     result = await engine.aingest_file(
@@ -618,7 +876,7 @@ async def test_single_hash_match_source_contract_change_updates_metadata(
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
 
-async def test_single_hash_match_local_noop_skips_without_metadata_lookup(
+async def test_single_hash_match_local_noop_checks_finalization_marker(
     tmp_path: Path,
 ) -> None:
     content = b"%PDF-1.4"
@@ -630,9 +888,7 @@ async def test_single_hash_match_local_noop_skips_without_metadata_lookup(
         "content_hash": _sha256(content),
         "status": "processed",
     }
-    deps["metadata_index"].get.side_effect = AssertionError(
-        "metadata_index.get should not be consulted for metadata-free no-op ingests"
-    )
+    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
     result = await engine.aingest_file(source, replace=False)
 
@@ -642,12 +898,12 @@ async def test_single_hash_match_local_noop_skips_without_metadata_lookup(
         "reason": "content_hash_match",
         "chunks": ["chunk-a"],
     }
-    deps["metadata_index"].get.assert_not_awaited()
+    deps["metadata_index"].get.assert_awaited_once()
     deps["metadata_index"].upsert.assert_not_awaited()
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
 
-async def test_single_hash_match_internal_local_contract_skips_without_metadata_lookup(
+async def test_single_hash_match_internal_local_contract_checks_finalization_marker(
     tmp_path: Path,
 ) -> None:
     content = b"%PDF-1.4"
@@ -659,9 +915,7 @@ async def test_single_hash_match_internal_local_contract_skips_without_metadata_
         "content_hash": _sha256(content),
         "status": "processed",
     }
-    deps["metadata_index"].get.side_effect = AssertionError(
-        "metadata_index.get should not be consulted for internally generated local contracts"
-    )
+    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
     result = await engine.aingest_file(
         source,
@@ -678,7 +932,7 @@ async def test_single_hash_match_internal_local_contract_skips_without_metadata_
         "reason": "content_hash_match",
         "chunks": ["chunk-a"],
     }
-    deps["metadata_index"].get.assert_not_awaited()
+    deps["metadata_index"].get.assert_awaited_once()
     deps["metadata_index"].upsert.assert_not_awaited()
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
@@ -703,6 +957,7 @@ async def test_single_hash_match_explicit_default_source_contract_updates_metada
         "download_locator": "https://cdn.example.com/old-sample.pdf",
         "file_extension": "pdf",
         "custom_metadata": {},
+        _FINALIZATION_COMPLETE_KEY: True,
     }
 
     result = await engine.aingest_file(
@@ -741,6 +996,7 @@ async def test_batch_metadata_only_update_preserves_source_contract_and_chunks(
         "content_hash": _sha256(content),
         "status": "processed",
     }
+    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
     prepare_metadata = MagicMock(wraps=engine._prepare_metadata_record)
     monkeypatch.setattr(engine, "_prepare_metadata_record", prepare_metadata)
 
@@ -836,6 +1092,7 @@ async def test_pending_metadata_is_persisted_before_parser_enqueue_failure(
             "download_locator": "https://cdn.example.com/assets/1.pdf",
             "file_extension": "pdf",
             "custom_metadata": {},
+            _FINALIZATION_COMPLETE_KEY: False,
         }
     ]
 
@@ -885,6 +1142,35 @@ async def test_batch_pending_metadata_is_persisted_before_parser_enqueue_failure
         "https://cdn.example.com/assets/1.pdf",
         "s3://documents/assets/2.pdf",
     ]
+
+
+async def test_post_processing_failure_transitions_processed_status_to_failed(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    processed = {"status": "processed", "chunks_list": ["chunk-a"], "content_hash": "hash"}
+    deps["stores"].get_doc_status.side_effect = [None, processed]
+    writes = 0
+
+    async def metadata_write(*_args: object) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise RuntimeError("metadata index unavailable")
+
+    deps["metadata_index"].upsert.side_effect = metadata_write
+
+    result = await engine.aingest_files([source])
+
+    assert result["processed"] == 0
+    assert result["errors"] == ["report.pdf: document processing failed"]
+    failed = deps["stores"].doc_status.upsert.await_args.args[0][doc_id]
+    assert failed["status"] == "failed"
+    assert failed["chunks_list"] == ["chunk-a"]
+    assert failed["error_msg"] == "document post-processing failed"
 
 
 async def test_batch_finalization_aggregates_failed_and_processed_documents(
@@ -958,8 +1244,8 @@ async def test_document_ingest_delegates_non_sidecar_parser_route(tmp_path: Path
     assert result["process_options"] == "iteP"
     assert result["chunks"] == ["chunk-a"]
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
-    assert kwargs["parse_engine"] == "native"
-    assert kwargs["process_options"] == "iteP"
+    assert kwargs["parse_engine"] == ["native"]
+    assert kwargs["process_options"] == ["iteP"]
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
@@ -1022,8 +1308,8 @@ async def test_image_file_ingest_delegates_to_lightrag_parser(
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["docs_format"] == "pending_parse"
-    assert kwargs["parse_engine"] == "mineru"
-    assert kwargs["process_options"] == "iteP"
+    assert kwargs["parse_engine"] == ["mineru"]
+    assert kwargs["process_options"] == ["iteP"]
 
 
 async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path) -> None:
@@ -1079,7 +1365,8 @@ async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path)
 
     # Must have cleaned up the old partial record.
     deps["lightrag"].adelete_by_doc_id.assert_awaited_once_with(doc_id, delete_llm_cache=True)
-    deps["metadata_index"].delete.assert_awaited_once_with(doc_id)
+    deps["metadata_index"].delete.assert_not_awaited()
+    deps["metadata_index"].upsert.assert_awaited()
     assert events[:2] == ["get_full_doc", "adelete_by_doc_id"]
     assert not artifact_dir.exists()
 
@@ -1089,9 +1376,8 @@ async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path)
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
 
 
-async def test_document_ingest_skips_cleanup_when_already_processed(tmp_path: Path) -> None:
-    """When a doc exists with status 'processed', re-ingest must NOT
-    clean up (it should go through normal duplicate detection instead)."""
+async def test_document_ingest_replaces_processed_hash_mismatch(tmp_path: Path) -> None:
+    """Pinned LightRAG rejects duplicate IDs, so changed content is cleaned first."""
     source = tmp_path / "sample[mineru-iteP].pdf"
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
@@ -1103,8 +1389,7 @@ async def test_document_ingest_skips_cleanup_when_already_processed(tmp_path: Pa
 
     await engine.aingest_file(source, replace=False)
 
-    # Cleanup must NOT have been called for a healthy doc.
-    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["lightrag"].adelete_by_doc_id.assert_awaited_once()
     deps["metadata_index"].delete.assert_not_awaited()
 
 
@@ -1114,7 +1399,6 @@ async def test_document_ingest_first_time_no_cleanup(tmp_path: Path) -> None:
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
     deps["stores"].get_doc_status.side_effect = [
-        None,
         None,
         {"chunks_list": ["chunk-a"], "content_hash": "sha256:abc", "status": "processed"},
     ]
@@ -1169,7 +1453,6 @@ async def test_parser_image_sidecar_overwrites_lightrag_mm_chunk_vector(
         {"id": mm_chunk_id, "content": "public/private sector mapping chart"}
     ]
     deps["stores"].get_doc_status.side_effect = [
-        None,
         None,
         {
             "chunks_list": ["chunk-a", mm_chunk_id],
@@ -1238,7 +1521,6 @@ async def test_parser_image_sidecar_skips_vector_overwrite_when_direct_embedding
     )
     deps["stores"].get_doc_status.side_effect = [
         None,
-        None,
         {
             "chunks_list": ["chunk-a", mm_chunk_id],
             "content_hash": "sha256:parsed",
@@ -1283,7 +1565,11 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
         try:
             return next(status_iter)
         except StopIteration:
-            return {"chunks_list": ["chunk-1"], "content_hash": "sha256:abc", "status": "processed"}
+            return {
+                "chunks_list": ["chunk-1"],
+                "content_hash": _sha256(b"%PDF-1.4"),
+                "status": "processed",
+            }
 
     deps["stores"].get_doc_status = AsyncMock(side_effect=status_side_effect)
     deps["stores"].get_full_doc.return_value = {
@@ -1314,7 +1600,7 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
 
 
 async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:
-    """Re-ingesting a file with the same content_hash must skip and return early."""
+    """Re-ingesting finalized content with the same hash returns early."""
     source = tmp_path / "sample[mineru-iteP].pdf"
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
@@ -1326,6 +1612,7 @@ async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:
         "content_hash": current_hash,
         "status": "processed",
     }
+    deps["metadata_index"].get.return_value = {_FINALIZATION_COMPLETE_KEY: True}
 
     result = await engine.aingest_file(source, replace=False)
 
@@ -1573,3 +1860,835 @@ def test_resolve_sidecar_uri_rejects_everything_that_is_not_a_local_sidecar() ->
     assert resolve_sidecar_uri("/tmp/local/path") is None
     assert resolve_sidecar_uri(None) is None
     assert resolve_sidecar_uri("") is None
+
+
+async def test_batch_rejects_duplicate_canonical_ids_before_mutation(tmp_path: Path) -> None:
+    first = tmp_path / "a" / "report.pdf"
+    second = tmp_path / "b" / "report.pdf"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_bytes(b"one")
+    second.write_bytes(b"two")
+    engine, deps = _make_engine()
+
+    for paths in ([first, first], [first, second]):
+        with pytest.raises(ValueError, match="duplicate canonical document IDs"):
+            await engine.aingest_files(paths)
+
+    deps["stores"].get_doc_status.assert_not_awaited()
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+async def test_final_delete_failure_with_missing_status_never_restores_zombie(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "failed.pdf"
+    source.write_bytes(b"failed")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    statuses = {doc_id: {"status": "failed", "chunks_list": ["old"]}}
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+
+    async def final_stage_failure(current: str, **_kwargs: object) -> SimpleNamespace:
+        statuses.pop(current, None)
+        return SimpleNamespace(status="fail")
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = final_stage_failure
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = RuntimeError("enqueue down")
+
+    with pytest.raises(RuntimeError, match="enqueue down"):
+        await engine.aingest_files([source])
+
+    assert doc_id not in statuses
+    deps["stores"].doc_status.upsert.assert_not_awaited()
+
+
+async def test_metadata_only_remote_tombstone_recovers_and_retires_old_metadata(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    locator = "s3://bucket/item.pdf"
+    source_uri = "bynder://asset/1"
+    statuses: dict[str, dict[str, object]] = {}
+    metadata = {old_id: {"download_locator": locator, "source_uri": source_uri}}
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def process() -> None:
+        statuses[new_id] = {"status": "processed", "chunks_list": ["new"]}
+
+    async def delete_metadata(current: str) -> None:
+        metadata.pop(current, None)
+
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+
+    result = await engine.aingest_files([item], replace=True)
+
+    assert result["processed"] == 1
+    assert statuses[new_id]["status"] == "processed"
+    assert old_id not in metadata
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+
+
+async def test_failed_metadata_tombstone_replacement_keeps_only_new_failed_identity(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    locator = "s3://bucket/item.pdf"
+    source_uri = "bynder://asset/1"
+    statuses: dict[str, dict[str, object]] = {}
+    metadata = {old_id: {"download_locator": locator, "source_uri": source_uri}}
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def process() -> None:
+        statuses[new_id] = {"status": "failed", "chunks_list": [], "error_msg": "parse"}
+
+    async def delete_metadata(current: str) -> None:
+        metadata.pop(current, None)
+
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+
+    result = await engine.aingest_files([item], replace=True)
+
+    assert result["processed"] == 0
+    assert set(statuses) == {new_id}
+    assert statuses[new_id]["status"] == "failed"
+    assert old_id not in metadata
+
+
+async def test_replacement_revalidates_locator_ownership_after_lock_wait(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    old_id = "doc-old"
+    locator = "s3://bucket/item.pdf"
+    source_uri = "bynder://asset/1"
+    metadata = {old_id: {"download_locator": locator, "source_uri": source_uri}}
+    deps["stores"].get_doc_status.return_value = None
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+    lock = engine._get_ingest_lock(old_id)
+    await lock.acquire()
+    task = asyncio.create_task(engine.aingest_files([item], replace=True))
+    await asyncio.sleep(0)
+    metadata[old_id] = {
+        "download_locator": "s3://other/unrelated.pdf",
+        "source_uri": "bynder://asset/other",
+    }
+    lock.release()
+
+    with pytest.raises(RuntimeError, match="ownership changed"):
+        await task
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["metadata_index"].delete.assert_not_awaited()
+
+
+@pytest.mark.parametrize("boundary", ["vectors", "bm25"])
+async def test_finalization_cancellation_boundaries_mark_failed(
+    tmp_path: Path, boundary: str
+) -> None:
+    source = tmp_path / f"{boundary}.pdf"
+    source.write_bytes(b"content")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    statuses: dict[str, dict[str, object]] = {}
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+
+    async def process() -> None:
+        statuses[doc_id] = {"status": "processed", "chunks_list": ["chunk"]}
+
+    async def upsert_status(rows: dict[str, dict[str, object]]) -> None:
+        statuses.update({key: dict(value) for key, value in rows.items()})
+
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["stores"].doc_status.upsert.side_effect = upsert_status
+    if boundary == "vectors":
+        engine._overwrite_sidecar_image_vectors = AsyncMock(  # type: ignore[method-assign]
+            side_effect=asyncio.CancelledError
+        )
+    else:
+        engine._label_bm25_languages = AsyncMock(  # type: ignore[method-assign]
+            side_effect=asyncio.CancelledError
+        )
+
+    with pytest.raises(asyncio.CancelledError):
+        await engine.aingest_files([source])
+
+    assert statuses[doc_id]["status"] == "failed"
+    assert statuses[doc_id]["error_msg"] == "document post-processing failed"
+
+
+async def test_failed_old_to_new_replacement_restores_only_old_failed_identity(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    locator = "s3://bucket/item.pdf"
+    source_uri = "bynder://asset/1"
+    statuses = {old_id: {"status": "processed", "chunks_list": ["old"]}}
+    metadata: dict[str, dict[str, object]] = {
+        old_id: {
+            "filename": "old.pdf",
+            "download_locator": locator,
+            "source_uri": source_uri,
+        }
+    }
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def delete(current: str, **_kwargs: object) -> SimpleNamespace:
+        statuses.pop(current, None)
+        return SimpleNamespace(status="success")
+
+    async def process() -> None:
+        statuses[new_id] = {"status": "failed", "chunks_list": [], "error_msg": "parse"}
+
+    async def upsert_status(rows: dict[str, dict[str, object]]) -> None:
+        statuses.update({key: dict(value) for key, value in rows.items()})
+
+    async def upsert_metadata(current: str, row: dict[str, object]) -> None:
+        metadata[current] = dict(row)
+
+    async def delete_metadata(current: str) -> None:
+        metadata.pop(current, None)
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = delete
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["stores"].doc_status.upsert.side_effect = upsert_status
+    deps["metadata_index"].upsert.side_effect = upsert_metadata
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+
+    result = await engine.aingest_files([item], replace=True)
+
+    assert result["processed"] == 0
+    assert set(statuses) == {old_id}
+    assert statuses[old_id]["status"] == "failed"
+    assert statuses[old_id]["chunks_list"] == []
+    assert set(metadata) == {old_id}
+    assert deps["lightrag"].adelete_by_doc_id.await_count == 2
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("enqueue failed"), asyncio.CancelledError()])
+async def test_outer_enqueue_failure_settles_partial_candidate_and_old_anchor(
+    tmp_path: Path, failure: BaseException
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    locator = "s3://bucket/item.pdf"
+    source_uri = "bynder://asset/1"
+    statuses = {old_id: {"status": "processed", "chunks_list": ["old"]}}
+    metadata: dict[str, dict[str, object]] = {
+        old_id: {"download_locator": locator, "source_uri": source_uri}
+    }
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def delete(current: str, **_kwargs: object) -> SimpleNamespace:
+        statuses.pop(current, None)
+        return SimpleNamespace(status="success")
+
+    async def enqueue(**_kwargs: object) -> None:
+        statuses[new_id] = {"status": "pending", "chunks_list": []}
+        raise failure
+
+    async def upsert_status(rows: dict[str, dict[str, object]]) -> None:
+        statuses.update({key: dict(value) for key, value in rows.items()})
+
+    async def upsert_metadata(current: str, row: dict[str, object]) -> None:
+        metadata[current] = dict(row)
+
+    async def delete_metadata(current: str) -> None:
+        metadata.pop(current, None)
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = delete
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = enqueue
+    deps["stores"].doc_status.upsert.side_effect = upsert_status
+    deps["metadata_index"].upsert.side_effect = upsert_metadata
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+
+    with pytest.raises(type(failure)):
+        await engine.aingest_files([item], replace=True)
+
+    assert set(statuses) == {old_id}
+    assert statuses[old_id]["status"] == "failed"
+    assert set(metadata) == {old_id}
+
+
+async def test_old_metadata_retirement_failure_does_not_publish_deleted_candidate(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    locator = "s3://bucket/item.pdf"
+    source_uri = "bynder://asset/1"
+    statuses = {old_id: {"status": "processed", "chunks_list": ["old"]}}
+    metadata: dict[str, dict[str, object]] = {
+        old_id: {"download_locator": locator, "source_uri": source_uri}
+    }
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def delete(current: str, **_kwargs: object) -> SimpleNamespace:
+        statuses.pop(current, None)
+        return SimpleNamespace(status="success")
+
+    async def process() -> None:
+        statuses[new_id] = {"status": "processed", "chunks_list": ["new"]}
+
+    async def upsert_status(rows: dict[str, dict[str, object]]) -> None:
+        statuses.update({key: dict(value) for key, value in rows.items()})
+
+    async def upsert_metadata(current: str, row: dict[str, object]) -> None:
+        metadata[current] = dict(row)
+
+    async def delete_metadata(current: str) -> None:
+        if current == old_id:
+            raise RuntimeError("metadata retirement failed")
+        metadata.pop(current, None)
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = delete
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["stores"].doc_status.upsert.side_effect = upsert_status
+    deps["metadata_index"].upsert.side_effect = upsert_metadata
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+
+    result = await engine.aingest_files([item], replace=True)
+
+    assert result["processed"] == 0
+    assert result["results"] == []
+    assert result["errors"]
+    assert set(statuses) == {old_id}
+
+
+async def test_incomplete_finalization_marker_replays_without_reenqueue(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "report.pdf"
+    content = b"content"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    deps["stores"].get_doc_status.return_value = {
+        "status": "processed",
+        "chunks_list": ["chunk"],
+        "content_hash": _sha256(content),
+    }
+    deps["metadata_index"].get.return_value = {
+        "filename": "report.pdf",
+        _FINALIZATION_COMPLETE_KEY: False,
+    }
+    engine._overwrite_sidecar_image_vectors = AsyncMock()  # type: ignore[method-assign]
+
+    result = await engine.aingest_file(source)
+
+    assert result["doc_id"] == doc_id
+    assert result["source_kind"] == "document"
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+    engine._overwrite_sidecar_image_vectors.assert_awaited_once()  # type: ignore[attr-defined]
+    _, completed = deps["metadata_index"].upsert.await_args.args
+    assert completed[_FINALIZATION_COMPLETE_KEY] is True
+
+
+@pytest.mark.parametrize("original", [RuntimeError("vectors failed"), asyncio.CancelledError()])
+async def test_finalization_marker_write_failure_preserves_uncertainty_or_cancellation(
+    tmp_path: Path, original: BaseException
+) -> None:
+    from dlightrag.engine.rag.corpus.ingest_jobs import RetryOutcomeUncertainError
+
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"content")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    statuses = {doc_id: {"status": "processed", "chunks_list": ["chunk"]}}
+    deps["stores"].get_doc_status.side_effect = [None, statuses[doc_id]]
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = lambda: None
+    engine._overwrite_sidecar_image_vectors = AsyncMock(  # type: ignore[method-assign]
+        side_effect=original
+    )
+    deps["stores"].doc_status.upsert.side_effect = RuntimeError("status store down")
+
+    expected = (
+        asyncio.CancelledError
+        if isinstance(original, asyncio.CancelledError)
+        else RetryOutcomeUncertainError
+    )
+    with pytest.raises(expected):
+        await engine.aingest_file(source)
+
+    assert statuses[doc_id]["status"] == "processed"
+    first_metadata = deps["metadata_index"].upsert.await_args_list[0].args[1]
+    assert first_metadata[_FINALIZATION_COMPLETE_KEY] is False
+
+
+async def test_metadata_only_old_tombstone_enqueue_failure_removes_candidate_intent(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    locator = "s3://bucket/item.pdf"
+    source_uri = "bynder://asset/1"
+    metadata: dict[str, dict[str, object]] = {
+        old_id: {"download_locator": locator, "source_uri": source_uri}
+    }
+    deps["stores"].get_doc_status.return_value = None
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def upsert_metadata(current: str, row: dict[str, object]) -> None:
+        metadata[current] = dict(row)
+
+    async def delete_metadata(current: str) -> None:
+        metadata.pop(current, None)
+
+    deps["metadata_index"].upsert.side_effect = upsert_metadata
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = RuntimeError("enqueue failed")
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+
+    with pytest.raises(RuntimeError, match="enqueue failed"):
+        await engine.aingest_files([item], replace=True)
+
+    assert set(metadata) == {old_id}
+    assert new_id not in metadata
+
+
+async def test_unrelated_preexisting_candidate_fails_before_replacement_cleanup(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    incoming_locator = "s3://bucket/incoming.pdf"
+    incoming_source = "bynder://asset/incoming"
+    candidate_metadata = {
+        "download_locator": "s3://other/existing.pdf",
+        "source_uri": "bynder://asset/existing",
+        "filename": "existing.pdf",
+    }
+    metadata: dict[str, dict[str, object]] = {
+        new_id: dict(candidate_metadata),
+        old_id: {
+            "download_locator": incoming_locator,
+            "source_uri": incoming_source,
+        },
+    }
+    statuses: dict[str, dict[str, object]] = {
+        new_id: {"status": "processed", "chunks_list": ["old-chunk"]}
+    }
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    item = PreparedIngestFile(
+        source,
+        incoming_source,
+        incoming_locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, incoming_locator, incoming_source),),
+    )
+
+    with pytest.raises(RuntimeError, match="candidate ownership changed"):
+        await engine.aingest_files([item], replace=True)
+
+    assert metadata[new_id] == candidate_metadata
+    assert statuses[new_id]["status"] == "processed"
+    assert metadata[old_id]["download_locator"] == incoming_locator
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["metadata_index"].delete.assert_not_awaited()
+
+
+async def test_multiple_metadata_tombstones_collapse_to_one_owner_on_enqueue_failure(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_ids = ("doc-old-a", "doc-old-b")
+    locator = "s3://bucket/incoming.pdf"
+    source_uri = "bynder://asset/incoming"
+    metadata: dict[str, dict[str, object]] = {
+        old_id: {"download_locator": locator, "source_uri": source_uri} for old_id in old_ids
+    }
+    deps["stores"].get_doc_status.return_value = None
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def upsert_metadata(current: str, row: dict[str, object]) -> None:
+        metadata[current] = dict(row)
+
+    async def delete_metadata(current: str) -> None:
+        metadata.pop(current, None)
+
+    deps["metadata_index"].upsert.side_effect = upsert_metadata
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = RuntimeError("enqueue failed")
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=old_ids,
+        replacement_ownership=tuple((old_id, locator, source_uri) for old_id in old_ids),
+    )
+
+    with pytest.raises(RuntimeError, match="enqueue failed"):
+        await engine.aingest_files([item], replace=True)
+
+    assert set(metadata) == {old_ids[0]}
+    assert new_id not in metadata
+
+
+async def test_replacement_completion_marker_commits_after_old_metadata_retirement(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    locator = "s3://bucket/incoming.pdf"
+    source_uri = "bynder://asset/incoming"
+    statuses: dict[str, dict[str, object]] = {
+        old_id: {"status": "processed", "chunks_list": ["old"]}
+    }
+    metadata: dict[str, dict[str, object]] = {
+        old_id: {"download_locator": locator, "source_uri": source_uri}
+    }
+    events: list[tuple[str, str, object]] = []
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def delete_doc(current: str, **_kwargs: object) -> SimpleNamespace:
+        statuses.pop(current, None)
+        return SimpleNamespace(status="success")
+
+    async def process() -> None:
+        statuses[new_id] = {"status": "processed", "chunks_list": ["new"]}
+
+    async def upsert_metadata(current: str, row: dict[str, object]) -> None:
+        metadata[current] = dict(row)
+        events.append(("upsert", current, row.get(_FINALIZATION_COMPLETE_KEY)))
+
+    async def delete_metadata(current: str) -> None:
+        events.append(("delete", current, None))
+        metadata.pop(current, None)
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = delete_doc
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["metadata_index"].upsert.side_effect = upsert_metadata
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+
+    result = await engine.aingest_files([item], replace=True)
+
+    assert result["processed"] == 1
+    retirement = events.index(("delete", old_id, None))
+    completion = events.index(("upsert", new_id, True))
+    assert retirement < completion
+    assert all(
+        marker is not True
+        for operation, current, marker in events[:completion]
+        if operation == "upsert" and current == new_id
+    )
+    assert metadata[new_id][_FINALIZATION_COMPLETE_KEY] is True
+    assert old_id not in metadata
+
+
+async def test_recovered_incomplete_replacement_retires_remaining_owner_before_commit(
+    tmp_path: Path,
+) -> None:
+    content = b"new"
+    source = tmp_path / "new.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    locator = "s3://bucket/incoming.pdf"
+    source_uri = "bynder://asset/incoming"
+    statuses: dict[str, dict[str, object]] = {
+        new_id: {
+            "status": "processed",
+            "chunks_list": ["new"],
+            "content_hash": _sha256(content),
+        }
+    }
+    metadata: dict[str, dict[str, object]] = {
+        new_id: {
+            "download_locator": locator,
+            "source_uri": source_uri,
+            _FINALIZATION_COMPLETE_KEY: False,
+        },
+        old_id: {"download_locator": locator, "source_uri": source_uri},
+    }
+    events: list[tuple[str, str, object]] = []
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def upsert_metadata(current: str, row: dict[str, object]) -> None:
+        metadata[current] = dict(row)
+        events.append(("upsert", current, row.get(_FINALIZATION_COMPLETE_KEY)))
+
+    async def delete_metadata(current: str) -> None:
+        events.append(("delete", current, None))
+        metadata.pop(current, None)
+
+    deps["metadata_index"].upsert.side_effect = upsert_metadata
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+
+    result = await engine.aingest_files([item], replace=False)
+
+    assert result["processed"] == 1
+    assert events.index(("delete", old_id, None)) < events.index(("upsert", new_id, True))
+    assert old_id not in metadata
+    assert metadata[new_id][_FINALIZATION_COMPLETE_KEY] is True
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+    deps["lightrag"].apipeline_process_enqueue_documents.assert_not_awaited()
+
+
+async def test_replacement_marker_failure_after_retirement_leaves_retriable_candidate(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_id = "doc-old"
+    locator = "s3://bucket/incoming.pdf"
+    source_uri = "bynder://asset/incoming"
+    statuses: dict[str, dict[str, object]] = {
+        old_id: {"status": "processed", "chunks_list": ["old"]}
+    }
+    metadata: dict[str, dict[str, object]] = {
+        old_id: {"download_locator": locator, "source_uri": source_uri}
+    }
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc.return_value = {"sidecar_location": None}
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def delete_doc(current: str, **_kwargs: object) -> SimpleNamespace:
+        statuses.pop(current, None)
+        return SimpleNamespace(status="success")
+
+    async def process() -> None:
+        statuses[new_id] = {"status": "processed", "chunks_list": ["new"]}
+
+    async def upsert_status(rows: dict[str, dict[str, object]]) -> None:
+        statuses.update(rows)
+
+    async def upsert_metadata(current: str, row: dict[str, object]) -> None:
+        if current == new_id and row.get(_FINALIZATION_COMPLETE_KEY) is True:
+            raise RuntimeError("completion marker unavailable")
+        metadata[current] = dict(row)
+
+    async def delete_metadata(current: str) -> None:
+        metadata.pop(current, None)
+
+    deps["lightrag"].adelete_by_doc_id.side_effect = delete_doc
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process
+    deps["stores"].doc_status.upsert.side_effect = upsert_status
+    deps["metadata_index"].upsert.side_effect = upsert_metadata
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=(old_id,),
+        replacement_ownership=((old_id, locator, source_uri),),
+    )
+
+    result = await engine.aingest_files([item], replace=True)
+
+    assert result["processed"] == 0
+    assert result["errors"] == ["incoming.pdf: document processing failed"]
+    assert old_id not in metadata
+    assert metadata[new_id][_FINALIZATION_COMPLETE_KEY] is False
+    assert statuses[new_id]["status"] == "failed"
+    assert statuses[new_id]["error_msg"] == "document post-processing failed"
+
+
+async def test_unrelated_candidate_with_metadata_tombstones_collapses_only_safe_surplus(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_ids = ("doc-old-a", "doc-old-b")
+    locator = "s3://bucket/incoming.pdf"
+    source_uri = "bynder://asset/incoming"
+    candidate = {
+        "download_locator": "s3://other/existing.pdf",
+        "source_uri": "bynder://asset/existing",
+        "filename": "existing.pdf",
+    }
+    metadata: dict[str, dict[str, object]] = {
+        new_id: dict(candidate),
+        **{old_id: {"download_locator": locator, "source_uri": source_uri} for old_id in old_ids},
+    }
+    statuses = {new_id: {"status": "processed", "chunks_list": ["existing"]}}
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+
+    async def delete_metadata(current: str) -> None:
+        metadata.pop(current, None)
+
+    deps["metadata_index"].delete.side_effect = delete_metadata
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=old_ids,
+        replacement_ownership=tuple((old_id, locator, source_uri) for old_id in old_ids),
+    )
+
+    with pytest.raises(RuntimeError, match="candidate ownership changed"):
+        await engine.aingest_files([item], replace=True)
+
+    assert metadata[new_id] == candidate
+    assert statuses[new_id] == {"status": "processed", "chunks_list": ["existing"]}
+    assert set(metadata) == {new_id, old_ids[0]}
+    deps["metadata_index"].delete.assert_awaited_once_with(old_ids[1])
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+async def test_unrelated_candidate_does_not_collapse_when_external_owner_has_status(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "new.pdf"
+    source.write_bytes(b"new")
+    engine, deps = _make_engine()
+    new_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    old_ids = ("doc-old-a", "doc-old-b")
+    locator = "s3://bucket/incoming.pdf"
+    source_uri = "bynder://asset/incoming"
+    candidate = {
+        "download_locator": "s3://other/existing.pdf",
+        "source_uri": "bynder://asset/existing",
+    }
+    metadata: dict[str, dict[str, object]] = {
+        new_id: dict(candidate),
+        **{old_id: {"download_locator": locator, "source_uri": source_uri} for old_id in old_ids},
+    }
+    statuses = {
+        new_id: {"status": "processed", "chunks_list": ["existing"]},
+        old_ids[1]: {"status": "failed", "chunks_list": []},
+    }
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["metadata_index"].get.side_effect = lambda current: metadata.get(current)
+    item = PreparedIngestFile(
+        source,
+        source_uri,
+        locator,
+        replacement_doc_ids=old_ids,
+        replacement_ownership=tuple((old_id, locator, source_uri) for old_id in old_ids),
+    )
+
+    with pytest.raises(RuntimeError, match="candidate ownership changed"):
+        await engine.aingest_files([item], replace=True)
+
+    assert metadata == {
+        new_id: candidate,
+        old_ids[0]: {"download_locator": locator, "source_uri": source_uri},
+        old_ids[1]: {"download_locator": locator, "source_uri": source_uri},
+    }
+    deps["metadata_index"].delete.assert_not_awaited()
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()

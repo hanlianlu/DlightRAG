@@ -716,6 +716,15 @@ class TestWebFiles:
         assert response.status_code == 422
         mock_application.corpora.file_panel_snapshot.assert_not_awaited()
 
+        failed_view = mock_application.corpora.file_panel_cursor_codec.encode(
+            FilePanelCursor(
+                workspace="default", updated_at=None, doc_id="doc-failed", view="failed"
+            )
+        )
+        response = await client.get("/web/api/files", params={"cursor": failed_view})
+        assert response.status_code == 422
+        mock_application.corpora.file_panel_snapshot.assert_not_awaited()
+
     async def test_file_list_rejects_tampered_cursor_before_storage(
         self, client: AsyncClient, mock_application
     ) -> None:
@@ -857,7 +866,7 @@ class TestWebFiles:
                 {
                     "doc_id": "doc-failed",
                     "file_path": "/books/failed.pdf",
-                    "error": "embedding failed",
+                    "error": "embedding failed: public diagnostic",
                     "updated_at": timestamp.isoformat(),
                 }
             ],
@@ -880,10 +889,16 @@ class TestWebFiles:
             {
                 "document_id": "doc-failed",
                 "file_name": "failed.pdf",
-                "error": "embedding failed",
+                "error": payload["failed"][0]["error"],
                 "updated_at": timestamp.isoformat(),
             }
         ]
+        diagnostic = payload["failed"][0]["error"]
+        assert diagnostic.startswith("embedding failed")
+        assert "secret" not in diagnostic
+        assert "password" not in diagnostic
+        assert "/srv/private" not in diagnostic
+        assert len(diagnostic) <= 512
         assert isinstance(payload["next_cursor"], str)
         assert payload["active_recovery"] == {
             "job_id": "retry-1",
@@ -897,6 +912,19 @@ class TestWebFiles:
             "default",
             page=FilePanelPageRequest(limit=5),
         )
+
+    async def test_failed_files_rejects_processed_view_cursor(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        token = mock_application.corpora.file_panel_cursor_codec.encode(
+            FilePanelCursor(workspace="default", updated_at=None, doc_id="doc-processed")
+        )
+        mock_application.corpora.failed_file_snapshot.reset_mock()
+
+        response = await client.get("/web/api/files/failed", params={"cursor": token})
+
+        assert response.status_code == 422
+        mock_application.corpora.failed_file_snapshot.assert_not_awaited()
 
     async def test_failed_file_retry_starts_durable_job_and_projects_terminal_status(
         self, client: AsyncClient, mock_application
@@ -924,6 +952,34 @@ class TestWebFiles:
             "retried": 2,
             "succeeded": 1,
             "failed": 1,
+        }
+
+    async def test_failed_file_retry_projects_cancelled_ledger_totals(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        mock_application.corpora.get_ingest_job.return_value = {
+            "job_id": "retry-cancelled",
+            "workspace": "default",
+            "source_type": "retry_failed",
+            "status": "failed",
+            "result": {
+                "retried": 3,
+                "succeeded": 1,
+                "failed": 2,
+                "cancelled": True,
+            },
+        }
+
+        response = await client.get("/web/api/files/retry/retry-cancelled")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "job_id": "retry-cancelled",
+            "workspace": "default",
+            "status": "failed",
+            "retried": 3,
+            "succeeded": 1,
+            "failed": 2,
         }
 
     async def test_failed_file_retry_preserves_reader_role_forbidden_response(

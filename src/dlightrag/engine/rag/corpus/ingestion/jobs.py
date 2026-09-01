@@ -18,6 +18,7 @@ from dlightrag.engine.rag.corpus.ingest_jobs import (
     JOB_LEASE_SECONDS,
     JOB_ORPHAN_AFTER_SECONDS,
     IngestJobStore,
+    RetryOutcomeUncertainError,
 )
 from dlightrag.engine.rag.workspace.ports import WorkspaceWriteFencedError
 from dlightrag.engine.rag.workspace.workspaces import require_canonical_workspace_id
@@ -33,8 +34,10 @@ type IngestJobType = SourceType | Literal["retry_failed"]
 
 _FAILED_DOCUMENT_RETRY_JOB_TYPE = "retry_failed"
 _RECOVERABLE_JOB_TYPES = {"local", "azure_blob", "s3", "url", _FAILED_DOCUMENT_RETRY_JOB_TYPE}
-# Sweeping faster than the orphan window means no dead worker waits two passes.
-_JOB_SWEEP_SECONDS = JOB_ORPHAN_AFTER_SECONDS // 2
+# Recovery follows the lease cadence; retention pruning remains deliberately
+# slower and independent so a quick restart never waits behind the orphan TTL.
+_JOB_SWEEP_SECONDS = max(5.0, min(JOB_HEARTBEAT_SECONDS, JOB_LEASE_SECONDS / 2))
+_JOB_PRUNE_SECONDS = JOB_ORPHAN_AFTER_SECONDS / 2
 
 
 class WorkspaceIngestor(Protocol):
@@ -44,7 +47,13 @@ class WorkspaceIngestor(Protocol):
 
     async def aingest(self, *, source_type: SourceType, **kwargs: Any) -> dict[str, Any]: ...
 
-    async def aretry_failed_docs(self) -> dict[str, Any]: ...
+    async def aretry_failed_docs(
+        self,
+        *,
+        cohort_doc_ids: Sequence[str] | None = None,
+        cohort_callback: Callable[[tuple[str, ...]], Awaitable[None]] | None = None,
+        outcome_callback: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> dict[str, Any]: ...
 
 
 class IngestJobCoordinator:
@@ -64,6 +73,10 @@ class IngestJobCoordinator:
         self._store_lock = asyncio.Lock()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._workspaces: dict[str, str] = {}
+        # A durable-first local cancel makes the task's later owner CAS
+        # intentionally fail. Keep that committed fact until the task unwinds
+        # so it can still park corpus rows and clean its owned source paths.
+        self._durably_cancelled: set[str] = set()
         self._closing = False
         self._sweeper: asyncio.Task[None] | None = None
         self._lease_owner = uuid.uuid4().hex
@@ -85,11 +98,17 @@ class IngestJobCoordinator:
         await self.get_store()
 
     async def _sweep_jobs(self, store: IngestJobStore) -> None:
-        """Recover newly orphaned jobs, then reap abandoned and expired rows."""
+        """Recover on lease cadence while pruning retained rows less often."""
+        next_prune = asyncio.get_running_loop().time() + _JOB_PRUNE_SECONDS
         while True:
-            # A lease can expire after startup. Re-scan before pruning so a
-            # recoverable job always gets first refusal at the orphan boundary.
+            # Startup already performs the immediate scan. Sleeping first also
+            # avoids racing a newly scheduled recovery claim with cleanup.
+            await asyncio.sleep(_JOB_SWEEP_SECONDS)
             await self._recover_jobs(store)
+            now = asyncio.get_running_loop().time()
+            if now < next_prune:
+                continue
+            next_prune = now + _JOB_PRUNE_SECONDS
             try:
                 summary = await store.prune()
             except Exception:
@@ -97,7 +116,6 @@ class IngestJobCoordinator:
             else:
                 if any(summary.values()):
                     logger.info("Ingest job cleanup: %s", summary)
-            await asyncio.sleep(_JOB_SWEEP_SECONDS)
 
     async def _recover_jobs(self, store: IngestJobStore) -> None:
         try:
@@ -129,8 +147,16 @@ class IngestJobCoordinator:
         raw_kwargs = request.get("kwargs")
         kwargs: dict[str, Any] = dict(raw_kwargs) if isinstance(raw_kwargs, dict) else {}
         if not workspace or job_type not in _RECOVERABLE_JOB_TYPES:
-            logger.warning("Skipping invalid recoverable ingest job row: %s", row)
-            return False
+            logger.warning("Failing invalid recoverable ingest job row: %s", row)
+            task = asyncio.create_task(
+                self._fail_recovered_job(
+                    job_id,
+                    store,
+                    "ingest job durable request is invalid",
+                )
+            )
+            self._track(job_id, raw_workspace or "invalid", task)
+            return True
 
         if "source" in kwargs:
             task = asyncio.create_task(
@@ -187,10 +213,25 @@ class IngestJobCoordinator:
             )
 
     async def cancel_job(self, job_id: str, *, workspace: str) -> bool:
-        """Stop one running job. False when it is not ours or already finished."""
-        if self._workspaces.get(job_id) != require_canonical_workspace_id(workspace):
-            return False
-        return await self._cancel(job_id)
+        """Durably cancel one active job, then stop its local task when present."""
+        workspace_id = require_canonical_workspace_id(workspace)
+        store = await self.get_store()
+        durable = await store.cancel(
+            job_id,
+            workspace=workspace_id,
+            error="ingest job cancelled",
+        )
+        local = False
+        if self._workspaces.get(job_id) == workspace_id:
+            if durable:
+                self._durably_cancelled.add(job_id)
+            local = await self._cancel(job_id)
+            if durable and local:
+                # A task cancelled before its coroutine first runs cannot reach
+                # _run_job's finally block. Local ownership plus the committed
+                # transition makes this post-join cleanup safe (and idempotent).
+                await self._cleanup_cancelled_local_sources(store, job_id)
+        return durable or local
 
     async def cancel_for_workspace(self, workspace: str) -> int:
         workspace = require_canonical_workspace_id(workspace)
@@ -213,6 +254,55 @@ class IngestJobCoordinator:
             _ = await task
         self._forget(job_id)
         return True
+
+    async def _cleanup_cancelled_local_sources(
+        self,
+        store: IngestJobStore,
+        job_id: str,
+    ) -> None:
+        try:
+            row = await store.get(job_id)
+        except Exception:
+            logger.warning(
+                "Could not inspect cancelled ingest job %s for source cleanup",
+                job_id,
+                exc_info=True,
+            )
+            return
+        if not isinstance(row, Mapping):
+            return
+        request = row.get("request")
+        if not isinstance(request, Mapping):
+            return
+        cleanup_paths = _normalize_cleanup_paths(request.get("cleanup_paths"))
+        if cleanup_paths:
+            await asyncio.to_thread(
+                _cleanup_ingest_paths,
+                cleanup_paths,
+                self._input_root,
+            )
+
+    async def _was_durably_cancelled(
+        self,
+        store: IngestJobStore,
+        job_id: str,
+    ) -> bool:
+        """Distinguish a committed cancel from a true foreign lease takeover."""
+        if job_id in self._durably_cancelled:
+            return True
+        try:
+            row = await store.get(job_id)
+        except Exception:
+            logger.warning(
+                "Could not inspect lost ingest job %s for cancellation",
+                job_id,
+                exc_info=True,
+            )
+            return False
+        if not isinstance(row, Mapping) or str(row.get("status") or "") != "failed":
+            return False
+        result = row.get("result")
+        return isinstance(result, Mapping) and result.get("cancelled") is True
 
     async def _park_unfinished_docs(self, store: IngestJobStore, workspace: str) -> None:
         """Best-effort: cancelling the job must not be undone by a later sweep.
@@ -257,31 +347,28 @@ class IngestJobCoordinator:
         )
 
     async def start_retry_failed_job(self, workspace: str) -> dict[str, Any]:
-        """Start or join the one active failed-document retry for a workspace."""
+        """Atomically start or join the retry row for one workspace."""
         workspace_id = require_canonical_workspace_id(workspace)
         store = await self.get_store()
-        active = await store.get_active_for_workspace(
-            workspace_id,
-            source_type=_FAILED_DOCUMENT_RETRY_JOB_TYPE,
+        job_id = uuid.uuid7().hex
+        request = {
+            "workspace": workspace_id,
+            "source_type": _FAILED_DOCUMENT_RETRY_JOB_TYPE,
+            "kwargs": {},
+        }
+        row = await store.start_or_join_failed_retry(
+            job_id=job_id,
+            workspace=workspace_id,
+            request=request,
         )
-        if active is not None:
-            # Queued or expired rows may belong to a stopped replica. Claim
-            # arbitration remains in PostgreSQL, so scheduling is safe even
-            # when another writer still owns a live lease.
-            self.schedule_recovered_job(active, store)
-            return active
-        return await self._start_job(
-            workspace_id,
-            _FAILED_DOCUMENT_RETRY_JOB_TYPE,
-            cleanup_paths=None,
-            kwargs={},
-            store=store,
-        )
+        if str(row.get("status") or "") in {"queued", "running"}:
+            self.schedule_recovered_job(row, store)
+        return row
 
     async def _start_job(
         self,
         workspace: str,
-        job_type: IngestJobType,
+        job_type: SourceType,
         *,
         cleanup_paths: str | Path | Sequence[str | Path] | None,
         kwargs: dict[str, Any],
@@ -293,29 +380,18 @@ class IngestJobCoordinator:
         cleanup_path_tuple = _normalize_cleanup_paths(cleanup_paths)
         request = {
             "workspace": workspace_id,
-            # Keep the durable field name for existing rows and clients. Its
-            # value now also admits the coordinator-owned retry operation.
+            # Keep the durable field name for existing rows and clients.
             "source_type": job_type,
             "kwargs": _json_safe(kwargs),
         }
         if cleanup_path_tuple:
             request["cleanup_paths"] = [str(path) for path in cleanup_path_tuple]
-        try:
-            await job_store.create(
-                job_id=job_id,
-                workspace=workspace_id,
-                source_type=job_type,
-                request=request,
-            )
-        except Exception:
-            if job_type == _FAILED_DOCUMENT_RETRY_JOB_TYPE:
-                active = await job_store.get_active_for_workspace(
-                    workspace_id,
-                    source_type=_FAILED_DOCUMENT_RETRY_JOB_TYPE,
-                )
-                if active is not None:
-                    return active
-            raise
+        await job_store.create(
+            job_id=job_id,
+            workspace=workspace_id,
+            source_type=job_type,
+            request=request,
+        )
 
         task = asyncio.create_task(
             self._run_job(
@@ -373,10 +449,7 @@ class IngestJobCoordinator:
 
     async def get_active_retry_failed_job(self, workspace: str) -> dict[str, Any] | None:
         store = await self.get_store()
-        return await store.get_active_for_workspace(
-            require_canonical_workspace_id(workspace),
-            source_type=_FAILED_DOCUMENT_RETRY_JOB_TYPE,
-        )
+        return await store.get_active_failed_retry(require_canonical_workspace_id(workspace))
 
     def has_active_workspace_job(self, workspace: str) -> bool:
         """Return whether an in-process ingest task exists for *workspace*."""
@@ -387,22 +460,8 @@ class IngestJobCoordinator:
         return False
 
     async def _fail_recovered_job(self, job_id: str, store: IngestJobStore, error: str) -> None:
-        """Terminally fail one recovered job without any corpus write.
-
-        This is a control-plane failure (invalid source type), so it never
-        needs the workspace write gate and must not wait out a promotion
-        fence: fail the queued row directly, and only fall back to the
-        leased claim+fail when the row is already claimed.
-        """
-        if await store.cancel_queued(job_id, error=error):
-            return
-        claimed = await store.claim_running(
-            job_id,
-            lease_owner=self._lease_owner,
-            lease_seconds=JOB_LEASE_SECONDS,
-        )
-        if claimed:
-            await store.fail(job_id, error=error, lease_owner=self._lease_owner)
+        """Terminally fail one malformed recovered row without corpus fencing."""
+        await store.fail_invalid_recoverable(job_id, error=error)
 
     async def _run_job(
         self,
@@ -430,13 +489,26 @@ class IngestJobCoordinator:
                     # the cancel); shutdown leaves the row queued and the
                     # source files intact for the next recovery sweep.
                     if not self._closing:
-                        if await store.cancel_queued(job_id, error="ingest job cancelled"):
-                            cleanup_after_run = True
-                        elif await store.fail(
-                            job_id,
-                            error="ingest job cancelled",
-                            lease_owner=self._lease_owner,
-                        ):
+                        cancelled = await self._was_durably_cancelled(store, job_id)
+                        if not cancelled and job_type == _FAILED_DOCUMENT_RETRY_JOB_TYPE:
+                            cancelled = await store.cancel_failed_retry(
+                                job_id,
+                                error="ingest job cancelled",
+                                lease_owner=None,
+                            ) or await store.cancel_failed_retry(
+                                job_id,
+                                error="ingest job cancelled",
+                                lease_owner=self._lease_owner,
+                            )
+                        elif not cancelled:
+                            cancelled = await store.cancel_queued(
+                                job_id, error="ingest job cancelled"
+                            ) or await store.fail(
+                                job_id,
+                                error="ingest job cancelled",
+                                lease_owner=self._lease_owner,
+                            )
+                        if cancelled:
                             cleanup_after_run = True
                     raise
                 if not claimed:
@@ -477,7 +549,58 @@ class IngestJobCoordinator:
                         svc = await self._get_service(workspace)
                         await svc.aregister_workspace()
                         if job_type == _FAILED_DOCUMENT_RETRY_JOB_TYPE:
-                            result = await svc.aretry_failed_docs()
+                            try:
+                                cohort_doc_ids = await store.list_unfinished_failed_retry_items(
+                                    job_id,
+                                    lease_owner=self._lease_owner,
+                                )
+                            except Exception as exc:
+                                raise LeaseLostError(
+                                    "failed retry cohort state is uncertain"
+                                ) from exc
+
+                            async def _seal_cohort(doc_ids: tuple[str, ...]) -> None:
+                                try:
+                                    sealed = await store.seal_failed_retry_cohort(
+                                        job_id,
+                                        doc_ids=doc_ids,
+                                        lease_owner=self._lease_owner,
+                                    )
+                                except Exception as exc:
+                                    raise LeaseLostError(
+                                        "failed retry cohort seal is uncertain"
+                                    ) from exc
+                                if not sealed:
+                                    raise LeaseLostError("ingest job lease lost")
+
+                            async def _record_retry_outcome(
+                                doc_id: str,
+                                outcome: str,
+                                summary: dict[str, Any],
+                            ) -> None:
+                                try:
+                                    recorded = await store.record_failed_retry_outcome(
+                                        job_id,
+                                        doc_id=doc_id,
+                                        outcome=outcome,
+                                        summary=summary,
+                                        lease_owner=self._lease_owner,
+                                    )
+                                except Exception as exc:
+                                    raise LeaseLostError(
+                                        "failed retry outcome commit is uncertain"
+                                    ) from exc
+                                if not recorded:
+                                    raise LeaseLostError("ingest job lease lost")
+
+                            retry_kwargs: dict[str, Any] = {
+                                "outcome_callback": _record_retry_outcome,
+                            }
+                            if cohort_doc_ids is None:
+                                retry_kwargs["cohort_callback"] = _seal_cohort
+                            else:
+                                retry_kwargs["cohort_doc_ids"] = cohort_doc_ids
+                            result = await svc.aretry_failed_docs(**retry_kwargs)
                         else:
                             result = await svc.aingest(
                                 source_type=job_type,
@@ -504,11 +627,15 @@ class IngestJobCoordinator:
                                 if not updated:
                                     raise LeaseLostError("ingest job lease lost")
                     if job_type == _FAILED_DOCUMENT_RETRY_JOB_TYPE:
-                        finished = await store.finish_failed_retry(
-                            job_id,
-                            result=result,
-                            lease_owner=self._lease_owner,
-                        )
+                        try:
+                            finished = await store.finish_failed_retry(
+                                job_id,
+                                lease_owner=self._lease_owner,
+                            )
+                        except Exception as exc:
+                            raise LeaseLostError(
+                                "failed retry terminal commit is uncertain"
+                            ) from exc
                     else:
                         finished = await store.finish(
                             job_id,
@@ -536,30 +663,60 @@ class IngestJobCoordinator:
                     logger.info("Skipping ingest job %s; another worker owns it", job_id)
                     cleanup_after_run = False
                 except asyncio.CancelledError:
-                    if lease_lost.is_set():
+                    durably_cancelled = await self._was_durably_cancelled(store, job_id)
+                    if durably_cancelled:
+                        # The durable-first transition already revoked this
+                        # owner, so a second owner CAS must fail. This task still
+                        # owns its transient corpus rows and uploaded sources.
+                        await self._park_unfinished_docs(store, workspace)
+                        cleanup_after_run = True
+                    elif lease_lost.is_set():
                         cleanup_after_run = False
                     elif not self._closing:
-                        if job_type != _FAILED_DOCUMENT_RETRY_JOB_TYPE:
-                            await self._park_unfinished_docs(store, workspace)
-                        if await store.fail(
-                            job_id,
-                            error="ingest job cancelled",
-                            lease_owner=self._lease_owner,
-                        ):
+                        await self._park_unfinished_docs(store, workspace)
+                        if job_type == _FAILED_DOCUMENT_RETRY_JOB_TYPE:
+                            cancelled = await store.cancel_failed_retry(
+                                job_id,
+                                error="ingest job cancelled",
+                                lease_owner=self._lease_owner,
+                            )
+                        else:
+                            cancelled = await store.fail(
+                                job_id,
+                                error="ingest job cancelled",
+                                lease_owner=self._lease_owner,
+                            )
+                        if cancelled:
                             cleanup_after_run = True
                     else:
                         # Shutdown while running keeps the lease rows and the
                         # source files for recovery.
                         cleanup_after_run = False
                     raise
-                except LeaseLostError:
-                    # Another worker re-claimed this job (detected via
-                    # record_window). Do not fail it or delete its source
-                    # files — the new owner owns them.
+                except RetryOutcomeUncertainError:
+                    # The corpus write may have committed while its status read
+                    # failed. Never freeze an opposite ledger outcome: release
+                    # this owner and let the same durable job retry the pending item.
+                    released = await store.release_running(job_id, lease_owner=self._lease_owner)
                     logger.warning(
-                        "Ingest job %s lease lost mid-run; yielding to new owner", job_id
+                        "Ingest job %s retry outcome uncertain; %s for recovery",
+                        job_id,
+                        "requeued" if released else "yielding",
                     )
                     cleanup_after_run = False
+                except LeaseLostError:
+                    if await self._was_durably_cancelled(store, job_id):
+                        await self._park_unfinished_docs(store, workspace)
+                        cleanup_after_run = True
+                        logger.info("Ingest job %s observed durable cancellation", job_id)
+                    else:
+                        # Another worker re-claimed this job. It owns the
+                        # transient sources and cleanup responsibility now.
+                        logger.warning(
+                            "Ingest job %s lease lost mid-run; yielding to new owner",
+                            job_id,
+                        )
+                        cleanup_after_run = False
                 except Exception as exc:
                     if await store.fail(
                         job_id,
@@ -675,6 +832,7 @@ class IngestJobCoordinator:
             self._tasks.clear()
             self._closing = False
         self._workspaces.clear()
+        self._durably_cancelled.clear()
 
     def _track(self, job_id: str, workspace: str, task: asyncio.Task[None]) -> None:
         self._tasks[job_id] = task
@@ -684,6 +842,7 @@ class IngestJobCoordinator:
     def _forget(self, job_id: str) -> None:
         self._tasks.pop(job_id, None)
         self._workspaces.pop(job_id, None)
+        self._durably_cancelled.discard(job_id)
 
 
 def _json_safe(value: Any) -> Any:

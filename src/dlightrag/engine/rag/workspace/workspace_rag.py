@@ -4,8 +4,17 @@
 import asyncio
 import logging
 import uuid
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from inspect import isawaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -21,18 +30,23 @@ from dlightrag.engine.rag.corpus.contracts import (
     SourceType,
     VisualAssetSize,
 )
+from dlightrag.engine.rag.corpus.ingest_jobs import RetryOutcomeUncertainError
 from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     build_document_embedder,
     resolve_direct_image_embedding_enabled,
 )
-from dlightrag.engine.rag.corpus.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
+from dlightrag.engine.rag.corpus.ingestion.engine import (
+    PreparedIngestFile,
+    UnifiedIngestionEngine,
+    ingest_finalization_complete,
+)
 from dlightrag.engine.rag.corpus.ingestion.paths import (
     iter_ingestable_files,
+    lightrag_archived_source_path,
     remote_ingest_batch_root,
     remote_parser_input_path,
     retained_remote_source_path,
     stage_input_file,
-    staged_input_path,
     workspace_input_root,
 )
 from dlightrag.engine.rag.corpus.metadata_index import MetadataIndexProtocol
@@ -47,6 +61,9 @@ from dlightrag.engine.rag.corpus.sources.source_contract import (
 from dlightrag.engine.rag.corpus.visual_assets import ThumbnailCache, VisualAssetResolver
 from dlightrag.engine.rag.lightrag.models import LightRagChatModels, build_lightrag_embedding
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalResult
+from dlightrag.engine.rag.retrieval.metadata_fields import (
+    INGEST_FINALIZATION_COMPLETE_FIELD,
+)
 from dlightrag.engine.rag.retrieval.rerank import build_rerank_func, rerank_consumes_images
 from dlightrag.engine.rag.workspace.lifecycle import (
     defer_cancellation,
@@ -135,13 +152,6 @@ def _retry_display_filename(value: object) -> str:
     return filename
 
 
-def _normalized_operation_status(result: object) -> str:
-    raw_status = (
-        result.get("status") if isinstance(result, Mapping) else getattr(result, "status", None)
-    )
-    return str(getattr(raw_status, "value", raw_status) or "").strip().lower()
-
-
 def _download_locator_kind(locator: str | None, *, retained: bool = False) -> str:
     if retained:
         return "local"
@@ -165,7 +175,14 @@ def _log_download_locator_outcome(*, outcome: str, locator_kind: str, source_fil
 
 
 # Identity and storage plumbing: never part of a caller-facing answer or payload.
-_INTERNAL_FIELDS = frozenset({"workspace", "doc_id", "download_locator"})
+_INTERNAL_FIELDS = frozenset(
+    {
+        "workspace",
+        "doc_id",
+        "download_locator",
+        INGEST_FINALIZATION_COMPLETE_FIELD,
+    }
+)
 
 
 class WorkspaceRag:
@@ -615,53 +632,70 @@ class WorkspaceRag:
             return self.settings.ingestion_replace_default
         return bool(explicit)
 
-    async def _purge_existing_for_replace(
+    def _remote_replacement_locators(
         self,
         *,
-        file_path: Path,
-    ) -> None:
-        """Delete an existing ingest target before replacing it."""
-        lightrag = self.lightrag
-        if lightrag is None:
-            return
-
-        from dlightrag.engine.rag.corpus.ingestion.cleanup import (
-            cascade_delete,
-            collect_deletion_context,
+        primary_locator: str,
+        source_type: str,
+        source_uri: str,
+        key: str,
+    ) -> tuple[str, ...]:
+        """Return every locator representation remote ingestion can persist."""
+        retained_locator = retained_remote_source_path(
+            input_root=self._workspace_input_root(),
+            source_type=source_type,
+            source_uri=source_uri,
+            key=key,
         )
-
-        identifier = str(file_path)
-        ctx = await collect_deletion_context(
-            identifier=identifier,
-            metadata_index=self._metadata_index,
-            doc_status_lookup=self._doc_status_lookup,
-        )
-        if not ctx.doc_ids:
-            return
-
-        stats = await cascade_delete(
-            ctx=ctx,
-            lightrag=lightrag,
-            metadata_index=self._metadata_index,
-        )
-        errors = stats.get("errors") or []
-        if errors:
-            raise RuntimeError(
-                f"replace cleanup failed for {identifier}: {'; '.join(map(str, errors))}"
+        return tuple(
+            dict.fromkeys(
+                (
+                    primary_locator,
+                    str(retained_locator),
+                    str(lightrag_archived_source_path(retained_locator)),
+                )
             )
+        )
 
-    async def _purge_existing_download_locator(self, download_locator: str) -> None:
-        """Delete only documents owning one exact locator in this workspace."""
-        lightrag = self.lightrag
-        if lightrag is None or self._metadata_index is None:
-            return
+    async def _replacement_owners_for_locators(
+        self,
+        *,
+        download_locators: tuple[str, ...],
+        source_uri: str,
+    ) -> tuple[tuple[str, ...], tuple[tuple[str, str, str], ...]]:
+        """Resolve exact locator owners for engine-side locked revalidation."""
+        if self._metadata_index is None:
+            return (), ()
+        ownership_by_id: dict[str, str] = {}
+        for locator in dict.fromkeys(download_locators):
+            owner_ids = await self._metadata_index.find_by_download_locator(locator)
+            if any(not isinstance(owner_id, str) or not owner_id for owner_id in owner_ids):
+                raise RuntimeError("replacement document ownership is invalid")
+            for owner_id in owner_ids:
+                prior_locator = ownership_by_id.setdefault(owner_id, locator)
+                if prior_locator != locator:
+                    raise RuntimeError("replacement document ownership is inconsistent")
+        owner_ids = tuple(ownership_by_id)
+        return owner_ids, tuple(
+            (owner_id, ownership_by_id[owner_id], source_uri) for owner_id in owner_ids
+        )
 
-        doc_ids = await self._metadata_index.find_by_download_locator(download_locator)
-        for doc_id in doc_ids:
-            result = await lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
-            if _normalized_operation_status(result) != "success":
-                raise RuntimeError("remote replace cleanup failed")
-            await self._metadata_index.delete(doc_id)
+    async def _retry_replacement_owners(
+        self,
+        *,
+        download_locators: tuple[str, ...],
+        source_uri: str,
+    ) -> tuple[tuple[str, ...], tuple[tuple[str, str, str], ...]]:
+        """Reconstruct retry retirement intent for engine-side locked revalidation."""
+        if self._metadata_index is None:
+            raise RetryOutcomeUncertainError("retry replacement ownership is unavailable")
+        try:
+            return await self._replacement_owners_for_locators(
+                download_locators=download_locators,
+                source_uri=source_uri,
+            )
+        except Exception as exc:
+            raise RetryOutcomeUncertainError("retry replacement ownership lookup failed") from exc
 
     async def _aingest_local_file(
         self,
@@ -676,15 +710,6 @@ class WorkspaceRag:
         """Ingest one local file through the unified LightRAG path."""
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
-
-        if replace:
-            await self._purge_existing_for_replace(
-                file_path=staged_input_path(
-                    input_root=self._workspace_input_root(),
-                    file_path=file_path,
-                    relative_to=source_root,
-                ),
-            )
 
         file_path = await asyncio.to_thread(
             stage_input_file,
@@ -724,16 +749,6 @@ class WorkspaceRag:
             raise RuntimeError("Ingestion engine not initialized")
         if not file_paths:
             return {"processed": 0, "errors": [], "results": []}
-
-        if replace:
-            for file_path in file_paths:
-                await self._purge_existing_for_replace(
-                    file_path=staged_input_path(
-                        input_root=self._workspace_input_root(),
-                        file_path=file_path,
-                        relative_to=source_root,
-                    )
-                )
 
         staged_paths = [
             await asyncio.to_thread(
@@ -784,14 +799,6 @@ class WorkspaceRag:
                 raise ValueError("local manifest documents require a path")
             file_path = Path(document.path)
             relative_to = self._local_manifest_relative_root(file_path)
-            if replace:
-                await self._purge_existing_for_replace(
-                    file_path=staged_input_path(
-                        input_root=self._workspace_input_root(),
-                        file_path=file_path,
-                        relative_to=relative_to,
-                    )
-                )
             staged = await asyncio.to_thread(
                 stage_input_file,
                 input_root=self._workspace_input_root(),
@@ -886,6 +893,8 @@ class WorkspaceRag:
         resume_from_window: int = 0,
         retain_source_file: bool | None = None,
         parser_filename_override: str | None = None,
+        replacement_doc_ids_override: tuple[str, ...] = (),
+        replacement_ownership_override: tuple[tuple[str, str, str], ...] = (),
     ) -> dict[str, Any]:
         """Download remote objects into ephemeral parser batches and ingest them."""
         if self._ingestion_engine is None:
@@ -915,11 +924,13 @@ class WorkspaceRag:
             )
             prepared_items: list[PreparedIngestFile] = []
             window_errors: list[str] = []
+            remote_primary_locators: dict[int, str] = {}
 
             async def _download(
                 document: SourceDocument,
                 *,
                 current_batch_root: Path = batch_root,
+                current_primary_locators: dict[int, str] = remote_primary_locators,
             ) -> PreparedIngestFile | _RemoteDownloadFailure:
                 safe_source_id = _safe_remote_source_id(document)
                 try:
@@ -983,6 +994,16 @@ class WorkspaceRag:
                             source_filename=safe_source_id,
                         )
 
+                    if retain_source_files and download_uri is not None:
+                        try:
+                            current_primary_locators[id(document)] = validate_download_uri(
+                                download_uri
+                            )
+                        except ValueError:
+                            pass
+                    else:
+                        current_primary_locators[id(document)] = download_locator
+
                     return await self._download_remote_to_prepared_item(
                         source=source,
                         document=document,
@@ -1019,6 +1040,12 @@ class WorkspaceRag:
                         errors.append(error)
                         window_errors.append(error)
                         continue
+                    if replacement_doc_ids_override or replacement_ownership_override:
+                        downloaded = dataclass_replace(
+                            downloaded,
+                            replacement_doc_ids=replacement_doc_ids_override,
+                            replacement_ownership=replacement_ownership_override,
+                        )
                     prepared_items.append(downloaded)
                     prepared_documents.append(document)
 
@@ -1037,25 +1064,37 @@ class WorkspaceRag:
                     continue
 
                 if replace:
+                    replacement_items: list[PreparedIngestFile] = []
                     for document, prepared_item in zip(
                         prepared_documents, prepared_items, strict=True
                     ):
-                        await self._purge_existing_download_locator(prepared_item.download_locator)
-                        if not retain_source_files:
-                            await self._purge_existing_download_locator(
-                                str(
-                                    retained_remote_source_path(
-                                        input_root=self._workspace_input_root(),
-                                        source_type=source_type,
-                                        source_uri=prepared_item.source_uri,
-                                        key=document.display_filename or document.key,
-                                    )
-                                )
+                        replacement_locators = self._remote_replacement_locators(
+                            primary_locator=remote_primary_locators.get(
+                                id(document), prepared_item.download_locator
+                            ),
+                            source_type=source_type,
+                            source_uri=prepared_item.source_uri,
+                            key=document.display_filename or document.key,
+                        )
+                        (
+                            replacement_doc_ids,
+                            replacement_ownership,
+                        ) = await self._replacement_owners_for_locators(
+                            download_locators=replacement_locators,
+                            source_uri=prepared_item.source_uri,
+                        )
+                        replacement_items.append(
+                            dataclass_replace(
+                                prepared_item,
+                                replacement_doc_ids=replacement_doc_ids,
+                                replacement_ownership=replacement_ownership,
                             )
+                        )
+                    prepared_items = replacement_items
 
                 batch_result = await self._ingestion_engine.aingest_files(
                     prepared_items,
-                    replace=False,
+                    replace=replace,
                     title=title,
                     author=author,
                     metadata=metadata,
@@ -1125,6 +1164,8 @@ class WorkspaceRag:
         _progress_callback: RemoteIngestProgressCallback | None = None,
         _resume_from_window: int = 0,
         _parser_filename_override: str | None = None,
+        _replacement_doc_ids_override: tuple[str, ...] = (),
+        _replacement_ownership_override: tuple[tuple[str, str, str], ...] = (),
     ) -> dict[str, Any]:
         """Ingest documents from a caller-provided async data source.
 
@@ -1164,6 +1205,8 @@ class WorkspaceRag:
                 resume_from_window=_resume_from_window,
                 retain_source_file=retain_source_file,
                 parser_filename_override=_parser_filename_override,
+                replacement_doc_ids_override=_replacement_doc_ids_override,
+                replacement_ownership_override=_replacement_ownership_override,
             )
         finally:
             if close is not None:
@@ -1197,6 +1240,12 @@ class WorkspaceRag:
                 _progress_callback=kwargs.get("_progress_callback"),
                 _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
                 _parser_filename_override=kwargs.get("_parser_filename_override"),
+                _replacement_doc_ids_override=tuple(
+                    kwargs.get("_replacement_doc_ids_override") or ()
+                ),
+                _replacement_ownership_override=tuple(
+                    kwargs.get("_replacement_ownership_override") or ()
+                ),
             )
             if len(documents) == 1:
                 return self._single_file_result(result)
@@ -1238,6 +1287,10 @@ class WorkspaceRag:
             _progress_callback=kwargs.get("_progress_callback"),
             _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
             _parser_filename_override=kwargs.get("_parser_filename_override"),
+            _replacement_doc_ids_override=tuple(kwargs.get("_replacement_doc_ids_override") or ()),
+            _replacement_ownership_override=tuple(
+                kwargs.get("_replacement_ownership_override") or ()
+            ),
         )
         if len(urls) == 1:
             return self._single_file_result(result)
@@ -1266,6 +1319,12 @@ class WorkspaceRag:
             "_progress_callback": kwargs.get("_progress_callback"),
             "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
             "_parser_filename_override": kwargs.get("_parser_filename_override"),
+            "_replacement_doc_ids_override": tuple(
+                kwargs.get("_replacement_doc_ids_override") or ()
+            ),
+            "_replacement_ownership_override": tuple(
+                kwargs.get("_replacement_ownership_override") or ()
+            ),
         }
         documents = _ingest_documents(kwargs.get("documents"))
         if documents is not None:
@@ -1755,131 +1814,199 @@ class WorkspaceRag:
             for entry in page:
                 yield entry
 
-    async def aretry_failed_docs(self) -> dict[str, Any]:
-        """Stream-reingest FAILED documents from their durable metadata contracts."""
+    async def aretry_failed_docs(
+        self,
+        *,
+        cohort_doc_ids: Sequence[str] | None = None,
+        cohort_callback: Callable[[tuple[str, ...]], Awaitable[None]] | None = None,
+        outcome_callback: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> dict[str, Any]:
+        """Retry one frozen FAILED cohort and report compact per-document outcomes."""
         self._require_writer("failed-document retry")
         self._ensure_initialized()
 
-        lr = self.lightrag
-        retried = 0
+        if cohort_doc_ids is None:
+            entries = [entry async for entry in self._iter_failed_docs()]
+        else:
+            entries = await self._retry_cohort_entries(cohort_doc_ids)
+        entries = list({str(entry.get("doc_id")): entry for entry in entries}.values())
+        cohort = tuple(str(entry["doc_id"]) for entry in entries)
+        if cohort_callback is not None:
+            # The durable coordinator seals the complete cohort before the
+            # first destructive retry starts.
+            await cohort_callback(cohort)
+
+        succeeded: list[dict[str, Any]] = []
+        still_failed: list[dict[str, Any]] = []
         succeeded_count = 0
         failed_count = 0
         details_truncated = False
-        succeeded: list[dict[str, Any]] = []
-        still_failed: list[dict[str, Any]] = []
 
-        def record_succeeded(detail: dict[str, Any]) -> None:
-            nonlocal succeeded_count, details_truncated
-            succeeded_count += 1
-            if len(succeeded) < 100:
-                succeeded.append(detail)
+        async def record(doc_id: str, outcome: str, detail: dict[str, Any]) -> None:
+            nonlocal details_truncated, failed_count, succeeded_count
+            if outcome_callback is not None:
+                await outcome_callback(doc_id, outcome, detail)
+            if outcome == "succeeded":
+                succeeded_count += 1
+            else:
+                failed_count += 1
+            target = succeeded if outcome == "succeeded" else still_failed
+            if len(target) < 100:
+                target.append(detail)
             else:
                 details_truncated = True
 
-        def record_failed(detail: dict[str, Any]) -> None:
-            nonlocal failed_count, details_truncated
-            failed_count += 1
-            if len(still_failed) < 100:
-                still_failed.append(detail)
-            else:
-                details_truncated = True
+        for entry in entries:
+            doc_id = str(entry["doc_id"])
+            file_path = str(entry.get("file_path") or "")
+            recovered_processed = str(entry.get("status") or "") == "processed"
 
-        async for entry in self._iter_failed_docs():
-            retried += 1
-            doc_id = entry["doc_id"]
+            async def preflight_failure(
+                reason: str,
+                *,
+                processed: bool = recovered_processed,
+                expected_doc_id: str = doc_id,
+            ) -> None:
+                if processed:
+                    # A processed pending item may already be a complete commit,
+                    # or may only need idempotent application finalization. Never
+                    # freeze the opposite ledger outcome because its source
+                    # preflight is temporarily unavailable.
+                    raise RetryOutcomeUncertainError(reason)
+                await record(
+                    expected_doc_id,
+                    "failed",
+                    {"doc_id": expected_doc_id, "reason": reason},
+                )
+
+            # A pending durable item with PROCESSED LightRAG status may have
+            # crashed before required DlightRAG finalization. A durable complete
+            # marker proves success without requiring the source to still exist;
+            # incomplete/legacy markers re-enter the same-ID finalization seam.
             if self._metadata_index is None:
-                record_failed({"doc_id": doc_id, "reason": "source metadata unavailable"})
+                await preflight_failure("source metadata unavailable")
                 continue
 
             try:
                 metadata = await self._metadata_index.get(doc_id)
-            except Exception:
+            except Exception as exc:
                 logger.warning("Failed to load retry metadata for doc_id=%s", doc_id)
-                record_failed({"doc_id": doc_id, "reason": "source metadata unavailable"})
+                if recovered_processed:
+                    raise RetryOutcomeUncertainError(
+                        "retry finalization metadata read failed"
+                    ) from exc
+                await preflight_failure("source metadata unavailable")
                 continue
 
-            if metadata is None:
-                record_failed({"doc_id": doc_id, "reason": "source metadata incomplete"})
+            if not isinstance(metadata, Mapping):
+                await preflight_failure("source metadata incomplete")
+                continue
+            if recovered_processed and ingest_finalization_complete(metadata):
+                await record(
+                    doc_id,
+                    "succeeded",
+                    {"doc_id": doc_id, "file_path": file_path, "replacement_count": 1},
+                )
                 continue
             source_uri = metadata.get("source_uri")
             download_locator = metadata.get("download_locator")
             stored_filename = metadata.get("filename")
-            if not isinstance(source_uri, str) or not source_uri:
-                record_failed({"doc_id": doc_id, "reason": "source metadata incomplete"})
-                continue
-            if not isinstance(download_locator, str) or not download_locator:
-                record_failed({"doc_id": doc_id, "reason": "source metadata incomplete"})
-                continue
-            if not isinstance(stored_filename, str) or not stored_filename:
-                record_failed({"doc_id": doc_id, "reason": "source metadata incomplete"})
+            if (
+                not isinstance(source_uri, str)
+                or not source_uri
+                or not isinstance(download_locator, str)
+                or not download_locator
+                or not isinstance(stored_filename, str)
+                or not stored_filename
+            ):
+                await preflight_failure("source metadata incomplete")
                 continue
 
             try:
                 display_filename = _retry_display_filename(stored_filename)
                 self._validate_retry_source_contract(source_uri, download_locator)
-            except OSError, TypeError, ValueError:
-                record_failed({"doc_id": doc_id, "reason": "source metadata invalid"})
+            except (OSError, TypeError, ValueError) as exc:
+                if recovered_processed:
+                    raise RetryOutcomeUncertainError(
+                        "retry finalization source preflight failed"
+                    ) from exc
+                await preflight_failure("source metadata invalid")
                 continue
 
-            status_snapshot = await self._retry_status_snapshot(doc_id)
+            retry_metadata = self._allowed_retry_metadata(metadata)
             try:
                 result = await self._aingest_download_locator(
-                    source_uri, download_locator, display_filename
+                    source_uri,
+                    download_locator,
+                    display_filename,
+                    retry_metadata,
                 )
                 processed = result.get("processed")
                 if result.get("errors") or (isinstance(processed, int | float) and processed < 1):
-                    await self._restore_retry_discoverability(
-                        doc_id, status_snapshot=status_snapshot, metadata=metadata
+                    await record(
+                        doc_id,
+                        "failed",
+                        {
+                            "doc_id": doc_id,
+                            **({"file_path": file_path} if file_path else {}),
+                            "reason": "retry ingestion failed",
+                        },
                     )
-                    record_failed({"doc_id": doc_id, "reason": "retry ingestion failed"})
                     continue
-                replacement_doc_ids = self._retry_result_doc_ids(result)
-                if not replacement_doc_ids:
-                    await self._restore_retry_discoverability(
-                        doc_id, status_snapshot=status_snapshot, metadata=metadata
-                    )
-                    record_failed({"doc_id": doc_id, "reason": "retry ingestion failed"})
-                    continue
-                if doc_id not in replacement_doc_ids:
-                    if lr is None:
-                        await self._rollback_retry_replacements(
-                            replacement_doc_ids, original_doc_id=doc_id
-                        )
-                        raise RuntimeError("old LightRAG document cleanup unavailable")
-                    try:
-                        deletion_result = await lr.adelete_by_doc_id(doc_id, delete_llm_cache=True)
-                    except Exception:
-                        await self._rollback_retry_replacements(
-                            replacement_doc_ids, original_doc_id=doc_id
-                        )
-                        raise
-                    if _normalized_operation_status(deletion_result) != "success":
-                        await self._rollback_retry_replacements(
-                            replacement_doc_ids, original_doc_id=doc_id
-                        )
-                        raise RuntimeError("old LightRAG document cleanup failed")
-                    try:
-                        await self._metadata_index.delete(doc_id)
-                    except Exception:
-                        logger.warning(
-                            "Old retry metadata cleanup incomplete for doc_id=%s", doc_id
-                        )
-                record_succeeded(
-                    {"doc_id": doc_id, "file_path": entry.get("file_path", ""), "result": result}
-                )
+            except RetryOutcomeUncertainError:
+                raise
             except Exception:
-                await self._restore_retry_discoverability(
-                    doc_id, status_snapshot=status_snapshot, metadata=metadata
-                )
                 logger.warning("Retry failed for doc_id=%s", doc_id)
-                record_failed(
+                outcome = await self._retry_doc_authoritative_outcome(doc_id)
+                if outcome == "succeeded":
+                    # Corpus commit won a late finalization/outcome race. Keep
+                    # durable totals aligned with the authoritative status.
+                    await record(
+                        doc_id,
+                        "succeeded",
+                        {"doc_id": doc_id, "file_path": file_path, "replacement_count": 1},
+                    )
+                    continue
+                if outcome is None:
+                    raise RetryOutcomeUncertainError(
+                        "retry document status is not yet authoritative"
+                    ) from None
+                await record(
+                    doc_id,
+                    "failed",
                     {
                         "doc_id": doc_id,
-                        "file_path": entry.get("file_path", ""),
+                        **({"file_path": file_path} if file_path else {}),
                         "reason": "retry ingestion failed",
-                    }
+                    },
                 )
+                continue
 
+            if self._retry_result_identity(result) != doc_id:
+                # The parser path fixes the canonical ID before ingestion. An
+                # identity-invalid result is not an ambiguous finalization
+                # error and must never be reconciled from PROCESSED to success.
+                # A reported mismatch may name a pre-existing unrelated doc.
+                await self._fail_processed_retry_identity(doc_id)
+                logger.warning("Retry returned invalid identity for doc_id=%s", doc_id)
+                await record(
+                    doc_id,
+                    "failed",
+                    {
+                        "doc_id": doc_id,
+                        **({"file_path": file_path} if file_path else {}),
+                        "reason": "retry ingestion failed",
+                    },
+                )
+                continue
+
+            await record(
+                doc_id,
+                "succeeded",
+                {"doc_id": doc_id, "file_path": file_path, "replacement_count": 1},
+            )
+
+        retried = len(entries)
         if retried == 0:
             return {"retried": 0, "succeeded": 0, "failed": 0, "results": []}
         return {
@@ -1891,88 +2018,117 @@ class WorkspaceRag:
             "details_truncated": details_truncated,
         }
 
-    @staticmethod
-    def _retry_result_doc_ids(result: Mapping[str, Any]) -> set[str]:
-        doc_ids: set[str] = set()
-        direct_doc_id = result.get("doc_id")
-        if isinstance(direct_doc_id, str) and direct_doc_id:
-            doc_ids.add(direct_doc_id)
-
-        nested_results = result.get("results")
-        if isinstance(nested_results, list):
-            for item in nested_results:
-                if not isinstance(item, Mapping):
-                    continue
-                nested_doc_id = item.get("doc_id")
-                if isinstance(nested_doc_id, str) and nested_doc_id:
-                    doc_ids.add(nested_doc_id)
-        return doc_ids
-
-    async def _retry_status_snapshot(self, doc_id: str) -> dict[str, Any] | None:
-        """Capture the FAILED row in case same-id cleanup fails before re-enqueue."""
+    async def _retry_doc_authoritative_outcome(self, doc_id: str) -> str | None:
+        """Return a durable outcome only for an authoritative terminal status."""
         if self._lightrag_stores is None:
-            return None
+            raise RetryOutcomeUncertainError("retry document status store is unavailable")
         try:
             row = await self._lightrag_stores.get_doc_status(doc_id)
-        except Exception:
-            logger.warning("Failed to snapshot retry status for doc_id=%s", doc_id)
-            return None
-        return dict(row) if isinstance(row, Mapping) else None
-
-    async def _restore_retry_discoverability(
-        self,
-        doc_id: str,
-        *,
-        status_snapshot: Mapping[str, Any] | None,
-        metadata: Mapping[str, Any],
-    ) -> None:
-        """Restore retry metadata/status only when same-id cleanup left no row."""
-        if self._lightrag_stores is not None and status_snapshot is not None:
+        except Exception as exc:
+            raise RetryOutcomeUncertainError("retry document status read failed") from exc
+        raw_status = row.get("status") if isinstance(row, Mapping) else None
+        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        if status == "processed":
+            if self._metadata_index is None:
+                raise RetryOutcomeUncertainError("retry finalization metadata is unavailable")
             try:
-                current_status = await self._lightrag_stores.get_doc_status(doc_id)
-                if current_status is None:
-                    await self._lightrag_stores.doc_status.upsert({doc_id: dict(status_snapshot)})
-            except Exception:
-                logger.warning("Failed to restore retry status for doc_id=%s", doc_id)
-        if self._metadata_index is not None:
-            try:
-                current_metadata = await self._metadata_index.get(doc_id)
-                if current_metadata is None:
-                    await self._metadata_index.upsert(doc_id, dict(metadata))
-            except Exception:
-                logger.warning("Failed to restore retry metadata for doc_id=%s", doc_id)
+                metadata = await self._metadata_index.get(doc_id)
+            except Exception as exc:
+                raise RetryOutcomeUncertainError("retry finalization metadata read failed") from exc
+            return "succeeded" if ingest_finalization_complete(metadata) else None
+        if status == "failed":
+            return "failed"
+        return None
 
-    async def _rollback_retry_replacements(
-        self,
-        replacement_doc_ids: set[str],
-        *,
-        original_doc_id: str,
-    ) -> None:
-        """Best-effort compensation when the original FAILED row still exists."""
-        lr = self.lightrag
-        if lr is None or self._metadata_index is None:
+    async def _fail_processed_retry_identity(self, doc_id: str) -> None:
+        """Keep a same-ID mismatch discoverable, or leave its outcome pending."""
+        if self._lightrag_stores is None:
+            raise RetryOutcomeUncertainError("retry document status store is unavailable")
+        try:
+            row = await self._lightrag_stores.get_doc_status(doc_id)
+        except Exception as exc:
+            raise RetryOutcomeUncertainError("retry mismatch status read failed") from exc
+        if not isinstance(row, Mapping):
+            raise RetryOutcomeUncertainError("retry mismatch status is unavailable")
+        raw_status = row.get("status")
+        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        if status == "failed":
             return
-        for replacement_doc_id in sorted(replacement_doc_ids - {original_doc_id}):
-            try:
-                result = await lr.adelete_by_doc_id(replacement_doc_id, delete_llm_cache=True)
-            except Exception:
-                logger.warning(
-                    "Retry replacement rollback failed for doc_id=%s", replacement_doc_id
-                )
-                continue
-            if _normalized_operation_status(result) != "success":
-                logger.warning(
-                    "Retry replacement rollback was not acknowledged for doc_id=%s",
-                    replacement_doc_id,
-                )
-                continue
-            try:
-                await self._metadata_index.delete(replacement_doc_id)
-            except Exception:
-                logger.warning(
-                    "Retry replacement metadata rollback failed for doc_id=%s",
-                    replacement_doc_id,
-                )
+        if status != "processed":
+            raise RetryOutcomeUncertainError("retry mismatch status is not terminal")
+        failed = dict(row)
+        failed.update(
+            status="failed",
+            error_msg="retry ingestion returned mismatched document identity",
+        )
+        try:
+            await self._lightrag_stores.doc_status.upsert({doc_id: failed})
+        except Exception as exc:
+            raise RetryOutcomeUncertainError("retry mismatch failure marker is uncertain") from exc
+
+    async def _retry_cohort_entries(self, cohort_doc_ids: Sequence[str]) -> list[dict[str, Any]]:
+        """Project named durable items, including already-committed success."""
+        doc_ids = tuple(dict.fromkeys(str(doc_id) for doc_id in cohort_doc_ids if doc_id))
+        if not doc_ids:
+            return []
+        if self._lightrag_stores is None:
+            raise RetryOutcomeUncertainError("retry document status store is unavailable")
+        try:
+            rows = await self._lightrag_stores.get_full_doc_statuses(list(doc_ids))
+        except Exception as exc:
+            raise RetryOutcomeUncertainError("retry cohort status read failed") from exc
+        missing = set(doc_ids).difference(rows)
+        if missing:
+            raise RetryOutcomeUncertainError("retry cohort status rows are incomplete")
+        entries: list[dict[str, Any]] = []
+        for doc_id in doc_ids:
+            row = rows.get(doc_id)
+            raw_status = getattr(row, "status", None)
+            status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+            entries.append(
+                {
+                    "doc_id": doc_id,
+                    "file_path": str(getattr(row, "file_path", "") or ""),
+                    "status": status,
+                }
+            )
+        return entries
+
+    @staticmethod
+    def _allowed_retry_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+        allowed: dict[str, Any] = {}
+        for key in ("title", "author", "creation_date"):
+            value = metadata.get(key)
+            if value is not None:
+                allowed[key] = value
+        custom = metadata.get("custom_metadata")
+        if isinstance(custom, Mapping):
+            allowed["custom_metadata"] = dict(custom)
+        return allowed
+
+    @staticmethod
+    def _retry_result_identity(result: Mapping[str, Any]) -> str | None:
+        direct = result.get("doc_id")
+        nested = result.get("results")
+        direct_id = direct if isinstance(direct, str) and direct else None
+        nested_ids = (
+            tuple(
+                item["doc_id"]
+                for item in nested
+                if isinstance(item, Mapping)
+                and isinstance(item.get("doc_id"), str)
+                and item.get("doc_id")
+            )
+            if isinstance(nested, list)
+            else ()
+        )
+        if direct_id is not None and not nested_ids:
+            accepted = direct_id
+        elif direct_id is None and len(nested_ids) == 1:
+            accepted = nested_ids[0]
+        else:
+            accepted = None
+        return accepted
 
     def _validate_retry_source_contract(
         self,
@@ -1996,14 +2152,14 @@ class WorkspaceRag:
     def _retry_local_source_path(self, download_locator: str) -> Path:
         """Resolve a local source that LightRAG may have moved under __parsed__."""
         original = Path(download_locator)
-        if original.is_file():
-            return original
-
         input_root = self._workspace_input_root().resolve()
         try:
-            original.resolve().relative_to(input_root)
+            resolved_original = original.resolve()
+            resolved_original.relative_to(input_root)
         except ValueError:
             raise FileNotFoundError("download locator is unavailable") from None
+        if resolved_original.is_file():
+            return resolved_original
 
         candidates = (
             original.parent / PARSED_DIR_NAME / original.name,
@@ -2020,16 +2176,46 @@ class WorkspaceRag:
         source_uri: str,
         download_locator: str,
         display_filename: str,
+        retry_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Materialize one validated locator while preserving source provenance."""
         source_type, parts = self._validate_retry_source_contract(source_uri, download_locator)
         stable_source_uri = validate_source_uri(source_uri)
+        if source_type == "local":
+            ownership_locators = (download_locator,)
+        else:
+            ownership_locators = self._remote_replacement_locators(
+                primary_locator=download_locator,
+                source_type=source_type,
+                source_uri=stable_source_uri,
+                key=display_filename,
+            )
+        replacement_doc_ids, replacement_ownership = await self._retry_replacement_owners(
+            download_locators=ownership_locators,
+            source_uri=stable_source_uri,
+        )
+
+        title = retry_metadata.get("title") if retry_metadata else None
+        author = retry_metadata.get("author") if retry_metadata else None
+        user_metadata: dict[str, Any] = {}
+        custom_metadata = retry_metadata.get("custom_metadata") if retry_metadata else None
+        if isinstance(custom_metadata, Mapping):
+            user_metadata.update(
+                (key, value) for key, value in custom_metadata.items() if isinstance(key, str)
+            )
+        if retry_metadata and retry_metadata.get("creation_date") is not None:
+            user_metadata["creation_date"] = retry_metadata["creation_date"]
 
         if source_type == "local":
             return await self._aingest_local_retry_locator(
                 source_uri=stable_source_uri,
                 download_locator=download_locator,
                 display_filename=display_filename,
+                title=title if isinstance(title, str) else None,
+                author=author if isinstance(author, str) else None,
+                metadata=user_metadata,
+                replacement_doc_ids=replacement_doc_ids,
+                replacement_ownership=replacement_ownership,
             )
 
         parser_filename = remote_parser_input_path(
@@ -2043,6 +2229,9 @@ class WorkspaceRag:
                 filename=display_filename,
                 source_uri=stable_source_uri,
                 download_uri=download_locator,
+                title=title if isinstance(title, str) else None,
+                author=author if isinstance(author, str) else None,
+                metadata=user_metadata,
             )
             return await self.aingest(
                 "url",
@@ -2050,6 +2239,8 @@ class WorkspaceRag:
                 replace=False,
                 retain_source_file=False,
                 _parser_filename_override=parser_filename,
+                _replacement_doc_ids_override=replacement_doc_ids,
+                _replacement_ownership_override=replacement_ownership,
             )
 
         if source_type == "s3":
@@ -2057,6 +2248,9 @@ class WorkspaceRag:
                 key=str(parts["key"]),
                 filename=display_filename,
                 source_uri=stable_source_uri,
+                title=title if isinstance(title, str) else None,
+                author=author if isinstance(author, str) else None,
+                metadata=user_metadata,
             )
             return await self.aingest(
                 "s3",
@@ -2065,12 +2259,17 @@ class WorkspaceRag:
                 replace=False,
                 retain_source_file=False,
                 _parser_filename_override=parser_filename,
+                _replacement_doc_ids_override=replacement_doc_ids,
+                _replacement_ownership_override=replacement_ownership,
             )
 
         document = IngestDocument(
             key=str(parts["blob_path"]),
             filename=display_filename,
             source_uri=stable_source_uri,
+            title=title if isinstance(title, str) else None,
+            author=author if isinstance(author, str) else None,
+            metadata=user_metadata,
         )
         return await self.aingest(
             "azure_blob",
@@ -2079,6 +2278,8 @@ class WorkspaceRag:
             replace=False,
             retain_source_file=False,
             _parser_filename_override=parser_filename,
+            _replacement_doc_ids_override=replacement_doc_ids,
+            _replacement_ownership_override=replacement_ownership,
         )
 
     async def _aingest_local_retry_locator(
@@ -2087,6 +2288,11 @@ class WorkspaceRag:
         source_uri: str,
         download_locator: str,
         display_filename: str,
+        title: str | None = None,
+        author: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        replacement_doc_ids: tuple[str, ...] = (),
+        replacement_ownership: tuple[tuple[str, str, str], ...] = (),
     ) -> dict[str, Any]:
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
@@ -2097,6 +2303,11 @@ class WorkspaceRag:
             source_uri=source_uri,
             download_locator=download_locator,
             display_filename=display_filename,
+            title=title,
+            author=author,
+            metadata=metadata,
+            replacement_doc_ids=replacement_doc_ids,
+            replacement_ownership=replacement_ownership,
         )
         result = await self._ingestion_engine.aingest_files([item], replace=False)
         return self._single_file_result(result)
