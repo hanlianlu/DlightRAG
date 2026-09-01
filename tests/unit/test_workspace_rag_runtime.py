@@ -56,11 +56,10 @@ def _service(
 def _set_failed_docs(service: WorkspaceRag, docs: list[dict[str, Any]]) -> None:
     service._initialized = True
 
-    async def _iter() -> AsyncIterator[dict[str, Any]]:
-        for doc in docs:
-            yield doc
+    async def _pages() -> AsyncIterator[list[dict[str, Any]]]:
+        yield list(docs)
 
-    service._iter_failed_docs = _iter  # type: ignore[method-assign]
+    service._iter_failed_doc_pages = _pages  # type: ignore[method-assign]
 
 
 def _runtime_lightrag() -> SimpleNamespace:
@@ -2894,13 +2893,13 @@ class TestWorkspaceRagLightRAGMainPath:
             for index in range(200)
         ]
 
-        async def dynamic_failed_docs() -> AsyncIterator[dict[str, Any]]:
+        async def dynamic_failed_pages() -> AsyncIterator[list[dict[str, Any]]]:
             index = 0
             while index < len(scheduled) and index < 400:
-                yield scheduled[index]
+                yield [scheduled[index]]
                 index += 1
 
-        service._iter_failed_docs = dynamic_failed_docs  # type: ignore[method-assign]
+        service._iter_failed_doc_pages = dynamic_failed_pages  # type: ignore[method-assign]
         service._metadata_index = AsyncMock()
         current_doc_id = ""
 
@@ -3548,25 +3547,22 @@ class TestWorkspaceRagLightRAGMainPath:
         service._metadata_index.delete.assert_not_awaited()
 
     @pytest.mark.parametrize(
-        ("download_locator", "source_type", "source_kwargs", "document_field"),
+        ("download_locator", "source_type", "source_class_path"),
         [
             (
                 "https://cdn.example.com/assets/1.pdf",
                 "url",
-                {},
-                ("url", "https://cdn.example.com/assets/1.pdf"),
+                "dlightrag.engine.rag.corpus.sources.url.URLDataSource",
             ),
             (
                 "s3://documents/assets/1.pdf",
                 "s3",
-                {"bucket": "documents"},
-                ("key", "assets/1.pdf"),
+                "dlightrag.engine.rag.corpus.sources.aws_s3.S3DataSource",
             ),
             (
                 "azure://documents/assets/1.pdf",
                 "azure_blob",
-                {"container_name": "documents"},
-                ("key", "assets/1.pdf"),
+                "dlightrag.engine.rag.corpus.sources.azure_blob.AzureBlobDataSource",
             ),
         ],
     )
@@ -3575,11 +3571,8 @@ class TestWorkspaceRagLightRAGMainPath:
         test_config: DlightragConfig,
         download_locator: str,
         source_type: str,
-        source_kwargs: dict[str, str],
-        document_field: tuple[str, str],
+        source_class_path: str,
     ) -> None:
-        from dlightrag.engine.rag.corpus.contracts import IngestDocument
-
         service = _service(test_config)
         service._initialized = True
         service._metadata_index = AsyncMock()
@@ -3598,37 +3591,92 @@ class TestWorkspaceRagLightRAGMainPath:
             if locator == retained_locator
             else []
         )
-        service.aingest = AsyncMock(return_value={"status": "success"})
-
-        result = await service._aingest_download_locator(  # type: ignore[attr-defined]
-            "bynder://asset/1",
-            download_locator,
-            "report.pdf",
+        service._ingestion_engine = AsyncMock()
+        service._ingestion_engine.aingest_files.return_value = {
+            "processed": 1,
+            "errors": [],
+            "results": [{"status": "success"}],
+        }
+        content = b"%PDF-1.4 remote dispatch"
+        source = MagicMock()
+        source.amaterialize_document = AsyncMock(
+            side_effect=lambda _document, destination: destination.write_bytes(content)
         )
+        source.aclose = AsyncMock()
+
+        with patch(source_class_path, return_value=source):
+            result = await service._aingest_download_locator(  # type: ignore[attr-defined]
+                "bynder://asset/1",
+                download_locator,
+                "report.pdf",
+            )
 
         assert result == {"status": "success"}
-        call = service.aingest.await_args
-        assert call is not None
-        assert call.args == (source_type,)
+        source.amaterialize_document.assert_awaited_once()
+        source.aclose.assert_awaited_once()
+        assert service._ingestion_engine.aingest_files.await_count == 1
+        call = service._ingestion_engine.aingest_files.await_args
         assert call.kwargs["replace"] is False
-        assert call.kwargs["_replacement_doc_ids_override"] == (
-            "doc-candidate",
-            "doc-old",
-        )
-        assert call.kwargs["_replacement_ownership_override"] == (
+        assert len(call.args[0]) == 1
+        item = call.args[0][0]
+        assert isinstance(item, PreparedIngestFile)
+        assert item.download_locator == download_locator
+        assert item.source_uri == "bynder://asset/1"
+        assert item.display_filename == "report.pdf"
+        assert item.replacement_doc_ids == ("doc-candidate", "doc-old")
+        assert item.replacement_ownership == (
             ("doc-candidate", download_locator, "bynder://asset/1"),
             ("doc-old", retained_locator, "bynder://asset/1"),
         )
-        for key, value in source_kwargs.items():
-            assert call.kwargs[key] == value
-        assert len(call.kwargs["documents"]) == 1
-        document = call.kwargs["documents"][0]
-        assert isinstance(document, IngestDocument)
-        assert document.source_uri == "bynder://asset/1"
-        assert document.filename == "report.pdf"
-        assert getattr(document, document_field[0]) == document_field[1]
-        if source_type == "url":
-            assert document.download_uri == download_locator
+        expected_parser_path = (
+            service._workspace_input_root()
+            / remote_parser_input_path(
+                batch_root=Path(), source_uri="bynder://asset/1", key="report.pdf"
+            ).name
+        )
+        assert item.parser_path == expected_parser_path
+        # The transient parser source is removed after the engine settles it.
+        assert not expected_parser_path.exists()
+
+    async def test_remote_retry_materialization_failure_removes_partial_parser_source(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = _service(test_config)
+        service._initialized = True
+        service._metadata_index = AsyncMock()
+        service._metadata_index.find_by_download_locator.return_value = []
+        service._ingestion_engine = AsyncMock()
+        parser_path = (
+            service._workspace_input_root()
+            / remote_parser_input_path(
+                batch_root=Path(), source_uri="bynder://asset/1", key="report.pdf"
+            ).name
+        )
+        source = MagicMock()
+
+        async def fail_after_partial_write(_document: object, destination: Path) -> None:
+            destination.write_bytes(b"partial")
+            raise RuntimeError("download interrupted")
+
+        source.amaterialize_document = AsyncMock(side_effect=fail_after_partial_write)
+        source.aclose = AsyncMock()
+
+        with (
+            patch(
+                "dlightrag.engine.rag.corpus.sources.url.URLDataSource",
+                return_value=source,
+            ),
+            pytest.raises(RuntimeError, match="download interrupted"),
+        ):
+            await service._aingest_download_locator(  # type: ignore[attr-defined]
+                "bynder://asset/1",
+                "https://cdn.example.com/assets/1.pdf",
+                "report.pdf",
+            )
+
+        assert not parser_path.exists()
+        source.aclose.assert_awaited_once()
+        service._ingestion_engine.aingest_files.assert_not_awaited()
 
     async def test_download_locator_dispatch_preserves_local_source_identity(
         self, test_config: DlightragConfig, tmp_path: Path

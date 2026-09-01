@@ -495,10 +495,6 @@ class IngestJobCoordinator:
                                 job_id,
                                 error="ingest job cancelled",
                                 lease_owner=None,
-                            ) or await store.cancel_failed_retry(
-                                job_id,
-                                error="ingest job cancelled",
-                                lease_owner=self._lease_owner,
                             )
                         elif not cancelled:
                             cancelled = await store.cancel_queued(

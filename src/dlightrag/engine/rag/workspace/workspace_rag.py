@@ -140,6 +140,13 @@ def _safe_remote_source_id(document: SourceDocument) -> str:
     return safe_source_filename(document.display_filename or document.key)
 
 
+def _normalized_retry_status(value: object) -> str:
+    raw_status = (
+        value.get("status") if isinstance(value, Mapping) else getattr(value, "status", None)
+    )
+    return str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+
+
 def _retry_display_filename(value: object) -> str:
     if not isinstance(value, str) or not value or "\x00" in value:
         raise ValueError("source filename is invalid")
@@ -852,13 +859,10 @@ class WorkspaceRag:
         download_locator: str,
         batch_root: Path,
         retain_source_file: bool,
-        parser_filename_override: str | None = None,
     ) -> PreparedIngestFile:
         key = document.display_filename or document.key
         if retain_source_file:
             parser_path = Path(download_locator)
-        elif parser_filename_override is not None:
-            parser_path = self._workspace_input_root() / parser_filename_override
         else:
             parser_path = remote_parser_input_path(
                 batch_root=batch_root,
@@ -892,9 +896,6 @@ class WorkspaceRag:
         progress_callback: RemoteIngestProgressCallback | None = None,
         resume_from_window: int = 0,
         retain_source_file: bool | None = None,
-        parser_filename_override: str | None = None,
-        replacement_doc_ids_override: tuple[str, ...] = (),
-        replacement_ownership_override: tuple[tuple[str, str, str], ...] = (),
     ) -> dict[str, Any]:
         """Download remote objects into ephemeral parser batches and ingest them."""
         if self._ingestion_engine is None:
@@ -1011,7 +1012,6 @@ class WorkspaceRag:
                         download_locator=download_locator,
                         batch_root=current_batch_root,
                         retain_source_file=retain_source_files,
-                        parser_filename_override=parser_filename_override,
                     )
                 except SourceDownloadContractError as exc:
                     return _RemoteDownloadFailure(str(exc))
@@ -1040,12 +1040,6 @@ class WorkspaceRag:
                         errors.append(error)
                         window_errors.append(error)
                         continue
-                    if replacement_doc_ids_override or replacement_ownership_override:
-                        downloaded = dataclass_replace(
-                            downloaded,
-                            replacement_doc_ids=replacement_doc_ids_override,
-                            replacement_ownership=replacement_ownership_override,
-                        )
                     prepared_items.append(downloaded)
                     prepared_documents.append(document)
 
@@ -1163,9 +1157,6 @@ class WorkspaceRag:
         retain_source_file: bool | None = None,
         _progress_callback: RemoteIngestProgressCallback | None = None,
         _resume_from_window: int = 0,
-        _parser_filename_override: str | None = None,
-        _replacement_doc_ids_override: tuple[str, ...] = (),
-        _replacement_ownership_override: tuple[tuple[str, str, str], ...] = (),
     ) -> dict[str, Any]:
         """Ingest documents from a caller-provided async data source.
 
@@ -1204,9 +1195,6 @@ class WorkspaceRag:
                 progress_callback=_progress_callback,
                 resume_from_window=_resume_from_window,
                 retain_source_file=retain_source_file,
-                parser_filename_override=_parser_filename_override,
-                replacement_doc_ids_override=_replacement_doc_ids_override,
-                replacement_ownership_override=_replacement_ownership_override,
             )
         finally:
             if close is not None:
@@ -1239,13 +1227,6 @@ class WorkspaceRag:
                 retain_source_file=kwargs.get("retain_source_file"),
                 _progress_callback=kwargs.get("_progress_callback"),
                 _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
-                _parser_filename_override=kwargs.get("_parser_filename_override"),
-                _replacement_doc_ids_override=tuple(
-                    kwargs.get("_replacement_doc_ids_override") or ()
-                ),
-                _replacement_ownership_override=tuple(
-                    kwargs.get("_replacement_ownership_override") or ()
-                ),
             )
             if len(documents) == 1:
                 return self._single_file_result(result)
@@ -1286,11 +1267,6 @@ class WorkspaceRag:
             retain_source_file=kwargs.get("retain_source_file"),
             _progress_callback=kwargs.get("_progress_callback"),
             _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
-            _parser_filename_override=kwargs.get("_parser_filename_override"),
-            _replacement_doc_ids_override=tuple(kwargs.get("_replacement_doc_ids_override") or ()),
-            _replacement_ownership_override=tuple(
-                kwargs.get("_replacement_ownership_override") or ()
-            ),
         )
         if len(urls) == 1:
             return self._single_file_result(result)
@@ -1318,13 +1294,6 @@ class WorkspaceRag:
             "retain_source_file": kwargs.get("retain_source_file"),
             "_progress_callback": kwargs.get("_progress_callback"),
             "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
-            "_parser_filename_override": kwargs.get("_parser_filename_override"),
-            "_replacement_doc_ids_override": tuple(
-                kwargs.get("_replacement_doc_ids_override") or ()
-            ),
-            "_replacement_ownership_override": tuple(
-                kwargs.get("_replacement_ownership_override") or ()
-            ),
         }
         documents = _ingest_documents(kwargs.get("documents"))
         if documents is not None:
@@ -1809,11 +1778,6 @@ class WorkspaceRag:
                 for doc_id in doc_ids
             ]
 
-    async def _iter_failed_docs(self) -> AsyncIterator[dict[str, Any]]:
-        async for page in self._iter_failed_doc_pages():
-            for entry in page:
-                yield entry
-
     async def aretry_failed_docs(
         self,
         *,
@@ -1826,7 +1790,7 @@ class WorkspaceRag:
         self._ensure_initialized()
 
         if cohort_doc_ids is None:
-            entries = [entry async for entry in self._iter_failed_docs()]
+            entries = [entry async for page in self._iter_failed_doc_pages() for entry in page]
         else:
             entries = await self._retry_cohort_entries(cohort_doc_ids)
         entries = list({str(entry.get("doc_id")): entry for entry in entries}.values())
@@ -2026,8 +1990,7 @@ class WorkspaceRag:
             row = await self._lightrag_stores.get_doc_status(doc_id)
         except Exception as exc:
             raise RetryOutcomeUncertainError("retry document status read failed") from exc
-        raw_status = row.get("status") if isinstance(row, Mapping) else None
-        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        status = _normalized_retry_status(row)
         if status == "processed":
             if self._metadata_index is None:
                 raise RetryOutcomeUncertainError("retry finalization metadata is unavailable")
@@ -2050,8 +2013,7 @@ class WorkspaceRag:
             raise RetryOutcomeUncertainError("retry mismatch status read failed") from exc
         if not isinstance(row, Mapping):
             raise RetryOutcomeUncertainError("retry mismatch status is unavailable")
-        raw_status = row.get("status")
-        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        status = _normalized_retry_status(row)
         if status == "failed":
             return
         if status != "processed":
@@ -2083,8 +2045,7 @@ class WorkspaceRag:
         entries: list[dict[str, Any]] = []
         for doc_id in doc_ids:
             row = rows.get(doc_id)
-            raw_status = getattr(row, "status", None)
-            status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+            status = _normalized_retry_status(row)
             entries.append(
                 {
                     "doc_id": doc_id,
@@ -2195,8 +2156,10 @@ class WorkspaceRag:
             source_uri=stable_source_uri,
         )
 
-        title = retry_metadata.get("title") if retry_metadata else None
-        author = retry_metadata.get("author") if retry_metadata else None
+        raw_title = retry_metadata.get("title") if retry_metadata else None
+        raw_author = retry_metadata.get("author") if retry_metadata else None
+        title = raw_title if isinstance(raw_title, str) else None
+        author = raw_author if isinstance(raw_author, str) else None
         user_metadata: dict[str, Any] = {}
         custom_metadata = retry_metadata.get("custom_metadata") if retry_metadata else None
         if isinstance(custom_metadata, Mapping):
@@ -2206,81 +2169,114 @@ class WorkspaceRag:
         if retry_metadata and retry_metadata.get("creation_date") is not None:
             user_metadata["creation_date"] = retry_metadata["creation_date"]
 
+        retry_kwargs: dict[str, Any] = {
+            "source_uri": stable_source_uri,
+            "download_locator": download_locator,
+            "display_filename": display_filename,
+            "title": title,
+            "author": author,
+            "metadata": user_metadata,
+            "replacement_doc_ids": replacement_doc_ids,
+            "replacement_ownership": replacement_ownership,
+        }
         if source_type == "local":
-            return await self._aingest_local_retry_locator(
-                source_uri=stable_source_uri,
+            return await self._aingest_local_retry_locator(**retry_kwargs)
+        return await self._aingest_remote_retry_locator(
+            source_type=source_type,
+            parts=parts,
+            **retry_kwargs,
+        )
+
+    async def _aingest_remote_retry_locator(
+        self,
+        *,
+        source_type: str,
+        parts: Mapping[str, Any],
+        source_uri: str,
+        download_locator: str,
+        display_filename: str,
+        title: str | None = None,
+        author: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        replacement_doc_ids: tuple[str, ...] = (),
+        replacement_ownership: tuple[tuple[str, str, str], ...] = (),
+    ) -> dict[str, Any]:
+        """Download one remote retry locator and replay it in the same-ID seam.
+
+        Replays with ``replace=False``; the adapter and transient parser
+        source are cleaned up either way.
+        """
+        if self._ingestion_engine is None:
+            raise RuntimeError("Ingestion engine not initialized")
+        common_fields: dict[str, Any] = {
+            "filename": display_filename,
+            "source_uri": source_uri,
+            "title": title,
+            "author": author,
+            "metadata": metadata,
+        }
+        if source_type == "url":
+            from dlightrag.engine.rag.corpus.sources.url import URLDataSource
+
+            document = IngestDocument(
+                url=download_locator, download_uri=download_locator, **common_fields
+            )
+            source_document = _source_document_from_manifest(document, key=cast(str, document.url))
+            source: AsyncDataSource = URLDataSource(
+                documents=[source_document],
+                max_download_bytes=self.settings.url_ingest_max_bytes,
+                allow_private_hosts=self.settings.url_ingest_private_host_allowlist,
+            )
+        else:
+            object_key = str(parts["blob_path"] if source_type == "azure_blob" else parts["key"])
+            document = IngestDocument(key=object_key, **common_fields)
+            source_document = _source_document_from_manifest(document, key=object_key)
+            if source_type == "s3":
+                from dlightrag.engine.rag.corpus.sources.aws_s3 import S3DataSource
+
+                source = S3DataSource(
+                    bucket=str(parts["bucket"]),
+                    region=self.settings.s3_region,
+                )
+            else:
+                from dlightrag.engine.rag.corpus.sources.azure_blob import AzureBlobDataSource
+
+                source = AzureBlobDataSource(
+                    connection_string=self.settings.blob_connection_string,
+                    container_name=str(parts["container_name"]),
+                )
+
+        try:
+            parser_path = (
+                self._workspace_input_root()
+                / remote_parser_input_path(
+                    batch_root=Path(), source_uri=source_uri, key=display_filename
+                ).name
+            )
+            parser_path.parent.mkdir(parents=True, exist_ok=True)
+            prepared = PreparedIngestFile(
+                parser_path=parser_path,
+                source_uri=source_uri,
                 download_locator=download_locator,
                 display_filename=display_filename,
-                title=title if isinstance(title, str) else None,
-                author=author if isinstance(author, str) else None,
-                metadata=user_metadata,
+                title=title,
+                author=author,
+                metadata=metadata,
                 replacement_doc_ids=replacement_doc_ids,
                 replacement_ownership=replacement_ownership,
             )
-
-        parser_filename = remote_parser_input_path(
-            batch_root=Path(),
-            source_uri=stable_source_uri,
-            key=display_filename,
-        ).name
-        if source_type == "url":
-            document = IngestDocument(
-                url=download_locator,
-                filename=display_filename,
-                source_uri=stable_source_uri,
-                download_uri=download_locator,
-                title=title if isinstance(title, str) else None,
-                author=author if isinstance(author, str) else None,
-                metadata=user_metadata,
-            )
-            return await self.aingest(
-                "url",
-                documents=[document],
-                replace=False,
-                retain_source_file=False,
-                _parser_filename_override=parser_filename,
-                _replacement_doc_ids_override=replacement_doc_ids,
-                _replacement_ownership_override=replacement_ownership,
-            )
-
-        if source_type == "s3":
-            document = IngestDocument(
-                key=str(parts["key"]),
-                filename=display_filename,
-                source_uri=stable_source_uri,
-                title=title if isinstance(title, str) else None,
-                author=author if isinstance(author, str) else None,
-                metadata=user_metadata,
-            )
-            return await self.aingest(
-                "s3",
-                bucket=str(parts["bucket"]),
-                documents=[document],
-                replace=False,
-                retain_source_file=False,
-                _parser_filename_override=parser_filename,
-                _replacement_doc_ids_override=replacement_doc_ids,
-                _replacement_ownership_override=replacement_ownership,
-            )
-
-        document = IngestDocument(
-            key=str(parts["blob_path"]),
-            filename=display_filename,
-            source_uri=stable_source_uri,
-            title=title if isinstance(title, str) else None,
-            author=author if isinstance(author, str) else None,
-            metadata=user_metadata,
-        )
-        return await self.aingest(
-            "azure_blob",
-            container_name=str(parts["container_name"]),
-            documents=[document],
-            replace=False,
-            retain_source_file=False,
-            _parser_filename_override=parser_filename,
-            _replacement_doc_ids_override=replacement_doc_ids,
-            _replacement_ownership_override=replacement_ownership,
-        )
+            try:
+                await source.amaterialize_document(source_document, parser_path)
+                result = await self._ingestion_engine.aingest_files([prepared], replace=False)
+                return self._single_file_result(result)
+            finally:
+                await asyncio.to_thread(_remove_remote_parser_sources, [prepared])
+        finally:
+            close = getattr(source, "aclose", None)
+            if close is not None:
+                result = close()
+                if isawaitable(result):
+                    _ = await result
 
     async def _aingest_local_retry_locator(
         self,

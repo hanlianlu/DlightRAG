@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """URI parsing helpers for ingestion sources.
 
-Centralises the ``scheme://...`` parsing that was previously duplicated
-between ``WorkspaceRag.aretry_failed_docs`` and the file-serving routes,
-so that adding a new source scheme is a single-edit change.
+Centralises the ``scheme://...`` parsing shared by durable download-locator
+validation and S3 presigning, so that adding a new source scheme is a
+single-edit change.
 """
 
 from typing import Any
@@ -12,10 +12,10 @@ from dlightrag.engine.rag.corpus.contracts import SourceType
 
 
 def parse_remote_uri(file_path: str) -> tuple[SourceType, dict[str, Any]]:
-    """Split a stored ``file_path`` into ``(source_type, ingest_kwargs)``.
+    """Split a stored ``file_path`` into ``(source_type, locator_parts)``.
 
-    Used by retry / re-ingest paths that need to dispatch a stored doc
-    URI back through ``WorkspaceRag.aingest(source_type, **kwargs)``.
+    Used by durable download-locator validation and retry source-contract
+    preflight; callers own dispatch to their concrete source adapter.
 
     >>> parse_remote_uri("/var/data/foo.pdf")
     ('local', {'path': '/var/data/foo.pdf'})

@@ -1949,6 +1949,45 @@ async def test_explicit_cancel_while_waiting_behind_a_fence_is_terminal(
     await coordinator.close()
 
 
+async def test_pre_claim_retry_cancel_uses_single_ownerless_transition(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from dlightrag.engine.rag.corpus.ingestion import jobs as jobs_module
+
+    monkeypatch.setattr(jobs_module, "FENCE_POLL_SECONDS", 0.02)
+
+    store = _CoordinatorStore()
+    store.fenced_workspaces["personel"] = True
+    cancel_calls: list[str | None] = []
+
+    async def cancel_failed_retry(job_id: str, *, error: str, lease_owner: str | None) -> bool:
+        assert error == "ingest job cancelled"
+        cancel_calls.append(lease_owner)
+        row = store.rows[job_id]
+        row["status"] = "failed"
+        row["lease_owner"] = None
+        row["errors"].append(error)
+        return True
+
+    store.cancel_failed_retry = cancel_failed_retry  # type: ignore[method-assign]
+    runtime = AsyncMock()
+    coordinator = _coordinator(store, runtime, input_root=tmp_path)
+
+    job = await coordinator.start_retry_failed_job("personel")
+    await asyncio.sleep(0.05)
+    task = coordinator._tasks[job["job_id"]]
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert cancel_calls == [None]
+    assert store.rows[job["job_id"]]["status"] == "failed"
+    assert "ingest job cancelled" in store.rows[job["job_id"]]["errors"]
+    runtime.aretry_failed_docs.assert_not_awaited()
+    await coordinator.close()
+
+
 async def test_shutdown_while_waiting_behind_a_fence_leaves_the_job_queued(
     tmp_path: Path,
     monkeypatch,
