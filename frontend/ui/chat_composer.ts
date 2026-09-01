@@ -8,7 +8,7 @@ import {listSkills, type SkillSummary} from '../api/skills.ts';
 import type {AnswerMode} from '../lib/answer_request.ts';
 import {formatFileSize} from '../lib/file_size.ts';
 import {LightElement} from '../lib/lit_host.ts';
-import {parseSkillDirective} from '../lib/skill_directive.ts';
+import {parseSkillDirective, skillDirectivePrefix} from '../lib/skill_directive.ts';
 import {attachmentStore, type PendingAttachment} from '../stores/attachmentStore.ts';
 import chatStyles from '../styles/chat.module.css';
 import {
@@ -298,7 +298,7 @@ export class DlChatComposer extends LightElement {
   #inputChanged(event: Event): void {
     this.draft = (event.currentTarget as HTMLTextAreaElement).value;
     this.skillNotice = false;
-    if (this.draft.startsWith('/skill:')) {
+    if (this.draft.startsWith('/')) {
       void listSkills()
         .then((skills) => { this.skills = skills; })
         .catch(() => {});
@@ -403,9 +403,8 @@ export class DlChatComposer extends LightElement {
   }
 
   #skillSuggestions(): readonly SkillSummary[] {
-    const partial = /^\/skill:([a-z0-9-]*)$/.exec(this.draft.trim());
-    if (partial === null || this.skills.length === 0) return [];
-    const prefix = partial[1]!.toLowerCase();
+    const prefix = skillDirectivePrefix(this.draft);
+    if (prefix === null || this.skills.length === 0) return [];
     return this.skills.filter((skill) => skill.name.toLowerCase().startsWith(prefix)).slice(0, 8);
   }
 
