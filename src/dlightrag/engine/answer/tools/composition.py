@@ -2,7 +2,6 @@
 """The peer tools one research run offers, composed per run and never globally."""
 
 import hashlib
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -10,12 +9,6 @@ from pydantic import BaseModel
 from dlightrag.application.answer_runs.errors import InvalidToolConfigurationError
 from dlightrag.engine.agent.environment import AccessScheduler
 from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
-from dlightrag.engine.agent.skills import (
-    SkillCatalog,
-    delete_skill_tool,
-    load_skill_tool,
-    publish_skill_tool,
-)
 from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.engine.agent.tools.files import path_tools, read_tool
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
@@ -52,8 +45,7 @@ def compose_research_tools(
     ripgrep: str = "rg",
     subagent_host: SubagentHost | None = None,
     memory_host: MemoryHost | None = None,
-    skill_catalog: SkillCatalog | None = None,
-    publish_owner_root: Path | None = None,
+    skill_tools: list[AgentTool] | None = None,
     child: bool = False,
     tool_names: tuple[str, ...] | None = None,
 ) -> list[AgentTool]:
@@ -110,16 +102,11 @@ def compose_research_tools(
                 recall_memory_tool(host=memory_host),
             )
         )
-    if skill_catalog is not None:
+    if skill_tools:
         # Tool membership is pinned before a run workspace exists. Keep the
         # contract stable even when this particular catalog is empty; execution
         # then returns an ordinary not-found result rather than changing the Plan.
-        tools.append(load_skill_tool(skill_catalog))
-    if publish_owner_root is not None:
-        # Parent runs only: the validated owner publication channel. Children
-        # consume skills, they never publish them.
-        tools.append(publish_skill_tool(publish_owner_root))
-        tools.append(delete_skill_tool(publish_owner_root))
+        tools.extend(skill_tools)
     try:
         registry = ToolRegistry(tools)
         return list(

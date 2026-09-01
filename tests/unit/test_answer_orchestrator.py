@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.engine.agent.skills import SkillCatalog
+from dlightrag.engine.agent.skills import SkillsBundle
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
@@ -15,9 +15,8 @@ from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from tests.unit.conftest import answer_model_profile
 
 
-def _orchestrator(
-    *, mode: str, model=None, retrieve=None, synthesizer=None, requested_skill: str | None = None
-):
+def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
+
     profile = answer_model_profile()
 
     async def default_retrieve(_query: str):
@@ -32,7 +31,6 @@ def _orchestrator(
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode=mode,  # type: ignore[arg-type]
-        requested_skill=requested_skill,
     )
 
 
@@ -43,10 +41,9 @@ def test_requested_skill_contribution_precedes_skill_metadata(tmp_path: Path) ->
         "---\nname: review\ndescription: Review plans.\n---\nbody",
         encoding="utf-8",
     )
-    catalog = SkillCatalog.discover(global_root=global_root)
 
-    orchestrator = _orchestrator(mode="research", requested_skill="review")
-    contributions = orchestrator._context_contributions(catalog)
+    bundle = SkillsBundle(global_root=global_root, requested_skill="review")
+    contributions = bundle.context_contributions()
 
     assert [item.source for item in contributions] == ["agent.skills.requested", "agent.skills"]
     assert contributions[0].authority == "user"
@@ -61,13 +58,25 @@ def test_context_contributions_without_requested_skill_keep_metadata_only(tmp_pa
         "---\nname: review\ndescription: Review plans.\n---\nbody",
         encoding="utf-8",
     )
-    catalog = SkillCatalog.discover(global_root=global_root)
 
-    orchestrator = _orchestrator(mode="research")
-    contributions = orchestrator._context_contributions(catalog)
+    bundle = SkillsBundle(global_root=global_root)
+    contributions = bundle.context_contributions()
 
     assert [item.source for item in contributions] == ["agent.skills"]
     assert contributions[0].authority == "reference"
+
+
+def test_skills_bundle_tool_membership_differs_between_parent_and_child(tmp_path: Path) -> None:
+    owner_root = tmp_path / "owner"
+    bundle = SkillsBundle(owner_root=owner_root)
+
+    parent = {tool.name for tool in bundle.tools(child=False)}
+    child = {tool.name for tool in bundle.tools(child=True)}
+
+    assert {"load_skill", "publish_skill", "delete_skill"} <= parent
+    assert "load_skill" in child
+    assert "publish_skill" not in child
+    assert "delete_skill" not in child
 
 
 @pytest.mark.asyncio

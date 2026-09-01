@@ -112,6 +112,7 @@ def _executor() -> AnswerExecutor:
 def test_acceptance_research_tools_include_every_configured_non_resource_surface() -> None:
     from pydantic import BaseModel
 
+    from dlightrag.engine.agent.skills import SkillsBundle
     from dlightrag.engine.agent.tools import AgentTool, ToolResult
 
     class Args(BaseModel):
@@ -135,6 +136,9 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         execution_environment="trust",
         memory_store=MagicMock(),
         external_tools=(AgentTool("remote_lookup", "Remote lookup.", Args, external),),
+        skills_bundle_factory=lambda owner_id, requested_skill=None: SkillsBundle(
+            global_root=Path("/nonexistent-global-skills"),
+        ),
     )
 
     names = {tool.name for tool in executor.acceptance_research_tools()}
@@ -159,7 +163,6 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
 
 def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> None:
     from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
-    from dlightrag.engine.agent.skills import SkillCatalog
     from dlightrag.engine.answer.evidence import EvidenceLedger
     from dlightrag.engine.answer.tools.composition import compose_research_tools
     from dlightrag.engine.answer.tools.subagents import SubagentHost
@@ -192,7 +195,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         register_web_source=None,
         environment=LocalExecutionEnvironment(tmp_path),
         subagent_host=SubagentHost(),
-        skill_catalog=SkillCatalog(()),
+        skill_tools=[],
     )
     runtime_by_name = {tool.name: tool for tool in runtime_tools}
     runtime_surface = tuple(runtime_by_name[tool.name] for tool in accepted)

@@ -23,7 +23,6 @@ from dlightrag.application.answer_runs.errors import (
     InvalidToolConfigurationError,
 )
 from dlightrag.application.answer_runs.mode import ResolvedMode
-from dlightrag.engine.agent.context import ContextContribution
 from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.environment.errors import TOOL_RESULT_MAX_BYTES, TOOL_RESULT_MAX_LINES
 from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
@@ -48,7 +47,7 @@ from dlightrag.engine.agent.session.runtime import (
     CompactionResult,
     RuntimeContext,
 )
-from dlightrag.engine.agent.skills import SkillCatalog
+from dlightrag.engine.agent.skills import SkillsBundle
 from dlightrag.engine.agent.tools import (
     AgentTool,
     ExecutedTurn,
@@ -152,9 +151,7 @@ class AnswerOrchestrator:
         resolved_mode: ResolvedMode,
         subagent_host: SubagentHost | None = None,
         memory_host: MemoryHost | None = None,
-        skills_global_root: Path | None = None,
-        skills_owner_root: Path | None = None,
-        requested_skill: str | None = None,
+        skills: SkillsBundle | None = None,
         child_model_resolver: Callable[[str], tuple[ToolModelFunc, StreamModel, ModelProfile]]
         | None = None,
     ) -> None:
@@ -180,9 +177,7 @@ class AnswerOrchestrator:
         self._memory_text = ""
         self._parent_query = ""
         self._parent_history = PriorTurns()
-        self._skills_global_root = skills_global_root
-        self._skills_owner_root = skills_owner_root
-        self._requested_skill = requested_skill
+        self._skills = skills
         self._child_model_resolver = child_model_resolver
         self._access = AccessScheduler()
         self._compaction: dict[str, CompactionCoordinator] = {}
@@ -499,12 +494,12 @@ class AnswerOrchestrator:
         evidence = EvidenceLedger(image_budget=self._image_budget)
         retained_tail_tokens = self._context_policy.retained_tail_target(self._model_profile)
         trace = _fresh_research_trace()
-        skill_catalog = self._skill_catalog()
+        skills = self._skills
         tools = self._compose_tools(
             evidence,
             trace,
             child=False,
-            skill_catalog=skill_catalog,
+            skill_tools=[] if skills is None else skills.tools(child=False),
         )
         return PreparedRun(
             context=ContextAssembler(
@@ -515,7 +510,7 @@ class AnswerOrchestrator:
                 query_images=query_images,
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
-                contributions=self._context_contributions(skill_catalog),
+                contributions=() if skills is None else skills.context_contributions(),
                 tool_guidance=_tool_guidance(tools),
                 profile_memory_write=self._memory_host is not None,
             ),
@@ -555,12 +550,12 @@ class AnswerOrchestrator:
         trace = _fresh_research_trace()
         trace["child_context"] = request.context
         trace["child_model_role"] = request.model_role
-        skill_catalog = self._skill_catalog()
+        skills = self._skills
         tools = self._compose_tools(
             evidence,
             trace,
             child=True,
-            skill_catalog=skill_catalog,
+            skill_tools=[] if skills is None else skills.tools(child=True),
             tool_names=request.tools,
             child_session_id=child_session_id,
         )
@@ -578,7 +573,7 @@ class AnswerOrchestrator:
                 query_images=None,
                 resource_manifest=self._resource_manifest,
                 memory_text=self._memory_text,
-                contributions=self._context_contributions(skill_catalog),
+                contributions=() if skills is None else skills.context_contributions(),
                 tool_guidance=_tool_guidance(tools),
             ),
             tools=tools,
@@ -627,7 +622,7 @@ class AnswerOrchestrator:
         trace: dict[str, Any],
         *,
         child: bool,
-        skill_catalog: SkillCatalog | None,
+        skill_tools: list[AgentTool],
         tool_names: tuple[str, ...] | None = None,
         child_session_id: str = "",
     ) -> list[AgentTool]:
@@ -670,9 +665,8 @@ class AnswerOrchestrator:
             ),
             subagent_host=subagent_host,
             memory_host=memory_host,
-            skill_catalog=skill_catalog,
+            skill_tools=skill_tools,
             child=child,
-            publish_owner_root=(None if child else self._skills_owner_root),
         )
         try:
             registry = ToolRegistry(composed)
@@ -711,21 +705,6 @@ class AnswerOrchestrator:
             return await base_reader(resource_id, focus, cursor, runtime)
 
         return read
-
-    def _skill_catalog(self) -> SkillCatalog | None:
-        if self._skills_global_root is None and self._skills_owner_root is None:
-            return None
-        return SkillCatalog.discover(
-            global_root=self._skills_global_root,
-            owner_root=self._skills_owner_root,
-        )
-
-    def _context_contributions(
-        self, skill_catalog: SkillCatalog | None
-    ) -> tuple[ContextContribution, ...]:
-        requested = _requested_skill_contribution(self._requested_skill)
-        skill = None if skill_catalog is None else skill_catalog.contribution()
-        return tuple(item for item in (requested, skill) if item is not None)
 
     def _output_stage_factory(self) -> Any:
         from dlightrag.engine.answer.workspace import FileOutputStage
@@ -837,31 +816,6 @@ def _read_committed_spill(
 
 def _tool_guidance(tools: list[AgentTool]) -> tuple[str, ...]:
     return tuple(f"- {tool.guidance}" for tool in tools if tool.guidance)
-
-
-def _requested_skill_contribution(name: str | None) -> ContextContribution | None:
-    """Explicit user-requested skill directive, ordered before skill metadata.
-
-    The name was validated against the discovered catalog at acceptance; the
-    message is still only a directive — loading and following the skill remain
-    the model's calls through the load_skill tool.
-    """
-    if name is None:
-        return None
-    return ContextContribution(
-        source="agent.skills.requested",
-        authority="user",
-        messages=(
-            {
-                "role": "user",
-                "content": (
-                    f"The user explicitly requested Agent Skill '{name}' for this run. "
-                    f"Call load_skill(name='{name}') first and follow it unless the "
-                    "user later says otherwise."
-                ),
-            },
-        ),
-    )
 
 
 def _fresh_research_trace() -> dict[str, Any]:

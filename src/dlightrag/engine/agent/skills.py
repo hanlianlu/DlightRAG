@@ -21,7 +21,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Literal, cast
+from typing import Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -148,6 +148,86 @@ class SkillCatalog:
         if len(text) > _MAX_SKILL_FILE_CHARS:
             raise ValueError(f"Skill document exceeds {_MAX_SKILL_FILE_CHARS} characters")
         return text
+
+
+class SkillsBundle:
+    """One run's complete skills slice behind a narrow interface.
+
+    Hides dual-root discovery, owner precedence, context contribution
+    ordering, and tool membership (parents publish, children only load).
+    Callers hold one object instead of three roots plus a directive.
+    """
+
+    def __init__(
+        self,
+        *,
+        global_root: Path | None = None,
+        owner_root: Path | None = None,
+        requested_skill: str | None = None,
+    ) -> None:
+        self._global_root = global_root.expanduser() if global_root is not None else None
+        self._owner_root = owner_root.expanduser() if owner_root is not None else None
+        self._requested_skill = requested_skill
+
+    @property
+    def owner_root(self) -> Path | None:
+        return self._owner_root
+
+    def catalog(self) -> SkillCatalog | None:
+        if self._global_root is None and self._owner_root is None:
+            return None
+        return SkillCatalog.discover(
+            global_root=self._global_root,
+            owner_root=self._owner_root,
+        )
+
+    def context_contributions(self) -> tuple[ContextContribution, ...]:
+        requested = _requested_skill_contribution(self._requested_skill)
+        catalog = self.catalog()
+        skill = None if catalog is None else catalog.contribution()
+        return tuple(item for item in (requested, skill) if item is not None)
+
+    def tools(self, *, child: bool) -> list[AgentTool]:
+        tools: list[AgentTool] = []
+        catalog = self.catalog()
+        if catalog is not None:
+            tools.append(load_skill_tool(catalog))
+        if not child and self._owner_root is not None:
+            # Parent runs only: the validated owner publication channel.
+            tools.append(publish_skill_tool(self._owner_root))
+            tools.append(delete_skill_tool(self._owner_root))
+        return tools
+
+
+class SkillsBundleFactory(Protocol):
+    """Builds one run's SkillsBundle for an owner, optionally with a directive."""
+
+    def __call__(self, owner_id: str, requested_skill: str | None = None) -> SkillsBundle: ...
+
+
+def _requested_skill_contribution(name: str | None) -> ContextContribution | None:
+    """Explicit user-requested skill directive, ordered before skill metadata.
+
+    The name was validated against the discovered catalog at admission; the
+    message is still only a directive — loading and following the skill remain
+    the model's calls through the load_skill tool.
+    """
+    if name is None:
+        return None
+    return ContextContribution(
+        source="agent.skills.requested",
+        authority="user",
+        messages=(
+            {
+                "role": "user",
+                "content": (
+                    f"The user explicitly requested Agent Skill '{name}' for this run. "
+                    f"Call load_skill(name='{name}') first and follow it unless the "
+                    "user later says otherwise."
+                ),
+            },
+        ),
+    )
 
 
 def load_skill_tool(catalog: SkillCatalog) -> AgentTool:
@@ -419,6 +499,8 @@ __all__ = [
     "PublishSkillInput",
     "SkillCatalog",
     "SkillMetadata",
+    "SkillsBundle",
+    "SkillsBundleFactory",
     "delete_skill_tool",
     "load_skill_tool",
     "owner_skill_root",

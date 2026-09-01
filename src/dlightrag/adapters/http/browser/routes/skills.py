@@ -16,15 +16,15 @@ from dlightrag.adapters.http.browser.deps import (
     get_workspace,
 )
 from dlightrag.application.access import AccessAction, owner_id_from_user
-from dlightrag.application.skills import discover_skill_catalog
+from dlightrag.application.skills import skills_bundle_factory
 
 router = APIRouter()
 
 
 def require_known_skill(application: Any, owner_id: str, name: str) -> str:
     """Validate one requested skill against the viewer's merged catalog."""
-    catalog = discover_skill_catalog(application.config, owner_id=owner_id)
-    if name not in {skill.name for skill in catalog.metadata}:
+    catalog = skills_bundle_factory(application.config)(owner_id).catalog()
+    if catalog is None or name not in {skill.name for skill in catalog.metadata}:
         raise ValueError(f"Unknown Agent Skill: {name}")
     return name
 
@@ -38,7 +38,8 @@ async def list_skills(
     await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, workspace)
     application = get_application(request)
     user = getattr(request.state, "user_context", None)
-    catalog = discover_skill_catalog(application.config, owner_id=owner_id_from_user(user))
+    owner_id = owner_id_from_user(user)
+    catalog = skills_bundle_factory(application.config)(owner_id).catalog()
     return {
         "skills": [
             {
@@ -46,6 +47,6 @@ async def list_skills(
                 "description": skill.description,
                 "source": skill.source,
             }
-            for skill in catalog.metadata
+            for skill in (() if catalog is None else catalog.metadata)
         ]
     }
