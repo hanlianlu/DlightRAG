@@ -13,7 +13,7 @@ import {
   type ConversationTurn,
 } from '../api/conversations.ts';
 import {localizedRunErrorPayload} from '../lib/run_errors.ts';
-import {applyToolEvent, toolStatusText} from '../lib/tool_events.ts';
+import {applyAnswerEvent} from '../lib/turn_projection.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {
   RunController,
@@ -45,48 +45,17 @@ import {
   storedTurnView,
   type ChatReconnectDetail,
   type ChatToolTraceToggleDetail,
-  type ChatTurnView,
   type ChatView,
 } from './chat_message_list.ts';
 import './chat_message_list.ts';
+import type {ChatTurnView} from '../lib/chat_views.ts';
 import type {ToastRequestDetail} from './toast.ts';
 import {webRouter} from './router.ts';
 
 export type {ChatRunActionDetail, ChatView, ChatViewActionDetail} from './chat_message_list.ts';
 
-type AnswerPhase = 'routing' | 'planning' | 'searching' | 'researching' | 'generating';
-export const ANSWER_PHASE_LABELS = {
-  routing: 'Routing answer...',
-  planning: 'Planning answer...',
-  searching: 'Searching knowledge base...',
-  researching: 'Researching sources...',
-  generating: 'Generating answer...',
-} as const satisfies Record<AnswerPhase, string>;
-
-export type ToolEventType = 'tool_start' | 'tool_progress' | 'tool_end';
-
-export function answerPhaseLabel(phase: string): string | null {
-  if (!Object.hasOwn(ANSWER_PHASE_LABELS, phase)) return null;
-  return ANSWER_PHASE_LABELS[phase as AnswerPhase];
-}
-
 function terminalTurn(turn: ChatTurnView): boolean {
   return turn.state === 'succeeded' || turn.state === 'failed' || turn.state === 'cancelled';
-}
-
-interface DonePayload {
-  status: 'succeeded' | 'cancelled';
-  presentation: ConversationTurn['presentation'];
-  usage?: Record<string, unknown>;
-  evidence?: Record<string, number>;
-}
-
-interface ToolProgressPayload {
-  tool_name?: string;
-  call_id?: string;
-  object_label?: string;
-  outcome?: string;
-  duration_ms?: number;
 }
 
 export interface ChatRunningChangeDetail {
@@ -104,12 +73,6 @@ export interface ChatMemoryOperationDetail {
   live?: boolean;
   operation?: 'remember' | 'forget' | 'undo';
   outcome?: 'changed' | 'unchanged' | 'rejected' | 'conflict';
-}
-
-function isDonePayload(value: unknown): value is DonePayload {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const payload = value as Record<string, unknown>;
-  return payload.status === 'succeeded' || payload.status === 'cancelled';
 }
 
 function isMemoryOperation(value: unknown): value is ChatMemoryOperationDetail {
@@ -728,104 +691,21 @@ export class DlChatFeature extends LightElement {
   }
 
   #handleRunBatch(turnId: string, events: readonly AnswerRunEvent[]): void {
-    const turns = this.turns;
-    const turnIndex = turns.findIndex((candidate) => candidate.id === turnId);
-    const turn = turns[turnIndex];
-    let nextTurn: ChatTurnView | null = null;
-    const currentTurn = (): ChatTurnView => nextTurn ?? turn;
-    const apply = (patch: Partial<ChatTurnView>): void => {
-      if (!nextTurn) nextTurn = {...turn};
-      Object.assign(nextTurn, patch);
-    };
-
+    const turnIndex = this.turns.findIndex((candidate) => candidate.id === turnId);
+    const turn = this.turns[turnIndex];
     for (const event of events) {
-      if (event.kind === 'memory') {
-        if (isMemoryOperation(event.payload)) {
-          this.dispatchEvent(new CustomEvent<ChatMemoryOperationDetail>(
-            'dl-chat-memory-operation',
-            {bubbles: true, composed: true, detail: event.payload},
-          ));
-        }
-        continue;
+      if (event.kind === 'memory' && isMemoryOperation(event.payload)) {
+        this.dispatchEvent(new CustomEvent<ChatMemoryOperationDetail>(
+          'dl-chat-memory-operation',
+          {bubbles: true, composed: true, detail: event.payload},
+        ));
       }
-      if (!turn) continue;
-      if (event.kind === 'token') {
-        const current = currentTurn();
-        apply({
-          state: 'streaming',
-          streamText: current.streamText + event.text,
-          progress: current.streamText ? current.progress : '',
-          error: '',
-        });
-        continue;
-      }
-      if (event.kind === 'reset') {
-        apply({state: 'pending', streamText: '', progress: '', error: ''});
-        continue;
-      }
-      if (event.kind === 'progress') {
-        const payload = event.payload as {phase?: string};
-        const phase = String(payload?.phase || '');
-        const label = answerPhaseLabel(phase);
-        if (label !== null) {
-          const text = msg(label, {id: `chatFeature.phase.${phase}`});
-          apply({progress: text, liveStatus: text, error: ''});
-        }
-        continue;
-      }
-      if (event.kind === 'tool') {
-        const info = event.payload as ToolProgressPayload;
-        if (!info || typeof info.tool_name !== 'string') continue;
-        const current = currentTurn();
-        const toolRows = applyToolEvent(current.toolRows, event.eventType, info);
-        const toolTotal = event.eventType === 'tool_start'
-          ? current.toolTotal + 1
-          : current.toolTotal;
-        const text = toolStatusText(toolRows);
-        apply({
-          toolRows,
-          toolTotal,
-          progress: text,
-          liveStatus: text,
-          sawChildren: current.sawChildren || info.tool_name === 'spawn_agent',
-          error: '',
-        });
-        continue;
-      }
-      if (event.kind === 'error') {
-        const message = localizedRunErrorPayload(event.payload);
-        apply({state: 'failed', error: message, progress: '', liveStatus: message});
-        continue;
-      }
-      const payload = event.payload;
-      if (!isDonePayload(payload)) {
-        const message = msg('Service error. Please try again.', {id: 'chatFeature.serviceError'});
-        apply({state: 'failed', error: message, progress: '', liveStatus: message});
-        continue;
-      }
-      if (payload.status === 'cancelled') {
-        apply({state: 'cancelled', progress: '', liveStatus: msg('Answer stopped', {id: 'chatFeature.answerStopped'})});
-        continue;
-      }
-      if (!payload.presentation) {
-        const message = msg('Service error. Please try again.', {id: 'chatFeature.serviceError'});
-        apply({state: 'failed', error: message, progress: '', liveStatus: message});
-        continue;
-      }
-      apply({
-        state: 'succeeded',
-        presentation: payload.presentation,
-        streamText: payload.presentation.answer_text,
-        usage: payload.usage ?? {},
-        evidence: payload.evidence ?? {},
-        progress: '',
-        liveStatus: msg('Answer ready', {id: 'chatFeature.answerReady'}),
-      });
     }
-
-    if (!nextTurn) return;
-    const nextTurns = [...turns];
-    nextTurns[turnIndex] = nextTurn;
+    if (!turn) return;
+    const projected = events.reduce(applyAnswerEvent, turn);
+    if (projected === turn) return;
+    const nextTurns = [...this.turns];
+    nextTurns[turnIndex] = projected;
     this.turns = nextTurns;
   }
 

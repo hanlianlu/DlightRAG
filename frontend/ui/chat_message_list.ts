@@ -9,6 +9,7 @@ import type {
   ConversationAttachmentReference,
   ConversationTurn,
 } from '../api/conversations.ts';
+import type {ChatTurnView} from '../lib/chat_views.ts';
 import {icon} from '../design-system/index.ts';
 import {localizedStoredRunError} from '../lib/run_errors.ts';
 import {formatFileSize} from '../lib/file_size.ts';
@@ -34,26 +35,6 @@ export type ChatView =
   | {kind: 'unavailable'; hasRecent: boolean}
   | {kind: 'error'};
 
-export interface ChatTurnView {
-  id: string;
-  userText: string;
-  userAttachments: readonly ConversationAttachmentReference[];
-  runId: string;
-  state: 'pending' | 'streaming' | 'succeeded' | 'failed' | 'cancelled' | 'retryable';
-  streamText: string;
-  presentation: AnswerPresentation | null;
-  usage: Record<string, unknown>;
-  evidence: Record<string, number>;
-  error: string;
-  progress: string;
-  liveStatus: string;
-  sawChildren: boolean;
-  cancelRequested: boolean;
-  steeringMessages: readonly string[];
-  toolRows: readonly ToolRow[];
-  toolTotal: number;
-  toolExpanded: boolean;
-}
 
 export interface ChatRunActionDetail {
   action: 'children' | 'follow-up' | 'fork';

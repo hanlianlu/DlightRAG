@@ -14,19 +14,17 @@ import type {DlChatComposer} from './chat_composer.ts';
 import './chat_composer.ts';
 import type {DlConversationSidebar} from './conversation_sidebar.ts';
 import './conversation_sidebar.ts';
-import {
-  ANSWER_PHASE_LABELS,
-  answerPhaseLabel,
-  type DlChatFeature,
-} from './chat_feature.ts';
+import {ANSWER_PHASE_LABELS, answerPhaseLabel} from '../lib/turn_projection.ts';
+import type {ChatTurnView} from '../lib/chat_views.ts';
 import {applyToolEvent, toolStatusText} from '../lib/tool_events.ts';
 import {toolDisplay} from '../lib/tool_display.ts';
+import type {DlChatFeature} from './chat_feature.ts';
+import './chat_feature.ts';
 import {
   ANSWER_RECONNECT_COPY,
   answerReconnectState,
   storedTurnView,
   type ChatRunActionDetail,
-  type ChatTurnView,
   type DlChatMessageList,
 } from './chat_message_list.ts';
 import {webRouter} from './router.ts';
