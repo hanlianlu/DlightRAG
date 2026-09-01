@@ -495,7 +495,7 @@ body.files-panel-open #files-btn {
 }
 
 .skill-menu-source.owner {
-    color: var(--color-accent-foreground, #d2b661);
+    color: var(--color-accent-text);
     border-color: var(--color-accent-border-soft);
 }
 

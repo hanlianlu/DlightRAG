@@ -72,7 +72,7 @@
   --color-control-ring: rgb(210 182 97 / 64%);
   --color-control-ring-soft: var(--color-accent-surface);
   --color-selected-row: rgb(120 113 108 / 13%);
-  --color-row-alt: rgb(28 25 23 / 50%);
+  --color-row-alt: var(--color-stone-800);
   --color-row-hover-faint: rgb(255 255 255 / 2%);
   --color-source-highlight: rgb(210 182 97 / 18%);
   --color-source-surface: rgb(12 10 9 / 72%);
