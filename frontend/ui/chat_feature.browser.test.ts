@@ -1512,3 +1512,62 @@ it('Message List exposes loading and retry through visible ARIA state and typed 
   feature.querySelector<HTMLButtonElement>('[aria-label="Retry loading conversation history"]')?.click();
   expect(action).to.equal('retry');
 });
+
+it('Composer completes skill directives with ghost preview, Tab, and shorthand', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    skills: [
+      {name: 'tdd', description: 'TDD loop', source: 'global'},
+      {name: 'weekly-report', description: 'Weekly reports', source: 'owner'},
+    ],
+  }), {status: 200, headers: {'Content-Type': 'application/json'}});
+  const composer = document.createElement('dl-chat-composer') as DlChatComposer;
+  composer.attachmentPolicy = policy;
+  document.body.appendChild(composer);
+  await composer.updateComplete;
+  const input = composer.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')!;
+  const mirror = composer.querySelector<HTMLElement>('.composer-input-mirror')!;
+
+  // Bare slash: panel opens, ghost teaches the full canonical form.
+  input.value = '/';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await composer.updateComplete;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await composer.updateComplete;
+  expect(mirror.textContent).to.equal('/skill:tdd');
+  expect(composer.querySelectorAll('.skill-menu-item').length).to.equal(2);
+
+  // Tab commits the canonical form with a trailing space and closes the menu.
+  input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}));
+  await composer.updateComplete;
+  expect(input.value).to.equal('/skill:tdd ');
+  expect(mirror.textContent).to.equal('/skill:tdd ');
+  expect(composer.querySelector('.skill-menu[hidden]')).to.not.equal(null);
+
+  // Shorthand narrows and commits in the shorthand form.
+  input.value = '/w';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await composer.updateComplete;
+  expect(mirror.textContent).to.equal('/weekly-report');
+  input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}));
+  await composer.updateComplete;
+  expect(input.value).to.equal('/weekly-report ');
+
+  // Arrows move the highlight and the ghost follows the highlighted skill.
+  input.value = '/skill:';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  await composer.updateComplete;
+  expect(mirror.textContent).to.equal('/skill:tdd');
+  input.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true, cancelable: true}));
+  await composer.updateComplete;
+  expect(mirror.textContent).to.equal('/skill:tdd');
+  input.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true, cancelable: true}));
+  await composer.updateComplete;
+  expect(mirror.textContent).to.equal('/skill:weekly-report');
+  input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+  await composer.updateComplete;
+  expect(input.value).to.equal('/skill:weekly-report ');
+
+  composer.remove();
+  globalThis.fetch = originalFetch;
+});

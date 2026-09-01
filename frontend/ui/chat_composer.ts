@@ -8,7 +8,12 @@ import {listSkills, type SkillSummary} from '../api/skills.ts';
 import type {AnswerMode} from '../lib/answer_request.ts';
 import {formatFileSize} from '../lib/file_size.ts';
 import {LightElement} from '../lib/lit_host.ts';
-import {parseSkillDirective, skillDirectivePrefix} from '../lib/skill_directive.ts';
+import {
+  committedSkillDirective,
+  parseSkillDirective,
+  skillDirectiveState,
+  skillGhostSuffix,
+} from '../lib/skill_directive.ts';
 import {attachmentStore, type PendingAttachment} from '../stores/attachmentStore.ts';
 import chatStyles from '../styles/chat.module.css';
 import {
@@ -69,6 +74,8 @@ export class DlChatComposer extends LightElement {
     attachments: {state: true},
     skills: {state: true},
     skillNotice: {state: true},
+    skillMenuOpen: {state: true},
+    skillActive: {state: true},
   };
 
   declare running: boolean;
@@ -84,6 +91,8 @@ export class DlChatComposer extends LightElement {
   declare attachments: readonly PendingAttachment[];
   declare skills: readonly SkillSummary[];
   declare skillNotice: boolean;
+  declare skillMenuOpen: boolean;
+  declare skillActive: number;
 
   #unsubscribe: (() => void) | null = null;
   #dragCounter = 0;
@@ -107,6 +116,8 @@ export class DlChatComposer extends LightElement {
     this.attachments = [...attachmentStore.list()];
     this.skills = [];
     this.skillNotice = false;
+    this.skillMenuOpen = false;
+    this.skillActive = -1;
   }
 
   get hasDraft(): boolean {
@@ -151,6 +162,8 @@ export class DlChatComposer extends LightElement {
   clearText(): void {
     this.draft = '';
     this.multiline = false;
+    this.skillMenuOpen = false;
+    this.skillActive = -1;
     void this.updateComplete.then(() => this.#resize());
   }
 
@@ -197,6 +210,23 @@ export class DlChatComposer extends LightElement {
         <div class="drop-overlay-content">${msg('Drop files or folders here', {id: 'chatComposer.dropCopy'})}</div>
       </div>
       <div class="composer" id="composer">
+        <div class="skill-menu" id="skill-menu" role="listbox"
+             aria-label=${msg('Available skills', {id: 'chatComposer.skillMenuAria'})}
+             ?hidden=${!this.skillMenuOpen || this.#skillSuggestions().length === 0}>
+          ${repeat(this.#skillSuggestions(), (skill) => skill.name, (skill, index) => html`
+            <button type="button" role="option" class="skill-menu-item ${index === this.skillActive ? 'active' : ''}"
+                    aria-selected=${String(index === this.skillActive)}
+                    title=${skill.description}
+                    @click=${() => this.#applySkill(skill.name)}
+                    @mousemove=${() => { this.skillActive = index; }}>
+              <span class="skill-menu-name">${skill.name}</span>
+              <span class="skill-menu-desc">${skill.description}</span>
+              <span class="skill-menu-source ${skill.source}">${skill.source === 'owner'
+                ? msg('Mine', {id: 'chatComposer.skillSource.owner'})
+                : msg('Built-in', {id: 'chatComposer.skillSource.global'})}</span>
+            </button>
+          `)}
+        </div>
         <div class="composer-inner">
           <div class="thumbnail-strip" id="thumbnail-strip">
             ${repeat(this.attachments, (item) => item.id, (item) => this.#attachment(item))}
@@ -210,13 +240,16 @@ export class DlChatComposer extends LightElement {
                     @click=${this.#openAttachmentPicker}>
               ${icon('attach', {size: 'lg', className: 'composer-plus-icon'})}
             </button>
-            <textarea name="query" aria-label=${msg('Message', {id: 'chatComposer.messageAria'})} placeholder=${msg('Ask anything', {id: 'chatComposer.placeholder'})}
-                      class="composer-input" rows="1" autocomplete="off"
-                      .value=${this.draft}
-                      @input=${this.#inputChanged}
-                      @keydown=${this.#inputKeydown}
-                      @beforeinput=${this.#beforeInput}
-                      @keyup=${this.#inputKeyup}></textarea>
+            <div class="composer-input-wrap">
+              <div class="composer-input-mirror" aria-hidden="true">${this.draft}<span class="skill-ghost-text">${this.#ghostText()}</span></div>
+              <textarea name="query" aria-label=${msg('Message', {id: 'chatComposer.messageAria'})} placeholder=${msg('Ask anything', {id: 'chatComposer.placeholder'})}
+                        class="composer-input" rows="1" autocomplete="off"
+                        .value=${this.draft}
+                        @input=${this.#inputChanged}
+                        @keydown=${this.#inputKeydown}
+                        @beforeinput=${this.#beforeInput}
+                        @keyup=${this.#inputKeyup}></textarea>
+            </div>
             <div class="composer-mode">
               <button type="button" class="composer-mode-trigger" id="composer-mode"
                       aria-haspopup="menu" aria-expanded=${String(this.modeOpen)}
@@ -250,14 +283,6 @@ export class DlChatComposer extends LightElement {
           ${this.skillNotice ? html`
             <div class="skill-notice" role="alert">
               ${msg('A skill directive needs a question, e.g. /skill:review Check this plan.', {id: 'chatComposer.skillQuestionRequired'})}
-            </div>` : nothing}
-          ${this.#skillSuggestions().length > 0 ? html`
-            <div class="skill-suggestions">
-              <span class="skill-suggestions-label">${msg('Available skills', {id: 'chatComposer.skillSuggestions'})}</span>
-              ${repeat(this.#skillSuggestions(), (skill) => skill.name, (skill) => html`
-                <button type="button" class="skill-suggestion" title=${skill.description}
-                        @click=${() => this.#applySkill(skill.name)}>${skill.name}</button>
-              `)}
             </div>` : nothing}
         </div>
         <input class="hidden" type="file" id="attachment-input"
@@ -298,6 +323,8 @@ export class DlChatComposer extends LightElement {
   #inputChanged(event: Event): void {
     this.draft = (event.currentTarget as HTMLTextAreaElement).value;
     this.skillNotice = false;
+    this.skillMenuOpen = skillDirectiveState(this.draft) !== null;
+    this.skillActive = -1;
     if (this.draft.startsWith('/')) {
       void listSkills()
         .then((skills) => { this.skills = skills; })
@@ -317,11 +344,41 @@ export class DlChatComposer extends LightElement {
     this.multiline = this.draft.includes('\n') || contentHeight > lineHeight * 1.5;
     input.style.height = `${Math.min(contentHeight, maxHeight)}px`;
     input.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
+    const mirror = this.querySelector<HTMLDivElement>('.composer-input-mirror');
+    if (mirror) mirror.scrollTop = input.scrollTop;
   }
 
   #inputKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape' && this.running) {
       this.#cancelIntent();
+      return;
+    }
+    const suggestions = this.#skillSuggestions();
+    const menuOpen = this.skillMenuOpen && suggestions.length > 0;
+    if (event.key === 'Tab' && menuOpen) {
+      event.preventDefault();
+      this.#applySkill(suggestions[this.skillActive >= 0 ? this.skillActive : 0]!.name);
+      return;
+    }
+    if (event.key === 'ArrowDown' && menuOpen) {
+      event.preventDefault();
+      this.skillActive = (this.skillActive + 1) % suggestions.length;
+      this.#scrollActiveSkill();
+      return;
+    }
+    if (event.key === 'ArrowUp' && menuOpen) {
+      event.preventDefault();
+      this.skillActive = (this.skillActive - 1 + suggestions.length) % suggestions.length;
+      this.#scrollActiveSkill();
+      return;
+    }
+    if (event.key === 'Enter' && menuOpen && this.skillActive >= 0) {
+      event.preventDefault();
+      this.#applySkill(suggestions[this.skillActive]!.name);
+      return;
+    }
+    if (event.key === 'Escape' && this.skillMenuOpen) {
+      this.skillMenuOpen = false;
       return;
     }
     if (event.key === 'Enter') this.#allowNextLineBreak = event.shiftKey;
@@ -382,6 +439,8 @@ export class DlChatComposer extends LightElement {
     }
     this.draft = '';
     this.skillNotice = false;
+    this.skillMenuOpen = false;
+    this.skillActive = -1;
     this.dispatchEvent(new CustomEvent<ComposerSubmitDetail>('dl-composer-submit', {
       bubbles: true,
       composed: true,
@@ -391,8 +450,10 @@ export class DlChatComposer extends LightElement {
   }
 
   #applySkill(name: string): void {
-    this.draft = `/skill:${name} `;
+    this.draft = committedSkillDirective(this.draft, name);
     this.skillNotice = false;
+    this.skillMenuOpen = false;
+    this.skillActive = -1;
     void this.updateComplete.then(() => {
       const input = this.#input();
       if (input) {
@@ -402,10 +463,25 @@ export class DlChatComposer extends LightElement {
     });
   }
 
+  #ghostText(): string {
+    const suggestions = this.#skillSuggestions();
+    if (suggestions.length === 0) return '';
+    const name = suggestions[this.skillActive >= 0 ? this.skillActive : 0]!.name;
+    return skillGhostSuffix(this.draft, name);
+  }
+
   #skillSuggestions(): readonly SkillSummary[] {
-    const prefix = skillDirectivePrefix(this.draft);
-    if (prefix === null || this.skills.length === 0) return [];
-    return this.skills.filter((skill) => skill.name.toLowerCase().startsWith(prefix)).slice(0, 8);
+    const state = skillDirectiveState(this.draft);
+    if (state === null || this.skills.length === 0) return [];
+    if (state.kind === 'canonical' && state.prefix === '') return this.skills;
+    return this.skills.filter((skill) => skill.name.startsWith(state.prefix));
+  }
+
+  #scrollActiveSkill(): void {
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLButtonElement>('.skill-menu-item.active')
+        ?.scrollIntoView({block: 'nearest'});
+    });
   }
 
   #cancelIntent(): void {
