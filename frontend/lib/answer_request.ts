@@ -14,6 +14,7 @@ export interface AnswerEnvelope {
     conversationId: string | null;
     submissionId: string;
     mode?: AnswerMode;
+    requestedSkill?: string;
 }
 
 export interface AnswerRequestInit {
@@ -34,6 +35,7 @@ export function buildAnswerRequest(
                 conversation_id: envelope.conversationId,
                 submission_id: envelope.submissionId,
                 ...(envelope.mode ? {mode: envelope.mode} : {}),
+                ...(envelope.requestedSkill ? {requested_skill: envelope.requestedSkill} : {}),
             }),
         };
     }
@@ -43,6 +45,7 @@ export function buildAnswerRequest(
     if (envelope.conversationId) form.append('conversation_id', envelope.conversationId);
     form.append('submission_id', envelope.submissionId);
     if (envelope.mode) form.append('mode', envelope.mode);
+    if (envelope.requestedSkill) form.append('requested_skill', envelope.requestedSkill);
     for (const file of attachments) form.append('attachments', file, file.name);
     return {body: form};
 }

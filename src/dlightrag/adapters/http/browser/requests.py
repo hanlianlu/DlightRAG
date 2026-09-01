@@ -13,6 +13,7 @@ class WebAnswerRequest(ClientContractModel):
     conversation_id: UUID | None = None
     submission_id: UUID
     mode: Literal["auto", "fast", "research"] | None = None
+    requested_skill: str | None = None
 
 
 __all__ = ["WebAnswerRequest"]

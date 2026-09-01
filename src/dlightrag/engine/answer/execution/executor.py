@@ -1040,6 +1040,7 @@ class AnswerExecutor:
             pinned_image_descriptions=request.image_descriptions,
             projected_history=projected_history,
             model_profiles=model_profiles,
+            requested_skill=request.requested_skill,
         )
         auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
         prepared_input = session.prepared_input or {}
@@ -1602,6 +1603,7 @@ class AnswerExecutor:
         model_profiles: Mapping[ModelRole, ModelProfile],
         environment: ExecutionEnvironment | None = None,
         resolved_mode: ResolvedMode,
+        requested_skill: str | None = None,
     ) -> OrchestratorRun:
         history = projected_history
         models = self._capabilities.request_model_context(model_profiles)
@@ -1727,6 +1729,7 @@ class AnswerExecutor:
                 ),
                 child_model_resolver=resolve_child_model,
                 skills_global_root=self._skills_global_root,
+                requested_skill=requested_skill,
             )
             orchestrated_run = OrchestratorRun(
                 orchestrator=orchestrator,

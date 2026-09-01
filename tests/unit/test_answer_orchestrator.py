@@ -1,10 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Answer Host coordination around the deep AgentSessionRuntime."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from dlightrag.engine.agent.skills import SkillCatalog
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
@@ -13,7 +15,9 @@ from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from tests.unit.conftest import answer_model_profile
 
 
-def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
+def _orchestrator(
+    *, mode: str, model=None, retrieve=None, synthesizer=None, requested_skill: str | None = None
+):
     profile = answer_model_profile()
 
     async def default_retrieve(_query: str):
@@ -28,7 +32,42 @@ def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
         resolved_mode=mode,  # type: ignore[arg-type]
+        requested_skill=requested_skill,
     )
+
+
+def test_requested_skill_contribution_precedes_skill_metadata(tmp_path: Path) -> None:
+    global_root = tmp_path / "global"
+    (global_root / "review").mkdir(parents=True)
+    (global_root / "review" / "SKILL.md").write_text(
+        "---\nname: review\ndescription: Review plans.\n---\nbody",
+        encoding="utf-8",
+    )
+    catalog = SkillCatalog.discover(global_root=global_root, workspace_root=None)
+
+    orchestrator = _orchestrator(mode="research", requested_skill="review")
+    contributions = orchestrator._context_contributions(catalog)
+
+    assert [item.source for item in contributions] == ["agent.skills.requested", "agent.skills"]
+    assert contributions[0].authority == "user"
+    assert contributions[1].authority == "reference"
+    assert "load_skill(name='review')" in str(contributions[0].messages[0]["content"])
+
+
+def test_context_contributions_without_requested_skill_keep_metadata_only(tmp_path: Path) -> None:
+    global_root = tmp_path / "global"
+    (global_root / "review").mkdir(parents=True)
+    (global_root / "review" / "SKILL.md").write_text(
+        "---\nname: review\ndescription: Review plans.\n---\nbody",
+        encoding="utf-8",
+    )
+    catalog = SkillCatalog.discover(global_root=global_root, workspace_root=None)
+
+    orchestrator = _orchestrator(mode="research")
+    contributions = orchestrator._context_contributions(catalog)
+
+    assert [item.source for item in contributions] == ["agent.skills"]
+    assert contributions[0].authority == "reference"
 
 
 @pytest.mark.asyncio

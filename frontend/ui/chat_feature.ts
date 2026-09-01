@@ -464,7 +464,7 @@ export class DlChatFeature extends LightElement {
 
   #submit = (event: CustomEvent<ComposerSubmitDetail>): void => {
     event.stopPropagation();
-    void this.#submitQuery(event.detail.query, event.detail.mode);
+    void this.#submitQuery(event.detail.query, event.detail.mode, event.detail.requestedSkill);
   };
 
   #steer = (event: CustomEvent<ComposerSteerDetail>): void => {
@@ -494,7 +494,11 @@ export class DlChatFeature extends LightElement {
     void this.#followTurn(turn.id, conversationId, turn.runId);
   };
 
-  async #submitQuery(query: string, mode: AnswerMode | null): Promise<void> {
+  async #submitQuery(
+    query: string,
+    mode: AnswerMode | null,
+    requestedSkill: string | null = null,
+  ): Promise<void> {
     if (this.#runController.active || this.#submissionActor) return;
     if (!conversationStore.canAnswer) {
       this.#requestToast({
@@ -526,6 +530,7 @@ export class DlChatFeature extends LightElement {
       conversationId,
       submissionId,
       workspaces: [...workspaceStore.active],
+      ...(requestedSkill ? {requestedSkill} : {}),
     }, lease, this.#submissionAdapter);
     if (!actor) {
       lease.restore();
@@ -631,7 +636,7 @@ export class DlChatFeature extends LightElement {
     if (type === 'EDIT') {
       workspaceStore.restoreActive(intent.workspaces);
       this.querySelector<DlChatComposer>('dl-chat-composer')
-        ?.restoreSubmission(intent.query, intent.mode);
+        ?.restoreSubmission(intent.query, intent.mode, intent.requestedSkill ?? null);
     }
     if (this.#submissionTurnId) {
       this.turns = this.turns.filter((turn) => turn.id !== this.#submissionTurnId);

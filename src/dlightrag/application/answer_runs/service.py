@@ -138,6 +138,7 @@ class AnswerRequest:
     agent_session_id: str = ""
     agent_lane_id: str = "main"
     source_lane_id: str | None = None
+    requested_skill: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,6 +428,7 @@ def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
         agent_session_id=request.agent_session_id,
         agent_lane_id=request.agent_lane_id,
         source_lane_id=request.source_lane_id,
+        requested_skill=request.requested_skill,
         history_attachments=tuple(
             AttachmentReference(
                 digest=resource.digest,

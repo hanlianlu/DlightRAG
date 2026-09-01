@@ -153,6 +153,7 @@ class AnswerOrchestrator:
         subagent_host: SubagentHost | None = None,
         memory_host: MemoryHost | None = None,
         skills_global_root: Path | None = None,
+        requested_skill: str | None = None,
         child_model_resolver: Callable[[str], tuple[ToolModelFunc, StreamModel, ModelProfile]]
         | None = None,
     ) -> None:
@@ -179,6 +180,7 @@ class AnswerOrchestrator:
         self._parent_query = ""
         self._parent_history = PriorTurns()
         self._skills_global_root = skills_global_root
+        self._requested_skill = requested_skill
         self._child_model_resolver = child_model_resolver
         self._access = AccessScheduler()
         self._compaction: dict[str, CompactionCoordinator] = {}
@@ -719,8 +721,9 @@ class AnswerOrchestrator:
     def _context_contributions(
         self, skill_catalog: SkillCatalog | None
     ) -> tuple[ContextContribution, ...]:
+        requested = _requested_skill_contribution(self._requested_skill)
         skill = None if skill_catalog is None else skill_catalog.contribution()
-        return (skill,) if skill is not None else ()
+        return tuple(item for item in (requested, skill) if item is not None)
 
     def _output_stage_factory(self) -> Any:
         from dlightrag.engine.answer.workspace import FileOutputStage
@@ -832,6 +835,31 @@ def _read_committed_spill(
 
 def _tool_guidance(tools: list[AgentTool]) -> tuple[str, ...]:
     return tuple(f"- {tool.guidance}" for tool in tools if tool.guidance)
+
+
+def _requested_skill_contribution(name: str | None) -> ContextContribution | None:
+    """Explicit user-requested skill directive, ordered before skill metadata.
+
+    The name was validated against the discovered catalog at acceptance; the
+    message is still only a directive — loading and following the skill remain
+    the model's calls through the load_skill tool.
+    """
+    if name is None:
+        return None
+    return ContextContribution(
+        source="agent.skills.requested",
+        authority="user",
+        messages=(
+            {
+                "role": "user",
+                "content": (
+                    f"The user explicitly requested Agent Skill '{name}' for this run. "
+                    f"Call load_skill(name='{name}') first and follow it unless the "
+                    "user later says otherwise."
+                ),
+            },
+        ),
+    )
 
 
 def _fresh_research_trace() -> dict[str, Any]:

@@ -182,6 +182,84 @@ async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
     application_double.aclose.assert_awaited_once_with()
 
 
+async def test_skills_endpoint_lists_discovered_global_skills(
+    client, test_config: DlightragConfig, tmp_path: Path
+) -> None:
+    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path))
+    review = tmp_path / "review"
+    review.mkdir()
+    (review / "SKILL.md").write_text(
+        "---\nname: review\ndescription: Review plans.\n---\nbody",
+        encoding="utf-8",
+    )
+
+    response = await client.get("/web/api/skills")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "skills": [{"name": "review", "description": "Review plans.", "source": "global"}]
+    }
+
+
+async def test_skills_endpoint_returns_an_empty_catalog(
+    client, test_config: DlightragConfig, tmp_path: Path
+) -> None:
+    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path))
+
+    response = await client.get("/web/api/skills")
+
+    assert response.status_code == 200
+    assert response.json() == {"skills": []}
+
+
+async def test_answer_rejects_unknown_requested_skill(
+    client, test_config: DlightragConfig, tmp_path: Path
+) -> None:
+    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path))
+
+    response = await client.post(
+        "/web/api/answer",
+        json={
+            "query": "Check this plan",
+            "workspaces": ["default"],
+            "submission_id": SUBMISSION_ID,
+            "requested_skill": "does-not-exist",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["kind"] == "invalid_request"
+
+
+async def test_answer_with_requested_skill_forces_research_mode(
+    client, mock_application, test_config: DlightragConfig, tmp_path: Path
+) -> None:
+    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path))
+    review = tmp_path / "review"
+    review.mkdir()
+    (review / "SKILL.md").write_text(
+        "---\nname: review\ndescription: Review plans.\n---\nbody",
+        encoding="utf-8",
+    )
+    mock_application.web_conversations.start_answer.return_value = None
+
+    response = await client.post(
+        "/web/api/answer",
+        json={
+            "query": "Check this plan",
+            "workspaces": ["default"],
+            "submission_id": SUBMISSION_ID,
+            "mode": "auto",
+            "requested_skill": "review",
+        },
+    )
+
+    assert response.status_code == 404  # service returns None → conversation_missing
+    call = mock_application.web_conversations.start_answer.await_args
+    assert call.kwargs["mode"] == "research"
+    assert call.kwargs["requested_skill"] == "review"
+
+
 async def test_vite_hashed_assets_are_immutable(client):
     from dlightrag.adapters.http.browser.static_files import APP_DIR
 

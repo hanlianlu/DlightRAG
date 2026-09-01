@@ -40,6 +40,24 @@ test('a first JSON submission explicitly carries no conversation', () => {
   assert.equal(parsed.submission_id, 'sub-1');
 });
 
+test('a requested skill rides both the JSON and multipart envelopes', () => {
+  const withSkill = {...envelope, requestedSkill: 'review'};
+
+  const jsonBody = buildAnswerRequest(withSkill, []).body as string;
+  const parsed = JSON.parse(jsonBody) as Record<string, unknown>;
+  assert.equal(parsed.requested_skill, 'review');
+
+  const multipartBody = buildAnswerRequest(withSkill, [file('a.png', 'image/png')]).body;
+  assert.ok(multipartBody instanceof FormData);
+  assert.equal((multipartBody as FormData).get('requested_skill'), 'review');
+});
+
+test('a submission without a requested skill never emits the field', () => {
+  const jsonBody = buildAnswerRequest(envelope, []).body as string;
+  const parsed = JSON.parse(jsonBody) as Record<string, unknown>;
+  assert.ok(!('requested_skill' in parsed));
+});
+
 test('mixed attachments emit one multipart with the envelope plus repeated attachments in order', () => {
   const attachments = [
     file('a.png', 'image/png'),

@@ -547,7 +547,7 @@ it('Composer owns draft, attachment, mode, and typed submission intent', async (
   composer.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
   await composer.updateComplete;
 
-  expect(submitted).to.deep.equal({query: 'Explain this', mode: null});
+  expect(submitted).to.deep.equal({query: 'Explain this', mode: null, requestedSkill: null});
   expect(composer.querySelector<HTMLTextAreaElement>('[aria-label="Message"]')?.value).to.equal('');
   expect(composer.hasDraft).to.equal(true);
 

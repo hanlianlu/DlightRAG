@@ -323,6 +323,66 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
     store.create_answer_turn.assert_not_awaited()
 
 
+def test_web_request_fingerprint_distinguishes_requested_skill() -> None:
+    from dlightrag.application.web_conversations.service import _web_answer_request_fingerprint
+
+    def fingerprint(*, requested_skill: str | None = None) -> str:
+        return _web_answer_request_fingerprint(
+            conversation_id=_CID,
+            query="Review this plan",
+            workspaces=("default",),
+            attachments=(),
+            mode="auto",
+            requested_skill=requested_skill,
+        )
+
+    assert fingerprint() == fingerprint()
+    assert fingerprint(requested_skill="review") == fingerprint(requested_skill="review")
+    assert fingerprint(requested_skill="review") != fingerprint()
+    assert fingerprint(requested_skill="review") != fingerprint(requested_skill="tdd")
+
+
+async def test_start_answer_passes_requested_skill_into_the_prepared_request() -> None:
+    now = datetime.datetime.now(datetime.UTC)
+    store = AsyncMock()
+    store.replay_answer_turn.return_value = None
+    store.submission_seed.return_value = SubmissionSeed(
+        head=ConversationHead(
+            principal_id="anonymous",
+            conversation_id=_CID,
+            agent_session_id=_CID,
+            agent_lane_id="main",
+            content_revision=1,
+            title="Conversation",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    store.create_answer_turn.return_value = answer_turn_creation(conversation_id=_CID)
+    answers = FakeAnswers()
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_attachments=6,
+        cursor_secret=b"web-answer-runs-cursor-test",
+    )
+
+    submission = await service.start_answer(
+        None,
+        conversation_id=None,
+        submission_id=SUBMISSION_ID,
+        query="Check this plan",
+        workspaces=["default"],
+        requested_skill="review",
+    )
+
+    assert submission is not None
+    assert len(answers.prepared) == 1
+    prepared = answers.prepared[0]
+    assert prepared.query == "Check this plan"
+    assert prepared.requested_skill == "review"
+
+
 async def test_durable_recovery_reads_more_than_100_succeeded_turns_in_bounded_pages() -> None:
     now = datetime.datetime.now(datetime.UTC)
     store = AsyncMock()

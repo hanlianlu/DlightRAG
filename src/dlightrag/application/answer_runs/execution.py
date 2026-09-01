@@ -198,6 +198,7 @@ class AnswerRunRequest:
     agent_session_id: str = ""
     agent_lane_id: str = "main"
     source_lane_id: str | None = None
+    requested_skill: str | None = None
 
     def as_request(self) -> dict[str, Any]:
         return {
@@ -218,6 +219,7 @@ class AnswerRunRequest:
             "agent_session_id": self.agent_session_id,
             "agent_lane_id": self.agent_lane_id,
             "source_lane_id": self.source_lane_id,
+            "requested_skill": self.requested_skill,
         }
 
     @classmethod
@@ -245,6 +247,9 @@ class AnswerRunRequest:
             agent_lane_id=str(request.get("agent_lane_id") or "main"),
             source_lane_id=(
                 str(request["source_lane_id"]) if request.get("source_lane_id") else None
+            ),
+            requested_skill=(
+                str(request["requested_skill"]).strip() if request.get("requested_skill") else None
             ),
         )
 
@@ -285,6 +290,7 @@ class AnswerRunInput:
     resource_manifest: tuple[Mapping[str, Any], ...] = ()
     parent_run_id: str | None = None
     continuation_kind: str | None = None
+    requested_skill: str | None = None
 
     def as_request(self) -> dict[str, Any]:
         return {
@@ -313,6 +319,7 @@ class AnswerRunInput:
             "resource_manifest": [dict(item) for item in self.resource_manifest],
             "parent_run_id": self.parent_run_id,
             "continuation_kind": self.continuation_kind,
+            "requested_skill": self.requested_skill,
         }
 
     @classmethod
@@ -367,6 +374,9 @@ class AnswerRunInput:
             parent_run_id=(str(request["parent_run_id"]) if request.get("parent_run_id") else None),
             continuation_kind=(
                 str(request["continuation_kind"]) if request.get("continuation_kind") else None
+            ),
+            requested_skill=(
+                str(request["requested_skill"]).strip() if request.get("requested_skill") else None
             ),
         )
 

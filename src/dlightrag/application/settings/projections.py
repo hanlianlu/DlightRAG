@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Map root Pydantic configuration into provider-neutral AI settings."""
 
+from pathlib import Path
+
 from dlightrag.application.access import (
     AccessRule,
     AccessSettings,
@@ -122,6 +124,17 @@ def answer_resource_settings(config: DlightragConfig) -> AnswerResourceSettings:
         image_max_bytes=answer.image_max_bytes,
         image_max_pixels=answer.image_max_pixels,
     )
+
+
+def agent_skills_root(config: DlightragConfig) -> Path:
+    """Resolve the global Agent Skills root; unset resolves to ~/.dlightrag/skills.
+
+    Mirrors the Agent Workspace default convention. The directory is ensured
+    eagerly by composition so operators can drop skills in without a restart;
+    discovery itself tolerates an absent root.
+    """
+    configured = config.answer.agent.skills_root
+    return Path(configured).expanduser() if configured else Path.home() / ".dlightrag" / "skills"
 
 
 def answer_executor_settings(config: DlightragConfig) -> AnswerExecutorSettings:

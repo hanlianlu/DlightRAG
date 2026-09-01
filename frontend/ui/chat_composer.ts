@@ -4,9 +4,11 @@ import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {icon} from '../design-system/index.ts';
+import {listSkills, type SkillSummary} from '../api/skills.ts';
 import type {AnswerMode} from '../lib/answer_request.ts';
 import {formatFileSize} from '../lib/file_size.ts';
 import {LightElement} from '../lib/lit_host.ts';
+import {parseSkillDirective} from '../lib/skill_directive.ts';
 import {attachmentStore, type PendingAttachment} from '../stores/attachmentStore.ts';
 import chatStyles from '../styles/chat.module.css';
 import {
@@ -30,6 +32,7 @@ const MODE_LABELS: Record<AnswerMode, string> = {
 export interface ComposerSubmitDetail {
   query: string;
   mode: AnswerMode | null;
+  requestedSkill: string | null;
 }
 
 export interface ComposerSteerDetail {
@@ -64,6 +67,8 @@ export class DlChatComposer extends LightElement {
     multiline: {state: true},
     dragActive: {state: true},
     attachments: {state: true},
+    skills: {state: true},
+    skillNotice: {state: true},
   };
 
   declare running: boolean;
@@ -77,6 +82,8 @@ export class DlChatComposer extends LightElement {
   declare multiline: boolean;
   declare dragActive: boolean;
   declare attachments: readonly PendingAttachment[];
+  declare skills: readonly SkillSummary[];
+  declare skillNotice: boolean;
 
   #unsubscribe: (() => void) | null = null;
   #dragCounter = 0;
@@ -98,6 +105,8 @@ export class DlChatComposer extends LightElement {
     this.multiline = false;
     this.dragActive = false;
     this.attachments = [...attachmentStore.list()];
+    this.skills = [];
+    this.skillNotice = false;
   }
 
   get hasDraft(): boolean {
@@ -151,8 +160,12 @@ export class DlChatComposer extends LightElement {
     return true;
   }
 
-  restoreSubmission(query: string, requestMode: AnswerMode | null): void {
-    this.draft = query;
+  restoreSubmission(
+    query: string,
+    requestMode: AnswerMode | null,
+    requestedSkill: string | null = null,
+  ): void {
+    this.draft = requestedSkill ? `/skill:${requestedSkill} ${query}` : query;
     this.#requestMode = requestMode;
     this.mode = requestMode ?? 'auto';
     this.modeOpen = false;
@@ -234,6 +247,18 @@ export class DlChatComposer extends LightElement {
               ${icon('stop', {size: 'sm', className: 'composer-send-icon composer-send-icon--stop'})}
             </button>
           </form>
+          ${this.skillNotice ? html`
+            <div class="skill-notice" role="alert">
+              ${msg('A skill directive needs a question, e.g. /skill:review Check this plan.', {id: 'chatComposer.skillQuestionRequired'})}
+            </div>` : nothing}
+          ${this.#skillSuggestions().length > 0 ? html`
+            <div class="skill-suggestions">
+              <span class="skill-suggestions-label">${msg('Available skills', {id: 'chatComposer.skillSuggestions'})}</span>
+              ${repeat(this.#skillSuggestions(), (skill) => skill.name, (skill) => html`
+                <button type="button" class="skill-suggestion" title=${skill.description}
+                        @click=${() => this.#applySkill(skill.name)}>${skill.name}</button>
+              `)}
+            </div>` : nothing}
         </div>
         <input class="hidden" type="file" id="attachment-input"
                accept=${this.attachmentAccept} multiple
@@ -272,6 +297,12 @@ export class DlChatComposer extends LightElement {
 
   #inputChanged(event: Event): void {
     this.draft = (event.currentTarget as HTMLTextAreaElement).value;
+    this.skillNotice = false;
+    if (this.draft.startsWith('/skill:')) {
+      void listSkills()
+        .then((skills) => { this.skills = skills; })
+        .catch(() => {});
+    }
     void this.updateComplete.then(() => this.#resize());
   }
 
@@ -338,13 +369,44 @@ export class DlChatComposer extends LightElement {
       return;
     }
     if (!query) return;
+    const directive = parseSkillDirective(query);
+    let submitQuery = query;
+    let requestedSkill: string | null = null;
+    if (directive !== null) {
+      if (!directive.query) {
+        this.skillNotice = true;
+        return;
+      }
+      submitQuery = directive.query;
+      requestedSkill = directive.skill;
+    }
     this.draft = '';
+    this.skillNotice = false;
     this.dispatchEvent(new CustomEvent<ComposerSubmitDetail>('dl-composer-submit', {
       bubbles: true,
       composed: true,
-      detail: {query, mode: this.#requestMode},
+      detail: {query: submitQuery, mode: this.#requestMode, requestedSkill},
     }));
     void this.updateComplete.then(() => this.#resize());
+  }
+
+  #applySkill(name: string): void {
+    this.draft = `/skill:${name} `;
+    this.skillNotice = false;
+    void this.updateComplete.then(() => {
+      const input = this.#input();
+      if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    });
+  }
+
+  #skillSuggestions(): readonly SkillSummary[] {
+    const partial = /^\/skill:([a-z0-9-]*)$/.exec(this.draft.trim());
+    if (partial === null || this.skills.length === 0) return [];
+    const prefix = partial[1]!.toLowerCase();
+    return this.skills.filter((skill) => skill.name.toLowerCase().startsWith(prefix)).slice(0, 8);
   }
 
   #cancelIntent(): void {

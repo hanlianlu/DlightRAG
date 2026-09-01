@@ -21,6 +21,7 @@ export interface AnswerSubmissionIntent {
   readonly query: string;
   readonly workspaces: readonly string[];
   readonly mode: AnswerMode | null;
+  readonly requestedSkill?: string | null;
 }
 
 export class AnswerSubmissionError extends Error {
@@ -89,6 +90,7 @@ export class BrowserAnswerSubmissionAdapter implements AnswerSubmissionAdapter {
       conversationId: intent.conversationId,
       submissionId: intent.submissionId,
       ...(intent.mode ? {mode: intent.mode} : {}),
+      ...(intent.requestedSkill ? {requestedSkill: intent.requestedSkill} : {}),
     }, [...files]);
     let response: Response;
     try {

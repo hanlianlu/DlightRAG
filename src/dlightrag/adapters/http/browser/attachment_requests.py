@@ -41,12 +41,20 @@ class ParsedWebAnswerRequest:
     submission_id: UUID
     attachments: tuple[ValidatedWebAttachment, ...]
     mode: str | None = None
+    requested_skill: str | None = None
 
 
 def _optional_uuid(value: Any) -> UUID | None:
     if value in (None, ""):
         return None
     return UUID(str(value))
+
+
+def _optional_skill(value: Any) -> str | None:
+    """Normalize an optional requested skill name to a canonical identifier."""
+    if value in (None, ""):
+        return None
+    return str(value).strip()
 
 
 def _optional_mode(value: Any) -> Literal["auto", "fast", "research"] | None:
@@ -92,6 +100,7 @@ async def parse_web_answer_request(
             submission_id=body.submission_id,
             attachments=(),
             mode=body.mode,
+            requested_skill=_optional_skill(body.requested_skill),
         )
 
     try:
@@ -165,6 +174,7 @@ async def parse_web_answer_request(
                 conversation_id=_optional_uuid(form.get("conversation_id")),
                 submission_id=UUID(str(form.get("submission_id"))),
                 mode=_optional_mode(form.get("mode")),
+                requested_skill=_optional_skill(form.get("requested_skill")),
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -175,6 +185,7 @@ async def parse_web_answer_request(
             submission_id=body.submission_id,
             attachments=attachments,
             mode=body.mode,
+            requested_skill=body.requested_skill,
         )
     finally:
         await form.close()

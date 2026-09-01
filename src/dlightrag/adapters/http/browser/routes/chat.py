@@ -44,6 +44,7 @@ from dlightrag.adapters.http.browser.presentation import (
     AnswerPresentation,
     build_answer_presentation,
 )
+from dlightrag.adapters.http.browser.routes.skills import require_known_skill
 from dlightrag.adapters.http.streaming.answer_stream import follow_run_frames, resume_cursor
 from dlightrag.application.access import AccessAction, owner_id_from_user
 from dlightrag.application.answer_runs import (
@@ -139,6 +140,17 @@ async def start_answer_run(
     if not query:
         raise _command_error(422, "invalid_request", "A question is required")
 
+    requested_skill = body.requested_skill
+    if requested_skill is not None:
+        try:
+            requested_skill = require_known_skill(application, requested_skill)
+        except ValueError as exc:
+            raise _command_error(422, "invalid_request", str(exc)) from exc
+    mode = body.mode
+    if requested_skill is not None and mode != "research":
+        # Skills (load_skill tool + metadata) exist only in Research runs.
+        mode = "research"
+
     target_workspaces = normalize_workspace_ids(body.workspaces or [workspace])
     try:
         for ws in target_workspaces:
@@ -158,7 +170,8 @@ async def start_answer_run(
             query=query,
             workspaces=target_workspaces,
             attachments=body.attachments,
-            mode=body.mode,
+            mode=mode,
+            requested_skill=requested_skill,
         )
     except ConversationSubmissionConflict, IdempotencyKeyConflict:
         raise _command_error(

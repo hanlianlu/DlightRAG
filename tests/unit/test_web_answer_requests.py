@@ -123,6 +123,95 @@ async def test_parse_json_web_answer_request_carries_no_attachments() -> None:
 
 
 @pytest.mark.asyncio
+async def test_parse_json_web_answer_request_carries_requested_skill() -> None:
+    app = FastAPI()
+
+    @app.post("/probe")
+    async def probe(request: Request):
+        body = await parse_web_answer_request(
+            request,
+            max_attachments=6,
+            max_attachment_bytes=_IMAGE_MAX_BYTES,
+            max_total_attachment_bytes=128 * 1024 * 1024,
+            image_max_pixels=40_000_000,
+            answer_image_capability=_supported_capability(),
+        )
+        return {"query": body.query, "requested_skill": body.requested_skill}
+
+    payload = {
+        "query": "check",
+        "workspaces": ["default"],
+        "submission_id": str(uuid4()),
+        "requested_skill": "review",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/probe", json=payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"query": "check", "requested_skill": "review"}
+
+
+@pytest.mark.asyncio
+async def test_parse_json_web_answer_request_defaults_requested_skill_to_none() -> None:
+    app = FastAPI()
+
+    @app.post("/probe")
+    async def probe(request: Request):
+        body = await parse_web_answer_request(
+            request,
+            max_attachments=6,
+            max_attachment_bytes=_IMAGE_MAX_BYTES,
+            max_total_attachment_bytes=128 * 1024 * 1024,
+            image_max_pixels=40_000_000,
+            answer_image_capability=_supported_capability(),
+        )
+        return {"requested_skill": body.requested_skill}
+
+    payload = {"query": "check", "workspaces": ["default"], "submission_id": str(uuid4())}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/probe", json=payload)
+
+    assert response.status_code == 200
+    assert response.json() == {"requested_skill": None}
+
+
+@pytest.mark.asyncio
+async def test_parse_multipart_web_answer_request_carries_requested_skill() -> None:
+    app = FastAPI()
+
+    @app.post("/probe")
+    async def probe(request: Request):
+        body = await parse_web_answer_request(
+            request,
+            max_attachments=6,
+            max_attachment_bytes=_IMAGE_MAX_BYTES,
+            max_total_attachment_bytes=128 * 1024 * 1024,
+            image_max_pixels=40_000_000,
+            answer_image_capability=_supported_capability(),
+        )
+        return {"query": body.query, "requested_skill": body.requested_skill}
+
+    boundary = "----test-boundary-123"
+    payload = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="query"\r\n\r\ncheck\r\n'
+        f'--{boundary}\r\nContent-Disposition: form-data; name="submission_id"\r\n\r\n'
+        f"{uuid4()}\r\n"
+        f'--{boundary}\r\nContent-Disposition: form-data; name="requested_skill"\r\n\r\n'
+        f"review\r\n"
+        f"--{boundary}--\r\n"
+    ).encode()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/probe",
+            content=payload,
+            headers={"content-type": f"multipart/form-data; boundary={boundary}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"query": "check", "requested_skill": "review"}
+
+
+@pytest.mark.asyncio
 async def test_parse_json_first_submission_allows_no_conversation() -> None:
     app = FastAPI()
 

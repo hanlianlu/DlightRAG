@@ -11,6 +11,7 @@ from typing import Any
 from dlightrag.application.application import Application, _ApplicationComponents
 from dlightrag.application.config import DlightragConfig, get_config
 from dlightrag.application.opaque_cursor import CursorSecretBox
+from dlightrag.application.settings import agent_skills_root
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import Telemetry
@@ -68,15 +69,9 @@ async def _close_process() -> None:
         shutdown_tracing()
 
 
-def _resolve_agent_skills_root(config: DlightragConfig) -> Path:
-    """Resolve the global Agent Skills root and ensure it exists.
-
-    Unset resolves to ~/.dlightrag/skills, mirroring the Agent Workspace
-    default. The directory is created eagerly so operators can drop skills
-    in without a restart; discovery itself tolerates an absent root.
-    """
-    configured = config.answer.agent.skills_root
-    root = Path(configured).expanduser() if configured else Path.home() / ".dlightrag" / "skills"
+def _ensure_agent_skills_root(config: DlightragConfig) -> Path:
+    """Resolve the configured global Agent Skills root and create it eagerly."""
+    root = agent_skills_root(config)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -323,7 +318,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         memory_recall_enabled=memory.recall_enabled,
         memory_capability_current=memory.capability_current,
         external_tools=outbound_tools,
-        skills_global_root=_resolve_agent_skills_root(config),
+        skills_global_root=_ensure_agent_skills_root(config),
     )
     coordinator = RunCoordinator(
         store=run_store,

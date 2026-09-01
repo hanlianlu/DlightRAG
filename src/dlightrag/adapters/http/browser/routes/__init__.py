@@ -13,6 +13,7 @@ from .files import router as files_router
 from .images import router as images_router
 from .memory import router as memory_router
 from .model_catalogue import router as model_catalogue_router
+from .skills import router as skills_router
 from .workspaces import router as workspaces_router
 
 router = APIRouter(prefix="/web", tags=["web"])
@@ -28,6 +29,7 @@ api_router.include_router(files_router)
 api_router.include_router(memory_router)
 api_router.include_router(workspaces_router)
 api_router.include_router(model_catalogue_router)
+api_router.include_router(skills_router)
 router.include_router(api_router)
 
 __all__ = ["router"]

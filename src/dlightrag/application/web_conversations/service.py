@@ -418,6 +418,7 @@ class WebConversationService:
         workspaces: Sequence[str],
         attachments: Sequence[WebAttachment] = (),
         mode: str | None = None,
+        requested_skill: str | None = None,
     ) -> WebAnswerSubmission | None:
         """Create or replay one submission's run and its conversation entry.
 
@@ -436,6 +437,7 @@ class WebConversationService:
             workspaces=workspaces,
             attachments=attachments,
             mode=mode,
+            requested_skill=requested_skill,
         )
         replay = await self._store_call(
             self._store.replay_answer_turn(
@@ -466,6 +468,7 @@ class WebConversationService:
             seed=seed,
             attachments=attachments,
             mode=mode,
+            requested_skill=requested_skill,
         )
 
         async def resolve_history(
@@ -684,6 +687,7 @@ def _prepare_submission(
     seed: SubmissionSeed,
     attachments: Sequence[WebAttachment],
     mode: str | None = None,
+    requested_skill: str | None = None,
 ) -> _PreparedSubmission:
     """Normalize a browser submission without coupling it to a UI history page."""
     request = AnswerRequest(
@@ -692,6 +696,7 @@ def _prepare_submission(
         history=(),
         semantic_highlights=True,
         mode=mode,
+        requested_skill=requested_skill,
         resources=tuple(
             ResourceInput(
                 filename=attachment.filename,
@@ -740,6 +745,7 @@ def _web_answer_request_fingerprint(
     workspaces: Sequence[str],
     attachments: Sequence[WebAttachment],
     mode: str | None = None,
+    requested_skill: str | None = None,
 ) -> str:
     """Hash only the stable browser submission, before conversation enrichment."""
     return answer_run_request_fingerprint(
@@ -747,6 +753,7 @@ def _web_answer_request_fingerprint(
             "conversation_id": conversation_id,
             "query": query,
             "mode": mode or "auto",
+            "requested_skill": requested_skill or "",
             "workspaces": list(workspaces),
             "attachments": [
                 {
