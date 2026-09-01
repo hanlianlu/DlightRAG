@@ -441,7 +441,7 @@ body.files-panel-open #files-btn {
     padding: 0.25rem;
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-card);
+    border-radius: var(--radius-control);
     box-shadow: 0 12px 32px rgb(0 0 0 / 35%);
     z-index: 5;
 }
@@ -459,7 +459,7 @@ body.files-panel-open #files-btn {
     text-align: left;
     font: inherit;
     padding: 0.35rem 0.5rem;
-    border-radius: var(--radius-control);
+    border-radius: var(--radius-highlight);
     cursor: pointer;
     color: var(--color-text-primary);
 }
