@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: 引导用户创建、改进 DlightRAG 个人技能。当用户想"创建技能"、"把这件事变成技能"、"改一下我的技能"时使用。流程：访谈 → 起草 → publish_skill 发布 → 验证。
+description: Guide users through creating, refining, and removing their personal DlightRAG skills. Use when the user wants to create a skill, turn a repeated workflow into a skill, or edit an existing one. Flow: interview → draft → publish_skill → verify.
 ---
 
 # Skill Creator
