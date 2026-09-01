@@ -607,7 +607,7 @@
   background: var(--color-bg-elevated);
   padding: var(--space-inline) var(--space-tight);
   border-radius: var(--radius-control);
-  color: var(--color-accent-action);
+  color: var(--color-text-secondary);
 }
 
 .aiMessageContent ul,
