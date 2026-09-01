@@ -793,7 +793,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "2.0.0"
+version = "2.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -918,7 +918,7 @@ eval = [{ name = "lightrag-hku", extras = ["evaluation"], specifier = ">=1.5.7rc
 
 [[package]]
 name = "dlightrag-memory"
-version = "2.0.0"
+version = "2.0.1"
 source = { editable = "packages/memory" }
 dependencies = [
     { name = "asyncpg" },
