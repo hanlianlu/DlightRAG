@@ -31,6 +31,31 @@ export interface WebUploadReceipt {
   ingest: WebIngestStatus;
 }
 
+export type FailedRecoveryStatus = 'queued' | 'running' | 'succeeded' | 'partial' | 'failed';
+
+export interface WebFailedFileItem {
+  document_id: string;
+  file_name: string;
+  error: string;
+  updated_at: string;
+}
+
+export interface WebFailedRecoveryJob {
+  job_id: string;
+  workspace: string;
+  status: FailedRecoveryStatus;
+  retried: number;
+  succeeded: number;
+  failed: number;
+}
+
+export interface WebFailedFilesPage {
+  workspace: string;
+  failed: WebFailedFileItem[];
+  next_cursor: string | null;
+  active_recovery: WebFailedRecoveryJob | null;
+}
+
 export class FilesApiError extends Error {
   readonly status: number;
 
@@ -87,6 +112,39 @@ export async function getIngestStatus(
 ): Promise<WebIngestStatus> {
   const response = await fetch(url('/web/api/ingest-status', workspace), {signal});
   return json(response, 'Failed to read ingest status');
+}
+
+export async function getFailedFiles(
+  workspace: string,
+  cursor: string | null = null,
+  signal?: AbortSignal,
+): Promise<WebFailedFilesPage> {
+  const target = new URL(url('/web/api/files/failed', workspace), window.location.origin);
+  if (cursor !== null) target.searchParams.set('cursor', cursor);
+  const response = await fetch(target.pathname + target.search, {signal});
+  return json(response, 'Failed to load documents needing attention');
+}
+
+export async function startFailedFileRetry(
+  workspace: string,
+  signal?: AbortSignal,
+): Promise<WebFailedRecoveryJob> {
+  const response = await fetch(url('/web/api/files/retry', workspace), {
+    method: 'POST',
+    headers: csrfHeaders(),
+    signal,
+  });
+  return json(response, 'Document recovery could not be started');
+}
+
+export async function getFailedFileRetryStatus(
+  workspace: string,
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<WebFailedRecoveryJob> {
+  const path = `/web/api/files/retry/${encodeURIComponent(jobId)}`;
+  const response = await fetch(url(path, workspace), {signal});
+  return json(response, 'Failed to read document recovery status');
 }
 
 export async function uploadFileBatch(

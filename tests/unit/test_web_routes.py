@@ -112,6 +112,20 @@ def mock_application():
         }
     )
     corpora.delete_files = AsyncMock(return_value=[])
+    corpora.failed_file_snapshot = AsyncMock(
+        return_value={"failed": [], "next_cursor": None, "fetched_rows": 0}
+    )
+    corpora.get_active_retry_failed_docs = AsyncMock(return_value=None)
+    corpora.start_retry_failed_docs = AsyncMock(
+        return_value={
+            "job_id": "retry-1",
+            "workspace": "default",
+            "source_type": "retry_failed",
+            "status": "queued",
+            "result": {},
+        }
+    )
+    corpora.get_ingest_job = AsyncMock(return_value=None)
     corpora.start_ingest_job = AsyncMock(return_value={"job_id": "job-1", "status": "queued"})
     corpora.prepare_source_download = AsyncMock()
     corpora.get_visual_asset = AsyncMock()
@@ -827,6 +841,116 @@ class TestWebFiles:
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
         mock_application.corpora.file_panel_snapshot.assert_not_awaited()
+
+    async def test_failed_files_page_projects_bounded_rows_and_active_recovery(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        timestamp = datetime.datetime(2026, 8, 31, 21, 36, 15)
+        continuation = FilePanelCursor(
+            workspace="default",
+            updated_at=timestamp,
+            doc_id="doc-failed",
+            view="failed",
+        )
+        mock_application.corpora.failed_file_snapshot.return_value = {
+            "failed": [
+                {
+                    "doc_id": "doc-failed",
+                    "file_path": "/books/failed.pdf",
+                    "error": "embedding failed",
+                    "updated_at": timestamp.isoformat(),
+                }
+            ],
+            "next_cursor": continuation,
+            "fetched_rows": 2,
+        }
+        mock_application.corpora.get_active_retry_failed_docs.return_value = {
+            "job_id": "retry-1",
+            "workspace": "default",
+            "source_type": "retry_failed",
+            "status": "running",
+            "result": {},
+        }
+
+        response = await client.get("/web/api/files/failed")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["failed"] == [
+            {
+                "document_id": "doc-failed",
+                "file_name": "failed.pdf",
+                "error": "embedding failed",
+                "updated_at": timestamp.isoformat(),
+            }
+        ]
+        assert isinstance(payload["next_cursor"], str)
+        assert payload["active_recovery"] == {
+            "job_id": "retry-1",
+            "workspace": "default",
+            "status": "running",
+            "retried": 0,
+            "succeeded": 0,
+            "failed": 0,
+        }
+        mock_application.corpora.failed_file_snapshot.assert_awaited_once_with(
+            "default",
+            page=FilePanelPageRequest(limit=5),
+        )
+
+    async def test_failed_file_retry_starts_durable_job_and_projects_terminal_status(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        started = await client.post("/web/api/files/retry")
+
+        assert started.status_code == 202
+        assert started.json()["job_id"] == "retry-1"
+        mock_application.corpora.start_retry_failed_docs.assert_awaited_once_with("default")
+
+        mock_application.corpora.get_ingest_job.return_value = {
+            "job_id": "retry-1",
+            "workspace": "default",
+            "source_type": "retry_failed",
+            "status": "partial",
+            "result": {"retried": 2, "succeeded": 1, "failed": 1},
+        }
+        status = await client.get("/web/api/files/retry/retry-1")
+
+        assert status.status_code == 200
+        assert status.json() == {
+            "job_id": "retry-1",
+            "workspace": "default",
+            "status": "partial",
+            "retried": 2,
+            "succeeded": 1,
+            "failed": 1,
+        }
+
+    async def test_failed_file_retry_preserves_reader_role_forbidden_response(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        mock_application.corpora.start_retry_failed_docs.side_effect = PermissionError(
+            "failed document retry requires the writer service role"
+        )
+
+        response = await client.post("/web/api/files/retry")
+
+        assert response.status_code == 403
+        assert response.json()["error_type"] == "auth"
+
+    async def test_failed_file_retry_status_hides_other_job_kinds(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        mock_application.corpora.get_ingest_job.return_value = {
+            "job_id": "upload-1",
+            "workspace": "default",
+            "source_type": "local",
+            "status": "running",
+        }
+
+        response = await client.get("/web/api/files/retry/upload-1")
+
+        assert response.status_code == 404
 
     async def test_ingest_status_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application

@@ -415,6 +415,8 @@ class IngestJobs(Protocol):
         **kwargs: Any,
     ) -> dict[str, Any]: ...
 
+    async def start_retry_failed_job(self, workspace: str) -> dict[str, Any]: ...
+
     async def await_job(
         self,
         job_id: str,
@@ -423,6 +425,8 @@ class IngestJobs(Protocol):
     ) -> dict[str, Any] | None: ...
 
     async def get_job(self, job_id: str) -> dict[str, Any] | None: ...
+
+    async def get_active_retry_failed_job(self, workspace: str) -> dict[str, Any] | None: ...
 
     async def cancel_job(self, job_id: str, *, workspace: str) -> bool: ...
 
@@ -887,12 +891,35 @@ class CorpusAdmin:
         runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
         return await runtime.aget_visual_asset(chunk_id, size=size)
 
-    async def retry_failed_docs(self, workspace_id: str) -> dict[str, Any]:
+    async def start_retry_failed_docs(self, workspace_id: str) -> dict[str, Any]:
+        """Start or join the durable failed-document retry for one workspace."""
         self._require_writer("failed document retry")
-        workspace = require_canonical_workspace_id(workspace_id)
-        async with _workspace_write_gate(self._maintenance, workspace):
-            runtime = await _acquire_workspace(self._pool, workspace)
-            return await runtime.aretry_failed_docs()
+        return await self._ingest_jobs.start_retry_failed_job(
+            require_canonical_workspace_id(workspace_id)
+        )
+
+    async def get_active_retry_failed_docs(self, workspace_id: str) -> dict[str, Any] | None:
+        if self._settings.read_only:
+            return None
+        return await self._ingest_jobs.get_active_retry_failed_job(
+            require_canonical_workspace_id(workspace_id)
+        )
+
+    async def retry_failed_docs(self, workspace_id: str) -> dict[str, Any]:
+        """Await the durable single-flight retry for existing REST callers."""
+        job = await self.start_retry_failed_docs(workspace_id)
+        row = await self._ingest_jobs.await_job(str(job["job_id"]))
+        if row is None:
+            raise CorpusIngestError(f"Retry job disappeared: {job['job_id']}")
+        status = str(row.get("status") or "")
+        if status in JOB_STATES_WITH_RESULT:
+            result = row.get("result")
+            return result if isinstance(result, dict) else {}
+        raw_errors = row.get("errors")
+        errors = raw_errors if isinstance(raw_errors, list) else []
+        raise CorpusIngestError(
+            "; ".join(str(error) for error in errors) or "Failed-document retry failed"
+        )
 
     async def get_metadata(self, workspace_id: str, document_id: str) -> dict[str, Any]:
         runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))

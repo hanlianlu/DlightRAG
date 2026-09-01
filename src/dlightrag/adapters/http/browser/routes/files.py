@@ -4,13 +4,17 @@
 import logging
 import shutil
 from pathlib import Path
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, Any, NoReturn, cast
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
 from dlightrag.adapters.http.browser.deps import enforce_web_access, get_application, get_workspace
 from dlightrag.adapters.http.browser.file_models import (
+    WebFailedFileItem,
+    WebFailedFilesPage,
+    WebFailedRecoveryJob,
+    WebFailedRecoveryStatus,
     WebFileItem,
     WebFilePanelSnapshot,
     WebIngestStatus,
@@ -32,6 +36,8 @@ from dlightrag.application.corpus_admin import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+_FAILED_PAGE_DEFAULT_LIMIT = 5
+_FAILED_DOCUMENT_RETRY_JOB_TYPE = "retry_failed"
 
 
 @router.get("/files/raw/{document_id:path}", response_model=None)
@@ -110,6 +116,37 @@ def _file_view_models(files: list[dict[str, Any]]) -> list[WebFileItem]:
             file_name = str(item.get("doc_id") or "Untitled file")
         rows.append(WebFileItem(file_name=file_name, file_path=file_path))
     return rows
+
+
+def _failed_file_view_models(files: list[dict[str, Any]]) -> list[WebFailedFileItem]:
+    rows: list[WebFailedFileItem] = []
+    for item in files:
+        file_path = str(item.get("file_path") or "")
+        rows.append(
+            WebFailedFileItem(
+                document_id=str(item.get("doc_id") or ""),
+                file_name=Path(file_path).name or "Untitled file",
+                error=str(item.get("error") or ""),
+                updated_at=str(item.get("updated_at") or ""),
+            )
+        )
+    return rows
+
+
+def _failed_recovery_job(job: dict[str, Any]) -> WebFailedRecoveryJob:
+    result_value = job.get("result")
+    result = result_value if isinstance(result_value, dict) else {}
+    status = str(job.get("status") or "failed")
+    if status not in {"queued", "running", "succeeded", "partial", "failed"}:
+        status = "failed"
+    return WebFailedRecoveryJob(
+        job_id=str(job.get("job_id") or ""),
+        workspace=str(job.get("workspace") or ""),
+        status=cast(WebFailedRecoveryStatus, status),
+        retried=max(0, int(result.get("retried") or job.get("total_items") or 0)),
+        succeeded=max(0, int(result.get("succeeded") or job.get("processed_items") or 0)),
+        failed=max(0, int(result.get("failed") or job.get("failed_items") or 0)),
+    )
 
 
 def _ingest_status(status: dict[str, Any], *, message: str = "") -> WebIngestStatus:
@@ -192,6 +229,115 @@ async def _file_panel_snapshot(
             else None
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Failed-document recovery — bounded listing + durable background retry
+# ---------------------------------------------------------------------------
+
+
+@router.get("/files/failed", response_model=WebFailedFilesPage)
+async def failed_file_list(
+    request: Request,
+    workspace: str = Depends(get_workspace),
+    workspace_name: str | None = Query(default=None, alias="workspace"),
+    limit: Annotated[int, Query(ge=1, le=FILE_PANEL_PAGE_MAX_LIMIT)] = (_FAILED_PAGE_DEFAULT_LIMIT),
+    cursor: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
+) -> WebFailedFilesPage:
+    selected_workspace = _resolve_workspace(workspace_name, workspace)
+    selected_workspace = await _resolve_registered_workspace(request, selected_workspace)
+    if selected_workspace is None:
+        _stale_workspace()
+    await enforce_web_access(request, AccessAction.WORKSPACE_LIST_FILES, selected_workspace)
+    application = get_application(request)
+    try:
+        decoded_cursor = (
+            application.corpora.file_panel_cursor_codec.decode(cursor)
+            if cursor is not None
+            else None
+        )
+        if decoded_cursor is not None and decoded_cursor.workspace != selected_workspace:
+            raise FilePanelCursorError("file-panel cursor belongs to another workspace")
+        if decoded_cursor is not None and decoded_cursor.view != "failed":
+            raise FilePanelCursorError("file-panel cursor belongs to another view")
+        page = FilePanelPageRequest(limit=limit, cursor=decoded_cursor)
+    except (FilePanelCursorError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    try:
+        snapshot = await application.corpora.failed_file_snapshot(
+            selected_workspace,
+            page=page,
+        )
+        active = await application.corpora.get_active_retry_failed_docs(selected_workspace)
+    except Exception:
+        logger.exception(
+            "Could not read failed files for workspace %s",
+            safe_log_text(selected_workspace),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Failed-document status is temporarily unavailable",
+        ) from None
+
+    next_cursor = snapshot.get("next_cursor")
+    return WebFailedFilesPage(
+        workspace=selected_workspace,
+        failed=_failed_file_view_models(list(snapshot.get("failed") or [])),
+        next_cursor=(
+            application.corpora.file_panel_cursor_codec.encode(next_cursor)
+            if next_cursor is not None
+            else None
+        ),
+        active_recovery=_failed_recovery_job(active) if active is not None else None,
+    )
+
+
+@router.post("/files/retry", response_model=WebFailedRecoveryJob, status_code=202)
+async def start_failed_file_retry(
+    request: Request,
+    workspace: str = Depends(get_workspace),
+    workspace_name: str | None = Query(default=None, alias="workspace"),
+) -> WebFailedRecoveryJob:
+    selected_workspace = _resolve_workspace(workspace_name, workspace)
+    if not await _workspace_is_registered(request, selected_workspace):
+        _stale_workspace()
+    await enforce_web_access(request, AccessAction.WORKSPACE_INGEST, selected_workspace)
+    try:
+        job = await get_application(request).corpora.start_retry_failed_docs(selected_workspace)
+    except PermissionError:
+        raise
+    except Exception:
+        logger.exception(
+            "Could not start failed-document retry for workspace %s",
+            safe_log_text(selected_workspace),
+        )
+        raise HTTPException(
+            status_code=503, detail="Document recovery could not be started"
+        ) from None
+    return _failed_recovery_job(job)
+
+
+@router.get("/files/retry/{job_id}", response_model=WebFailedRecoveryJob)
+async def failed_file_retry_status(
+    job_id: str,
+    request: Request,
+    workspace: str = Depends(get_workspace),
+    workspace_name: str | None = Query(default=None, alias="workspace"),
+) -> WebFailedRecoveryJob:
+    selected_workspace = _resolve_workspace(workspace_name, workspace)
+    selected_workspace = await _resolve_registered_workspace(request, selected_workspace)
+    if selected_workspace is None:
+        _stale_workspace()
+    await enforce_web_access(request, AccessAction.WORKSPACE_LIST_FILES, selected_workspace)
+    job = await get_application(request).corpora.get_ingest_job(job_id)
+    if (
+        job is None
+        or str(job.get("workspace") or "") != selected_workspace
+        or str(job.get("source_type") or "") != _FAILED_DOCUMENT_RETRY_JOB_TYPE
+    ):
+        raise HTTPException(status_code=404, detail="Document recovery job not found")
+    return _failed_recovery_job(job)
 
 
 # ---------------------------------------------------------------------------

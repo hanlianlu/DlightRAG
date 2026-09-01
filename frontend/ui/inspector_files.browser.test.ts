@@ -393,6 +393,14 @@ it('load older is a no-op while a same-workspace first-page reload is active', a
   let olderRequests = 0;
   window.fetch = async (input) => {
     const url = new URL(String(input), window.location.origin);
+    if (url.pathname.endsWith('/files/failed')) {
+      return new Response(JSON.stringify({
+        workspace: 'default',
+        failed: [],
+        next_cursor: null,
+        active_recovery: null,
+      }), {status: 200, headers: {'Content-Type': 'application/json'}});
+    }
     if (url.searchParams.has('cursor')) {
       olderRequests += 1;
       return new Response(JSON.stringify(snapshot([], null)), {

@@ -119,6 +119,15 @@ class _Conn:
             if self.row.get("status") == "running" and self.row.get("lease_owner") == args[1]:
                 return self.row
             return None
+        if "source_type = $2" in query and "status IN ('queued', 'running')" in query:
+            if (
+                self.row is not None
+                and self.row.get("workspace") == args[0]
+                and self.row.get("source_type") == args[1]
+                and self.row.get("status") in {"queued", "running"}
+            ):
+                return self.row
+            return None
         return self.row
 
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
@@ -154,6 +163,16 @@ class _Conn:
             else:
                 retained += incoming
             self.row["errors"] = json.dumps(retained)
+            return 1
+        if "source_type = 'retry_failed'" in query and self.row is not None:
+            self.row["total_items"] = args[1]
+            self.row["processed_items"] = args[2]
+            self.row["failed_items"] = args[3]
+            self.row["current_window"] = 1
+            self.row["status"] = _finished_status(self.row)
+            self.row["result_json"] = args[4]
+            self.row["lease_owner"] = None
+            self.row["lease_expires_at"] = None
             return 1
         if "THEN 'partial' ELSE 'succeeded'" in query and self.row is not None:
             self.row["status"] = _finished_status(self.row)
@@ -228,6 +247,9 @@ async def test_ingest_job_store_records_window_progress_and_result() -> None:
     assert row["result"] == {"processed": 63}
     assert row["errors"] == ["s3://b/docs/bad.pdf: failed"]
     assert row["errors_truncated"] is False
+    finish_query = next(query for query, _ in conn.fetchvals if "finished_at = NOW()" in query)
+    assert "status = 'running'" in finish_query
+    assert "lease_expires_at > NOW()" in finish_query
 
 
 async def test_ingest_job_store_caps_retained_errors_and_reports_truncation() -> None:
@@ -306,6 +328,13 @@ async def test_ingest_job_store_caps_terminal_failure_error() -> None:
     assert row is not None
     assert row["errors"] == retained_errors
     assert row["errors_truncated"] is True
+    fail_query = next(
+        query
+        for query, _ in conn.fetchvals
+        if "SET status = 'failed'" in query and "finished_at = NOW()" in query
+    )
+    assert "status = 'running'" in fail_query
+    assert "lease_expires_at > NOW()" in fail_query
 
 
 async def test_ingest_job_store_claims_job_with_database_lease() -> None:
@@ -371,6 +400,7 @@ async def test_ingest_job_store_renews_owned_lease() -> None:
     query, args = conn.fetchvals[0]
     assert "SET lease_expires_at = NOW() + ($3 * INTERVAL '1 second')" in query
     assert "lease_owner = $2" in query
+    assert "lease_expires_at > NOW()" in query
     assert args == ("job-1", "owner-1", 300)
 
 
@@ -388,6 +418,8 @@ async def test_ingest_job_store_prunes_stale_jobs() -> None:
     assert "errors_truncated =" in mark_query
     # Liveness comes from the lease, so the reaper keys off it, not updated_at.
     assert "COALESCE(lease_expires_at, updated_at) <" in mark_query
+    assert "lease_owner = NULL" in mark_query
+    assert "lease_expires_at = NULL" in mark_query
     assert mark_args[0] == JOB_ORPHAN_AFTER_SECONDS
     assert json.loads(mark_args[1]) == ["ingest job abandoned after process exit"]
     assert mark_args[3] == 200
@@ -439,6 +471,30 @@ async def test_ingest_job_store_lists_recoverable_jobs() -> None:
     # Recovery and reaping split orphans on the same boundary: no gap, no overlap.
     assert "COALESCE(lease_expires_at, updated_at) >=" in query
     assert args[0] == JOB_ORPHAN_AFTER_SECONDS
+
+
+async def test_ingest_job_store_finds_only_matching_active_workspace_job() -> None:
+    conn = _Conn()
+    store = PGIngestJobStore(pool=_Pool(conn))
+    await store.create(
+        job_id="retry-1",
+        workspace="personel",
+        source_type="retry_failed",
+        request={},
+    )
+
+    active = await store.get_active_for_workspace(
+        "personel",
+        source_type="retry_failed",
+    )
+    missing = await store.get_active_for_workspace(
+        "default",
+        source_type="retry_failed",
+    )
+
+    assert active is not None
+    assert active["job_id"] == "retry-1"
+    assert missing is None
 
 
 async def test_ingest_job_store_deletes_workspace_jobs() -> None:
@@ -625,6 +681,25 @@ class _CoordinatorStore:
         self.rows[job_id]["result"] = result
         return True
 
+    async def finish_failed_retry(
+        self,
+        job_id: str,
+        *,
+        result: dict[str, Any],
+        lease_owner: str | None = None,
+    ) -> bool:
+        row = self.rows[job_id]
+        retried = int(result.get("retried") or 0)
+        succeeded = int(result.get("succeeded") or 0)
+        failed = int(result.get("failed") or 0)
+        row["total_items"] = retried
+        row["processed_items"] = succeeded
+        row["failed_items"] = failed
+        row["current_window"] = 1
+        row["status"] = "partial" if failed else "succeeded"
+        row["result"] = result
+        return True
+
     async def fail(
         self,
         job_id: str,
@@ -639,8 +714,27 @@ class _CoordinatorStore:
     async def get(self, job_id: str) -> dict[str, Any] | None:
         return self.rows.get(job_id)
 
+    async def get_active_for_workspace(
+        self,
+        workspace: str,
+        *,
+        source_type: str,
+    ) -> dict[str, Any] | None:
+        matches = [
+            row
+            for row in self.rows.values()
+            if row.get("workspace") == workspace
+            and row.get("source_type") == source_type
+            and row.get("status") in {"queued", "running"}
+        ]
+        return matches[-1] if matches else None
+
     async def list_recoverable(self) -> list[dict[str, Any]]:
-        return list(self.recoverable_rows)
+        return [
+            row
+            for row in self.recoverable_rows
+            if self.rows.get(str(row.get("job_id")), row).get("status") in {"queued", "running"}
+        ]
 
     async def prune(self) -> dict[str, int]:
         return {"failed_abandoned": 0, "deleted_completed": 0}
@@ -731,6 +825,57 @@ async def test_coordinator_does_not_run_recovery_after_losing_the_claim(
     runtime.aingest.assert_not_awaited()
 
 
+async def test_sweeper_recovers_a_job_that_becomes_recoverable_after_startup(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    from dlightrag.engine.rag.corpus.ingestion import jobs as jobs_module
+
+    monkeypatch.setattr(jobs_module, "_JOB_SWEEP_SECONDS", 0.01)
+    store = _CoordinatorStore()
+    runtime = AsyncMock()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def retry() -> dict[str, int]:
+        started.set()
+        await release.wait()
+        return {"retried": 1, "succeeded": 1, "failed": 0}
+
+    runtime.aretry_failed_docs.side_effect = retry
+    coordinator = _coordinator(store, runtime, input_root=tmp_path)
+    await coordinator.start_recovery()
+    row = {
+        "job_id": "retry-late",
+        "workspace": "personel",
+        "source_type": "retry_failed",
+        "status": "running",
+        "request": {
+            "workspace": "personel",
+            "source_type": "retry_failed",
+            "kwargs": {},
+        },
+        "total_items": 0,
+        "processed_items": 0,
+        "failed_items": 0,
+        "current_window": 0,
+        "result": {},
+        "errors": [],
+    }
+    store.rows["retry-late"] = dict(row)
+    store.recoverable_rows.append(row)
+
+    await asyncio.wait_for(started.wait(), timeout=1)
+    store.recoverable_rows.clear()
+    release.set()
+    result = await coordinator.await_job("retry-late", timeout=1)
+    await coordinator.close()
+
+    assert result is not None
+    assert result["status"] == "succeeded"
+    runtime.aretry_failed_docs.assert_awaited_once_with()
+
+
 async def test_coordinator_records_progress_and_cleans_completed_upload_batch(
     tmp_path: Path,
 ) -> None:
@@ -770,6 +915,94 @@ async def test_coordinator_records_progress_and_cleans_completed_upload_batch(
     assert result["failed_items"] == 1
     assert result["request"]["cleanup_paths"] == [str(staged_dir)]
     assert not staged_dir.exists()
+
+
+async def test_coordinator_runs_failed_document_retry_without_promotion_counts(
+    tmp_path: Path,
+) -> None:
+    store = _CoordinatorStore()
+    runtime = AsyncMock()
+    runtime.aretry_failed_docs.return_value = {"retried": 2, "succeeded": 1, "failed": 1}
+    coordinator = _coordinator(store, runtime, input_root=tmp_path)
+
+    job = await coordinator.start_retry_failed_job("personel")
+    result = await coordinator.await_job(job["job_id"], timeout=1)
+    await coordinator.close()
+
+    assert result is not None
+    assert result["source_type"] == "retry_failed"
+    assert result["total_items"] == 2
+    assert result["processed_items"] == 1
+    assert result["failed_items"] == 1
+    assert result["result"] == {"retried": 2, "succeeded": 1, "failed": 1}
+    assert result["status"] == "partial"
+    assert not any(event[0] == "record-window" for event in store.events)
+    runtime.aretry_failed_docs.assert_awaited_once_with()
+    runtime.aingest.assert_not_awaited()
+
+
+async def test_recovered_failed_retry_replaces_stale_partial_counts(tmp_path: Path) -> None:
+    row = {
+        "job_id": "retry-1",
+        "workspace": "personel",
+        "source_type": "retry_failed",
+        "status": "running",
+        "request": {
+            "workspace": "personel",
+            "source_type": "retry_failed",
+            "kwargs": {},
+        },
+        "total_items": 2,
+        "processed_items": 1,
+        "failed_items": 1,
+        "current_window": 1,
+        "result": {},
+        "errors": [],
+    }
+    store = _CoordinatorStore()
+    store.rows["retry-1"] = dict(row)
+    store.recoverable_rows = [row]
+    runtime = AsyncMock()
+    runtime.aretry_failed_docs.return_value = {"retried": 1, "succeeded": 1, "failed": 0}
+    coordinator = _coordinator(store, runtime, input_root=tmp_path)
+
+    await coordinator.start_recovery()
+    result = await coordinator.await_job("retry-1", timeout=1)
+    store.recoverable_rows.clear()
+    await coordinator.close()
+
+    assert result is not None
+    assert result["status"] == "succeeded"
+    assert result["total_items"] == 1
+    assert result["processed_items"] == 1
+    assert result["failed_items"] == 0
+    assert result["result"] == {"retried": 1, "succeeded": 1, "failed": 0}
+    assert not any(event[0] == "record-window" for event in store.events)
+
+
+async def test_coordinator_joins_one_active_failed_document_retry(tmp_path: Path) -> None:
+    store = _CoordinatorStore()
+    runtime = AsyncMock()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def retry() -> dict[str, int]:
+        started.set()
+        await release.wait()
+        return {"retried": 1, "succeeded": 1, "failed": 0}
+
+    runtime.aretry_failed_docs.side_effect = retry
+    coordinator = _coordinator(store, runtime, input_root=tmp_path)
+
+    first = await coordinator.start_retry_failed_job("personel")
+    await asyncio.wait_for(started.wait(), timeout=1)
+    second = await coordinator.start_retry_failed_job("personel")
+    release.set()
+    await coordinator.await_job(first["job_id"], timeout=1)
+    await coordinator.close()
+
+    assert second["job_id"] == first["job_id"]
+    runtime.aretry_failed_docs.assert_awaited_once_with()
 
 
 async def test_coordinator_close_keeps_running_upload_for_recovery(tmp_path: Path) -> None:
@@ -1026,6 +1259,35 @@ async def test_record_window_without_thresholds_keeps_counters_but_never_enqueue
         and "ingested_docs_total = ingested_docs_total + $2" in query
         for query, _ in conn.executed
     )
+
+
+async def test_failed_retry_finishes_counts_and_status_atomically_without_counter_event() -> None:
+    conn = _Conn()
+    store = PGIngestJobStore(pool=_Pool(conn))
+    await store.initialize()
+    await store.create(
+        job_id="retry-1",
+        workspace="personel",
+        source_type="retry_failed",
+        request={},
+    )
+    await store.claim_running("retry-1", lease_owner="owner-1", lease_seconds=300)
+
+    finished = await store.finish_failed_retry(
+        "retry-1",
+        result={"retried": 2, "succeeded": 1, "failed": 1},
+        lease_owner="owner-1",
+    )
+
+    assert finished is True
+    assert conn.counter_inserts == []
+    row = await store.get("retry-1")
+    assert row is not None
+    assert row["status"] == "partial"
+    assert row["total_items"] == 2
+    assert row["processed_items"] == 1
+    assert row["failed_items"] == 1
+    assert row["result"] == {"retried": 2, "succeeded": 1, "failed": 1}
 
 
 def test_counter_ledger_is_idempotent_per_job_and_window() -> None:

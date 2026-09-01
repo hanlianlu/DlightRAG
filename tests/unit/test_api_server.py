@@ -240,6 +240,16 @@ def mock_application(_api_app: FastAPI, mock_service, test_config):
     corpora.failed_file_snapshot = AsyncMock(
         return_value={"failed": [], "next_cursor": None, "fetched_rows": 0}
     )
+    corpora.get_active_retry_failed_docs = AsyncMock(return_value=None)
+    corpora.start_retry_failed_docs = AsyncMock(
+        return_value={
+            "job_id": "retry-1",
+            "workspace": "default",
+            "source_type": "retry_failed",
+            "status": "queued",
+            "result": {},
+        }
+    )
     corpora.retry_failed_docs = AsyncMock(return_value={})
     corpora.prepare_source_download = AsyncMock()
     corpora.get_visual_asset = AsyncMock()

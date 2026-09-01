@@ -61,6 +61,12 @@ _CREATE_INDEXES = (
     f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_status_lease ON {TABLE} (status, lease_expires_at)",
 )
 
+_CREATE_ACTIVE_RETRY_UNIQUE = f"""
+CREATE UNIQUE INDEX IF NOT EXISTS idx_{TABLE}_one_active_failed_retry
+ON {TABLE} (workspace, source_type)
+WHERE source_type = 'retry_failed' AND status IN ('queued', 'running')
+"""
+
 # Durable idempotency ledger: one event per ingest job/window. Replayed
 # windows (lease lost and reclaimed) hit the primary key and must not move the
 # registry counters again.
@@ -132,6 +138,7 @@ SET status = 'queued',
 WHERE job_id = $1
   AND status = 'running'
   AND lease_owner = $2
+  AND lease_expires_at > NOW()
 """
 
 # A queued job waiting out a promotion fence refreshes its liveness so the
@@ -208,6 +215,7 @@ WITH updated AS (
     WHERE job_id = $1
       AND lease_owner = $2
       AND status = 'running'
+      AND lease_expires_at > NOW()
     RETURNING 1
 )
 SELECT COUNT(*)::int FROM updated
@@ -256,6 +264,31 @@ WITH updated AS (
         finished_at = NOW()
     WHERE job_id = $1
       AND lease_owner = $3
+      AND status = 'running'
+      AND lease_expires_at > NOW()
+    RETURNING 1
+)
+SELECT COUNT(*)::int FROM updated
+"""
+
+_FINISH_FAILED_RETRY = """
+WITH updated AS (
+    UPDATE dlightrag_ingest_jobs
+    SET status = CASE WHEN $4 > 0 THEN 'partial' ELSE 'succeeded' END,
+        total_items = $2,
+        processed_items = $3,
+        failed_items = $4,
+        current_window = 1,
+        result_json = $5::jsonb,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        updated_at = NOW(),
+        finished_at = NOW()
+    WHERE job_id = $1
+      AND source_type = 'retry_failed'
+      AND lease_owner = $6
+      AND status = 'running'
+      AND lease_expires_at > NOW()
     RETURNING 1
 )
 SELECT COUNT(*)::int FROM updated
@@ -283,6 +316,8 @@ WITH updated AS (
         finished_at = NOW()
     WHERE job_id = $1
       AND lease_owner = $3
+      AND status = 'running'
+      AND lease_expires_at > NOW()
     RETURNING 1
 )
 SELECT COUNT(*)::int FROM updated
@@ -296,6 +331,20 @@ errors_truncated,
 created_at, updated_at, started_at, finished_at, lease_owner, lease_expires_at
 FROM dlightrag_ingest_jobs
 WHERE job_id = $1
+"""
+
+_GET_ACTIVE_FOR_WORKSPACE = """
+SELECT
+job_id, workspace, source_type, status, request_json, total_items,
+processed_items, failed_items, current_window, result_json, errors,
+errors_truncated,
+created_at, updated_at, started_at, finished_at, lease_owner, lease_expires_at
+FROM dlightrag_ingest_jobs
+WHERE workspace = $1
+  AND source_type = $2
+  AND status IN ('queued', 'running')
+ORDER BY created_at DESC, job_id DESC
+LIMIT 1
 """
 
 _LIST_RECOVERABLE = """
@@ -330,6 +379,8 @@ WITH updated AS (
         ),
         errors_truncated = errors_truncated
             OR jsonb_array_length(errors) + jsonb_array_length($2::jsonb) > $4,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
         updated_at = NOW(),
         finished_at = NOW()
     WHERE job_id IN (
@@ -404,6 +455,11 @@ _SCHEMA_MIGRATIONS = (
         "ingest_counters_fk",
         "Cascade-delete counter ledger rows with their ingest jobs",
         (_CREATE_COUNTERS_FK,),
+    ),
+    Migration(
+        "one_active_failed_retry",
+        "Allow at most one active failed-document retry per workspace",
+        (_CREATE_ACTIVE_RETRY_UNIQUE,),
     ),
 )
 
@@ -630,6 +686,35 @@ class PGIngestJobStore(PostgresOperationRunner):
 
         return await self._run(_operation) > 0
 
+    async def finish_failed_retry(
+        self,
+        job_id: str,
+        *,
+        result: dict[str, Any],
+        lease_owner: str,
+    ) -> bool:
+        retried = max(0, int(result.get("retried") or 0))
+        succeeded = max(0, int(result.get("succeeded") or 0))
+        failed = max(0, int(result.get("failed") or 0))
+        if succeeded + failed > retried:
+            retried = succeeded + failed
+        final_result = dict(result)
+        final_result.update(retried=retried, succeeded=succeeded, failed=failed)
+
+        async def _operation(conn: Any) -> int:
+            updated = await conn.fetchval(
+                _FINISH_FAILED_RETRY,
+                job_id,
+                retried,
+                succeeded,
+                failed,
+                json.dumps(final_result),
+                lease_owner,
+            )
+            return int(updated or 0)
+
+        return await self._run(_operation) > 0
+
     async def fail(self, job_id: str, *, error: str, lease_owner: str) -> bool:
         async def _operation(conn: Any) -> int:
             updated = await conn.fetchval(
@@ -646,6 +731,25 @@ class PGIngestJobStore(PostgresOperationRunner):
     async def get(self, job_id: str) -> dict[str, Any] | None:
         async def _operation(conn: Any) -> Any:
             return await conn.fetchrow(_GET, job_id)
+
+        row = await self._run(_operation)
+        return _serialize_row(row) if row is not None else None
+
+    async def get_active_for_workspace(
+        self,
+        workspace: str,
+        *,
+        source_type: str,
+    ) -> dict[str, Any] | None:
+        workspace_id = str(workspace).strip()
+        source = str(source_type).strip()
+        if not workspace_id:
+            raise ValueError("workspace cannot be empty")
+        if not source:
+            raise ValueError("source_type cannot be empty")
+
+        async def _operation(conn: Any) -> Any:
+            return await conn.fetchrow(_GET_ACTIVE_FOR_WORKSPACE, workspace_id, source)
 
         row = await self._run(_operation)
         return _serialize_row(row) if row is not None else None

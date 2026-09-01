@@ -757,6 +757,7 @@ def e2e_base_url(
         "next_cursor": None,
         "fetched_rows": 0,
     }
+    application_double.corpora.get_active_retry_failed_docs.return_value = None
     application_double.corpora.delete_files.return_value = {"deleted_count": 0}
     application_double.web_conversations = e2e_conversation_service
 

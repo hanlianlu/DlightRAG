@@ -1484,6 +1484,101 @@ async def test_prune_cascades_counter_ledger_rows(
         await conn.close()
 
 
+async def test_failed_retry_is_single_flight_and_atomically_replaces_stale_counts(
+    corpus: None, workspaces: tuple[str, str]
+) -> None:
+    ws, _ = workspaces
+    await _clean_state()
+    import asyncio
+
+    from dlightrag.adapters.postgres.corpus.ingest_jobs import PGIngestJobStore
+
+    await PGWorkspaceRegistry().upsert(workspace=ws, display_name="Retry", embedding_model="m")
+    store = PGIngestJobStore()
+    await store.initialize()
+
+    async def create_retry(job_id: str) -> None:
+        await store.create(
+            job_id=job_id,
+            workspace=ws,
+            source_type="retry_failed",
+            request={"workspace": ws, "source_type": "retry_failed", "kwargs": {}},
+        )
+
+    outcomes = await asyncio.gather(
+        create_retry("retry-a"),
+        create_retry("retry-b"),
+        return_exceptions=True,
+    )
+    assert sum(outcome is None for outcome in outcomes) == 1
+    assert sum(isinstance(outcome, asyncpg.UniqueViolationError) for outcome in outcomes) == 1
+
+    active = await store.get_active_for_workspace(ws, source_type="retry_failed")
+    assert active is not None
+    job_id = active["job_id"]
+    assert await store.claim_running(job_id, lease_owner="retry-owner", lease_seconds=300)
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        await conn.execute(
+            "UPDATE dlightrag_ingest_jobs "
+            "SET total_items = 2, processed_items = 1, failed_items = 1, current_window = 1 "
+            "WHERE job_id = $1",
+            job_id,
+        )
+    finally:
+        await conn.close()
+
+    assert await store.finish_failed_retry(
+        job_id,
+        result={"retried": 1, "succeeded": 1, "failed": 0},
+        lease_owner="retry-owner",
+    )
+    finished = await store.get(job_id)
+    assert finished is not None
+    assert finished["status"] == "succeeded"
+    assert finished["total_items"] == 1
+    assert finished["processed_items"] == 1
+    assert finished["failed_items"] == 0
+
+
+async def test_expired_ingest_lease_cannot_be_revived_or_finalized(
+    corpus: None, workspaces: tuple[str, str]
+) -> None:
+    ws, _ = workspaces
+    await _clean_state()
+    from dlightrag.adapters.postgres.corpus.ingest_jobs import PGIngestJobStore
+
+    registry = PGWorkspaceRegistry()
+    await registry.upsert(workspace=ws, display_name="Expired", embedding_model="m")
+    store = PGIngestJobStore()
+    await store.initialize()
+    await store.create(job_id="expired-job", workspace=ws, source_type="local", request={})
+    assert await store.claim_running("expired-job", lease_owner="stale-owner", lease_seconds=300)
+    conn = await asyncpg.connect(**_kwargs(_TEST_DB))
+    try:
+        await conn.execute(
+            "UPDATE dlightrag_ingest_jobs "
+            "SET lease_expires_at = NOW() - INTERVAL '2 hours', "
+            "updated_at = NOW() - INTERVAL '2 hours' "
+            "WHERE job_id = 'expired-job'"
+        )
+    finally:
+        await conn.close()
+
+    assert not await store.heartbeat("expired-job", lease_owner="stale-owner", lease_seconds=300)
+    assert not await store.finish("expired-job", result={"processed": 1}, lease_owner="stale-owner")
+    assert not await store.fail("expired-job", error="late failure", lease_owner="stale-owner")
+    assert not await store.release_running("expired-job", lease_owner="stale-owner")
+
+    summary = await store.prune()
+    row = await store.get("expired-job")
+    assert summary["failed_abandoned"] >= 1
+    assert row is not None
+    assert row["status"] == "failed"
+    assert row["lease_owner"] is None
+    assert row["lease_expires_at"] is None
+
+
 async def test_fence_keeps_real_jobs_queued_with_liveness_and_terminal_cancel(
     corpus: None, workspaces: tuple[str, str]
 ) -> None:

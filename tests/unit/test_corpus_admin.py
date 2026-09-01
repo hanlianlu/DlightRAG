@@ -80,8 +80,10 @@ def _admin(
     jobs = SimpleNamespace(
         start_recovery=AsyncMock(),
         start_job=AsyncMock(return_value={"job_id": "job-1", "status": "queued"}),
+        start_retry_failed_job=AsyncMock(return_value={"job_id": "retry-1", "status": "queued"}),
         await_job=AsyncMock(),
         get_job=AsyncMock(),
+        get_active_retry_failed_job=AsyncMock(return_value=None),
         cancel_job=AsyncMock(),
         has_active_workspace_job=MagicMock(return_value=False),
         cancel_for_workspace=AsyncMock(return_value=0),
@@ -412,6 +414,7 @@ async def test_catalog_failure_falls_back_to_default() -> None:
         ),
         ("cancel_ingest_job", ("job-1",), {}),
         ("delete_files", ("finance",), {}),
+        ("start_retry_failed_docs", ("finance",), {}),
         ("retry_failed_docs", ("finance",), {}),
         ("update_metadata", ("finance", "doc-1", {"title": "Report"}), {}),
         ("reset", (), {"workspace_ids": ("finance",)}),
@@ -430,6 +433,7 @@ async def test_reader_rejects_corpus_mutations_before_touching_collaborators(
     pool.acquire.assert_not_awaited()
     maintenance.list_workspace_records.assert_not_awaited()
     jobs.start_job.assert_not_awaited()
+    jobs.start_retry_failed_job.assert_not_awaited()
     jobs.cancel_job.assert_not_awaited()
 
 
@@ -550,6 +554,46 @@ async def test_file_panel_snapshot_derives_bounded_cursor_and_rejects_foreign_cu
             ),
         )
     file_panel.list_processed_files.assert_not_awaited()
+
+
+async def test_failed_document_retry_jobs_delegate_to_durable_coordinator() -> None:
+    admin, pool, _, jobs, _, _ = _admin()
+    jobs.get_active_retry_failed_job.return_value = {
+        "job_id": "retry-1",
+        "workspace": "finance",
+        "status": "running",
+    }
+    jobs.await_job.return_value = {
+        "job_id": "retry-1",
+        "status": "partial",
+        "result": {"retried": 2, "succeeded": 1, "failed": 1},
+    }
+
+    started = await admin.start_retry_failed_docs("finance")
+    active = await admin.get_active_retry_failed_docs("finance")
+    result = await admin.retry_failed_docs("finance")
+
+    assert started == {"job_id": "retry-1", "status": "queued"}
+    assert active == {
+        "job_id": "retry-1",
+        "workspace": "finance",
+        "status": "running",
+    }
+    assert result == {"retried": 2, "succeeded": 1, "failed": 1}
+    assert jobs.start_retry_failed_job.await_count == 2
+    jobs.start_retry_failed_job.assert_awaited_with("finance")
+    jobs.get_active_retry_failed_job.assert_awaited_once_with("finance")
+    jobs.await_job.assert_awaited_once_with("retry-1")
+    pool.acquire.assert_not_awaited()
+
+
+async def test_reader_does_not_initialize_retry_coordinator_for_active_status() -> None:
+    admin, _, _, jobs, _, _ = _admin(read_only=True)
+
+    assert await admin.get_active_retry_failed_docs("finance") is None
+
+    jobs.get_active_retry_failed_job.assert_not_awaited()
+    jobs.start_recovery.assert_not_awaited()
 
 
 async def test_failed_file_snapshot_is_bounded_and_preserves_error_text() -> None:

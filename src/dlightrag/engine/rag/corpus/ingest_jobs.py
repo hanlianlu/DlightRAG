@@ -73,9 +73,24 @@ class IngestJobStore(Protocol):
 
     async def finish(self, job_id: str, *, result: dict[str, Any], lease_owner: str) -> bool: ...
 
+    async def finish_failed_retry(
+        self,
+        job_id: str,
+        *,
+        result: dict[str, Any],
+        lease_owner: str,
+    ) -> bool: ...
+
     async def fail(self, job_id: str, *, error: str, lease_owner: str) -> bool: ...
 
     async def get(self, job_id: str) -> dict[str, Any] | None: ...
+
+    async def get_active_for_workspace(
+        self,
+        workspace: str,
+        *,
+        source_type: str,
+    ) -> dict[str, Any] | None: ...
 
     async def list_recoverable(self) -> list[dict[str, Any]]: ...
 

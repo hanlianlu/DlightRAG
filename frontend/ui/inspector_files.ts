@@ -20,6 +20,8 @@ import {workspaceStore} from '../stores/workspaceStore.ts';
 import {bus} from '../events/bus.ts';
 import {modalResult} from './modal.ts';
 import {withRelativePath} from './folder-upload.ts';
+import './failed_file_recovery.ts';
+import type {DlFailedFileRecovery} from './failed_file_recovery.ts';
 import type {ToastRequestDetail} from './toast.ts';
 
 const POLL_INTERVAL_MS = 2000;
@@ -336,6 +338,8 @@ export class DlInspectorFiles extends LightElement {
       if (workspace !== ingestStore.workspace || !this.active || !this.isConnected) return;
       if (!status.busy) {
         await this.reload(false);
+        const recovery = this.querySelector<DlFailedFileRecovery>('dl-failed-file-recovery');
+        await recovery?.refresh(false);
         return;
       }
       this.#setIngestStatus(workspace, status);
@@ -518,6 +522,11 @@ export class DlInspectorFiles extends LightElement {
                @change=${(event: Event) => { this.#folderInputChanged(event); }}>
         <div id="upload-spinner" class="file-status">${msg('Uploading...', {id: 'inspectorFiles.uploadingStatus'})}</div>
       </div>
+      <dl-failed-file-recovery
+        .workspace=${this.#workspace || ingestStore.workspace}
+        .active=${this.active}
+        @dl-failed-file-recovery-complete=${() => { void this.reload(false); }}
+      ></dl-failed-file-recovery>
       ${this.loading ? html`
         <div class="file-status file-status--loading"><div class="spinner"></div><span>${msg('Loading files...', {id: 'inspectorFiles.loadingFiles'})}</span></div>
       ` : nothing}
