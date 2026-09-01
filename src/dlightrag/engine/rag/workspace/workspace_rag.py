@@ -1935,8 +1935,8 @@ class WorkspaceRag:
                     replacement_doc_id,
                 )
 
-    @staticmethod
     def _validate_retry_source_contract(
+        self,
         source_uri: str,
         download_locator: str,
     ) -> tuple[SourceType, dict[str, Any]]:
@@ -1947,13 +1947,34 @@ class WorkspaceRag:
             raise ValueError("download locator is invalid")
         source_type, parts = parse_remote_uri(download_locator)
         if source_type == "local":
-            if not Path(download_locator).is_file():
-                raise FileNotFoundError("download locator is unavailable")
+            self._retry_local_source_path(download_locator)
         else:
             validate_download_uri(download_locator)
         if not stable_source_uri:
             raise ValueError("source identity is invalid")
         return source_type, parts
+
+    def _retry_local_source_path(self, download_locator: str) -> Path:
+        """Resolve a local source that LightRAG may have moved under __parsed__."""
+        original = Path(download_locator)
+        if original.is_file():
+            return original
+
+        input_root = self._workspace_input_root().resolve()
+        try:
+            original.resolve().relative_to(input_root)
+        except ValueError:
+            raise FileNotFoundError("download locator is unavailable") from None
+
+        candidates = (
+            original.parent / PARSED_DIR_NAME / original.name,
+            input_root / PARSED_DIR_NAME / original.name,
+        )
+        for candidate in dict.fromkeys(candidates):
+            resolved = candidate.resolve()
+            if resolved.is_relative_to(input_root) and resolved.is_file():
+                return resolved
+        raise FileNotFoundError("download locator is unavailable")
 
     async def _aingest_download_locator(
         self,
@@ -2047,8 +2068,9 @@ class WorkspaceRag:
             display_filename=display_filename,
         )
         parser_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path = self._retry_local_source_path(download_locator)
         try:
-            await asyncio.to_thread(shutil.copy2, Path(download_locator), parser_path)
+            await asyncio.to_thread(shutil.copy2, source_path, parser_path)
             result = await self._ingestion_engine.aingest_files([item], replace=False)
             return self._single_file_result(result)
         finally:

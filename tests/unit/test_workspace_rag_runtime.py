@@ -3215,6 +3215,34 @@ class TestWorkspaceRagLightRAGMainPath:
         assert item.parser_path.suffix == ".pdf"
         assert not item.parser_path.exists()
 
+    async def test_download_locator_dispatch_recovers_lightrag_moved_local_source(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = _service(test_config)
+        input_root = service._workspace_input_root()  # type: ignore[attr-defined]
+        original = input_root / "report.pdf"
+        moved = input_root / "__parsed__" / original.name
+        moved.parent.mkdir(parents=True)
+        moved.write_bytes(b"%PDF-1.4 moved by parser")
+        service._ingestion_engine = AsyncMock()
+        service._ingestion_engine.aingest_files.return_value = {
+            "processed": 1,
+            "errors": [],
+            "results": [{"status": "success"}],
+        }
+
+        result = await service._aingest_download_locator(  # type: ignore[attr-defined]
+            "local://default/report.pdf",
+            str(original),
+            "report.pdf",
+        )
+
+        assert result == {"status": "success"}
+        items = service._ingestion_engine.aingest_files.await_args.args[0]
+        assert len(items) == 1
+        assert items[0].download_locator == str(original)
+        assert moved.is_file()
+
     async def test_download_locator_dispatch_rejects_invalid_remote_locator(
         self, test_config: DlightragConfig
     ) -> None:
