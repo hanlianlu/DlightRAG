@@ -9,6 +9,7 @@ import json
 import pytest
 
 from dlightrag.application.opaque_cursor import (
+    _CURSOR_SECRET_DERIVATION_ITERATIONS,
     CursorSecretBox,
     OpaqueCursorEnvelope,
     OpaqueCursorError,
@@ -25,13 +26,15 @@ def _signed(secret: bytes, domain: str, payload: dict[str, object]) -> str:
     return f"{_encode(raw)}.{_encode(mac)}"
 
 
-def test_secret_box_is_stable_domain_separated_and_legacy_compatible() -> None:
+def test_secret_box_is_stable_domain_separated() -> None:
     material = b"db-host\0db-name\0db-password"
     box = CursorSecretBox(material)
 
-    assert (
-        box.derive("dlightrag-file-panel-cursor")
-        == hashlib.sha256(b"dlightrag-file-panel-cursor\0" + material).digest()
+    assert box.derive("dlightrag-file-panel-cursor") == hashlib.pbkdf2_hmac(
+        "sha256",
+        material,
+        salt=b"dlightrag-file-panel-cursor",
+        iterations=_CURSOR_SECRET_DERIVATION_ITERATIONS,
     )
     assert box.derive("dlightrag-file-panel-cursor") != box.derive(
         "dlightrag-metadata-search-cursor"

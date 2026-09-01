@@ -12,6 +12,7 @@ from collections.abc import Mapping, Set
 from typing import Any
 
 _CURSOR_MAC_BYTES = 16
+_CURSOR_SECRET_DERIVATION_ITERATIONS = 600_000
 _BASE64URL_CHARACTERS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 )
@@ -32,9 +33,20 @@ class CursorSecretBox:
         self._material = material
 
     def derive(self, domain: str) -> bytes:
-        """Return the stable SHA-256 secret for one named cursor domain."""
+        """Return the stable PBKDF2-derived secret for one named cursor domain.
+
+        The material is deployment identity (including the database password),
+        so a computationally expensive KDF raises the cost of offline
+        dictionary attacks against that secret when an attacker holds a
+        valid cursor token. Derivation runs once per domain at startup.
+        """
         encoded_domain = _encoded_domain(domain)
-        return hashlib.sha256(encoded_domain + b"\0" + self._material).digest()
+        return hashlib.pbkdf2_hmac(
+            "sha256",
+            self._material,
+            salt=encoded_domain,
+            iterations=_CURSOR_SECRET_DERIVATION_ITERATIONS,
+        )
 
 
 class OpaqueCursorEnvelope:
