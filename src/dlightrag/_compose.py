@@ -11,7 +11,7 @@ from typing import Any
 from dlightrag.application.application import Application, _ApplicationComponents
 from dlightrag.application.config import DlightragConfig, get_config
 from dlightrag.application.opaque_cursor import CursorSecretBox
-from dlightrag.application.settings import agent_skills_root
+from dlightrag.application.settings import agent_skills_root, owner_skills_root
 from dlightrag.engine.ai.embedding import MultimodalEmbedder
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.telemetry import Telemetry
@@ -72,6 +72,13 @@ async def _close_process() -> None:
 def _ensure_agent_skills_root(config: DlightragConfig) -> Path:
     """Resolve the configured global Agent Skills root and create it eagerly."""
     root = agent_skills_root(config)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _ensure_owner_skills_root(config: DlightragConfig) -> Path:
+    """Resolve the configured per-owner Agent Skills root and create it eagerly."""
+    root = owner_skills_root(config)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -319,6 +326,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         memory_capability_current=memory.capability_current,
         external_tools=outbound_tools,
         skills_global_root=_ensure_agent_skills_root(config),
+        skills_owner_root_base=_ensure_owner_skills_root(config),
     )
     coordinator = RunCoordinator(
         store=run_store,

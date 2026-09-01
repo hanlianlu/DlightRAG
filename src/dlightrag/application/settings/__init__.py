@@ -13,6 +13,7 @@ from .projections import (
     model_profile_for_role,
     model_profile_for_settings,
     model_settings_for_role,
+    owner_skills_root,
     rag_settings,
     rerank_scoring_model_settings,
     retrieval_settings,
@@ -22,6 +23,7 @@ from .projections import (
 __all__ = [
     "access_settings",
     "agent_skills_root",
+    "owner_skills_root",
     "answer_capability_settings",
     "answer_executor_settings",
     "answer_model_runtime_settings",

@@ -43,7 +43,7 @@ def test_requested_skill_contribution_precedes_skill_metadata(tmp_path: Path) ->
         "---\nname: review\ndescription: Review plans.\n---\nbody",
         encoding="utf-8",
     )
-    catalog = SkillCatalog.discover(global_root=global_root, workspace_root=None)
+    catalog = SkillCatalog.discover(global_root=global_root)
 
     orchestrator = _orchestrator(mode="research", requested_skill="review")
     contributions = orchestrator._context_contributions(catalog)
@@ -61,7 +61,7 @@ def test_context_contributions_without_requested_skill_keep_metadata_only(tmp_pa
         "---\nname: review\ndescription: Review plans.\n---\nbody",
         encoding="utf-8",
     )
-    catalog = SkillCatalog.discover(global_root=global_root, workspace_root=None)
+    catalog = SkillCatalog.discover(global_root=global_root)
 
     orchestrator = _orchestrator(mode="research")
     contributions = orchestrator._context_contributions(catalog)

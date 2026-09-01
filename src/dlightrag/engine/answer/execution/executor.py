@@ -664,6 +664,7 @@ class AnswerExecutor:
         memory_capability_current: Callable[..., Awaitable[bool]] | None = None,
         external_tools: tuple[AgentTool, ...] = (),
         skills_global_root: Path | None = None,
+        skills_owner_root_base: Path | None = None,
     ) -> None:
         self._store = store
         self._pool = pool
@@ -685,6 +686,7 @@ class AnswerExecutor:
         self._memory_capability_current = memory_capability_current
         self._external_tools = external_tools
         self._skills_global_root = skills_global_root
+        self._skills_owner_root_base = skills_owner_root_base
         if execution_environment not in {"disabled", "trust", "sandbox"}:
             raise ValueError(f"unknown agent execution mode: {execution_environment}")
         self._execution_adapter = resolve_execution_adapter(
@@ -699,7 +701,13 @@ class AnswerExecutor:
         """
         from dlightrag.engine.agent.environment import AccessScheduler
         from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
-        from dlightrag.engine.agent.skills import SkillCatalog, SkillMetadata, load_skill_tool
+        from dlightrag.engine.agent.skills import (
+            SkillCatalog,
+            SkillMetadata,
+            delete_skill_tool,
+            load_skill_tool,
+            publish_skill_tool,
+        )
         from dlightrag.engine.agent.tools.files import path_tools, read_tool
         from dlightrag.engine.agent.tools.registry import ToolRegistry
         from dlightrag.engine.answer.tools.memory import (
@@ -738,6 +746,11 @@ class AnswerExecutor:
             # Membership follows configured roots, not discovered contents, so
             # workspace changes cannot alter an accepted Plan.
             tools.append(load_skill_tool(SkillCatalog((placeholder,))))
+        if self._skills_owner_root_base is not None:
+            # Owner publication membership follows the configured owner root;
+            # execute closures are never invoked at acceptance.
+            tools.append(publish_skill_tool(Path.cwd()))
+            tools.append(delete_skill_tool(Path.cwd()))
         return ToolRegistry(tools).resolve()
 
     async def execute(self, session: RunSession) -> RunExecutionOutcome:
@@ -965,6 +978,8 @@ class AnswerExecutor:
         )
 
     async def _execute(self, session: RunSession) -> RunExecutionOutcome:
+        from dlightrag.engine.agent.skills import owner_skill_root
+
         request = AnswerRunInput.from_prepared_input(session.prepared_input)
         model_profiles = self.validate_pinned_model_profiles(request)
         agent_session_id = SessionId(request.agent_session_id)
@@ -1041,6 +1056,11 @@ class AnswerExecutor:
             projected_history=projected_history,
             model_profiles=model_profiles,
             requested_skill=request.requested_skill,
+            skills_owner_root=(
+                owner_skill_root(self._skills_owner_root_base, session.owner_id)
+                if self._skills_owner_root_base is not None
+                else None
+            ),
         )
         auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
         prepared_input = session.prepared_input or {}
@@ -1604,6 +1624,7 @@ class AnswerExecutor:
         environment: ExecutionEnvironment | None = None,
         resolved_mode: ResolvedMode,
         requested_skill: str | None = None,
+        skills_owner_root: Path | None = None,
     ) -> OrchestratorRun:
         history = projected_history
         models = self._capabilities.request_model_context(model_profiles)
@@ -1729,6 +1750,7 @@ class AnswerExecutor:
                 ),
                 child_model_resolver=resolve_child_model,
                 skills_global_root=self._skills_global_root,
+                skills_owner_root=skills_owner_root,
                 requested_skill=requested_skill,
             )
             orchestrated_run = OrchestratorRun(

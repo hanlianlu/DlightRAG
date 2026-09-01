@@ -131,5 +131,18 @@ def test_skills_root_defaults_to_none_and_accepts_absolute() -> None:
 
 
 def test_skills_root_rejects_a_relative_path() -> None:
-    with pytest.raises(ValidationError, match="skills_root must be an absolute path"):
+    with pytest.raises(ValidationError, match="skill roots must be absolute paths"):
         AgentExecutionConfig.model_validate({"skills_root": "skills"})
+
+
+def test_owner_skills_root_defaults_to_none_and_accepts_absolute() -> None:
+    assert AgentExecutionConfig().owner_skills_root is None
+    config = AgentExecutionConfig.model_validate(
+        {"owner_skills_root": "/opt/dlightrag/owner_skills"}
+    )
+    assert config.owner_skills_root == "/opt/dlightrag/owner_skills"
+
+
+def test_owner_skills_root_rejects_a_relative_path() -> None:
+    with pytest.raises(ValidationError, match="skill roots must be absolute paths"):
+        AgentExecutionConfig.model_validate({"owner_skills_root": "owner_skills"})

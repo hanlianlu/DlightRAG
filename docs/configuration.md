@@ -542,6 +542,7 @@ answer:
     execution_environment: trust   # disabled | trust | sandbox
     workspace_root: null
     skills_root: null              # absolute path; null → ~/.dlightrag/skills
+    owner_skills_root: null        # absolute path; null → ~/.dlightrag/owner_skills
     outbound_mcp: []
     publication:
       max_artifacts: 20
@@ -584,10 +585,16 @@ answer:
 ```
 
 There is no endpoint discovery, marketplace, OAuth service, or plugin runtime.
-Research discovers Skill metadata under global and workspace skill directories
-and loads content on demand. The global root is `answer.agent.skills_root`,
-defaulting to `~/.dlightrag/skills`; each worker must see the same shared path.
-The workspace root is the per-run Agent Workspace's `.agents/skills/`.
+Research discovers Skill metadata from two tiers and loads content on demand.
+The global root is `answer.agent.skills_root`, defaulting to
+`~/.dlightrag/skills`; it is operator-provisioned and read-only for the answer
+agent. The per-owner root is `answer.agent.owner_skills_root`, defaulting to
+`~/.dlightrag/owner_skills`; users write their own skills only through the
+validated `publish_skill`/`delete_skill` tools, bounded by a 20-skill / 20MiB
+owner quota. Owner names shadow global names for that owner. Each worker must
+see the same shared paths. A reference creator workflow ships at
+`examples/skills/skill-creator/SKILL.md`; copy it into the global skills root
+to guide conversational skill creation for all users.
 
 ## Web Search
 

@@ -283,11 +283,11 @@ class AgentExecutionConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    @field_validator("skills_root")
+    @field_validator("skills_root", "owner_skills_root")
     @classmethod
-    def _validate_skills_root(cls, value: str | None) -> str | None:
+    def _validate_skills_roots(cls, value: str | None) -> str | None:
         if value is not None and not Path(value).expanduser().is_absolute():
-            raise ValueError("skills_root must be an absolute path when set")
+            raise ValueError("skill roots must be absolute paths when set")
         return value
 
     execution_environment: Literal["disabled", "trust", "sandbox"] = Field(
@@ -312,6 +312,15 @@ class AgentExecutionConfig(BaseModel):
             "Absolute global Agent Skills root. When unset, defaults to "
             "~/.dlightrag/skills. Multi-host deployments must set the same "
             "shared absolute path on every worker."
+        ),
+    )
+    owner_skills_root: str | None = Field(
+        default=None,
+        description=(
+            "Absolute per-owner Agent Skills root. When unset, defaults to "
+            "~/.dlightrag/owner_skills. Users publish their own skills here "
+            "through the validated publish_skill tool; the global root stays "
+            "operator-provisioned and read-only."
         ),
     )
     publication: ArtifactPublicationConfig = Field(default_factory=ArtifactPublicationConfig)

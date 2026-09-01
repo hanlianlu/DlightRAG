@@ -143,7 +143,8 @@ async def start_answer_run(
     requested_skill = body.requested_skill
     if requested_skill is not None:
         try:
-            requested_skill = require_known_skill(application, requested_skill)
+            owner_id = owner_id_from_user(getattr(request.state, "user_context", None))
+            requested_skill = require_known_skill(application, owner_id, requested_skill)
         except ValueError as exc:
             raise _command_error(422, "invalid_request", str(exc)) from exc
     mode = body.mode

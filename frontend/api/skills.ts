@@ -4,7 +4,7 @@
 export interface SkillSummary {
   readonly name: string;
   readonly description: string;
-  readonly source: 'global' | 'workspace';
+  readonly source: 'global' | 'owner';
 }
 
 let catalogRequest: Promise<readonly SkillSummary[]> | null = null;

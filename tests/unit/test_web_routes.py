@@ -13,6 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.adapters.http.browser.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from dlightrag.adapters.http.server import create_app
+from dlightrag.application.access import DEPLOYMENT_OWNER_ID
 from dlightrag.application.answer_runs.capability import AnswerImageCapability
 from dlightrag.application.config import DlightragConfig
 from dlightrag.application.corpus_admin import (
@@ -22,6 +23,7 @@ from dlightrag.application.corpus_admin import (
     WorkspaceCatalogCursorCodec,
     WorkspaceCatalogPage,
 )
+from dlightrag.engine.agent.skills import owner_skill_root
 from tests.config_helpers import mutate_config
 from tests.unit.conftest import answer_capability_view
 
@@ -182,12 +184,41 @@ async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
     application_double.aclose.assert_awaited_once_with()
 
 
+async def test_skills_endpoint_merges_owner_skills(
+    client, test_config: DlightragConfig, tmp_path: Path
+) -> None:
+    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path / "global"))
+    mutate_config(test_config, "answer.agent.owner_skills_root", str(tmp_path / "owners"))
+    (tmp_path / "global" / "review").mkdir(parents=True)
+    (tmp_path / "global" / "review" / "SKILL.md").write_text(
+        "---\nname: review\ndescription: Global review.\n---\nbody",
+        encoding="utf-8",
+    )
+    owner_dir = owner_skill_root(tmp_path / "owners", DEPLOYMENT_OWNER_ID)
+    (owner_dir / "mine").mkdir(parents=True)
+    (owner_dir / "mine" / "SKILL.md").write_text(
+        "---\nname: mine\ndescription: My skill.\n---\nbody",
+        encoding="utf-8",
+    )
+
+    response = await client.get("/web/api/skills")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "skills": [
+            {"name": "mine", "description": "My skill.", "source": "owner"},
+            {"name": "review", "description": "Global review.", "source": "global"},
+        ]
+    }
+
+
 async def test_skills_endpoint_lists_discovered_global_skills(
     client, test_config: DlightragConfig, tmp_path: Path
 ) -> None:
-    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path))
-    review = tmp_path / "review"
-    review.mkdir()
+    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path / "global"))
+    mutate_config(test_config, "answer.agent.owner_skills_root", str(tmp_path / "owners"))
+    review = tmp_path / "global" / "review"
+    review.mkdir(parents=True)
     (review / "SKILL.md").write_text(
         "---\nname: review\ndescription: Review plans.\n---\nbody",
         encoding="utf-8",
@@ -204,7 +235,8 @@ async def test_skills_endpoint_lists_discovered_global_skills(
 async def test_skills_endpoint_returns_an_empty_catalog(
     client, test_config: DlightragConfig, tmp_path: Path
 ) -> None:
-    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path))
+    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path / "global"))
+    mutate_config(test_config, "answer.agent.owner_skills_root", str(tmp_path / "owners"))
 
     response = await client.get("/web/api/skills")
 
@@ -215,7 +247,8 @@ async def test_skills_endpoint_returns_an_empty_catalog(
 async def test_answer_rejects_unknown_requested_skill(
     client, test_config: DlightragConfig, tmp_path: Path
 ) -> None:
-    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path))
+    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path / "global"))
+    mutate_config(test_config, "answer.agent.owner_skills_root", str(tmp_path / "owners"))
 
     response = await client.post(
         "/web/api/answer",
@@ -234,9 +267,10 @@ async def test_answer_rejects_unknown_requested_skill(
 async def test_answer_with_requested_skill_forces_research_mode(
     client, mock_application, test_config: DlightragConfig, tmp_path: Path
 ) -> None:
-    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path))
-    review = tmp_path / "review"
-    review.mkdir()
+    mutate_config(test_config, "answer.agent.skills_root", str(tmp_path / "global"))
+    mutate_config(test_config, "answer.agent.owner_skills_root", str(tmp_path / "owners"))
+    review = tmp_path / "global" / "review"
+    review.mkdir(parents=True)
     (review / "SKILL.md").write_text(
         "---\nname: review\ndescription: Review plans.\n---\nbody",
         encoding="utf-8",

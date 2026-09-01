@@ -137,6 +137,14 @@ def agent_skills_root(config: DlightragConfig) -> Path:
     return Path(configured).expanduser() if configured else Path.home() / ".dlightrag" / "skills"
 
 
+def owner_skills_root(config: DlightragConfig) -> Path:
+    """Resolve the per-owner Agent Skills root; unset resolves to ~/.dlightrag/owner_skills."""
+    configured = config.answer.agent.owner_skills_root
+    return (
+        Path(configured).expanduser() if configured else Path.home() / ".dlightrag" / "owner_skills"
+    )
+
+
 def answer_executor_settings(config: DlightragConfig) -> AnswerExecutorSettings:
     """Snapshot durable Answer execution and Artifact publication policy."""
     from dlightrag.engine.answer.publication import PublicationLimits

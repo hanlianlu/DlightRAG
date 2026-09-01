@@ -153,6 +153,7 @@ class AnswerOrchestrator:
         subagent_host: SubagentHost | None = None,
         memory_host: MemoryHost | None = None,
         skills_global_root: Path | None = None,
+        skills_owner_root: Path | None = None,
         requested_skill: str | None = None,
         child_model_resolver: Callable[[str], tuple[ToolModelFunc, StreamModel, ModelProfile]]
         | None = None,
@@ -180,6 +181,7 @@ class AnswerOrchestrator:
         self._parent_query = ""
         self._parent_history = PriorTurns()
         self._skills_global_root = skills_global_root
+        self._skills_owner_root = skills_owner_root
         self._requested_skill = requested_skill
         self._child_model_resolver = child_model_resolver
         self._access = AccessScheduler()
@@ -670,6 +672,7 @@ class AnswerOrchestrator:
             memory_host=memory_host,
             skill_catalog=skill_catalog,
             child=child,
+            publish_owner_root=(None if child else self._skills_owner_root),
         )
         try:
             registry = ToolRegistry(composed)
@@ -710,12 +713,11 @@ class AnswerOrchestrator:
         return read
 
     def _skill_catalog(self) -> SkillCatalog | None:
-        workspace_root = self._environment.root if self._environment is not None else None
-        if workspace_root is None and self._skills_global_root is None:
+        if self._skills_global_root is None and self._skills_owner_root is None:
             return None
         return SkillCatalog.discover(
-            workspace_root=workspace_root,
             global_root=self._skills_global_root,
+            owner_root=self._skills_owner_root,
         )
 
     def _context_contributions(

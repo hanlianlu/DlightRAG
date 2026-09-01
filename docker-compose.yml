@@ -42,6 +42,10 @@ services:
       # CI) provision this directory, never the agent itself.
       # Host-side location overridable via DLIGHTRAG_SKILLS_DIR in .env.
       - ${DLIGHTRAG_SKILLS_DIR:-${HOME}/.dlightrag/skills}:/home/app/.dlightrag/skills:ro
+      # Per-owner Agent Skills, written only through the validated
+      # publish_skill/delete_skill tools. Persisted across container
+      # recreations; multi-host deployments must share this path.
+      - dlightrag_owner_skills:/home/app/.dlightrag/owner_skills
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,6 +87,10 @@ services:
       # CI) provision this directory, never the agent itself.
       # Host-side location overridable via DLIGHTRAG_SKILLS_DIR in .env.
       - ${DLIGHTRAG_SKILLS_DIR:-${HOME}/.dlightrag/skills}:/home/app/.dlightrag/skills:ro
+      # Per-owner Agent Skills, written only through the validated
+      # publish_skill/delete_skill tools. Persisted across container
+      # recreations; multi-host deployments must share this path.
+      - dlightrag_owner_skills:/home/app/.dlightrag/owner_skills
     depends_on:
       postgres:
         condition: service_healthy
@@ -173,4 +181,5 @@ services:
 volumes:
   dlightrag_data:
   dlightrag_agent_workspaces:
+  dlightrag_owner_skills:
   pg18_data:
