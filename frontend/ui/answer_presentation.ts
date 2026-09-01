@@ -15,6 +15,7 @@ import {renderMath} from '../lib/math.ts';
 import {safeImageSrc} from '../lib/urls.ts';
 import type {ImageOpenDetail} from './image_lightbox.ts';
 import {renderDiagrams} from './mermaid.ts';
+import chatStyles from '../styles/chat.module.css';
 
 export interface ArtifactOpenDetail {
   artifact: AnswerArtifact;
@@ -128,7 +129,7 @@ export class AnswerPresentationElement extends LightElement {
 
   #part(part: PresentationPart, index: number): TemplateResult | typeof nothing {
     if (part.type === 'markdown') {
-      return html`<div class="answer-rich-content" data-answer-part=${String(index)}></div>`;
+      return html`<div class="answer-rich-content ${chatStyles.aiMessageContent}" data-answer-part=${String(index)}></div>`;
     }
     if (part.type === 'evidence_image' && part.evidence_image) {
       return html`<div class="answer-inline-evidence">${this.#evidenceImage(part.evidence_image)}</div>`;
