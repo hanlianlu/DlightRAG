@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Browser coverage for the Web conversation lifecycle shell."""
 
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -15,6 +16,47 @@ from playwright.sync_api import Locator, Page, Route, expect
 class ConversationRouteState:
     conversations: list[dict[str, str | None]] = field(default_factory=list)
     delete_status: int = 204
+
+
+def _wait_for_shell_settled(page: Page) -> None:
+    """Wait until the shell grid geometry stops changing.
+
+    Sidebar open/collapse animates via CSS transitions (180ms) and the
+    split panel syncs ``--panel-width`` on the following animation frame;
+    fixed sleeps race both on loaded CI runners. Wait for the transition to
+    be underway, then require the rendered geometry to hold stable across
+    three consecutive samples so a not-yet-started transition (identical
+    pre-transition samples) can never satisfy the wait.
+    """
+    signature = (
+        "() => {"
+        "  const rect = (selector) => {"
+        "    const element = document.querySelector(selector);"
+        "    if (!element) return '';"
+        "    const box = element.getBoundingClientRect();"
+        "    return `${box.x},${box.width}`;"
+        "  };"
+        "  const widthVar = getComputedStyle(document.documentElement)"
+        "    .getPropertyValue('--panel-width');"
+        "  return [rect('#chat-sidebar'), rect('#composer'), rect('#panel'), widthVar]"
+        "    .join(';');"
+        "}"
+    )
+    time.sleep(0.12)
+    stable = 0
+    previous: str | None = None
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        current = page.evaluate(signature)
+        if current == previous:
+            stable += 1
+            if stable >= 3:
+                return
+        else:
+            stable = 0
+        previous = current
+        time.sleep(0.05)
+    raise AssertionError("shell layout did not settle")
 
 
 def _install_conversation_routes(page: Page) -> ConversationRouteState:
@@ -893,8 +935,10 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     page.locator("[aria-current='page']").wait_for()
 
     page.get_by_role("button", name="Collapse conversations").click()
+    page.wait_for_function("!document.body.classList.contains('conversation-sidebar-open')")
     page.get_by_role("button", name="Files", exact=True).click()
-    page.wait_for_timeout(220)
+    page.wait_for_function("document.querySelector('#panel')?.classList.contains('open')")
+    _wait_for_shell_settled(page)
     assert page.locator(".panel-resize-handle").count() == 0
     split = page.locator("#panel-split")
     handle = split.get_by_role("separator", name="Resize Files or Sources")
@@ -937,7 +981,8 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     assert persisted_collapsed == pytest.approx(collapsed["effectiveWidth"], abs=1)
 
     page.get_by_role("button", name="Open conversations").click()
-    page.wait_for_timeout(220)
+    page.wait_for_function("document.body.classList.contains('conversation-sidebar-open')")
+    _wait_for_shell_settled(page)
     expanded = shell_geometry()
     assert expanded["composerX"] == pytest.approx(expanded["sidebarWidth"], abs=1)
     assert expanded["composerWidth"] == pytest.approx(520, abs=1)
@@ -951,7 +996,7 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     )
 
     page.set_viewport_size({"width": 1280, "height": 820})
-    page.wait_for_timeout(220)
+    _wait_for_shell_settled(page)
     narrower = shell_geometry()
     # The one-pixel owned divider shares subpixels with adjacent tracks.
     assert narrower["composerWidth"] >= 519
@@ -959,14 +1004,15 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     assert narrower["effectiveWidth"] == pytest.approx(narrower["panelWidth"], abs=1)
 
     page.set_viewport_size({"width": 1440, "height": 900})
-    page.wait_for_timeout(220)
+    _wait_for_shell_settled(page)
     restored = shell_geometry()
     assert restored["composerWidth"] >= 519
     assert restored["composerRight"] == pytest.approx(restored["panelX"], abs=1)
     assert restored["effectiveWidth"] == pytest.approx(restored["panelWidth"], abs=1)
 
     page.get_by_role("button", name="Collapse conversations").click()
-    page.wait_for_timeout(220)
+    page.wait_for_function("!document.body.classList.contains('conversation-sidebar-open')")
+    _wait_for_shell_settled(page)
     recollapsed = shell_geometry()
     assert recollapsed["panelWidth"] == pytest.approx(persisted_collapsed, abs=1)
     assert recollapsed["composerWidth"] == pytest.approx(520, abs=1)
@@ -981,7 +1027,7 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     assert persisted_width == pytest.approx(keyboard_resized["effectiveWidth"], abs=1)
 
     handle.press("Enter")
-    page.wait_for_timeout(50)
+    _wait_for_shell_settled(page)
     after_enter = shell_geometry()
     assert after_enter["panelWidth"] == pytest.approx(keyboard_resized["panelWidth"], abs=1)
     assert page.evaluate("localStorage.getItem('dlightrag-panel-width')") == str(persisted_width)

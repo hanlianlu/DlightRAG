@@ -285,6 +285,14 @@ async def test_pipeline_recovery_waits_out_a_fence_then_holds_the_gate(
 
     monkeypatch.setattr(corpus_module.pg_pool, "run", run)
 
+    # The gate path also resolves the real domain pool; fake it so the test
+    # never needs a live PostgreSQL instance (CI has none on localhost).
+    fake_pool = MagicMock()
+    fake_conn = AsyncMock()
+    fake_pool.acquire.return_value = fake_conn
+    fake_conn.__aenter__.return_value = fake_conn
+    monkeypatch.setattr(corpus_module.pg_pool, "get", AsyncMock(return_value=fake_pool))
+
     @asynccontextmanager
     async def fake_gate(workspace: str, *, exclusive: bool = False):  # noqa: ANN001, ANN202
         states.append("gate-open")
@@ -308,6 +316,10 @@ async def test_pipeline_recovery_waits_out_a_fence_then_holds_the_gate(
     assert entered is True
     assert states == ["gate-open", "gate-close"]
     assert sleepers == [5.0]  # polled the remaining fence duration once
+    assert [call[0][0] for call in fake_conn.execute.call_args_list] == [
+        "SELECT pg_advisory_lock($1)",
+        "SELECT pg_advisory_unlock($1)",
+    ]
 
 
 async def test_pipeline_recovery_cancellation_propagates_while_waiting(
