@@ -14,6 +14,8 @@ from typing import Any, cast
 
 import pytest
 
+from tests.integration.pg_conn import PG_CONN_KWARGS
+
 # Mark all tests in this module as integration
 pytestmark = [
     pytest.mark.integration,
@@ -27,11 +29,11 @@ async def _pg_available() -> bool:
         import asyncpg
 
         conn = await asyncpg.connect(
-            host="localhost",
-            port=5432,
-            user="dlightrag",
-            password="dlightrag",
-            database="dlightrag",
+            host=str(_PG_CONN_KWARGS["host"]),
+            port=int(_PG_CONN_KWARGS["port"]),
+            user=str(_PG_CONN_KWARGS["user"]),
+            password=str(_PG_CONN_KWARGS["password"]),
+            database=str(_PG_CONN_KWARGS["database"]),
         )
         await conn.fetchval("SELECT 1")
         await conn.close()
@@ -47,13 +49,7 @@ async def pg_check():
         pytest.skip("PostgreSQL not available")
 
 
-_PG_CONN_KWARGS = dict(
-    host="localhost",
-    port=5432,
-    user="dlightrag",
-    password="dlightrag",
-    database="dlightrag",
-)
+_PG_CONN_KWARGS = PG_CONN_KWARGS
 
 _TEST_WORKSPACE_ALPHA = "test_pg_storage_alpha"
 _TEST_WORKSPACE_BETA = "test_pg_storage_beta"
@@ -102,6 +98,29 @@ def _corpus_admin(config: Any) -> Any:
         file_panel_cursor_secret=b"pg-storage-file-panel-test",
         metadata_search_cursor_secret=b"pg-storage-metadata-search-test",
         workspace_catalog_cursor_secret=b"pg-storage-workspace-catalog-test",
+    )
+
+
+def _test_config(**overrides: Any) -> Any:
+    """Build a DlightragConfig bound to the suite's PostgreSQL instance.
+
+    ``pg_pool.bind`` reads ``storage.postgres`` from the config, so the app
+    paths must target the same database the raw test pools use (honoring
+    PGHOST/PGPORT overrides).
+    """
+    from dlightrag.application.config import DlightragConfig
+
+    storage = dict(overrides.pop("storage", {}))
+    storage["postgres"] = {
+        "host": _PG_CONN_KWARGS["host"],
+        "port": _PG_CONN_KWARGS["port"],
+        "user": _PG_CONN_KWARGS["user"],
+        "password": _PG_CONN_KWARGS["password"],
+        "database": _PG_CONN_KWARGS["database"],
+    }
+    return DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        storage=storage,
+        **overrides,
     )
 
 
@@ -326,7 +345,7 @@ class TestPGWorkspaceDiscovery:
     async def test_discovers_workspaces_from_workspace_meta(self) -> None:
         """list_workspaces() returns workspaces found in dlightrag_workspace_meta."""
         from dlightrag.adapters.postgres.core._pool import pg_pool
-        from dlightrag.application.config import DlightragConfig, set_config
+        from dlightrag.application.config import set_config
         from dlightrag.engine.ai.settings import EmbeddingSettings
 
         pool, registry = await _open_workspace_registry()
@@ -343,7 +362,7 @@ class TestPGWorkspaceDiscovery:
                 embedding_model="voyage-multimodal-3.5",
             )
 
-            cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+            cfg = _test_config(
                 models={
                     "embedding": EmbeddingSettings(
                         provider="voyage",
@@ -371,13 +390,13 @@ class TestPGWorkspaceDiscovery:
     async def test_empty_table_returns_default_workspace(self) -> None:
         """Empty workspace metadata falls back to config.deployment.workspace."""
         from dlightrag.adapters.postgres.core._pool import pg_pool
-        from dlightrag.application.config import DlightragConfig, set_config
+        from dlightrag.application.config import set_config
         from dlightrag.engine.ai.settings import EmbeddingSettings
 
         pool, registry = await _open_workspace_registry()
         try:
             await _delete_test_workspaces(registry, "test-fallback-ws")
-            cfg = DlightragConfig(  # pyright: ignore[reportCallIssue, reportArgumentType]
+            cfg = _test_config(
                 deployment={
                     "workspace": "test-fallback-ws",
                 },
@@ -598,8 +617,22 @@ async def test_child_roster_traverses_newest_first_with_timestamp_ties() -> None
                 "DELETE FROM dlightrag_answer_child_sessions WHERE owner_id = $1",
                 owner,
             )
-            # The local development database already owns the real schema with
-            # its run foreign key; insert one minimal parent run for the FK.
+            # A clean CI database has no application schema, so provision a
+            # minimal runs table here (the development database already owns
+            # the real one with its run foreign key; IF NOT EXISTS makes this
+            # a no-op there).
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
+                    owner_id TEXT NOT NULL,
+                    run_id UUID NOT NULL,
+                    request_fingerprint TEXT NOT NULL,
+                    prepared_input_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    status TEXT NOT NULL,
+                    PRIMARY KEY (owner_id, run_id)
+                )
+                """
+            )
             await conn.execute(
                 "DELETE FROM dlightrag_answer_runs WHERE owner_id = $1 AND run_id = $2::uuid",
                 owner,
@@ -749,7 +782,10 @@ async def test_workspace_catalog_traverses_ascending_pages_without_gaps() -> Non
     from dlightrag.adapters.postgres.corpus.workspaces import PGWorkspaceRegistry
 
     prefix = "test_pg_catalog_"
-    workspaces = [f"{prefix}{index:03d}" for index in range(1, 121)]
+    # 121 rows with a page limit of 40 always yields at least four pages
+    # (40/40/40/1), so the traversal assertion holds even on a clean CI
+    # database that carries no other workspaces.
+    workspaces = [f"{prefix}{index:03d}" for index in range(1, 122)]
     pool = await asyncpg.create_pool(
         host=str(_PG_CONN_KWARGS["host"]),
         port=int(_PG_CONN_KWARGS["port"]),
@@ -786,9 +822,9 @@ async def test_workspace_catalog_traverses_ascending_pages_without_gaps() -> Non
             assert page.items
             after = str(page.items[-1]["workspace"])
 
-        # The shared local registry carries other workspaces; assert the
-        # traversal only on the rows this test inserted, and that the global
-        # ordering never violates ascending workspace order.
+        # The registry may also carry other workspaces; assert the traversal
+        # only on the rows this test inserted, and that the global ordering
+        # never violates ascending workspace order.
         inserted = [workspace for workspace in observed if workspace.startswith(prefix)]
         assert inserted == sorted(workspaces)
         assert len(inserted) == len(set(inserted))

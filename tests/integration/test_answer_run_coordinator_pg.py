@@ -75,19 +75,14 @@ from dlightrag.engine.runtime import (
     answer_run_request_fingerprint,
 )
 from tests.conftest import FingerprintingAnswerRunStore
+from tests.integration.pg_conn import PG_CONN_KWARGS
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.asyncio,
 ]
 
-_PG_CONN_KWARGS: dict[str, Any] = dict(
-    host="localhost",
-    port=5432,
-    user="dlightrag",
-    password="dlightrag",
-    database="dlightrag",
-)
+_PG_CONN_KWARGS: dict[str, Any] = PG_CONN_KWARGS
 
 _OWNER = "owner-alpha"
 _REQUEST: dict[str, Any] = {

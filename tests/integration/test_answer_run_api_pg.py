@@ -42,19 +42,14 @@ from dlightrag.engine.ai.settings import (
     ModelRoleSettings,
     ModelSettings,
 )
+from tests.integration.pg_conn import PG_CONN_KWARGS
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.asyncio,
 ]
 
-_PG_CONN_KWARGS: dict[str, Any] = dict(
-    host="localhost",
-    port=5432,
-    user="dlightrag",
-    password="dlightrag",
-    database="dlightrag",
-)
+_PG_CONN_KWARGS: dict[str, Any] = PG_CONN_KWARGS
 
 _ANON = UserContext(user_id="anonymous", auth_mode="none")
 _ALICE = UserContext(user_id="alice", auth_mode="jwt", claims={"iss": "https://issuer.test"})

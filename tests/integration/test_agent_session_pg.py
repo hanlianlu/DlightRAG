@@ -86,6 +86,7 @@ from dlightrag.engine.runtime.settlements import (
     OpaqueFetchedResourceWrite,
     WorkspaceInventoryUpdate,
 )
+from tests.integration.pg_conn import PG_CONN_KWARGS
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -94,9 +95,7 @@ async def _no_settled_result() -> None:
     return None
 
 
-_ADMIN: dict[str, Any] = dict(
-    host="localhost", port=5432, user="dlightrag", password="dlightrag", database="dlightrag"
-)
+_ADMIN: dict[str, Any] = PG_CONN_KWARGS
 _TEST_DATABASE = "dlightrag_agent_session_test"
 _OWNER = "owner-alpha"
 _WORKER = "worker-1"

@@ -22,12 +22,11 @@ from dlightrag.adapters.postgres.answer.memory_settings import (
 )
 from dlightrag.application.answer_runs.errors import MemoryDisabledError, MemoryWriteRejectedError
 from dlightrag.application.memory import MemoryService
+from tests.integration.pg_conn import PG_CONN_KWARGS
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
-_PG: dict[str, Any] = dict(
-    host="localhost", port=5432, user="dlightrag", password="dlightrag", database="dlightrag"
-)
+_PG: dict[str, Any] = PG_CONN_KWARGS
 
 
 async def _pg_available() -> bool:

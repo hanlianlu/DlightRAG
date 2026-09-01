@@ -8,12 +8,11 @@ import pytest
 
 from dlightrag.adapters.postgres.answer.answer_runs import PGAnswerRunStore
 from dlightrag.engine.runtime import RunCoordinator, RunExecutionOutcome
+from tests.integration.pg_conn import PG_CONN_KWARGS
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
-_ADMIN: dict[str, Any] = dict(
-    host="localhost", port=5432, user="dlightrag", password="dlightrag", database="dlightrag"
-)
+_ADMIN: dict[str, Any] = PG_CONN_KWARGS
 _TEST_DATABASE = "dlightrag_cancellation_test"
 
 
