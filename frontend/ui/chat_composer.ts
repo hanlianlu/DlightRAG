@@ -210,24 +210,24 @@ export class DlChatComposer extends LightElement {
         <div class="drop-overlay-content">${msg('Drop files or folders here', {id: 'chatComposer.dropCopy'})}</div>
       </div>
       <div class="composer" id="composer">
-        <div class="skill-menu" id="skill-menu" role="listbox"
-             aria-label=${msg('Available skills', {id: 'chatComposer.skillMenuAria'})}
-             ?hidden=${!this.skillMenuOpen || this.#skillSuggestions().length === 0}>
-          ${repeat(this.#skillSuggestions(), (skill) => skill.name, (skill, index) => html`
-            <button type="button" role="option" class="skill-menu-item ${index === this.skillActive ? 'active' : ''}"
-                    aria-selected=${String(index === this.skillActive)}
-                    title=${skill.description}
-                    @click=${() => this.#applySkill(skill.name)}
-                    @mousemove=${() => { this.skillActive = index; }}>
-              <span class="skill-menu-name">${skill.name}</span>
-              <span class="skill-menu-desc">${skill.description}</span>
-              <span class="skill-menu-source ${skill.source}">${skill.source === 'owner'
-                ? msg('Mine', {id: 'chatComposer.skillSource.owner'})
-                : msg('Built-in', {id: 'chatComposer.skillSource.global'})}</span>
-            </button>
-          `)}
-        </div>
         <div class="composer-inner">
+          <div class="skill-menu" id="skill-menu" role="listbox"
+               aria-label=${msg('Available skills', {id: 'chatComposer.skillMenuAria'})}
+               ?hidden=${!this.skillMenuOpen || this.#skillSuggestions().length === 0}>
+            ${repeat(this.#skillSuggestions(), (skill) => skill.name, (skill, index) => html`
+              <button type="button" role="option" class="skill-menu-item ${index === this.skillActive ? 'active' : ''}"
+                      aria-selected=${String(index === this.skillActive)}
+                      title=${skill.description}
+                      @click=${() => this.#applySkill(skill.name)}
+                      @mousemove=${() => { this.skillActive = index; }}>
+                <span class="skill-menu-name">${skill.name}</span>
+                <span class="skill-menu-desc">${skill.description}</span>
+                <span class="skill-menu-source ${skill.source}">${skill.source === 'owner'
+                  ? msg('Mine', {id: 'chatComposer.skillSource.owner'})
+                  : msg('Built-in', {id: 'chatComposer.skillSource.global'})}</span>
+              </button>
+            `)}
+          </div>
           <div class="thumbnail-strip" id="thumbnail-strip">
             ${repeat(this.attachments, (item) => item.id, (item) => this.#attachment(item))}
           </div>
