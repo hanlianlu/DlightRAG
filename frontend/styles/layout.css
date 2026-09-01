@@ -459,7 +459,7 @@ body.files-panel-open #files-btn {
     text-align: left;
     font: inherit;
     padding: 0.35rem 0.5rem;
-    border-radius: var(--radius-highlight);
+    border-radius: var(--radius-control);
     cursor: pointer;
     color: var(--color-text-primary);
 }
