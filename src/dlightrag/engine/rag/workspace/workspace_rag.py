@@ -3,7 +3,6 @@
 
 import asyncio
 import logging
-import shutil
 import uuid
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -134,15 +133,6 @@ def _retry_display_filename(value: object) -> str:
     if filename in {".", ".."}:
         raise ValueError("source filename is invalid")
     return filename
-
-
-def _retry_parser_filename(display_filename: str) -> str:
-    path = Path(display_filename)
-    suffix = path.suffix
-    stem = path.stem or "document"
-    marker = f"__retry_{uuid.uuid4().hex}"
-    max_stem_length = max(1, 96 - len(marker))
-    return f"{stem[:max_stem_length]}{marker}{suffix}"
 
 
 def _normalized_operation_status(result: object) -> str:
@@ -857,9 +847,11 @@ class WorkspaceRag:
         retain_source_file: bool,
         parser_filename_override: str | None = None,
     ) -> PreparedIngestFile:
-        key = parser_filename_override or document.display_filename or document.key
+        key = document.display_filename or document.key
         if retain_source_file:
             parser_path = Path(download_locator)
+        elif parser_filename_override is not None:
+            parser_path = self._workspace_input_root() / parser_filename_override
         else:
             parser_path = remote_parser_input_path(
                 batch_root=batch_root,
@@ -1806,9 +1798,12 @@ class WorkspaceRag:
                 record_failed({"doc_id": doc_id, "reason": "source metadata unavailable"})
                 continue
 
-            source_uri = metadata.get("source_uri") if metadata else None
-            download_locator = metadata.get("download_locator") if metadata else None
-            stored_filename = metadata.get("filename") if metadata else None
+            if metadata is None:
+                record_failed({"doc_id": doc_id, "reason": "source metadata incomplete"})
+                continue
+            source_uri = metadata.get("source_uri")
+            download_locator = metadata.get("download_locator")
+            stored_filename = metadata.get("filename")
             if not isinstance(source_uri, str) or not source_uri:
                 record_failed({"doc_id": doc_id, "reason": "source metadata incomplete"})
                 continue
@@ -1826,16 +1821,23 @@ class WorkspaceRag:
                 record_failed({"doc_id": doc_id, "reason": "source metadata invalid"})
                 continue
 
+            status_snapshot = await self._retry_status_snapshot(doc_id)
             try:
                 result = await self._aingest_download_locator(
                     source_uri, download_locator, display_filename
                 )
                 processed = result.get("processed")
                 if result.get("errors") or (isinstance(processed, int | float) and processed < 1):
+                    await self._restore_retry_discoverability(
+                        doc_id, status_snapshot=status_snapshot, metadata=metadata
+                    )
                     record_failed({"doc_id": doc_id, "reason": "retry ingestion failed"})
                     continue
                 replacement_doc_ids = self._retry_result_doc_ids(result)
                 if not replacement_doc_ids:
+                    await self._restore_retry_discoverability(
+                        doc_id, status_snapshot=status_snapshot, metadata=metadata
+                    )
                     record_failed({"doc_id": doc_id, "reason": "retry ingestion failed"})
                     continue
                 if doc_id not in replacement_doc_ids:
@@ -1866,6 +1868,9 @@ class WorkspaceRag:
                     {"doc_id": doc_id, "file_path": entry.get("file_path", ""), "result": result}
                 )
             except Exception:
+                await self._restore_retry_discoverability(
+                    doc_id, status_snapshot=status_snapshot, metadata=metadata
+                )
                 logger.warning("Retry failed for doc_id=%s", doc_id)
                 record_failed(
                     {
@@ -1902,6 +1907,40 @@ class WorkspaceRag:
                 if isinstance(nested_doc_id, str) and nested_doc_id:
                     doc_ids.add(nested_doc_id)
         return doc_ids
+
+    async def _retry_status_snapshot(self, doc_id: str) -> dict[str, Any] | None:
+        """Capture the FAILED row in case same-id cleanup fails before re-enqueue."""
+        if self._lightrag_stores is None:
+            return None
+        try:
+            row = await self._lightrag_stores.get_doc_status(doc_id)
+        except Exception:
+            logger.warning("Failed to snapshot retry status for doc_id=%s", doc_id)
+            return None
+        return dict(row) if isinstance(row, Mapping) else None
+
+    async def _restore_retry_discoverability(
+        self,
+        doc_id: str,
+        *,
+        status_snapshot: Mapping[str, Any] | None,
+        metadata: Mapping[str, Any],
+    ) -> None:
+        """Restore retry metadata/status only when same-id cleanup left no row."""
+        if self._lightrag_stores is not None and status_snapshot is not None:
+            try:
+                current_status = await self._lightrag_stores.get_doc_status(doc_id)
+                if current_status is None:
+                    await self._lightrag_stores.doc_status.upsert({doc_id: dict(status_snapshot)})
+            except Exception:
+                logger.warning("Failed to restore retry status for doc_id=%s", doc_id)
+        if self._metadata_index is not None:
+            try:
+                current_metadata = await self._metadata_index.get(doc_id)
+                if current_metadata is None:
+                    await self._metadata_index.upsert(doc_id, dict(metadata))
+            except Exception:
+                logger.warning("Failed to restore retry metadata for doc_id=%s", doc_id)
 
     async def _rollback_retry_replacements(
         self,
@@ -1985,16 +2024,19 @@ class WorkspaceRag:
         """Materialize one validated locator while preserving source provenance."""
         source_type, parts = self._validate_retry_source_contract(source_uri, download_locator)
         stable_source_uri = validate_source_uri(source_uri)
-        parser_filename = _retry_parser_filename(display_filename)
 
         if source_type == "local":
             return await self._aingest_local_retry_locator(
                 source_uri=stable_source_uri,
                 download_locator=download_locator,
                 display_filename=display_filename,
-                parser_filename=parser_filename,
             )
 
+        parser_filename = remote_parser_input_path(
+            batch_root=Path(),
+            source_uri=stable_source_uri,
+            key=display_filename,
+        ).name
         if source_type == "url":
             document = IngestDocument(
                 url=download_locator,
@@ -2045,27 +2087,19 @@ class WorkspaceRag:
         source_uri: str,
         download_locator: str,
         display_filename: str,
-        parser_filename: str,
     ) -> dict[str, Any]:
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
 
-        input_root = self._workspace_input_root()
-        parser_path = input_root / parser_filename
+        source_path = self._retry_local_source_path(download_locator)
         item = PreparedIngestFile(
-            parser_path=parser_path,
+            parser_path=source_path,
             source_uri=source_uri,
             download_locator=download_locator,
             display_filename=display_filename,
         )
-        parser_path.parent.mkdir(parents=True, exist_ok=True)
-        source_path = self._retry_local_source_path(download_locator)
-        try:
-            await asyncio.to_thread(shutil.copy2, source_path, parser_path)
-            result = await self._ingestion_engine.aingest_files([item], replace=False)
-            return self._single_file_result(result)
-        finally:
-            await asyncio.to_thread(_remove_remote_parser_sources, [item])
+        result = await self._ingestion_engine.aingest_files([item], replace=False)
+        return self._single_file_result(result)
 
     async def adelete_files(
         self,

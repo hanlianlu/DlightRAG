@@ -22,7 +22,11 @@ from dlightrag.engine.rag.corpus.ingestion.document_embedding import (
     resolve_direct_image_embedding_enabled,
 )
 from dlightrag.engine.rag.corpus.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
-from dlightrag.engine.rag.corpus.ingestion.paths import iter_ingestable_files, stage_input_file
+from dlightrag.engine.rag.corpus.ingestion.paths import (
+    iter_ingestable_files,
+    remote_parser_input_path,
+    stage_input_file,
+)
 from dlightrag.engine.rag.corpus.sources.base import AsyncDataSource, SourceDocument
 from dlightrag.engine.rag.workspace.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
@@ -2596,6 +2600,12 @@ class TestWorkspaceRagLightRAGMainPath:
         stores.get_doc_status.side_effect = lambda doc_id: statuses.get(doc_id)
         stores.get_full_doc.side_effect = lambda doc_id: full_docs.get(doc_id)
 
+        async def upsert_status(rows: dict[str, dict[str, object]]) -> None:
+            statuses.update({doc_id: dict(row) for doc_id, row in rows.items()})
+
+        stores.doc_status = MagicMock()
+        stores.doc_status.upsert = AsyncMock(side_effect=upsert_status)
+
         metadata_index = AsyncMock()
         metadata_index.get.side_effect = lambda doc_id: metadata_records.get(doc_id)
 
@@ -2623,6 +2633,7 @@ class TestWorkspaceRagLightRAGMainPath:
         service = _service(test_config)
         service._initialized = True
         service._lightrag = lightrag
+        service._lightrag_stores = stores
         service._metadata_index = metadata_index
         document_embedder = AsyncMock()
         document_embedder.image_enabled = False
@@ -2651,10 +2662,12 @@ class TestWorkspaceRagLightRAGMainPath:
 
         assert result["failed"] == 1
         assert statuses[original_doc_id] == original_status
-        assert metadata_records[original_doc_id] == original_metadata
-        lightrag.adelete_by_doc_id.assert_not_awaited()
+        assert {
+            key: metadata_records[original_doc_id][key] for key in original_metadata
+        } == original_metadata
+        lightrag.adelete_by_doc_id.assert_awaited_once_with(original_doc_id, delete_llm_cache=True)
 
-    async def test_remote_retry_uses_unique_parser_basename_and_original_metadata(
+    async def test_remote_retry_reuses_original_parser_identity_and_metadata(
         self, test_config: DlightragConfig
     ) -> None:
         service = _service(test_config)
@@ -2696,8 +2709,12 @@ class TestWorkspaceRagLightRAGMainPath:
         assert result["doc_id"] == "doc-new"
         assert len(seen_items) == 1
         item = seen_items[0]
-        assert "__retry_" in item.parser_path.stem
-        assert item.parser_path.suffix == ".pdf"
+        expected_parser_path = remote_parser_input_path(
+            batch_root=service._workspace_input_root(),  # type: ignore[attr-defined]
+            source_uri="bynder://asset/1",
+            key="report.pdf",
+        )
+        assert item.parser_path == expected_parser_path
         assert item.display_filename == "report.pdf"
         assert item.source_uri == "bynder://asset/1"
         assert item.download_locator == "https://cdn.example.com/assets/1"
@@ -3211,9 +3228,8 @@ class TestWorkspaceRagLightRAGMainPath:
         assert item.source_uri == "local://legacy/abcdef/report.pdf"
         assert item.download_locator == str(source)
         assert item.display_filename == "report.pdf"
-        assert "__retry_" in item.parser_path.stem
-        assert item.parser_path.suffix == ".pdf"
-        assert not item.parser_path.exists()
+        assert item.parser_path == source
+        assert item.parser_path.exists()
 
     async def test_download_locator_dispatch_recovers_lightrag_moved_local_source(
         self, test_config: DlightragConfig
@@ -3241,7 +3257,7 @@ class TestWorkspaceRagLightRAGMainPath:
         items = service._ingestion_engine.aingest_files.await_args.args[0]
         assert len(items) == 1
         assert items[0].download_locator == str(original)
-        assert items[0].parser_path.parent == input_root
+        assert items[0].parser_path == moved
         assert moved.is_file()
 
     async def test_download_locator_dispatch_rejects_invalid_remote_locator(
