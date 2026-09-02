@@ -150,7 +150,7 @@
 .toolTrace {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-3xs);
   margin-top: var(--space-related);
 }
 

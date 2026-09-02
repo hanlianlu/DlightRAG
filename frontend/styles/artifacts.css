@@ -3,6 +3,7 @@
 /* Markdown typography for answer content and Markdown artifacts. The server
    converts Markdown to sanitized HTML; this layer provides the visual design
    so model output renders with real hierarchy instead of browser defaults. */
+
 /* Answer Artifact placements */
 .answer-parts {
     display: flow-root;

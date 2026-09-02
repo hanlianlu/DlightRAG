@@ -398,7 +398,7 @@
   },
   "color-row-alt": {
     "$type": "color",
-    "$value": "rgb(28 25 23 / 50%)",
+    "$value": "{color-stone-800}",
     "$extensions": {
       "org.dlightrag.modes": {
         "light": "rgb(68 64 60 / 6%)"
