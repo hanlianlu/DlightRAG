@@ -20,7 +20,8 @@ _CONVERSATION = {
 }
 
 
-def _artifact(*, presentation: str, media_type: str, filename: str) -> dict[str, object]:
+def _artifact_wire(*, presentation: str, media_type: str, filename: str) -> dict[str, object]:
+    """Artifact descriptor in snake_case wire shape, served by the mocked server."""
     base = f"/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}"
     return {
         "resource_id": _RESOURCE_ID,
@@ -42,7 +43,31 @@ def _artifact(*, presentation: str, media_type: str, filename: str) -> dict[str,
     }
 
 
-def _presentation(artifact: dict[str, object]) -> dict[str, object]:
+def _artifact_domain(*, presentation: str, media_type: str, filename: str) -> dict[str, object]:
+    """Artifact descriptor in camelCase domain shape, consumed raw by the canvas element."""
+    base = f"/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}"
+    return {
+        "resourceId": _RESOURCE_ID,
+        "role": "primary_report",
+        "mediaType": media_type,
+        "label": "Quarterly report",
+        "filename": filename,
+        "byteSize": 512,
+        "digest": "a" * 64,
+        "presentation": presentation,
+        "status": "available",
+        "uri": f"dlightrag://answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}",
+        "width": None,
+        "height": None,
+        "dataUrl": base,
+        "downloadUrl": f"{base}?download=1",
+        "presentationUrl": f"{base}/presentation",
+        "issue": None,
+    }
+
+
+def _presentation_wire(artifact: dict[str, object]) -> dict[str, object]:
+    """Presentation in snake_case wire shape, embedded in the mocked history response."""
     return {
         "answer_text": f"Delivery note. [Quarterly report](artifact:{_RESOURCE_ID})",
         "parts": [
@@ -114,8 +139,14 @@ def _open_ready_page(page: Page) -> None:
 
 
 def test_markdown_primary_report_uses_the_general_artifact_canvas(page: Page) -> None:
-    artifact = _artifact(presentation="markdown", media_type="text/markdown", filename="report.md")
-    _install_history(page, _presentation(artifact))
+    _install_history(
+        page,
+        _presentation_wire(
+            _artifact_wire(
+                presentation="markdown", media_type="text/markdown", filename="report.md"
+            )
+        ),
+    )
     requested: list[str] = []
 
     def presentation_route(route: Route) -> None:
@@ -135,7 +166,11 @@ def test_markdown_primary_report_uses_the_general_artifact_canvas(page: Page) ->
                 ],
                 "sources": [],
                 "evidence_images": [],
-                "artifacts": [artifact],
+                "artifacts": [
+                    _artifact_wire(
+                        presentation="markdown", media_type="text/markdown", filename="report.md"
+                    )
+                ],
                 "artifact_outcome": {"status": "complete", "issues": []},
             }
         )
@@ -161,8 +196,14 @@ def test_markdown_primary_report_uses_the_general_artifact_canvas(page: Page) ->
 
 def test_desktop_conversation_area_dismisses_a_lone_artifact_canvas(page: Page) -> None:
     page.set_viewport_size({"width": 1440, "height": 900})
-    artifact = _artifact(presentation="markdown", media_type="text/markdown", filename="report.md")
-    _install_history(page, _presentation(artifact))
+    _install_history(
+        page,
+        _presentation_wire(
+            _artifact_wire(
+                presentation="markdown", media_type="text/markdown", filename="report.md"
+            )
+        ),
+    )
     page.route(
         f"**/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}/presentation",
         lambda route: route.fulfill(
@@ -180,7 +221,11 @@ def test_desktop_conversation_area_dismisses_a_lone_artifact_canvas(page: Page) 
                 ],
                 "sources": [],
                 "evidence_images": [],
-                "artifacts": [artifact],
+                "artifacts": [
+                    _artifact_wire(
+                        presentation="markdown", media_type="text/markdown", filename="report.md"
+                    )
+                ],
                 "artifact_outcome": {"status": "complete", "issues": []},
             }
         ),
@@ -306,8 +351,12 @@ _MALICIOUS_HTML = """<!doctype html><html><body>
 
 
 def test_active_html_is_opt_in_opaque_and_destroyed_on_close(page: Page) -> None:
-    artifact = _artifact(presentation="html", media_type="text/html", filename="report.html")
-    _install_history(page, _presentation(artifact))
+    _install_history(
+        page,
+        _presentation_wire(
+            _artifact_wire(presentation="html", media_type="text/html", filename="report.html")
+        ),
+    )
     network_hits: list[str] = []
     downloads: list[str] = []
     page.on("download", lambda download: downloads.append(download.suggested_filename))

@@ -393,17 +393,17 @@ export async function deleteAllConversations(signal?: AbortSignal): Promise<void
   }
 }
 
-export async function getArtifactPresentation(
-  runId: string,
-  resourceId: string,
+/** Parse the presentation served at a server-provided artifact URL. The URL
+ *  stays server-owned; the response still crosses the validated edge. */
+export async function getArtifactPresentationAt(
+  presentationUrl: string,
   signal?: AbortSignal,
 ): Promise<AnswerPresentation> {
-  const run = encodeURIComponent(runId);
-  const resource = encodeURIComponent(resourceId);
-  const response = await fetch(
-    `/web/api/answer/${run}/artifacts/${resource}/presentation`,
-    {signal},
-  );
+  const target = new URL(presentationUrl, window.location.origin);
+  if (target.origin !== window.location.origin) {
+    throw new ConversationApiError(0, 'Untrusted artifact presentation URL');
+  }
+  const response = await fetch(target.pathname + target.search, {signal});
   return parseWire(response, answerPresentation, makeError, 'Failed to load the Artifact');
 }
 

@@ -59,17 +59,19 @@ function artifact(id: string, label: string, presentation: 'markdown' | 'html'):
   };
 }
 
-function markdownPresentation(text: string): AnswerPresentation {
+// The canvas parses the presentation response through the api schema, so the
+// stub must serve the snake_case wire shape.
+function markdownPresentation(text: string): Record<string, unknown> {
   return {
-    answerText: text,
+    answer_text: text,
     parts: [{
       type: 'markdown', text, html: `<p>${text}</p>`, artifact: null,
-      evidenceImage: null, inline: false,
+      evidence_image: null, inline: false,
     }],
     sources: [],
-    evidenceImages: [],
+    evidence_images: [],
     artifacts: [],
-    artifactOutcome: {status: 'complete', issues: []},
+    artifact_outcome: {status: 'complete', issues: []},
   };
 }
 
@@ -81,9 +83,9 @@ afterEach(() => {
 });
 
 it('ignores a previous Markdown response that finishes decoding after an Artifact switch', async () => {
-  let finishStaleDecode!: (value: AnswerPresentation) => void;
+  let finishStaleDecode!: (value: Record<string, unknown>) => void;
   let markDecodeStarted!: () => void;
-  const staleDecode = new Promise<AnswerPresentation>((resolve) => { finishStaleDecode = resolve; });
+  const staleDecode = new Promise<Record<string, unknown>>((resolve) => { finishStaleDecode = resolve; });
   const decodeStarted = new Promise<void>((resolve) => { markDecodeStarted = resolve; });
   const currentPresentation = markdownPresentation('Current report');
   window.fetch = async (input) => {

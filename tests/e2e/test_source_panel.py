@@ -32,18 +32,67 @@ def _open_ready_page(page) -> None:
     page.wait_for_selector(".composer-input", timeout=10000)
 
 
-def _source_presentation(*, source_url: str | None = None, image_url: str | None = None) -> dict:
+_CITED_HTML = (
+    "<p>DlightRAG cited answer "
+    '<cite class="citation-badge" data-ref="1" data-chunk="1" '
+    'role="button" tabindex="0" aria-label="Source 1, chunk 1">1-1</cite>.</p>'
+)
+
+
+def _source_presentation_domain(
+    *,
+    source_url: str | None = None,
+    image_url: str | None = None,
+) -> dict:
+    """Presentation in camelCase domain shape, injected into element properties."""
+    return {
+        "answerText": "DlightRAG cited answer [1-1].",
+        "parts": [
+            {
+                "type": "markdown",
+                "text": "DlightRAG cited answer [1-1].",
+                "html": _CITED_HTML,
+                "artifact": None,
+                "evidenceImage": None,
+                "inline": False,
+            }
+        ],
+        "sources": [
+            {
+                "id": "1",
+                "title": "report.pdf",
+                "sourceUrl": source_url,
+                "downloadUrl": "/web/api/files/raw/doc-report?workspace=default",
+                "chunks": [
+                    {
+                        "chunkIdx": 1,
+                        "pageNumber": 1,
+                        "contentHtml": "<p>Evidence text</p>",
+                        "imageUrl": image_url,
+                        "thumbnailUrl": image_url,
+                    }
+                ],
+            }
+        ],
+        "evidenceImages": [],
+        "artifacts": [],
+        "artifactOutcome": {"status": "complete", "issues": []},
+    }
+
+
+def _source_presentation_wire(
+    *,
+    source_url: str | None = None,
+    image_url: str | None = None,
+) -> dict:
+    """Presentation in snake_case wire shape, served by the mocked server."""
     return {
         "answer_text": "DlightRAG cited answer [1-1].",
         "parts": [
             {
                 "type": "markdown",
                 "text": "DlightRAG cited answer [1-1].",
-                "html": (
-                    "<p>DlightRAG cited answer "
-                    '<cite class="citation-badge" data-ref="1" data-chunk="1" '
-                    'role="button" tabindex="0" aria-label="Source 1, chunk 1">1-1</cite>.</p>'
-                ),
+                "html": _CITED_HTML,
                 "artifact": None,
                 "evidence_image": None,
                 "inline": False,
@@ -82,7 +131,7 @@ def _inject_answer_with_sources(page, *, image_url: str | None = None) -> None:
           element.presentation = presentation;
           return element.updateComplete;
         }""",
-        _source_presentation(image_url=image_url),
+        _source_presentation_domain(image_url=image_url),
     )
     page.locator(".answer-ref-item").last.wait_for()
 
@@ -185,7 +234,7 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
         "updated_at": timestamp,
     }
     source_url = "http://www.sgas.ruc.edu.cn/xwgg/yjyxw/f1a3ff59a5894391b7b0db77951c08b4.htm"
-    presentation = _source_presentation(source_url=source_url)
+    presentation_wire = _source_presentation_wire(source_url=source_url)
 
     def handle_conversations(route):
         path = urlparse(route.request.url).path
@@ -207,7 +256,9 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
                             "user_text": "Show the source",
                             "assistant_text": "Cited answer.",
                             "user_attachments": [],
-                            "presentation": presentation,
+                            "presentation": presentation_wire,
+                            "usage": {},
+                            "evidence": {},
                             "error_kind": None,
                             "error_message": None,
                             "created_at": timestamp,

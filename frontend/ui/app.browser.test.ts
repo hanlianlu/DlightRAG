@@ -390,6 +390,22 @@ it('owns Shell message layout while preserving the welcome for an empty conversa
 
 it('opens Sources as the only compact modal when intent originates in Canvas', async () => {
   window.matchMedia = compactMedia;
+  // The canvas parses this response through the api schema: serve wire shape.
+  // The canvas parses this response through the api schema: serve wire shape.
+  const presentationWire = {
+    answer_text: 'See [1].',
+    parts: [{
+      type: 'markdown', text: 'See [1].',
+      html: '<p>See <cite class="citation-badge" data-ref="1">1</cite>.</p>',
+      artifact: null, evidence_image: null, inline: false,
+    }],
+    sources: [{
+      id: '1', title: 'Source', source_url: null, download_url: null, chunks: [],
+    }],
+    evidence_images: [], artifacts: [], artifact_outcome: {status: 'complete', issues: []},
+  };;
+  // What the element would hold after parsing; the dispatched event detail
+  // carries the domain object, like the real component does.
   const presentation: AnswerPresentation = {
     answerText: 'See [1].',
     parts: [{
@@ -401,9 +417,9 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
       id: '1', title: 'Source', sourceUrl: null, downloadUrl: null, chunks: [],
     }],
     evidenceImages: [], artifacts: [], artifactOutcome: {status: 'complete', issues: []},
-  };
+  };;
   window.fetch = async (input) => String(input).includes('/presentation')
-    ? response(presentation)
+    ? response(presentationWire)
     : bootstrapResponse(input);
   const app = document.createElement('dl-app') as DlApp;
   document.body.appendChild(app);
@@ -448,6 +464,21 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
 
 it('restores a desktop Canvas citation when Sources closes alongside it', async () => {
   window.matchMedia = desktopMedia;
+  // The canvas parses this response through the api schema: serve wire shape.
+  const presentationWire = {
+    answer_text: 'See [1].',
+    parts: [{
+      type: 'markdown', text: 'See [1].',
+      html: '<p>See <cite class="citation-badge" data-ref="1" tabindex="0">1</cite>.</p>',
+      artifact: null, evidence_image: null, inline: false,
+    }],
+    sources: [{
+      id: '1', title: 'Source', source_url: null, download_url: null, chunks: [],
+    }],
+    evidence_images: [], artifacts: [], artifact_outcome: {status: 'complete', issues: []},
+  };;
+  // What the element would hold after parsing; the dispatched event detail
+  // carries the domain object, like the real component does.
   const presentation: AnswerPresentation = {
     answerText: 'See [1].',
     parts: [{
@@ -459,9 +490,9 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
       id: '1', title: 'Source', sourceUrl: null, downloadUrl: null, chunks: [],
     }],
     evidenceImages: [], artifacts: [], artifactOutcome: {status: 'complete', issues: []},
-  };
+  };;
   window.fetch = async (input) => String(input).includes('/presentation')
-    ? response(presentation)
+    ? response(presentationWire)
     : bootstrapResponse(input);
   const app = document.createElement('dl-app') as DlApp;
   document.body.appendChild(app);

@@ -2,7 +2,7 @@
 
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
-import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
+import {getArtifactPresentationAt, type AnswerArtifact, type AnswerPresentation} from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
@@ -300,9 +300,10 @@ export class DlArtifactCanvas extends LightElement {
       }
       if (artifact.presentation === 'markdown') {
         if (!artifact.presentationUrl) throw new Error('missing presentation URL');
-        const response = await fetch(artifact.presentationUrl, {signal: controller.signal});
-        if (!response.ok) throw new Error('presentation failed');
-        const presentation = await response.json() as AnswerPresentation;
+        const presentation = await getArtifactPresentationAt(
+          artifact.presentationUrl,
+          controller.signal,
+        );
         if (this.#controller !== controller) return;
         this.presentation = presentation;
       } else if (artifact.presentation === 'html' || artifact.presentation === 'text') {

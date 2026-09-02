@@ -52,7 +52,15 @@ def test_file_panel_loads_older_keyset_page_through_accessible_control(page):
                 {
                     "workspace": workspace,
                     "files": files,
-                    "ingest": {"busy": False, "message": "", "pending_enqueues": 0},
+                    "ingest": {
+                        "busy": False,
+                        "message": "",
+                        "progress_percent": None,
+                        "current_batch": None,
+                        "total_batches": None,
+                        "documents": None,
+                        "pending_enqueues": 0,
+                    },
                     "next_cursor": "older-page" if cursor is None else None,
                 }
             ),
