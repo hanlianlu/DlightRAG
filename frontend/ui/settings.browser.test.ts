@@ -71,7 +71,7 @@ it('consumes a typed memory fact through its command and refreshes after Undo', 
     intent_id: 'intent-settings-test',
     operation: 'remember',
     outcome: 'changed',
-    change_id: 'change-settings-test',
+    changeId: 'change-settings-test',
     body: 'Use concise answers',
   });
   await waitFor(() => settings.textContent?.includes('1 stored item') ?? false);
@@ -170,7 +170,7 @@ it('rejects a delayed memory read after a newer toggle mutation settles', async 
     intent_id: 'stale-read-intent',
     operation: 'remember',
     outcome: 'changed',
-    change_id: 'stale-read-change',
+    changeId: 'stale-read-change',
     body: 'Remember this',
   });
   await waitFor(() => reads === 1);

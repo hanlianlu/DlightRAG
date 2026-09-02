@@ -12,8 +12,13 @@ import {
 } from './answer-submission-machine.ts';
 
 const accepted = {
-  conversation: {conversation_id: 'c1'},
-  turn: {answer_run_id: 'run-1', submission_id: 'submission-1'},
+  conversation: {conversationId: 'c1', title: null, createdAt: '', updatedAt: '', forkedFromConversationId: null, forkedFromTitle: null},
+  turn: {
+    turnId: 't1', turnNumber: 1, answerRunId: 'run-1', submissionId: 'submission-1',
+    status: 'queued' as const, cancelRequested: false, userText: 'Question', assistantText: '',
+    userAttachments: [], presentation: null, usage: {}, evidence: {},
+    errorKind: null, errorMessage: null, createdAt: '',
+  },
 } as AcceptedAnswer;
 const intent = {
   submissionId: 'submission-1',

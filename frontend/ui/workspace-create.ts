@@ -52,12 +52,12 @@ export class DlWorkspaceCreate extends LightElement {
       ) return;
       workspaceStore.add({
         workspace: created.workspace,
-        displayName: created.display_name,
+        displayName: created.displayName,
         embeddingModel: '',
       });
       input.value = '';
       this.#requestToast({
-        message: msg(str`Workspace ${created.display_name} created.`, {id: 'workspaceCreate.created'}),
+        message: msg(str`Workspace ${created.displayName} created.`, {id: 'workspaceCreate.created'}),
       });
       this.dispatchEvent(new CustomEvent<WorkspaceCreatedDetail>('dl-workspace-created', {
         detail: {workspace: created.workspace},

@@ -1,145 +1,309 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import * as v from 'valibot';
 import {csrfHeaders} from './csrf.ts';
+import {parseWire} from './wire.ts';
 
-export interface ConversationSummary {
-  conversation_id: string;
-  title: string | null;
-  created_at: string;
-  updated_at: string;
-  forked_from_conversation_id?: string | null;
-  forked_from_title?: string | null;
-}
+const conversationSummary = v.pipe(
+  v.object({
+    conversation_id: v.string(),
+    title: v.nullable(v.string()),
+    created_at: v.string(),
+    updated_at: v.string(),
+    forked_from_conversation_id: v.optional(v.nullable(v.string())),
+    forked_from_title: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({
+    conversationId: w.conversation_id,
+    title: w.title,
+    createdAt: w.created_at,
+    updatedAt: w.updated_at,
+    forkedFromConversationId: w.forked_from_conversation_id ?? null,
+    forkedFromTitle: w.forked_from_title ?? null,
+  })),
+);
+export type ConversationSummary = v.InferOutput<typeof conversationSummary>;
 
-export interface ConversationPage {
-  items: ConversationSummary[];
-  next_cursor: string | null;
-}
+const attachmentReference = v.pipe(
+  v.object({
+    attachment_id: v.string(),
+    ordinal: v.number(),
+    kind: v.string(),
+    filename: v.string(),
+    mime_type: v.string(),
+    byte_size: v.number(),
+    url: v.string(),
+    thumbnail_url: v.nullable(v.string()),
+    label: v.string(),
+  }),
+  v.transform((w) => ({
+    attachmentId: w.attachment_id,
+    ordinal: w.ordinal,
+    kind: w.kind,
+    filename: w.filename,
+    mimeType: w.mime_type,
+    byteSize: w.byte_size,
+    url: w.url,
+    thumbnailUrl: w.thumbnail_url,
+    label: w.label,
+  })),
+);
+export type ConversationAttachmentReference = v.InferOutput<typeof attachmentReference>;
 
-export interface ConversationAttachmentReference {
-  attachment_id: string;
-  ordinal: number;
-  kind: string;
-  filename: string;
-  mime_type: string;
-  byte_size: number;
-  url: string;
-  thumbnail_url: string | null;
-  label: string;
-}
+const presentationImage = v.pipe(
+  v.object({
+    id: v.string(),
+    chunk_id: v.string(),
+    source_ref: v.string(),
+    url: v.string(),
+    thumbnail_url: v.string(),
+    label: v.string(),
+    answer_image_sent: v.boolean(),
+  }),
+  v.transform((w) => ({
+    id: w.id,
+    chunkId: w.chunk_id,
+    sourceRef: w.source_ref,
+    url: w.url,
+    thumbnailUrl: w.thumbnail_url,
+    label: w.label,
+    answerImageSent: w.answer_image_sent,
+  })),
+);
+export type PresentationImage = v.InferOutput<typeof presentationImage>;
 
-export type AnswerRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+const artifactIssue = v.object({
+  kind: v.string(),
+  description: v.string(),
+  resource_id: v.nullable(v.string()),
+});
+export type ArtifactIssue = v.InferOutput<typeof artifactIssue>;
 
-export interface PresentationImage {
-  id: string;
-  chunk_id: string;
-  source_ref: string;
-  url: string;
-  thumbnail_url: string;
-  label: string;
-  answer_image_sent: boolean;
-}
+const artifactOutcome = v.pipe(
+  v.object({
+    status: v.picklist(['complete', 'partial', 'failed']),
+    issues: v.array(artifactIssue),
+  }),
+  v.transform((w) => ({
+    status: w.status,
+    issues: w.issues.map((issue) => ({
+      kind: issue.kind,
+      description: issue.description,
+      resourceId: issue.resource_id,
+    })),
+  })),
+);
+export type ArtifactOutcome = v.InferOutput<typeof artifactOutcome>;
 
-export interface ArtifactIssue {
-  kind: string;
-  description: string;
-  resource_id: string | null;
-}
+const answerArtifact = v.pipe(
+  v.object({
+    resource_id: v.string(),
+    role: v.picklist(['primary_report', 'attachment']),
+    media_type: v.string(),
+    label: v.string(),
+    filename: v.string(),
+    byte_size: v.number(),
+    digest: v.string(),
+    presentation: v.picklist(['image', 'markdown', 'html', 'pdf', 'text', 'download']),
+    status: v.picklist(['available', 'unavailable']),
+    uri: v.string(),
+    width: v.nullable(v.number()),
+    height: v.nullable(v.number()),
+    data_url: v.nullable(v.string()),
+    download_url: v.nullable(v.string()),
+    presentation_url: v.nullable(v.string()),
+    issue: v.nullable(artifactIssue),
+  }),
+  v.transform((w) => ({
+    resourceId: w.resource_id,
+    role: w.role,
+    mediaType: w.media_type,
+    label: w.label,
+    filename: w.filename,
+    byteSize: w.byte_size,
+    digest: w.digest,
+    presentation: w.presentation,
+    status: w.status,
+    uri: w.uri,
+    width: w.width,
+    height: w.height,
+    dataUrl: w.data_url,
+    downloadUrl: w.download_url,
+    presentationUrl: w.presentation_url,
+    issue: w.issue === null ? null : {
+      kind: w.issue.kind,
+      description: w.issue.description,
+      resourceId: w.issue.resource_id,
+    },
+  })),
+);
+export type AnswerArtifact = v.InferOutput<typeof answerArtifact>;
 
-export interface ArtifactOutcome {
-  status: 'complete' | 'partial' | 'failed';
-  issues: ArtifactIssue[];
-}
+const presentationPart = v.pipe(
+  v.object({
+    type: v.picklist(['markdown', 'artifact', 'evidence_image']),
+    text: v.string(),
+    html: v.string(),
+    artifact: v.nullable(answerArtifact),
+    evidence_image: v.nullable(presentationImage),
+    inline: v.boolean(),
+  }),
+  v.transform((w) => ({
+    type: w.type,
+    text: w.text,
+    html: w.html,
+    artifact: w.artifact,
+    evidenceImage: w.evidence_image,
+    inline: w.inline,
+  })),
+);
+export type PresentationPart = v.InferOutput<typeof presentationPart>;
 
-export interface AnswerArtifact {
-  resource_id: string;
-  role: 'primary_report' | 'attachment';
-  media_type: string;
-  label: string;
-  filename: string;
-  byte_size: number;
-  digest: string;
-  presentation: 'image' | 'markdown' | 'html' | 'pdf' | 'text' | 'download';
-  status: 'available' | 'unavailable';
-  uri: string;
-  width: number | null;
-  height: number | null;
-  data_url: string | null;
-  download_url: string | null;
-  presentation_url: string | null;
-  issue: ArtifactIssue | null;
-}
+const presentationSourceChunk = v.pipe(
+  v.object({
+    chunk_idx: v.nullable(v.number()),
+    page_number: v.nullable(v.number()),
+    content_html: v.string(),
+    image_url: v.nullable(v.string()),
+    thumbnail_url: v.nullable(v.string()),
+  }),
+  v.transform((w) => ({
+    chunkIdx: w.chunk_idx,
+    pageNumber: w.page_number,
+    contentHtml: w.content_html,
+    imageUrl: w.image_url,
+    thumbnailUrl: w.thumbnail_url,
+  })),
+);
+export type PresentationSourceChunk = v.InferOutput<typeof presentationSourceChunk>;
 
-export interface PresentationPart {
-  type: 'markdown' | 'artifact' | 'evidence_image';
-  text: string;
-  html: string;
-  artifact: AnswerArtifact | null;
-  evidence_image: PresentationImage | null;
-  inline: boolean;
-}
+const presentationSource = v.pipe(
+  v.object({
+    id: v.string(),
+    title: v.string(),
+    source_url: v.nullable(v.string()),
+    download_url: v.nullable(v.string()),
+    chunks: v.array(presentationSourceChunk),
+  }),
+  v.transform((w) => ({
+    id: w.id,
+    title: w.title,
+    sourceUrl: w.source_url,
+    downloadUrl: w.download_url,
+    chunks: w.chunks,
+  })),
+);
+export type PresentationSource = v.InferOutput<typeof presentationSource>;
 
-export interface PresentationSourceChunk {
-  chunk_idx: number | null;
-  page_number: number | null;
-  content_html: string;
-  image_url: string | null;
-  thumbnail_url: string | null;
-}
+const answerPresentation = v.pipe(
+  v.object({
+    answer_text: v.string(),
+    parts: v.array(presentationPart),
+    sources: v.array(presentationSource),
+    evidence_images: v.array(presentationImage),
+    artifacts: v.array(answerArtifact),
+    artifact_outcome: artifactOutcome,
+  }),
+  v.transform((w) => ({
+    answerText: w.answer_text,
+    parts: w.parts,
+    sources: w.sources,
+    evidenceImages: w.evidence_images,
+    artifacts: w.artifacts,
+    artifactOutcome: w.artifact_outcome,
+  })),
+);
+export type AnswerPresentation = v.InferOutput<typeof answerPresentation>;
 
-export interface PresentationSource {
-  id: string;
-  title: string;
-  source_url: string | null;
-  download_url: string | null;
-  chunks: PresentationSourceChunk[];
-}
+const agentChildStatus = v.pipe(
+  v.object({
+    child_session_id: v.optional(v.string()),
+    status: v.string(),
+    objective: v.optional(v.string()),
+    model_role: v.optional(v.string()),
+    usage: v.optional(v.nullable(v.record(v.string(), v.number()))),
+  }),
+  v.transform((w) => ({
+    childSessionId: w.child_session_id,
+    status: w.status,
+    objective: w.objective,
+    modelRole: w.model_role,
+    usage: w.usage ?? null,
+  })),
+);
+export type AgentChildStatus = v.InferOutput<typeof agentChildStatus>;
 
-export interface AnswerPresentation {
-  answer_text: string;
-  parts: PresentationPart[];
-  sources: PresentationSource[];
-  evidence_images: PresentationImage[];
-  artifacts: AnswerArtifact[];
-  artifact_outcome: ArtifactOutcome;
-}
+const conversationTurn = v.pipe(
+  v.object({
+    turn_id: v.string(),
+    turn_number: v.number(),
+    answer_run_id: v.string(),
+    submission_id: v.string(),
+    status: v.picklist(['queued', 'running', 'succeeded', 'failed', 'cancelled']),
+    cancel_requested: v.boolean(),
+    user_text: v.string(),
+    assistant_text: v.string(),
+    user_attachments: v.array(attachmentReference),
+    presentation: v.nullable(answerPresentation),
+    usage: v.record(v.string(), v.unknown()),
+    evidence: v.record(v.string(), v.number()),
+    error_kind: v.nullable(v.string()),
+    error_message: v.nullable(v.string()),
+    created_at: v.string(),
+  }),
+  v.transform((w) => ({
+    turnId: w.turn_id,
+    turnNumber: w.turn_number,
+    answerRunId: w.answer_run_id,
+    submissionId: w.submission_id,
+    status: w.status,
+    cancelRequested: w.cancel_requested,
+    userText: w.user_text,
+    assistantText: w.assistant_text,
+    userAttachments: w.user_attachments,
+    presentation: w.presentation,
+    usage: w.usage,
+    evidence: w.evidence,
+    errorKind: w.error_kind,
+    errorMessage: w.error_message,
+    createdAt: w.created_at,
+  })),
+);
+export type ConversationTurn = v.InferOutput<typeof conversationTurn>;
 
-export interface AgentChildStatus {
-  child_session_id: string;
-  status: string;
-  objective?: string;
-  model_role?: string;
-  usage?: Record<string, number> | null;
-}
+export const acceptedAnswer = v.object({
+  conversation: conversationSummary,
+  turn: conversationTurn,
+});
+export type AcceptedAnswer = v.InferOutput<typeof acceptedAnswer>;
 
-export interface ConversationTurn {
-  turn_id: string;
-  turn_number: number;
-  answer_run_id: string;
-  submission_id: string;
-  status: AnswerRunStatus;
-  cancel_requested: boolean;
-  user_text: string;
-  assistant_text: string;
-  user_attachments: ConversationAttachmentReference[];
-  presentation: AnswerPresentation | null;
-  usage: Record<string, unknown>;
-  evidence: Record<string, number>;
-  error_kind: string | null;
-  error_message: string | null;
-  created_at: string;
-}
+const conversationPage = v.pipe(
+  v.object({
+    items: v.array(conversationSummary),
+    next_cursor: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({items: w.items, nextCursor: w.next_cursor ?? null})),
+);
+export type ConversationPage = v.InferOutput<typeof conversationPage>;
 
-export interface AcceptedAnswer {
-  conversation: ConversationSummary;
-  turn: ConversationTurn;
-}
+const conversationHistory = v.pipe(
+  v.object({
+    conversation: conversationSummary,
+    turns: v.array(conversationTurn),
+    next_cursor: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({conversation: w.conversation, turns: w.turns, nextCursor: w.next_cursor ?? null})),
+);
+export type ConversationHistory = v.InferOutput<typeof conversationHistory>;
 
-export interface ConversationHistory {
-  conversation: ConversationSummary;
-  turns: ConversationTurn[];
-  next_cursor?: string | null;
-}
+const agentChildRosterPage = v.pipe(
+  v.object({
+    children: v.array(agentChildStatus),
+    next_cursor: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({children: w.children, nextCursor: w.next_cursor ?? null})),
+);
+export type AgentChildRosterPage = v.InferOutput<typeof agentChildRosterPage>;
 
 export class ConversationApiError extends Error {
   readonly status: number;
@@ -151,9 +315,8 @@ export class ConversationApiError extends Error {
   }
 }
 
-async function responseJson<T>(response: Response, fallback: string): Promise<T> {
-  if (!response.ok) throw new ConversationApiError(response.status, fallback);
-  return await response.json() as T;
+function makeError(status: number, message: string): Error {
+  return new ConversationApiError(status, message);
 }
 
 export async function listConversations(
@@ -162,7 +325,7 @@ export async function listConversations(
 ): Promise<ConversationPage> {
   const query = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
   const response = await fetch(`/web/api/conversations${query}`, {signal});
-  return responseJson<ConversationPage>(response, 'Failed to load conversations');
+  return parseWire(response, conversationPage, makeError, 'Failed to load conversations');
 }
 
 export async function createConversation(signal?: AbortSignal): Promise<ConversationSummary> {
@@ -171,7 +334,7 @@ export async function createConversation(signal?: AbortSignal): Promise<Conversa
     headers: csrfHeaders(),
     signal,
   });
-  return responseJson<ConversationSummary>(response, 'Failed to create conversation');
+  return parseWire(response, conversationSummary, makeError, 'Failed to create conversation');
 }
 
 export async function getConversationHistory(
@@ -186,10 +349,7 @@ export async function getConversationHistory(
   if (limit !== undefined) query.set('limit', String(limit));
   const suffix = query.size > 0 ? `?${query.toString()}` : '';
   const response = await fetch(`/web/api/conversations/${id}/history${suffix}`, {signal});
-  const history = await responseJson<Omit<ConversationHistory, 'next_cursor'> & {
-    next_cursor?: string | null;
-  }>(response, 'Failed to load conversation history');
-  return {...history, next_cursor: history.next_cursor ?? null};
+  return parseWire(response, conversationHistory, makeError, 'Failed to load conversation history');
 }
 
 export async function renameConversation(
@@ -204,7 +364,7 @@ export async function renameConversation(
     body: JSON.stringify({title}),
     signal,
   });
-  return responseJson<ConversationSummary>(response, 'Failed to rename conversation');
+  return parseWire(response, conversationSummary, makeError, 'Failed to rename conversation');
 }
 
 export async function deleteConversation(
@@ -244,7 +404,7 @@ export async function getArtifactPresentation(
     `/web/api/answer/${run}/artifacts/${resource}/presentation`,
     {signal},
   );
-  return responseJson<AnswerPresentation>(response, 'Failed to load the Artifact');
+  return parseWire(response, answerPresentation, makeError, 'Failed to load the Artifact');
 }
 
 export async function getAnswerRun(
@@ -253,7 +413,7 @@ export async function getAnswerRun(
 ): Promise<ConversationTurn> {
   const id = encodeURIComponent(runId);
   const response = await fetch(`/web/api/answer/${id}`, {signal});
-  return responseJson<ConversationTurn>(response, 'Failed to load answer run');
+  return parseWire(response, conversationTurn, makeError, 'Failed to load answer run');
 }
 
 /** Ask the server to stop a run; disconnecting never does this on its own. */
@@ -269,12 +429,8 @@ export async function steerAnswerRun(
     body: JSON.stringify({content: instruction}),
     signal,
   });
-  return responseJson<Record<string, unknown>>(response, 'Failed to steer the answer');
-}
-
-export interface AgentChildRosterPage {
-  children: AgentChildStatus[];
-  next_cursor: string | null;
+  const schema = v.record(v.string(), v.unknown());
+  return parseWire(response, schema, makeError, 'Failed to steer the answer');
 }
 
 export async function getAnswerRunChildren(
@@ -295,13 +451,7 @@ export async function getAnswerRunChildrenPage(
   if (cursor !== null) query.set('cursor', cursor);
   const suffix = query.size > 0 ? `?${query.toString()}` : '';
   const response = await fetch(`/web/api/answer/${id}/children${suffix}`, {signal});
-  const payload = await responseJson<Omit<AgentChildRosterPage, 'next_cursor'> & {
-    next_cursor?: string | null;
-  }>(
-    response,
-    'Failed to load child agents',
-  );
-  return {children: payload.children, next_cursor: payload.next_cursor ?? null};
+  return parseWire(response, agentChildRosterPage, makeError, 'Failed to load child agents');
 }
 
 export async function continueAnswerRun(
@@ -318,7 +468,7 @@ export async function continueAnswerRun(
     body: JSON.stringify({content, submission_id: submissionId}),
     signal,
   });
-  return responseJson<AcceptedAnswer>(response, `Failed to ${operation} the answer`);
+  return parseWire(response, acceptedAnswer, makeError, `Failed to ${operation} the answer`);
 }
 
 export async function resumeAnswerRun(
@@ -331,7 +481,7 @@ export async function resumeAnswerRun(
     headers: csrfHeaders(),
     signal,
   });
-  return responseJson<ConversationTurn>(response, 'Failed to resume the answer');
+  return parseWire(response, conversationTurn, makeError, 'Failed to resume the answer');
 }
 
 export async function cancelAnswerRun(
@@ -344,5 +494,5 @@ export async function cancelAnswerRun(
     headers: csrfHeaders(),
     signal,
   });
-  return responseJson<ConversationTurn>(response, 'Failed to stop the answer');
+  return parseWire(response, conversationTurn, makeError, 'Failed to stop the answer');
 }

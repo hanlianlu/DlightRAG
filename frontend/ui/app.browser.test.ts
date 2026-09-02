@@ -124,7 +124,24 @@ it('renders the application shell from the typed bootstrap before resolving read
 
   const loaded = await app.ready;
 
-  expect(loaded).to.deep.equal(bootstrap);
+  expect(loaded).to.deep.equal({
+    contractVersion: 1,
+    workspaces: [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed-test'}],
+    workspacesNextCursor: null,
+    primaryWorkspace: 'default',
+    activeWorkspaces: ['default'],
+    knownWorkspaces: ['default'],
+    answerAttachments: {
+      countLimit: 6,
+      imageMaxBytes: 1024,
+      documentMaxBytes: 2048,
+      extensions: ['md', 'pdf'],
+      imageCapability: 'supported',
+      imageLimit: 3,
+      accept: 'image/*,.md,.pdf',
+    },
+    activeHtmlPreviewEnabled: true,
+  });
   const shell = app.querySelector<HTMLElement>('#app');
   expect(shell?.inert).to.equal(false);
   expect(app.querySelector('dl-workspace-scope')?.textContent).to.contain('All workspaces (1)');
@@ -313,8 +330,8 @@ it('closes conversation-scoped Inspector content on a typed route reset', async 
 
   const inspector = app.querySelector('dl-inspector')!;
   await inspector.openSources({
-    answer_text: '', parts: [], sources: [], evidence_images: [], artifacts: [],
-    artifact_outcome: {status: 'complete', issues: []},
+    answerText: '', parts: [], sources: [], evidenceImages: [], artifacts: [],
+    artifactOutcome: {status: 'complete', issues: []},
   });
   app.querySelector('dl-conversation-sidebar')?.dispatchEvent(new CustomEvent(
     'dl-conversation-route-change',
@@ -344,21 +361,21 @@ it('owns Shell message layout while preserving the welcome for an empty conversa
   expect(chat.querySelector('.welcome')?.textContent).to.contain('Ask anything');
 
   const answer: AnswerPresentation = {
-    answer_text: 'Stored answer.',
+    answerText: 'Stored answer.',
     parts: [{
       type: 'markdown', text: 'Stored answer.', html: '<p>Stored answer.</p>',
-      artifact: null, evidence_image: null, inline: false,
+      artifact: null, evidenceImage: null, inline: false,
     }],
-    sources: [], evidence_images: [], artifacts: [],
-    artifact_outcome: {status: 'complete', issues: []},
+    sources: [], evidenceImages: [], artifacts: [],
+    artifactOutcome: {status: 'complete', issues: []},
   };
   chat.view = {
     kind: 'ready', conversationId: 'filled', lineage: null,
     history: [{
-      turn_id: 'turn-1', turn_number: 1, answer_run_id: 'run-1', submission_id: 'submission-1',
-      status: 'succeeded', cancel_requested: false, user_text: 'Question', assistant_text: 'Stored answer.',
-      user_attachments: [], presentation: answer, usage: {}, evidence: {}, error_kind: null,
-      error_message: null, created_at: '2026-01-01T00:00:00Z',
+      turnId: 'turn-1', turnNumber: 1, answerRunId: 'run-1', submissionId: 'submission-1',
+      status: 'succeeded', cancelRequested: false, userText: 'Question', assistantText: 'Stored answer.',
+      userAttachments: [], presentation: answer, usage: {}, evidence: {}, errorKind: null,
+      errorMessage: null, createdAt: '2026-01-01T00:00:00Z',
     }],
   };
   await chat.updateComplete;
@@ -374,16 +391,16 @@ it('owns Shell message layout while preserving the welcome for an empty conversa
 it('opens Sources as the only compact modal when intent originates in Canvas', async () => {
   window.matchMedia = compactMedia;
   const presentation: AnswerPresentation = {
-    answer_text: 'See [1].',
+    answerText: 'See [1].',
     parts: [{
       type: 'markdown', text: 'See [1].',
       html: '<p>See <cite class="citation-badge" data-ref="1">1</cite>.</p>',
-      artifact: null, evidence_image: null, inline: false,
+      artifact: null, evidenceImage: null, inline: false,
     }],
     sources: [{
-      id: '1', title: 'Source', source_url: null, download_url: null, chunks: [],
+      id: '1', title: 'Source', sourceUrl: null, downloadUrl: null, chunks: [],
     }],
-    evidence_images: [], artifacts: [], artifact_outcome: {status: 'complete', issues: []},
+    evidenceImages: [], artifacts: [], artifactOutcome: {status: 'complete', issues: []},
   };
   window.fetch = async (input) => String(input).includes('/presentation')
     ? response(presentation)
@@ -393,13 +410,13 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
   await app.ready;
   const returnFocus = app.querySelector<HTMLButtonElement>('#files-btn')!;
   const artifact: AnswerArtifact = {
-    resource_id: 'report-1', role: 'primary_report', media_type: 'text/markdown',
-    label: 'Report', filename: 'report.md', byte_size: 20, digest: 'a'.repeat(64),
+    resourceId: 'report-1', role: 'primary_report', mediaType: 'text/markdown',
+    label: 'Report', filename: 'report.md', byteSize: 20, digest: 'a'.repeat(64),
     presentation: 'markdown', status: 'available',
     uri: 'dlightrag://answer/run-1/artifacts/report-1', width: null, height: null,
-    data_url: '/web/api/answer/run-1/artifacts/report-1',
-    download_url: '/web/api/answer/run-1/artifacts/report-1?download=1',
-    presentation_url: '/web/api/answer/run-1/artifacts/report-1/presentation', issue: null,
+    dataUrl: '/web/api/answer/run-1/artifacts/report-1',
+    downloadUrl: '/web/api/answer/run-1/artifacts/report-1?download=1',
+    presentationUrl: '/web/api/answer/run-1/artifacts/report-1/presentation', issue: null,
   };
   const canvas = app.querySelector('dl-artifact-canvas')!;
   await canvas.open(artifact, returnFocus);
@@ -432,16 +449,16 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
 it('restores a desktop Canvas citation when Sources closes alongside it', async () => {
   window.matchMedia = desktopMedia;
   const presentation: AnswerPresentation = {
-    answer_text: 'See [1].',
+    answerText: 'See [1].',
     parts: [{
       type: 'markdown', text: 'See [1].',
       html: '<p>See <cite class="citation-badge" data-ref="1" tabindex="0">1</cite>.</p>',
-      artifact: null, evidence_image: null, inline: false,
+      artifact: null, evidenceImage: null, inline: false,
     }],
     sources: [{
-      id: '1', title: 'Source', source_url: null, download_url: null, chunks: [],
+      id: '1', title: 'Source', sourceUrl: null, downloadUrl: null, chunks: [],
     }],
-    evidence_images: [], artifacts: [], artifact_outcome: {status: 'complete', issues: []},
+    evidenceImages: [], artifacts: [], artifactOutcome: {status: 'complete', issues: []},
   };
   window.fetch = async (input) => String(input).includes('/presentation')
     ? response(presentation)
@@ -450,13 +467,13 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
   document.body.appendChild(app);
   await app.ready;
   const artifact: AnswerArtifact = {
-    resource_id: 'report-desktop', role: 'primary_report', media_type: 'text/markdown',
-    label: 'Report', filename: 'report.md', byte_size: 20, digest: 'b'.repeat(64),
+    resourceId: 'report-desktop', role: 'primary_report', mediaType: 'text/markdown',
+    label: 'Report', filename: 'report.md', byteSize: 20, digest: 'b'.repeat(64),
     presentation: 'markdown', status: 'available',
     uri: 'dlightrag://answer/run-1/artifacts/report-desktop', width: null, height: null,
-    data_url: '/web/api/answer/run-1/artifacts/report-desktop',
-    download_url: '/web/api/answer/run-1/artifacts/report-desktop?download=1',
-    presentation_url: '/web/api/answer/run-1/artifacts/report-desktop/presentation', issue: null,
+    dataUrl: '/web/api/answer/run-1/artifacts/report-desktop',
+    downloadUrl: '/web/api/answer/run-1/artifacts/report-desktop?download=1',
+    presentationUrl: '/web/api/answer/run-1/artifacts/report-desktop/presentation', issue: null,
   };
   const canvas = app.querySelector('dl-artifact-canvas')!;
   await canvas.open(artifact, app.querySelector('#files-btn'));
@@ -492,13 +509,13 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
   await app.ready;
   const canvas = app.querySelector('dl-artifact-canvas')!;
   const artifact: AnswerArtifact = {
-    resource_id: 'chart-1', role: 'attachment', media_type: 'image/png',
-    label: 'Chart', filename: 'chart.png', byte_size: 20, digest: 'c'.repeat(64),
+    resourceId: 'chart-1', role: 'attachment', mediaType: 'image/png',
+    label: 'Chart', filename: 'chart.png', byteSize: 20, digest: 'c'.repeat(64),
     presentation: 'image', status: 'available',
     uri: 'dlightrag://answer/run-1/artifacts/chart-1', width: 100, height: 100,
-    data_url: '/web/api/answer/run-1/artifacts/chart-1',
-    download_url: '/web/api/answer/run-1/artifacts/chart-1?download=1',
-    presentation_url: null, issue: null,
+    dataUrl: '/web/api/answer/run-1/artifacts/chart-1',
+    downloadUrl: '/web/api/answer/run-1/artifacts/chart-1?download=1',
+    presentationUrl: null, issue: null,
   };
   await canvas.open(artifact, app.querySelector('#files-btn'));
   await canvas.updateComplete;
@@ -529,8 +546,8 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
   const inspectorReturn = app.querySelector<HTMLButtonElement>('#theme-trigger')!;
   const inspector = app.querySelector('dl-inspector')!;
   await inspector.openSources({
-    answer_text: '', parts: [], sources: [], evidence_images: [], artifacts: [],
-    artifact_outcome: {status: 'complete', issues: []},
+    answerText: '', parts: [], sources: [], evidenceImages: [], artifacts: [],
+    artifactOutcome: {status: 'complete', issues: []},
   }, undefined, undefined, inspectorReturn);
   app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {
     bubbles: true,

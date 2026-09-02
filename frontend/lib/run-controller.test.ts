@@ -15,21 +15,21 @@ function eventResponse(body: string): Response {
 
 function stored(status: ConversationTurn['status']): ConversationTurn {
   return {
-    turn_id: 'turn-1',
-    turn_number: 1,
-    answer_run_id: 'run-1',
-    submission_id: 'submission-1',
+    turnId: 'turn-1',
+    turnNumber: 1,
+    answerRunId: 'run-1',
+    submissionId: 'submission-1',
     status,
-    cancel_requested: false,
-    user_text: 'Question',
-    assistant_text: '',
-    user_attachments: [],
+    cancelRequested: false,
+    userText: 'Question',
+    assistantText: '',
+    userAttachments: [],
     presentation: null,
     usage: {},
     evidence: {},
-    error_kind: null,
-    error_message: null,
-    created_at: '2026-01-01T00:00:00Z',
+    errorKind: null,
+    errorMessage: null,
+    createdAt: '2026-01-01T00:00:00Z',
   };
 }
 

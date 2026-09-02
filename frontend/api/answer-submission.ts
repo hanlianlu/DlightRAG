@@ -1,8 +1,9 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {csrfHeaders} from './csrf.ts';
-import type {AcceptedAnswer} from './conversations.ts';
+import {acceptedAnswer as acceptedAnswerSchema, type AcceptedAnswer} from './conversations.ts';
 import {buildAnswerRequest, type AnswerMode} from '../lib/answer-request.ts';
+import * as v from 'valibot';
 
 const WEB_COMMAND_ERROR_KINDS = [
   'invalid_request',
@@ -41,15 +42,7 @@ export class AnswerSubmissionError extends Error {
 }
 
 function acceptedAnswer(value: unknown): AcceptedAnswer {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new AnswerSubmissionError(0, 'ambiguous', 'Malformed answer acceptance');
-  }
-  const candidate = value as Partial<AcceptedAnswer>;
-  if (!candidate.conversation?.conversation_id || !candidate.turn?.answer_run_id
-      || !candidate.turn.submission_id) {
-    throw new AnswerSubmissionError(0, 'ambiguous', 'Malformed answer acceptance');
-  }
-  return candidate as AcceptedAnswer;
+  return v.parse(acceptedAnswerSchema, value);
 }
 
 async function failure(response: Response): Promise<AnswerSubmissionError> {

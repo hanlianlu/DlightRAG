@@ -120,12 +120,12 @@ export class DlConversationList extends LightElement {
   }
 
   #commitRename(conversation: ConversationSummary, input: HTMLInputElement): void {
-    if (this.renameId !== conversation.conversation_id) return;
+    if (this.renameId !== conversation.conversationId) return;
     this.renameId = null;
     const title = input.value.trim();
     if (!title || title === (conversation.title ?? '').trim()) return;
     this.#emit<ConversationRenameDetail>('dl-conversation-rename', {
-      conversationId: conversation.conversation_id,
+      conversationId: conversation.conversationId,
       title,
     });
   }
@@ -137,7 +137,7 @@ export class DlConversationList extends LightElement {
   ): void {
     if (commit) this.#commitRename(conversation, input);
     else this.renameId = null;
-    void this.focusActions(conversation.conversation_id);
+    void this.focusActions(conversation.conversationId);
   }
 
   #renderStatus(
@@ -188,7 +188,7 @@ export class DlConversationList extends LightElement {
   }
 
   #renderMenu(conversation: ConversationSummary): TemplateResult {
-    const conversationId = conversation.conversation_id;
+    const conversationId = conversation.conversationId;
     return html`
       <div
         class="conversation-actions-menu"
@@ -230,7 +230,7 @@ export class DlConversationList extends LightElement {
   }
 
   #renderRow(conversation: ConversationSummary): TemplateResult {
-    const conversationId = conversation.conversation_id;
+    const conversationId = conversation.conversationId;
     const active = conversationId === conversationStore.activeConversationId;
     const renaming = this.renameId === conversationId;
     const expanded = this.openMenuId === conversationId;
@@ -255,12 +255,12 @@ export class DlConversationList extends LightElement {
               }}
             >${conversation.title || msg('New chat', {id: 'conversationList.newChat'})}</button>
           `}
-          ${conversation.forked_from_title ? html`
+          ${conversation.forkedFromTitle ? html`
             <span
               class="conversation-lineage"
               title=${msg('Forked from another conversation', {id: 'conversationList.forkedFromTitle'})}
             >
-              ${msg(str`Forked from ${conversation.forked_from_title}`, {id: 'conversationList.forkedFrom'})}
+              ${msg(str`Forked from ${conversation.forkedFromTitle}`, {id: 'conversationList.forkedFrom'})}
             </span>
           ` : nothing}
         </div>
@@ -315,7 +315,7 @@ export class DlConversationList extends LightElement {
       <div class="conversation-items" role="list" aria-live="polite">
         ${repeat(
           conversations,
-          (conversation) => conversation.conversation_id,
+          (conversation) => conversation.conversationId,
           (conversation) => this.#renderRow(conversation),
         )}
       </div>

@@ -331,7 +331,7 @@ export class DlWorkspaceScope extends LightElement {
         operation.signal.aborted || this.#deleteOperation !== operation
         || this.deleteWorkspace !== workspace
       ) return;
-      workspaceStore.remove(deleted.workspace, deleted.next_workspace);
+      workspaceStore.remove(deleted.workspace, deleted.nextWorkspace);
       this.querySelector<HTMLDialogElement>('#delete-workspace-dialog')?.close();
       this.#requestToast({
         message: msg(str`Workspace ${workspace} deleted.`, {id: 'workspaceScope.deleted'}),

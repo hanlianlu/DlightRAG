@@ -37,6 +37,35 @@ test.afterEach(() => {
 
 const accepted: AcceptedAnswer = {
   conversation: {
+    conversationId: 'conversation-1',
+    title: 'Answer',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
+  },
+  turn: {
+    turnId: 'turn-1',
+    turnNumber: 1,
+    answerRunId: 'run-1',
+    submissionId: intent.submissionId,
+    status: 'queued',
+    cancelRequested: false,
+    userText: intent.query,
+    assistantText: '',
+    userAttachments: [],
+    presentation: null,
+    usage: {},
+    evidence: {},
+    errorKind: null,
+    errorMessage: null,
+    createdAt: '2026-01-01T00:00:00Z',
+  },
+};
+
+// What the server actually puts on the wire; the adapter must translate it.
+const acceptedWire = {
+  conversation: {
     conversation_id: 'conversation-1',
     title: 'Answer',
     created_at: '2026-01-01T00:00:00Z',
@@ -66,7 +95,7 @@ test('browser answer command posts the immutable intent and leased files', async
   const adapter = new BrowserAnswerSubmissionAdapter();
   globalThis.fetch = async (input, init) => {
     request = new Request(new URL(String(input), 'http://localhost'), init);
-    return new Response(JSON.stringify(accepted), {
+    return new Response(JSON.stringify(acceptedWire), {
       status: 202,
       headers: {'Content-Type': 'application/json'},
     });
@@ -123,7 +152,7 @@ test('submission lookup is owner route shaped and distinguishes absent from acce
   const seen: string[] = [];
   const responses = [
     new Response(null, {status: 404}),
-    new Response(JSON.stringify(accepted), {
+    new Response(JSON.stringify(acceptedWire), {
       status: 200,
       headers: {'Content-Type': 'application/json'},
     }),

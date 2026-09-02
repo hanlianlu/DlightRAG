@@ -31,9 +31,17 @@ export function answerPhaseLabel(phase: string): string | null {
   return ANSWER_PHASE_LABELS[phase as AnswerPhase];
 }
 
+/** The SSE done event carries a snake_case wire presentation subset — not the
+ *  validated REST AnswerPresentation. It only fills the view until the terminal
+ *  refresh reconciles server truth. */
+interface DonePresentationWire {
+  answer_text: string;
+  sources?: unknown[];
+}
+
 interface DonePayload {
   status: 'succeeded' | 'cancelled';
-  presentation: AnswerPresentation | null;
+  presentation: DonePresentationWire | null;
   usage?: Record<string, unknown>;
   evidence?: Record<string, number>;
 }
@@ -115,7 +123,8 @@ export function applyAnswerEvent(turn: ChatTurnView, event: AnswerRunEvent): Cha
       return {
         ...turn,
         state: 'succeeded',
-        presentation: payload.presentation,
+        // Wire subset stands in until refreshActive() swaps in the stored turn.
+        presentation: payload.presentation as unknown as AnswerPresentation,
         streamText: payload.presentation.answer_text,
         usage: payload.usage ?? {},
         evidence: payload.evidence ?? {},

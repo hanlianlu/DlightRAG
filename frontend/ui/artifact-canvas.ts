@@ -172,8 +172,8 @@ export class DlArtifactCanvas extends LightElement {
             <button class="dl-btn" type="button" @click=${() => this.#setLayout('fullscreen')}
                     aria-pressed=${this.layout === 'fullscreen'}>${msg('Fullscreen', {id: 'artifactCanvas.layoutFullscreen'})}</button>
           </div>
-          ${artifact?.download_url ? html`
-            <a class="dl-btn" href=${safeSameOriginHref(artifact.download_url) || '#'} download>
+          ${artifact?.downloadUrl ? html`
+            <a class="dl-btn" href=${safeSameOriginHref(artifact.downloadUrl) || '#'} download>
               ${msg('Download', {id: 'artifactCanvas.download'})}
             </a>` : nothing}
           <button class="panel-close" data-action="close" type="button"
@@ -211,7 +211,7 @@ export class DlArtifactCanvas extends LightElement {
           ? html`<dl-answer-presentation .presentation=${this.presentation}></dl-answer-presentation>`
           : html``;
       case 'image': {
-        const source = safeImageSrc(artifact.data_url || '');
+        const source = safeImageSrc(artifact.dataUrl || '');
         return source
           ? html`<button class="artifact-image" type="button"
                   aria-label=${msg(str`Open image: ${artifact.label}`, {id: 'artifactCanvas.openImage'})}
@@ -226,7 +226,7 @@ export class DlArtifactCanvas extends LightElement {
       case 'html':
         return this.#htmlPreview();
       case 'pdf': {
-        const source = safeSameOriginHref(artifact.data_url || '');
+        const source = safeSameOriginHref(artifact.dataUrl || '');
         return source
           ? html`<iframe class="artifact-pdf" title=${artifact.label} src=${source}
                   sandbox="" referrerpolicy="no-referrer"></iframe>`
@@ -283,8 +283,8 @@ export class DlArtifactCanvas extends LightElement {
   #downloadOnly(): TemplateResult {
     return html`<div class="artifact-download-only">
       <p>${msg('No browser-safe inline preview is available for this file.', {id: 'artifactCanvas.downloadOnly'})}</p>
-      ${this.artifact?.download_url ? html`
-        <a class="dl-btn" href=${safeSameOriginHref(this.artifact.download_url) || '#'} download>
+      ${this.artifact?.downloadUrl ? html`
+        <a class="dl-btn" href=${safeSameOriginHref(this.artifact.downloadUrl) || '#'} download>
           ${msg(str`Download ${this.artifact.filename}`, {id: 'artifactCanvas.downloadFile'})}
         </a>` : nothing}
     </div>`;
@@ -299,15 +299,15 @@ export class DlArtifactCanvas extends LightElement {
         return;
       }
       if (artifact.presentation === 'markdown') {
-        if (!artifact.presentation_url) throw new Error('missing presentation URL');
-        const response = await fetch(artifact.presentation_url, {signal: controller.signal});
+        if (!artifact.presentationUrl) throw new Error('missing presentation URL');
+        const response = await fetch(artifact.presentationUrl, {signal: controller.signal});
         if (!response.ok) throw new Error('presentation failed');
         const presentation = await response.json() as AnswerPresentation;
         if (this.#controller !== controller) return;
         this.presentation = presentation;
       } else if (artifact.presentation === 'html' || artifact.presentation === 'text') {
-        if (!artifact.data_url) throw new Error('missing Artifact URL');
-        const response = await fetch(artifact.data_url, {
+        if (!artifact.dataUrl) throw new Error('missing Artifact URL');
+        const response = await fetch(artifact.dataUrl, {
           headers: artifact.presentation === 'text'
             ? {Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}`}
             : undefined,

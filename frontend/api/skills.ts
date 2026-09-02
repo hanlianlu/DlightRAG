@@ -1,11 +1,14 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Web API client for the discovered global Agent Skill catalog. */
 
-export interface SkillSummary {
-  readonly name: string;
-  readonly description: string;
-  readonly source: 'global' | 'owner';
-}
+import * as v from 'valibot';
+
+const skillSummary = v.object({
+  name: v.string(),
+  description: v.string(),
+  source: v.picklist(['global', 'owner']),
+});
+export type SkillSummary = v.InferOutput<typeof skillSummary>;
 
 let catalogRequest: Promise<readonly SkillSummary[]> | null = null;
 
@@ -16,12 +19,9 @@ export function listSkills(): Promise<readonly SkillSummary[]> {
         if (!response.ok) {
           throw new Error(`Failed to load Agent Skills (${response.status})`);
         }
-        const body = (await response.json()) as {skills?: unknown};
-        if (!Array.isArray(body.skills)) throw new Error('Malformed Agent Skills response');
-        return body.skills.filter((item): item is SkillSummary =>
-          item !== null && typeof item === 'object'
-          && typeof (item as Record<string, unknown>).name === 'string'
-          && typeof (item as Record<string, unknown>).description === 'string');
+        const body = v.parse(v.object({skills: v.array(v.unknown())}), await response.json());
+        // One malformed entry must not reject the whole catalog; skip it.
+        return body.skills.filter((item): item is SkillSummary => v.is(skillSummary, item));
       })
       .catch((error: unknown) => {
         catalogRequest = null;

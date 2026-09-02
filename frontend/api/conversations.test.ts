@@ -38,7 +38,7 @@ test('conversation pages use the bounded route and encode an opaque continuation
     });
   };
 
-  assert.deepEqual(await listConversations(), {items: [], next_cursor: null});
+  assert.deepEqual(await listConversations(), {items: [], nextCursor: null});
   await listConversations('facts/signature + padding');
 
   assert.deepEqual(seen, [
@@ -72,7 +72,7 @@ test('history pages encode cursor and limit, normalize rollback payloads, and pa
     'http://localhost/web/api/conversations/conversation%2F1/history?cursor=opaque+cursor%2B&limit=25',
   );
   assert.equal(seenSignal, controller.signal);
-  assert.equal(result.next_cursor, null);
+  assert.equal(result.nextCursor, null);
 });
 
 test('continuation posts one submission id to the selected branch operation', async () => {
@@ -80,16 +80,28 @@ test('continuation posts one submission id to the selected branch operation', as
   globalThis.fetch = async (input, init) => {
     seen.push(new Request(new URL(String(input), 'http://localhost'), init));
     return new Response(JSON.stringify({
-      run_id: 'child-run',
-      status: 'queued',
-      status_url: '/status',
-      events_url: '/events',
-      cancel_url: '/cancel',
       conversation: {
         conversation_id: 'conversation-2',
         title: null,
         created_at: '2026-08-23T00:00:00Z',
         updated_at: '2026-08-23T00:00:00Z',
+      },
+      turn: {
+        turn_id: 'child-turn',
+        turn_number: 1,
+        answer_run_id: 'child-run',
+        submission_id: 'submission-1',
+        status: 'queued',
+        cancel_requested: false,
+        user_text: 'branch',
+        assistant_text: '',
+        user_attachments: [],
+        presentation: null,
+        usage: {},
+        evidence: {},
+        error_kind: null,
+        error_message: null,
+        created_at: '2026-08-23T00:00:00Z',
       },
     }), {status: 202, headers: {'Content-Type': 'application/json'}});
   };
@@ -100,7 +112,7 @@ test('continuation posts one submission id to the selected branch operation', as
   assert.equal(request.url, 'http://localhost/web/api/answer/parent%2Frun/fork');
   assert.equal(request.method, 'POST');
   assert.deepEqual(await request.json(), {content: 'branch', submission_id: 'submission-1'});
-  assert.equal(result.conversation.conversation_id, 'conversation-2');
+  assert.equal(result.conversation.conversationId, 'conversation-2');
 });
 
 test('steer and child roster use their shared run routes', async () => {
@@ -141,13 +153,13 @@ test('child roster pages encode the opaque cursor and normalize the continuation
   };
 
   const first = await getAnswerRunChildrenPage('run-1');
-  assert.deepEqual(first.children.map((child) => child.child_session_id), ['child-1']);
-  assert.equal(first.next_cursor, 'opaque-token');
+  assert.deepEqual(first.children.map((child) => child.childSessionId), ['child-1']);
+  assert.equal(first.nextCursor, 'opaque-token');
   assert.equal(requests[0], 'http://localhost/web/api/answer/run-1/children');
 
   const older = await getAnswerRunChildrenPage('run-1', 'opaque-token');
-  assert.deepEqual(older.children.map((child) => child.child_session_id), ['child-2']);
-  assert.equal(older.next_cursor, null);
+  assert.deepEqual(older.children.map((child) => child.childSessionId), ['child-2']);
+  assert.equal(older.nextCursor, null);
   assert.equal(
     requests[1],
     'http://localhost/web/api/answer/run-1/children?cursor=opaque-token',

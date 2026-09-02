@@ -33,8 +33,8 @@ function normalizePage(page: WebFailedFilesPage): WebFailedFilesPage {
   return {
     ...page,
     failed: Array.isArray(page.failed) ? page.failed : [],
-    next_cursor: page.next_cursor ?? null,
-    active_recovery: page.active_recovery ?? null,
+    nextCursor: page.nextCursor ?? null,
+    activeRecovery: page.activeRecovery ?? null,
   };
 }
 
@@ -147,7 +147,7 @@ export class DlFailedFileRecovery extends LightElement {
       if (!this.#isCurrent(controller, workspace, generation)) return;
       const page = normalizePage(response);
       this.page = page;
-      const pageRecovery = page.active_recovery;
+      const pageRecovery = page.activeRecovery;
       const liveRecovery = this.recovery;
       // A mutation or poll that completed after this request began owns newer
       // state even when the delayed page still reports an older non-null job.
@@ -155,7 +155,7 @@ export class DlFailedFileRecovery extends LightElement {
         ? liveRecovery
         : pageRecovery ?? (isRecoveryActive(liveRecovery) ? liveRecovery : null);
       this.recovery = recovery;
-      if (isRecoveryActive(recovery)) this.#schedulePoll(workspace, recovery.job_id);
+      if (isRecoveryActive(recovery)) this.#schedulePoll(workspace, recovery.jobId);
     } catch (error) {
       if (isAbortError(error) || !this.#isCurrent(controller, workspace, generation)) return;
       this.page = null;
@@ -167,7 +167,7 @@ export class DlFailedFileRecovery extends LightElement {
       );
       const liveRecovery = this.recovery;
       if (isRecoveryActive(liveRecovery)) {
-        this.#schedulePoll(workspace, liveRecovery.job_id);
+        this.#schedulePoll(workspace, liveRecovery.jobId);
       }
     } finally {
       if (this.#listController === controller) {
@@ -221,10 +221,10 @@ export class DlFailedFileRecovery extends LightElement {
     const recoveryActive = isRecoveryActive(this.recovery);
     const recoveryBusy = this.recovery !== null;
     if (failed.length === 0 && !recoveryActive) return nothing;
-    const count = `${failed.length}${this.page?.next_cursor ? '+' : ''}`;
+    const count = `${failed.length}${this.page?.nextCursor ? '+' : ''}`;
     const heading = recoveryActive
       ? msg('Document recovery in progress', {id: 'inspectorFiles.recovery.inProgress'})
-      : failed.length === 1 && !this.page?.next_cursor
+      : failed.length === 1 && !this.page?.nextCursor
         ? msg('1 document needs attention', {id: 'inspectorFiles.recovery.oneNeedsAttention'})
         : msg(str`${count} documents need attention`, {
           id: 'inspectorFiles.recovery.nNeedsAttention',
@@ -251,19 +251,19 @@ export class DlFailedFileRecovery extends LightElement {
                 })}>
               ${repeat(
                 failed,
-                (item) => item.document_id,
+                (item) => item.documentId,
                 (item) => html`
                   <li>
                     <details class="failed-file-row">
                       <summary class="failed-file-row-summary">
                         <span class="failed-file-row-mark" aria-hidden="true">!</span>
                         <span class="failed-file-row-copy">
-                          <strong title=${item.file_name}>${item.file_name}</strong>
+                          <strong title=${item.fileName}>${item.fileName}</strong>
                           <span>${msg('Processing did not finish.', {
                             id: 'inspectorFiles.recovery.processingFailed',
                           })}</span>
                         </span>
-                        <time datetime=${item.updated_at}>${failureTime(item.updated_at)}</time>
+                        <time datetime=${item.updatedAt}>${failureTime(item.updatedAt)}</time>
                       </summary>
                       <div class="failed-file-technical">
                         <span>${msg('Technical details', {
@@ -278,7 +278,7 @@ export class DlFailedFileRecovery extends LightElement {
                 `,
               )}
             </ul>
-            ${this.page?.next_cursor ? html`
+            ${this.page?.nextCursor ? html`
               <div class="failed-file-more">
                 <button class="failed-file-more-button" type="button"
                         ?disabled=${this.loadMoreState === 'loading'}
@@ -316,7 +316,7 @@ export class DlFailedFileRecovery extends LightElement {
 
   async #loadMore(): Promise<void> {
     const page = this.page;
-    const cursor = page?.next_cursor;
+    const cursor = page?.nextCursor;
     const workspace = this.workspace;
     if (!cursor || !workspace || this.loadMoreState === 'loading') return;
     this.#loadMoreController?.abort();
@@ -331,24 +331,24 @@ export class DlFailedFileRecovery extends LightElement {
         controller !== this.#loadMoreController
         || generation !== this.#contextGeneration
         || workspace !== this.workspace
-        || this.page?.next_cursor !== cursor
+        || this.page?.nextCursor !== cursor
       ) return;
       const older = normalizePage(response);
-      const seen = new Set(page.failed.map((item) => item.document_id));
-      const appended = older.failed.filter((item) => !seen.has(item.document_id));
+      const seen = new Set(page.failed.map((item) => item.documentId));
+      const appended = older.failed.filter((item) => !seen.has(item.documentId));
       const liveRecovery = this.recovery;
       const recovery = liveRecovery !== observedRecovery
         ? liveRecovery
-        : older.active_recovery ?? liveRecovery;
+        : older.activeRecovery ?? liveRecovery;
       this.page = {
         ...page,
         failed: [...page.failed, ...appended],
-        next_cursor: older.next_cursor,
-        active_recovery: recovery,
+        nextCursor: older.nextCursor,
+        activeRecovery: recovery,
       };
       this.recovery = recovery;
       if (isRecoveryActive(recovery)) {
-        this.#schedulePoll(workspace, recovery.job_id);
+        this.#schedulePoll(workspace, recovery.jobId);
       }
       this.loadMoreState = 'idle';
     } catch (error) {
@@ -408,7 +408,7 @@ export class DlFailedFileRecovery extends LightElement {
           message: msg('Document recovery started.', {id: 'inspectorFiles.recovery.started'}),
           duration: 3000,
         });
-        this.#schedulePoll(workspace, job.job_id);
+        this.#schedulePoll(workspace, job.jobId);
       } else {
         await this.#settleRecovery(job);
       }

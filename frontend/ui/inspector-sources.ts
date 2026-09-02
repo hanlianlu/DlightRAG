@@ -73,11 +73,11 @@ export class DlInspectorSources extends LightElement {
     if (changed.has('sources')) {
       this.sources.forEach((source) => {
         source.chunks.forEach((chunk, index) => {
-          const key = this.#chunkKey(chunk.chunk_idx, index);
+          const key = this.#chunkKey(chunk.chunkIdx, index);
           const host = this.querySelector<HTMLElement>(
             `[data-source-content="${CSS.escape(source.id)}:${CSS.escape(key)}"]`,
           );
-          if (host) setSanitizedLlmHtml(host, chunk.content_html);
+          if (host) setSanitizedLlmHtml(host, chunk.contentHtml);
         });
       });
     }
@@ -116,8 +116,8 @@ export class DlInspectorSources extends LightElement {
 
   #source(source: PresentationSource): TemplateResult {
     const expanded = this.showAll || this.expandedRef === source.id;
-    const download = safeSameOriginHref(source.download_url);
-    const external = safeExternalHttpHref(source.source_url);
+    const download = safeSameOriginHref(source.downloadUrl);
+    const external = safeExternalHttpHref(source.sourceUrl);
     return html`
       <div class="source-doc${expanded ? ' expanded' : ''}" data-ref=${source.id}>
         <div class="source-doc-header">
@@ -147,26 +147,26 @@ export class DlInspectorSources extends LightElement {
         <div class="source-doc-chunks" ?hidden=${!expanded}>
           ${repeat(
             source.chunks,
-            (chunk, index) => this.#chunkKey(chunk.chunk_idx, index),
+            (chunk, index) => this.#chunkKey(chunk.chunkIdx, index),
             (chunk, index) => {
-              const key = this.#chunkKey(chunk.chunk_idx, index);
+              const key = this.#chunkKey(chunk.chunkIdx, index);
               const hidden = expanded && !this.showAll && this.onlyChunk !== null
                 && key !== this.onlyChunk;
               const active = this.activeRef === source.id && this.activeChunk === key;
-              const image = safeImageSrc(chunk.image_url || chunk.thumbnail_url);
-              const thumbnail = safeImageSrc(chunk.thumbnail_url || chunk.image_url);
+              const image = safeImageSrc(chunk.imageUrl || chunk.thumbnailUrl);
+              const thumbnail = safeImageSrc(chunk.thumbnailUrl || chunk.imageUrl);
               return html`
                 <div class="source-chunk${active ? ' active' : ''}" data-ref=${source.id}
                      data-chunk=${key} ?hidden=${hidden}>
                   <div class="source-chunk-header">
                     <span class="source-chunk-page">
-                      ${chunk.page_number === null ? `#${key}` : `p.${chunk.page_number}`}
+                      ${chunk.pageNumber === null ? `#${key}` : `p.${chunk.pageNumber}`}
                     </span>
                   </div>
                   ${image && thumbnail ? html`
                     <div class="source-chunk-image">
                       <img src=${thumbnail}
-                           alt=${msg(str`Page ${chunk.page_number ?? ''}`, {id: 'inspectorSources.pageAlt'})}
+                           alt=${msg(str`Page ${chunk.pageNumber ?? ''}`, {id: 'inspectorSources.pageAlt'})}
                            loading="lazy" role="button" tabindex="0"
                            aria-label=${msg('Open page image', {id: 'inspectorSources.openPageImage'})}
                            @click=${(event: Event) => this.#openImage(
@@ -180,7 +180,7 @@ export class DlInspectorSources extends LightElement {
                            }}>
                     </div>
                   ` : nothing}
-                  ${chunk.content_html ? html`
+                  ${chunk.contentHtml ? html`
                     <div class="source-chunk-content"
                          data-source-content=${`${source.id}:${key}`}></div>
                   ` : nothing}
@@ -199,7 +199,7 @@ export class DlInspectorSources extends LightElement {
 
   #openImage(src: string, returnFocus: HTMLElement): void {
     const gallery = this.sources.flatMap((source) => source.chunks)
-      .map((chunk) => safeImageSrc(chunk.image_url || chunk.thumbnail_url))
+      .map((chunk) => safeImageSrc(chunk.imageUrl || chunk.thumbnailUrl))
       .filter(Boolean);
     this.dispatchEvent(new CustomEvent<ImageOpenDetail>('dl-image-open', {
       bubbles: true,

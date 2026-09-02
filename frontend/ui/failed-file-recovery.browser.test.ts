@@ -138,7 +138,7 @@ it('loads failed documents in bounded pages without duplicating rows', async () 
   const recovery = mount();
   await waitFor(() => recovery.loading === false && recovery.page !== null);
   recovery.querySelector<HTMLButtonElement>('.failed-file-more-button')?.click();
-  await waitFor(() => recovery.page?.next_cursor === null && recovery.page.failed.length === 3);
+  await waitFor(() => recovery.page?.nextCursor === null && recovery.page.failed.length === 3);
 
   expect(recovery.querySelectorAll('.failed-file-row')).to.have.length(3);
   expect(recovery.querySelector('.failed-file-more-button')).to.equal(null);
@@ -284,7 +284,7 @@ it('keeps a successful retry POST across a concurrent same-workspace refresh', a
   }), {headers: {'Content-Type': 'application/json'}}));
   await waitFor(() => recovery.recoveryPending === false);
 
-  expect(recovery.recovery?.job_id).to.equal('retry-race');
+  expect(recovery.recovery?.jobId).to.equal('retry-race');
   expect(recovery.querySelector<HTMLButtonElement>('.failed-file-retry')?.disabled).to.equal(true);
 });
 
@@ -312,7 +312,7 @@ it('does not POST when an open confirmation discovers an existing recovery', asy
   const dialog = recovery.querySelector<HTMLDialogElement>('#retry-failed-files-dialog')!;
   await waitFor(() => dialog.open);
   await recovery.refresh(false);
-  expect(recovery.recovery?.job_id).to.equal('retry-discovered');
+  expect(recovery.recovery?.jobId).to.equal('retry-discovered');
   dialog.returnValue = 'retry';
   dialog.close();
   await new Promise((resolve) => originalSetTimeout(resolve, 0));
@@ -354,7 +354,7 @@ it('preserves a POST-created recovery when the older refresh resolves afterwards
     job_id: 'retry-post-first', workspace: 'personel', status: 'queued',
     retried: 0, succeeded: 0, failed: 0,
   }), {headers: {'Content-Type': 'application/json'}}));
-  await waitFor(() => recovery.recovery?.job_id === 'retry-post-first');
+  await waitFor(() => recovery.recovery?.jobId === 'retry-post-first');
   refresh.resolve(new Response(JSON.stringify({
     ...failedPage(),
     active_recovery: {
@@ -364,7 +364,7 @@ it('preserves a POST-created recovery when the older refresh resolves afterwards
   }), {headers: {'Content-Type': 'application/json'}}));
   await refreshFlight;
 
-  expect(recovery.recovery?.job_id).to.equal('retry-post-first');
+  expect(recovery.recovery?.jobId).to.equal('retry-post-first');
 });
 
 it('preserves a POST-created recovery when delayed load-more reports an older job', async () => {
@@ -387,7 +387,7 @@ it('preserves a POST-created recovery when delayed load-more reports an older jo
   };
 
   const recovery = mount();
-  await waitFor(() => recovery.page?.next_cursor === 'older-cursor');
+  await waitFor(() => recovery.page?.nextCursor === 'older-cursor');
   recovery.querySelector<HTMLButtonElement>('.failed-file-more-button')?.click();
   await waitFor(() => recovery.loadMoreState === 'loading');
   recovery.querySelector<HTMLButtonElement>('.failed-file-retry')?.click();
@@ -395,7 +395,7 @@ it('preserves a POST-created recovery when delayed load-more reports an older jo
   await waitFor(() => dialog.open);
   dialog.returnValue = 'retry';
   dialog.close();
-  await waitFor(() => recovery.recovery?.job_id === 'retry-post-load');
+  await waitFor(() => recovery.recovery?.jobId === 'retry-post-load');
 
   older.resolve(new Response(JSON.stringify({
     ...failedPage(),
@@ -406,7 +406,7 @@ it('preserves a POST-created recovery when delayed load-more reports an older jo
   }), {headers: {'Content-Type': 'application/json'}}));
   await waitFor(() => recovery.loadMoreState === 'idle');
 
-  expect(recovery.recovery?.job_id).to.equal('retry-post-load');
+  expect(recovery.recovery?.jobId).to.equal('retry-post-load');
 });
 
 it('keeps polling a known active job after refresh omits it, then observes terminal', async () => {

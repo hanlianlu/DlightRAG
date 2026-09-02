@@ -22,10 +22,12 @@ const originalFetch = window.fetch;
 const originalMatchMedia = window.matchMedia;
 
 const first: ConversationSummary = {
-  conversation_id: 'conversation-1',
+  conversationId: 'conversation-1',
   title: 'Research notes',
-  created_at: '2026-01-01T00:00:00Z',
-  updated_at: '2026-01-02T00:00:00Z',
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-02T00:00:00Z',
+  forkedFromConversationId: null,
+  forkedFromTitle: null,
 };
 
 function media(desktop: boolean): (query: string) => MediaQueryList {
@@ -41,6 +43,13 @@ function media(desktop: boolean): (query: string) => MediaQueryList {
   });
 }
 
+const firstWire = {
+  conversation_id: 'conversation-1',
+  title: 'Research notes',
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-02T00:00:00Z',
+};
+
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -49,7 +58,17 @@ function response(body: unknown, status = 200): Response {
 }
 
 function conversationPage(items: ConversationSummary[], nextCursor: string | null = null): Response {
-  return response({items, next_cursor: nextCursor});
+  return response({
+    items: items.map((item) => ({
+      conversation_id: item.conversationId,
+      title: item.title,
+      created_at: item.createdAt,
+      updated_at: item.updatedAt,
+      forked_from_conversation_id: item.forkedFromConversationId,
+      forked_from_title: item.forkedFromTitle,
+    })),
+    next_cursor: nextCursor,
+  });
 }
 
 function button(root: ParentNode, name: string): HTMLButtonElement {
@@ -100,7 +119,7 @@ it('publishes list item intent and owns menu keyboard behavior through ARIA', as
   let selected: ConversationIntentDetail | null = null;
   list.addEventListener('dl-conversation-select', (event) => { selected = event.detail; });
   button(list, 'Research notes').click();
-  expect(selected).to.deep.equal({conversationId: first.conversation_id});
+  expect(selected).to.deep.equal({conversationId: first.conversationId});
 
   const actions = button(list, 'Conversation actions');
   actions.dispatchEvent(new KeyboardEvent('keydown', {
@@ -186,7 +205,7 @@ it('restores row focus after keyboard rename completion and cancellation', async
   await list.updateComplete;
 
   expect(renamed).to.deep.equal([{
-    conversationId: first.conversation_id,
+    conversationId: first.conversationId,
     title: 'Updated title',
   }]);
   expect(document.activeElement).to.equal(button(list, 'Conversation actions'));
@@ -322,8 +341,8 @@ it('owns list loading and route selection while exposing only typed Shell intent
   window.fetch = async (input) => {
     const url = String(input);
     if (url === '/web/api/conversations') return conversationPage([first]);
-    if (url.endsWith(`/${first.conversation_id}/history`)) {
-      return response({conversation: first, turns: []});
+    if (url.endsWith(`/${first.conversationId}/history`)) {
+      return response({conversation: firstWire, turns: []});
     }
     return response({detail: 'not found'}, 404);
   };
@@ -346,7 +365,7 @@ it('owns list loading and route selection while exposing only typed Shell intent
 
   let routeChanges = 0;
   sidebar.addEventListener('dl-conversation-route-change', (event) => {
-    if (event.detail.nextConversationId === first.conversation_id) routeChanges += 1;
+    if (event.detail.nextConversationId === first.conversationId) routeChanges += 1;
   });
   button(sidebar, 'Research notes').click();
   await waitFor(() => chat.view.kind === 'ready');
@@ -370,10 +389,10 @@ it('keeps route navigation available while an independent rename settles', async
   window.fetch = async (input, init) => {
     const url = String(input);
     if (url === '/web/api/conversations') return conversationPage([first]);
-    if (url.endsWith(`/${first.conversation_id}/history`)) {
-      return response({conversation: first, turns: []});
+    if (url.endsWith(`/${first.conversationId}/history`)) {
+      return response({conversation: firstWire, turns: []});
     }
-    if (url.endsWith(`/${first.conversation_id}`) && init?.method === 'PATCH') {
+    if (url.endsWith(`/${first.conversationId}`) && init?.method === 'PATCH') {
       return await new Promise<Response>((resolve) => { resolveRename = resolve; });
     }
     return response({detail: 'not found'}, 404);
@@ -595,8 +614,8 @@ it('cancels a pending draft dialog on disconnect without wedging later navigatio
   window.fetch = async (input) => {
     const url = String(input);
     if (url === '/web/api/conversations') return conversationPage([first]);
-    if (url.endsWith(`/${first.conversation_id}/history`)) {
-      return response({conversation: first, turns: []});
+    if (url.endsWith(`/${first.conversationId}/history`)) {
+      return response({conversation: firstWire, turns: []});
     }
     return response({detail: 'not found'}, 404);
   };
@@ -614,7 +633,7 @@ it('cancels a pending draft dialog on disconnect without wedging later navigatio
   document.body.appendChild(sidebar);
   await waitFor(() => sidebar.querySelector('[role="listitem"]') !== null);
 
-  const blockedNavigation = webRouter.navigate(conversationRoute(first.conversation_id));
+  const blockedNavigation = webRouter.navigate(conversationRoute(first.conversationId));
   await waitFor(() => Boolean(sidebar.querySelector<HTMLDialogElement>(
     '#discard-draft-dialog',
   )?.open));
@@ -631,7 +650,7 @@ it('cancels a pending draft dialog on disconnect without wedging later navigatio
   document.body.appendChild(replacement);
   await waitFor(() => replacement.querySelector('[role="listitem"]') !== null);
 
-  expect(await webRouter.navigate(conversationRoute(first.conversation_id))).to.equal(true);
+  expect(await webRouter.navigate(conversationRoute(first.conversationId))).to.equal(true);
   await waitFor(() => replacementChat.view.kind === 'ready');
   expect(replacementChat.view.kind).to.equal('ready');
 });

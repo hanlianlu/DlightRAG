@@ -1,30 +1,48 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 /** Web API client for owner Profile Memory management. */
 
+import * as v from 'valibot';
 import {csrfHeaders} from './csrf.ts';
+import {parseWire} from './wire.ts';
 
-export interface MemorySettings {
-  enabled: boolean;
-  active_count: number | null;
-}
+const memorySettings = v.pipe(
+  v.object({enabled: v.boolean(), active_count: v.nullable(v.number())}),
+  v.transform((w) => ({enabled: w.enabled, activeCount: w.active_count})),
+);
+export type MemorySettings = v.InferOutput<typeof memorySettings>;
 
-export interface MemoryOperationReceipt {
-  action: 'remember' | 'forget' | 'undo';
-  outcome: 'changed' | 'unchanged' | 'conflict';
-  change_id: string;
-  memory_ids: string[];
-  kind?: 'preference' | 'fact' | null;
-  body: string;
-  supersedes_id?: string | null;
-  target_change_id?: string | null;
-}
+const memoryOperationReceipt = v.pipe(
+  v.object({
+    action: v.picklist(['remember', 'forget', 'undo']),
+    outcome: v.picklist(['changed', 'unchanged', 'conflict']),
+    change_id: v.string(),
+    memory_ids: v.array(v.string()),
+    kind: v.optional(v.nullable(v.picklist(['preference', 'fact']))),
+    body: v.string(),
+    supersedes_id: v.optional(v.nullable(v.string())),
+    target_change_id: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({
+    action: w.action,
+    outcome: w.outcome,
+    changeId: w.change_id,
+    memoryIds: w.memory_ids,
+    kind: w.kind ?? null,
+    body: w.body,
+    supersedesId: w.supersedes_id ?? null,
+    targetChangeId: w.target_change_id ?? null,
+  })),
+);
+export type MemoryOperationReceipt = v.InferOutput<typeof memoryOperationReceipt>;
 
 export async function getMemorySettings(signal?: AbortSignal): Promise<MemorySettings> {
   const response = await fetch('/web/api/memory/settings', {signal});
-  if (!response.ok) {
-    throw new Error(`Failed to load memory settings (${response.status})`);
-  }
-  return (await response.json()) as MemorySettings;
+  return parseWire(
+    response,
+    memorySettings,
+    (status, message) => new Error(`${message} (${status})`),
+    'Failed to load memory settings',
+  );
 }
 
 export async function putMemorySettings(
@@ -37,10 +55,12 @@ export async function putMemorySettings(
     body: JSON.stringify({enabled}),
     signal,
   });
-  if (!response.ok) {
-    throw new Error(`Failed to update memory settings (${response.status})`);
-  }
-  return (await response.json()) as MemorySettings;
+  return parseWire(
+    response,
+    memorySettings,
+    (status, message) => new Error(`${message} (${status})`),
+    'Failed to update memory settings',
+  );
 }
 
 export async function undoMemoryChange(
@@ -58,10 +78,12 @@ export async function undoMemoryChange(
       signal,
     },
   );
-  if (!response.ok) {
-    throw new Error(`Failed to undo memory change (${response.status})`);
-  }
-  return (await response.json()) as MemoryOperationReceipt;
+  return parseWire(
+    response,
+    memoryOperationReceipt,
+    (status, message) => new Error(`${message} (${status})`),
+    'Failed to undo memory change',
+  );
 }
 
 export async function clearMemory(signal?: AbortSignal): Promise<void> {

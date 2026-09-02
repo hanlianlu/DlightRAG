@@ -155,7 +155,7 @@ export class DlInspectorFiles extends LightElement {
     if (this.#olderFilesFlight !== null) return this.#olderFilesFlight;
     const workspace = ingestStore.workspace;
     const cursor = this.snapshot?.workspace === workspace
-      ? this.snapshot.next_cursor
+      ? this.snapshot.nextCursor
       : null;
     if (!cursor || this.loading || this.#request !== null || !this.active) {
       return Promise.resolve();
@@ -190,7 +190,7 @@ export class DlInspectorFiles extends LightElement {
         || generation !== this.#olderFilesGeneration
         || workspace !== ingestStore.workspace
         || current?.workspace !== workspace
-        || current.next_cursor !== cursor
+        || current.nextCursor !== cursor
       ) {
         if (controller === this.#olderFilesController) {
           this.filesLoadMoreState = 'idle';
@@ -201,22 +201,22 @@ export class DlInspectorFiles extends LightElement {
       if (older.workspace !== workspace) {
         throw new Error('older file page changed workspace identity');
       }
-      const paths = new Set(current.files.map((file) => file.file_path));
+      const paths = new Set(current.files.map((file) => file.filePath));
       const appended = older.files.filter((file) => {
-        if (paths.has(file.file_path)) return false;
-        paths.add(file.file_path);
+        if (paths.has(file.filePath)) return false;
+        paths.add(file.filePath);
         return true;
       });
       this.snapshot = {
         ...current,
         files: [...current.files, ...appended],
-        next_cursor: older.next_cursor,
+        nextCursor: older.nextCursor,
       };
       this.filesLoadMoreState = 'idle';
       this.#olderFilesAnnouncement = appended.length === 1
         ? msg('Loaded 1 older file.', {id: 'inspectorFiles.loadedOneOlder'})
         : msg(str`Loaded ${appended.length} older files.`, {id: 'inspectorFiles.loadedOlder'});
-      if (older.next_cursor === null && this.#restoreOlderFocus) {
+      if (older.nextCursor === null && this.#restoreOlderFocus) {
         this.#restoreOlderFocus = false;
         await this.updateComplete;
         this.querySelector<HTMLElement>('#file-list')?.focus({preventScroll: true});
@@ -253,11 +253,11 @@ export class DlInspectorFiles extends LightElement {
         workspace,
         files: this.snapshot?.workspace === workspace ? this.snapshot.files : [],
         ingest: receipt.ingest,
-        next_cursor: this.snapshot?.workspace === workspace
-          ? this.snapshot.next_cursor
+        nextCursor: this.snapshot?.workspace === workspace
+          ? this.snapshot.nextCursor
           : null,
       };
-      this.acceptedFiles = receipt.file_count;
+      this.acceptedFiles = receipt.fileCount;
       this.#requestToast({
         message: msg('Files received — processing in background', {id: 'inspectorFiles.filesReceived'}),
         duration: 3000,
@@ -359,8 +359,8 @@ export class DlInspectorFiles extends LightElement {
       workspace,
       files: this.snapshot?.workspace === workspace ? this.snapshot.files : [],
       ingest,
-      next_cursor: this.snapshot?.workspace === workspace
-        ? this.snapshot.next_cursor
+      nextCursor: this.snapshot?.workspace === workspace
+        ? this.snapshot.nextCursor
         : null,
     };
   }
@@ -482,20 +482,20 @@ export class DlInspectorFiles extends LightElement {
           <div class="spinner"></div>
           <span>${status.message || msg('Ingesting...', {id: 'inspectorFiles.ingesting'})}</span>
         </div>
-        ${status.progress_percent === null ? nothing : html`
+        ${status.progressPercent === null ? nothing : html`
           <div class="progress-bar-track" role="progressbar"
-               aria-valuenow=${String(status.progress_percent)} aria-valuemin="0"
+               aria-valuenow=${String(status.progressPercent)} aria-valuemin="0"
                aria-valuemax="100"
                aria-label=${msg('Ingest progress', {id: 'inspectorFiles.ingestProgressAria'})}>
-            <div class="progress-bar-fill" data-pct=${String(status.progress_percent)}></div>
+            <div class="progress-bar-fill" data-pct=${String(status.progressPercent)}></div>
           </div>
           <div class="progress-label">
-            ${msg(str`batch ${status.current_batch}/${status.total_batches} · ${status.documents} doc(s)`, {id: 'inspectorFiles.batchProgress'})}
+            ${msg(str`batch ${status.currentBatch}/${status.totalBatches} · ${status.documents} doc(s)`, {id: 'inspectorFiles.batchProgress'})}
           </div>
         `}
-        ${status.pending_enqueues > 0 ? html`
+        ${status.pendingEnqueues > 0 ? html`
           <div class="ingest-queue-notice">
-            ${msg(str`${status.pending_enqueues} upload(s) queued — will process after current batch`, {id: 'inspectorFiles.queueNotice'})}
+            ${msg(str`${status.pendingEnqueues} upload(s) queued — will process after current batch`, {id: 'inspectorFiles.queueNotice'})}
           </div>
         ` : nothing}
       </div>
@@ -534,15 +534,15 @@ export class DlInspectorFiles extends LightElement {
         <div id="file-list" role="list" aria-label=${msg('Processed files', {id: 'inspectorFiles.processedFilesAria'})} tabindex="-1">
           ${repeat(
             files,
-            (file) => file.file_path,
+            (file) => file.filePath,
             (file) => html`
               <div class="file-item" role="listitem">
-                <span class="file-name" title=${file.file_path}>${file.file_name}</span>
+                <span class="file-name" title=${file.filePath}>${file.fileName}</span>
                 <button class="file-delete" type="button"
-                        aria-label=${msg(str`Delete ${file.file_name}`, {id: 'inspectorFiles.deleteFileAria'})}
+                        aria-label=${msg(str`Delete ${file.fileName}`, {id: 'inspectorFiles.deleteFileAria'})}
                         @click=${(event: Event) => {
                           this.#deleteTrigger = event.currentTarget as HTMLElement;
-                          void this.#deleteFile(file.file_path);
+                          void this.#deleteFile(file.filePath);
                         }}>
                   ${icon('close', {size: 'sm', className: 'file-delete-icon'})}
                 </button>
@@ -550,7 +550,7 @@ export class DlInspectorFiles extends LightElement {
             `,
           )}
         </div>
-        ${snapshot?.next_cursor ? html`
+        ${snapshot?.nextCursor ? html`
           <div class="file-page-control">
             <button type="button" data-load-older-files
                     aria-busy=${this.filesLoadMoreState === 'loading' ? 'true' : 'false'}

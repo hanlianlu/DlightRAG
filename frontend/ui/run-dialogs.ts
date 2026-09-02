@@ -96,13 +96,13 @@ export class DlContinuationDialog extends LightElement {
 export interface ChildRosterEntry {
   status: string;
   objective?: string;
-  child_session_id?: string;
+  childSessionId?: string;
 }
 
 export type ChildRosterPageFetcher = (
   cursor: string | null,
   signal?: AbortSignal,
-) => Promise<{children: ChildRosterEntry[]; next_cursor: string | null}>;
+) => Promise<{children: ChildRosterEntry[]; nextCursor: string | null}>;
 
 export class DlChildrenRoster extends LightElement {
   static override properties = {fetcher: {state: true}};
@@ -169,7 +169,7 @@ export class DlChildrenRoster extends LightElement {
       const page = await this.#pageFetcher!(null, controller.signal);
       if (controller !== this.#controller || generation !== this.#generation) return;
       this.#entries = page.children;
-      this.#nextCursor = page.next_cursor;
+      this.#nextCursor = page.nextCursor;
       this.#empty = page.children.length === 0;
       this.#failed = false;
       this.requestUpdate();
@@ -216,14 +216,14 @@ export class DlChildrenRoster extends LightElement {
         }
         return;
       }
-      const known = new Set(this.#entries.map((entry) => entry.child_session_id).filter(Boolean));
+      const known = new Set(this.#entries.map((entry) => entry.childSessionId).filter(Boolean));
       const appended = page.children.filter((entry) => {
-        if (!entry.child_session_id || known.has(entry.child_session_id)) return false;
-        known.add(entry.child_session_id);
+        if (!entry.childSessionId || known.has(entry.childSessionId)) return false;
+        known.add(entry.childSessionId);
         return true;
       });
       this.#entries = [...this.#entries, ...appended];
-      this.#nextCursor = page.next_cursor;
+      this.#nextCursor = page.nextCursor;
       this.#loadMoreState = 'idle';
       this.#announcement = appended.length === 1
         ? msg('Loaded 1 older child.', {id: 'runDialogs.loadedOneChild'})
@@ -291,7 +291,7 @@ export class DlChildrenRoster extends LightElement {
               <li>${msg('No child agents were started.', {id: 'runDialogs.noChildAgents'})}</li>
             ` : entries.map((child) => html`
               <li role="listitem">
-                ${this.#statusLabel(child.status)}: ${child.objective || child.child_session_id || ''}
+                ${this.#statusLabel(child.status)}: ${child.objective || child.childSessionId || ''}
               </li>
             `)}
           </ul>

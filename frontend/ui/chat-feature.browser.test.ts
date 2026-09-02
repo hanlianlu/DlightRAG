@@ -3,8 +3,12 @@
 import {expect} from '@esm-bundle/chai';
 import type {
   AcceptedAnswer,
+  AnswerArtifact,
   AnswerPresentation,
+  ConversationAttachmentReference,
+  ConversationSummary,
   ConversationTurn,
+  PresentationImage,
 } from '../api/conversations.ts';
 import {attachmentStore} from '../stores/attachment-store.ts';
 import {conversationStore} from '../stores/conversation-store.ts';
@@ -42,54 +46,56 @@ const policy = {
 };
 
 const presentation: AnswerPresentation = {
-  answer_text: 'A stored answer.',
+  answerText: 'A stored answer.',
   parts: [{
     type: 'markdown',
     text: 'A stored answer.',
     html: '<p>A stored answer.</p>',
     artifact: null,
-    evidence_image: null,
+    evidenceImage: null,
     inline: false,
   }],
   sources: [],
-  evidence_images: [],
+  evidenceImages: [],
   artifacts: [],
-  artifact_outcome: {status: 'complete', issues: []},
+  artifactOutcome: {status: 'complete', issues: []},
 };
 
 function storedTurn(): ConversationTurn {
   return {
-    turn_id: 'turn-1',
-    turn_number: 1,
-    answer_run_id: 'run-1',
-    submission_id: 'submission-1',
+    turnId: 'turn-1',
+    turnNumber: 1,
+    answerRunId: 'run-1',
+    submissionId: 'submission-1',
     status: 'succeeded',
-    cancel_requested: false,
-    user_text: 'Question',
-    assistant_text: presentation.answer_text,
-    user_attachments: [],
+    cancelRequested: false,
+    userText: 'Question',
+    assistantText: presentation.answerText,
+    userAttachments: [],
     presentation,
     usage: {},
     evidence: {},
-    error_kind: null,
-    error_message: null,
-    created_at: '2026-01-01T00:00:00Z',
+    errorKind: null,
+    errorMessage: null,
+    createdAt: '2026-01-01T00:00:00Z',
   };
 }
 
 function continuationDescriptor(conversationId: string): AcceptedAnswer {
   return {
     conversation: {
-      conversation_id: conversationId,
+      conversationId: conversationId,
       title: 'Continuation',
-      created_at: '2026-01-01T00:00:00Z',
-      updated_at: '2026-01-01T00:00:00Z',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
     },
     turn: {
       ...storedTurn(),
-      answer_run_id: `run-${conversationId}`,
-      turn_id: `turn-${conversationId}`,
-      submission_id: `submission-${conversationId}`,
+      answerRunId: `run-${conversationId}`,
+      turnId: `turn-${conversationId}`,
+      submissionId: `submission-${conversationId}`,
       status: 'queued',
     },
   };
@@ -101,6 +107,131 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error('condition did not become true');
+}
+
+// What the server actually puts on the wire; these mappers mirror the
+// snake_case REST payloads back out of parsed camelCase domain fixtures.
+function conversationWire(conversation: ConversationSummary): Record<string, unknown> {
+  return {
+    conversation_id: conversation.conversationId,
+    title: conversation.title,
+    created_at: conversation.createdAt,
+    updated_at: conversation.updatedAt,
+    forked_from_conversation_id: conversation.forkedFromConversationId,
+    forked_from_title: conversation.forkedFromTitle,
+  };
+}
+
+function attachmentWire(attachment: ConversationAttachmentReference): Record<string, unknown> {
+  return {
+    attachment_id: attachment.attachmentId,
+    ordinal: attachment.ordinal,
+    kind: attachment.kind,
+    filename: attachment.filename,
+    mime_type: attachment.mimeType,
+    byte_size: attachment.byteSize,
+    url: attachment.url,
+    thumbnail_url: attachment.thumbnailUrl,
+    label: attachment.label,
+  };
+}
+
+function presentationImageWire(image: PresentationImage): Record<string, unknown> {
+  return {
+    id: image.id,
+    chunk_id: image.chunkId,
+    source_ref: image.sourceRef,
+    url: image.url,
+    thumbnail_url: image.thumbnailUrl,
+    label: image.label,
+    answer_image_sent: image.answerImageSent,
+  };
+}
+
+function artifactWire(artifact: AnswerArtifact): Record<string, unknown> {
+  return {
+    resource_id: artifact.resourceId,
+    role: artifact.role,
+    media_type: artifact.mediaType,
+    label: artifact.label,
+    filename: artifact.filename,
+    byte_size: artifact.byteSize,
+    digest: artifact.digest,
+    presentation: artifact.presentation,
+    status: artifact.status,
+    uri: artifact.uri,
+    width: artifact.width,
+    height: artifact.height,
+    data_url: artifact.dataUrl,
+    download_url: artifact.downloadUrl,
+    presentation_url: artifact.presentationUrl,
+    issue: artifact.issue === null ? null : {
+      kind: artifact.issue.kind,
+      description: artifact.issue.description,
+      resource_id: artifact.issue.resourceId,
+    },
+  };
+}
+
+function presentationWire(presentation: AnswerPresentation): Record<string, unknown> {
+  return {
+    answer_text: presentation.answerText,
+    parts: presentation.parts.map((part) => ({
+      type: part.type,
+      text: part.text,
+      html: part.html,
+      artifact: part.artifact === null ? null : artifactWire(part.artifact),
+      evidence_image: part.evidenceImage === null ? null : presentationImageWire(part.evidenceImage),
+      inline: part.inline,
+    })),
+    sources: presentation.sources.map((source) => ({
+      id: source.id,
+      title: source.title,
+      source_url: source.sourceUrl,
+      download_url: source.downloadUrl,
+      chunks: source.chunks.map((chunk) => ({
+        chunk_idx: chunk.chunkIdx,
+        page_number: chunk.pageNumber,
+        content_html: chunk.contentHtml,
+        image_url: chunk.imageUrl,
+        thumbnail_url: chunk.thumbnailUrl,
+      })),
+    })),
+    evidence_images: presentation.evidenceImages.map(presentationImageWire),
+    artifacts: presentation.artifacts.map(artifactWire),
+    artifact_outcome: {
+      status: presentation.artifactOutcome.status,
+      issues: presentation.artifactOutcome.issues.map((issue) => ({
+        kind: issue.kind,
+        description: issue.description,
+        resource_id: issue.resourceId,
+      })),
+    },
+  };
+}
+
+function turnWire(turn: ConversationTurn): Record<string, unknown> {
+  return {
+    turn_id: turn.turnId,
+    turn_number: turn.turnNumber,
+    answer_run_id: turn.answerRunId,
+    submission_id: turn.submissionId,
+    status: turn.status,
+    cancel_requested: turn.cancelRequested,
+    user_text: turn.userText,
+    assistant_text: turn.assistantText,
+    user_attachments: turn.userAttachments.map(attachmentWire),
+    presentation: turn.presentation === null ? null : presentationWire(turn.presentation),
+    usage: turn.usage,
+    evidence: turn.evidence,
+    error_kind: turn.errorKind,
+    error_message: turn.errorMessage,
+    created_at: turn.createdAt,
+  };
+}
+
+function acceptedWire(accepted: AcceptedAnswer): Record<string, unknown> {
+  return {conversation: conversationWire(accepted.conversation), turn: turnWire(accepted.turn)};
 }
 
 async function settle(element: DlChatFeature): Promise<void> {
@@ -184,7 +315,7 @@ it('renders cancelled history without a simultaneous stopping phase', async () =
     history: [{
       ...storedTurn(),
       status: 'cancelled',
-      cancel_requested: true,
+      cancelRequested: true,
       presentation: null,
     }],
   };
@@ -437,7 +568,7 @@ it('hands accepted work to RunController without announcing a false idle gap', a
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === '/web/api/answer' && init?.method === 'POST') {
-      return Promise.resolve(new Response(JSON.stringify(accepted), {
+      return Promise.resolve(new Response(JSON.stringify(acceptedWire(accepted)), {
         status: 202,
         headers: {'Content-Type': 'application/json'},
       }));
@@ -476,7 +607,7 @@ it('hands accepted work to RunController without announcing a false idle gap', a
   URL.revokeObjectURL = (url) => {
     if (url === leasedUrl) {
       const current = feature.turns.at(-1);
-      authoritativeAtRevoke = current?.runId === accepted.turn.answer_run_id
+      authoritativeAtRevoke = current?.runId === accepted.turn.answerRunId
         && current.userAttachments.every((attachment) => attachment.url !== leasedUrl);
     }
     originalRevokeObjectURL.call(URL, url);
@@ -626,8 +757,8 @@ it('delayed steering preserves newer text and is aborted when the run detaches',
       lineage: null,
       history: [{
         ...storedTurn(),
-        answer_run_id: runId,
-        turn_id: `turn-${runId}`,
+        answerRunId: runId,
+        turnId: `turn-${runId}`,
         status: 'running',
         presentation: null,
       }],
@@ -712,7 +843,7 @@ it('detaching invalidates delayed follow-up and fork continuations', async () =>
     await continuation;
 
     expect(conversationStore.conversations.some(
-      (conversation) => conversation.conversation_id === conversationId,
+      (conversation) => conversation.conversationId === conversationId,
     )).to.equal(false);
     expect(conversationStore.activeConversationId).not.to.equal(conversationId);
     expect(webRouter.current).to.deep.equal(originalRoute);
@@ -779,8 +910,8 @@ it('failed steering raises a toast intent instead of a blocking alert', async ()
     lineage: null,
     history: [{
       ...storedTurn(),
-      answer_run_id: 'run-steer-failure',
-      turn_id: 'turn-steer-failure',
+      answerRunId: 'run-steer-failure',
+      turnId: 'turn-steer-failure',
       status: 'running',
       presentation: null,
     }],
@@ -806,6 +937,14 @@ it('failed steering raises a toast intent instead of a blocking alert', async ()
 it('shows cancel-aware reconnect state and preserves stopping when reconnecting', async () => {
   const conversationId = 'conversation-stopping';
   const runId = 'run-stopping';
+  const stoppingTurn: ConversationTurn = {
+    ...storedTurn(),
+    turnId: 'turn-stopping',
+    answerRunId: runId,
+    status: 'running',
+    cancelRequested: true,
+    presentation: null,
+  };
   let eventRequests = 0;
   let finishFirstEvents!: (response: Response) => void;
   const firstEvents = new Promise<Response>((resolve) => { finishFirstEvents = resolve; });
@@ -824,22 +963,20 @@ it('shows cancel-aware reconnect state and preserves stopping when reconnecting'
       });
     }
     if (url.endsWith(`/answer/${runId}`)) {
-      return Promise.resolve(new Response(JSON.stringify({
-        ...storedTurn(),
-        answer_run_id: runId,
-        turn_id: 'turn-stopping',
-        status: 'running',
-        cancel_requested: true,
-        presentation: null,
-      }), {status: 200, headers: {'Content-Type': 'application/json'}}));
+      return Promise.resolve(new Response(JSON.stringify(turnWire(stoppingTurn)), {
+        status: 200,
+        headers: {'Content-Type': 'application/json'},
+      }));
     }
     throw new Error(`unexpected fetch: ${url}`);
   }) as typeof fetch;
   conversationStore.adoptCreatedConversation({
-    conversation_id: conversationId,
+    conversationId: conversationId,
     title: 'Stopping',
-    created_at: '2026-01-01T00:00:00Z',
-    updated_at: '2026-01-01T00:00:00Z',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
   });
 
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
@@ -849,10 +986,10 @@ it('shows cancel-aware reconnect state and preserves stopping when reconnecting'
     lineage: null,
     history: [{
       ...storedTurn(),
-      answer_run_id: runId,
-      turn_id: 'turn-stopping',
+      answerRunId: runId,
+      turnId: 'turn-stopping',
       status: 'running',
-      cancel_requested: true,
+      cancelRequested: true,
       presentation: null,
     }],
   };
@@ -934,10 +1071,12 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
     return Promise.resolve(new Response('{}', {status: 503}));
   }) as typeof fetch;
   conversationStore.adoptCreatedConversation({
-    conversation_id: conversationId,
+    conversationId: conversationId,
     title: 'Frame batching',
-    created_at: '2026-01-01T00:00:00Z',
-    updated_at: '2026-01-01T00:00:00Z',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
   });
 
   try {
@@ -948,8 +1087,8 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
       lineage: null,
       history: [{
         ...storedTurn(),
-        answer_run_id: runId,
-        turn_id: 'turn-frame-batching',
+        answerRunId: runId,
+        turnId: 'turn-frame-batching',
         status: 'running',
         presentation: null,
       }],
@@ -1022,7 +1161,7 @@ it('Message List anchors the completed turn at its latest user question', async 
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   const earlier: ChatTurnView = {
     id: 'turn-earlier', userText: 'Earlier question', runId: 'run-earlier', state: 'succeeded',
-    userAttachments: [], streamText: presentation.answer_text, presentation, usage: {}, evidence: {},
+    userAttachments: [], streamText: presentation.answerText, presentation, usage: {}, evidence: {},
     error: '', progress: '', liveStatus: '', sawChildren: false, cancelRequested: false,
     steeringMessages: [],
     toolRows: [],
@@ -1144,9 +1283,9 @@ it('Message List announces image state and prunes it with the owning turns', asy
     id: 'turn-image',
     userText: 'Image',
     userAttachments: [{
-      attachment_id: 'image-1', ordinal: 1, kind: 'image', filename: 'chart.png',
-      mime_type: 'image/png', byte_size: 10,
-      url: '/images/chart.png', thumbnail_url: '/images/chart-thumb.png', label: 'Chart',
+      attachmentId: 'image-1', ordinal: 1, kind: 'image', filename: 'chart.png',
+      mimeType: 'image/png', byteSize: 10,
+      url: '/images/chart.png', thumbnailUrl: '/images/chart-thumb.png', label: 'Chart',
     }],
     runId: 'run-image',
     state: 'succeeded',
@@ -1257,7 +1396,7 @@ it('Message List keeps the final older-page announcement and moves focus into th
 it('Message List anchors the existing viewport when an older page is prepended', async () => {
   const list = document.createElement('dl-chat-message-list') as DlChatMessageList;
   const existing = {
-    ...storedTurn(), turn_id: 'turn-2', turn_number: 2, answer_run_id: 'run-2',
+    ...storedTurn(), turnId: 'turn-2', turnNumber: 2, answerRunId: 'run-2',
   };
   list.view = {
     kind: 'ready', conversationId: 'anchor', history: [existing], lineage: null,
@@ -1276,7 +1415,7 @@ it('Message List anchors the existing viewport when an older page is prepended',
   list.view = {...list.view, olderMessagesState: 'loading'};
   await list.updateComplete;
   const older = {
-    ...storedTurn(), turn_id: 'turn-1', turn_number: 1, answer_run_id: 'run-1',
+    ...storedTurn(), turnId: 'turn-1', turnNumber: 1, answerRunId: 'run-1',
   };
   list.turns = [storedTurnView(older), storedTurnView(existing)];
   list.view = {...list.view, olderMessagesState: 'idle'};
@@ -1367,17 +1506,17 @@ it('Chat Feature preserves a non-terminal live projection across history republi
 it('Chat Feature drops stale terminal ranges while preserving a pending optimistic turn', async () => {
   const oldHistory = Array.from({length: 40}, (_, index) => ({
     ...storedTurn(),
-    turn_id: `turn-${index + 1}`,
-    turn_number: index + 1,
-    answer_run_id: `run-${index + 1}`,
-    submission_id: `submission-${index + 1}`,
+    turnId: `turn-${index + 1}`,
+    turnNumber: index + 1,
+    answerRunId: `run-${index + 1}`,
+    submissionId: `submission-${index + 1}`,
   }));
   const recentHistory = Array.from({length: 40}, (_, index) => ({
     ...storedTurn(),
-    turn_id: `turn-${index + 51}`,
-    turn_number: index + 51,
-    answer_run_id: `run-${index + 51}`,
-    submission_id: `submission-${index + 51}`,
+    turnId: `turn-${index + 51}`,
+    turnNumber: index + 51,
+    answerRunId: `run-${index + 51}`,
+    submissionId: `submission-${index + 51}`,
   }));
   const feature = document.createElement('dl-chat-feature') as DlChatFeature;
   feature.view = {
@@ -1417,10 +1556,10 @@ it('Chat Feature renders every explicitly loaded history page without a product 
     lineage: null,
     history: Array.from({length: 101}, (_, index) => ({
       ...storedTurn(),
-      turn_id: `turn-${index}`,
-      answer_run_id: `run-${index}`,
-      turn_number: index + 1,
-      user_text: `Question ${index}`,
+      turnId: `turn-${index}`,
+      answerRunId: `run-${index}`,
+      turnNumber: index + 1,
+      userText: `Question ${index}`,
     })),
   };
   document.body.appendChild(feature);
@@ -1434,19 +1573,19 @@ it('Chat Feature renders every explicitly loaded history page without a product 
 it('pages more than 40 turns through the wired store, sidebar, and Load older control', async () => {
   const recent = Array.from({length: 40}, (_, index) => ({
     ...storedTurn(),
-    turn_id: `turn-${index + 41}`,
-    turn_number: index + 41,
-    answer_run_id: `run-${index + 41}`,
-    submission_id: `submission-${index + 41}`,
-    user_text: `Question ${index + 41}`,
+    turnId: `turn-${index + 41}`,
+    turnNumber: index + 41,
+    answerRunId: `run-${index + 41}`,
+    submissionId: `submission-${index + 41}`,
+    userText: `Question ${index + 41}`,
   }));
   const older = Array.from({length: 40}, (_, index) => ({
     ...storedTurn(),
-    turn_id: `turn-${index + 1}`,
-    turn_number: index + 1,
-    answer_run_id: `run-${index + 1}`,
-    submission_id: `submission-${index + 1}`,
-    user_text: `Question ${index + 1}`,
+    turnId: `turn-${index + 1}`,
+    turnNumber: index + 1,
+    answerRunId: `run-${index + 1}`,
+    submissionId: `submission-${index + 1}`,
+    userText: `Question ${index + 1}`,
   }));
   window.fetch = (async (input) => {
     const url = new URL(String(input), window.location.origin);
@@ -1459,7 +1598,7 @@ it('pages more than 40 turns through the wired store, sidebar, and Load older co
         conversation_id: 'wired', title: 'Wired',
         created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
       },
-      turns: isOlder ? older : recent,
+      turns: (isOlder ? older : recent).map(turnWire),
       next_cursor: isOlder ? null : 'before-41',
     }), {status: 200, headers: {'Content-Type': 'application/json'}});
   }) as typeof fetch;
@@ -1491,9 +1630,9 @@ it('Message List revokes live attachment URLs when a turn is evicted', async () 
   const turn: ChatTurnView = {
     id: 'turn-blob', userText: 'Blob', runId: 'run-blob', state: 'cancelled',
     userAttachments: [{
-      attachment_id: 'blob-1', ordinal: 1, kind: 'document', filename: 'notes.md',
-      mime_type: 'text/markdown', byte_size: 2, url: 'blob:http://localhost/live-turn',
-      thumbnail_url: null, label: 'notes.md',
+      attachmentId: 'blob-1', ordinal: 1, kind: 'document', filename: 'notes.md',
+      mimeType: 'text/markdown', byteSize: 2, url: 'blob:http://localhost/live-turn',
+      thumbnailUrl: null, label: 'notes.md',
     }],
     streamText: '', presentation: null, usage: {}, evidence: {}, error: '', progress: '',
     liveStatus: '', sawChildren: false, cancelRequested: false, steeringMessages: [],

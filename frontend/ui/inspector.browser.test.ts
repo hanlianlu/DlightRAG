@@ -24,24 +24,24 @@ function media(compact: boolean): (query: string) => MediaQueryList {
 }
 
 const presentation: AnswerPresentation = {
-  answer_text: 'See sources.',
+  answerText: 'See sources.',
   parts: [],
   sources: [
     {
-      id: '1', title: 'First source', source_url: null, download_url: null,
+      id: '1', title: 'First source', sourceUrl: null, downloadUrl: null,
       chunks: [{
-        chunk_idx: 1, content_html: '<p>First evidence</p>', page_number: 2,
-        image_url: null, thumbnail_url: null,
+        chunkIdx: 1, contentHtml: '<p>First evidence</p>', pageNumber: 2,
+        imageUrl: null, thumbnailUrl: null,
       }],
     },
     {
-      id: '2', title: 'Second source', source_url: null, download_url: null,
+      id: '2', title: 'Second source', sourceUrl: null, downloadUrl: null,
       chunks: [],
     },
   ],
-  evidence_images: [],
+  evidenceImages: [],
   artifacts: [],
-  artifact_outcome: {status: 'complete', issues: []},
+  artifactOutcome: {status: 'complete', issues: []},
 };
 
 async function waitFor(predicate: () => boolean): Promise<void> {

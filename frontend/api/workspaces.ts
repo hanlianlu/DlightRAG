@@ -1,32 +1,47 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {csrfHeaders} from './csrf';
+import * as v from 'valibot';
+import {csrfHeaders} from './csrf.ts';
+import {parseWire} from './wire.ts';
 
-export interface CreatedWorkspace {
-  workspace: string;
-  display_name: string;
-}
+const createdWorkspace = v.pipe(
+  v.object({workspace: v.string(), display_name: v.string()}),
+  v.transform((w) => ({workspace: w.workspace, displayName: w.display_name})),
+);
+export type CreatedWorkspace = v.InferOutput<typeof createdWorkspace>;
 
-export interface DeletedWorkspace {
-  workspace: string;
-  next_workspace: string;
-}
+const deletedWorkspace = v.pipe(
+  v.object({workspace: v.string(), next_workspace: v.string()}),
+  v.transform((w) => ({workspace: w.workspace, nextWorkspace: w.next_workspace})),
+);
+export type DeletedWorkspace = v.InferOutput<typeof deletedWorkspace>;
 
-export interface WorkspacePageItem {
-  workspace: string;
-  display_name: string;
-  embedding_model: string;
-}
+export const workspacePageItem = v.pipe(
+  v.object({workspace: v.string(), display_name: v.string(), embedding_model: v.string()}),
+  v.transform((w) => ({
+    workspace: w.workspace,
+    displayName: w.display_name,
+    embeddingModel: w.embedding_model,
+  })),
+);
+export type WorkspacePageItem = v.InferOutput<typeof workspacePageItem>;
 
-export interface WorkspacePage {
-  workspaces: WorkspacePageItem[];
-  next_cursor: string | null;
-}
+const workspacePage = v.pipe(
+  v.object({
+    workspaces: v.optional(v.array(workspacePageItem)),
+    next_cursor: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({workspaces: w.workspaces ?? [], nextCursor: w.next_cursor ?? null})),
+);
+export type WorkspacePage = v.InferOutput<typeof workspacePage>;
 
 export class WorkspaceApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
     super(message);
     this.name = 'WorkspaceApiError';
+    this.status = status;
   }
 }
 
@@ -36,22 +51,16 @@ export async function getWorkspacesPage(
 ): Promise<WorkspacePage> {
   const query = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
   const response = await fetch(`/web/api/workspaces${query}`, {signal});
-  if (!response.ok) {
-    throw new WorkspaceApiError(response.status, 'Failed to load workspaces');
-  }
-  const payload = await response.json() as {
-    workspaces: WorkspacePageItem[];
-    next_cursor?: string | null;
-  };
-  return {workspaces: payload.workspaces ?? [], next_cursor: payload.next_cursor ?? null};
+  return parseWire(response, workspacePage, makeError, 'Failed to load workspaces');
 }
 
-async function post<T>(
+async function post<Input, Output>(
   path: string,
   body: Record<string, string>,
+  schema: v.GenericSchema<Input, Output>,
   fallback: string,
   signal?: AbortSignal,
-): Promise<T> {
+): Promise<Output> {
   const response = await fetch(path, {
     method: 'POST',
     headers: csrfHeaders('application/x-www-form-urlencoded'),
@@ -64,16 +73,21 @@ async function post<T>(
     const message = typeof detail?.error === 'string' ? detail.error : fallback;
     throw new WorkspaceApiError(response.status, message);
   }
-  return await response.json() as T;
+  return v.parse(schema, await response.json());
+}
+
+function makeError(status: number, message: string): Error {
+  return new WorkspaceApiError(status, message);
 }
 
 export function createWorkspaceRequest(
   name: string,
   signal?: AbortSignal,
 ): Promise<CreatedWorkspace> {
-  return post<CreatedWorkspace>(
+  return post(
     '/web/api/workspaces/create',
     {workspace_name: name},
+    createdWorkspace,
     'Failed to create workspace',
     signal,
   );
@@ -83,9 +97,10 @@ export function deleteWorkspaceRequest(
   name: string,
   signal?: AbortSignal,
 ): Promise<DeletedWorkspace> {
-  return post<DeletedWorkspace>(
+  return post(
     '/web/api/workspaces/delete',
     {workspace_name: name, confirm_name: name},
+    deletedWorkspace,
     'Could not delete workspace.',
     signal,
   );

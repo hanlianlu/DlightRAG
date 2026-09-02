@@ -43,7 +43,15 @@ test('file pages encode the opaque cursor, pass abort, and normalize older paylo
     return new Response(JSON.stringify({
       workspace: 'finance',
       files: [],
-      ingest: {busy: false, message: '', progress_percent: null},
+      ingest: {
+        busy: false,
+        message: '',
+        progress_percent: null,
+        current_batch: null,
+        total_batches: null,
+        documents: null,
+        pending_enqueues: 0,
+      },
     }), {headers: {'Content-Type': 'application/json'}});
   };
   const controller = new AbortController();
@@ -51,8 +59,8 @@ test('file pages encode the opaque cursor, pass abort, and normalize older paylo
   const first = await getFilePanel('finance', null, controller.signal);
   const older = await getFilePanel('finance', 'opaque/cursor +', controller.signal);
 
-  assert.equal(first.next_cursor, null);
-  assert.equal(older.next_cursor, null);
+  assert.equal(first.nextCursor, null);
+  assert.equal(older.nextCursor, null);
   assert.deepEqual(seen, [
     {
       url: '/web/api/files?workspace=finance',

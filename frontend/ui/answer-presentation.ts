@@ -76,7 +76,7 @@ export class AnswerPresentationElement extends LightElement {
     const presentation = this.presentation;
     if (!presentation) return nothing;
     return html`
-      ${presentation.artifact_outcome.status === 'complete' ? nothing : html`
+      ${presentation.artifactOutcome.status === 'complete' ? nothing : html`
         <div class="artifact-publication-warning" role="alert">
           ${msg('Some requested Artifacts could not be published.', {id: 'answerPresentation.publicationWarning'})}
         </div>
@@ -84,13 +84,13 @@ export class AnswerPresentationElement extends LightElement {
       <div class="answer-parts" @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
         ${presentation.parts.map((part, index) => this.#part(part, index))}
       </div>
-      ${presentation.evidence_images.length > 0 ? html`
+      ${presentation.evidenceImages.length > 0 ? html`
         <section class="answer-evidence" aria-label=${msg('Visual Evidence', {id: 'answerPresentation.visualEvidenceAria'})}
                  @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
           <h3>${msg('Visual Evidence', {id: 'answerPresentation.visualEvidence'})}</h3>
           <div class="answer-image-strip">
             ${repeat(
-              presentation.evidence_images,
+              presentation.evidenceImages,
               (image) => image.id || image.url,
               (image) => this.#evidenceImage(image),
             )}
@@ -131,8 +131,8 @@ export class AnswerPresentationElement extends LightElement {
     if (part.type === 'markdown') {
       return html`<div class="answer-rich-content ${chatStyles.aiMessageContent}" data-answer-part=${String(index)}></div>`;
     }
-    if (part.type === 'evidence_image' && part.evidence_image) {
-      return html`<div class="answer-inline-evidence">${this.#evidenceImage(part.evidence_image)}</div>`;
+    if (part.type === 'evidence_image' && part.evidenceImage) {
+      return html`<div class="answer-inline-evidence">${this.#evidenceImage(part.evidenceImage)}</div>`;
     }
     if (part.type === 'artifact' && part.artifact) return this.#artifact(part.artifact, part.inline);
     return nothing;
@@ -150,7 +150,7 @@ export class AnswerPresentationElement extends LightElement {
       `;
     }
     if (inline && artifact.presentation === 'image') {
-      const source = safeImageSrc(artifact.data_url || '');
+      const source = safeImageSrc(artifact.dataUrl || '');
       if (source) {
         return html`
           <figure class="answer-artifact-image">
@@ -179,7 +179,7 @@ export class AnswerPresentationElement extends LightElement {
 
   #evidenceImage(image: PresentationImage): TemplateResult | typeof nothing {
     const source = safeImageSrc(image.url);
-    const thumbnail = safeImageSrc(image.thumbnail_url || image.url);
+    const thumbnail = safeImageSrc(image.thumbnailUrl || image.url);
     if (!source || !thumbnail) return nothing;
     return html`
       <div class="answer-evidence-image">
@@ -188,10 +188,10 @@ export class AnswerPresentationElement extends LightElement {
           <img src=${thumbnail} alt=${image.label} loading="lazy">
           <span class="answer-image-label">${image.label}</span>
         </button>
-        ${image.source_ref ? html`
-          <button class="answer-image-source" type="button" data-ref=${image.source_ref}
-                  aria-label=${msg(str`Open source ${image.source_ref}`, {id: 'answerPresentation.openSourceAria'})}>
-            ${msg(str`Source ${image.source_ref}`, {id: 'answerPresentation.openSource'})}
+        ${image.sourceRef ? html`
+          <button class="answer-image-source" type="button" data-ref=${image.sourceRef}
+                  aria-label=${msg(str`Open source ${image.sourceRef}`, {id: 'answerPresentation.openSourceAria'})}>
+            ${msg(str`Source ${image.sourceRef}`, {id: 'answerPresentation.openSource'})}
           </button>
         ` : nothing}
       </div>
@@ -244,15 +244,15 @@ export class AnswerPresentationElement extends LightElement {
     if (!presentation) return [];
     const candidates = [
       ...presentation.parts.flatMap((part) => {
-        if (part.type === 'evidence_image' && part.evidence_image) {
-          return [part.evidence_image.url];
+        if (part.type === 'evidence_image' && part.evidenceImage) {
+          return [part.evidenceImage.url];
         }
         if (part.type === 'artifact' && part.artifact?.presentation === 'image') {
-          return [part.artifact.data_url || ''];
+          return [part.artifact.dataUrl || ''];
         }
         return [];
       }),
-      ...presentation.evidence_images.map((image) => image.url),
+      ...presentation.evidenceImages.map((image) => image.url),
     ];
     return [...new Set(candidates.map(safeImageSrc).filter(Boolean))];
   }

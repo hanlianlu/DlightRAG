@@ -1,33 +1,57 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-export interface BootstrapWorkspace {
-  workspace: string;
-  display_name: string;
-  embedding_model: string;
-}
+import * as v from 'valibot';
+import {workspacePageItem} from './workspaces.ts';
+
+import {parseWire} from './wire.ts';
 
 export type ImageCapabilityStatus = 'supported' | 'unsupported' | 'unknown';
 
-export interface AnswerAttachmentBootstrap {
-  count_limit: number;
-  image_max_bytes: number;
-  document_max_bytes: number;
-  extensions: string[];
-  image_capability: ImageCapabilityStatus;
-  image_limit: number;
-  accept: string;
-}
+const answerAttachmentBootstrap = v.pipe(
+  v.object({
+    count_limit: v.number(),
+    image_max_bytes: v.number(),
+    document_max_bytes: v.number(),
+    extensions: v.array(v.string()),
+    image_capability: v.picklist(['supported', 'unsupported', 'unknown']),
+    image_limit: v.number(),
+    accept: v.string(),
+  }),
+  v.transform((w) => ({
+    countLimit: w.count_limit,
+    imageMaxBytes: w.image_max_bytes,
+    documentMaxBytes: w.document_max_bytes,
+    extensions: w.extensions,
+    imageCapability: w.image_capability,
+    imageLimit: w.image_limit,
+    accept: w.accept,
+  })),
+);
+export type AnswerAttachmentBootstrap = v.InferOutput<typeof answerAttachmentBootstrap>;
 
-export interface WebBootstrap {
-  contract_version: 1;
-  workspaces: BootstrapWorkspace[];
-  workspaces_next_cursor?: string | null;
-  primary_workspace: string;
-  active_workspaces: string[];
-  known_workspaces?: string[] | null;
-  answer_attachments: AnswerAttachmentBootstrap;
-  active_html_preview_enabled: boolean;
-}
+const webBootstrap = v.pipe(
+  v.object({
+    contract_version: v.literal(1),
+    workspaces: v.array(workspacePageItem),
+    workspaces_next_cursor: v.optional(v.nullable(v.string())),
+    primary_workspace: v.string(),
+    active_workspaces: v.array(v.string()),
+    known_workspaces: v.optional(v.nullable(v.array(v.string()))),
+    answer_attachments: answerAttachmentBootstrap,
+    active_html_preview_enabled: v.boolean(),
+  }),
+  v.transform((w) => ({
+    contractVersion: w.contract_version,
+    workspaces: w.workspaces,
+    workspacesNextCursor: w.workspaces_next_cursor ?? null,
+    primaryWorkspace: w.primary_workspace,
+    activeWorkspaces: w.active_workspaces,
+    knownWorkspaces: w.known_workspaces ?? null,
+    answerAttachments: w.answer_attachments,
+    activeHtmlPreviewEnabled: w.active_html_preview_enabled,
+  })),
+);
+export type WebBootstrap = v.InferOutput<typeof webBootstrap>;
 
 export class BootstrapApiError extends Error {
   readonly status: number;
@@ -41,15 +65,10 @@ export class BootstrapApiError extends Error {
 
 export async function getWebBootstrap(signal?: AbortSignal): Promise<WebBootstrap> {
   const response = await fetch('/web/api/bootstrap', {signal});
-  if (!response.ok) throw new BootstrapApiError(response.status);
-  try {
-    const data = await response.json() as WebBootstrap;
-    return {
-      ...data,
-      workspaces_next_cursor: data.workspaces_next_cursor ?? null,
-      known_workspaces: data.known_workspaces ?? null,
-    };
-  } catch {
-    throw new BootstrapApiError(response.status);
-  }
+  return parseWire(
+    response,
+    webBootstrap,
+    (status) => new BootstrapApiError(status),
+    'Failed to load the Web application',
+  );
 }

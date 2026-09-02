@@ -238,8 +238,8 @@ it('preserves loaded files and cursor when an upload only changes ingest status'
   await panel.upload([new File(['report'], 'report.pdf', {type: 'application/pdf'})]);
   await panel.updateComplete;
 
-  expect(panel.snapshot?.files.map((item) => item.file_path)).to.deep.equal(['/newest']);
-  expect(panel.snapshot?.next_cursor).to.equal('older-1');
+  expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/newest']);
+  expect(panel.snapshot?.nextCursor).to.equal('older-1');
   panel.pause();
 });
 
@@ -263,11 +263,11 @@ it('deletion replaces loaded traversal with the returned fresh first page', asyn
   panel.querySelector<HTMLButtonElement>('.file-delete')!.click();
   await panel.updateComplete;
   confirmDeleteDialog(panel, 'confirm');
-  await waitFor(() => panel.snapshot?.files[0]?.file_path === '/replacement');
+  await waitFor(() => panel.snapshot?.files[0]?.filePath === '/replacement');
   await panel.updateComplete;
 
-  expect(panel.snapshot?.files.map((item) => item.file_path)).to.deep.equal(['/replacement']);
-  expect(panel.snapshot?.next_cursor).to.equal('replacement-older');
+  expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/replacement']);
+  expect(panel.snapshot?.nextCursor).to.equal('replacement-older');
   expect(panel.querySelector('[data-load-older-files]')).not.to.equal(null);
 });
 
@@ -378,14 +378,14 @@ it('delete during an older-page flight cannot apply stale rows or latch loading 
   deletion.resolve(new Response(JSON.stringify(snapshot([
     {file_name: 'Replacement', file_path: '/replacement'},
   ], 'replacement-older')), {status: 200, headers: {'Content-Type': 'application/json'}}));
-  await waitFor(() => panel.snapshot?.files[0]?.file_path === '/replacement');
+  await waitFor(() => panel.snapshot?.files[0]?.filePath === '/replacement');
   older.resolve(new Response(JSON.stringify(snapshot([
     {file_name: 'Stale older', file_path: '/stale'},
   ], null)), {status: 200, headers: {'Content-Type': 'application/json'}}));
   await olderFlight;
   await panel.updateComplete;
 
-  expect(panel.snapshot?.files.map((item) => item.file_path)).to.deep.equal(['/replacement']);
+  expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/replacement']);
   expect(panel.filesLoadMoreState).to.equal('idle');
   const button = panel.querySelector<HTMLButtonElement>('[data-load-older-files]')!;
   expect(button.disabled).to.equal(false);
@@ -443,7 +443,7 @@ it('load older is a no-op while a same-workspace first-page reload is active', a
   await reloadFlight;
   await panel.updateComplete;
 
-  expect(panel.snapshot?.files.map((item) => item.file_path)).to.deep.equal(['/fresh']);
+  expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/fresh']);
   expect(panel.filesLoadMoreState).to.equal('idle');
   const button = panel.querySelector<HTMLButtonElement>('[data-load-older-files]')!;
   expect(button.disabled).to.equal(false);
@@ -485,7 +485,7 @@ it('failed upload settles loading after superseding a pending visible reload', a
   expect(panel.error).to.equal('Upload rejected.');
   expect(panel.querySelector('.file-error')?.textContent).to.contain('Upload rejected.');
   expect(panel.querySelector('.file-status--loading')).to.equal(null);
-  expect(panel.snapshot?.files.map((item) => item.file_path)).to.deep.equal(['/original']);
+  expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/original']);
 
   staleReload.resolve(new Response(JSON.stringify(snapshot([
     {file_name: 'Stale reload', file_path: '/stale'},
@@ -495,7 +495,7 @@ it('failed upload settles loading after superseding a pending visible reload', a
 
   expect(panel.loading).to.equal(false);
   expect(panel.error).to.equal('Upload rejected.');
-  expect(panel.snapshot?.files.map((item) => item.file_path)).to.deep.equal(['/original']);
+  expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/original']);
 });
 
 it('failed deletion settles loading after superseding a pending visible reload', async () => {
@@ -536,7 +536,7 @@ it('failed deletion settles loading after superseding a pending visible reload',
   expect(panel.error).to.equal('Deletion rejected.');
   expect(panel.querySelector('.file-error')?.textContent).to.contain('Deletion rejected.');
   expect(panel.querySelector('.file-status--loading')).to.equal(null);
-  expect(panel.snapshot?.files.map((item) => item.file_path)).to.deep.equal(['/original']);
+  expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/original']);
 
   staleReload.resolve(new Response(JSON.stringify(snapshot([
     {file_name: 'Stale reload', file_path: '/stale'},
@@ -546,5 +546,5 @@ it('failed deletion settles loading after superseding a pending visible reload',
 
   expect(panel.loading).to.equal(false);
   expect(panel.error).to.equal('Deletion rejected.');
-  expect(panel.snapshot?.files.map((item) => item.file_path)).to.deep.equal(['/original']);
+  expect(panel.snapshot?.files.map((item) => item.filePath)).to.deep.equal(['/original']);
 });

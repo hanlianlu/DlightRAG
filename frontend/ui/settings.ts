@@ -131,7 +131,7 @@ export class DlSettingsDialog extends LightElement {
   /** Consume one live Profile Memory domain fact from Chat composition. */
   handleMemoryOperation(event: ChatMemoryOperationDetail): void {
     if (!event.live) return;
-    const identity = event.change_id || `${event.intent_id || ''}:${event.operation}:${event.outcome}`;
+    const identity = event.changeId || `${event.intent_id || ''}:${event.operation}:${event.outcome}`;
     if (!identity || this.#seenMemoryOperations.has(identity)) return;
     if (this.#seenMemoryOperations.size >= MAX_SEEN_MEMORY_OPERATIONS) {
       const oldest = this.#seenMemoryOperations.values().next().value;
@@ -139,11 +139,11 @@ export class DlSettingsDialog extends LightElement {
     }
     this.#seenMemoryOperations.add(identity);
     const message = memorySummary(event);
-    if (event.outcome !== 'changed' || !event.change_id) {
+    if (event.outcome !== 'changed' || !event.changeId) {
       this.#requestToast({message, duration: 3000});
       return;
     }
-    const changeId = event.change_id;
+    const changeId = event.changeId;
     const signal = this.#events?.signal;
     this.#requestToast({
       message,
@@ -164,7 +164,7 @@ export class DlSettingsDialog extends LightElement {
 
   protected override render(): TemplateResult {
     const total = conversationStore.conversations.length;
-    const active = this.memory?.active_count;
+    const active = this.memory?.activeCount;
     return html`
       <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title"
               @click=${this.#scrimClick} @close=${this.#closed}>

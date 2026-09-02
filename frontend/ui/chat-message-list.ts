@@ -106,7 +106,7 @@ function liveImageIds(turns: readonly ChatTurnView[]): Set<string> {
   const ids = new Set<string>();
   for (const turn of turns) {
     for (const attachment of turn.userAttachments) {
-      if (attachment.kind === 'image') ids.add(attachment.attachment_id);
+      if (attachment.kind === 'image') ids.add(attachment.attachmentId);
     }
   }
   return ids;
@@ -485,17 +485,17 @@ export class DlChatMessageList extends LightElement {
     return html`
       ${images.length > 0 ? html`
         <div class=${chatStyles.messageImages}>
-          ${repeat(images, (reference) => reference.attachment_id, (reference) => this.#image(reference))}
+          ${repeat(images, (reference) => reference.attachmentId, (reference) => this.#image(reference))}
         </div>
       ` : nothing}
       ${documents.length > 0 ? html`
         <div class=${chatStyles.messageDocuments}>
-          ${repeat(documents, (reference) => reference.attachment_id, (reference) => {
+          ${repeat(documents, (reference) => reference.attachmentId, (reference) => {
             const href = safeSameOriginHref(reference.url);
             const content = html`
               <span class=${chatStyles.documentChipInfo}>
                 <span class=${chatStyles.documentChipName}>${reference.filename}</span>
-                <span class=${chatStyles.documentChipMeta}>${formatFileSize(reference.byte_size)}</span>
+                <span class=${chatStyles.documentChipMeta}>${formatFileSize(reference.byteSize)}</span>
               </span>
             `;
             return href
@@ -511,10 +511,10 @@ export class DlChatMessageList extends LightElement {
   }
 
   #image(reference: ConversationAttachmentReference): TemplateResult {
-    const thumbnail = safeImageSrc(reference.thumbnail_url || reference.url);
+    const thumbnail = safeImageSrc(reference.thumbnailUrl || reference.url);
     const source = safeImageSrc(reference.url);
-    const failed = !thumbnail || !source || this.#imageErrors.has(reference.attachment_id);
-    const loaded = !failed && this.#imageLoaded.has(reference.attachment_id);
+    const failed = !thumbnail || !source || this.#imageErrors.has(reference.attachmentId);
+    const loaded = !failed && this.#imageLoaded.has(reference.attachmentId);
     return html`
       <div class=${chatStyles.historyImageCard}>
         <button type="button" class=${chatStyles.historyImageButton}
@@ -526,8 +526,8 @@ export class DlChatMessageList extends LightElement {
           <img class=${chatStyles.messageImg} src=${failed ? nothing : thumbnail}
                alt=${reference.label} loading="lazy" decoding="async"
                ?hidden=${failed}
-               @load=${() => this.#finishImage(reference.attachment_id)}
-               @error=${() => this.#failImage(reference.attachment_id)}>
+               @load=${() => this.#finishImage(reference.attachmentId)}
+               @error=${() => this.#failImage(reference.attachmentId)}>
         </button>
         <span class=${chatStyles.historyImageStatus}
               role=${failed ? 'alert' : 'status'} ?hidden=${loaded}>
@@ -546,7 +546,7 @@ export class DlChatMessageList extends LightElement {
 
   #openImage(reference: ConversationAttachmentReference, returnFocus: HTMLElement): void {
     const source = safeImageSrc(reference.url);
-    if (!source || this.#imageErrors.has(reference.attachment_id)) return;
+    if (!source || this.#imageErrors.has(reference.attachmentId)) return;
     const gallery = this.turns.flatMap((turn) => turn.userAttachments)
       .filter((attachment) => attachment.kind === 'image')
       .map((attachment) => safeImageSrc(attachment.url))
@@ -572,11 +572,11 @@ export class DlChatMessageList extends LightElement {
   }
 
   async #retryImage(reference: ConversationAttachmentReference, target: HTMLElement): Promise<void> {
-    const thumbnail = safeImageSrc(reference.thumbnail_url || reference.url);
+    const thumbnail = safeImageSrc(reference.thumbnailUrl || reference.url);
     const source = safeImageSrc(reference.url);
     if (!thumbnail || !source) return;
-    this.#imageErrors.delete(reference.attachment_id);
-    this.#imageLoaded.delete(reference.attachment_id);
+    this.#imageErrors.delete(reference.attachmentId);
+    this.#imageLoaded.delete(reference.attachmentId);
     this.#imageRevision += 1;
     this.requestUpdate();
     await this.updateComplete;
@@ -698,15 +698,15 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     }
   } else if (stored.status === 'failed') {
     state = 'failed';
-    error = localizedStoredRunError(stored.error_kind, stored.error_message);
+    error = localizedStoredRunError(stored.errorKind, stored.errorMessage);
   } else if (stored.status === 'cancelled') {
     state = 'cancelled';
   }
   return {
-    id: stored.turn_id || stored.answer_run_id,
-    userText: stored.user_text,
-    userAttachments: stored.user_attachments,
-    runId: stored.answer_run_id,
+    id: stored.turnId || stored.answerRunId,
+    userText: stored.userText,
+    userAttachments: stored.userAttachments,
+    runId: stored.answerRunId,
     state,
     streamText: '',
     presentation: stored.presentation,
@@ -714,10 +714,10 @@ export function storedTurnView(stored: ConversationTurn): ChatTurnView {
     evidence: stored.evidence ?? {},
     error,
     progress: (stored.status === 'queued' || stored.status === 'running')
-      && stored.cancel_requested ? msg('Stopping...', {id: 'chatFeature.stopping'}) : '',
+      && stored.cancelRequested ? msg('Stopping...', {id: 'chatFeature.stopping'}) : '',
     liveStatus: '',
     sawChildren: false,
-    cancelRequested: stored.cancel_requested,
+    cancelRequested: stored.cancelRequested,
     steeringMessages: [],
     toolRows: [],
     toolTotal: 0,

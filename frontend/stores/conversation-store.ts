@@ -125,7 +125,7 @@ export class ConversationStore extends Store {
   }
 
   get fallbackConversationId(): string | null {
-    return this.#conversations[0]?.conversation_id ?? null;
+    return this.#conversations[0]?.conversationId ?? null;
   }
 
   async loadList(): Promise<void> {
@@ -141,7 +141,7 @@ export class ConversationStore extends Store {
       const page = await this.#api.list(null, controller.signal);
       if (generation !== this.#listGeneration) return;
       this.#conversations = this.#merge([], page.items);
-      this.#nextCursor = page.next_cursor;
+      this.#nextCursor = page.nextCursor;
       this.#listState = 'ready';
       this.changed();
     } catch (error) {
@@ -174,7 +174,7 @@ export class ConversationStore extends Store {
       const page = await this.#api.list(cursor, controller.signal);
       if (generation !== this.#listGeneration) return;
       this.#conversations = this.#merge(this.#conversations, page.items);
-      this.#nextCursor = page.next_cursor;
+      this.#nextCursor = page.nextCursor;
       this.#loadMoreState = 'idle';
       this.changed();
     } catch (error) {
@@ -220,7 +220,7 @@ export class ConversationStore extends Store {
     try {
       const recent = await this.#api.history(conversationId, null, undefined, controller.signal);
       if (generation !== this.#viewGeneration) return 'stale';
-      if (recent.conversation.conversation_id !== conversationId) {
+      if (recent.conversation.conversationId !== conversationId) {
         throw new Error('conversation history response changed conversation identity');
       }
       const replaceHistory = sameConversation && this.#history !== null
@@ -228,11 +228,11 @@ export class ConversationStore extends Store {
       const turns = sameConversation && this.#history !== null && !replaceHistory
         ? this.#mergeTurns(this.#history.turns, recent.turns, true)
         : this.#mergeTurns([], recent.turns, true);
-      if (!hadHistory || replaceHistory) this.#historyNextCursor = recent.next_cursor ?? null;
+      if (!hadHistory || replaceHistory) this.#historyNextCursor = recent.nextCursor ?? null;
       this.#history = {
         ...recent,
         turns,
-        next_cursor: this.#historyNextCursor,
+        nextCursor: this.#historyNextCursor,
       };
       this.#activeConversationId = conversationId;
       this.#upsert(recent.conversation);
@@ -304,16 +304,16 @@ export class ConversationStore extends Store {
         || this.#activeConversationId !== conversationId
         || this.#historyNextCursor !== cursor
       ) return;
-      if (older.conversation.conversation_id !== conversationId || this.#history === null) {
+      if (older.conversation.conversationId !== conversationId || this.#history === null) {
         throw new Error('older history response changed conversation identity');
       }
       this.#history = {
         ...this.#history,
         conversation: older.conversation,
         turns: this.#mergeTurns(this.#history.turns, older.turns, false),
-        next_cursor: older.next_cursor ?? null,
+        nextCursor: older.nextCursor ?? null,
       };
-      this.#historyNextCursor = older.next_cursor ?? null;
+      this.#historyNextCursor = older.nextCursor ?? null;
       this.#historyLoadMoreState = 'idle';
       this.#upsert(older.conversation);
       this.#publishView();
@@ -335,7 +335,7 @@ export class ConversationStore extends Store {
   adoptCreatedConversation(summary: ConversationSummary): void {
     this.#abortView();
     this.#upsert(summary);
-    this.#activeConversationId = summary.conversation_id;
+    this.#activeConversationId = summary.conversationId;
     this.#history = null;
     this.#historyNextCursor = null;
     this.#historyLoadMoreState = 'idle';
@@ -461,7 +461,7 @@ export class ConversationStore extends Store {
 
   #removeSummary(conversationId: string): void {
     this.#conversations = this.#conversations.filter(
-      (conversation) => conversation.conversation_id !== conversationId,
+      (conversation) => conversation.conversationId !== conversationId,
     );
   }
 
@@ -470,10 +470,10 @@ export class ConversationStore extends Store {
     incoming: readonly ConversationSummary[],
   ): ConversationSummary[] {
     const byId = new Map(existing.map((conversation) => [
-      conversation.conversation_id,
+      conversation.conversationId,
       conversation,
     ]));
-    for (const conversation of incoming) byId.set(conversation.conversation_id, conversation);
+    for (const conversation of incoming) byId.set(conversation.conversationId, conversation);
     return this.#sort([...byId.values()]);
   }
 
@@ -482,8 +482,8 @@ export class ConversationStore extends Store {
     recent: readonly ConversationHistory['turns'][number][],
   ): boolean {
     if (existing.length === 0 || recent.length === 0) return false;
-    const newestExisting = Math.max(...existing.map((turn) => turn.turn_number));
-    const oldestRecent = Math.min(...recent.map((turn) => turn.turn_number));
+    const newestExisting = Math.max(...existing.map((turn) => turn.turnNumber));
+    const oldestRecent = Math.min(...recent.map((turn) => turn.turnNumber));
     return oldestRecent > newestExisting + 1;
   }
 
@@ -492,35 +492,35 @@ export class ConversationStore extends Store {
     incoming: readonly ConversationHistory['turns'][number][],
     incomingWins: boolean,
   ): ConversationHistory['turns'] {
-    const byId = new Map(existing.map((turn) => [turn.turn_id, turn]));
-    const byNumber = new Map(existing.map((turn) => [turn.turn_number, turn]));
+    const byId = new Map(existing.map((turn) => [turn.turnId, turn]));
+    const byNumber = new Map(existing.map((turn) => [turn.turnNumber, turn]));
     for (const turn of incoming) {
-      const sameId = byId.get(turn.turn_id);
-      const sameNumber = byNumber.get(turn.turn_number);
+      const sameId = byId.get(turn.turnId);
+      const sameNumber = byNumber.get(turn.turnNumber);
       if (
         (sameId && (
-          sameId.turn_number !== turn.turn_number
-          || sameId.answer_run_id !== turn.answer_run_id
+          sameId.turnNumber !== turn.turnNumber
+          || sameId.answerRunId !== turn.answerRunId
         ))
-        || (sameNumber && sameNumber.turn_id !== turn.turn_id)
+        || (sameNumber && sameNumber.turnId !== turn.turnId)
       ) {
         throw new Error('conversation turn identity changed across history pages');
       }
-      if (!sameId || incomingWins) byId.set(turn.turn_id, turn);
-      byNumber.set(turn.turn_number, byId.get(turn.turn_id)!);
+      if (!sameId || incomingWins) byId.set(turn.turnId, turn);
+      byNumber.set(turn.turnNumber, byId.get(turn.turnId)!);
     }
-    return [...byId.values()].sort((left, right) => left.turn_number - right.turn_number);
+    return [...byId.values()].sort((left, right) => left.turnNumber - right.turnNumber);
   }
 
   #sort(conversations: readonly ConversationSummary[]): ConversationSummary[] {
     return [...conversations].sort((left, right) => {
-      const leftMillis = Date.parse(left.updated_at);
-      const rightMillis = Date.parse(right.updated_at);
+      const leftMillis = Date.parse(left.updatedAt);
+      const rightMillis = Date.parse(right.updatedAt);
       if (leftMillis !== rightMillis) return rightMillis - leftMillis;
-      const microsecondOrder = this.#microsecondRemainder(right.updated_at)
-        - this.#microsecondRemainder(left.updated_at);
+      const microsecondOrder = this.#microsecondRemainder(right.updatedAt)
+        - this.#microsecondRemainder(left.updatedAt);
       if (microsecondOrder !== 0) return microsecondOrder;
-      return right.conversation_id.localeCompare(left.conversation_id);
+      return right.conversationId.localeCompare(left.conversationId);
     });
   }
 

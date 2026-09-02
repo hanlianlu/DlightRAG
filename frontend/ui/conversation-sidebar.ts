@@ -367,11 +367,11 @@ export class DlConversationSidebar extends LightElement {
       const history = conversationStore.history;
       if (!history) return;
       const lineage = conversationStore.conversations.find(
-        (summary) => summary.conversation_id === history.conversation.conversation_id,
-      )?.forked_from_title ?? null;
+        (summary) => summary.conversationId === history.conversation.conversationId,
+      )?.forkedFromTitle ?? null;
       this.chatFeature.view = {
         kind: 'ready',
-        conversationId: history.conversation.conversation_id,
+        conversationId: history.conversation.conversationId,
         history: history.turns,
         lineage,
         hasOlderMessages: conversationStore.hasOlderMessages,

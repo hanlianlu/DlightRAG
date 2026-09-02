@@ -407,11 +407,11 @@ it('loads more workspaces with coalescing, dedup, retry, and exhaustion', async 
     }
     return {
       workspaces: [
-        {workspace: 'default', display_name: 'Default', embedding_model: 'embed'},
-        {workspace: 'finance', display_name: 'Finance', embedding_model: 'embed'},
-        {workspace: 'research', display_name: 'Research', embedding_model: 'embed'},
+        {workspace: 'default', displayName: 'Default', embeddingModel: 'embed'},
+        {workspace: 'finance', displayName: 'Finance', embeddingModel: 'embed'},
+        {workspace: 'research', displayName: 'Research', embeddingModel: 'embed'},
       ],
-      next_cursor: olderRequests === 2 ? 'cursor-2' : null,
+      nextCursor: olderRequests === 2 ? 'cursor-2' : null,
     };
   };
   workspaceStore.init(
@@ -443,8 +443,8 @@ it('loads more workspaces with coalescing, dedup, retry, and exhaustion', async 
 });
 
 it('rejects stale load-more pages after a fresh init invalidates the flight', async () => {
-  let resolve!: (page: {workspaces: {workspace: string; display_name: string; embedding_model: string}[]; next_cursor: string | null}) => void;
-  const pending = new Promise<{workspaces: {workspace: string; display_name: string; embedding_model: string}[]; next_cursor: string | null}>((done) => {
+  let resolve!: (page: {workspaces: {workspace: string; displayName: string; embeddingModel: string}[]; nextCursor: string | null}) => void;
+  const pending = new Promise<{workspaces: {workspace: string; displayName: string; embeddingModel: string}[]; nextCursor: string | null}>((done) => {
     resolve = done;
   });
   const loader = async () => await pending;
@@ -464,8 +464,8 @@ it('rejects stale load-more pages after a fresh init invalidates the flight', as
     loader,
     'cursor-fresh',
   );
-  resolve({workspaces: [{workspace: 'stale', display_name: 'Stale', embedding_model: 'e'}],
-    next_cursor: null});
+  resolve({workspaces: [{workspace: 'stale', displayName: 'Stale', embeddingModel: 'e'}],
+    nextCursor: null});
   await flight;
 
   expect(workspaceStore.records.map((record) => record.workspace)).to.deep.equal(['fresh']);
@@ -475,8 +475,8 @@ it('rejects stale load-more pages after a fresh init invalidates the flight', as
 
 it('renders an accessible load-more workspaces control in the picker', async () => {
   const loader = async () => ({
-    workspaces: [{workspace: 'finance', display_name: 'Finance', embedding_model: 'embed'}],
-    next_cursor: null,
+    workspaces: [{workspace: 'finance', displayName: 'Finance', embeddingModel: 'embed'}],
+    nextCursor: null,
   });
   workspaceStore.init(
     [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],
@@ -510,8 +510,8 @@ it('renders an accessible load-more workspaces control in the picker', async () 
 
 it('preserves server-validated active and primary beyond the first display page', async () => {
   const loader = async () => ({
-    workspaces: [{workspace: 'archive', display_name: 'Archive', embedding_model: 'embed'}],
-    next_cursor: null,
+    workspaces: [{workspace: 'archive', displayName: 'Archive', embeddingModel: 'embed'}],
+    nextCursor: null,
   });
   // biome-ignore lint/suspicious/noDocumentCookie: clearing the preference channel under test
   document.cookie = 'dlightrag_workspace_ids=;path=/;SameSite=Lax;Max-Age=0';

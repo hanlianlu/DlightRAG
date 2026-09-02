@@ -119,12 +119,12 @@ class WorkspaceStore extends Store {
         known.add(item.workspace);
         appended.push({
           workspace: item.workspace,
-          displayName: item.display_name || item.workspace,
-          embeddingModel: item.embedding_model || '',
+          displayName: item.displayName || item.workspace,
+          embeddingModel: item.embeddingModel || '',
         });
       }
       this.#records = [...this.#records, ...appended];
-      this.#nextCursor = page.next_cursor ?? null;
+      this.#nextCursor = page.nextCursor ?? null;
       this.#loadMoreState = 'idle';
       this.changed();
     } catch (error) {

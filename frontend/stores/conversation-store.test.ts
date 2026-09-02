@@ -12,38 +12,40 @@ import {ConversationStore, type ConversationApi} from './conversation-store.ts';
 
 function summary(id: string, updated = '2026-08-20T00:00:00Z'): ConversationSummary {
   return {
-    conversation_id: id,
+    conversationId: id,
     title: id,
-    created_at: '2026-08-19T00:00:00Z',
-    updated_at: updated,
+    createdAt: '2026-08-19T00:00:00Z',
+    updatedAt: updated,
+    forkedFromConversationId: null,
+    forkedFromTitle: null,
   };
 }
 
 function history(id: string): ConversationHistory {
-  return {conversation: summary(id), turns: []};
+  return {conversation: summary(id), turns: [], nextCursor: null};
 }
 
 function page(items: ConversationSummary[], nextCursor: string | null = null): ConversationPage {
-  return {items, next_cursor: nextCursor};
+  return {items, nextCursor: nextCursor};
 }
 
 function turn(number: number) {
   return {
-    turn_id: `turn-${number}`,
-    turn_number: number,
-    answer_run_id: `run-${number}`,
-    submission_id: `submission-${number}`,
+    turnId: `turn-${number}`,
+    turnNumber: number,
+    answerRunId: `run-${number}`,
+    submissionId: `submission-${number}`,
     status: 'succeeded' as const,
-    cancel_requested: false,
-    user_text: `Question ${number}`,
-    assistant_text: `Answer ${number}`,
-    user_attachments: [],
+    cancelRequested: false,
+    userText: `Question ${number}`,
+    assistantText: `Answer ${number}`,
+    userAttachments: [],
     presentation: null,
     usage: {},
     evidence: {},
-    error_kind: null,
-    error_message: null,
-    created_at: '2026-08-20T00:00:00Z',
+    errorKind: null,
+    errorMessage: null,
+    createdAt: '2026-08-20T00:00:00Z',
   };
 }
 
@@ -88,7 +90,7 @@ test('list loading is server-owned, sorted, and observable', async () => {
 
   await store.loadList();
 
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['newer', 'older']);
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), ['newer', 'older']);
   assert.equal(store.listState, 'ready');
   assert.ok(changes >= 2);
 });
@@ -121,7 +123,7 @@ test('load older coalesces overlap and appends deduped deterministic pages', asy
   await firstFlight;
 
   assert.deepEqual(cursors, [null, 'older-cursor']);
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), [
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), [
     '00000000-0000-0000-0000-000000000002',
     '00000000-0000-0000-0000-000000000001',
     '00000000-0000-0000-0000-000000000003',
@@ -143,11 +145,11 @@ test('load older errors preserve loaded rows and remain retryable', async () => 
   await store.loadList();
 
   await store.loadOlder();
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['new']);
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), ['new']);
   assert.equal(store.loadMoreState, 'error');
   await store.loadOlder();
 
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['new', 'old']);
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), ['new', 'old']);
   assert.equal(store.loadMoreState, 'idle');
 });
 
@@ -177,7 +179,7 @@ test('reload cancels an older-page request and replaces it with a fresh first pa
   await older;
 
   assert.equal(olderAborted, true);
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['reloaded']);
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), ['reloaded']);
   assert.equal(store.loadMoreState, 'idle');
 });
 
@@ -201,7 +203,7 @@ test('dispose aborts a pending page without applying late state', async () => {
   await older;
 
   assert.equal(aborted, true);
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['first']);
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), ['first']);
 });
 
 test('microsecond timestamps and UUID ties retain exact newest-first order', async () => {
@@ -215,7 +217,7 @@ test('microsecond timestamps and UUID ties retain exact newest-first order', asy
 
   await store.loadList();
 
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), [
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), [
     '00000000-0000-0000-0000-000000000003',
     '00000000-0000-0000-0000-000000000002',
     '00000000-0000-0000-0000-000000000001',
@@ -237,7 +239,7 @@ test('opening a route drops a superseded history response', async () => {
   assert.equal(await openingFirst, 'stale');
   assert.equal(await openingSecond, 'ready');
   assert.equal(store.activeConversationId, 'second');
-  assert.equal(store.history?.conversation.conversation_id, 'second');
+  assert.equal(store.history?.conversation.conversationId, 'second');
 });
 
 test('message history traverses 205 turns by prepend with coalescing and overlap dedup', async () => {
@@ -259,7 +261,7 @@ test('message history traverses 205 turns by prepend with coalescing and overlap
           {length: page.end - page.start + 1},
           (_, index) => turn(page.start + index),
         ),
-        next_cursor: page.next,
+        nextCursor: page.next,
       };
     },
   }));
@@ -272,7 +274,7 @@ test('message history traverses 205 turns by prepend with coalescing and overlap
   while (store.hasOlderMessages) await store.loadOlderMessages();
 
   assert.equal(store.history?.turns.length, 205);
-  assert.deepEqual(store.history?.turns.map((item) => item.turn_number),
+  assert.deepEqual(store.history?.turns.map((item) => item.turnNumber),
     Array.from({length: 205}, (_, index) => index + 1));
   assert.deepEqual(calls, [null, 'before-166', 'before-126', 'before-86', 'before-46']);
 });
@@ -287,7 +289,7 @@ test('a recent refresh replaces a disconnected loaded range and restores its old
         turns: request === 1
           ? Array.from({length: 40}, (_, index) => turn(index + 1))
           : Array.from({length: 40}, (_, index) => turn(index + 51)),
-        next_cursor: request === 1 ? null : 'before-51',
+        nextCursor: request === 1 ? null : 'before-51',
       };
     },
   }));
@@ -296,11 +298,11 @@ test('a recent refresh replaces a disconnected loaded range and restores its old
   await store.refreshActive();
 
   assert.deepEqual(
-    store.history?.turns.map((item) => item.turn_number),
+    store.history?.turns.map((item) => item.turnNumber),
     Array.from({length: 40}, (_, index) => index + 51),
   );
   assert.equal(store.hasOlderMessages, true);
-  assert.equal(store.history?.next_cursor, 'before-51');
+  assert.equal(store.history?.nextCursor, 'before-51');
 });
 
 test('missing and malformed route ids share one unavailable state', async () => {
@@ -326,7 +328,7 @@ test('adopting an atomically created conversation updates routing state without 
   assert.equal(store.activeConversationId, 'created');
   assert.equal(store.answerConversationId, 'created');
   assert.equal(store.viewRevision, before);
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['created']);
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), ['created']);
 });
 
 test('background refresh preserves visible history on transient failure', async () => {
@@ -343,7 +345,7 @@ test('background refresh preserves visible history on transient failure', async 
 
   assert.equal(await store.refreshActive(), 'error');
   assert.equal(store.viewState, 'ready');
-  assert.equal(store.history?.conversation.conversation_id, 'one');
+  assert.equal(store.history?.conversation.conversationId, 'one');
   assert.equal(store.viewRevision, before);
 });
 
@@ -361,7 +363,7 @@ test('rename updates and reorders an already loaded summary', async () => {
   await store.loadList();
 
   assert.equal(await store.rename('one', 'renamed'), 'ok');
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['one', 'two']);
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), ['one', 'two']);
   assert.equal(store.conversations[0]?.title, 'renamed');
 });
 
@@ -373,7 +375,7 @@ test('rename validation errors do not masquerade as missing conversations', asyn
   await store.loadList();
 
   assert.equal(await store.rename('one', ''), 'error');
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['one']);
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), ['one']);
 });
 
 test('an aborted mutation settles pending state without applying local changes', async () => {
@@ -399,7 +401,7 @@ test('an aborted mutation settles pending state without applying local changes',
   assert.equal(await deletion, 'error');
   assert.equal(receivedSignal, controller.signal);
   assert.equal(store.mutationPending, false);
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['one']);
+  assert.deepEqual(store.conversations.map((item) => item.conversationId), ['one']);
 });
 
 test('delete mutates the server before removing the local summary', async () => {

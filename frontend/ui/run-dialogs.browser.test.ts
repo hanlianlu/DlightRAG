@@ -5,12 +5,12 @@ import './run-dialogs.ts';
 import type {ChildRosterEntry, DlChildrenRoster} from './run-dialogs.ts';
 
 function entry(id: string, status = 'succeeded'): ChildRosterEntry {
-  return {child_session_id: id, status, objective: `objective ${id}`};
+  return {childSessionId: id, status, objective: `objective ${id}`};
 }
 
 function deferredPage() {
-  let resolve!: (page: {children: ChildRosterEntry[]; next_cursor: string | null}) => void;
-  const promise = new Promise<{children: ChildRosterEntry[]; next_cursor: string | null}>(
+  let resolve!: (page: {children: ChildRosterEntry[]; nextCursor: string | null}) => void;
+  const promise = new Promise<{children: ChildRosterEntry[]; nextCursor: string | null}>(
     (done) => { resolve = done; },
   );
   return {promise, resolve};
@@ -52,7 +52,7 @@ it('paged roster renders the newest page and appends older pages with dedup', as
     async () => [entry('newest')],
     async (cursor) => {
       if (cursor === null) {
-        return {children: [entry('newest')], next_cursor: 'older-1'};
+        return {children: [entry('newest')], nextCursor: 'older-1'};
       }
       expect(cursor).to.equal('older-1');
       olderRequests += 1;
@@ -73,7 +73,7 @@ it('paged roster renders the newest page and appends older pages with dedup', as
 
   older.resolve({
     children: [entry('newest'), entry('older')],
-    next_cursor: null,
+    nextCursor: null,
   });
   await flight;
   await panel.updateComplete;
@@ -93,12 +93,12 @@ it('older-page failure keeps loaded rows and stays retryable', async () => {
     async () => [entry('newest')],
     async (cursor) => {
       if (cursor === null) {
-        return {children: [entry('newest')], next_cursor: 'older-1'};
+        return {children: [entry('newest')], nextCursor: 'older-1'};
       }
       expect(cursor).to.equal('older-1');
       attempts += 1;
       if (attempts === 1) throw new Error('unavailable');
-      return {children: [entry('older')], next_cursor: null};
+      return {children: [entry('older')], nextCursor: null};
     },
   );
   await waitFor(() => panel.querySelectorAll('li[role="listitem"]').length === 1);
@@ -124,7 +124,7 @@ it('refresh resets the traversal and rejects a late older response', async () =>
     async (cursor) => {
       if (cursor === null) {
         firstPage += 1;
-        return {children: [entry('fresh')], next_cursor: 'older-1'};
+        return {children: [entry('fresh')], nextCursor: 'older-1'};
       }
       return older.promise;
     },
@@ -134,7 +134,7 @@ it('refresh resets the traversal and rejects a late older response', async () =>
   const flight = panel.loadOlderChildren();
   await panel.refresh();
   await waitFor(() => firstPage === 2);
-  older.resolve({children: [entry('stale')], next_cursor: null});
+  older.resolve({children: [entry('stale')], nextCursor: null});
   await flight;
   await panel.updateComplete;
 
@@ -151,7 +151,7 @@ it('closing the dialog aborts in-flight pages and resets paging state', async ()
   panel.open(
     async () => [entry('newest')],
     async (cursor) => (cursor === null
-      ? {children: [entry('newest')], next_cursor: 'older-1'}
+      ? {children: [entry('newest')], nextCursor: 'older-1'}
       : older.promise),
   );
   await waitFor(() => panel.querySelectorAll('li[role="listitem"]').length === 1);
@@ -161,7 +161,7 @@ it('closing the dialog aborts in-flight pages and resets paging state', async ()
   dialog.close();
   // The native close event is a queued task; wait until the reset is visible.
   await waitFor(() => panel.querySelectorAll('li[role="listitem"]').length === 0);
-  older.resolve({children: [entry('stale')], next_cursor: null});
+  older.resolve({children: [entry('stale')], nextCursor: null});
   await flight;
   await panel.updateComplete;
 

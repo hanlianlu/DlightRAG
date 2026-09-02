@@ -67,7 +67,7 @@ export interface ChatContentChangeDetail {
 
 export interface ChatMemoryOperationDetail {
   body?: string;
-  change_id?: string | null;
+  changeId?: string | null;
   intent_id?: string;
   live?: boolean;
   operation?: 'remember' | 'forget' | 'undo';
@@ -218,9 +218,9 @@ export class DlChatFeature extends LightElement {
       if (controller.signal.aborted || this.#continuationController !== controller) return;
       conversationStore.upsertSummary(descriptor.conversation);
       if (kind === 'fork') {
-        await webRouter.navigate(conversationRoute(descriptor.conversation.conversation_id));
+        await webRouter.navigate(conversationRoute(descriptor.conversation.conversationId));
       } else {
-        await conversationStore.open(descriptor.conversation.conversation_id, {
+        await conversationStore.open(descriptor.conversation.conversationId, {
           showLoading: false,
           preserveOnError: true,
         });
@@ -379,14 +379,14 @@ export class DlChatFeature extends LightElement {
     if (['accepted', 'handedOff', 'edited', 'discarded'].includes(snapshot.status)) return null;
     const {intent, lease} = actor.getSnapshot().context;
     const attachments: ConversationAttachmentReference[] = lease.items.map((item, index) => ({
-      attachment_id: item.id,
+      attachmentId: item.id,
       ordinal: index + 1,
       kind: item.kind,
       filename: item.file.name,
-      mime_type: item.file.type,
-      byte_size: item.file.size,
+      mimeType: item.file.type,
+      byteSize: item.file.size,
       url: item.objectUrl,
-      thumbnail_url: item.objectUrl,
+      thumbnailUrl: item.objectUrl,
       label: item.file.name,
     }));
     const turn = optimisticTurn(intent.submissionId, intent.query, attachments);
@@ -474,14 +474,14 @@ export class DlChatFeature extends LightElement {
     const conversationId = conversationStore.answerConversationId;
     const lease = attachmentStore.leaseAll();
     const liveAttachmentRefs: ConversationAttachmentReference[] = lease.items.map((item, index) => ({
-      attachment_id: item.id,
+      attachmentId: item.id,
       ordinal: index + 1,
       kind: item.kind,
       filename: item.file.name,
-      mime_type: item.file.type,
-      byte_size: item.file.size,
+      mimeType: item.file.type,
+      byteSize: item.file.size,
       url: item.objectUrl,
-      thumbnail_url: item.objectUrl,
+      thumbnailUrl: item.objectUrl,
       label: item.file.name,
     }));
     const submissionId = crypto.randomUUID();
@@ -535,7 +535,7 @@ export class DlChatFeature extends LightElement {
       return;
     }
     const accepted = snapshot.accepted;
-    const acceptedConversationId = accepted.conversation.conversation_id;
+    const acceptedConversationId = accepted.conversation.conversationId;
     if (expectedConversationId && acceptedConversationId !== expectedConversationId) {
       this.#setTurnError(turnId, msg('The answer was accepted for an unexpected conversation.', {
         id: 'chatFeature.unexpectedConversation',
@@ -558,11 +558,11 @@ export class DlChatFeature extends LightElement {
       conversationStore.upsertSummary(accepted.conversation);
     }
     const stored = accepted.turn;
-    answerEventCursorStore.trackRun(acceptedConversationId, stored.answer_run_id);
+    answerEventCursorStore.trackRun(acceptedConversationId, stored.answerRunId);
     this.#replaceStoredTurn(turnId, stored);
     const following = this.#runController.beginFollow(
-      stored.answer_run_id,
-      stored.cancel_requested,
+      stored.answerRunId,
+      stored.cancelRequested,
     );
     actor.send({type: 'HANDOFF'});
     if (!following) {
@@ -570,7 +570,7 @@ export class DlChatFeature extends LightElement {
       return;
     }
     this.#runStateChanged();
-    await this.#followTurn(turnId, acceptedConversationId, stored.answer_run_id);
+    await this.#followTurn(turnId, acceptedConversationId, stored.answerRunId);
   }
 
   #retrySubmission = (): void => {
@@ -611,12 +611,12 @@ export class DlChatFeature extends LightElement {
 
   async #resumeStoredTurn(conversationId: string, stored: ConversationTurn): Promise<void> {
     if (this.#runController.active) return;
-    answerEventCursorStore.trackRun(conversationId, stored.answer_run_id);
-    if (!this.#runController.beginFollow(stored.answer_run_id, stored.cancel_requested)) return;
+    answerEventCursorStore.trackRun(conversationId, stored.answerRunId);
+    if (!this.#runController.beginFollow(stored.answerRunId, stored.cancelRequested)) return;
     await this.#followTurn(
-      stored.turn_id || stored.answer_run_id,
+      stored.turnId || stored.answerRunId,
       conversationId,
-      stored.answer_run_id,
+      stored.answerRunId,
     );
   }
 
@@ -641,7 +641,7 @@ export class DlChatFeature extends LightElement {
       if (result.stored) this.#replaceStoredTurn(turnId, result.stored);
       finished = true;
     } else if (result.kind === 'retryable') {
-      const cancelRequested = result.stored.cancel_requested;
+      const cancelRequested = result.stored.cancelRequested;
       const reconnectState = answerReconnectState(cancelRequested);
       this.#setTurn(turnId, {
         state: 'retryable',

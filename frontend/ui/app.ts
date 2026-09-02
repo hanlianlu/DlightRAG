@@ -52,20 +52,22 @@ import './toast.ts';
 import './workspace-scope.ts';
 
 const EMPTY_BOOTSTRAP: WebBootstrap = {
-  contract_version: 1,
+  contractVersion: 1,
   workspaces: [],
-  primary_workspace: '',
-  active_workspaces: [],
-  answer_attachments: {
-    count_limit: 0,
-    image_max_bytes: 0,
-    document_max_bytes: 0,
+  primaryWorkspace: '',
+  activeWorkspaces: [],
+  workspacesNextCursor: null,
+  knownWorkspaces: null,
+  answerAttachments: {
+    countLimit: 0,
+    imageMaxBytes: 0,
+    documentMaxBytes: 0,
     extensions: [],
-    image_capability: 'unknown',
-    image_limit: 0,
+    imageCapability: 'unknown',
+    imageLimit: 0,
     accept: '',
   },
-  active_html_preview_enabled: true,
+  activeHtmlPreviewEnabled: true,
 };
 
 /** Authenticated bootstrap, top-level capabilities, and Feature composition only. */
@@ -168,14 +170,14 @@ export class DlApp extends LightElement {
       workspaceStore.init(
         bootstrap.workspaces.map((workspace) => ({
           workspace: workspace.workspace,
-          displayName: workspace.display_name,
-          embeddingModel: workspace.embedding_model,
+          displayName: workspace.displayName,
+          embeddingModel: workspace.embeddingModel,
         })),
-        bootstrap.active_workspaces,
-        bootstrap.primary_workspace,
+        bootstrap.activeWorkspaces,
+        bootstrap.primaryWorkspace,
         (cursor, signal) => getWorkspacesPage(cursor, signal),
-        bootstrap.workspaces_next_cursor ?? null,
-        bootstrap.known_workspaces ?? null,
+        bootstrap.workspacesNextCursor ?? null,
+        bootstrap.knownWorkspaces ?? null,
       );
       this.bootState = 'ready';
       await this.updateComplete;
@@ -193,7 +195,7 @@ export class DlApp extends LightElement {
 
   protected override render(): TemplateResult {
     const bootstrap = this.#bootstrap;
-    const attachments = bootstrap.answer_attachments;
+    const attachments = bootstrap.answerAttachments;
     const ready = this.bootState === 'ready';
     const chatFeature = this.querySelector<DlChatFeature>('dl-chat-feature');
     const conversationModal = this.conversationExpanded && this.conversationCompact;
@@ -255,7 +257,7 @@ export class DlApp extends LightElement {
             </div>
             <dl-artifact-canvas id="artifact-canvas" class="panel" slot="end"
               aria-label=${msg('Artifact canvas', {id: 'app.artifactCanvasLabel'})} aria-hidden="true"
-              .activePreviewEnabled=${bootstrap.active_html_preview_enabled}
+              .activePreviewEnabled=${bootstrap.activeHtmlPreviewEnabled}
             ></dl-artifact-canvas>
           </dl-split-layout>
           <dl-inspector id="inspector" slot="end"
@@ -453,14 +455,14 @@ export class DlApp extends LightElement {
   }
 
   #attachmentPolicy(): AttachmentPolicy {
-    const attachments = this.#bootstrap.answer_attachments;
+    const attachments = this.#bootstrap.answerAttachments;
     return {
-      countLimit: attachments.count_limit,
-      imageMaxBytes: attachments.image_max_bytes,
-      documentMaxBytes: attachments.document_max_bytes,
+      countLimit: attachments.countLimit,
+      imageMaxBytes: attachments.imageMaxBytes,
+      documentMaxBytes: attachments.documentMaxBytes,
       extensions: new Set(attachments.extensions),
-      imageCapability: attachments.image_capability,
-      imageLimit: attachments.image_limit,
+      imageCapability: attachments.imageCapability,
+      imageLimit: attachments.imageLimit,
     };
   }
 

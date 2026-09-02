@@ -23,21 +23,21 @@ function desktopMedia(query: string): MediaQueryList {
 
 function htmlArtifact(): AnswerArtifact {
   return {
-    resource_id: 'artifact-html',
+    resourceId: 'artifact-html',
     role: 'primary_report',
-    media_type: 'text/html',
+    mediaType: 'text/html',
     label: 'Interactive report',
     filename: 'report.html',
-    byte_size: 42,
+    byteSize: 42,
     digest: 'a'.repeat(64),
     presentation: 'html',
     status: 'available',
     uri: 'dlightrag://answer/run-1/artifacts/artifact-html',
     width: null,
     height: null,
-    data_url: '/web/api/answer/run-1/artifacts/artifact-html',
-    download_url: '/web/api/answer/run-1/artifacts/artifact-html?download=1',
-    presentation_url: '/web/api/answer/run-1/artifacts/artifact-html/presentation',
+    dataUrl: '/web/api/answer/run-1/artifacts/artifact-html',
+    downloadUrl: '/web/api/answer/run-1/artifacts/artifact-html?download=1',
+    presentationUrl: '/web/api/answer/run-1/artifacts/artifact-html/presentation',
     issue: null,
   };
 }
@@ -47,29 +47,29 @@ function artifact(id: string, label: string, presentation: 'markdown' | 'html'):
   const mediaType = presentation === 'markdown' ? 'text/markdown' : 'text/html';
   return {
     ...htmlArtifact(),
-    resource_id: id,
-    media_type: mediaType,
+    resourceId: id,
+    mediaType: mediaType,
     label,
     filename: `${id}.${extension}`,
     presentation,
     uri: `dlightrag://answer/run-1/artifacts/${id}`,
-    data_url: `/web/api/answer/run-1/artifacts/${id}`,
-    download_url: `/web/api/answer/run-1/artifacts/${id}?download=1`,
-    presentation_url: `/web/api/answer/run-1/artifacts/${id}/presentation`,
+    dataUrl: `/web/api/answer/run-1/artifacts/${id}`,
+    downloadUrl: `/web/api/answer/run-1/artifacts/${id}?download=1`,
+    presentationUrl: `/web/api/answer/run-1/artifacts/${id}/presentation`,
   };
 }
 
 function markdownPresentation(text: string): AnswerPresentation {
   return {
-    answer_text: text,
+    answerText: text,
     parts: [{
       type: 'markdown', text, html: `<p>${text}</p>`, artifact: null,
-      evidence_image: null, inline: false,
+      evidenceImage: null, inline: false,
     }],
     sources: [],
-    evidence_images: [],
+    evidenceImages: [],
     artifacts: [],
-    artifact_outcome: {status: 'complete', issues: []},
+    artifactOutcome: {status: 'complete', issues: []},
   };
 }
 
@@ -252,7 +252,7 @@ it('does not restore stale focus when close is immediately followed by reopen', 
   artifact.issue = {
     kind: 'missing_file',
     description: 'Referenced Artifact is missing.',
-    resource_id: artifact.resource_id,
+    resourceId: artifact.resourceId,
   };
   const firstTrigger = document.createElement('button');
   const secondTrigger = document.createElement('button');
@@ -318,7 +318,7 @@ it('an unavailable Artifact renders a persistent safe issue without fetching', a
   artifact.issue = {
     kind: 'missing_file',
     description: 'Referenced Artifact is missing.',
-    resource_id: artifact.resource_id,
+    resourceId: artifact.resourceId,
   };
   const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
   document.body.appendChild(canvas);
