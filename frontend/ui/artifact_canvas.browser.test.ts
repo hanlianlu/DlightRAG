@@ -194,7 +194,7 @@ it('requires explicit user intent before creating the active iframe', async () =
   expect(frame).not.to.equal(null);
   expect(frame?.active).to.equal(true);
 
-  frame?.dispatchEvent(new CustomEvent('artifact-frame-escape', {bubbles: true, composed: true}));
+  frame?.dispatchEvent(new CustomEvent('dl-artifact-frame-escape', {bubbles: true, composed: true}));
   await canvas.updateComplete;
   await new Promise((resolve) => requestAnimationFrame(resolve));
   expect(canvas.classList.contains('open')).to.equal(false);

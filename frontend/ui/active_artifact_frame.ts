@@ -129,7 +129,7 @@ export class DlActiveArtifactFrame extends LitElement {
       !iframe || event.source !== iframe.contentWindow || !payload
       || payload.type !== ESCAPE_MESSAGE || payload.token !== this.#escapeToken
     ) return;
-    this.dispatchEvent(new CustomEvent('artifact-frame-escape', {
+    this.dispatchEvent(new CustomEvent('dl-artifact-frame-escape', {
       bubbles: true,
       composed: true,
     }));
@@ -141,5 +141,9 @@ customElements.define('dl-active-artifact-frame', DlActiveArtifactFrame);
 declare global {
   interface HTMLElementTagNameMap {
     'dl-active-artifact-frame': DlActiveArtifactFrame;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-artifact-frame-escape': CustomEvent<void>;
   }
 }

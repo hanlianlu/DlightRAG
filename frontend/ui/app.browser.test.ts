@@ -409,7 +409,7 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
   const canvasPresentation = canvas.querySelector<AnswerPresentationElement>(
     'dl-answer-presentation',
   )!;
-  canvasPresentation.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('answer-source-open', {
+  canvasPresentation.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('dl-answer-source-open', {
     bubbles: true,
     composed: true,
     detail: {presentation, referenceId: '1', returnFocus: canvasPresentation},
@@ -467,7 +467,7 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
   )!;
   canvasPresentation.tabIndex = 0;
   canvasPresentation.focus();
-  canvasPresentation.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('answer-source-open', {
+  canvasPresentation.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('dl-answer-source-open', {
     bubbles: true,
     composed: true,
     detail: {presentation, referenceId: '1', returnFocus: canvasPresentation},

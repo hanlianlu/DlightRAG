@@ -7,7 +7,7 @@ import {
   acceptsAttachmentUpload,
   attachmentsEnabled,
   classifyAttachmentFile,
-} from '../ui/attachment_policy.ts';
+} from './attachment_policy.ts';
 
 function file(name: string, type: string, size: number): File {
   return {name, type, size} as File;

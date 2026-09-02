@@ -268,7 +268,7 @@ export class DlArtifactCanvas extends LightElement {
         .source=${this.textPreview}
         .active=${true}
         .label=${this.artifact?.label || msg('HTML Artifact', {id: 'artifactCanvas.htmlFallbackLabel'})}
-        @artifact-frame-escape=${() => this.close()}
+        @dl-artifact-frame-escape=${() => this.close()}
       ></dl-active-artifact-frame>
       ${this.#htmlSource(msg('Source', {id: 'artifactCanvas.source'}))}
     `;

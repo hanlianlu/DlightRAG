@@ -8,7 +8,7 @@ import {icon} from '../design-system/index.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
 import {LightElement} from '../lib/lit_host.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
-import type {AttachmentPolicy} from './attachment_policy.ts';
+import type {AttachmentPolicy} from '../lib/attachment_policy.ts';
 import type {
   ArtifactCanvasStateDetail,
   DlArtifactCanvas,
@@ -203,8 +203,8 @@ export class DlApp extends LightElement {
     const shellModal = blockingShellModal || panelInteractionLocked;
     return html`
       <div class="app${this.hasMessages ? ' has-messages' : ''}" id="app"
-        @artifact-open=${this.#openArtifact}
-        @answer-source-open=${this.#openAnswerSource}
+        @dl-artifact-open=${this.#openArtifact}
+        @dl-answer-source-open=${this.#openAnswerSource}
         @dl-image-open=${this.#openImage}
         @dl-chat-view-action=${this.#chatViewAction}
         @dl-chat-memory-operation=${this.#memoryOperation}
@@ -254,7 +254,7 @@ export class DlApp extends LightElement {
               </div>
             </div>
             <dl-artifact-canvas id="artifact-canvas" class="panel" slot="end"
-              aria-label="Artifact Canvas" aria-hidden="true"
+              aria-label=${msg('Artifact canvas', {id: 'app.artifactCanvasLabel'})} aria-hidden="true"
               .activePreviewEnabled=${bootstrap.active_html_preview_enabled}
             ></dl-artifact-canvas>
           </dl-split-layout>
@@ -266,7 +266,7 @@ export class DlApp extends LightElement {
           aria-atomic="true"
           .shellInert=${shellModal || this.lightboxOpen}></dl-toast-region>
         <dl-notification-offer class="notify-offer" id="notify-offer" role="group"
-          aria-label="Answer notifications" .running=${this.chatRunning}
+          aria-label=${msg('Answer notifications', {id: 'app.answerNotificationsLabel'})} .running=${this.chatRunning}
           ?inert=${shellModal}></dl-notification-offer>
         <dl-settings-dialog
           .deleteAllConversations=${this.#requestDeleteAllConversations}
@@ -339,7 +339,12 @@ export class DlApp extends LightElement {
     if (!inspector?.open) return;
     if (inspector.hasActiveFileMutation) {
       event.preventDefault();
-      this.#toast()?.show('Wait for the file change to finish before opening conversations.', 3000);
+      this.#toast()?.show(
+        msg('Wait for the file change to finish before opening conversations.', {
+          id: 'app.waitForFileChange',
+        }),
+        3000,
+      );
       return;
     }
     inspector.close();

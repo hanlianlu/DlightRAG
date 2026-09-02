@@ -57,6 +57,9 @@ export const templates: Record<
   // App shell
   'app.searchIn': '搜索范围：',
   'app.files': '文件',
+  'app.artifactCanvasLabel': '工件画布',
+  'app.answerNotificationsLabel': '回答通知',
+  'app.waitForFileChange': '请等待文件变更完成后再打开会话。',
 
   // Chat feature
   'chatFeature.continuationFailed': '后续对话无法开始。',
@@ -216,6 +219,11 @@ export const templates: Record<
   'runDialogs.forkNote': '基于相同上下文开启新会话。先前的回答不会带入。',
   'runDialogs.followUpNote': '提出追问；先前的回答会作为上下文。',
   'runDialogs.askPlaceholder': '输入问题…',
+  'runDialogs.questionLabel': '你的问题',
+  'runDialogs.childStatus.running': '运行中',
+  'runDialogs.childStatus.succeeded': '已完成',
+  'runDialogs.childStatus.failed': '已失败',
+  'runDialogs.childStatus.cancelled': '已取消',
   'runDialogs.cancel': '取消',
   'runDialogs.continue': '继续',
   'runDialogs.loadingOlderChildren': '正在加载更早的子任务…',

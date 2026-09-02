@@ -15,16 +15,17 @@ export interface ContinuationResult {
 }
 
 export class DlContinuationDialog extends LightElement {
-  kind: ContinuationKind = 'follow-up';
+  static override properties = {kind: {state: true}};
+  declare kind: ContinuationKind;
 
   constructor() {
     super();
+    this.kind = 'follow-up';
     updateWhenLocaleChanges(this);
   }
 
   open(kind: ContinuationKind): void {
     this.kind = kind;
-    this.requestUpdate();
     void this.updateComplete.then(() => {
       const dialog = this.#dialog();
       if (!dialog) return;
@@ -64,6 +65,7 @@ export class DlContinuationDialog extends LightElement {
           <h2 id="dl-continuation-title">${title}</h2>
           <p>${note}</p>
           <textarea class="dl-dialog-input" rows="3"
+                    aria-label=${msg('Your question', {id: 'runDialogs.questionLabel'})}
                     placeholder=${msg('Ask a question…', {id: 'runDialogs.askPlaceholder'})}></textarea>
           <div class="dl-dialog-actions">
             <button type="submit" value="cancel">${msg('Cancel', {id: 'runDialogs.cancel'})}</button>
@@ -103,10 +105,12 @@ export type ChildRosterPageFetcher = (
 ) => Promise<{children: ChildRosterEntry[]; next_cursor: string | null}>;
 
 export class DlChildrenRoster extends LightElement {
-  fetcher: (() => Promise<ChildRosterEntry[]>) | null = null;
+  static override properties = {fetcher: {state: true}};
+  declare fetcher: (() => Promise<ChildRosterEntry[]>) | null;
 
   constructor() {
     super();
+    this.fetcher = null;
     updateWhenLocaleChanges(this);
   }
 
@@ -261,6 +265,16 @@ export class DlChildrenRoster extends LightElement {
     this.requestUpdate();
   }
 
+  #statusLabel(status: string): string {
+    const labels: Record<string, string> = {
+      running: msg('running', {id: 'runDialogs.childStatus.running'}),
+      succeeded: msg('succeeded', {id: 'runDialogs.childStatus.succeeded'}),
+      failed: msg('failed', {id: 'runDialogs.childStatus.failed'}),
+      cancelled: msg('cancelled', {id: 'runDialogs.childStatus.cancelled'}),
+    };
+    return labels[status] ?? status;
+  }
+
   override render() {
     const entries = this.#entries;
     const showEmpty = !this.#failed && this.#empty;
@@ -277,7 +291,7 @@ export class DlChildrenRoster extends LightElement {
               <li>${msg('No child agents were started.', {id: 'runDialogs.noChildAgents'})}</li>
             ` : entries.map((child) => html`
               <li role="listitem">
-                ${child.status}: ${child.objective || child.child_session_id || ''}
+                ${this.#statusLabel(child.status)}: ${child.objective || child.child_session_id || ''}
               </li>
             `)}
           </ul>
@@ -313,7 +327,5 @@ declare global {
   }
 }
 
-// Explicit registration: decorator emission is not stable across shared
-// chunk builds, and a registered-by-import element is a hard requirement.
 customElements.define('dl-continuation-dialog', DlContinuationDialog);
 customElements.define('dl-children-roster', DlChildrenRoster);

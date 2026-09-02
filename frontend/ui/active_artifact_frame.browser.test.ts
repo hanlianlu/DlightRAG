@@ -58,7 +58,7 @@ it('captures its private Escape signal before hostile Artifact listeners', async
     'parent.postMessage("dl-test-escape-ready","*")</script>';
   let escapes = 0;
   const escaped = new Promise<void>((resolve) => {
-    frame.addEventListener('artifact-frame-escape', () => {
+    frame.addEventListener('dl-artifact-frame-escape', () => {
       escapes += 1;
       resolve();
     });

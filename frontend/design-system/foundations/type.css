@@ -5,6 +5,10 @@
 /* Semantic typography and line-height foundations. */
 
 :root {
+  /* Single source of truth for the app body font; mermaid diagrams read this
+     token because isolated SVG output cannot inherit page CSS. */
+  --font-body: -apple-system, blinkmacsystemfont, 'Segoe UI', roboto,
+    'Helvetica Neue', sans-serif;
   --font-size-caption: var(--step--2);
   --font-size-detail: var(--step--1);
   --font-size-body: var(--step-0);

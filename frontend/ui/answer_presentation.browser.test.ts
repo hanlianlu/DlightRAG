@@ -56,7 +56,7 @@ it('sanitizes rich answer HTML while Lit escapes structured references', async (
 
   let referenceId = '';
   let eventPresentation: AnswerPresentation | null = null;
-  element.addEventListener('answer-source-open', (event) => {
+  element.addEventListener('dl-answer-source-open', (event) => {
     const detail = (event as CustomEvent).detail;
     referenceId = detail.referenceId;
     eventPresentation = detail.presentation;
@@ -134,7 +134,7 @@ it('renders Artifact intent and semantic Visual Evidence in approved order', asy
 
   let opened = '';
   let imageSource = '';
-  element.addEventListener('artifact-open', (event) => {
+  element.addEventListener('dl-artifact-open', (event) => {
     opened = (event as CustomEvent).detail.artifact.resource_id;
   });
   element.addEventListener('dl-image-open', (event) => {

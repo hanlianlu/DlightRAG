@@ -143,6 +143,28 @@ _Avoid_: snapshot, max_turns, trim window, retention window
 One workspace-bound signed keyset page of processed files in durable server order. It bounds presentation/read work, not inventory or retention.
 _Avoid_: full file snapshot, OFFSET page, workspace catalog scan, retention window
 
+## Web Conversation Streaming
+
+**Event Cursor**:
+The client's consumed position in one Answer Run's event stream, carried across reconnects. It bounds replay, not retention, and never outlives its run.
+_Avoid_: Conversation History Page, offset, bookmark, retention marker
+
+**Attachment Lease**:
+The exactly-once settlement of a locally attached file's ownership when a submission is handed to an Answer Run: accept keeps it with the stored turn, restore returns it to the composer, discard releases it. A lease is never shared between submissions.
+_Avoid_: upload, blob registry, attachment copy
+
+**Optimistic Turn**:
+The local turn a Web Conversation shows while a submission handshake is in flight. It is swapped for the stored turn on acceptance and dropped on failure.
+_Avoid_: placeholder message, fake reply, client-side Answer Run
+
+**Turn Projection**:
+The browser-side fold of one Answer Run's event stream into a presentable turn view. Replaying the same events yields the same view.
+_Avoid_: answer parser, incremental rendering state, second transcript
+
+**Wire Format**:
+The snake_case field spelling of REST and SSE payloads at the transport boundary. It is translated exactly once at the consuming edge and never appears beyond it.
+_Avoid_: DTO leak, dual naming convention, camelCase server contract
+
 ## Session Entries And Effects
 
 **Session Entry**:

@@ -654,6 +654,10 @@
     "$type": "string",
     "$value": "0 0 0 3px var(--color-control-ring-soft)"
   },
+  "font-body": {
+    "$type": "fontFamily",
+    "$value": "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,\n    'Helvetica Neue', sans-serif"
+  },
   "font-size-body": {
     "$type": "dimension",
     "$value": "{step-0}"

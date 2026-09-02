@@ -163,7 +163,7 @@
 }
 
 .toolRowFailed {
-  color: var(--color-text-danger, #d9534f);
+  color: var(--color-danger);
 }
 
 .toolState {

@@ -10,10 +10,14 @@ import {sanitizeSvg} from '../lib/safe_html.ts';
 
 const MERMAID_SELECTOR = 'pre.mermaid-source';
 const MAX_CACHE = 60;
-// Match the app body font (frontend/styles/global.css) so isolated diagrams,
-// which cannot inherit page CSS, stay visually consistent with the answer text.
-const FONT_STACK =
-  '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
+
+// Isolated diagrams cannot inherit page CSS, so the font is read from the
+// --font-body token (design-system/foundations/type.css) — the same source the
+// body uses — keeping diagrams visually consistent with the answer text.
+function bodyFontStack(): string {
+  const token = getComputedStyle(document.documentElement).getPropertyValue('--font-body');
+  return token.trim() || 'sans-serif';
+}
 
 // Identical source -> identical SVG, so the done-event re-render and history
 // restore reuse the result instead of re-parsing.
@@ -25,7 +29,7 @@ async function loadMermaid() {
     startOnLoad: false,
     securityLevel: 'strict', // strips scripts/handlers and disables click binding
     theme: document.documentElement.dataset.colorMode === 'dark' ? 'dark' : 'default',
-    fontFamily: FONT_STACK,
+    fontFamily: bodyFontStack(),
     flowchart: {htmlLabels: false}, // SVG-native <text> labels, no <foreignObject>
   });
   return mermaid;

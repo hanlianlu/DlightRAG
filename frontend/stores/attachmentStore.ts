@@ -5,7 +5,7 @@
 // object URL; dl-chat-composer renders and submits the files in this order.
 // URL/id factories are injected so ordering and lifecycle can be unit-tested.
 
-import type {AttachmentKind} from '../ui/attachment_policy.ts';
+import type {AttachmentKind} from '../lib/attachment_policy.ts';
 
 export type PendingAttachmentKind = Extract<AttachmentKind, 'image' | 'document'>;
 

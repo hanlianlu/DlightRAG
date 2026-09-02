@@ -501,7 +501,7 @@ body.files-panel-open #files-btn {
 
 .skill-notice {
     padding: 0.4rem var(--space-inline) 0;
-    color: var(--color-text-danger, #d9534f);
+    color: var(--color-danger);
     font-size: 0.75rem;
 }
 

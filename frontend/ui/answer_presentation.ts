@@ -212,7 +212,7 @@ export class AnswerPresentationElement extends LightElement {
     if (source && this.contains(source) && presentation) {
       event.preventDefault();
       event.stopPropagation();
-      this.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('answer-source-open', {
+      this.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('dl-answer-source-open', {
         bubbles: true,
         composed: true,
         detail: {
@@ -265,7 +265,7 @@ export class AnswerPresentationElement extends LightElement {
   };
 
   #openArtifact(artifact: AnswerArtifact, returnFocus: HTMLElement): void {
-    this.dispatchEvent(new CustomEvent<ArtifactOpenDetail>('artifact-open', {
+    this.dispatchEvent(new CustomEvent<ArtifactOpenDetail>('dl-artifact-open', {
       bubbles: true,
       composed: true,
       detail: {artifact, returnFocus},
@@ -278,5 +278,10 @@ customElements.define('dl-answer-presentation', AnswerPresentationElement);
 declare global {
   interface HTMLElementTagNameMap {
     'dl-answer-presentation': AnswerPresentationElement;
+  }
+
+  interface HTMLElementEventMap {
+    'dl-answer-source-open': CustomEvent<AnswerSourceOpenDetail>;
+    'dl-artifact-open': CustomEvent<ArtifactOpenDetail>;
   }
 }

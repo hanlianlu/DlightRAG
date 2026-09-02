@@ -21,7 +21,7 @@ import {
   attachmentsEnabled,
   classifyAttachmentFile,
   type AttachmentPolicy,
-} from './attachment_policy.ts';
+} from '../lib/attachment_policy.ts';
 import {detectDropItems, type RelativeFile} from './folder-upload.ts';
 
 const STORAGE_KEY = 'dlightrag.answerMode';

@@ -30,7 +30,7 @@ import {
 } from '../stores/answerSubmissionMachine.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
-import type {AttachmentPolicy} from './attachment_policy.ts';
+import type {AttachmentPolicy} from '../lib/attachment_policy.ts';
 import type {
   AnswerMode,
   ComposerSteerDetail,

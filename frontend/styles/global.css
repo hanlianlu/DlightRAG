@@ -30,7 +30,7 @@ dl-answer-presentation { display: contents; }
 
 /* ── Body defaults ── */
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    font-family: var(--font-body);
     font-size: var(--font-size-body);
     background: var(--color-bg-base);
     color: var(--color-text-tertiary);
