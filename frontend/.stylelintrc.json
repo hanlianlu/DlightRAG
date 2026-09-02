@@ -2,6 +2,9 @@
   "extends": ["stylelint-config-standard"],
   "rules": {
     "selector-class-pattern": "^[a-z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*(?:--[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*)?$",
+    "value-keyword-case": {
+      "ignoreKeywords": ["BlinkMacSystemFont", "Roboto", "HelveticaNeue"]
+    },
     "declaration-property-value-disallowed-list": {
       "/^font-size$/": ["/^\\d+px/"],
       "/^(padding|margin|gap)$/": ["/^\\d+px/"],
