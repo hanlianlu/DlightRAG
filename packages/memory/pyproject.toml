@@ -4,7 +4,7 @@
 name = "dlightrag-memory"
 version = "2.0.1"
 description = "Reusable cross-conversation profile memory for DlightRAG"
-requires-python = ">=3.14.7,<3.15"
+requires-python = ">=3.14,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]

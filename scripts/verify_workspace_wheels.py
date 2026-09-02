@@ -601,8 +601,8 @@ def verify_workspace_definition(workspace_root: Path) -> None:
             raise ValueError(f"{relative_path}: unexpected project name")
         version = str(project.get("version") or "")
         versions.add(version)
-        if project.get("requires-python") != ">=3.14.7,<3.15":
-            raise ValueError(f"{distribution}: Python requirement must be >=3.14.7,<3.15")
+        if project.get("requires-python") != ">=3.14,<3.15":
+            raise ValueError(f"{distribution}: Python requirement must be >=3.14,<3.15")
         if project.get("license") != "Apache-2.0":
             raise ValueError(f"{distribution}: license must be Apache-2.0")
         if build_system.get("build-backend") != "hatchling.build":
@@ -638,7 +638,7 @@ def verify_workspace_definition(workspace_root: Path) -> None:
         lock_packages = lock["package"]
     except (KeyError, TypeError) as exc:
         raise ValueError("uv.lock is missing package records") from exc
-    if lock.get("requires-python") != ">=3.14.7, <3.15":
+    if lock.get("requires-python") != "==3.14.*":
         raise ValueError("uv.lock Python requirement differs from workspace manifests")
     if lock.get("manifest", {}).get("members") != list(_EXPECTED_PACKAGES):
         raise ValueError("uv.lock manifest members differ from the root-plus-Memory contract")
@@ -1205,7 +1205,7 @@ def smoke_installed(dist_dir: Path, *, config_path: Path) -> None:
             temp = Path(raw_temp)
             venv = temp / ".venv"
             _run_checked(
-                [uv_executable, "venv", "--python", "3.14.7", str(venv)],
+                [uv_executable, "venv", "--python", "3.14", str(venv)],
                 cwd=temp,
                 env=base_env,
             )
@@ -1233,7 +1233,7 @@ def smoke_installed(dist_dir: Path, *, config_path: Path) -> None:
         temp = Path(raw_temp)
         venv = temp / ".venv"
         _run_checked(
-            [uv_executable, "venv", "--python", "3.14.7", str(venv)],
+            [uv_executable, "venv", "--python", "3.14", str(venv)],
             cwd=temp,
             env=base_env,
         )
@@ -1306,7 +1306,7 @@ def _parse_args() -> argparse.Namespace:
     mode.add_argument(
         "--smoke-installed",
         action="store_true",
-        help="Install all wheels into isolated Python 3.14.7 environments and run interface smokes",
+        help="Install all wheels into isolated Python 3.14 environments and run interface smokes",
     )
     mode.add_argument(
         "--installed",
