@@ -3,7 +3,7 @@
 
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, type PropertyValues, type TemplateResult} from 'lit';
-import {LightElement} from '../lib/lit_host.ts';
+import {LightElement} from '../lib/lit-host.ts';
 
 const ASKED_STORAGE_KEY = 'dlightrag-notify-asked';
 

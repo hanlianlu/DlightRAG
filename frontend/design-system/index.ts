@@ -14,4 +14,4 @@ export {
   type SplitOrientation,
   type SplitPositionDetail,
   type SplitPrimary,
-} from './elements/split_layout.ts';
+} from './elements/split-layout.ts';

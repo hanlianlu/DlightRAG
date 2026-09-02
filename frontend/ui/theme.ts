@@ -10,7 +10,7 @@ import {
   THEME_STORAGE_KEY,
   type ThemePreference,
 } from '../lib/theme.ts';
-import {LightElement} from '../lib/lit_host.ts';
+import {LightElement} from '../lib/lit-host.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 

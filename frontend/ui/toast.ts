@@ -3,7 +3,7 @@
 
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
-import {LightElement} from '../lib/lit_host.ts';
+import {LightElement} from '../lib/lit-host.ts';
 
 const MAX_TOAST_DURATION = 3000;
 

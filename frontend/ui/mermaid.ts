@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {sanitizeSvg} from '../lib/safe_html.ts';
+import {sanitizeSvg} from '../lib/safe-html.ts';
 
 // Mermaid fences arrive as <pre class="mermaid-source">…escaped source…</pre>
 // (see src/dlightrag/adapters/http/browser/markdown.py). Mermaid itself is imported lazily on the

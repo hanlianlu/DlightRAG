@@ -16,9 +16,9 @@ import {
   type MemorySettings,
 } from '../api/memory.ts';
 import {icon} from '../design-system/index.ts';
-import {LightElement, StoreController} from '../lib/lit_host.ts';
-import {conversationStore} from '../stores/conversationStore.ts';
-import type {ChatMemoryOperationDetail} from './chat_feature.ts';
+import {LightElement, StoreController} from '../lib/lit-host.ts';
+import {conversationStore} from '../stores/conversation-store.ts';
+import type {ChatMemoryOperationDetail} from './chat-feature.ts';
 import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
 import type {ToastRequestDetail} from './toast.ts';
 

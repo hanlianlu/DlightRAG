@@ -4,15 +4,15 @@ import {expect} from '@esm-bundle/chai';
 import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
 import './app.ts';
 import type {DlApp} from './app.ts';
-import type {DlChatFeature} from './chat_feature.ts';
-import type {DlConversationSidebar} from './conversation_sidebar.ts';
-import type {ImageOpenDetail} from './image_lightbox.ts';
-import type {DlContinuationDialog} from './run_dialogs.ts';
+import type {DlChatFeature} from './chat-feature.ts';
+import type {DlConversationSidebar} from './conversation-sidebar.ts';
+import type {ImageOpenDetail} from './image-lightbox.ts';
+import type {DlContinuationDialog} from './run-dialogs.ts';
 import type {DlSettingsDialog} from './settings.ts';
 import type {
   AnswerPresentationElement,
   AnswerSourceOpenDetail,
-} from './answer_presentation.ts';
+} from './answer-presentation.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
 
 const bootstrap = {

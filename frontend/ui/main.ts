@@ -16,7 +16,7 @@ await initializeLanguagePreference();
 
 const appModule = await import('./app.ts');
 void appModule;
-const {initializeBrowserAdapters} = await import('./browser_adapters.ts');
+const {initializeBrowserAdapters} = await import('./browser-adapters.ts');
 
 // Dynamic imports can finish after DOMContentLoaded on a cold load. Start
 // immediately when parsing already completed, otherwise wait for it once.

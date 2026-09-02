@@ -6,21 +6,21 @@ import {getWebBootstrap, type WebBootstrap} from '../api/bootstrap.ts';
 import {getWorkspacesPage} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
-import {LightElement} from '../lib/lit_host.ts';
-import {workspaceStore} from '../stores/workspaceStore.ts';
-import type {AttachmentPolicy} from '../lib/attachment_policy.ts';
+import {LightElement} from '../lib/lit-host.ts';
+import {workspaceStore} from '../stores/workspace-store.ts';
+import type {AttachmentPolicy} from '../lib/attachment-policy.ts';
 import type {
   ArtifactCanvasStateDetail,
   DlArtifactCanvas,
-} from './artifact_canvas.ts';
-import './artifact_canvas.ts';
+} from './artifact-canvas.ts';
+import './artifact-canvas.ts';
 import type {
   ConversationSidebarStateDetail,
   DlConversationSidebar,
-} from './conversation_sidebar.ts';
-import './conversation_sidebar.ts';
-import type {AnswerSourceOpenDetail} from './answer_presentation.ts';
-import type {ComposerWorkspaceDropDetail} from './chat_composer.ts';
+} from './conversation-sidebar.ts';
+import './conversation-sidebar.ts';
+import type {AnswerSourceOpenDetail} from './answer-presentation.ts';
+import type {ComposerWorkspaceDropDetail} from './chat-composer.ts';
 import type {
   ChatContentChangeDetail,
   ChatMemoryOperationDetail,
@@ -28,28 +28,28 @@ import type {
   ChatRunningChangeDetail,
   ChatViewActionDetail,
   DlChatFeature,
-} from './chat_feature.ts';
-import './chat_feature.ts';
-import type {ImageOpenDetail} from './image_lightbox.ts';
-import type {DlImageLightbox} from './image_lightbox.ts';
-import './image_lightbox.ts';
+} from './chat-feature.ts';
+import './chat-feature.ts';
+import type {ImageOpenDetail} from './image-lightbox.ts';
+import type {DlImageLightbox} from './image-lightbox.ts';
+import './image-lightbox.ts';
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
 import './inspector.ts';
 import type {ModalStateDetail} from './modal.ts';
 import type {DlSettingsDialog} from './settings.ts';
 import './settings.ts';
-import {syncPanelSplitState} from './split_panel.ts';
+import {syncPanelSplitState} from './split-panel.ts';
 import type {
   ContinuationResult,
   DlChildrenRoster,
   DlContinuationDialog,
-} from './run_dialogs.ts';
-import './run_dialogs.ts';
+} from './run-dialogs.ts';
+import './run-dialogs.ts';
 import './notifications.ts';
 import './theme.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
 import './toast.ts';
-import './workspace_scope.ts';
+import './workspace-scope.ts';
 
 const EMPTY_BOOTSTRAP: WebBootstrap = {
   contract_version: 1,

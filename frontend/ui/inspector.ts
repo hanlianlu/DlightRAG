@@ -6,16 +6,16 @@ import type {AnswerPresentation} from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
-import {LightElement} from '../lib/lit_host.ts';
-import {ingestStore} from '../stores/ingestStore.ts';
-import type {DlInspectorFiles} from './inspector_files.ts';
-import './inspector_files.ts';
+import {LightElement} from '../lib/lit-host.ts';
+import {ingestStore} from '../stores/ingest-store.ts';
+import type {DlInspectorFiles} from './inspector-files.ts';
+import './inspector-files.ts';
 import type {
   DlInspectorSources,
   InspectorSourcesStateDetail,
-} from './inspector_sources.ts';
-import './inspector_sources.ts';
-import './ingest_target.ts';
+} from './inspector-sources.ts';
+import './inspector-sources.ts';
+import './ingest-target.ts';
 
 export type InspectorKind = 'files' | 'sources';
 

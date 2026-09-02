@@ -2,8 +2,8 @@
 
 import {expect} from '@esm-bundle/chai';
 import type {AnswerPresentation} from '../api/conversations.ts';
-import {ingestStore} from '../stores/ingestStore.ts';
-import {workspaceStore} from '../stores/workspaceStore.ts';
+import {ingestStore} from '../stores/ingest-store.ts';
+import {workspaceStore} from '../stores/workspace-store.ts';
 import './inspector.ts';
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
 
