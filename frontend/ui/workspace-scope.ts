@@ -5,7 +5,8 @@ import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {WorkspaceApiError, deleteWorkspaceRequest} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
-import type {WorkspaceRecord} from '../events/bus.ts';
+import type {WorkspaceRecord} from '../stores/workspace-store.ts';
+import {ingestStore} from '../stores/ingest-store.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
@@ -333,6 +334,7 @@ export class DlWorkspaceScope extends LightElement {
         || this.deleteWorkspace !== workspace
       ) return;
       workspaceStore.remove(deleted.workspace, deleted.nextWorkspace);
+      ingestStore.set(deleted.nextWorkspace || workspaceStore.primary);
       this.querySelector<HTMLDialogElement>('#delete-workspace-dialog')?.close();
       requestToast(this, {
         message: msg(str`Workspace ${workspace} deleted.`, {id: 'workspaceScope.deleted'}),

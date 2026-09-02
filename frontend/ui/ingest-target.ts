@@ -4,7 +4,7 @@ import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {icon} from '../design-system/index.ts';
-import type {WorkspaceRecord} from '../events/bus.ts';
+import type {WorkspaceRecord} from '../stores/workspace-store.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';

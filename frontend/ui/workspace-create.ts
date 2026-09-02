@@ -6,6 +6,7 @@ import {WorkspaceApiError, createWorkspaceRequest} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {workspaceStore} from '../stores/workspace-store.ts';
+import {ingestStore} from '../stores/ingest-store.ts';
 import {requestToast} from './toast-request.ts';
 import type {ToastRequestDetail} from './toast.ts';
 
@@ -56,6 +57,7 @@ export class DlWorkspaceCreate extends LightElement {
         displayName: created.displayName,
         embeddingModel: '',
       });
+      ingestStore.set(created.workspace);
       input.value = '';
       requestToast(this, {
         message: msg(str`Workspace ${created.displayName} created.`, {id: 'workspaceCreate.created'}),

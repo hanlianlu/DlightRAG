@@ -17,7 +17,6 @@ import {isAbortError} from '../lib/errors.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {ingestStore} from '../stores/ingest-store.ts';
 import {workspaceStore} from '../stores/workspace-store.ts';
-import {bus} from '../events/bus.ts';
 import {requestToast} from './toast-request.ts';
 import {modalResult} from './modal.ts';
 import {withRelativePath} from './folder-upload.ts';
@@ -84,19 +83,11 @@ export class DlInspectorFiles extends LightElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.#releaseWorkspaceEvents = [
-      bus.on('workspaceCreated', ({workspace}) => { ingestStore.set(workspace); }),
-      bus.on('workspaceDeleted', ({nextWorkspace}) => {
-        ingestStore.set(nextWorkspace || workspaceStore.primary);
-      }),
-    ];
     if (this.active) queueMicrotask(() => { void this.reload(); });
   }
 
   override disconnectedCallback(): void {
     this.pause();
-    for (const release of this.#releaseWorkspaceEvents) release();
-    this.#releaseWorkspaceEvents = [];
     super.disconnectedCallback();
   }
 

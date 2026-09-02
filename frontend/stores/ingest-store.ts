@@ -12,12 +12,12 @@ class IngestStore extends Store {
 
   set(workspace: string): void {
     this.#workspace = workspace;
-    this.emit('ingestWorkspaceChanged', { workspace: this.workspace });
+    this.changed();
   }
 
   resetToPrimary(): void {
     this.#workspace = null;
-    this.emit('ingestWorkspaceChanged', { workspace: this.workspace });
+    this.changed();
   }
 }
 

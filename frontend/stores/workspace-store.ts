@@ -1,9 +1,10 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import { Store } from './base.ts';
-import type { WorkspaceRecord } from '../events/bus';
 import type {WorkspacePage, WorkspacePageItem} from '../api/workspaces.ts';
 import {KeysetPager, type PageLoadState} from '../lib/paged.ts';
+
+export type WorkspaceRecord = WorkspacePageItem;
 
 const PRIMARY_COOKIE = 'dlightrag_workspace';
 const ACTIVE_COOKIE = 'dlightrag_workspace_ids';
@@ -77,7 +78,7 @@ class WorkspaceStore extends Store {
     this.#active = this.#validActive(active);
     this.#primary = this.#validPrimary(primary);
     this.#syncCookies();
-    this.emit('workspaceToggled', { workspaces: [...this.#active] });
+    this.changed();
   }
 
   loadMoreWorkspaces(): Promise<void> {
@@ -120,7 +121,7 @@ class WorkspaceStore extends Store {
       this.#primary = workspace;
     }
     this.#syncCookies();
-    this.emit('workspaceToggled', { workspaces: [...this.#active] });
+    this.changed();
   }
 
   select(workspace: string): void {
@@ -128,7 +129,7 @@ class WorkspaceStore extends Store {
     this.#active = [workspace];
     this.#primary = workspace;
     this.#syncCookies();
-    this.emit('workspaceToggled', { workspaces: [...this.#active] });
+    this.changed();
   }
 
   selectAll(): void {
@@ -139,7 +140,7 @@ class WorkspaceStore extends Store {
     this.#active = knownIds;
     this.#primary = this.#defaultWorkspace();
     this.#syncCookies();
-    this.emit('workspaceToggled', { workspaces: [...this.#active] });
+    this.changed();
   }
 
   /** Restore an earlier composer scope after an editable submission failure. */
@@ -147,7 +148,7 @@ class WorkspaceStore extends Store {
     this.#active = this.#validActive([...workspaces]);
     this.#primary = this.#validPrimary(this.#primary);
     this.#syncCookies();
-    this.emit('workspaceToggled', {workspaces: [...this.#active]});
+    this.changed();
   }
 
   add(record: WorkspaceRecord): void {
@@ -158,7 +159,7 @@ class WorkspaceStore extends Store {
     this.#active = [record.workspace];
     this.#primary = record.workspace;
     this.#syncCookies();
-    this.emit('workspaceCreated', { workspace: record.workspace, displayName: record.displayName });
+    this.changed();
   }
 
   remove(workspace: string, nextWorkspace: string): void {
@@ -173,7 +174,7 @@ class WorkspaceStore extends Store {
       this.#primary = this.#fallbackPrimary(nextWorkspace);
     }
     this.#syncCookies();
-    this.emit('workspaceDeleted', { workspace, nextWorkspace });
+    this.changed();
   }
 
   #validActive(active: string[]): string[] {
