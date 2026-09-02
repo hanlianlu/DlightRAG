@@ -1440,8 +1440,8 @@ async def test_follow_up_and_fork_reenter_one_acceptance_interface() -> None:
         {"role": "user", "content": "parent question"},
     )
     assert follow_request.episodic_summary == "Older accepted context."
-    assert follow_request.top_k == 7
-    assert follow_request.chunk_top_k == 11
+    assert follow_request.retrieval.top_k == 7
+    assert follow_request.retrieval.chunk_top_k == 11
     assert follow_request.semantic_highlights is True
     assert [item.reference_kind for item in follow_request.history_resources] == [
         "history_attachment",

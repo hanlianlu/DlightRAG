@@ -419,8 +419,37 @@ def build_rerank_func(
     )
 
 
+def build_product_reranker(
+    settings: RerankSettings,
+    *,
+    scoring_settings: ModelSettings | None,
+    scheduler: ModelScheduler,
+    supports_vision: bool | None = None,
+    telemetry: Telemetry = NOOP_TELEMETRY,
+) -> Callable[..., Any] | None:
+    """Build the product-configured reranker for one runtime.
+
+    One shared construction shape for workspace runtimes and the federation
+    pass: the chat-listwise strategy needs the scoring model settings, every
+    other strategy needs none, and a disabled rerank yields None without any
+    model wiring.
+    """
+    return build_rerank_func(
+        settings,
+        scheduler=scheduler,
+        scoring_settings=(
+            scoring_settings
+            if settings.enabled and settings.strategy == "chat_llm_reranker"
+            else None
+        ),
+        supports_vision=supports_vision,
+        telemetry=telemetry,
+    )
+
+
 __all__ = [
     "LISTWISE_RERANK_SYSTEM_PROMPT",
+    "build_product_reranker",
     "build_rerank_func",
     "rerank_consumes_images",
 ]

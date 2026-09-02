@@ -58,6 +58,7 @@ def test_defaults_preserve_runtime_contract(tmp_path: Path) -> None:
     assert config.models.embedding.batch_size == 64
     assert config.corpus.retrieval.top_k == 40
     assert config.corpus.retrieval.chunk_top_k == 20
+    assert config.corpus.retrieval.federation_min_chunks_per_workspace == 7
     assert config.corpus.promotion.doc_threshold is None
     assert config.corpus.promotion.chunk_threshold is None
     assert config.answer.runtime.answer_run_retention_days == 365

@@ -161,6 +161,7 @@ async def retrieve(
             workspaces=tuple(resolved_workspaces),
             top_k=body.top_k,
             chunk_top_k=body.chunk_top_k,
+            federated_rerank=body.federated_rerank,
             bm25_query=body.bm25_query,
             filters=metadata_filter_from_payload(body.filters),
             query_images=tuple(

@@ -4,11 +4,13 @@
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from dlightrag.engine.ai.concurrency import bounded_gather
 from dlightrag.engine.ai.telemetry import safe_log_text
 from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.rag.retrieval.rerank_fallback import rerank_with_fallback
 from dlightrag.engine.rag.retrieval.visual import PreparedVisualQuery, VisualEmbeddingDomain
 
 logger = logging.getLogger(__name__)
@@ -38,16 +40,71 @@ type FederatedVisualPreparer = Callable[
 ]
 
 
+class FederatedReranker(Protocol):
+    """One cross-workspace rerank pass over the merged candidate pool.
+
+    Built from the product-configured reranker settings; its presence at the
+    federation call site is the enable switch, so no separate flag exists at
+    this seam. Errors surface as exceptions; callers reuse the shared
+    ``rerank_with_fallback`` semantics for deterministic degradation.
+    """
+
+    async def __call__(
+        self,
+        query: str,
+        chunks: list[dict[str, Any]],
+        top_k: int,
+    ) -> list[dict[str, Any]]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FederationMergePolicy:
+    """Facts for one federated merge: the output budget and the fairness floor.
+
+    ``chunk_top_k`` is the effective per-request output budget (the configured
+    value or the resolved default). ``min_chunks_per_workspace`` guarantees
+    each contributing workspace its top-N chunks when the budget would squeeze
+    them below N; zero disables the floor.
+    """
+
+    chunk_top_k: int | None = None
+    min_chunks_per_workspace: int = 7
+
+
+def _resolve_cap(n_non_empty: int, policy: FederationMergePolicy) -> int | None:
+    """Resolve the merged-output truncation for one federation merge.
+
+    The output keeps at least the effective chunk budget and at least
+    ``min_chunks_per_workspace`` per contributing workspace, so fan-out never
+    squeezes a workspace below its quality frontier. The configured budget is
+    honored directly — there is no separate hardcoded default.
+    """
+    if policy.chunk_top_k is None:
+        return None
+    if policy.min_chunks_per_workspace > 0:
+        return max(policy.chunk_top_k, policy.min_chunks_per_workspace * n_non_empty)
+    return policy.chunk_top_k
+
+
+def _chunk_count_by_workspace(chunks: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for chunk in chunks:
+        workspace = str(chunk.get("_workspace") or "")
+        counts[workspace] = counts.get(workspace, 0) + 1
+    return counts
+
+
 def merge_results(
     results: list[RetrievalResult],
     workspaces: list[str],
-    chunk_top_k: int | None = None,
+    *,
+    policy: FederationMergePolicy,
 ) -> RetrievalResult:
     """Merge multiple RetrievalResults via round-robin interleaving.
 
     Each chunk/entity/relation is tagged with ``_workspace`` to identify
     its source. Results are interleaved: ws_a[0], ws_b[0], ws_a[1], ws_b[1]...
-    then truncated to ``chunk_top_k``.
+    then truncated per the merge policy's resolved cap.
     """
     per_ws_chunks: list[list[dict[str, Any]]] = []
     for result, ws in zip(results, workspaces, strict=True):
@@ -79,8 +136,10 @@ def merge_results(
         deduped.append(c)
     merged_chunks = deduped
 
-    if chunk_top_k is not None:
-        merged_chunks = merged_chunks[:chunk_top_k]
+    n_non_empty = sum(1 for ws_chunks in per_ws_chunks if ws_chunks)
+    cap = _resolve_cap(n_non_empty, policy)
+    if cap is not None:
+        merged_chunks = merged_chunks[:cap]
 
     # Re-canonicalize reference_id under the federation namespace so
     # citations like [3-2] map to one chunk across the merged answer.
@@ -105,6 +164,8 @@ def merge_results(
                 for ws, result in zip(workspaces, results, strict=True)
             },
             "merged_chunk_count": len(merged_chunks),
+            "federation_cap": cap,
+            "per_workspace_chunk_count": _chunk_count_by_workspace(merged_chunks),
         },
     )
 
@@ -136,10 +197,11 @@ async def federated_retrieve(
     get_service: Callable[[str], Awaitable[WorkspaceRetriever]],
     *,
     top_k: int | None = None,
-    chunk_top_k: int | None = None,
+    policy: FederationMergePolicy,
     max_concurrency: int = 8,
     query_image_blocks: Sequence[Mapping[str, Any]] = (),
     prepare_visual_query: FederatedVisualPreparer | None = None,
+    reranker: FederatedReranker | None = None,
     **kwargs: Any,
 ) -> RetrievalResult:
     """Execute bounded federated retrieval over already-authorized workspaces.
@@ -147,6 +209,11 @@ async def federated_retrieve(
     Services are acquired first so compatible visual domains can share one
     preparation. Only typed prepared vectors cross into workspace retrieval;
     raw query-image blocks are never fanned out to workspace ``aretrieve``.
+
+    Without a ``reranker`` the merged list is truncated by the policy's
+    resolved cap (fairness floor applied). With one, the full interleaved
+    pool is reranked in one pass and the policy budget selects the final
+    list; failures degrade to the capped interleave.
     """
     if len(workspaces) < 2:
         raise ValueError("federated_retrieve requires at least two workspaces")
@@ -209,7 +276,7 @@ async def federated_retrieve(
         result = await service.aretrieve(
             query=query,
             top_k=top_k,
-            chunk_top_k=chunk_top_k,
+            chunk_top_k=policy.chunk_top_k,
             **call_kwargs,
         )
         elapsed = time.monotonic() - starts[workspace]
@@ -258,14 +325,46 @@ async def federated_retrieve(
     if not successful_results:
         raise failures_by_workspace[failed_workspaces[0]]
 
-    merged = merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)
+    if reranker is not None and policy.chunk_top_k:
+        merged = merge_results(
+            successful_results,
+            successful_workspaces,
+            policy=replace(policy, chunk_top_k=None),
+        )
+        pool = merged.contexts["chunks"]
+        n_non_empty = sum(1 for result in successful_results if result.contexts.get("chunks"))
+        cap = _resolve_cap(n_non_empty, policy)
+        capped = pool[:cap] if cap is not None else pool
+        outcome = await rerank_with_fallback(
+            query=query,
+            chunks=pool,
+            top_k=policy.chunk_top_k,
+            rerank_func=reranker,
+        )
+        merged.contexts["chunks"] = list(outcome.chunks) if outcome.reranked else list(capped)
+        merged.trace["federation_cap"] = policy.chunk_top_k if outcome.reranked else cap
+        merged.trace["per_workspace_chunk_count"] = _chunk_count_by_workspace(
+            merged.contexts["chunks"]
+        )
+        merged.trace["federated_rerank"] = {
+            "pool_chunk_count": len(pool),
+            "reranked": outcome.reranked,
+            "output_chunk_count": len(merged.contexts["chunks"]),
+        }
+        if outcome.error_type:
+            merged.trace["federated_rerank"]["error_type"] = outcome.error_type
+    else:
+        merged = merge_results(successful_results, successful_workspaces, policy=policy)
+
     if failed_workspaces:
         merged.trace["failed_workspaces"] = failed_workspaces
     return merged
 
 
 __all__ = [
+    "FederatedReranker",
     "FederatedVisualPreparer",
+    "FederationMergePolicy",
     "WorkspaceRetriever",
     "federated_retrieve",
     "merge_results",

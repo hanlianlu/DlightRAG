@@ -97,6 +97,7 @@ class QueryRequestContract(ClientContractModel):
     query: str
     top_k: int | None = Field(default=None, ge=1)
     chunk_top_k: int | None = Field(default=None, ge=1)
+    federated_rerank: bool = False
 
 
 class RetrieveRequestContract(QueryRequestContract):

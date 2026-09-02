@@ -124,6 +124,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
     from dlightrag.engine.rag.corpus.downloads import SourceDownloadService
     from dlightrag.engine.rag.corpus.ingestion.jobs import IngestJobCoordinator
+    from dlightrag.engine.rag.retrieval.federation import FederatedReranker
+    from dlightrag.engine.rag.retrieval.rerank import build_product_reranker
     from dlightrag.engine.rag.retrieval.runtime import RetrievalPlannerRuntime
     from dlightrag.engine.rag.workspace.pool import WorkspacePool
     from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
@@ -242,6 +244,21 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     async def schema_lookup(workspaces: Sequence[str]) -> dict[str, Any]:
         return await schema_index.get_field_schema(workspaces=tuple(workspaces))
 
+    def federated_reranker_factory() -> FederatedReranker | None:
+        """Build the shared federation reranker lazily, on first flagged request.
+
+        Deferred past startup so the capabilities vision probe has settled;
+        built from the same product reranker settings the workspaces use.
+        """
+        resolved_rerank = rag_settings(config).rerank
+        return build_product_reranker(
+            resolved_rerank,
+            scoring_settings=rerank_scoring_model_settings(config),
+            scheduler=scheduler,
+            supports_vision=capabilities.rerank_supports_vision,
+            telemetry=telemetry,
+        )
+
     retrieval = RetrievalService(
         pool=pool,
         planners=RetrievalPlannerRuntime(
@@ -255,6 +272,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         projector=project_answer_retrieval,
         settings=retrieval_settings(config),
         telemetry=telemetry,
+        federated_reranker_factory=federated_reranker_factory,
     )
 
     run_store = PGAnswerRunStore(

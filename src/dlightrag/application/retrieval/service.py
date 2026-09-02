@@ -16,7 +16,12 @@ from dlightrag.application.errors import CorpusUnavailableError
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
-from dlightrag.engine.rag.retrieval.federation import WorkspaceRetriever, federated_retrieve
+from dlightrag.engine.rag.retrieval.federation import (
+    FederatedReranker,
+    FederationMergePolicy,
+    WorkspaceRetriever,
+    federated_retrieve,
+)
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
 from dlightrag.engine.rag.retrieval.visual import PreparedVisualQuery, VisualEmbeddingDomain
 from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup
@@ -51,7 +56,22 @@ class RetrievalSettings:
     default_chunk_top_k: int
     timeout_seconds: float
     query_image_limit: int
+    federation_min_chunks_per_workspace: int = 7
     workspace_fanout_concurrency: int = 8
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalOptions:
+    """Caller-awaited retrieval knobs travelling the answer-run corridor.
+
+    One small object instead of three parallel scalars through contracts,
+    durable records, the executor seam, and the retrieval service. Public
+    serialization stays flat; this bundles only the in-process corridor.
+    """
+
+    top_k: int | None = None
+    chunk_top_k: int | None = None
+    federated_rerank: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +96,7 @@ class RetrieveRequest:
     bm25_query: str | None = None
     filters: MetadataFilter | None = None
     query_images: tuple[Mapping[str, Any], ...] = ()
+    federated_rerank: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +133,7 @@ class RetrievalService:
         settings: RetrievalSettings,
         telemetry: Telemetry,
         clock: Callable[[], float] = time.monotonic,
+        federated_reranker_factory: Callable[[], FederatedReranker | None] | None = None,
     ) -> None:
         self._pool = pool
         self._planners = planners
@@ -121,6 +143,9 @@ class RetrievalService:
         self._settings = settings
         self._telemetry = telemetry
         self._clock = clock
+        self._federated_reranker_factory = federated_reranker_factory
+        self._federated_reranker: FederatedReranker | None = None
+        self._federated_reranker_unavailable = False
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         self._schema_refreshes: dict[tuple[str, ...], asyncio.Task[dict[str, Any]]] = {}
         self._visual_query_cache: OrderedDict[_VisualQueryCacheKey, PreparedVisualQuery] = (
@@ -132,6 +157,24 @@ class RetrievalService:
         self._warmups: dict[tuple[str, ...], asyncio.Task[None]] = {}
         self._close_task: asyncio.Task[None] | None = None
         self._closed = False
+
+    async def _resolve_federated_reranker(self, requested: bool) -> FederatedReranker | None:
+        """Build or return the shared federation reranker once, on first request.
+
+        Builds lazily so the composition-time vision probe result is available.
+        A missing factory or a failed build degrades to the capped interleave
+        and is remembered instead of retried per request.
+        """
+        if not requested or self._federated_reranker_factory is None:
+            return None
+        if self._federated_reranker is None and not self._federated_reranker_unavailable:
+            try:
+                self._federated_reranker = self._federated_reranker_factory()
+            except Exception:
+                logger.warning("Federated reranker build failed", exc_info=True)
+            if self._federated_reranker is None:
+                self._federated_reranker_unavailable = True
+        return self._federated_reranker
 
     @property
     def closed(self) -> bool:
@@ -319,8 +362,11 @@ class RetrievalService:
         result = await self.retrieve_result(
             request.query,
             workspaces=request.workspaces,
-            top_k=request.top_k,
-            chunk_top_k=request.chunk_top_k,
+            retrieval=RetrievalOptions(
+                top_k=request.top_k,
+                chunk_top_k=request.chunk_top_k,
+                federated_rerank=request.federated_rerank,
+            ),
             bm25_query=request.bm25_query,
             filters=request.filters,
             query_images=images,
@@ -340,8 +386,7 @@ class RetrievalService:
         *,
         workspaces: Sequence[str],
         conversation_history: Sequence[Mapping[str, object]] | None = None,
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
+        retrieval: RetrievalOptions = RetrievalOptions(),
         bm25_query: str | None = None,
         filters: MetadataFilter | None = None,
         query_images: Sequence[Mapping[str, Any]] = (),
@@ -355,6 +400,9 @@ class RetrievalService:
             raise CorpusUnavailableError("Retrieval service is closed")
         if not workspaces:
             raise ValueError("At least one canonical workspace is required")
+        top_k = retrieval.top_k
+        chunk_top_k = retrieval.chunk_top_k
+        federated_rerank = retrieval.federated_rerank
         active_planner = planner or self.planner_for(model_profile)
         async with self._telemetry.observe(
             "retrieval_planning",
@@ -429,6 +477,7 @@ class RetrievalService:
                 "top_k": effective_top_k,
                 "chunk_top_k": effective_chunk_top_k,
                 "has_filters": effective_filters is not None,
+                "federated_rerank": federated_rerank,
             },
         ) as observation:
             if len(workspaces) == 1:
@@ -440,15 +489,24 @@ class RetrievalService:
                     )
                 result = await runtime.aretrieve(plan.standalone_query, **kwargs)
             else:
+                reranker = await self._resolve_federated_reranker(federated_rerank)
+                policy = FederationMergePolicy(
+                    chunk_top_k=effective_chunk_top_k,
+                    min_chunks_per_workspace=(self._settings.federation_min_chunks_per_workspace),
+                )
                 result = await federated_retrieve(
                     plan.standalone_query,
                     list(workspaces),
                     self._acquire,
+                    policy=policy,
+                    reranker=reranker,
                     max_concurrency=self._settings.workspace_fanout_concurrency,
                     query_image_blocks=visual_blocks,
                     prepare_visual_query=_prepare_visual if visual_blocks else None,
-                    **kwargs,
+                    **{key: value for key, value in kwargs.items() if key != "chunk_top_k"},
                 )
+                if federated_rerank and reranker is None:
+                    result.trace["federated_rerank_unavailable"] = True
             result.image_descriptions = list(image_descriptions)
             result.trace["query_image_description_count"] = len(image_descriptions)
             if visual_blocks:
@@ -488,6 +546,11 @@ class RetrievalService:
         if visual_flights:
             await asyncio.gather(*visual_flights, return_exceptions=True)
         self._visual_query_flights.clear()
+        if self._federated_reranker is not None:
+            close = getattr(self._federated_reranker, "aclose", None)
+            if close is not None:
+                await close()
+            self._federated_reranker = None
         self._visual_query_cache.clear()
         await self._planners.aclose()
 
@@ -534,6 +597,7 @@ __all__ = [
     "RetrieveProjection",
     "RetrieveRequest",
     "RetrieveResponse",
+    "RetrievalOptions",
     "RetrievalService",
     "RetrievalSettings",
     "RetrievalTimeoutError",

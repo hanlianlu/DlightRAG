@@ -163,6 +163,9 @@ def retrieval_settings(config: DlightragConfig) -> RetrievalSettings:
     return RetrievalSettings(
         default_top_k=config.corpus.retrieval.top_k,
         default_chunk_top_k=config.corpus.retrieval.chunk_top_k,
+        federation_min_chunks_per_workspace=(
+            config.corpus.retrieval.federation_min_chunks_per_workspace
+        ),
         timeout_seconds=config.corpus.retrieval.timeout,
         query_image_limit=MAX_QUERY_IMAGES,
     )

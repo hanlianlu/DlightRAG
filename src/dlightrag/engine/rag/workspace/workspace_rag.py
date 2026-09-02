@@ -64,7 +64,10 @@ from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag.engine.rag.retrieval.metadata_fields import (
     INGEST_FINALIZATION_COMPLETE_FIELD,
 )
-from dlightrag.engine.rag.retrieval.rerank import build_rerank_func, rerank_consumes_images
+from dlightrag.engine.rag.retrieval.rerank import (
+    build_product_reranker,
+    rerank_consumes_images,
+)
 from dlightrag.engine.rag.workspace.lifecycle import (
     defer_cancellation,
     shutdown_lightrag_worker_pools,
@@ -359,14 +362,10 @@ class WorkspaceRag:
         self._chat_models = chat_models
         default_func_lr = chat_models.default_func
         resolved_rerank = settings.rerank
-        rerank_func = build_rerank_func(
+        rerank_func = build_product_reranker(
             resolved_rerank,
+            scoring_settings=settings.rerank_scoring_model,
             scheduler=self._model_scheduler,
-            scoring_settings=(
-                settings.rerank_scoring_model
-                if resolved_rerank.enabled and resolved_rerank.strategy == "chat_llm_reranker"
-                else None
-            ),
             supports_vision=self._rerank_supports_vision,
             telemetry=self.telemetry,
         )

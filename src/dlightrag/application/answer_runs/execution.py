@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.application.answer_runs.mode import canonical_answer_mode
+from dlightrag.application.retrieval import RetrievalOptions
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
@@ -185,8 +186,7 @@ class AnswerRunRequest:
     workspaces: tuple[str, ...] = ()
     history: tuple[Mapping[str, Any], ...] = ()
     episodic_summary: str = ""
-    top_k: int | None = None
-    chunk_top_k: int | None = None
+    retrieval: RetrievalOptions = RetrievalOptions()
     filters: Mapping[str, Any] | None = None
     semantic_highlights: bool = False
     links: tuple[LinkReference, ...] = ()
@@ -206,8 +206,9 @@ class AnswerRunRequest:
             "workspaces": list(self.workspaces),
             "history": [dict(message) for message in self.history],
             "episodic_summary": self.episodic_summary,
-            "top_k": self.top_k,
-            "chunk_top_k": self.chunk_top_k,
+            "top_k": self.retrieval.top_k,
+            "chunk_top_k": self.retrieval.chunk_top_k,
+            "federated_rerank": self.retrieval.federated_rerank,
             "filters": dict(self.filters) if self.filters else None,
             "semantic_highlights": self.semantic_highlights,
             "links": [item.as_json() for item in self.links],
@@ -231,8 +232,11 @@ class AnswerRunRequest:
             workspaces=tuple(str(value) for value in request.get("workspaces") or ()),
             history=tuple(dict(message) for message in request.get("history") or ()),
             episodic_summary=str(request.get("episodic_summary") or ""),
-            top_k=_optional_int(request.get("top_k")),
-            chunk_top_k=_optional_int(request.get("chunk_top_k")),
+            retrieval=RetrievalOptions(
+                top_k=_optional_int(request.get("top_k")),
+                chunk_top_k=_optional_int(request.get("chunk_top_k")),
+                federated_rerank=bool(request.get("federated_rerank")),
+            ),
             filters=dict(filters) if isinstance(filters, Mapping) else None,
             semantic_highlights=bool(request.get("semantic_highlights")),
             links=_link_references(request.get("links")),
@@ -272,8 +276,7 @@ class AnswerRunInput:
     workspaces: tuple[str, ...] = ()
     history: tuple[Mapping[str, Any], ...] = ()
     episodic_summary: str = ""
-    top_k: int | None = None
-    chunk_top_k: int | None = None
+    retrieval: RetrievalOptions = RetrievalOptions()
     filters: Mapping[str, Any] | None = None
     semantic_highlights: bool = False
     links: tuple[LinkReference, ...] = ()
@@ -297,8 +300,9 @@ class AnswerRunInput:
             "query": self.query,
             "workspaces": list(self.workspaces),
             "history": [dict(message) for message in self.history],
-            "top_k": self.top_k,
-            "chunk_top_k": self.chunk_top_k,
+            "top_k": self.retrieval.top_k,
+            "chunk_top_k": self.retrieval.chunk_top_k,
+            "federated_rerank": self.retrieval.federated_rerank,
             "filters": dict(self.filters) if self.filters else None,
             "semantic_highlights": self.semantic_highlights,
             "links": [item.as_json() for item in self.links],
@@ -357,8 +361,11 @@ class AnswerRunInput:
             workspaces=tuple(str(value) for value in request.get("workspaces") or ()),
             history=tuple(dict(message) for message in request.get("history") or ()),
             episodic_summary=str(request.get("episodic_summary") or ""),
-            top_k=_optional_int(request.get("top_k")),
-            chunk_top_k=_optional_int(request.get("chunk_top_k")),
+            retrieval=RetrievalOptions(
+                top_k=_optional_int(request.get("top_k")),
+                chunk_top_k=_optional_int(request.get("chunk_top_k")),
+                federated_rerank=bool(request.get("federated_rerank")),
+            ),
             filters=dict(filters) if isinstance(filters, Mapping) else None,
             semantic_highlights=bool(request.get("semantic_highlights")),
             links=links,

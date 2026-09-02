@@ -2,6 +2,8 @@
 """Behavioral contract for the inline Retrieval application service."""
 
 import asyncio
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, Mock, patch
@@ -792,7 +794,122 @@ async def test_multiple_workspaces_use_federated_retrieval() -> None:
     acquire = federated.await_args.args[2]
     assert acquire is not pool.acquire  # the service wraps acquire to translate pool errors
     assert federated.await_args.kwargs["max_concurrency"] == 3
+    policy = federated.await_args.kwargs["policy"]
+    assert policy.chunk_top_k == 5
+    assert policy.min_chunks_per_workspace == 7
+    assert federated.await_args.kwargs["reranker"] is None
     pool.acquire.assert_not_awaited()
+
+
+_FEDERATION_SETTINGS = RetrievalSettings(
+    default_top_k=8,
+    default_chunk_top_k=5,
+    timeout_seconds=30,
+    query_image_limit=4,
+)
+
+
+def _federated_service(
+    *,
+    factory: Any = None,
+) -> RetrievalService:
+    """One federation-test service with a mock pool, projector, and planner."""
+    projector = Mock()
+    projector.return_value = ProjectedRetrieval(contexts={}, sources=())
+    return RetrievalService(
+        pool=AsyncMock(),
+        planners=_Planners(),
+        schema_lookup=AsyncMock(return_value={}),
+        image_preparer=AsyncMock(return_value=[]),
+        projector=projector,
+        settings=_FEDERATION_SETTINGS,
+        telemetry=NoopTelemetry(),
+        federated_reranker_factory=factory,
+    )
+
+
+@contextmanager
+def _patched_federated_retrieve(trace: Mapping[str, Any] | None = None) -> Iterator[Any]:
+    """Patch the service's federated_retrieve import; yields the mock."""
+    with patch(
+        "dlightrag.application.retrieval.service.federated_retrieve",
+        new=AsyncMock(return_value=RetrievalResult(trace=dict(trace or {}))),
+    ) as federated:
+        yield federated
+
+
+def _flagged_request(
+    chunk_top_k: int | None = None,
+    *,
+    federated_rerank: bool = True,
+) -> RetrieveRequest:
+    return RetrieveRequest(
+        query="query",
+        workspaces=("reports", "legal"),
+        projection=_PROJECTION,
+        chunk_top_k=chunk_top_k,
+        federated_rerank=federated_rerank,
+    )
+
+
+async def test_federated_policy_reuses_the_requested_chunk_budget() -> None:
+    service = _federated_service()
+
+    with _patched_federated_retrieve() as federated:
+        await service.retrieve(_flagged_request(chunk_top_k=3, federated_rerank=False))
+
+    assert federated.await_args is not None
+    policy = federated.await_args.kwargs["policy"]
+    assert policy.chunk_top_k == 3
+
+
+async def test_federated_rerank_flag_resolves_the_injected_reranker_once() -> None:
+    reranker = AsyncMock()
+    factory = Mock(return_value=reranker)
+    service = _federated_service(factory=factory)
+
+    with _patched_federated_retrieve() as federated:
+        for _ in range(2):
+            await service.retrieve(_flagged_request())
+
+    factory.assert_called_once()
+    assert all(call.kwargs["reranker"] is reranker for call in federated.await_args_list)
+
+
+async def test_federated_rerank_flag_without_a_reranker_marks_unavailable() -> None:
+    service = _federated_service()
+
+    with _patched_federated_retrieve(trace={"federated": True}) as federated:
+        response = await service.retrieve(_flagged_request())
+
+    assert federated.await_args is not None
+    assert federated.await_args.kwargs["reranker"] is None
+    assert response.trace["federated_rerank_unavailable"] is True
+
+
+async def test_federated_rerank_factory_failure_is_remembered_not_retried() -> None:
+    factory = Mock(side_effect=RuntimeError("build boom"))
+    service = _federated_service(factory=factory)
+
+    with _patched_federated_retrieve(trace={"federated": True}):
+        for _ in range(2):
+            await service.retrieve(_flagged_request())
+
+    factory.assert_called_once()
+
+
+async def test_federated_rerank_factory_returning_none_marks_unavailable_once() -> None:
+    """rerank.enabled=false makes the factory yield None; the flag degrades to
+    the default path with an unavailable marker, memoized across requests."""
+    factory = Mock(return_value=None)
+    service = _federated_service(factory=factory)
+
+    with _patched_federated_retrieve(trace={"federated": True}) as federated:
+        for _ in range(2):
+            await service.retrieve(_flagged_request())
+
+    factory.assert_called_once()
+    assert all(call.kwargs["reranker"] is None for call in federated.await_args_list)
 
 
 async def test_planner_runtime_caches_by_profile_and_closes_its_model_once() -> None:

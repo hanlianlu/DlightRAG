@@ -38,6 +38,7 @@ from dlightrag.application.answer_runs.mode import ModeResource, ResolvedMode, r
 from dlightrag.application.answer_runs.results import store_answer_result
 from dlightrag.application.answer_runs.routing import AnswerRoutingStore, decide_resolved_mode
 from dlightrag.application.answer_runs.sources import project_contexts_for_client
+from dlightrag.application.retrieval import RetrievalOptions
 from dlightrag.engine.agent.environment import (
     ExecutionEnvironment,
     resolve_execution_adapter,
@@ -208,8 +209,7 @@ class RawRetrieval(Protocol):
         *,
         workspaces: Sequence[str],
         conversation_history: Sequence[Mapping[str, object]] | None = None,
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
+        retrieval: RetrievalOptions = RetrievalOptions(),
         bm25_query: str | None = None,
         filters: MetadataFilter | None = None,
         query_images: Sequence[Mapping[str, Any]] = (),
@@ -1026,8 +1026,7 @@ class AnswerExecutor:
         run = await self.prepare_orchestrated_run(
             query=request.query,
             workspaces=list(request.workspaces),
-            top_k=request.top_k,
-            chunk_top_k=request.chunk_top_k,
+            retrieval=request.retrieval,
             filters=MetadataFilter.model_validate(request.filters) if request.filters else None,
             resources=await self._answer_run_resources(request, owner_id=session.owner_id),
             fetched_bytes_sink=_buffered_fetched_bytes_sink(fetched_buffer),
@@ -1307,8 +1306,8 @@ class AnswerExecutor:
                     plan={
                         "query": request.query,
                         "workspaces": list(request.workspaces),
-                        "top_k": request.top_k,
-                        "chunk_top_k": request.chunk_top_k,
+                        "top_k": request.retrieval.top_k,
+                        "chunk_top_k": request.retrieval.chunk_top_k,
                     },
                 )
                 fast_session_host = FastSessionHost(
@@ -1592,8 +1591,7 @@ class AnswerExecutor:
         *,
         query: str,
         workspaces: list[str],
-        top_k: int | None,
-        chunk_top_k: int | None,
+        retrieval: RetrievalOptions,
         filters: MetadataFilter | None,
         resources: list[ResourceInput] | None,
         fetched_bytes_sink: FetchedBytesSink | None = None,
@@ -1667,8 +1665,7 @@ class AnswerExecutor:
                     search_query,
                     workspaces=workspaces,
                     conversation_history=active_history.messages,
-                    top_k=top_k,
-                    chunk_top_k=chunk_top_k,
+                    retrieval=retrieval,
                     filters=filters,
                     query_images=resolved.current_images,
                     image_descriptions=image_descriptions,

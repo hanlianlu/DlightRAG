@@ -95,6 +95,16 @@ HistoryParam = Annotated[
         ),
     ),
 ]
+FederatedRerankParam = Annotated[
+    bool,
+    Field(
+        description=(
+            "Apply one cross-workspace rerank pass over the merged federation pool "
+            "before selecting the top chunks. Defaults to off; the round-robin "
+            "fairness cap is used instead."
+        ),
+    ),
+]
 IdempotencyKeyParam = Annotated[
     str | None,
     Field(

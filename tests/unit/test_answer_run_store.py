@@ -120,6 +120,7 @@ class TestFixedRuntimeBounds:
             "episodic_summary": "",
             "top_k": None,
             "chunk_top_k": None,
+            "federated_rerank": False,
             "filters": None,
             "semantic_highlights": False,
             "mode": "research",

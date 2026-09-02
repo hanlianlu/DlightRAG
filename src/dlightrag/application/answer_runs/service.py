@@ -36,6 +36,7 @@ from dlightrag.application.answer_runs.mode import (
 from dlightrag.application.answer_runs.prepared_input import require_prepared_input_bounds
 from dlightrag.application.answer_runs.results import AnswerResult, restore_answer_result
 from dlightrag.application.answer_runs.routing import RoutingAcceptance
+from dlightrag.application.retrieval import RetrievalOptions
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.agent.session.ids import LaneId, SessionId
 from dlightrag.engine.agent.session.plan import AgentRunPlan
@@ -126,8 +127,7 @@ class AnswerRequest:
     workspaces: tuple[str, ...]
     history: tuple[Mapping[str, Any], ...] = ()
     episodic_summary: str = ""
-    top_k: int | None = None
-    chunk_top_k: int | None = None
+    retrieval: RetrievalOptions = RetrievalOptions()
     filters: MetadataFilter | None = None
     semantic_highlights: bool = False
     resources: tuple[ResourceInput, ...] = ()
@@ -414,8 +414,7 @@ def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
         workspaces=workspaces,
         history=tuple(dict(message) for message in request.history),
         episodic_summary=request.episodic_summary,
-        top_k=request.top_k,
-        chunk_top_k=request.chunk_top_k,
+        retrieval=request.retrieval,
         filters=(
             request.filters.model_dump(exclude_none=True, mode="json") if request.filters else None
         ),
@@ -1023,9 +1022,14 @@ class AnswerService:
             workspaces=tuple(str(item) for item in authorized_workspaces),
             history=tuple(history),
             episodic_summary=str(accepted.get("episodic_summary") or ""),
-            top_k=(int(accepted["top_k"]) if accepted.get("top_k") is not None else None),
-            chunk_top_k=(
-                int(accepted["chunk_top_k"]) if accepted.get("chunk_top_k") is not None else None
+            retrieval=RetrievalOptions(
+                top_k=(int(accepted["top_k"]) if accepted.get("top_k") is not None else None),
+                chunk_top_k=(
+                    int(accepted["chunk_top_k"])
+                    if accepted.get("chunk_top_k") is not None
+                    else None
+                ),
+                federated_rerank=bool(accepted.get("federated_rerank")),
             ),
             filters=(
                 MetadataFilter.model_validate(filters) if isinstance(filters, Mapping) else None
@@ -1195,8 +1199,7 @@ class AnswerService:
             workspaces=request.workspaces,
             history=projection.history,
             episodic_summary=projection.episodic_summary,
-            top_k=request.top_k,
-            chunk_top_k=request.chunk_top_k,
+            retrieval=request.retrieval,
             filters=request.filters,
             semantic_highlights=request.semantic_highlights,
             links=request.links,

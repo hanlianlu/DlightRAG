@@ -15,6 +15,7 @@ from dlightrag.adapters.mcp.contracts import (
 )
 from dlightrag.adapters.mcp.server import (
     AttachmentsParam,
+    FederatedRerankParam,
     HistoryParam,
     IdempotencyKeyParam,
     mcp_app,
@@ -25,7 +26,7 @@ from dlightrag.application.answer_runs import IdempotencyKeyConflict
 from dlightrag.application.answer_runs.client_contracts import conversation_history_as_dicts
 from dlightrag.application.answer_runs.resource_links import answer_link_resources
 from dlightrag.application.answer_runs.results import project_answer_result
-from dlightrag.application.retrieval import MetadataFilter
+from dlightrag.application.retrieval import MetadataFilter, RetrievalOptions
 
 
 @mcp_app.tool(
@@ -50,6 +51,7 @@ async def answer_tool(
         int | None,
         Field(default=None, description="Vector chunk candidate count override for this answer"),
     ] = None,
+    federated_rerank: FederatedRerankParam = False,
     workspaces: Annotated[
         list[str] | None,
         Field(default=None, description="Workspace names to search. Omit for default."),
@@ -92,8 +94,11 @@ async def answer_tool(
             request=ServiceAnswerRequest(
                 query=args.query,
                 workspaces=tuple(resolved_workspaces),
-                top_k=args.top_k,
-                chunk_top_k=args.chunk_top_k,
+                retrieval=RetrievalOptions(
+                    top_k=args.top_k,
+                    chunk_top_k=args.chunk_top_k,
+                    federated_rerank=args.federated_rerank,
+                ),
                 filters=MetadataFilter.model_validate(args.filters) if args.filters else None,
                 semantic_highlights=args.semantic_highlights,
                 history=tuple(conversation_history_as_dicts(args.history) or ()),

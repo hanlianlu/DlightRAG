@@ -856,8 +856,8 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
     answer_request = mock_mcp_application.answers.create.await_args.kwargs["request"]
     call_kwargs = mock_mcp_application.answers.create.await_args.kwargs
     assert answer_request.workspaces == ("default",)
-    assert answer_request.top_k == 8
-    assert answer_request.chunk_top_k == 12
+    assert answer_request.retrieval.top_k == 8
+    assert answer_request.retrieval.chunk_top_k == 12
     assert answer_request.semantic_highlights is True
     assert call_kwargs["idempotency_key"] == "key-1"
     assert call_kwargs["owner_id"] == _EXPECTED_OWNER

@@ -149,6 +149,7 @@ def accepted_input_envelope(prepared: Mapping[str, Any]) -> dict[str, Any]:
         "episodic_summary": str(prepared.get("episodic_summary") or ""),
         "top_k": prepared.get("top_k"),
         "chunk_top_k": prepared.get("chunk_top_k"),
+        "federated_rerank": bool(prepared.get("federated_rerank")),
         "filters": (
             dict(prepared["filters"]) if isinstance(prepared.get("filters"), Mapping) else None
         ),

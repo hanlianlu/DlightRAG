@@ -60,6 +60,7 @@ from dlightrag.application.answer_runs.results import (
 from dlightrag.application.answer_runs.sources import SourceDownloadLinkBuilder
 from dlightrag.application.config import AnswerConfig
 from dlightrag.application.corpus_admin import safe_source_filename
+from dlightrag.application.retrieval import RetrievalOptions
 
 from .deps import authorized_workspaces, get_application, resolve_authorized_query_workspaces
 
@@ -231,8 +232,11 @@ def _service_request(
         query=body.query,
         workspaces=tuple(workspaces),
         history=tuple(conversation_history_as_dicts(body.history) or ()),
-        top_k=body.top_k,
-        chunk_top_k=body.chunk_top_k,
+        retrieval=RetrievalOptions(
+            top_k=body.top_k,
+            chunk_top_k=body.chunk_top_k,
+            federated_rerank=body.federated_rerank,
+        ),
         filters=(
             MetadataFilter.model_validate(body.filters.model_dump(exclude_none=True, mode="json"))
             if body.filters

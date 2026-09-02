@@ -87,8 +87,9 @@ async def test_pg18_fake_model_factories_match_service_initialization(monkeypatc
     )
     assert chat_models.default_func is not None
     assert (
-        service_module.build_rerank_func(
+        service_module.build_product_reranker(
             config,
+            scoring_settings=None,
             scheduler=scheduler,
             supports_vision=True,
         )

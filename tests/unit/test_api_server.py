@@ -1876,7 +1876,7 @@ class TestAnswerEndpoint:
         )
         assert resp.status_code == 202
         answer_request = mock_application.answers.create.await_args.kwargs["request"]
-        assert answer_request.chunk_top_k == 12
+        assert answer_request.retrieval.chunk_top_k == 12
         assert answer_request.semantic_highlights is False
 
     async def test_answer_forwards_semantic_highlights_opt_in(

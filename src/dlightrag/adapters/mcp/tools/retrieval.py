@@ -13,6 +13,7 @@ from dlightrag.adapters.mcp.contracts import (
     RetrieveInput,
 )
 from dlightrag.adapters.mcp.server import (
+    FederatedRerankParam,
     QueryImagesParam,
     mcp_app,
 )
@@ -39,6 +40,7 @@ async def retrieve_tool(
         int | None,
         Field(default=None, description="Vector chunk candidate count override."),
     ] = None,
+    federated_rerank: FederatedRerankParam = False,
     bm25_query: Annotated[
         str | None,
         Field(
@@ -84,6 +86,7 @@ async def retrieve_tool(
             workspaces=tuple(resolved_workspaces),
             top_k=args.top_k,
             chunk_top_k=args.chunk_top_k,
+            federated_rerank=args.federated_rerank,
             bm25_query=args.bm25_query,
             filters=MetadataFilter.model_validate(args.filters) if args.filters else None,
             query_images=tuple(
