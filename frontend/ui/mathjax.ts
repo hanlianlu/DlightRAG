@@ -9,15 +9,15 @@
 // copy `tex-mml-svg.js`, `@mathjax/mathjax-newcm-font/svg/dynamic`, and `sre/`
 // into that directory, then `npm rm mathjax`.
 const MATHJAX_ROOT = '/static/vendor/mathjax';
-const MATHJAX_SRC = MATHJAX_ROOT + '/tex-mml-svg.js';
+const MATHJAX_SRC = `${MATHJAX_ROOT}/tex-mml-svg.js`;
 
 let loading = false;
 
 function configureMathJax(): void {
     if (window.MathJax) return;
     window.MathJax = {
-        loader: {paths: {fonts: MATHJAX_ROOT + '/@mathjax'}},
-        svg: {dynamicPrefix: MATHJAX_ROOT + '/@mathjax/mathjax-newcm-font/svg/dynamic'},
+        loader: {paths: {fonts: `${MATHJAX_ROOT}/@mathjax`}},
+        svg: {dynamicPrefix: `${MATHJAX_ROOT}/@mathjax/mathjax-newcm-font/svg/dynamic`},
         tex: {
             inlineMath: [['$', '$'], ['\\(', '\\)']],
             displayMath: [['$$', '$$'], ['\\[', '\\]']],
@@ -31,21 +31,21 @@ function configureMathJax(): void {
 }
 
 function appendMathJaxScript(): void {
-    if (loading || (window.MathJax && window.MathJax.typesetPromise)) return;
+    if (loading || window.MathJax?.typesetPromise) return;
     loading = true;
     configureMathJax();
 
     const script = document.createElement('script');
     script.src = MATHJAX_SRC;
     script.async = true;
-    script.onload = function() {
-        if (window.MathJax && window.MathJax.typesetPromise) {
-            window.MathJax.typesetPromise().catch(function() {
+    script.onload = () => {
+        if (window.MathJax?.typesetPromise) {
+            window.MathJax.typesetPromise().catch(() => {
                 // Malformed math should not affect the chat shell.
             });
         }
     };
-    script.onerror = function() {
+    script.onerror = () => {
         loading = false;
     };
     document.head.appendChild(script);

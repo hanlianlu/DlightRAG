@@ -5,7 +5,6 @@ import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {guard} from 'lit/directives/guard.js';
 import {repeat} from 'lit/directives/repeat.js';
 import type {
-  AnswerPresentation,
   ConversationAttachmentReference,
   ConversationTurn,
 } from '../api/conversations.ts';
@@ -13,7 +12,6 @@ import type {ChatTurnView} from '../lib/chat-views.ts';
 import {icon} from '../design-system/index.ts';
 import {localizedStoredRunError} from '../lib/run-errors.ts';
 import {formatFileSize} from '../lib/file-size.ts';
-import type {ToolRow} from '../lib/tool-events.ts';
 import {toolVerbText} from '../lib/tool-display.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';

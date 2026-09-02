@@ -14,8 +14,14 @@ function makeStore() {
   let seq = 0;
   let urlSeq = 0;
   const store = new AttachmentStore({
-    createId: () => `id-${(seq += 1)}`,
-    createObjectUrl: () => `blob:url-${(urlSeq += 1)}`,
+    createId: () => {
+      seq += 1;
+      return `id-${seq}`;
+    },
+    createObjectUrl: () => {
+      urlSeq += 1;
+      return `blob:url-${urlSeq}`;
+    },
     revokeObjectUrl: (url) => {
       revoked.push(url);
     },

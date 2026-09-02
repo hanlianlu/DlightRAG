@@ -1,7 +1,7 @@
 import {defineConfig, type Plugin} from 'vite';
-import {resolve, dirname} from 'path';
-import {fileURLToPath} from 'url';
-import {readFileSync, writeFileSync} from 'fs';
+import {resolve, dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {readFileSync, writeFileSync} from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outputDirectory = resolve(__dirname, '../src/dlightrag/adapters/http/browser/static/app');
@@ -37,7 +37,7 @@ function hashedThemeInit(): Plugin {
       const theme = Object.values(bundle).find(
         (item) => item.type === 'chunk' && item.name === 'theme-init',
       );
-      if (!theme || theme.type !== 'chunk' || !options.dir) {
+      if (theme?.type !== 'chunk' || !options.dir) {
         throw new Error('Vite did not emit the pre-paint theme entry');
       }
       for (const filename of [

@@ -51,7 +51,7 @@ class TestFrames {
   runAll(): void {
     const callbacks = [...this.callbacks.values()];
     this.callbacks.clear();
-    callbacks.forEach((callback) => callback());
+    callbacks.forEach((callback) => { callback(); });
   }
 }
 

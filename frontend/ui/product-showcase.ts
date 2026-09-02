@@ -4,7 +4,7 @@
 import {html, render} from 'lit';
 import '../design-system/index.css';
 import '../styles/app.css';
-import '../styles/design_system.css';
+import '../styles/design-system.css';
 import {defineDesignSystemElements} from '../design-system/index.ts';
 import './notifications.ts';
 import './theme.ts';

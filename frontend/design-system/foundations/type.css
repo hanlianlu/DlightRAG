@@ -7,7 +7,8 @@
 :root {
   /* Single source of truth for the app body font; mermaid diagrams read this
      token because isolated SVG output cannot inherit page CSS. */
-  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', roboto,
+  /* stylelint-disable-next-line value-keyword-case */
+  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
     'Helvetica Neue', sans-serif;
   --font-size-caption: var(--step--2);
   --font-size-detail: var(--step--1);

@@ -4,8 +4,8 @@
 // editing the loader does not change the bytes of every module that only
 // typesets.
 export function renderMath(container: Element): void {
-    if (!window.MathJax || !window.MathJax.typesetPromise) return;
-    window.MathJax.typesetPromise([container]).catch(function () {
+    if (!window.MathJax?.typesetPromise) return;
+    window.MathJax.typesetPromise([container]).catch(() => {
         // MathJax may fail on genuinely malformed input; ignore.
     });
 }

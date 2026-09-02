@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import { Store } from './base';
-import { type WorkspaceRecord } from '../events/bus';
+import type { WorkspaceRecord } from '../events/bus';
 import type { WorkspacePage } from '../api/workspaces.ts';
 import {isAbortError} from '../lib/errors.ts';
 
@@ -16,10 +16,12 @@ export type WorkspacePageLoader = (
 export type WorkspaceLoadMoreState = 'idle' | 'loading' | 'error';
 
 function setCookie(name: string, value: string): void {
+  // biome-ignore lint/suspicious/noDocumentCookie: cookies are the workspace preference channel
   document.cookie = `${name}=${encodeURIComponent(value)};path=/;SameSite=Lax`;
 }
 
 function clearCookie(name: string): void {
+  // biome-ignore lint/suspicious/noDocumentCookie: cookies are the workspace preference channel
   document.cookie = `${name}=;path=/;SameSite=Lax;Max-Age=0`;
 }
 

@@ -64,7 +64,7 @@ export class AnswerPresentationElement extends LightElement {
     this.querySelectorAll<HTMLElement>('[data-answer-part]').forEach((host) => {
       const index = Number(host.dataset.answerPart);
       const part = presentation.parts[index];
-      if (!part || part.type !== 'markdown') return;
+      if (part?.type !== 'markdown') return;
       setSanitizedLlmHtml(host, part.html);
       renderMath(host);
       renderDiagrams(host);

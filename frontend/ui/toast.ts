@@ -9,7 +9,7 @@ const MAX_TOAST_DURATION = 3000;
 
 export interface ActionToastOptions {
   actionLabel: string;
-  onAction: () => Promise<string | void>;
+  onAction: () => Promise<string | undefined>;
   duration?: number;
 }
 

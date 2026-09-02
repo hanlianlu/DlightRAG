@@ -3,7 +3,7 @@
 
 import {html, render} from 'lit';
 import '../design-system/index.css';
-import '../styles/design_system.css';
+import '../styles/design-system.css';
 import {
   defineDesignSystemElements,
   icon,

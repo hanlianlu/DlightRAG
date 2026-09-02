@@ -6,7 +6,7 @@ const stylesheets = [
   '../design-system/index.css',
   '../styles/global.css',
   '../styles/layout.css',
-  '../styles/shared_components.css',
+  '../styles/shared-components.css',
   '../styles/panels.css',
   '../styles/files.css',
   '../styles/sources.css',

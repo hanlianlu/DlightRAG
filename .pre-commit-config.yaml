@@ -40,3 +40,10 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+
+      - id: frontend-lint
+        name: frontend (biome + stylelint)
+        entry: make frontend-lint
+        language: system
+        files: ^frontend/.*\.(ts|mjs|css|json|html)$
+        pass_filenames: false

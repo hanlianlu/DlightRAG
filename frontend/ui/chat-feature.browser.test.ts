@@ -895,7 +895,7 @@ it('frame-batches 2,000 streamed tokens into bounded Chat and Message List updat
   const runFrames = (): void => {
     const pending = [...frames.values()];
     frames.clear();
-    pending.forEach((callback) => callback(performance.now()));
+    pending.forEach((callback) => { callback(performance.now()); });
   };
 
   const conversationId = 'conversation-frame-batching';

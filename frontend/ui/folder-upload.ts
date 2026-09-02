@@ -42,15 +42,15 @@ export function withRelativePath(file: File, path: string): RelativeFile {
 async function traverseDirectory(entry: WebkitFileSystemEntry, basePath: string): Promise<RelativeFile[]> {
     const files: RelativeFile[] = [];
     if (entry.isFile) {
-        return new Promise(function (resolve) {
-            entry.file(function (file) {
-                files.push(withRelativePath(file, basePath ? basePath + '/' + file.name : file.name));
+        return new Promise((resolve) => {
+            entry.file((file) => {
+                files.push(withRelativePath(file, basePath ? `${basePath}/${file.name}` : file.name));
                 resolve(files);
             });
         });
     }
     if (entry.isDirectory) {
-        const dirPath = basePath ? basePath + '/' + entry.name : entry.name;
+        const dirPath = basePath ? `${basePath}/${entry.name}` : entry.name;
         const entries = await readAllEntries(entry);
         for (let i = 0; i < entries.length; i++) {
             const childFiles = await traverseDirectory(entries[i], dirPath);
@@ -61,11 +61,11 @@ async function traverseDirectory(entry: WebkitFileSystemEntry, basePath: string)
 }
 
 function readAllEntries(dirEntry: WebkitFileSystemDirectoryEntry): Promise<WebkitFileSystemEntry[]> {
-    return new Promise(function (resolve) {
+    return new Promise((resolve) => {
         const reader = dirEntry.createReader();
         const all: WebkitFileSystemEntry[] = [];
         function readBatch() {
-            reader.readEntries(function (entries) {
+            reader.readEntries((entries) => {
                 if (entries.length === 0) {
                     resolve(all);
                 } else {
@@ -86,7 +86,7 @@ async function traverseFileSystemDirectory(
     for await (const entry of handle.entries()) {
         const name = entry[0];
         const child = entry[1];
-        const childPath = basePath + '/' + name;
+        const childPath = `${basePath}/${name}`;
         if (child.kind === 'file') {
             const file = await child.getFile();
             files.push(withRelativePath(file, childPath));
@@ -162,8 +162,8 @@ export async function detectDropItems(
                     continue;
                 }
                 if (entry.isFile) {
-                    const f2 = await new Promise<RelativeFile>(function (resolve) {
-                        entry.file(function (file) {
+                    const f2 = await new Promise<RelativeFile>((resolve) => {
+                        entry.file((file) => {
                             resolve(withRelativePath(file, file.name));
                         });
                     });

@@ -9,10 +9,9 @@ import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import type {DlActiveArtifactFrame} from './active-artifact-frame.ts';
-import './active-artifact-frame.ts';
-import type {AnswerPresentationElement} from './answer-presentation.ts';
-import './answer-presentation.ts';
 import type {ImageOpenDetail} from './image-lightbox.ts';
+import './active-artifact-frame.ts';
+import './answer-presentation.ts';
 
 type CanvasLayout = 'side' | 'wide' | 'fullscreen';
 type CanvasState = 'idle' | 'loading' | 'ready' | 'error';

@@ -27,7 +27,7 @@ type MemoryReadResult = 'loaded' | 'stale' | 'failed';
 
 function memorySummary(event: ChatMemoryOperationDetail): string {
   const body = String(event.body || '').replace(/\s+/g, ' ').trim();
-  const concise = body.length > 120 ? body.slice(0, 117) + '…' : body;
+  const concise = body.length > 120 ? `${body.slice(0, 117)}…` : body;
   if (event.outcome === 'unchanged') {
     return msg('Already remembered.', {id: 'settings.memory.alreadyRemembered'});
   }

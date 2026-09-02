@@ -14,11 +14,11 @@ import {
 } from '../stores/conversation-store.ts';
 import conversationStyles from '../styles/conversations.module.css';
 import type {ChatView, ChatViewActionDetail} from './chat-feature.ts';
-import {
-  type ConversationIntentDetail,
-  type ConversationRenameDetail,
-  type ConversationRetryDetail,
-  type DlConversationList,
+import type {
+  ConversationIntentDetail,
+  ConversationRenameDetail,
+  ConversationRetryDetail,
+  DlConversationList,
 } from './conversation-list.ts';
 import './conversation-list.ts';
 import {modalResult, type FocusRestorer} from './modal.ts';

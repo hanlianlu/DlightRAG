@@ -123,7 +123,7 @@ frontend-typecheck:
 	npm --prefix frontend run typecheck
 
 frontend-lint:
-	npm --prefix frontend run lint:css
+	npm --prefix frontend run lint
 
 frontend-test:
 	npm --prefix frontend test

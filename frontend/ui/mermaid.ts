@@ -74,7 +74,8 @@ async function upgradeBlock(
   if (!source) return;
   let svg = svgCache.get(source);
   if (svg === undefined) {
-    const {svg: raw} = await mermaid.render(`mermaid-${(idSeq += 1)}`, source);
+    idSeq += 1;
+    const {svg: raw} = await mermaid.render(`mermaid-${idSeq}`, source);
     svg = sanitizeSvg(raw);
     rememberSvg(source, svg);
   }

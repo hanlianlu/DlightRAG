@@ -244,7 +244,7 @@ it('preserves loaded files and cursor when an upload only changes ingest status'
 });
 
 it('deletion replaces loaded traversal with the returned fresh first page', async () => {
-  window.fetch = async (input, init) => {
+  window.fetch = async (_input, init) => {
     if (init?.method === 'DELETE') {
       return new Response(JSON.stringify(snapshot([
         {file_name: 'Replacement', file_path: '/replacement'},
@@ -273,7 +273,7 @@ it('deletion replaces loaded traversal with the returned fresh first page', asyn
 
 it('cancelling the delete dialog keeps the file and restores trigger focus', async () => {
   let deleteRequests = 0;
-  window.fetch = async (input, init) => {
+  window.fetch = async (_input, init) => {
     if (init?.method === 'DELETE') {
       deleteRequests += 1;
       return new Response(null, {status: 204});

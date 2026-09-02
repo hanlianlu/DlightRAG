@@ -513,7 +513,9 @@ it('preserves server-validated active and primary beyond the first display page'
     workspaces: [{workspace: 'archive', display_name: 'Archive', embedding_model: 'embed'}],
     next_cursor: null,
   });
+  // biome-ignore lint/suspicious/noDocumentCookie: clearing the preference channel under test
   document.cookie = 'dlightrag_workspace_ids=;path=/;SameSite=Lax;Max-Age=0';
+  // biome-ignore lint/suspicious/noDocumentCookie: clearing the preference channel under test
   document.cookie = 'dlightrag_workspace=;path=/;SameSite=Lax;Max-Age=0';
   workspaceStore.init(
     [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed'}],

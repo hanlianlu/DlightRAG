@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "npm run check:generated && node --experimental-strip-types --test api/*.test.ts stores/*.test.ts lib/*.test.ts tokens/*.test.ts ui/components.structure.test.ts ui/i18n-catalog.structure.test.ts design-system/testing/architecture.test.ts",
+    "test": "npm run check:generated && node --experimental-strip-types --test api/*.test.ts stores/*.test.ts lib/*.test.ts tokens/*.test.ts naming.structure.test.ts ui/components.structure.test.ts ui/i18n-catalog.structure.test.ts design-system/testing/architecture.test.ts",
     "test:browser": "web-test-runner --config web-test-runner.config.mjs",
     "typecheck": "tsc --noEmit",
+    "lint": "npm run lint:ts && npm run lint:css",
+    "lint:ts": "biome lint .",
     "lint:css": "stylelint 'styles/**/*.css' 'styles/**/*.module.css' 'design-system/**/*.css'",
     "generate:icons": "node scripts/generate-icons.mjs",
     "generate:tokens": "node scripts/generate-tokens.mjs",
@@ -19,6 +21,7 @@
     "test:browser:cross-engine": "WTR_BROWSERS=chromium,firefox,webkit web-test-runner design-system/testing/design-system.browser.test.ts --config web-test-runner.config.mjs"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.11",
     "@esm-bundle/chai": "^4.3.4-fix.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^26.4.0",

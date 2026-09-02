@@ -1,0 +1,31 @@
+{
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"files": {
+		"includes": [
+			"**/*.ts",
+			"**/*.mjs",
+			"**/*.json",
+			"!node_modules",
+			"!**/*.generated.ts",
+			"!**/*.generated.json"
+		]
+	},
+	"formatter": {
+		"enabled": false
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"style": {
+				// Non-null assertions after updateComplete/guarded lookups are idiomatic
+				// throughout this Lit codebase (~165 sites); the assertion is the check.
+				"noNonNullAssertion": "off"
+			},
+			"complexity": {
+				// Named function expressions in tests read better than arrow rewrites.
+				"useArrowFunction": "off"
+			}
+		}
+	}
+}
