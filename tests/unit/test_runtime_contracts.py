@@ -107,11 +107,43 @@ def test_run_status_and_phase_literals_have_one_runtime_owner() -> None:
 
 
 def test_frontend_phase_union_matches_runtime() -> None:
-    text = (_ROOT / "frontend/ui/chat_feature.ts").read_text(encoding="utf-8")
-    match = re.search(r"type AnswerPhase = ([^;]+);", text)
-    assert match is not None
-    values = tuple(part.strip().strip("'\"") for part in match.group(1).split("|"))
-    assert values == _PHASE_VALUES
+    """The hand-maintained AnswerPhase mirror must exist exactly once in the
+    frontend production sources and match the runtime phases, wherever the
+    declaration currently lives.
+
+    The mirror is not generated from the backend and the label lookup casts
+    unknown phases, so drift degrades silently at runtime; this tripwire fails
+    only when the contract itself drifts or duplicates, never when the type
+    moves files.
+    """
+    declarations: list[tuple[Path, tuple[str, ...]]] = []
+    for dirpath, dirnames, filenames in os.walk(_ROOT / "frontend"):
+        dirnames[:] = [name for name in dirnames if name not in {"node_modules", "dist", "build"}]
+        for filename in filenames:
+            if not filename.endswith(".ts") or ".test." in filename:
+                continue
+            path = Path(dirpath) / filename
+            match = re.search(
+                r"type AnswerPhase = ([^;]+);",
+                path.read_text(encoding="utf-8"),
+            )
+            if match is not None:
+                declarations.append(
+                    (
+                        path,
+                        tuple(part.strip().strip("'\"") for part in match.group(1).split("|")),
+                    )
+                )
+
+    assert declarations, "frontend production sources declare no AnswerPhase mirror"
+    assert len(declarations) == 1, (
+        "frontend declares AnswerPhase in more than one production file: "
+        + ", ".join(str(path) for path, _ in declarations)
+    )
+    path, values = declarations[0]
+    assert values == _PHASE_VALUES, (
+        f"{path.relative_to(_ROOT)} AnswerPhase {values} != runtime {_PHASE_VALUES}"
+    )
 
 
 def test_postgres_adapter_does_not_publish_or_supply_runtime_records() -> None:
