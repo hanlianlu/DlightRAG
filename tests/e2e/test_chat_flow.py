@@ -369,7 +369,7 @@ def test_separated_drops_that_make_progress_never_exhaust_the_reconnect_budget(
     )
     page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
     answer = page.evaluate(
-        """() => Array.from(document.querySelectorAll('[class*="aiMessageContent"]'))
+        """() => Array.from(document.querySelectorAll('[data-run-id]'))
             .map(node => node.textContent).join('')"""
     )
     assert answer.count("DlightRAG is a multimodal RAG system.") == 1

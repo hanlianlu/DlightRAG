@@ -376,6 +376,7 @@ class E2EConversationService:
         workspaces: Any,
         attachments: Any = (),
         mode: str | None = None,
+        requested_skill: str | None = None,
     ) -> WebAnswerSubmission | None:
         with self._lock:
             if conversation_id is None:
