@@ -11,6 +11,7 @@ import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import {workspaceStore} from '../stores/workspace-store.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
+import {requestToast} from './toast-request.ts';
 import {publishModalState, showOwnedModal} from './modal.ts';
 import type {ToastRequestDetail} from './toast.ts';
 import './workspace-create.ts';
@@ -333,12 +334,12 @@ export class DlWorkspaceScope extends LightElement {
       ) return;
       workspaceStore.remove(deleted.workspace, deleted.nextWorkspace);
       this.querySelector<HTMLDialogElement>('#delete-workspace-dialog')?.close();
-      this.#requestToast({
+      requestToast(this, {
         message: msg(str`Workspace ${workspace} deleted.`, {id: 'workspaceScope.deleted'}),
       });
     } catch (error) {
       if (!operation.signal.aborted && this.#deleteOperation === operation) {
-        this.#requestToast({
+        requestToast(this, {
           message: error instanceof WorkspaceApiError
             ? error.message
             : msg('Could not delete workspace.', {id: 'workspaceScope.deleteFailed'}),
@@ -377,13 +378,6 @@ export class DlWorkspaceScope extends LightElement {
     if (target?.isConnected && !target.inert) target.focus();
   };
 
-  #requestToast(detail: ToastRequestDetail): void {
-    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
-      detail,
-      bubbles: true,
-      composed: true,
-    }));
-  }
 }
 
 customElements.define('dl-workspace-scope', DlWorkspaceScope);

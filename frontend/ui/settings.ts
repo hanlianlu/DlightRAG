@@ -18,6 +18,7 @@ import {
 import {icon} from '../design-system/index.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {conversationStore} from '../stores/conversation-store.ts';
+import {requestToast} from './toast-request.ts';
 import type {ChatMemoryOperationDetail} from './chat-feature.ts';
 import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
 import type {ToastRequestDetail} from './toast.ts';
@@ -112,7 +113,7 @@ export class DlSettingsDialog extends LightElement {
       const read = await this.#readMemory();
       if (read === 'failed') {
         this.memory = null;
-        this.#requestToast({
+        requestToast(this, {
           message: msg('Could not load memory settings.', {id: 'settings.memoryLoadFailed'}),
           duration: 3000,
         });
@@ -140,12 +141,12 @@ export class DlSettingsDialog extends LightElement {
     this.#seenMemoryOperations.add(identity);
     const message = memorySummary(event);
     if (event.outcome !== 'changed' || !event.changeId) {
-      this.#requestToast({message, duration: 3000});
+      requestToast(this, {message, duration: 3000});
       return;
     }
     const changeId = event.changeId;
     const signal = this.#events?.signal;
-    this.#requestToast({
+    requestToast(this, {
       message,
       action: {
         actionLabel: msg('Undo', {id: 'settings.memory.undo'}),
@@ -280,7 +281,7 @@ export class DlSettingsDialog extends LightElement {
     } catch {
       if (!signal.aborted) {
         input.checked = !requested;
-        this.#requestToast({
+        requestToast(this, {
           message: msg('Could not save memory settings.', {id: 'settings.memorySaveFailed'}),
           duration: 3000,
         });
@@ -302,14 +303,14 @@ export class DlSettingsDialog extends LightElement {
       await clearMemory(signal);
       if (await this.#readMemory() === 'failed') throw new Error('Memory refresh failed');
       if (!signal.aborted) {
-        this.#requestToast({
+        requestToast(this, {
           message: msg('Memory cleared.', {id: 'settings.memoryCleared'}),
           duration: 3000,
         });
       }
     } catch {
       if (!signal.aborted) {
-        this.#requestToast({
+        requestToast(this, {
           message: msg('Could not clear memory.', {id: 'settings.memoryClearFailedToast'}),
           duration: 3000,
         });
@@ -331,13 +332,6 @@ export class DlSettingsDialog extends LightElement {
     void setLanguagePreference(preference);
   };
 
-  #requestToast(detail: ToastRequestDetail): void {
-    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
-      detail,
-      bubbles: true,
-      composed: true,
-    }));
-  }
 
   #invalidateMemoryReads(): void {
     this.#memoryReadGeneration += 1;

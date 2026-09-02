@@ -14,6 +14,7 @@ import {
 } from '../api/files.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement} from '../lib/lit-host.ts';
+import {requestToast} from './toast-request.ts';
 import {modalResult} from './modal.ts';
 import type {ToastRequestDetail} from './toast.ts';
 
@@ -404,7 +405,7 @@ export class DlFailedFileRecovery extends LightElement {
       if (!this.#mutationCurrent(controller, workspace, generation)) return;
       this.recovery = job;
       if (isRecoveryActive(job)) {
-        this.#requestToast({
+        requestToast(this, {
           message: msg('Document recovery started.', {id: 'inspectorFiles.recovery.started'}),
           duration: 3000,
         });
@@ -414,7 +415,7 @@ export class DlFailedFileRecovery extends LightElement {
       }
     } catch (error) {
       if (isAbortError(error) || !this.#mutationCurrent(controller, workspace, generation)) return;
-      this.#requestToast({
+      requestToast(this, {
         message: recoveryRequestError(
           error,
           msg('Document recovery could not be started.', {
@@ -489,7 +490,7 @@ export class DlFailedFileRecovery extends LightElement {
       composed: true,
     }));
     if (job.status === 'succeeded' || job.status === 'partial') {
-      this.#requestToast({
+      requestToast(this, {
         message: job.failed > 0
           ? msg(str`Recovery finished: ${job.succeeded} succeeded, ${job.failed} still failed.`, {
             id: 'inspectorFiles.recovery.finishedPartial',
@@ -501,7 +502,7 @@ export class DlFailedFileRecovery extends LightElement {
       });
       return;
     }
-    this.#requestToast({
+    requestToast(this, {
       message: msg('Document recovery failed.', {id: 'inspectorFiles.recovery.failed'}),
       duration: 4000,
     });
@@ -572,13 +573,6 @@ export class DlFailedFileRecovery extends LightElement {
     `;
   }
 
-  #requestToast(detail: ToastRequestDetail): void {
-    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
-      detail,
-      bubbles: true,
-      composed: true,
-    }));
-  }
 }
 
 customElements.define('dl-failed-file-recovery', DlFailedFileRecovery);

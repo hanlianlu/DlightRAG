@@ -1,9 +1,9 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import { Store } from './base';
+import { Store } from './base.ts';
 import type { WorkspaceRecord } from '../events/bus';
-import type { WorkspacePage } from '../api/workspaces.ts';
-import {isAbortError} from '../lib/errors.ts';
+import type {WorkspacePage, WorkspacePageItem} from '../api/workspaces.ts';
+import {KeysetPager, type PageLoadState} from '../lib/paged.ts';
 
 const PRIMARY_COOKIE = 'dlightrag_workspace';
 const ACTIVE_COOKIE = 'dlightrag_workspace_ids';
@@ -13,7 +13,7 @@ export type WorkspacePageLoader = (
   signal?: AbortSignal,
 ) => Promise<WorkspacePage>;
 
-export type WorkspaceLoadMoreState = 'idle' | 'loading' | 'error';
+export type WorkspaceLoadMoreState = PageLoadState;
 
 function setCookie(name: string, value: string): void {
   // biome-ignore lint/suspicious/noDocumentCookie: cookies are the workspace preference channel
@@ -31,11 +31,8 @@ class WorkspaceStore extends Store {
   #active: string[] = [];
   #primary = '';
   #loader: WorkspacePageLoader | null = null;
-  #nextCursor: string | null = null;
+  readonly #pager: KeysetPager<WorkspacePageItem>;
   #loadMoreState: WorkspaceLoadMoreState = 'idle';
-  #loadMoreFlight: Promise<void> | null = null;
-  #loadMoreController: AbortController | null = null;
-  #loadMoreGeneration = 0;
 
   get records(): readonly WorkspaceRecord[] {
     return this.#records;
@@ -54,11 +51,11 @@ class WorkspaceStore extends Store {
   }
 
   get hasMoreWorkspaces(): boolean {
-    return this.#loader !== null && this.#nextCursor !== null;
+    return this.#loader !== null && this.#pager.hasOlder;
   }
 
   get workspaceLoadMoreState(): WorkspaceLoadMoreState {
-    return this.#loadMoreState;
+    return this.#pager.state;
   }
 
   init(
@@ -69,15 +66,14 @@ class WorkspaceStore extends Store {
     nextCursor: string | null = null,
     knownWorkspaces: string[] | null = null,
   ): void {
-    this.#invalidateLoadMore();
+    this.#loader = loader;
+    this.#pager.reset(nextCursor);
     this.#records = records;
     // The full authorized id set stays separate from the bounded display
     // page: active/primary are server-validated against the full catalog and
     // must never be re-validated (and silently narrowed, then persisted to
     // cookies) against the first display page alone.
     this.#known = knownWorkspaces ?? records.map((record) => record.workspace);
-    this.#loader = loader;
-    this.#nextCursor = nextCursor;
     this.#active = this.#validActive(active);
     this.#primary = this.#validPrimary(primary);
     this.#syncCookies();
@@ -85,36 +81,11 @@ class WorkspaceStore extends Store {
   }
 
   loadMoreWorkspaces(): Promise<void> {
-    if (this.#loadMoreFlight !== null) return this.#loadMoreFlight;
-    if (this.#loader === null || this.#nextCursor === null) return Promise.resolve();
-    const flight = this.#loadMorePage(this.#nextCursor);
-    this.#loadMoreFlight = flight;
-    void flight.finally(() => {
-      if (this.#loadMoreFlight === flight) this.#loadMoreFlight = null;
-    });
-    return flight;
-  }
-
-  async #loadMorePage(cursor: string): Promise<void> {
-    this.#loadMoreController?.abort();
-    const controller = new AbortController();
-    this.#loadMoreController = controller;
-    const generation = this.#loadMoreGeneration;
-    this.#loadMoreState = 'loading';
-    this.changed();
-    try {
-      const page = await this.#loader!(cursor, controller.signal);
-      if (
-        controller !== this.#loadMoreController
-        || generation !== this.#loadMoreGeneration
-        || this.#nextCursor !== cursor
-      ) {
-        if (controller === this.#loadMoreController) this.#loadMoreState = 'idle';
-        return;
-      }
+    if (this.#loader === null) return Promise.resolve();
+    return this.#pager.loadNext((page) => {
       const known = new Set(this.#records.map((record) => record.workspace));
       const appended: WorkspaceRecord[] = [];
-      for (const item of page.workspaces) {
+      for (const item of page.items) {
         if (!item.workspace || known.has(item.workspace)) continue;
         known.add(item.workspace);
         appended.push({
@@ -124,28 +95,18 @@ class WorkspaceStore extends Store {
         });
       }
       this.#records = [...this.#records, ...appended];
-      this.#nextCursor = page.nextCursor ?? null;
-      this.#loadMoreState = 'idle';
-      this.changed();
-    } catch (error) {
-      if (
-        controller !== this.#loadMoreController
-        || generation !== this.#loadMoreGeneration
-      ) return;
-      if (isAbortError(error)) return;
-      this.#loadMoreState = 'error';
-      this.changed();
-    } finally {
-      if (this.#loadMoreController === controller) this.#loadMoreController = null;
-    }
+    });
   }
 
-  #invalidateLoadMore(): void {
-    this.#loadMoreController?.abort();
-    this.#loadMoreController = null;
-    this.#loadMoreGeneration += 1;
-    this.#loadMoreFlight = null;
-    this.#loadMoreState = 'idle';
+  constructor() {
+    super();
+    this.#pager = new KeysetPager<WorkspacePageItem>(
+      (cursor, signal) => this.#loader!(cursor, signal).then((page) => ({
+        items: page.workspaces,
+        nextCursor: page.nextCursor,
+      })),
+      () => this.changed(),
+    );
   }
 
   toggle(workspace: string): void {

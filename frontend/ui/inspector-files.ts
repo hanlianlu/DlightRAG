@@ -18,6 +18,7 @@ import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {ingestStore} from '../stores/ingest-store.ts';
 import {workspaceStore} from '../stores/workspace-store.ts';
 import {bus} from '../events/bus.ts';
+import {requestToast} from './toast-request.ts';
 import {modalResult} from './modal.ts';
 import {withRelativePath} from './folder-upload.ts';
 import './failed-file-recovery.ts';
@@ -245,7 +246,7 @@ export class DlInspectorFiles extends LightElement {
     this.uploading = true;
     this.error = null;
     const name = uploadLabel(files, label);
-    this.#requestToast({message: msg(str`Uploading ${name}...`, {id: 'inspectorFiles.uploadingToast'})});
+    requestToast(this, {message: msg(str`Uploading ${name}...`, {id: 'inspectorFiles.uploadingToast'})});
     try {
       const receipt = await uploadFileBatch(workspace, files, controller.signal);
       if (!this.#isCurrent(controller, workspace)) return;
@@ -258,7 +259,7 @@ export class DlInspectorFiles extends LightElement {
           : null,
       };
       this.acceptedFiles = receipt.fileCount;
-      this.#requestToast({
+      requestToast(this, {
         message: msg('Files received — processing in background', {id: 'inspectorFiles.filesReceived'}),
         duration: 3000,
       });
@@ -269,7 +270,7 @@ export class DlInspectorFiles extends LightElement {
         ? error.message
         : msg('Upload failed.', {id: 'inspectorFiles.uploadFailed'});
       this.error = message;
-      this.#requestToast({message, duration: 3000});
+      requestToast(this, {message, duration: 3000});
     } finally {
       this.#finishMutation();
       if (this.#request === controller) {
@@ -309,7 +310,7 @@ export class DlInspectorFiles extends LightElement {
       const snapshot = await deleteFileRequest(workspace, filePath, controller.signal);
       if (!this.#isCurrent(controller, workspace)) return;
       this.snapshot = snapshot;
-      this.#requestToast({
+      requestToast(this, {
         message: msg('File deleted.', {id: 'inspectorFiles.fileDeleted'}),
         duration: 3000,
       });
@@ -320,7 +321,7 @@ export class DlInspectorFiles extends LightElement {
         ? error.message
         : msg('Deletion failed.', {id: 'inspectorFiles.deletionFailed'});
       this.error = message;
-      this.#requestToast({message, duration: 3000});
+      requestToast(this, {message, duration: 3000});
     } finally {
       this.#finishMutation();
       if (this.#request === controller) {
@@ -444,13 +445,6 @@ export class DlInspectorFiles extends LightElement {
     void this.loadOlderFiles();
   };
 
-  #requestToast(detail: ToastRequestDetail): void {
-    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
-      detail,
-      bubbles: true,
-      composed: true,
-    }));
-  }
 
   #restoreDeleteTrigger(): void {
     const trigger = this.#deleteTrigger;

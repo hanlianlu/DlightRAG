@@ -5,6 +5,7 @@ import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing} from 'lit';
 import {LightElement} from '../lib/lit-host.ts';
 import {isAbortError} from '../lib/errors.ts';
+import {KeysetPager} from '../lib/paged.ts';
 import {publishModalState, showOwnedModal} from './modal.ts';
 
 export type ContinuationKind = 'follow-up' | 'fork';
@@ -116,14 +117,15 @@ export class DlChildrenRoster extends LightElement {
 
   #pageFetcher: ChildRosterPageFetcher | null = null;
   #entries: ChildRosterEntry[] = [];
-  #nextCursor: string | null = null;
-  #loadMoreState: 'idle' | 'loading' | 'error' = 'idle';
   #empty = true;
   #failed = false;
   #announcement = '';
   #controller: AbortController | null = null;
   #generation = 0;
-  #flight: Promise<void> | null = null;
+  #pager = new KeysetPager<ChildRosterEntry>(
+    (cursor, signal) => this.#pageFetcher!(cursor, signal).then((page) => ({items: page.children, nextCursor: page.nextCursor})),
+    () => this.requestUpdate(),
+  );
 
   open(
     fetcher: () => Promise<ChildRosterEntry[]>,
@@ -141,7 +143,6 @@ export class DlChildrenRoster extends LightElement {
   async refresh(): Promise<void> {
     this.#invalidate();
     this.#entries = [];
-    this.#nextCursor = null;
     this.#empty = true;
     this.#failed = false;
     if (this.#pageFetcher) {
@@ -169,7 +170,7 @@ export class DlChildrenRoster extends LightElement {
       const page = await this.#pageFetcher!(null, controller.signal);
       if (controller !== this.#controller || generation !== this.#generation) return;
       this.#entries = page.children;
-      this.#nextCursor = page.nextCursor;
+      this.#pager.reset(page.nextCursor);
       this.#empty = page.children.length === 0;
       this.#failed = false;
       this.requestUpdate();
@@ -185,70 +186,31 @@ export class DlChildrenRoster extends LightElement {
   }
 
   loadOlderChildren(): Promise<void> {
-    if (this.#flight !== null) return this.#flight;
-    if (!this.#pageFetcher || this.#nextCursor === null) return Promise.resolve();
-    const flight = this.#loadOlderPage(this.#nextCursor);
-    this.#flight = flight;
-    void flight.finally(() => {
-      if (this.#flight === flight) this.#flight = null;
-    });
-    return flight;
-  }
-
-  async #loadOlderPage(cursor: string): Promise<void> {
-    this.#controller?.abort();
-    const controller = new AbortController();
-    this.#controller = controller;
-    const generation = this.#generation;
-    this.#loadMoreState = 'loading';
     this.#announcement = msg('Loading older children…', {id: 'runDialogs.loadingOlderChildren'});
-    this.requestUpdate();
-    try {
-      const page = await this.#pageFetcher!(cursor, controller.signal);
-      if (
-        controller !== this.#controller
-        || generation !== this.#generation
-        || this.#nextCursor !== cursor
-      ) {
-        if (controller === this.#controller) {
-          this.#loadMoreState = 'idle';
-          this.#announcement = '';
-        }
-        return;
-      }
+    return this.#pager.loadNext((page) => {
       const known = new Set(this.#entries.map((entry) => entry.childSessionId).filter(Boolean));
-      const appended = page.children.filter((entry) => {
+      const appended = page.items.filter((entry) => {
         if (!entry.childSessionId || known.has(entry.childSessionId)) return false;
         known.add(entry.childSessionId);
         return true;
       });
       this.#entries = [...this.#entries, ...appended];
-      this.#nextCursor = page.nextCursor;
-      this.#loadMoreState = 'idle';
       this.#announcement = appended.length === 1
         ? msg('Loaded 1 older child.', {id: 'runDialogs.loadedOneChild'})
         : msg(str`Loaded ${appended.length} older children.`, {id: 'runDialogs.loadedOlderChildren'});
-      this.requestUpdate();
-    } catch (error) {
-      if (controller !== this.#controller || generation !== this.#generation) return;
-      if (isAbortError(error)) return;
-      this.#loadMoreState = 'error';
+    }, () => {
       this.#announcement = msg('Older children could not be loaded.', {
         id: 'runDialogs.olderChildrenFailed',
       });
-      this.requestUpdate();
-    } finally {
-      if (this.#controller === controller) this.#controller = null;
-    }
+    });
   }
 
   #invalidate(): void {
     this.#controller?.abort();
     this.#controller = null;
     this.#generation += 1;
-    this.#flight = null;
-    this.#loadMoreState = 'idle';
     this.#announcement = '';
+    this.#pager.reset(null);
   }
 
   #loadOlder = (): void => {
@@ -259,7 +221,6 @@ export class DlChildrenRoster extends LightElement {
     publishModalState(this);
     this.#invalidate();
     this.#entries = [];
-    this.#nextCursor = null;
     this.#empty = true;
     this.#failed = false;
     this.requestUpdate();
@@ -295,13 +256,13 @@ export class DlChildrenRoster extends LightElement {
               </li>
             `)}
           </ul>
-          ${this.#nextCursor !== null && !showEmpty ? html`
+          ${this.#pager.hasOlder && !showEmpty ? html`
             <div class="roster-page-control">
               <button type="button" data-load-older-children
-                      aria-busy=${this.#loadMoreState === 'loading' ? 'true' : 'false'}
-                      ?disabled=${this.#loadMoreState === 'loading'}
+                      aria-busy=${this.#pager.state === 'loading' ? 'true' : 'false'}
+                      ?disabled=${this.#pager.state === 'loading'}
                       @click=${this.#loadOlder}>
-                ${this.#loadMoreState === 'error'
+                ${this.#pager.state === 'error'
                   ? msg('Retry loading older children', {id: 'runDialogs.retryLoadOlderChildren'})
                   : msg('Load older children', {id: 'runDialogs.loadOlderChildren'})}
               </button>

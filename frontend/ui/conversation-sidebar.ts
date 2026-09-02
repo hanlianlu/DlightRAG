@@ -13,6 +13,7 @@ import {
   type ConversationMutationResult,
 } from '../stores/conversation-store.ts';
 import conversationStyles from '../styles/conversations.module.css';
+import {requestToast} from './toast-request.ts';
 import type {ChatView, ChatViewActionDetail} from './chat-feature.ts';
 import type {
   ConversationIntentDetail,
@@ -195,7 +196,7 @@ export class DlConversationSidebar extends LightElement {
       result = await conversationStore.deleteAll(signal);
       if (signal.aborted) return false;
       if (result === 'error') {
-        this.#requestToast({
+        requestToast(this, {
           message: msg('Could not delete conversations.', {id: 'conversationSidebar.deleteAllFailed'}),
           duration: 3000,
         });
@@ -206,7 +207,7 @@ export class DlConversationSidebar extends LightElement {
             await clearMemory(signal);
           } catch {
             if (!signal.aborted) {
-              this.#requestToast({
+              requestToast(this, {
                 message: msg('Conversations deleted; could not clear Profile memory.', {
                   id: 'conversationSidebar.memoryClearFailed',
                 }),
@@ -313,7 +314,7 @@ export class DlConversationSidebar extends LightElement {
 
   #lifecycleBlocked(): boolean {
     if (!this.chatFeature?.submissionPending) return false;
-    this.#requestToast({
+    requestToast(this, {
       message: msg('Wait for the current question to be accepted.', {
         id: 'conversationSidebar.waitForAcceptedQuestion',
       }),
@@ -450,13 +451,13 @@ export class DlConversationSidebar extends LightElement {
     const result = await conversationStore.rename(conversationId, title, signal);
     if (signal.aborted || result === 'ok') return;
     if (result === 'missing') {
-      this.#requestToast({
+      requestToast(this, {
         message: msg('Conversation unavailable.', {id: 'conversationSidebar.renameMissing'}),
         duration: 3000,
       });
       return;
     }
-    this.#requestToast({
+    requestToast(this, {
       message: title.trim().length > 120
         ? msg('Conversation titles must be 1 to 120 characters.', {
             id: 'conversationSidebar.renameTooLong',
@@ -498,7 +499,7 @@ export class DlConversationSidebar extends LightElement {
       result = await conversationStore.delete(conversationId, signal);
       if (signal.aborted) return;
       if (result === 'error') {
-        this.#requestToast({
+        requestToast(this, {
           message: msg('Could not delete the conversation.', {
             id: 'conversationSidebar.deleteFailed',
           }),
@@ -521,13 +522,6 @@ export class DlConversationSidebar extends LightElement {
     else await this.#focusSurvivingConversation();
   }
 
-  #requestToast(detail: ToastRequestDetail): void {
-    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
-      detail,
-      bubbles: true,
-      composed: true,
-    }));
-  }
 
   #toggleSidebar = (): void => {
     if (this.desktop) {

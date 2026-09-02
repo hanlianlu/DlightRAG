@@ -8,12 +8,12 @@ import {
   type AnswerSubmissionActor,
   type AnswerSubmissionSnapshot,
 } from './answer-submission-machine.ts';
+import {Store} from './base.ts';
 
 const NEW_CONVERSATION_KEY = '__new_chat__';
 
-export class AnswerSubmissionRegistry {
+export class AnswerSubmissionRegistry extends Store {
   readonly #actors = new Map<string, AnswerSubmissionActor>();
-  readonly #subscribers = new Set<() => void>();
 
   start(
     intent: AnswerSubmissionIntent,
@@ -25,14 +25,14 @@ export class AnswerSubmissionRegistry {
     const actor = createAnswerSubmissionActor({intent, lease, adapter});
     this.#actors.set(key, actor);
     actor.subscribe({
-      next: () => this.#notify(),
+      next: () => this.changed(),
       complete: () => {
         if (this.#actors.get(key) === actor) this.#actors.delete(key);
-        this.#notify();
+        this.changed();
       },
     });
     actor.start();
-    this.#notify();
+    this.changed();
     return actor;
   }
 
@@ -44,23 +44,15 @@ export class AnswerSubmissionRegistry {
     return [...this.#actors.values()].map(answerSubmissionSnapshot);
   }
 
-  subscribe(handler: () => void): () => void {
-    this.#subscribers.add(handler);
-    return () => this.#subscribers.delete(handler);
-  }
-
   dispose(): void {
     for (const actor of this.#actors.values()) {
       actor.getSnapshot().context.lease.discard();
       actor.stop();
     }
     this.#actors.clear();
-    this.#notify();
+    this.changed();
   }
 
-  #notify(): void {
-    for (const subscriber of this.#subscribers) subscriber();
-  }
 }
 
 export const answerSubmissionRegistry = new AnswerSubmissionRegistry();

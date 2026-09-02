@@ -6,6 +6,7 @@
 // URL/id factories are injected so ordering and lifecycle can be unit-tested.
 
 import type {AttachmentKind} from '../lib/attachment-policy.ts';
+import {Store} from './base.ts';
 
 export type PendingAttachmentKind = Extract<AttachmentKind, 'image' | 'document'>;
 
@@ -30,14 +31,14 @@ interface AttachmentStoreOptions {
     revokeObjectUrl?: (url: string) => void;
 }
 
-export class AttachmentStore {
+export class AttachmentStore extends Store {
     readonly #items: PendingAttachment[] = [];
-    readonly #subscribers = new Set<() => void>();
     readonly #createId: () => string;
     readonly #createObjectUrl: (file: File) => string;
     readonly #revokeObjectUrl: (url: string) => void;
 
     constructor(options: AttachmentStoreOptions = {}) {
+        super();
         this.#createId = options.createId || (() => crypto.randomUUID());
         this.#createObjectUrl = options.createObjectUrl || ((file) => URL.createObjectURL(file));
         this.#revokeObjectUrl = options.revokeObjectUrl || ((url) => URL.revokeObjectURL(url));
@@ -58,14 +59,14 @@ export class AttachmentStore {
     /** Move every attachment into a submission without creating another Blob URL. */
     leaseAll(): AttachmentLease {
         const items = this.#items.splice(0);
-        if (items.length > 0) this.#notify();
+        if (items.length > 0) this.changed();
         let settled = false;
         const settle = (restore: boolean): void => {
             if (settled) return;
             settled = true;
             if (restore) {
                 this.#items.unshift(...items);
-                if (items.length > 0) this.#notify();
+                if (items.length > 0) this.changed();
                 return;
             }
             for (const item of items) this.#revokeObjectUrl(item.objectUrl);
@@ -89,7 +90,7 @@ export class AttachmentStore {
             objectUrl: this.#createObjectUrl(file),
         };
         this.#items.push(item);
-        this.#notify();
+        this.changed();
         return item;
     }
 
@@ -98,26 +99,16 @@ export class AttachmentStore {
         if (index < 0) return;
         const [removed] = this.#items.splice(index, 1);
         this.#revokeObjectUrl(removed.objectUrl);
-        this.#notify();
+        this.changed();
     }
 
     clear(): void {
         if (this.#items.length === 0) return;
         for (const item of this.#items) this.#revokeObjectUrl(item.objectUrl);
         this.#items.length = 0;
-        this.#notify();
+        this.changed();
     }
 
-    subscribe(handler: () => void): () => void {
-        this.#subscribers.add(handler);
-        return () => {
-            this.#subscribers.delete(handler);
-        };
-    }
-
-    #notify(): void {
-        for (const handler of this.#subscribers) handler();
-    }
 }
 
 export const attachmentStore = new AttachmentStore();

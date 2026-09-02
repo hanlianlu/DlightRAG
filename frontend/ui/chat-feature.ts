@@ -48,6 +48,7 @@ import {
 } from './chat-message-list.ts';
 import './chat-message-list.ts';
 import type {ChatTurnView} from '../lib/chat-views.ts';
+import {requestToast} from './toast-request.ts';
 import type {ToastRequestDetail} from './toast.ts';
 import {webRouter} from './router.ts';
 
@@ -227,7 +228,7 @@ export class DlChatFeature extends LightElement {
       }
     } catch {
       if (!controller.signal.aborted && this.#continuationController === controller) {
-        this.#requestToast({
+        requestToast(this, {
           message: msg('The continuation could not be started.', {id: 'chatFeature.continuationFailed'}),
           duration: 3000,
         });
@@ -416,13 +417,6 @@ export class DlChatFeature extends LightElement {
     return this.querySelector<DlChatComposer>('dl-chat-composer');
   }
 
-  #requestToast(detail: ToastRequestDetail): void {
-    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
-      detail,
-      bubbles: true,
-      composed: true,
-    }));
-  }
 
   #submit = (event: CustomEvent<ComposerSubmitDetail>): void => {
     event.stopPropagation();
@@ -463,7 +457,7 @@ export class DlChatFeature extends LightElement {
   ): Promise<void> {
     if (this.#runController.active || this.#submissionActor) return;
     if (!conversationStore.canAnswer) {
-      this.#requestToast({
+      requestToast(this, {
         message: msg('Conversation service is unavailable. Please retry loading the conversation.', {
           id: 'chatFeature.conversationUnavailable',
         }),
@@ -671,7 +665,7 @@ export class DlChatFeature extends LightElement {
       await steerAnswerRun(runId, query, signal);
     } catch {
       if (!signal.aborted && this.#runController.runId === runId) {
-        this.#requestToast({
+        requestToast(this, {
           message: msg('This run can no longer be steered.', {id: 'chatFeature.steerUnavailable'}),
           duration: 3000,
         });

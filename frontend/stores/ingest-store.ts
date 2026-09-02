@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import { Store } from './base';
+import { Store } from './base.ts';
 import { workspaceStore } from './workspace-store.ts';
 
 class IngestStore extends Store {

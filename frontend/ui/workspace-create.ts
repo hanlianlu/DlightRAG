@@ -6,6 +6,7 @@ import {WorkspaceApiError, createWorkspaceRequest} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {workspaceStore} from '../stores/workspace-store.ts';
+import {requestToast} from './toast-request.ts';
 import type {ToastRequestDetail} from './toast.ts';
 
 export interface WorkspaceCreatedDetail {
@@ -56,7 +57,7 @@ export class DlWorkspaceCreate extends LightElement {
         embeddingModel: '',
       });
       input.value = '';
-      this.#requestToast({
+      requestToast(this, {
         message: msg(str`Workspace ${created.displayName} created.`, {id: 'workspaceCreate.created'}),
       });
       this.dispatchEvent(new CustomEvent<WorkspaceCreatedDetail>('dl-workspace-created', {
@@ -68,7 +69,7 @@ export class DlWorkspaceCreate extends LightElement {
       if (
         !lifecycle.signal.aborted && this.#lifecycle === lifecycle && this.isConnected
       ) {
-        this.#requestToast({
+        requestToast(this, {
           message: error instanceof WorkspaceApiError
             ? error.message
             : msg('Failed to create workspace', {id: 'workspaceCreate.failed'}),
@@ -80,13 +81,6 @@ export class DlWorkspaceCreate extends LightElement {
     }
   }
 
-  #requestToast(detail: ToastRequestDetail): void {
-    this.dispatchEvent(new CustomEvent<ToastRequestDetail>('dl-toast-request', {
-      detail,
-      bubbles: true,
-      composed: true,
-    }));
-  }
 
   protected override render(): TemplateResult {
     return html`
