@@ -161,7 +161,8 @@
     justify-content: center;
 }
 
-.upload-zone.is-uploading :global(#upload-spinner) {
+.upload-zone.is-uploading :global(#upload-spinner),
+:global(#upload-zone.is-uploading #upload-spinner) {
     display: flex;
 }
 

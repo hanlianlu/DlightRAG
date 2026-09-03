@@ -984,10 +984,19 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     page.wait_for_function("document.body.classList.contains('conversation-sidebar-open')")
     _wait_for_shell_settled(page)
     expanded = shell_geometry()
-    assert expanded["composerX"] == pytest.approx(expanded["sidebarWidth"], abs=1)
+    conversation_divider = 1
+    panel_divider = 1
+    assert expanded["composerX"] == pytest.approx(
+        expanded["sidebarWidth"] + conversation_divider, abs=1
+    )
     assert expanded["composerWidth"] == pytest.approx(520, abs=1)
     assert expanded["panelWidth"] == pytest.approx(
-        1440 - expanded["sidebarWidth"] - expanded["composerWidth"], abs=1
+        1440
+        - expanded["sidebarWidth"]
+        - expanded["composerWidth"]
+        - conversation_divider
+        - panel_divider,
+        abs=1,
     )
     assert expanded["composerRight"] == pytest.approx(expanded["panelX"], abs=1)
     assert expanded["effectiveWidth"] == pytest.approx(expanded["panelWidth"], abs=1)
