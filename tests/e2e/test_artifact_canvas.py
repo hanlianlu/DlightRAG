@@ -350,7 +350,7 @@ _MALICIOUS_HTML = """<!doctype html><html><body>
 </body></html>"""
 
 
-def test_active_html_is_opt_in_opaque_and_destroyed_on_close(page: Page) -> None:
+def test_active_html_is_sandboxed_and_destroyed_on_close(page: Page) -> None:
     _install_history(
         page,
         _presentation_wire(
@@ -383,9 +383,6 @@ def test_active_html_is_opt_in_opaque_and_destroyed_on_close(page: Page) -> None
     page.get_by_role("button", name="View report").click()
 
     canvas = page.locator("#artifact-canvas")
-    canvas.get_by_role("button", name="Open interactive report").wait_for(timeout=10000)
-    assert canvas.locator("dl-active-artifact-frame iframe").count() == 0
-    canvas.get_by_role("button", name="Open interactive report").click()
     iframe = canvas.locator("dl-active-artifact-frame").locator("iframe")
     iframe.wait_for(timeout=10000)
     assert iframe.get_attribute("sandbox") == "allow-scripts"

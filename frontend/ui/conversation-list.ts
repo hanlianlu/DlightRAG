@@ -61,8 +61,6 @@ export class DlConversationList extends LightElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.clearTimeout(this.#selectTimer);
-    this.#selectTimer = 0;
     this.#dismiss?.abort();
     this.#dismiss = null;
   }
@@ -114,8 +112,6 @@ export class DlConversationList extends LightElement {
     void this.#focusAfterRender('[role="menuitem"]:not([disabled])', conversationId, last);
   }
 
-  #selectTimer = 0;
-
   #rowIdFromEvent(event: Event): string | null {
     const target = event.target;
     if (!(target instanceof Element)) return null;
@@ -125,25 +121,13 @@ export class DlConversationList extends LightElement {
 
   #selectFromPointer = (event: MouseEvent): void => {
     if (this.busy) return;
+    if (event.detail >= 2) return;
     const conversationId = this.#rowIdFromEvent(event);
     if (!conversationId) return;
-    if (event.detail >= 2) return;
-    if (conversationId === this.handles.conversations.activeConversationId) return;
-    if (event.detail === 0) {
-      this.#emit<ConversationIntentDetail>('dl-conversation-select', {conversationId});
-      return;
-    }
-    window.clearTimeout(this.#selectTimer);
-    this.#selectTimer = window.setTimeout(() => {
-      this.#selectTimer = 0;
-      this.#emit<ConversationIntentDetail>('dl-conversation-select', {conversationId});
-    }, 250);
+    this.#emit<ConversationIntentDetail>('dl-conversation-select', {conversationId});
   };
 
   #renameFromPointer = (event: MouseEvent): void => {
-    window.clearTimeout(this.#selectTimer);
-    this.#selectTimer = 0;
-    if (this.busy) return;
     const conversationId = this.#rowIdFromEvent(event);
     if (conversationId) this.#startRename(conversationId);
   };
