@@ -76,13 +76,12 @@ template.innerHTML = `
       opacity: 0;
       pointer-events: none;
     }
-    :host(:not([disabled]):not([data-collapsed])) #divider:hover,
-    :host(:not([disabled]):not([data-collapsed])) #divider:focus-visible {
+    :host(:not([disabled]):not([data-collapsed])) #divider:hover {
       background: var(--color-accent-action, Highlight);
-      box-shadow: 0 0 0 1px var(--color-accent-action, Highlight);
     }
     :host(:not([disabled]):not([data-collapsed])) #divider:focus-visible {
-      box-shadow: 0 0 0 2px var(--color-accent-action, Highlight);
+      background: var(--color-accent-action, Highlight);
+      box-shadow: 0 0 0 2px var(--color-control-ring, Highlight);
     }
     @media (forced-colors: active) {
       #divider { background: CanvasText; }
