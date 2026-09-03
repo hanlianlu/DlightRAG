@@ -1,0 +1,82 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+@layer features {
+/* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules :global */
+
+/* === Files Panel — Ingest Target Pill === */
+
+.ingest-target {
+    align-items: center;
+    display: flex;
+    gap: var(--space-tight);
+    position: relative;
+}
+
+.ingest-target-pill {
+    align-items: center;
+    background: var(--color-accent-hover);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    color: var(--color-accent-action);
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    font-weight: 500;
+    gap: var(--space-inline);
+    padding: var(--space-inline) var(--space-tight);
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.ingest-target-pill:hover {
+    background: var(--color-accent-hover-strong);
+    border-color: var(--color-accent-border-soft);
+}
+
+:global(.dl-popover--ingest) :global(.dl-popover-item) {
+    background: transparent;
+    border: 0;
+    text-align: left;
+    width: 100%;
+}
+
+.ingest-target-dot {
+    background: var(--color-accent-action);
+    border-radius: var(--radius-circle);
+    flex-shrink: 0;
+    height: calc(var(--size-icon-sm) * 0.45);
+    width: calc(var(--size-icon-sm) * 0.45);
+}
+
+.ingest-target-caret {
+    color: var(--color-accent-muted);
+    flex-shrink: 0;
+    transition: transform 0.15s;
+}
+
+.ingest-target.open .ingest-target-caret {
+    transform: rotate(180deg);
+}
+
+/* Radio circle */
+.ingest-target-popover-radio {
+    border: 1.5px solid var(--color-text-subtle);
+    border-radius: var(--radius-circle);
+    flex-shrink: 0;
+    height: var(--size-icon-sm);
+    transition: all 0.15s;
+    width: var(--size-icon-sm);
+}
+
+.ingest-target-popover-radio.on {
+    background: radial-gradient(
+        circle at 50% 50%,
+        var(--color-accent-action) 0 calc(var(--size-icon-sm) * 0.23),
+        transparent calc(var(--size-icon-sm) * 0.24)
+    );
+    border-color: var(--color-accent-action);
+}
+
+}

@@ -10,6 +10,7 @@ import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import './workspace-create.ts';
+import ingestStyles from '../styles/ingest-target.module.css';
 
 /** Picks which workspace an upload lands in; shown only while Files is open. */
 export class DlIngestTarget extends LightElement {
@@ -50,8 +51,9 @@ export class DlIngestTarget extends LightElement {
     }
 
     protected override updated(): void {
+        this.classList.add(ingestStyles['ingest-target']);
         const showing = this.active && this.open;
-        this.classList.toggle('open', showing);
+        this.classList.toggle(ingestStyles.open, showing);
         if (showing) this.#dismiss.activate();
         else this.#dismiss.deactivate();
     }
@@ -77,7 +79,7 @@ export class DlIngestTarget extends LightElement {
                     void this.updateComplete.then(() => { this.#trigger()?.focus(); });
                 }}
             >
-                <span class="ingest-target-popover-radio${selected ? ' on' : ''}"></span>
+                <span class=${`${ingestStyles['ingest-target-popover-radio']}${selected ? ` ${ingestStyles.on}` : ''}`}></span>
                 <span>${record.displayName}</span>
             </button>
         `;
@@ -108,7 +110,7 @@ export class DlIngestTarget extends LightElement {
         return html`
             ${this.active ? html`
                 <button
-                    class="ingest-target-pill"
+                    class=${ingestStyles['ingest-target-pill']}
                     id="ingest-target-trigger"
                     type="button"
                     aria-label=${msg(str`Files in ${displayName}; choose file workspace`, {id: 'ingestTarget.filesInAria'})}
@@ -117,9 +119,9 @@ export class DlIngestTarget extends LightElement {
                     aria-controls="ingest-target-popover"
                     @click=${this.#togglePopover}
                 >
-                    <span class="ingest-target-dot"></span>
-                    <span class="ingest-target-name">${displayName}</span>
-                    <span class="ingest-target-caret">
+                    <span class=${ingestStyles['ingest-target-dot']}></span>
+                    <span class=${ingestStyles['ingest-target-name']}>${displayName}</span>
+                    <span class=${ingestStyles['ingest-target-caret']}>
                         ${icon('chevron-down', {size: 'xs'})}
                     </span>
                 </button>

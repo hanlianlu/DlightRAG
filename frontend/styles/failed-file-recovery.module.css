@@ -1,0 +1,219 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+@layer features {
+/* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules :global */
+
+/* === Failed-document recovery === */
+
+.failed-file-recovery-shell {
+    margin-bottom: var(--space-related);
+    position: relative;
+}
+
+.failed-file-recovery {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-accent-border-soft);
+    border-radius: var(--radius-content);
+    overflow: hidden;
+}
+
+.failed-file-recovery-summary {
+    align-items: center;
+    cursor: pointer;
+    display: grid;
+    gap: var(--space-tight);
+    grid-template-columns: auto minmax(0, 1fr);
+    list-style: none;
+    min-height: 58px;
+    padding: var(--space-tight) 96px var(--space-tight) var(--space-component);
+}
+
+.failed-file-recovery-summary::-webkit-details-marker,
+.failed-file-row-summary::-webkit-details-marker {
+    display: none;
+}
+
+.failed-file-recovery-summary:hover,
+.failed-file-recovery-summary:focus-visible {
+    background: var(--color-bg-hover);
+}
+
+.failed-file-recovery-mark,
+.failed-file-row-mark {
+    align-items: center;
+    background: var(--color-accent-surface);
+    border-radius: var(--radius-circle);
+    color: var(--color-accent-action);
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: var(--font-size-caption);
+    font-weight: 700;
+    justify-content: center;
+}
+
+.failed-file-recovery-mark {
+    height: 22px;
+    width: 22px;
+}
+
+.failed-file-recovery-copy,
+.failed-file-row-copy {
+    display: grid;
+    gap: var(--space-3xs);
+    min-width: 0;
+}
+
+.failed-file-recovery-copy strong {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+}
+
+.failed-file-recovery-copy span,
+.failed-file-row-copy span,
+.failed-file-row time {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+}
+
+.failed-file-recovery-body {
+    border-top: 1px solid var(--color-border-subtle);
+}
+
+.failed-file-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.failed-file-row {
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.failed-file-row-summary {
+    align-items: start;
+    cursor: pointer;
+    display: grid;
+    gap: var(--space-tight);
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    list-style: none;
+    padding: var(--space-tight) var(--space-component);
+}
+
+.failed-file-row-summary:hover,
+.failed-file-row-summary:focus-visible {
+    background: var(--color-row-hover-faint);
+}
+
+.failed-file-row-mark {
+    height: 18px;
+    margin-top: 1px;
+    width: 18px;
+}
+
+.failed-file-row-copy strong {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-detail);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.failed-file-row time {
+    white-space: nowrap;
+}
+
+.failed-file-technical {
+    display: grid;
+    gap: var(--space-3xs);
+    padding: 0 var(--space-component) var(--space-tight) 42px;
+}
+
+.failed-file-technical > span {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+}
+
+.failed-file-technical code {
+    color: var(--color-text-muted);
+    font-family: SFMono-Regular, Consolas, monospace;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    overflow-wrap: anywhere;
+}
+
+.failed-file-more {
+    border-bottom: 1px solid var(--color-border-subtle);
+    display: flex;
+    justify-content: center;
+    padding: var(--space-tight) var(--space-component);
+}
+
+.failed-file-more-button,
+.failed-files-retry-load {
+    background: transparent;
+    border: 0;
+    color: var(--color-accent-text);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-caption);
+}
+
+.failed-file-more-button:hover,
+.failed-file-more-button:focus-visible,
+.failed-files-retry-load:hover,
+.failed-files-retry-load:focus-visible {
+    text-decoration: underline;
+}
+
+.failed-file-more-button:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+.failed-file-recovery-note {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding: var(--space-tight) var(--space-component);
+}
+
+.failed-file-retry {
+    font-size: var(--font-size-caption);
+    min-width: 72px;
+    position: absolute;
+    right: var(--space-component);
+    top: 13px;
+    z-index: 1;
+}
+
+.failed-file-retry:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+.failed-files-loading,
+.failed-files-unavailable {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    margin-bottom: var(--space-related);
+    padding: var(--space-tight) var(--space-component);
+}
+
+.failed-files-unavailable {
+    align-items: center;
+    display: flex;
+    gap: var(--space-tight);
+    justify-content: space-between;
+}
+
+@media (width <= 560px) {
+    .failed-file-row time {
+        display: none;
+    }
+}
+
+
+}

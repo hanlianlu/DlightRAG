@@ -22,6 +22,7 @@ import {withRelativePath} from './folder-upload.ts';
 import './failed-file-recovery.ts';
 import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
 import type {ToastRequestDetail} from './toast.ts';
+import fileStyles from '../styles/inspector-files.module.css';
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -465,23 +466,23 @@ export class DlInspectorFiles extends LightElement {
     if (!status.busy) return nothing;
     return html`
       <div id="ingest-progress">
-        <div class="file-status">
-          <div class="spinner"></div>
+        <div class=${fileStyles['file-status']}>
+          <div class=${fileStyles['spinner']}></div>
           <span>${status.message || msg('Ingesting...', {id: 'inspectorFiles.ingesting'})}</span>
         </div>
         ${status.progressPercent === null ? nothing : html`
-          <div class="progress-bar-track" role="progressbar"
+          <div class=${fileStyles['progress-bar-track']} role="progressbar"
                aria-valuenow=${String(status.progressPercent)} aria-valuemin="0"
                aria-valuemax="100"
                aria-label=${msg('Ingest progress', {id: 'inspectorFiles.ingestProgressAria'})}>
-            <div class="progress-bar-fill" data-pct=${String(status.progressPercent)}></div>
+            <div class=${fileStyles['progress-bar-fill']} data-pct=${String(status.progressPercent)}></div>
           </div>
-          <div class="progress-label">
+          <div class=${fileStyles['progress-label']}>
             ${msg(str`batch ${status.currentBatch}/${status.totalBatches} · ${status.documents} doc(s)`, {id: 'inspectorFiles.batchProgress'})}
           </div>
         `}
         ${status.pendingEnqueues > 0 ? html`
-          <div class="ingest-queue-notice">
+          <div class=${fileStyles['ingest-queue-notice']}>
             ${msg(str`${status.pendingEnqueues} upload(s) queued — will process after current batch`, {id: 'inspectorFiles.queueNotice'})}
           </div>
         ` : nothing}
@@ -495,19 +496,19 @@ export class DlInspectorFiles extends LightElement {
     return html`
       ${snapshot ? this.#progress(snapshot.ingest) : nothing}
       ${this.error ? html`<div class="file-error" role="alert">${this.error}</div>` : nothing}
-      <div class="upload-zone${this.uploading ? ' is-uploading' : ''}" id="upload-zone">
-        <button type="button" class="upload-zone-file-action"
+      <div class=${`${fileStyles['upload-zone']}${this.uploading ? ` ${fileStyles['is-uploading']}` : ''}`} id="upload-zone">
+        <button type="button" class=${fileStyles['upload-zone-file-action']}
                 aria-label=${msg('Choose files', {id: 'inspectorFiles.chooseFilesAria'})}
                 @click=${() => { this.#chooseFiles(); }}>
-          <span class="upload-text">${msg('Drop files or folders, or click to choose files', {id: 'inspectorFiles.dropHint'})}</span>
+          <span class=${fileStyles['upload-text']}>${msg('Drop files or folders, or click to choose files', {id: 'inspectorFiles.dropHint'})}</span>
         </button>
-        <button type="button" class="upload-folder-action"
+        <button type="button" class=${fileStyles['upload-folder-action']}
                 @click=${() => { this.#chooseFolder(); }}>${msg('Choose folder', {id: 'inspectorFiles.chooseFolder'})}</button>
         <input class="hidden" type="file" id="file-input" name="files" multiple
                @change=${(event: Event) => { this.#fileInputChanged(event); }}>
         <input class="hidden" type="file" id="folder-input" webkitdirectory directory multiple
                @change=${(event: Event) => { this.#folderInputChanged(event); }}>
-        <div id="upload-spinner" class="file-status">${msg('Uploading...', {id: 'inspectorFiles.uploadingStatus'})}</div>
+        <div id="upload-spinner" class=${fileStyles['file-status']}>${msg('Uploading...', {id: 'inspectorFiles.uploadingStatus'})}</div>
       </div>
       <dl-failed-file-recovery
         .workspace=${this.handles.ingest.workspace}
@@ -515,7 +516,7 @@ export class DlInspectorFiles extends LightElement {
         @dl-failed-file-recovery-complete=${() => { void this.reload(false); }}
       ></dl-failed-file-recovery>
       ${this.loading ? html`
-        <div class="file-status file-status--loading"><div class="spinner"></div><span>${msg('Loading files...', {id: 'inspectorFiles.loadingFiles'})}</span></div>
+        <div class=${fileStyles['file-status']}><div class=${fileStyles['spinner']}></div><span>${msg('Loading files...', {id: 'inspectorFiles.loadingFiles'})}</span></div>
       ` : nothing}
       ${!this.loading ? html`
         <div id="file-list" role="list" aria-label=${msg('Processed files', {id: 'inspectorFiles.processedFilesAria'})} tabindex="-1">
@@ -523,22 +524,22 @@ export class DlInspectorFiles extends LightElement {
             files,
             (file) => file.filePath,
             (file) => html`
-              <div class="file-item" role="listitem">
-                <span class="file-name" title=${file.filePath}>${file.fileName}</span>
-                <button class="file-delete" type="button"
+              <div class=${fileStyles['file-item']} role="listitem" data-file-item>
+                <span class=${fileStyles['file-name']} title=${file.filePath}>${file.fileName}</span>
+                <button class=${fileStyles['file-delete']} type="button" data-file-delete
                         aria-label=${msg(str`Delete ${file.fileName}`, {id: 'inspectorFiles.deleteFileAria'})}
                         @click=${(event: Event) => {
                           this.#deleteTrigger = event.currentTarget as HTMLElement;
                           void this.#deleteFile(file.filePath);
                         }}>
-                  ${icon('close', {size: 'sm', className: 'file-delete-icon'})}
+                  ${icon('close', {size: 'sm', className: fileStyles['file-delete-icon']})}
                 </button>
               </div>
             `,
           )}
         </div>
         ${snapshot?.nextCursor ? html`
-          <div class="file-page-control">
+          <div class=${fileStyles['file-page-control']}>
             <button type="button" data-load-older-files
                     aria-busy=${this.filesLoadMoreState === 'loading' ? 'true' : 'false'}
                     ?disabled=${this.filesLoadMoreState === 'loading'}
@@ -557,7 +558,7 @@ export class DlInspectorFiles extends LightElement {
         <div class="empty-state">${msg(str`No files ingested in workspace “${this.#workspace}”.`, {id: 'inspectorFiles.emptyState'})}</div>
       ` : nothing}
       ${this.acceptedFiles > 0 && snapshot?.ingest.busy ? html`
-        <div class="ingest-queue-notice ingest-queue-notice--inline">
+        <div class=${`${fileStyles['ingest-queue-notice']} ${fileStyles['ingest-queue-notice--inline']}`}>
           ${msg(str`${this.acceptedFiles} new file(s) accepted for ingest`, {id: 'inspectorFiles.acceptedForIngest'})}
         </div>
       ` : nothing}

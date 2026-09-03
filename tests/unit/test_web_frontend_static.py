@@ -265,7 +265,7 @@ def test_panel_action_icons_use_the_accessible_semantic_registry() -> None:
 
     assert "aria-label=${msg(str`Delete ${file.fileName}`," in file_panel
     assert "'inspectorFiles.deleteFileAria'" in file_panel
-    assert "icon('close', {size: 'sm', className: 'file-delete-icon'})" in file_panel
+    assert "icon('close', {size: 'sm', className: fileStyles['file-delete-icon']})" in file_panel
     assert "icon('download', {size: 'sm', className: s['source-action-icon-svg']})" in source_panel
     assert (
         "icon('open-external', {size: 'sm', className: s['source-action-icon-svg']})"

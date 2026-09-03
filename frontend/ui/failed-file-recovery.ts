@@ -17,6 +17,7 @@ import {LightElement} from '../lib/lit-host.ts';
 import {requestToast} from './toast-request.ts';
 import {modalResult} from './modal.ts';
 import type {ToastRequestDetail} from './toast.ts';
+import recoveryStyles from '../styles/failed-file-recovery.module.css';
 
 const RECOVERY_POLL_INTERVAL_MS = 2000;
 const ACTIVE_RECOVERY_STATES = new Set(['queued', 'running']);
@@ -202,15 +203,15 @@ export class DlFailedFileRecovery extends LightElement {
   protected override render(): TemplateResult | typeof nothing {
     if (!this.active) return nothing;
     if (this.loading && this.page === null) {
-      return html`<div class="failed-files-loading" role="status">
+      return html`<div class=${recoveryStyles['failed-files-loading']} role="status">
         ${msg('Checking document status…', {id: 'inspectorFiles.recovery.loading'})}
       </div>`;
     }
     if (this.error && this.page === null) {
       return html`
-        <div class="failed-files-unavailable" role="alert">
+        <div class=${recoveryStyles['failed-files-unavailable']} role="alert">
           <span>${this.error}</span>
-          <button class="failed-files-retry-load" type="button"
+          <button class=${recoveryStyles['failed-files-retry-load']} type="button"
                   @click=${() => { void this.refresh(); }}> 
             ${msg('Try again', {id: 'inspectorFiles.recovery.tryAgain'})}
           </button>
@@ -232,11 +233,11 @@ export class DlFailedFileRecovery extends LightElement {
         });
 
     return html`
-      <div class="failed-file-recovery-shell">
-        <details class="failed-file-recovery">
-          <summary class="failed-file-recovery-summary">
-            <span class="failed-file-recovery-mark" aria-hidden="true">!</span>
-            <span class="failed-file-recovery-copy">
+      <div class=${recoveryStyles['failed-file-recovery-shell']}>
+        <details class=${recoveryStyles['failed-file-recovery']}>
+          <summary class=${recoveryStyles['failed-file-recovery-summary']}>
+            <span class=${recoveryStyles['failed-file-recovery-mark']} aria-hidden="true">!</span>
+            <span class=${recoveryStyles['failed-file-recovery-copy']}>
               <strong>${heading}</strong>
               <span>${recoveryActive
                 ? msg('You can close this panel while recovery continues.', {
@@ -245,8 +246,8 @@ export class DlFailedFileRecovery extends LightElement {
                 : msg('Review failed documents', {id: 'inspectorFiles.recovery.review'})}</span>
             </span>
           </summary>
-          <div class="failed-file-recovery-body">
-            <ul class="failed-file-list"
+          <div class=${recoveryStyles['failed-file-recovery-body']}>
+            <ul class=${recoveryStyles['failed-file-list']}
                 aria-label=${msg('Documents needing attention', {
                   id: 'inspectorFiles.recovery.listAria',
                 })}>
@@ -255,10 +256,10 @@ export class DlFailedFileRecovery extends LightElement {
                 (item) => item.documentId,
                 (item) => html`
                   <li>
-                    <details class="failed-file-row">
-                      <summary class="failed-file-row-summary">
-                        <span class="failed-file-row-mark" aria-hidden="true">!</span>
-                        <span class="failed-file-row-copy">
+                    <details class=${recoveryStyles['failed-file-row']}>
+                      <summary class=${recoveryStyles['failed-file-row-summary']}>
+                        <span class=${recoveryStyles['failed-file-row-mark']} aria-hidden="true">!</span>
+                        <span class=${recoveryStyles['failed-file-row-copy']}>
                           <strong title=${item.fileName}>${item.fileName}</strong>
                           <span>${msg('Processing did not finish.', {
                             id: 'inspectorFiles.recovery.processingFailed',
@@ -266,7 +267,7 @@ export class DlFailedFileRecovery extends LightElement {
                         </span>
                         <time datetime=${item.updatedAt}>${failureTime(item.updatedAt)}</time>
                       </summary>
-                      <div class="failed-file-technical">
+                      <div class=${recoveryStyles['failed-file-technical']}>
                         <span>${msg('Technical details', {
                           id: 'inspectorFiles.recovery.technicalDetails',
                         })}</span>
@@ -280,8 +281,8 @@ export class DlFailedFileRecovery extends LightElement {
               )}
             </ul>
             ${this.page?.nextCursor ? html`
-              <div class="failed-file-more">
-                <button class="failed-file-more-button" type="button"
+              <div class=${recoveryStyles['failed-file-more']}>
+                <button class=${recoveryStyles['failed-file-more-button']} type="button"
                         ?disabled=${this.loadMoreState === 'loading'}
                         aria-busy=${this.loadMoreState === 'loading' ? 'true' : 'false'}
                         @click=${() => { void this.#loadMore(); }}>
@@ -295,14 +296,14 @@ export class DlFailedFileRecovery extends LightElement {
                 </button>
               </div>
             ` : nothing}
-            <div class="failed-file-recovery-note">
+            <div class=${recoveryStyles['failed-file-recovery-note']}>
               ${msg('Retry uses stored sources. Parsing, embedding, and model usage may apply.', {
                 id: 'inspectorFiles.recovery.usageNotice',
               })}
             </div>
           </div>
         </details>
-        <button class="dl-btn failed-file-retry" type="button"
+        <button class=${`dl-btn ${recoveryStyles['failed-file-retry']}`} type="button"
                 ?disabled=${recoveryBusy || this.recoveryPending || failed.length === 0}
                 aria-busy=${this.recoveryPending ? 'true' : 'false'}
                 @click=${this.#confirmRetry}>

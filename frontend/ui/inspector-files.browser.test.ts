@@ -67,7 +67,7 @@ it('renders typed file data as escaped Lit text without an HTML fragment sink', 
 
   expect(panel.querySelector('.file-name')?.textContent).to.equal('<img src=x>');
   expect(panel.querySelector('.file-name img')).to.equal(null);
-  expect(panel.querySelector<HTMLButtonElement>('.file-delete')?.ariaLabel).to.equal(
+  expect(panel.querySelector<HTMLButtonElement>('[data-file-delete]')?.ariaLabel).to.equal(
     'Delete <img src=x>',
   );
 });
@@ -172,7 +172,7 @@ it('keeps loaded rows and cursor retryable after an older-page failure', async (
 
   await panel.loadOlderFiles();
   await panel.updateComplete;
-  expect(panel.querySelectorAll('.file-item')).to.have.length(1);
+  expect(panel.querySelectorAll('[data-file-item]')).to.have.length(1);
   expect(panel.querySelector('[data-load-older-files]')?.textContent).to.contain(
     'Retry loading older files',
   );
@@ -180,7 +180,7 @@ it('keeps loaded rows and cursor retryable after an older-page failure', async (
 
   await panel.loadOlderFiles();
   await panel.updateComplete;
-  expect(panel.querySelectorAll('.file-item')).to.have.length(2);
+  expect(panel.querySelectorAll('[data-file-item]')).to.have.length(2);
   expect(panel.querySelector('[data-load-older-files]')).to.equal(null);
 });
 
@@ -260,7 +260,7 @@ it('deletion replaces loaded traversal with the returned fresh first page', asyn
   document.body.appendChild(panel);
   await waitFor(() => panel.loading === false);
 
-  panel.querySelector<HTMLButtonElement>('.file-delete')!.click();
+  panel.querySelector<HTMLButtonElement>('[data-file-delete]')!.click();
   await panel.updateComplete;
   confirmDeleteDialog(panel, 'confirm');
   await waitFor(() => panel.snapshot?.files[0]?.filePath === '/replacement');
@@ -286,7 +286,7 @@ it('cancelling the delete dialog keeps the file and restores trigger focus', asy
   panel.active = true;
   document.body.appendChild(panel);
   await waitFor(() => panel.loading === false);
-  const deleteButton = panel.querySelector<HTMLButtonElement>('.file-delete')!;
+  const deleteButton = panel.querySelector<HTMLButtonElement>('[data-file-delete]')!;
   deleteButton.focus();
 
   deleteButton.click();
@@ -325,7 +325,7 @@ it('clears prior-workspace rows when the selected workspace reload fails', async
   panel.active = true;
   document.body.appendChild(panel);
   await waitFor(() => panel.loading === false);
-  expect(panel.querySelector('.file-delete')).not.to.equal(null);
+  expect(panel.querySelector('[data-file-delete]')).not.to.equal(null);
 
   ingestStore.set('secondary');
   await panel.updateComplete;
@@ -338,7 +338,7 @@ it('clears prior-workspace rows when the selected workspace reload fails', async
   expect(panel.snapshot).to.equal(null);
   expect(panel.acceptedFiles).to.equal(0);
   expect(panel.querySelector('.file-name')).to.equal(null);
-  expect(panel.querySelector('.file-delete')).to.equal(null);
+  expect(panel.querySelector('[data-file-delete]')).to.equal(null);
   expect(panel.querySelector('[data-load-older-files]')).to.equal(null);
   expect(deleteRequests).to.equal(0);
 });
@@ -366,7 +366,7 @@ it('delete during an older-page flight cannot apply stale rows or latch loading 
   const olderFlight = panel.loadOlderFiles();
   await panel.updateComplete;
   expect(panel.filesLoadMoreState).to.equal('loading');
-  panel.querySelector<HTMLButtonElement>('.file-delete')!.click();
+  panel.querySelector<HTMLButtonElement>('[data-file-delete]')!.click();
   await panel.updateComplete;
   confirmDeleteDialog(panel, 'confirm');
   await waitFor(() => panel.hasActiveMutation);
@@ -522,7 +522,7 @@ it('failed deletion settles loading after superseding a pending visible reload',
   document.body.appendChild(panel);
   panel.active = true;
   await waitFor(() => panel.loading === false);
-  const deleteButton = panel.querySelector<HTMLButtonElement>('.file-delete')!;
+  const deleteButton = panel.querySelector<HTMLButtonElement>('[data-file-delete]')!;
 
   const reloadFlight = panel.reload(true);
   expect(panel.loading).to.equal(true);

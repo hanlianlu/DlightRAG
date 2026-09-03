@@ -1,0 +1,244 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+
+@layer features {
+/* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules :global */
+
+/* === File Management === */
+
+.file-item {
+    align-items: center;
+    border-radius: var(--radius-control);
+    display: flex;
+    gap: var(--space-tight);
+    justify-content: space-between;
+    padding: var(--space-tight) var(--space-component);
+    transition: background 0.1s;
+}
+
+.file-item:hover {
+    background: var(--color-bg-hover);
+}
+
+.file-item:focus-within {
+    background: var(--color-bg-hover);
+}
+
+.file-name {
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-detail);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-delete {
+    align-items: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-control);
+    color: var(--color-text-dim);
+    cursor: pointer;
+    display: flex;
+    flex-shrink: 0;
+    height: var(--size-icon-md);
+    justify-content: center;
+    opacity: 0.45;
+    padding: 0;
+    transition: all 0.15s;
+    width: var(--size-icon-md);
+}
+
+@media (hover: hover) {
+    .file-delete {
+        opacity: 0;
+    }
+
+    .file-delete:focus-visible {
+        opacity: 1;
+    }
+
+    .file-item:hover .file-delete,
+    .file-item:focus-within .file-delete {
+        opacity: 1;
+    }
+}
+
+.file-delete:hover {
+    background: var(--color-danger-surface);
+    color: var(--color-danger);
+}
+
+.file-delete-icon {
+    pointer-events: none;
+}
+
+.file-page-control {
+    display: flex;
+    justify-content: center;
+    padding: var(--space-tight) var(--space-component);
+}
+
+.file-page-control button {
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    padding: var(--space-tight) var(--space-related);
+}
+
+.file-page-control button:hover,
+.file-page-control button:focus-visible {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-strong);
+}
+
+.file-page-control button:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+
+/* === Progress Bar === */
+
+.progress-bar-track {
+    margin: var(--space-tight) var(--space-related);
+    height: var(--space-inline);
+    background: var(--color-border-subtle);
+    border-radius: var(--radius-highlight);
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: var(--color-progress-fill);
+    border-radius: var(--radius-highlight);
+    transition: width 0.5s ease;
+}
+
+.progress-label {
+    padding: 0 var(--space-related) var(--space-tight);
+    font-size: var(--font-size-caption);
+    color: var(--color-text-muted);
+    text-align: center;
+}
+
+/* === Ingest Queue Notice === */
+
+.ingest-queue-notice {
+    padding: var(--space-tight) var(--space-related) 0;
+    font-size: var(--font-size-caption);
+    color: var(--color-text-dim);
+    text-align: center;
+}
+
+.ingest-queue-notice--inline {
+    padding: var(--space-tight) var(--space-component);
+    border-top: 1px solid var(--color-border-subtle);
+    margin-top: var(--space-tight);
+}
+
+#ingest-progress {
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* === Ingest Status (spinner + status text) === */
+
+.file-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-tight);
+    padding: var(--space-tight) var(--space-related) 0;
+    font-size: var(--font-size-detail);
+    color: var(--color-text-muted);
+}
+
+#upload-spinner {
+    display: none;
+    justify-content: center;
+}
+
+.upload-zone.is-uploading #upload-spinner {
+    display: flex;
+}
+
+.spinner {
+    width: calc(var(--size-icon-sm) * 0.75);
+    height: calc(var(--size-icon-sm) * 0.75);
+    border: 1.5px solid var(--color-border-subtle);
+    border-top-color: var(--color-progress-fill);
+    border-radius: var(--radius-circle);
+    flex-shrink: 0;
+    animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* === Upload Zone (Files Panel) === */
+
+.upload-zone {
+    border: 1.5px dashed var(--color-border-strong);
+    border-radius: var(--radius-content);
+    padding: var(--space-related);
+    text-align: center;
+    color: var(--color-text-dim);
+    cursor: pointer;
+    margin-bottom: var(--space-related);
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.upload-zone-file-action {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    display: block;
+    font: inherit;
+    padding: 0;
+    width: 100%;
+}
+
+.upload-text {
+    display: block;
+    font-size: var(--font-size-detail);
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-tight);
+}
+
+.upload-zone:hover {
+    border-color: var(--color-accent-border-soft);
+    background: var(--color-upload-hover);
+}
+
+.upload-zone:has(.upload-zone-file-action:focus-visible) {
+    border-color: var(--color-upload-focus);
+    outline: 2px solid var(--color-control-ring-soft);
+    outline-offset: 2px;
+}
+
+.upload-folder-action {
+    background: transparent;
+    border: 0;
+    color: var(--color-text-subtle);
+    font-family: inherit;
+    font-size: var(--font-size-caption);
+    cursor: pointer;
+    padding: var(--space-inline) var(--space-tight);
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 0.2em;
+    transition: color 0.15s, text-decoration-color 0.15s;
+}
+
+.upload-folder-action:hover,
+.upload-folder-action:focus-visible {
+    color: var(--color-text-secondary);
+    text-decoration-color: currentcolor;
+}
+
+}

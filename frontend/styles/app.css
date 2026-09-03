@@ -6,4 +6,3 @@
 @import url('./shared-components.css') layer(features);
 @import url('./panels.css') layer(features);
 @import url('./artifacts.css') layer(features);
-@import url('./files.css') layer(features);
