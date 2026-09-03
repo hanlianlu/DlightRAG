@@ -43,7 +43,10 @@
     cursor: pointer;
     font: inherit;
     font-size: var(--font-size-detail);
-    padding: var(--space-tight) var(--space-component);
+    height: var(--size-button);
+    line-height: var(--line-height-control);
+    padding-block: 0;
+    padding-inline: var(--space-component);
     transition: background 150ms, border-color 150ms, color 150ms;
 }
 
@@ -128,11 +131,20 @@
     color: var(--color-text-primary);
     font: inherit;
     font-size: var(--font-size-detail);
+    height: var(--size-button);
     line-height: var(--line-height-control);
     margin: var(--space-tight) 0 0;
     outline: none;
-    padding: var(--space-tight) var(--space-component);
+    padding-block: 0;
+    padding-inline: var(--space-component);
     width: 100%;
+}
+
+textarea.dl-dialog-input {
+    height: auto;
+    min-height: calc(var(--size-button) * 2);
+    padding-block: var(--space-tight);
+    resize: vertical;
 }
 
 .dl-dialog-input:focus {
@@ -209,10 +221,12 @@
     flex: 1;
     font: inherit;
     font-size: var(--font-size-detail);
+    height: var(--size-button);
     line-height: var(--line-height-control);
     min-width: 0;
     outline: none;
-    padding: var(--space-tight);
+    padding-block: 0;
+    padding-inline: var(--space-tight);
 }
 
 .dl-popover-input:focus {

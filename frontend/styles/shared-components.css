@@ -31,7 +31,6 @@
 
 .settings-dialog {
     background: var(--color-bg-surface);
-    backdrop-filter: blur(20px);
     border: 0;
     border-right: 1px solid var(--color-border-subtle);
     border-radius: 0 var(--radius-docked) var(--radius-docked) 0;
@@ -174,6 +173,7 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-subhead);
     font-weight: 600;
+    line-height: var(--line-height-control);
     margin-bottom: var(--space-component);
 }
 

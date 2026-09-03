@@ -22,7 +22,6 @@ dl-inspector[aria-hidden='true'] {
 .panel {
     background: var(--color-bg-surface);
     border-radius: var(--radius-docked);
-    backdrop-filter: blur(20px);
     display: flex;
     flex-direction: column;
     height: 100%;
