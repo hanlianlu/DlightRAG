@@ -9,6 +9,7 @@ import {LightElement} from '../lib/lit-host.ts';
 import {safeExternalHttpHref, safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import type {ImageOpenDetail} from './image-lightbox.ts';
 import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
+import sourceStyles from '../styles/inspector-sources.module.css';
 
 export interface InspectorSourcesStateDetail {
   hasSources: boolean;
@@ -81,8 +82,8 @@ export class DlInspectorSources extends LightElement {
       });
     }
     if (changed.has('sources') || changed.has('expandedRef') || changed.has('showAll')) {
-      this.querySelectorAll('.source-doc.expanded .source-doc-chunks').forEach((element) => {
-        typesetRichContent(element);
+      this.querySelectorAll('[data-source-chunks]').forEach((element) => {
+        if (element.closest('[data-expanded]')) typesetRichContent(element);
       });
     }
     this.dispatchEvent(new CustomEvent<InspectorSourcesStateDetail>(
@@ -117,33 +118,35 @@ export class DlInspectorSources extends LightElement {
     const expanded = this.showAll || this.expandedRef === source.id;
     const download = safeSameOriginHref(source.downloadUrl);
     const external = safeExternalHttpHref(source.sourceUrl);
+    const s = sourceStyles;
     return html`
-      <div class="source-doc${expanded ? ' expanded' : ''}" data-ref=${source.id}>
-        <div class="source-doc-header">
-          <button class="source-doc-toggle" type="button" aria-expanded=${String(expanded)}
+      <div class=${`${s['source-doc']}${expanded ? ` ${s.expanded}` : ''}`}
+           data-ref=${source.id} ?data-expanded=${expanded}>
+        <div class=${s['source-doc-header']}>
+          <button class=${s['source-doc-toggle']} type="button" aria-expanded=${String(expanded)}
                   @click=${() => { this.#toggle(source.id); }}>
-            <span class="collapse-icon">${icon('disclosure', {size: 'xs'})}</span>
-            <span class="source-doc-title">${source.title}</span>
-            <span class="source-doc-badge">${source.id}</span>
-            <span class="source-doc-count">${source.chunks.length}</span>
+            <span class=${s['collapse-icon']}>${icon('disclosure', {size: 'xs'})}</span>
+            <span class=${s['source-doc-title']}>${source.title}</span>
+            <span class=${s['source-doc-badge']}>${source.id}</span>
+            <span class=${s['source-doc-count']}>${source.chunks.length}</span>
           </button>
           ${download ? html`
-            <a href=${download} class="source-action-icon"
+            <a href=${download} class=${s['source-action-icon']}
                title=${msg('Download source', {id: 'inspectorSources.downloadSource'})}
                aria-label=${msg('Download source', {id: 'inspectorSources.downloadSource'})} download>
-              ${icon('download', {size: 'sm', className: 'source-action-icon-svg'})}
+              ${icon('download', {size: 'sm', className: s['source-action-icon-svg']})}
             </a>
           ` : nothing}
           ${external ? html`
-            <a href=${external} class="source-action-icon"
+            <a href=${external} class=${s['source-action-icon']}
                title=${msg('Open source', {id: 'inspectorSources.openSource'})}
                aria-label=${msg('Open source', {id: 'inspectorSources.openSource'})}
                target="_blank" rel="noopener noreferrer">
-              ${icon('open-external', {size: 'sm', className: 'source-action-icon-svg'})}
+              ${icon('open-external', {size: 'sm', className: s['source-action-icon-svg']})}
             </a>
           ` : nothing}
         </div>
-        <div class="source-doc-chunks" ?hidden=${!expanded}>
+        <div class=${s['source-doc-chunks']} data-source-chunks ?hidden=${!expanded}>
           ${repeat(
             source.chunks,
             (chunk, index) => this.#chunkKey(chunk.chunkIdx, index),
@@ -155,15 +158,15 @@ export class DlInspectorSources extends LightElement {
               const image = safeImageSrc(chunk.imageUrl || chunk.thumbnailUrl);
               const thumbnail = safeImageSrc(chunk.thumbnailUrl || chunk.imageUrl);
               return html`
-                <div class="source-chunk${active ? ' active' : ''}" data-ref=${source.id}
+                <div class=${`${s['source-chunk']}${active ? ` ${s.active}` : ''}`} data-ref=${source.id}
                      data-chunk=${key} ?hidden=${hidden}>
-                  <div class="source-chunk-header">
-                    <span class="source-chunk-page">
+                  <div class=${s['source-chunk-header']}>
+                    <span class=${s['source-chunk-page']}>
                       ${chunk.pageNumber === null ? `#${key}` : `p.${chunk.pageNumber}`}
                     </span>
                   </div>
                   ${image && thumbnail ? html`
-                    <div class="source-chunk-image">
+                    <div class=${s['source-chunk-image']}>
                       <img src=${thumbnail}
                            alt=${msg(str`Page ${chunk.pageNumber ?? ''}`, {id: 'inspectorSources.pageAlt'})}
                            loading="lazy" role="button" tabindex="0"
@@ -180,7 +183,7 @@ export class DlInspectorSources extends LightElement {
                     </div>
                   ` : nothing}
                   ${chunk.contentHtml ? html`
-                    <div class="source-chunk-content"
+                    <div class=${s['source-chunk-content']}
                          data-source-content=${`${source.id}:${key}`}></div>
                   ` : nothing}
                 </div>

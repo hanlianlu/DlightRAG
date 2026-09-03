@@ -14,6 +14,7 @@ import {safeImageSrc} from '../lib/urls.ts';
 import type {ImageOpenDetail} from './image-lightbox.ts';
 import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
 import chatStyles from '../styles/chat.module.css';
+import answerStyles from '../styles/answer-presentation.module.css';
 
 export interface ArtifactOpenDetail {
   artifact: AnswerArtifact;
@@ -76,7 +77,7 @@ export class AnswerPresentationElement extends LightElement {
         <section class="answer-evidence" aria-label=${msg('Visual Evidence', {id: 'answerPresentation.visualEvidenceAria'})}
                  @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
           <h3>${msg('Visual Evidence', {id: 'answerPresentation.visualEvidence'})}</h3>
-          <div class="answer-image-strip">
+          <div class=${answerStyles['answer-image-strip']}>
             ${repeat(
               presentation.evidenceImages,
               (image) => image.id || image.url,
@@ -86,23 +87,23 @@ export class AnswerPresentationElement extends LightElement {
         </section>
       ` : nothing}
       ${presentation.sources.length > 0 ? html`
-        <section class="answer-references" aria-label=${msg('References', {id: 'answerPresentation.referencesAria'})}
+        <section class=${answerStyles['answer-references']} aria-label=${msg('References', {id: 'answerPresentation.referencesAria'})}
                  @click=${this.#handleIntent} @keydown=${this.#handleKeyIntent}>
-          <h3 class="answer-references-title">${msg('References', {id: 'answerPresentation.references'})}</h3>
-          <div class=${this.referencesExpanded ? 'answer-reference-list expanded' : 'answer-reference-list'}>
+          <h3 class=${answerStyles['answer-references-title']}>${msg('References', {id: 'answerPresentation.references'})}</h3>
+          <div class=${`${answerStyles['answer-reference-list']}${this.referencesExpanded ? ` ${answerStyles.expanded}` : ''}`}>
           ${repeat(
             presentation.sources,
             (source) => source.id,
             (source) => html`
-              <button class="answer-ref-item" type="button" data-ref=${source.id}>
-                <span class="answer-ref-id">${source.id}</span>
-                <span class="answer-ref-title">${source.title}</span>
+              <button class=${answerStyles['answer-ref-item']} type="button" data-ref=${source.id}>
+                <span class=${answerStyles['answer-ref-id']}>${source.id}</span>
+                <span class=${answerStyles['answer-ref-title']}>${source.title}</span>
               </button>
             `,
           )}
           </div>
           ${presentation.sources.length > 3 ? html`
-            <button class="answer-references-show-all" type="button"
+            <button class=${answerStyles['answer-references-show-all']} type="button"
                     aria-expanded=${String(this.referencesExpanded)}
                     @click=${this.#toggleReferences}>
               ${this.referencesExpanded
@@ -171,10 +172,10 @@ export class AnswerPresentationElement extends LightElement {
     if (!source || !thumbnail) return nothing;
     return html`
       <div class="answer-evidence-image">
-        <button class="answer-image-item" type="button" data-answer-image
+        <button class=${answerStyles['answer-image-item']} type="button" data-answer-image
                 data-src=${source} aria-label=${msg(str`Open image: ${image.label}`, {id: 'answerPresentation.openImage'})}>
           <img src=${thumbnail} alt=${image.label} loading="lazy">
-          <span class="answer-image-label">${image.label}</span>
+          <span class=${answerStyles['answer-image-label']}>${image.label}</span>
         </button>
         ${image.sourceRef ? html`
           <button class="answer-image-source" type="button" data-ref=${image.sourceRef}
@@ -194,7 +195,7 @@ export class AnswerPresentationElement extends LightElement {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
     const source = target.closest<HTMLElement>(
-      '.citation-badge[data-ref], .answer-ref-item[data-ref], .answer-image-source[data-ref]',
+      '.citation-badge[data-ref], button[data-ref]',
     );
     const presentation = this.presentation;
     if (source && this.contains(source) && presentation) {

@@ -1,39 +1,7 @@
-/* DlightRAG Web Frontend — Immersive Chat Design
- *
- * Fluid design system: type, spacing, and layout scale with viewport width.
- * On phones (390px) → compact but readable.
- * On laptops (1440px) → slightly more relaxed without changing UI character.
- *
- * sources.css — Lit-rendered answer sources: document grouping, chunk
- * display, semantic highlights, citation badges, answer references, image
- * gallery, and source download icons.
- */
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
 
-/* === Citation Badge === */
-
-.citation-badge {
-    display: inline-flex;
-    align-items: center;
-    background: transparent;
-    color: var(--color-accent-emphasis);
-    font-size: var(--font-size-caption);
-    font-style: normal;
-    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-    line-height: 1;
-    padding: 0 0.16em;
-    border-radius: var(--radius-pill);
-    cursor: pointer;
-    font-weight: 600;
-    letter-spacing: 0;
-    vertical-align: baseline;
-    transition: background 0.15s, color 0.15s;
-    margin: 0 1px;
-}
-
-.citation-badge:hover {
-    background: var(--color-accent-surface);
-    color: var(--color-accent-action);
-}
+@layer features {
+/* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules :global */
 
 /* === Document-Level Source Grouping === */
 
@@ -206,18 +174,7 @@
     background: var(--color-row-hover-faint);
 }
 
-/* === Semantic Highlight === */
-
-.highlight {
-    background: var(--color-accent-hover-strong);
-    color: var(--color-text-primary);
-    padding: 0 0.1em;
-    border-radius: var(--radius-highlight);
-    border-bottom: none;
-    box-decoration-break: clone;
-}
-
-.source-chunk-content .highlight {
+.source-chunk-content :global(.highlight) {
     background: var(--color-source-highlight);
     color: var(--color-text-primary);
     border-bottom: none;
@@ -225,132 +182,6 @@
 
 /* === Answer References (doc-level, visible at bottom) === */
 
-.answer-references {
-    margin-top: var(--space-related);
-    padding-top: var(--space-component);
-    border-top: 1px solid var(--color-divider);
-}
-
-.answer-references-title {
-    font-size: var(--font-size-caption);
-    font-weight: 600;
-    color: var(--color-text-subtle);
-    text-transform: uppercase;
-    letter-spacing: 0;
-    margin-bottom: var(--space-tight);
-}
-
-.answer-ref-item {
-    background: transparent;
-    border: 0;
-    color: inherit;
-    display: flex;
-    font-family: inherit;
-    text-align: left;
-    width: 100%;
-    gap: var(--space-tight);
-    padding: var(--space-inline) 0;
-    font-size: var(--font-size-detail);
-    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-    line-height: 1.5;
-    cursor: pointer;
-    border-radius: var(--radius-control);
-    transition: background 0.1s;
-}
-
-.answer-ref-item:hover {
-    background: var(--color-accent-ghost);
-}
-
-.answer-ref-item:focus-visible {
-    outline: 2px solid var(--color-control-ring);
-    outline-offset: 2px;
-}
-
-.answer-references-show-all {
-    display: none;
-}
-
-@media (width <= 640px) {
-    .answer-reference-list:not(.expanded) .answer-ref-item:nth-child(n + 4) {
-        display: none;
-    }
-
-    .answer-references-show-all {
-        background: transparent;
-        border: 0;
-        color: var(--color-accent-action);
-        cursor: pointer;
-        display: inline-flex;
-        font: inherit;
-        font-size: var(--font-size-detail);
-        padding: var(--space-tight) 0;
-    }
-}
-
-.answer-ref-id {
-    color: var(--color-accent-muted);
-    font-weight: 600;
-    flex-shrink: 0;
-    min-width: 24px;
-}
-
-.answer-ref-title {
-    color: var(--color-text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* === Answer Image Gallery === */
-
-.answer-image-strip {
-    display: flex;
-    gap: var(--space-tight);
-    padding: var(--space-tight) 0 var(--space-inline);
-    overflow-x: auto;
-    scroll-behavior: smooth;
-    border-top: 1px solid var(--color-divider);
-    margin-top: var(--space-tight);
-}
-
-.answer-image-item {
-    background: transparent;
-    flex-shrink: 0;
-    font-family: inherit;
-    padding: 0;
-    height: clamp(100px, 10vw, 140px);
-    width: clamp(130px, 13vw, 180px);
-    border-radius: var(--radius-content);
-    cursor: pointer;
-    overflow: hidden;
-    position: relative;
-    border: 1px solid var(--color-border-subtle);
-    transition: border-color 0.15s;
-}
-
-.answer-image-item:hover {
-    border-color: var(--color-accent-border-strong);
-}
-
-.answer-image-item img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.answer-image-label {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: linear-gradient(transparent, var(--color-scrim-gradient));
-    color: var(--color-image-caption);
-    font-size: var(--font-size-caption);
-    padding: var(--space-tight) var(--space-inline) var(--space-inline);
-}
-
-/* === Source Action Icons === */
 
 .source-action-icon {
     display: inline-flex;
@@ -375,4 +206,6 @@
 
 .source-action-icon-svg {
     pointer-events: none;
+}
+
 }

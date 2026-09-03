@@ -266,9 +266,10 @@ def test_panel_action_icons_use_the_accessible_semantic_registry() -> None:
     assert "aria-label=${msg(str`Delete ${file.fileName}`," in file_panel
     assert "'inspectorFiles.deleteFileAria'" in file_panel
     assert "icon('close', {size: 'sm', className: 'file-delete-icon'})" in file_panel
-    assert "icon('download', {size: 'sm', className: 'source-action-icon-svg'})" in source_panel
+    assert "icon('download', {size: 'sm', className: s['source-action-icon-svg']})" in source_panel
     assert (
-        "icon('open-external', {size: 'sm', className: 'source-action-icon-svg'})" in source_panel
+        "icon('open-external', {size: 'sm', className: s['source-action-icon-svg']})"
+        in source_panel
     )
     assert "<svg" not in file_panel + source_panel
 
@@ -444,8 +445,11 @@ def test_lit_shell_completion_has_one_owner_and_no_compatibility_layer() -> None
     assert "'events/bus" not in app + main + production
     workspace_create = (FRONTEND_UI / "workspace-create.ts").read_text(encoding="utf-8")
     workspace_scope = (FRONTEND_UI / "workspace-scope.ts").read_text(encoding="utf-8")
-    assert "ingestStore.set(created.workspace)" in workspace_create
-    assert "ingestStore.set(deleted.nextWorkspace || workspaceStore.primary)" in workspace_scope
+    assert "this.handles.ingest.set(created.workspace)" in workspace_create
+    assert (
+        "this.handles.ingest.set(deleted.nextWorkspace || this.handles.workspaces.primary)"
+        in workspace_scope
+    )
     assert "nanoevents" not in (FRONTEND / "package.json").read_text(encoding="utf-8")
 
     toast = (FRONTEND_UI / "toast.ts").read_text(encoding="utf-8")
