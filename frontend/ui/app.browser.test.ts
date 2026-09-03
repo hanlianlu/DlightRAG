@@ -557,9 +557,9 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
   expect(canvas.layout).to.equal('wide');
   expect(app.querySelector('dl-inspector')?.open).to.equal(false);
   const chat = app.querySelector<DlChatFeature>('dl-chat-feature')!;
-  expect(chat.inert).to.equal(false);
-  expect(chat.querySelector<HTMLElement>('#chat-messages')?.inert).to.equal(true);
-  expect(chat.querySelector<HTMLElement>('dl-chat-composer')?.inert).to.equal(true);
+  expect(chat.inert).to.equal(true);
+  expect(chat.querySelector<HTMLElement>('#chat-messages')?.inert).to.equal(false);
+  expect(chat.querySelector<HTMLElement>('dl-chat-composer')?.inert).to.equal(false);
 
   app.querySelector('main[aria-label="Chat"]')?.dispatchEvent(new MouseEvent('click', {
     bubbles: true,
@@ -568,6 +568,7 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
 
   expect(canvas.classList.contains('open')).to.equal(false);
   expect(document.body.classList.contains('artifact-canvas-open')).to.equal(false);
+  expect(document.body.classList.contains('artifact-canvas-wide')).to.equal(false);
   await app.updateComplete;
   await chat.updateComplete;
   await chat.querySelector('dl-chat-message-list')?.updateComplete;

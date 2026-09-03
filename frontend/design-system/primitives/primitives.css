@@ -31,7 +31,7 @@
     display: flex;
     gap: var(--space-tight);
     justify-content: flex-end;
-    margin-top: var(--space-section);
+    margin-top: var(--space-related);
 }
 
 .dl-dialog-actions button,
@@ -128,7 +128,8 @@
     color: var(--color-text-primary);
     font: inherit;
     font-size: var(--font-size-detail);
-    margin: var(--space-component) 0;
+    line-height: var(--line-height-control);
+    margin: var(--space-tight) 0 0;
     outline: none;
     padding: var(--space-tight) var(--space-component);
     width: 100%;
@@ -171,6 +172,8 @@
 
 .dl-popover-item {
     align-items: center;
+    background: transparent;
+    border: 0;
     border-radius: var(--radius-control);
     color: var(--color-text-secondary);
     cursor: pointer;
@@ -179,6 +182,7 @@
     font-size: var(--font-size-detail);
     gap: var(--space-component);
     padding: var(--space-tight) var(--space-component);
+    text-align: left;
     transition: background 0.1s;
 }
 
@@ -205,6 +209,7 @@
     flex: 1;
     font: inherit;
     font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
     min-width: 0;
     outline: none;
     padding: var(--space-tight);

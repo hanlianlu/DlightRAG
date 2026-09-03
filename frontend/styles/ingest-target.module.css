@@ -35,13 +35,6 @@
     border-color: var(--color-accent-border-soft);
 }
 
-:global(.dl-popover--ingest) :global(.dl-popover-item) {
-    background: transparent;
-    border: 0;
-    text-align: left;
-    width: 100%;
-}
-
 .ingest-target-dot {
     background: var(--color-accent-action);
     border-radius: var(--radius-circle);

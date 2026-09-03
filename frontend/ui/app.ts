@@ -84,6 +84,7 @@ export class DlApp extends LightElement {
     canvasOpen: {state: true},
     canvasModal: {state: true},
     canvasOverlay: {state: true},
+    canvasWide: {state: true},
     chatRunning: {state: true},
     lightboxOpen: {state: true},
     nativeModalOpen: {state: true},
@@ -100,6 +101,7 @@ export class DlApp extends LightElement {
   declare canvasOpen: boolean;
   declare canvasModal: boolean;
   declare canvasOverlay: boolean;
+  declare canvasWide: boolean;
   declare chatRunning: boolean;
   declare lightboxOpen: boolean;
   declare nativeModalOpen: boolean;
@@ -126,6 +128,7 @@ export class DlApp extends LightElement {
     this.canvasOpen = false;
     this.canvasModal = false;
     this.canvasOverlay = false;
+    this.canvasWide = false;
     this.chatRunning = false;
     this.lightboxOpen = false;
     this.nativeModalOpen = false;
@@ -157,6 +160,7 @@ export class DlApp extends LightElement {
       'artifact-canvas-open',
       'artifact-canvas-overlay',
       'artifact-canvas-modal',
+      'artifact-canvas-wide',
       'settings-open',
     );
   }
@@ -269,7 +273,7 @@ export class DlApp extends LightElement {
                 <dl-chat-feature .handles=${this.handles} .attachmentPolicy=${this.#attachmentPolicy()}
                   .attachmentAccept=${attachments.accept}
                   .interactionLocked=${panelInteractionLocked}
-                  ?inert=${blockingShellModal}
+                  ?inert=${blockingShellModal || this.canvasWide}
                   @dl-chat-content-change=${this.#chatContentChanged}
                   @dl-chat-background-click=${this.#chatBackgroundClick}
                   @dl-chat-run-action=${this.#chatRunAction}></dl-chat-feature>
@@ -403,6 +407,7 @@ export class DlApp extends LightElement {
     this.canvasOpen = event.detail.open;
     this.canvasModal = event.detail.modal;
     this.canvasOverlay = event.detail.overlay;
+    this.canvasWide = event.detail.wide;
     this.#syncShellState();
   }
 
@@ -426,6 +431,7 @@ export class DlApp extends LightElement {
     document.body.classList.toggle('artifact-canvas-open', this.canvasOpen);
     document.body.classList.toggle('artifact-canvas-overlay', this.canvasOverlay);
     document.body.classList.toggle('artifact-canvas-modal', this.canvasModal);
+    document.body.classList.toggle('artifact-canvas-wide', this.canvasWide);
     syncPanelSplitState();
   }
 

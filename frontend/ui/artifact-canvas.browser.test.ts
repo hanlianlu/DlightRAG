@@ -7,6 +7,8 @@ import './artifact-canvas.ts';
 
 defineDesignSystemElements();
 import type {DlArtifactCanvas} from './artifact-canvas.ts';
+import type {DlActiveArtifactFrame} from './active-artifact-frame.ts';
+import './active-artifact-frame.ts';
 
 const originalFetch = window.fetch;
 const originalMatchMedia = window.matchMedia;
@@ -156,18 +158,19 @@ it('ignores previous HTML text that finishes decoding after an Artifact switch',
   expect(canvas.querySelector('.artifact-canvas-title')?.textContent).to.equal('Current HTML');
   expect(canvas.querySelector<HTMLAnchorElement>('[download]')?.getAttribute('href'))
     .to.equal(`${window.location.origin}/web/api/answer/run-1/artifacts/current-html?download=1`);
-  expect(canvas.querySelector('details pre')?.textContent).to.contain('Current HTML');
+  const frame = canvas.querySelector<DlActiveArtifactFrame>('dl-active-artifact-frame');
+  expect(frame?.source).to.contain('Current HTML');
 
   finishStaleDecode('<!doctype html><html><body>Stale HTML</body></html>');
   await staleOpen;
   await canvas.updateComplete;
 
   expect(canvas.querySelector('.artifact-canvas-title')?.textContent).to.equal('Current HTML');
-  expect(canvas.querySelector('details pre')?.textContent).to.contain('Current HTML');
-  expect(canvas.querySelector('details pre')?.textContent).not.to.contain('Stale HTML');
+  expect(frame?.source).to.contain('Current HTML');
+  expect(frame?.source).not.to.contain('Stale HTML');
 });
 
-it('requires explicit user intent before creating the active iframe', async () => {
+it('opens the interactive frame directly without a consent step', async () => {
   window.matchMedia = desktopMedia;
   window.fetch = async () => new Response('<!doctype html><html><body>Report</body></html>');
   const returnFocus = document.createElement('button');
@@ -189,12 +192,8 @@ it('requires explicit user intent before creating the active iframe', async () =
   const layoutGroup = canvas.querySelector<HTMLElement>('.artifact-canvas-layout-actions')!;
   expect(layoutGroup.getAttribute('role')).to.equal('group');
   expect(layoutGroup.getAttribute('aria-labelledby')).to.equal('artifact-canvas-title');
-  expect(canvas.getAttribute('aria-modal')).to.equal('true');
-  expect(canvas.querySelector('dl-active-artifact-frame')).to.equal(null);
-  const consent = canvas.querySelector<HTMLButtonElement>('.artifact-active-consent .dl-btn');
-  expect(consent?.textContent).to.contain('Open interactive report');
-  consent?.click();
-  await canvas.updateComplete;
+  expect(canvas.getAttribute('aria-modal')).to.equal(null);
+  expect(canvas.textContent).not.to.contain('Open interactive report');
   const frame = canvas.querySelector('dl-active-artifact-frame');
   expect(frame).not.to.equal(null);
   expect(frame?.active).to.equal(true);
@@ -220,11 +219,11 @@ it('requires explicit user intent before creating the active iframe', async () =
   expect(document.activeElement).to.equal(returnFocus);
 });
 
-it('publishes the one modal predicate for Shell composition and focus trapping', async () => {
+it('publishes modal, overlay, and wide predicates for Shell composition', async () => {
   window.matchMedia = desktopMedia;
   window.fetch = async () => new Response('<!doctype html><html><body>Report</body></html>');
   const canvas = document.createElement('dl-artifact-canvas') as DlArtifactCanvas;
-  const states: Array<{open: boolean; modal: boolean; overlay: boolean}> = [];
+  const states: Array<{open: boolean; modal: boolean; overlay: boolean; wide: boolean}> = [];
   canvas.addEventListener('dl-artifact-canvas-state-change', (event) => {
     states.push(event.detail);
   });
@@ -233,10 +232,21 @@ it('publishes the one modal predicate for Shell composition and focus trapping',
   await canvas.open(htmlArtifact());
   await canvas.updateComplete;
 
-  expect(canvas.getAttribute('aria-modal')).to.equal('true');
-  expect(states.at(-1)).to.deep.equal({open: true, modal: true, overlay: true});
+  // HTML suggests wide: docked expansion, not a modal, no overlay.
+  expect(canvas.layout).to.equal('wide');
+  expect(canvas.getAttribute('aria-modal')).to.equal(null);
+  expect(states.at(-1)).to.deep.equal({open: true, modal: false, overlay: false, wide: true});
 
-  const focusable = Array.from(canvas.querySelectorAll<HTMLButtonElement>('button'));
+  // Fullscreen is the modal; focus trapping applies there.
+  const fullscreenButton = Array.from(canvas.querySelectorAll<HTMLButtonElement>('.artifact-canvas-layout-actions button'))
+    .find((button) => button.textContent?.trim() === 'Fullscreen');
+  fullscreenButton?.click();
+  await canvas.updateComplete;
+  expect(canvas.getAttribute('aria-modal')).to.equal('true');
+  expect(states.at(-1)).to.deep.equal({open: true, modal: true, overlay: true, wide: false});
+  const focusable = Array.from(canvas.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), dl-icon-button:not([disabled]), a[href]',
+  ));
   focusable.at(-1)?.focus();
   focusable.at(-1)?.dispatchEvent(new KeyboardEvent('keydown', {
     key: 'Tab', bubbles: true, cancelable: true,
@@ -247,7 +257,7 @@ it('publishes the one modal predicate for Shell composition and focus trapping',
   await canvas.updateComplete;
   expect(canvas.layout).to.equal('side');
   expect(canvas.hasAttribute('aria-modal')).to.equal(false);
-  expect(states.at(-1)).to.deep.equal({open: true, modal: false, overlay: false});
+  expect(states.at(-1)).to.deep.equal({open: true, modal: false, overlay: false, wide: false});
 });
 
 it('does not restore stale focus when close is immediately followed by reopen', async () => {
@@ -287,12 +297,9 @@ it('operator-disabled HTML uses only the script-disabled static frame', async ()
   const frame = canvas.querySelector('dl-active-artifact-frame');
   expect(frame).not.to.equal(null);
   expect(frame?.active).to.equal(false);
+  expect(frame?.source).to.contain('Static');
   expect(canvas.textContent).not.to.contain('Open interactive report');
-  const source = canvas.querySelector<HTMLDetailsElement>('details');
-  expect(source?.querySelector('summary')?.textContent).to.equal('Source');
-  source?.querySelector<HTMLElement>('summary')?.click();
-  expect(source?.open).to.equal(true);
-  expect(source?.querySelector('pre')?.textContent).to.contain('Static');
+  expect(canvas.querySelector('details')).to.equal(null);
 });
 
 it('isolates PDF preview in a sandboxed no-referrer iframe', async () => {

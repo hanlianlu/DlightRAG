@@ -376,12 +376,6 @@ export const templates: Record<
   'artifactCanvas.retry': '重试',
   'artifactCanvas.openImage': str`打开图片：${0}`,
   'artifactCanvas.htmlFallbackLabel': 'HTML 工件',
-  'artifactCanvas.source': '源码',
-  'artifactCanvas.staticSource': '静态源码',
-  'artifactCanvas.untrustedTitle': '不受信任的交互式报告',
-  'artifactCanvas.untrustedDescription':
-    '活动代码与 DlightRAG 隔离。常规外部加载会被浏览器策略阻止。',
-  'artifactCanvas.openInteractive': '打开交互式报告',
   'artifactCanvas.downloadOnly': '该文件没有浏览器安全的内联预览。',
   'artifactCanvas.downloadFile': str`下载 ${0}`,
 
@@ -409,9 +403,6 @@ export const templates: Record<
 
   // Active artifact frame
   'activeArtifactFrame.defaultLabel': '工件 HTML 预览',
-  'activeArtifactFrame.modeActive': '不受信任的活动预览',
-  'activeArtifactFrame.modeStatic': '静态 HTML 预览',
-  'activeArtifactFrame.notice': str`${0} · 与 DlightRAG 隔离`,
 
   // Errors
   'errors.service': '服务出错，请重试。',

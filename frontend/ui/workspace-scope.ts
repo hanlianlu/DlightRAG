@@ -1,19 +1,19 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
+import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
-import {WorkspaceApiError, deleteWorkspaceRequest} from '../api/workspaces.ts';
+import {deleteWorkspaceRequest, WorkspaceApiError } from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
-import type {WorkspaceRecord} from '../stores/workspace-store.ts';
-import {LightElement, StoreController} from '../lib/lit-host.ts';
-import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
+import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
+import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
+import type {WorkspaceRecord} from '../stores/workspace-store.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
-import {requestToast} from './toast-request.ts';
 import {publishModalState, showOwnedModal} from './modal.ts';
 import type {ToastRequestDetail} from './toast.ts';
+import {requestToast} from './toast-request.ts';
 import './workspace-create.ts';
 
 /** Search-scope selection, workspace deletion, popover, and Dialog lifecycle. */
@@ -288,8 +288,7 @@ export class DlWorkspaceScope extends LightElement {
               @close=${this.#deleteClosed}>
         <form @submit=${this.#submitDelete}>
           <h3 class="workspace-dialog-title" id="delete-workspace-title">${msg('Delete workspace', {id: 'workspaceScope.deleteTitle'})}</h3>
-          <p class="workspace-dialog-text">${msg('This will permanently delete all data for', {id: 'workspaceScope.deleteWarning'})}</p>
-          <p class="workspace-dialog-name">${displayName}</p>
+          <p class="workspace-dialog-text">${msg('This will permanently delete all data for', {id: 'workspaceScope.deleteWarning'})} <strong>${displayName}</strong>.</p>
           <p class="workspace-dialog-text">${msg('Type the workspace name to confirm', {id: 'workspaceScope.typeToConfirm'})}</p>
           <input type="text" id="delete-workspace-confirm-input" class="dl-dialog-input"
                  autocomplete="off"

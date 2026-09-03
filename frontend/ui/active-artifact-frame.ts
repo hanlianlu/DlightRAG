@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
+import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {css, html, LitElement, nothing, type TemplateResult} from 'lit';
 
 const PERMISSIONS = [
@@ -57,19 +57,12 @@ export class DlActiveArtifactFrame extends LitElement {
   static styles = css`
     :host { display: block; height: 100%; min-height: 20rem; }
     .boundary {
-      border: 2px solid var(--color-danger-border, #a66);
       border-radius: var(--radius-content, 8px);
       display: flex;
       flex-direction: column;
       height: 100%;
       min-height: 20rem;
       overflow: hidden;
-    }
-    .notice {
-      background: var(--color-danger-surface, #291b1b);
-      color: var(--color-text-primary, #fff);
-      font: 500 var(--font-size-caption, 0.8rem)/1.4 system-ui;
-      padding: var(--space-tight, 0.5rem) var(--space-component, 0.75rem);
     }
     iframe { background: white; border: 0; flex: 1; min-height: 18rem; width: 100%; }
   `;
@@ -105,12 +98,8 @@ export class DlActiveArtifactFrame extends LitElement {
 
   protected override render(): TemplateResult | typeof nothing {
     if (this.source === null) return nothing;
-    const mode = this.active
-      ? msg('Untrusted active preview', {id: 'activeArtifactFrame.modeActive'})
-      : msg('Static HTML preview', {id: 'activeArtifactFrame.modeStatic'});
     return html`
       <div class="boundary">
-        <div class="notice" role="status">${msg(str`${mode} · isolated from DlightRAG`, {id: 'activeArtifactFrame.notice'})}</div>
         <iframe
           title=${this.label}
           sandbox=${this.active ? 'allow-scripts' : ''}

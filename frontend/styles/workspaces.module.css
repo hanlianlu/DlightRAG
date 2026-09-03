@@ -5,10 +5,7 @@
  */
 
 .workspacePopoverAll {
-  background: transparent;
-  border: 0;
   color: var(--color-accent-action);
-  text-align: left;
   width: 100%;
 }
 
@@ -19,11 +16,8 @@
 }
 
 .workspacePopoverOption {
-  background: transparent;
-  border: 0;
   flex: 1;
   min-width: 0;
-  text-align: left;
 }
 
 .workspacePopoverCheck {
@@ -79,8 +73,8 @@
     opacity: 0;
   }
 
-  .workspacePopoverItem:hover .workspacePopoverDelete,
-  .workspacePopoverItem:focus-within .workspacePopoverDelete {
+  .workspacePopoverDelete:focus-visible,
+  .workspacePopoverItem:hover .workspacePopoverDelete {
     opacity: 1;
   }
 }

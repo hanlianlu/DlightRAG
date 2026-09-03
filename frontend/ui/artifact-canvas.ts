@@ -2,7 +2,7 @@
 
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
-import {getArtifactPresentationAt, type AnswerArtifact, type AnswerPresentation} from '../api/conversations.ts';
+import {type AnswerArtifact, type AnswerPresentation, getArtifactPresentationAt } from '../api/conversations.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
@@ -19,6 +19,7 @@ export interface ArtifactCanvasStateDetail {
   open: boolean;
   modal: boolean;
   overlay: boolean;
+  wide: boolean;
 }
 
 const TEXT_PREVIEW_BYTES = 1024 * 1024;
@@ -32,7 +33,6 @@ export class DlArtifactCanvas extends LightElement {
     artifact: {state: true},
     textPreview: {state: true},
     presentation: {state: true},
-    interactive: {state: true},
   };
 
   declare activePreviewEnabled: boolean;
@@ -41,7 +41,6 @@ export class DlArtifactCanvas extends LightElement {
   declare artifact: AnswerArtifact | null;
   declare textPreview: string;
   declare presentation: AnswerPresentation | null;
-  declare interactive: boolean;
 
   #controller: AbortController | null = null;
   #returnFocus: HTMLElement | null = null;
@@ -57,7 +56,6 @@ export class DlArtifactCanvas extends LightElement {
     this.artifact = null;
     this.textPreview = '';
     this.presentation = null;
-    this.interactive = false;
     this.addEventListener('keydown', (event) => this.#onKeyDown(event));
   }
 
@@ -95,7 +93,6 @@ export class DlArtifactCanvas extends LightElement {
     this.#setLayout(this.#suggestedLayout(artifact));
     this.textPreview = '';
     this.presentation = null;
-    this.interactive = false;
     this.classList.add('open');
     this.inert = false;
     this.removeAttribute('aria-hidden');
@@ -239,44 +236,14 @@ export class DlArtifactCanvas extends LightElement {
   }
 
   #htmlPreview(): TemplateResult {
-    if (!this.activePreviewEnabled) {
-      return html`
-        <dl-active-artifact-frame
-          .source=${this.textPreview}
-          .active=${false}
-          .label=${this.artifact?.label || msg('HTML Artifact', {id: 'artifactCanvas.htmlFallbackLabel'})}
-        ></dl-active-artifact-frame>
-        ${this.#htmlSource(msg('Source', {id: 'artifactCanvas.source'}))}
-      `;
-    }
-    if (!this.interactive) {
-      return html`
-        <div class="artifact-active-consent">
-          <strong>${msg('Untrusted interactive report', {id: 'artifactCanvas.untrustedTitle'})}</strong>
-          <p>${msg('Active code is isolated from DlightRAG. Normal external loads are blocked by browser policy.', {id: 'artifactCanvas.untrustedDescription'})}</p>
-          <button class="dl-btn" type="button" @click=${() => { this.interactive = true; }}>
-            ${msg('Open interactive report', {id: 'artifactCanvas.openInteractive'})}
-          </button>
-        </div>
-        ${this.#htmlSource(msg('Static source', {id: 'artifactCanvas.staticSource'}))}
-      `;
-    }
     return html`
       <dl-active-artifact-frame
         .source=${this.textPreview}
-        .active=${true}
+        .active=${this.activePreviewEnabled}
         .label=${this.artifact?.label || msg('HTML Artifact', {id: 'artifactCanvas.htmlFallbackLabel'})}
         @dl-artifact-frame-escape=${() => this.close()}
       ></dl-active-artifact-frame>
-      ${this.#htmlSource(msg('Source', {id: 'artifactCanvas.source'}))}
     `;
-  }
-
-  #htmlSource(summary: string): TemplateResult {
-    return html`<details>
-      <summary>${summary}</summary>
-      <pre class="artifact-source">${this.textPreview}</pre>
-    </details>`;
   }
 
   #downloadOnly(): TemplateResult {
@@ -343,7 +310,12 @@ export class DlArtifactCanvas extends LightElement {
       {
         bubbles: true,
         composed: true,
-        detail: {open, modal: this.#isModal(), overlay: open && this.layout !== 'side'},
+        detail: {
+          open,
+          modal: this.#isModal(),
+          overlay: open && this.layout === 'fullscreen',
+          wide: open && this.layout === 'wide' && !this.#compactMatches(),
+        },
       },
     ));
   }
@@ -363,9 +335,12 @@ export class DlArtifactCanvas extends LightElement {
   };
 
   #isModal(): boolean {
-    const compact = this.#compactMedia?.matches
-      ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches;
-    return this.classList.contains('open') && (this.layout !== 'side' || compact);
+    return this.classList.contains('open')
+      && (this.layout === 'fullscreen' || this.#compactMatches());
+  }
+
+  #compactMatches(): boolean {
+    return this.#compactMedia?.matches ?? window.matchMedia(COMPACT_SHELL_MEDIA).matches;
   }
 
   #syncModalState(): void {
