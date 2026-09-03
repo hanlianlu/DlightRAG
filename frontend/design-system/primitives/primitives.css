@@ -36,14 +36,17 @@
 
 .dl-dialog-actions button,
 .dl-btn {
+    align-items: center;
     background: transparent;
     border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-control);
     color: var(--color-text-secondary);
     cursor: pointer;
+    display: inline-flex;
     font: inherit;
     font-size: var(--font-size-detail);
     height: var(--size-button);
+    justify-content: center;
     line-height: var(--line-height-control);
     padding-block: 0;
     padding-inline: var(--space-component);
