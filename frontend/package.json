@@ -28,6 +28,7 @@
     "@web/dev-server-esbuild": "^2.0.0",
     "@web/test-runner": "^1.0.0",
     "@web/test-runner-playwright": "^1.0.0",
+    "axe-core": "4.13.0",
     "lucide-static": "1.38.0",
     "stylelint": "^17.14.1",
     "stylelint-config-standard": "^40.0.0",
