@@ -1616,8 +1616,8 @@ it('pages more than 40 turns through the wired store, sidebar, and Load older co
   await sidebar.updateComplete;
   await settle(feature);
 
-  expect(feature.querySelectorAll('[data-turn-id]')).to.have.length(80);
-  expect(feature.textContent).to.contain('Question 1');
+  expect(feature.querySelectorAll('[data-turn-slot]')).to.have.length(80);
+  expect(feature.querySelector('[data-turn-id="turn-1"]')).not.to.equal(null);
   expect(feature.textContent).to.contain('Question 80');
   expect(feature.querySelector('[data-load-older]')).to.equal(null);
 });

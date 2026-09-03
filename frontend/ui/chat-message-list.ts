@@ -13,6 +13,11 @@ import {icon} from '../design-system/index.ts';
 import {localizedStoredRunError} from '../lib/run-errors.ts';
 import {formatFileSize} from '../lib/file-size.ts';
 import {toolRowText} from '../lib/tool-events.ts';
+import {
+  TURN_PLACEHOLDER_MIN_PX,
+  turnIsLive,
+  visibleTurnWindow,
+} from '../lib/turn-window.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import chatStyles from '../styles/chat.module.css';
@@ -134,6 +139,9 @@ export class DlChatMessageList extends LightElement {
   #pendingPrependAnchor: {turnId: string; offset: number} | null = null;
   #restoreOlderFocus = false;
   #olderAnnouncement = '';
+  #range = {start: 0, end: -1};
+  readonly #heights = new Map<string, number>();
+  #scrollArea: HTMLElement | null = null;
 
   constructor() {
     super();
@@ -147,6 +155,7 @@ export class DlChatMessageList extends LightElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     if (this.#scrollFrame) cancelAnimationFrame(this.#scrollFrame);
+    this.#unbindScroll();
     for (const url of liveObjectUrls(this.turns)) URL.revokeObjectURL(url);
   }
 
@@ -160,6 +169,8 @@ export class DlChatMessageList extends LightElement {
       this.#pendingPrependAnchor = null;
       this.#restoreOlderFocus = false;
       this.#olderAnnouncement = '';
+      this.#heights.clear();
+      this.#range = {start: 0, end: Number.MAX_SAFE_INTEGER};
     }
     if (
       previousView?.kind === 'ready'
@@ -186,9 +197,63 @@ export class DlChatMessageList extends LightElement {
       this.#pendingTurnAnchor = newlyCompletedTurn(previous, this.turns)
         ?? this.#pendingTurnAnchor;
     }
+    this.#recomputeWindow();
+  }
+
+  #bindScroll(): void {
+    const area = this.querySelector<HTMLElement>('#chat-area');
+    if (area === this.#scrollArea) return;
+    this.#unbindScroll();
+    this.#scrollArea = area;
+    area?.addEventListener('scroll', this.#onScroll, {passive: true});
+  }
+
+  #unbindScroll(): void {
+    this.#scrollArea?.removeEventListener('scroll', this.#onScroll);
+    this.#scrollArea = null;
+  }
+
+  #onScroll = (): void => {
+    if (this.#recomputeWindow()) this.requestUpdate();
+  };
+
+  #liveIndices(): Set<number> {
+    const indices = new Set<number>();
+    this.turns.forEach((turn, index) => {
+      if (turnIsLive(turn.state)) indices.add(index);
+    });
+    return indices;
+  }
+
+  #recomputeWindow(): boolean {
+    const area = this.querySelector<HTMLElement>('#chat-area');
+    const next = visibleTurnWindow({
+      count: this.turns.length,
+      heights: this.turns.map((turn) => this.#heights.get(turn.id) ?? 0),
+      scrollTop: area?.scrollTop ?? 0,
+      viewportHeight: area?.clientHeight ?? 800,
+      alwaysOn: this.#liveIndices(),
+    });
+    if (next.start === this.#range.start && next.end === this.#range.end) return false;
+    this.#range = next;
+    return true;
+  }
+
+  #measureSlots(): void {
+    for (const slot of this.querySelectorAll<HTMLElement>('[data-turn-slot]')) {
+      const id = slot.dataset.turnId;
+      if (!id || slot.hasAttribute('data-placeholder')) continue;
+      const height = slot.offsetHeight;
+      if (height > 0) this.#heights.set(id, height);
+    }
+  }
+
+  #mounted(index: number): boolean {
+    return index >= this.#range.start && index <= this.#range.end;
   }
 
   protected override updated(changed: PropertyValues<this>): void {
+    this.#bindScroll();
     if (changed.has('turns')) {
       const previous = (changed.get('turns') as readonly ChatTurnView[] | undefined) ?? [];
       const current = liveObjectUrls(this.turns);
@@ -203,7 +268,12 @@ export class DlChatMessageList extends LightElement {
         if (!currentImageIds.has(id)) this.#imageLoaded.delete(id);
       }
     }
-    if (this.#showWelcome()) return;
+    this.#measureSlots();
+    const windowChanged = this.#recomputeWindow();
+    if (this.#showWelcome()) {
+      if (windowChanged) this.requestUpdate();
+      return;
+    }
     const previousView = changed.get('view') as ChatView | undefined;
     const olderFlightSettled = previousView?.kind === 'ready'
       && this.view.kind === 'ready'
@@ -231,13 +301,17 @@ export class DlChatMessageList extends LightElement {
           else this.querySelector<HTMLElement>('#chat-messages')?.focus({preventScroll: true});
         }
       });
+      if (windowChanged) this.requestUpdate();
       return;
     }
     if (this.#pendingTurnAnchor && this.#scrollFrame) {
       cancelAnimationFrame(this.#scrollFrame);
       this.#scrollFrame = 0;
     }
-    if ((!this.#stickAfterUpdate && !this.#pendingTurnAnchor) || this.#scrollFrame) return;
+    if ((!this.#stickAfterUpdate && !this.#pendingTurnAnchor) || this.#scrollFrame) {
+      if (windowChanged) this.requestUpdate();
+      return;
+    }
     const stickToBottom = this.#stickAfterUpdate;
     this.#scrollFrame = requestAnimationFrame(() => {
       this.#scrollFrame = 0;
@@ -247,6 +321,8 @@ export class DlChatMessageList extends LightElement {
       this.#pendingTurnAnchor = null;
       const anchor = turnId
         ? Array.from(this.querySelectorAll<HTMLElement>('[data-turn-id]')).find(
+            (element) => element.dataset.turnId === turnId && !element.hasAttribute('data-turn-slot'),
+          ) ?? Array.from(this.querySelectorAll<HTMLElement>('[data-turn-id]')).find(
             (element) => element.dataset.turnId === turnId,
           )
         : null;
@@ -256,6 +332,7 @@ export class DlChatMessageList extends LightElement {
         area.scrollTop = area.scrollHeight;
       }
     });
+    if (windowChanged) this.requestUpdate();
   }
 
   protected override render(): TemplateResult {
@@ -274,7 +351,7 @@ export class DlChatMessageList extends LightElement {
           ${repeat(
             turns,
             (turn) => turn.id,
-            (turn) => guard([turn, this.#imageRevision], () => this.#turn(turn)),
+            (turn, index) => this.#turnSlot(turn, index),
           )}
           ${this.#showWelcome() ? html`
             <div class="welcome" id="welcome">
@@ -359,6 +436,21 @@ export class DlChatMessageList extends LightElement {
             ${msg('Open recent conversation', {id: 'chatMessageList.openRecent'})}
           </button>
         ` : nothing}
+      </div>
+    `;
+  }
+
+  #turnSlot(turn: ChatTurnView, index: number): TemplateResult {
+    if (!this.#mounted(index)) {
+      const height = this.#heights.get(turn.id) ?? TURN_PLACEHOLDER_MIN_PX;
+      return html`
+        <div data-turn-id=${turn.id} data-turn-slot data-placeholder
+             style=${`min-height:${height}px`}></div>
+      `;
+    }
+    return html`
+      <div data-turn-id=${turn.id} data-turn-slot>
+        ${guard([turn, this.#imageRevision], () => this.#turn(turn))}
       </div>
     `;
   }
