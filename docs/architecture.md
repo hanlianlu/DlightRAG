@@ -180,21 +180,24 @@ recovery, cancellation, event, blob, and conversation rules are centralized in
 </p>
 
 Vite owns the static entry, pre-paint theme, and built assets. Light-DOM Lit
-components own typed presentation and interaction. FastAPI serves page/static
+Features own typed presentation and interaction. FastAPI serves page/static
 assets plus same-origin `/web/api/*` commands, queries, and SSE. There is no
-Jinja or HTMX UI path.
+Jinja or HTMX UI path. Light DOM is composition (the document is the Feature
+interface). Open Shadow DOM is reserved for design-system primitives with no
+domain state. See [ADR 0003](adr/0003-light-composition-shadow-primitives.md).
 
 State is divided by lifetime: the History API owns active conversation routing;
 focused stores own conversations, workspaces, attachments, ingest, and answer
-runs. Feature components receive properties and raise typed events. The Shell
-coordinates siblings without inspecting their DOM or using module-global
-notification channels.
+runs. The Shell constructs those stores once and passes an `AppHandles` bag.
+Feature components receive properties and raise typed events. The Shell may
+query sibling Feature custom elements, not their internals, and does not use
+module-global notification channels.
 
-The package design system owns tokens, icons, primitives, and split layout.
-Sanitized answer/source HTML is the only same-DOM HTML sink. Active HTML
-Artifacts require explicit consent and render in a destroyed-on-close,
-opaque-origin iframe. Security details live in
-[Security](security.md#answer-artifact-browser-boundary).
+The package design system owns tokens, icons, Shadow primitives, and split
+layout. Sanitized answer/source HTML is the only same-DOM HTML sink and is
+never typeset inside a shadow root. Active HTML Artifacts require explicit
+consent and render in a destroyed-on-close, opaque-origin iframe. Security
+details live in [Security](security.md#answer-artifact-browser-boundary).
 
 ### Web Conversation Boundary
 

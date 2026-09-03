@@ -3,9 +3,9 @@
 
  * Every statically declared `id:` on a msg() call in ui/ and lib/ must exist
  * in the zh catalog, so a renamed or newly added message cannot silently fall
- * back to English under a non-English locale. Dynamically derived ids
- * (template-literal ids like `chatFeature.phase.${phase}`) are outside the
- * lock and stay covered by the browser locale tests.
+ * back to English under a non-English locale. Catalogued tool verbs
+ * (`chatFeature.tool.${name}` via toolDisplay) are locked the same way even
+ * though their ids are interpolated.
  */
 
 import {readdirSync, readFileSync, statSync} from 'node:fs';
@@ -41,14 +41,30 @@ function declaredIds(): Set<string> {
   return ids;
 }
 
-test('every declared msg id exists in the zh catalog', () => {
+function catalogKeys(): Set<string> {
   const catalog = readFileSync(
     join(FRONTEND_DIR, 'i18n', 'locales', 'zh.ts'),
     'utf8',
   );
-  const catalogKeys = new Set(
+  return new Set(
     [...catalog.matchAll(/^\s*'([A-Za-z][\w.]*)':/gm)].map((match) => match[1]),
   );
-  const missing = [...declaredIds()].filter((id) => !catalogKeys.has(id));
+}
+
+test('every declared msg id exists in the zh catalog', () => {
+  const missing = [...declaredIds()].filter((id) => !catalogKeys().has(id));
+  assert.deepEqual(missing, []);
+});
+
+test('every catalogued tool verb has a zh entry', () => {
+  const display = readFileSync(join(FRONTEND_DIR, 'lib', 'tool-display.ts'), 'utf8');
+  const block = display.match(/const TOOL_VERBS[^{]+\{([^}]+)\}/)?.[1];
+  assert.ok(block, 'TOOL_VERBS catalog missing');
+  const names = [...block.matchAll(/^\s*([a-z][a-z0-9_]*):/gm)].map((match) => match[1]);
+  assert.ok(names.length > 0, 'TOOL_VERBS catalog is empty');
+  const keys = catalogKeys();
+  const missing = names
+    .map((name) => `chatFeature.tool.${name}`)
+    .filter((id) => !keys.has(id));
   assert.deepEqual(missing, []);
 });
