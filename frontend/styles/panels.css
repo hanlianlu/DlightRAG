@@ -10,10 +10,6 @@ dl-inspector {
     width: 100%;
 }
 
-dl-inspector.open {
-    z-index: 110;
-}
-
 dl-inspector[aria-hidden='true'] {
     pointer-events: none;
 }

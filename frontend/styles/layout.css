@@ -631,6 +631,10 @@ body.files-panel-open #files-btn {
     width: 100%;
 }
 
+#artifact-canvas-split {
+    position: relative;
+}
+
 .primary-shell,
 .app-shell {
     min-height: 0;

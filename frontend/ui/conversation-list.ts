@@ -112,6 +112,16 @@ export class DlConversationList extends LightElement {
     void this.#focusAfterRender('[role="menuitem"]:not([disabled])', conversationId, last);
   }
 
+  #renameFromPointer = (event: MouseEvent): void => {
+    if (this.busy) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest('dl-menu, .conversation-actions-button, input')) return;
+    const row = target.closest('[data-conversation-id]');
+    const conversationId = row?.getAttribute('data-conversation-id');
+    if (conversationId) this.#startRename(conversationId);
+  };
+
   #startRename(conversationId: string): void {
     this.openMenuId = null;
     this.renameId = conversationId;
@@ -241,10 +251,6 @@ export class DlConversationList extends LightElement {
               @click=${() => {
                 this.#emit<ConversationIntentDetail>('dl-conversation-select', {conversationId});
               }}
-              @dblclick=${(event: MouseEvent) => {
-                event.preventDefault();
-                if (!this.busy) this.#startRename(conversationId);
-              }}
             >${conversation.title || msg('New chat', {id: 'conversationList.newChat'})}</button>
           `}
           ${conversation.forkedFromTitle ? html`
@@ -304,7 +310,8 @@ export class DlConversationList extends LightElement {
             'new',
           )
         : nothing}
-      <div class="conversation-items" role="list" aria-live="polite">
+      <div class="conversation-items" role="list" aria-live="polite"
+           @dblclick=${this.#renameFromPointer}>
         ${repeat(
           conversations,
           (conversation) => conversation.conversationId,

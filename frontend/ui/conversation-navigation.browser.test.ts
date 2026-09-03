@@ -204,7 +204,7 @@ it('starts rename from a double-click on the conversation title', async () => {
   document.body.appendChild(list);
   await list.updateComplete;
 
-  button(list, 'Research notes').dispatchEvent(new MouseEvent('dblclick', {
+  list.querySelector('[data-conversation-id]')!.dispatchEvent(new MouseEvent('dblclick', {
     bubbles: true, cancelable: true,
   }));
   await list.updateComplete;

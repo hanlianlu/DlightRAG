@@ -78,10 +78,11 @@ template.innerHTML = `
     }
     :host(:not([disabled]):not([data-collapsed])) #divider:hover,
     :host(:not([disabled]):not([data-collapsed])) #divider:focus-visible {
-      background: var(--color-accent-action, var(--focus-ring-color, Highlight));
+      background: var(--color-accent-action, Highlight);
+      box-shadow: 0 0 0 1px var(--color-accent-action, Highlight);
     }
     :host(:not([disabled]):not([data-collapsed])) #divider:focus-visible {
-      box-shadow: 0 0 0 2px var(--focus-ring-color, Highlight);
+      box-shadow: 0 0 0 2px var(--color-accent-action, Highlight);
     }
     @media (forced-colors: active) {
       #divider { background: CanvasText; }

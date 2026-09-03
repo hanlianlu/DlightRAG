@@ -30,8 +30,10 @@ template.innerHTML = `
     button:disabled { cursor: default; opacity: 0.5; }
     #icon, #icon svg { display: block; }
     #icon svg {
+      color: inherit;
       height: var(--dl-icon-size-sm, 16px);
       overflow: visible;
+      stroke: currentColor;
       stroke-width: var(--dl-icon-stroke, 1.75);
       width: var(--dl-icon-size-sm, 16px);
     }

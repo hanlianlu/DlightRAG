@@ -186,11 +186,11 @@ dl-artifact-canvas:not(.open) {
 }
 
 dl-artifact-canvas.layout-wide {
-    position: fixed;
+    position: absolute;
     inset: var(--space-layout);
     width: auto;
     height: auto;
-    z-index: 105;
+    z-index: 2;
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-dialog);
     box-shadow: var(--shadow-overlay);

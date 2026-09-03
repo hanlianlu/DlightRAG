@@ -325,45 +325,6 @@
     z-index: 110;
 }
 
-:global(#delete-conversation-dialog),
-:global(#delete-all-conversations-dialog),
-:global(#discard-draft-dialog) {
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-dialog);
-    box-shadow: var(--shadow-overlay);
-    color: var(--color-text-secondary);
-    font-family: var(--font-body);
-    line-height: var(--line-height-control);
-    margin: auto;
-    max-width: 420px;
-    padding: var(--space-section);
-    width: min(420px, calc(100vw - 32px));
-}
-
-:global(#delete-conversation-dialog::backdrop),
-:global(#delete-all-conversations-dialog::backdrop),
-:global(#discard-draft-dialog::backdrop) {
-    background: var(--color-scrim-strong);
-}
-
-:global(#delete-conversation-dialog h2),
-:global(#delete-all-conversations-dialog h2),
-:global(#discard-draft-dialog h2) {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-subhead);
-    line-height: var(--line-height-control);
-    margin-bottom: var(--space-component);
-}
-
-:global(#delete-conversation-dialog p),
-:global(#delete-all-conversations-dialog p),
-:global(#discard-draft-dialog p) {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-detail);
-    line-height: var(--line-height-control);
-}
-
 :global(#delete-all-conversations-dialog h2) {
     text-align: center;
     white-space: nowrap;
