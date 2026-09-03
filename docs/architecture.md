@@ -199,6 +199,13 @@ never typeset inside a shadow root. Active HTML Artifacts require explicit
 consent and render in a destroyed-on-close, opaque-origin iframe. Security
 details live in [Security](security.md#answer-artifact-browser-boundary).
 
+A custom element is a Feature only when it independently owns at least two of
+state, lifecycle, user intent, async work, accessibility, or reusable structure.
+Otherwise keep a function or a private template. Binding decisions:
+[ADR 0001](adr/0001-application-engine-adapters-architecture.md) (process zones),
+[ADR 0002](adr/0002-browser-wire-validation.md) (browser wire),
+[ADR 0003](adr/0003-light-composition-shadow-primitives.md) (Light vs Shadow).
+
 ### Web Conversation Boundary
 
 A Web conversation owns navigation/history, not execution. Each turn links to
