@@ -143,7 +143,9 @@ export function syncPanelSplitState(): void {
     const canvasState = state.widthVar === '--artifact-canvas-width';
     const splitOpen = isConversation(state)
       ? open && !drawer && !fullscreenCanvas
-      : open && !fullscreenCanvas;
+      : canvasState
+        ? open
+        : open && !fullscreenCanvas;
     state.split.disabled = drawer || !splitOpen || (canvasState && (wideCanvas || fullscreenCanvas));
     state.split.toggleAttribute('data-open', splitOpen);
     state.split.size = splitOpen ? state.preferred : 0;
@@ -156,7 +158,9 @@ export function syncPanelSplitState(): void {
     const canvasState = state.widthVar === '--artifact-canvas-width';
     const splitOpen = isConversation(state)
       ? open && !drawer && !fullscreenCanvas
-      : open && !fullscreenCanvas;
+      : canvasState
+        ? open
+        : open && !fullscreenCanvas;
     if (!splitOpen) continue;
     state.split.size = canvasState && (wideCanvas || fullscreenCanvas)
       ? state.split.max
