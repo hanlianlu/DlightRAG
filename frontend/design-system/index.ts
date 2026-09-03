@@ -9,6 +9,7 @@ export {
   type IconSourceMetadata,
 } from './icons/registry.generated.ts';
 export {defineDesignSystemElements} from './elements/define.ts';
+export {DlIconButton} from './elements/icon-button.ts';
 export {
   DlSplitLayout,
   type SplitOrientation,

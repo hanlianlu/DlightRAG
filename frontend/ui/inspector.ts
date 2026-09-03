@@ -3,7 +3,6 @@
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import type {AnswerPresentation} from '../api/conversations.ts';
-import {icon} from '../design-system/index.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
@@ -207,8 +206,8 @@ export class DlInspector extends LightElement {
             .handles=${this.handles}
             .active=${files}
           ></dl-ingest-target>
-          <button class="panel-close" id="panel-close-btn" type="button"
-                  aria-label=${msg('Close panel', {id: 'inspector.closePanel'})} @click=${() => this.close()}>${icon('close', {size: 'sm'})}</button>
+          <dl-icon-button class="panel-close" id="panel-close-btn" name="close" size="sm"
+                  aria-label=${msg('Close panel', {id: 'inspector.closePanel'})} @click=${() => this.close()}></dl-icon-button>
         </div>
         <div id="panel-content" class="panel-content">
           <dl-inspector-sources
@@ -289,14 +288,14 @@ export class DlInspector extends LightElement {
   async #focusOnCompact(): Promise<void> {
     if (!this.#isCompact()) return;
     await this.updateComplete;
-    this.querySelector<HTMLButtonElement>('#panel-close-btn')?.focus();
+    this.querySelector<HTMLElement>('#panel-close-btn')?.focus();
   }
 
   #focusableElements(): HTMLElement[] {
     const panel = this.querySelector<HTMLElement>('#panel');
     if (!panel) return [];
     return Array.from(panel.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), dl-icon-button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     )).filter((element) => !element.hidden && element.getClientRects().length > 0);
   }
 

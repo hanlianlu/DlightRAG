@@ -2,9 +2,12 @@
 
 import {expect} from '@esm-bundle/chai';
 import type {AnswerPresentation} from '../api/conversations.ts';
+import {defineDesignSystemElements} from '../design-system/index.ts';
 import {ingestStore} from '../stores/ingest-store.ts';
 import {workspaceStore} from '../stores/workspace-store.ts';
 import './inspector.ts';
+
+defineDesignSystemElements();
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
 
 const originalFetch = window.fetch;
@@ -52,8 +55,8 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   throw new Error('condition did not become true');
 }
 
-function buttonNamed(root: ParentNode, name: string): HTMLButtonElement | null {
-  return Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
+function buttonNamed(root: ParentNode, name: string): HTMLElement | null {
+  return Array.from(root.querySelectorAll<HTMLElement>('button, dl-icon-button'))
     .find((button) => button.getAttribute('aria-label') === name || button.textContent?.trim() === name)
     ?? null;
 }

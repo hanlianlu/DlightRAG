@@ -3,7 +3,6 @@
 import {msg, str, updateWhenLocaleChanges} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {getArtifactPresentationAt, type AnswerArtifact, type AnswerPresentation} from '../api/conversations.ts';
-import {icon} from '../design-system/index.ts';
 import {COMPACT_SHELL_MEDIA, MOBILE_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
@@ -176,8 +175,8 @@ export class DlArtifactCanvas extends LightElement {
             <a class="dl-btn" href=${safeSameOriginHref(artifact.downloadUrl) || '#'} download>
               ${msg('Download', {id: 'artifactCanvas.download'})}
             </a>` : nothing}
-          <button class="panel-close" data-action="close" type="button"
-                  aria-label=${msg('Close Artifact', {id: 'artifactCanvas.close'})} @click=${() => this.close()}>${icon('close', {size: 'sm'})}</button>
+          <dl-icon-button class="panel-close" data-action="close" name="close" size="sm"
+                  aria-label=${msg('Close Artifact', {id: 'artifactCanvas.close'})} @click=${() => this.close()}></dl-icon-button>
         </div>
       </div>
       <div class="artifact-canvas-content">
@@ -389,7 +388,7 @@ export class DlArtifactCanvas extends LightElement {
     }
     if (event.key === 'Tab' && this.#isModal()) {
       const focusable = Array.from(this.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), dl-icon-button:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"])',
       )).filter((element) => element.getClientRects().length > 0);
       wrapTabFocus(focusable, event);
     }

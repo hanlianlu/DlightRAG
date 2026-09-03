@@ -2,7 +2,10 @@
 
 import {expect} from '@esm-bundle/chai';
 import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
+import {defineDesignSystemElements} from '../design-system/index.ts';
 import './app.ts';
+
+defineDesignSystemElements();
 import type {DlApp} from './app.ts';
 import type {DlChatFeature} from './chat-feature.ts';
 import type {DlConversationSidebar} from './conversation-sidebar.ts';

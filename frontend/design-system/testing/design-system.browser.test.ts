@@ -2,7 +2,7 @@
 
 import {expect} from '@esm-bundle/chai';
 import {render} from 'lit';
-import {defineDesignSystemElements, DlSplitLayout, icon} from '../index.ts';
+import {defineDesignSystemElements, DlIconButton, DlSplitLayout, icon} from '../index.ts';
 
 defineDesignSystemElements();
 
@@ -43,6 +43,19 @@ it('renders semantic icons as decorative fixed-size SVG', () => {
 it('registers design-system elements idempotently', () => {
   expect(() => defineDesignSystemElements()).not.to.throw();
   expect(customElements.get('dl-split-layout')).to.equal(DlSplitLayout);
+  expect(customElements.get('dl-icon-button')).to.equal(DlIconButton);
+});
+
+it('renders a decorative icon inside an accessible host button', () => {
+  const button = document.createElement('dl-icon-button') as DlIconButton;
+  button.name = 'close';
+  button.size = 'sm';
+  button.setAttribute('aria-label', 'Close panel');
+  document.body.append(button);
+  const inner = button.shadowRoot!.querySelector('button')!;
+  expect(inner.getAttribute('aria-label')).to.equal('Close panel');
+  expect(inner.querySelector('svg')?.getAttribute('aria-hidden')).to.equal('true');
+  expect(button.shadowRoot!.querySelector('svg')?.classList.contains('dl-icon--sm')).to.equal(true);
 });
 
 it('emits normalized input and commit events for keyboard resizing', () => {

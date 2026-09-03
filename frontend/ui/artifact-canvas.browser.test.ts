@@ -2,7 +2,10 @@
 
 import {expect} from '@esm-bundle/chai';
 import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
+import {defineDesignSystemElements} from '../design-system/index.ts';
 import './artifact-canvas.ts';
+
+defineDesignSystemElements();
 import type {DlArtifactCanvas} from './artifact-canvas.ts';
 
 const originalFetch = window.fetch;
