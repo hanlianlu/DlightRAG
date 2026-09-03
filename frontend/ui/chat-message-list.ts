@@ -12,7 +12,7 @@ import type {ChatTurnView} from '../lib/chat-views.ts';
 import {icon} from '../design-system/index.ts';
 import {localizedStoredRunError} from '../lib/run-errors.ts';
 import {formatFileSize} from '../lib/file-size.ts';
-import {toolVerbText} from '../lib/tool-display.ts';
+import {toolRowText} from '../lib/tool-events.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import chatStyles from '../styles/chat.module.css';
@@ -643,9 +643,7 @@ export class DlChatMessageList extends LightElement {
                 : row.state === 'failed' ? icon('close', {size: 'xs', className: 'tool-state-icon tool-state-icon--failed'})
                   : icon('check', {size: 'xs', className: 'tool-state-icon tool-state-icon--done'})}
             </span>
-            <span class=${chatStyles.toolLabel}>${row.object
-              ? `${toolVerbText(row.verb, row.verbId)} ${row.object}`
-              : toolVerbText(row.verb, row.verbId)}</span>
+            <span class=${chatStyles.toolLabel}>${toolRowText(row)}</span>
             ${row.durationMs !== null
               ? html`<span class=${chatStyles.toolDuration}>${formatToolDuration(row.durationMs)}</span>`
               : nothing}

@@ -28,6 +28,7 @@ from dlightrag.engine.agent.tools import (
     ToolEffects,
     ToolResult,
     ToolResultCapacityError,
+    ToolRuntime,
 )
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
@@ -143,6 +144,69 @@ async def test_research_tool_settlement_rejects_nonempty_result_with_zero_residu
 
     with pytest.raises(ToolResultCapacityError, match="no residual"):
         await _settle_bounded_research_tool(profile, "cannot fit")
+
+
+@pytest.mark.asyncio
+async def test_research_runtime_projects_live_object_label_into_tool_updates() -> None:
+    emitted: list[Any] = []
+
+    async def execute(_input: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        await runtime.emit_update(
+            ToolResult.text("", details={"object_label": "quarterly revenue 2026"})
+        )
+        return ToolResult.text("added 3 new passages.")
+
+    tool = AgentTool("search_knowledge_base", "Search.", _EmptyToolInput, execute)
+    prepared = SimpleNamespace(
+        tools=(tool,),
+        model_profile=answer_model_profile(),
+        trace={"tool_observations": []},
+        evidence=SimpleNamespace(ledger_state_json=lambda: "{}"),
+    )
+    effects = ResearchRuntimeEffects(
+        orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+    )
+    item = ToolBatchItem(
+        source_index=0,
+        call_id="search-call",
+        tool_name=tool.name,
+        disposition="executable",
+        result_entry_id=EntryId.new(),
+        intent_id=IntentId.new(),
+        replay_policy=tool.replay_policy,
+        contract_version=tool.contract_version,
+        input_schema_digest=tool.input_schema_digest,
+        effective_input_digest="0" * 64,
+    )
+
+    async def emit_ephemeral(event: Any) -> None:
+        emitted.append(event)
+
+    await effects.execute_tool(
+        cast(
+            Any,
+            SimpleNamespace(
+                session_id=SessionId.new(),
+                lane_id=LaneId.main(),
+                operation_id=OperationId.new(),
+            ),
+        ),
+        item,
+        {},
+        AttemptId.new(),
+        emit_ephemeral,
+    )
+
+    updates = [event for event in emitted if getattr(event, "kind", None) == "tool_update"]
+    assert len(updates) == 1
+    assert updates[0].data["tool_name"] == "search_knowledge_base"
+    assert updates[0].data["call_id"] == "search-call"
+    assert updates[0].data["object_label"] == "quarterly revenue 2026"
 
 
 @pytest.mark.asyncio

@@ -6,14 +6,22 @@ import json
 import httpx
 import pytest
 
+from dlightrag.engine.agent.session.ids import IntentId
+from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from dlightrag.engine.answer.evidence import EvidenceLedger
-from dlightrag.engine.answer.tools.search import web_search_tool
+from dlightrag.engine.answer.tools.search import (
+    SearchInput,
+    knowledge_base_search_tool,
+    web_search_tool,
+)
 from dlightrag.engine.answer.tools.web import (
     ExaSearch,
     WebSearchHit,
+    WebSearchResult,
     WebSearchUnavailable,
     web_context_rows,
 )
+from dlightrag.engine.rag.retrieval import RetrievalResult
 
 _PAGE = {
     "url": "https://example.org/taylor",
@@ -38,6 +46,46 @@ def test_web_search_tool_guides_external_resource_discovery() -> None:
 
     assert "source page, document, image, or file" in tool.description
     assert "before claiming open-web search is unavailable" in tool.description
+
+
+def _label_capture_runtime(updates: list[ToolResult]) -> ToolRuntime:
+    async def sink(result: ToolResult) -> None:
+        updates.append(result)
+
+    return ToolRuntime(
+        call_id="test-call",
+        tool_name="test-tool",
+        intent_id=IntentId.new(),
+        execution_scope="test-scope",
+        _update_sink=sink,
+    )
+
+
+@pytest.mark.asyncio
+async def test_both_search_tools_report_the_query_as_object_label_live() -> None:
+    updates: list[ToolResult] = []
+    query = "quarterly revenue 2026"
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        return RetrievalResult()
+
+    async def search(_query: str) -> WebSearchResult:
+        return WebSearchResult(hits=(), cost_dollars=0.0)
+
+    await knowledge_base_search_tool(
+        retrieve=retrieve,
+        evidence=EvidenceLedger(),
+        trace={},
+    ).execute(SearchInput(query=query), _label_capture_runtime(updates))
+    await web_search_tool(
+        search=search,
+        evidence=EvidenceLedger(),
+        trace={"web_search_cost_dollars": 0.0},
+        register_web_source=None,
+    ).execute(SearchInput(query=query), _label_capture_runtime(updates))
+
+    labels = [update.details["object_label"] for update in updates if update.details]
+    assert labels == [query, query]
 
 
 def _client(handler) -> httpx.AsyncClient:

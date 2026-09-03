@@ -63,10 +63,14 @@ export function applyToolEvent(
   return rows;
 }
 
-/** The live status line for the most recent row (localized verb + object name). */
+/** One display line for a tool row (localized verb + optional object name). */
+export function toolRowText(row: ToolRow): string {
+  const verb = toolVerbText(row.verb, row.verbId);
+  return row.object ? `${verb} — ${row.object}` : verb;
+}
+
+/** The live status line for the most recent row. */
 export function toolStatusText(rows: readonly ToolRow[]): string {
   const row = rows[rows.length - 1];
-  if (!row) return '';
-  const verb = toolVerbText(row.verb, row.verbId);
-  return row.object ? `${verb} ${row.object}` : verb;
+  return row ? toolRowText(row) : '';
 }

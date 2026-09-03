@@ -36,7 +36,34 @@ test('tool events build, update, and settle one trace row', () => {
   rows = applyToolEvent(rows, 'tool_end', {call_id: 'c1', duration_ms: 1200});
   assert.equal(rows[0].state, 'done');
   assert.equal(rows[0].durationMs, 1200);
-  assert.ok(toolStatusText(rows).includes('code-review'));
+  assert.equal(toolStatusText(rows), 'Loading skill — code-review');
+});
+
+test('search status identifies the original query', () => {
+  let rows = applyToolEvent([], 'tool_start', {tool_name: 'search_web', call_id: 'c1'});
+  rows = applyToolEvent(rows, 'tool_progress', {
+    call_id: 'c1',
+    object_label: 'quarterly revenue 2026',
+  });
+
+  assert.equal(toolStatusText(rows), 'Searching the web — quarterly revenue 2026');
+});
+
+test('base file tools keep curated verbs with catalog entries', () => {
+  assert.deepEqual(toolDisplay('bash'), {
+    verb: 'Running a command',
+    verbId: 'chatFeature.tool.bash',
+    known: true,
+  });
+  assert.deepEqual(toolDisplay('grep'), {
+    verb: 'Searching files',
+    verbId: 'chatFeature.tool.grep',
+    known: true,
+  });
+
+  let rows = applyToolEvent([], 'tool_start', {tool_name: 'bash', call_id: 'c1'});
+  rows = applyToolEvent(rows, 'tool_progress', {call_id: 'c1', object_label: 'npm test'});
+  assert.equal(toolStatusText(rows), 'Running a command — npm test');
 });
 
 test('failed outcome marks the row failed', () => {

@@ -43,8 +43,9 @@ def knowledge_base_search_tool(
     evidence: EvidenceLedger,
     trace: dict[str, Any],
 ) -> AgentTool:
-    async def execute(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+    async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = _as(raw, SearchInput)
+        await runtime.emit_update(ToolResult.text("", details={"object_label": args.query}))
         return await _search_corpus(retrieve, args.query, evidence, trace)
 
     return AgentTool(
@@ -62,8 +63,9 @@ def web_search_tool(
     trace: dict[str, Any],
     register_web_source: RegisterWebSource | None,
 ) -> AgentTool:
-    async def execute(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
+    async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = _as(raw, SearchInput)
+        await runtime.emit_update(ToolResult.text("", details={"object_label": args.query}))
         return await _search_open_web(search, args.query, evidence, trace, register_web_source)
 
     return AgentTool(
