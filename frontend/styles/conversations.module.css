@@ -392,9 +392,10 @@
     :global(#chat-sidebar) {
         height: 100%;
         inset: auto;
-        position: absolute;
+        position: relative;
         transform: none;
         width: 100%;
+        z-index: auto;
     }
 
     :global(body.conversation-sidebar-open #conversation-sidebar-open) {

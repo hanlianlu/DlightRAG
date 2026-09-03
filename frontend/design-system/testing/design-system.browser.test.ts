@@ -2,7 +2,7 @@
 
 import {expect} from '@esm-bundle/chai';
 import {render} from 'lit';
-import {defineDesignSystemElements, DlIconButton, DlMenu, DlSplitLayout, icon} from '../index.ts';
+import {DlIconButton, DlMenu, DlSplitLayout, defineDesignSystemElements, icon} from '../index.ts';
 
 defineDesignSystemElements();
 
@@ -153,6 +153,23 @@ it('emits live and commit pixels for pointer resizing', () => {
   expect(input).to.deep.equal([170]);
   expect(change).to.deep.equal([170]);
   expect(split.size).to.equal(170);
+});
+
+it('keeps the divider above a high z-index slotted pane', () => {
+  const split = document.createElement('dl-split-layout');
+  split.primary = 'start';
+  split.size = 200;
+  split.style.cssText = 'display:block;width:500px;height:160px';
+  split.innerHTML = '<div slot="start" style="z-index:120;position:absolute;inset:0"></div><div slot="end"></div>';
+  document.body.append(split);
+  const box = split.divider.getBoundingClientRect();
+  const y = box.top + 40;
+  const center = split.shadowRoot?.elementFromPoint(box.left + Math.max(box.width / 2, 0.5), y);
+  const overlap = split.shadowRoot?.elementFromPoint(box.left - 4, y);
+  expect(center, `center=${center?.nodeName}`).to.equal(split.divider);
+  expect(overlap, `overlap=${overlap?.nodeName}.${(overlap as HTMLElement | null)?.id}`).to.equal(
+    split.divider,
+  );
 });
 
 it('mirrors horizontal pointer and keyboard direction under RTL', () => {

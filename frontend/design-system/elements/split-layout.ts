@@ -21,8 +21,10 @@ template.innerHTML = `
       block-size: 100%;
       display: flex;
       inline-size: 100%;
+      isolation: isolate;
       min-block-size: 0;
       min-inline-size: 0;
+      position: relative;
     }
     :host(:not([orientation='vertical'])) #layout { flex-direction: row; }
     :host([orientation='vertical']) #layout { flex-direction: column; }
@@ -31,6 +33,8 @@ template.innerHTML = `
       min-block-size: 0;
       min-inline-size: 0;
       overflow: hidden;
+      position: relative;
+      z-index: 0;
     }
     #start, #end { flex: 1 1 auto; }
     :host([primary='start']) #start,
@@ -51,7 +55,7 @@ template.innerHTML = `
       position: relative;
       touch-action: none;
       transition: background var(--duration-control, 150ms), opacity var(--duration-control, 150ms);
-      z-index: 2;
+      z-index: 1;
     }
     #divider::before {
       content: '';

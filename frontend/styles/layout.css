@@ -624,6 +624,10 @@ body.files-panel-open #files-btn {
     flex: 1;
 }
 
+#conversation-split {
+    --split-hit-target: 16px;
+}
+
 #artifact-canvas-split,
 .primary-shell,
 .app-shell {
