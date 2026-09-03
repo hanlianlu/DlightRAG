@@ -8,12 +8,11 @@ import {DESKTOP_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {conversationRoute, newChatRoute, type WebRoute} from '../lib/router.ts';
-import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
-import {
-  type ConversationMutationResult,
+import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
+import type {
+  ConversationMutationResult,
 } from '../stores/conversation-store.ts';
 import conversationStyles from '../styles/conversations.module.css';
-import {requestToast} from './toast-request.ts';
 import type {ChatView, ChatViewActionDetail} from './chat-feature.ts';
 import type {
   ConversationIntentDetail,
@@ -21,8 +20,9 @@ import type {
   ConversationRetryDetail,
   DlConversationList,
 } from './conversation-list.ts';
+import {requestToast} from './toast-request.ts';
 import './conversation-list.ts';
-import {modalResult, type FocusRestorer} from './modal.ts';
+import {type FocusRestorer, modalResult } from './modal.ts';
 import {webRouter} from './router.ts';
 import type {ToastRequestDetail} from './toast.ts';
 
@@ -118,6 +118,8 @@ export class DlConversationSidebar extends LightElement {
     if (changed.has('chatFeature')) this.#renderedViewRevision = -1;
     this.#startIfReady();
     this.#renderCurrentConversationView();
+    const expanded = this.enabled && (this.desktop ? !this.desktopCollapsed : this.drawerOpen);
+    this.classList.toggle('open', expanded && this.desktop);
     this.#publishSidebarState();
   }
 
@@ -277,7 +279,7 @@ export class DlConversationSidebar extends LightElement {
   }
 
   #openButton(): HTMLButtonElement | null {
-    return this.querySelector<HTMLButtonElement>('#conversation-sidebar-open');
+    return document.querySelector<HTMLButtonElement>('#conversation-sidebar-open');
   }
 
   #dialog(id: string): HTMLDialogElement | null {
@@ -670,20 +672,6 @@ export class DlConversationSidebar extends LightElement {
         ?hidden=${!modal}
         @click=${() => { void this.close(true); }}
       ></div>
-      <button
-        id="conversation-sidebar-open"
-        type="button"
-        aria-label=${msg('Open conversations', {id: 'conversationSidebar.openConversations'})}
-        aria-controls="chat-sidebar"
-        aria-expanded=${expanded ? 'true' : 'false'}
-        aria-hidden=${modal ? 'true' : nothing}
-        .inert=${modal}
-        @click=${(event: MouseEvent) => {
-          void this.open(event.currentTarget as HTMLElement);
-        }}
-      >
-        ${icon('panel-expand', {size: 'md'})}
-      </button>
       ${this.#conversationDialogs()}
     `;
   }

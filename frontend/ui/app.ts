@@ -1,15 +1,15 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {msg, updateWhenLocaleChanges} from '@lit/localize';
-import {html, type TemplateResult} from 'lit';
+import {html, nothing, type TemplateResult} from 'lit';
 import {getWebBootstrap, type WebBootstrap} from '../api/bootstrap.ts';
+import type {AnswerArtifact} from '../api/conversations.ts';
 import {getWorkspacesPage} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
-import type {AnswerArtifact} from '../api/conversations.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import '../styles/layout.css';
-import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import type {AttachmentPolicy} from '../lib/attachment-policy.ts';
+import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import type {
   ArtifactCanvasStateDetail,
   DlArtifactCanvas,
@@ -31,20 +31,19 @@ import type {
   DlChatFeature,
 } from './chat-feature.ts';
 import './chat-feature.ts';
-import type {ImageOpenDetail} from './image-lightbox.ts';
-import type {DlImageLightbox} from './image-lightbox.ts';
+import type {DlImageLightbox, ImageOpenDetail } from './image-lightbox.ts';
 import './image-lightbox.ts';
 import type {DlInspector, InspectorStateDetail} from './inspector.ts';
 import './inspector.ts';
 import type {ModalStateDetail} from './modal.ts';
 import type {DlSettingsDialog} from './settings.ts';
 import './settings.ts';
-import {syncPanelSplitState} from './split-panel.ts';
 import type {
   ContinuationResult,
   DlChildrenRoster,
   DlContinuationDialog,
 } from './run-dialogs.ts';
+import {syncPanelSplitState} from './split-panel.ts';
 import './run-dialogs.ts';
 import './notifications.ts';
 import './theme.ts';
@@ -228,15 +227,32 @@ export class DlApp extends LightElement {
         aria-busy=${ready ? 'false' : 'true'}
         ?inert=${!ready || this.lightboxOpen}
       >
-        <dl-split-layout class="panel-split" id="panel-split" primary="end"
-                         orientation="horizontal" size="0" min="320">
+        <dl-split-layout class="panel-split" id="conversation-split" primary="start"
+                         orientation="horizontal" size="0" min="240">
+          <dl-conversation-sidebar id="conversation-sidebar" slot="start"
+            .handles=${this.handles} .enabled=${ready} .chatFeature=${chatFeature}
+            .shellInert=${this.canvasModal}></dl-conversation-sidebar>
+          <dl-split-layout class="panel-split" id="panel-split" slot="end" primary="end"
+                           orientation="horizontal" size="0" min="320">
           <dl-split-layout class="panel-split" id="artifact-canvas-split" slot="start"
                            primary="end" orientation="horizontal" size="0" min="320">
             <div class="primary-shell" slot="start">
               <div class="app-shell">
                 <header class="topbar" ?inert=${inspectorModal || this.canvasModal}>
-                  <dl-conversation-sidebar .handles=${this.handles} .enabled=${ready} .chatFeature=${chatFeature}
-                    .shellInert=${this.canvasModal}></dl-conversation-sidebar>
+                  <button
+                    id="conversation-sidebar-open"
+                    type="button"
+                    aria-label=${msg('Open conversations', {id: 'conversationSidebar.openConversations'})}
+                    aria-controls="chat-sidebar"
+                    aria-expanded=${this.conversationExpanded ? 'true' : 'false'}
+                    aria-hidden=${conversationModal ? 'true' : nothing}
+                    ?inert=${shellModal}
+                    @click=${(event: MouseEvent) => {
+                      void this.#conversationSidebar()?.open(event.currentTarget as HTMLElement);
+                    }}
+                  >
+                    ${icon('panel-expand', {size: 'md'})}
+                  </button>
                   <span class="topbar-scope-label" ?inert=${shellModal}>${msg('Search in:', {id: 'app.searchIn'})}</span>
                   <dl-workspace-scope class="workspace-selector" id="workspace-selector"
                     .handles=${this.handles} ?inert=${shellModal}></dl-workspace-scope>
@@ -266,6 +282,7 @@ export class DlApp extends LightElement {
           </dl-split-layout>
           <dl-inspector id="inspector" slot="end"
             .handles=${this.handles} .shellInert=${this.canvasModal}></dl-inspector>
+          </dl-split-layout>
         </dl-split-layout>
 
         <dl-toast-region class="toast" id="toast" role="status" aria-live="polite"

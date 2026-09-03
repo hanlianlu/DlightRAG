@@ -4,11 +4,15 @@
 import {DlSplitLayout} from '../design-system/index.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
 
-const MIN_WIDTH = 320;
+const INSPECTOR_MIN_WIDTH = 320;
+const CONVERSATION_MIN_WIDTH = 240;
+const CONVERSATION_MAX_WIDTH = 360;
+const CONVERSATION_DEFAULT_WIDTH = 260;
+const INSPECTOR_DEFAULT_WIDTH = 420;
 const CHAT_RESERVE = 520;
 const DIVIDER_SIZE = 1;
 
-type WidthVar = '--panel-width' | '--artifact-canvas-width';
+type WidthVar = '--panel-width' | '--artifact-canvas-width' | '--layout-chat-sidebar-width';
 
 interface SplitState {
   split: DlSplitLayout;
@@ -16,29 +20,40 @@ interface SplitState {
   widthVar: WidthVar;
   storageKey: string;
   preferred: number;
+  minWidth: number;
+  maxWidth: number;
 }
 
 let states: SplitState[] = [];
 let widthFrame: number | null = null;
 let initialized = false;
 
-function cssDefault(widthVar: WidthVar): number {
-  const value = Number.parseInt(
-    getComputedStyle(document.documentElement).getPropertyValue(widthVar),
-    10,
-  );
-  return Number.isFinite(value) && value >= MIN_WIDTH ? value : 420;
+function isConversation(state: SplitState): boolean {
+  return state.widthVar === '--layout-chat-sidebar-width';
 }
 
-function loadPreferred(storageKey: string, widthVar: WidthVar): number {
+function cssDefault(state: Pick<SplitState, 'widthVar' | 'minWidth'>): number {
+  const value = Number.parseInt(
+    getComputedStyle(document.documentElement).getPropertyValue(state.widthVar),
+    10,
+  );
+  if (Number.isFinite(value) && value >= state.minWidth) return value;
+  return state.widthVar === '--layout-chat-sidebar-width'
+    ? CONVERSATION_DEFAULT_WIDTH
+    : INSPECTOR_DEFAULT_WIDTH;
+}
+
+function loadPreferred(state: Omit<SplitState, 'split' | 'panel' | 'preferred'>): number {
   try {
-    const stored = localStorage.getItem(storageKey);
+    const stored = localStorage.getItem(state.storageKey);
     const value = stored === null ? NaN : Number.parseInt(stored, 10);
-    if (Number.isFinite(value) && value >= MIN_WIDTH) return value;
+    if (Number.isFinite(value) && value >= state.minWidth) {
+      return Math.min(state.maxWidth, value);
+    }
   } catch {
     // Storage is an enhancement; the CSS default remains authoritative.
   }
-  return cssDefault(widthVar);
+  return Math.min(state.maxWidth, cssDefault(state));
 }
 
 function savePreferred(state: SplitState): void {
@@ -51,6 +66,11 @@ function savePreferred(state: SplitState): void {
 
 function syncRenderedWidthsNow(): void {
   for (const state of states) {
+    if (isConversation(state)) {
+      const width = state.split.size > 0 ? state.split.size : state.preferred;
+      document.documentElement.style.setProperty(state.widthVar, `${Math.round(width)}px`);
+      continue;
+    }
     if (!state.panel.classList.contains('open')) continue;
     const width = Math.round(state.panel.getBoundingClientRect().width || state.split.size);
     document.documentElement.style.setProperty(state.widthVar, `${width}px`);
@@ -65,19 +85,22 @@ function scheduleRenderedWidthSync(): void {
   });
 }
 
-function conversationReserve(): number {
-  if (!document.body.classList.contains('conversation-sidebar-open')) return CHAT_RESERVE;
-  const sidebar = document.getElementById('chat-sidebar');
-  return CHAT_RESERVE + (sidebar?.getBoundingClientRect().width ?? 0);
-}
-
 function updateMaximums(): void {
   const drawer = window.matchMedia(COMPACT_SHELL_MEDIA).matches;
-  const reserve = conversationReserve();
   const artifact = states.find((state) => state.widthVar === '--artifact-canvas-width');
   for (const state of states) {
+    if (isConversation(state)) {
+      state.split.min = state.minWidth;
+      state.split.max = drawer
+        ? state.minWidth
+        : Math.min(
+          state.maxWidth,
+          Math.max(state.minWidth, state.split.clientWidth - CHAT_RESERVE - DIVIDER_SIZE),
+        );
+      continue;
+    }
     if (drawer) {
-      state.split.max = Math.max(MIN_WIDTH, state.split.clientWidth);
+      state.split.max = Math.max(state.minWidth, state.split.clientWidth);
       continue;
     }
     let otherWidth = 0;
@@ -88,25 +111,32 @@ function updateMaximums(): void {
     }
     const dividerReserve = DIVIDER_SIZE * (otherWidth > 0 ? 2 : 1);
     state.split.max = Math.max(
-      MIN_WIDTH,
-      state.split.clientWidth - reserve - otherWidth - dividerReserve,
+      state.minWidth,
+      state.split.clientWidth - CHAT_RESERVE - otherWidth - dividerReserve,
     );
   }
+}
+
+function desktopOpen(state: SplitState): boolean {
+  return state.panel.classList.contains('open');
 }
 
 export function syncPanelSplitState(): void {
   const drawer = window.matchMedia(COMPACT_SHELL_MEDIA).matches;
   for (const state of states) {
-    const open = state.panel.classList.contains('open');
-    state.split.disabled = drawer || !open;
-    state.split.toggleAttribute('data-open', open);
-    state.split.size = open ? state.preferred : 0;
+    const open = desktopOpen(state);
+    const splitOpen = isConversation(state) ? open && !drawer : open;
+    state.split.disabled = drawer || !splitOpen;
+    state.split.toggleAttribute('data-open', splitOpen);
+    state.split.size = splitOpen ? state.preferred : 0;
   }
   // Bounds depend on the other split's rendered size, so clamp only after both
   // open/closed positions have been projected in the first pass.
   updateMaximums();
   for (const state of states) {
-    if (state.panel.classList.contains('open')) {
+    const open = desktopOpen(state);
+    const splitOpen = isConversation(state) ? open && !drawer : open;
+    if (splitOpen) {
       state.split.size = Math.min(state.preferred, state.split.max);
     }
   }
@@ -124,24 +154,30 @@ function createState(
   panelId: string,
   widthVar: WidthVar,
   storageKey: string,
+  minWidth: number,
+  maxWidth: number,
 ): SplitState | null {
   const split = document.getElementById(splitId);
   const panel = document.getElementById(panelId);
   if (!(split instanceof DlSplitLayout) || !panel) return null;
+  const partial = {widthVar, storageKey, minWidth, maxWidth};
   return {
     split,
     panel,
-    widthVar,
-    storageKey,
-    preferred: loadPreferred(storageKey, widthVar),
+    ...partial,
+    preferred: loadPreferred(partial),
   };
 }
 
+function resizeLabel(state: SplitState): string {
+  if (state.widthVar === '--panel-width') return 'Resize Files or Sources';
+  if (state.widthVar === '--artifact-canvas-width') return 'Resize Artifact Canvas';
+  return 'Resize conversations';
+}
+
 function bindState(state: SplitState): void {
-  state.split.divider.setAttribute(
-    'aria-label',
-    state.widthVar === '--panel-width' ? 'Resize Files or Sources' : 'Resize Artifact Canvas',
-  );
+  state.split.min = state.minWidth;
+  state.split.divider.setAttribute('aria-label', resizeLabel(state));
   state.split.divider.addEventListener('pointerdown', () => {
     if (!state.split.disabled) setResizing(true);
   });
@@ -152,7 +188,7 @@ function bindState(state: SplitState): void {
     scheduleRenderedWidthSync();
   });
   state.split.addEventListener('dl-split-change', (event) => {
-    if (event.target !== state.split || !state.panel.classList.contains('open')) return;
+    if (event.target !== state.split || !desktopOpen(state)) return;
     updateMaximums();
     state.preferred = Math.round(state.split.size);
     state.split.size = state.preferred;
@@ -166,12 +202,29 @@ function bindState(state: SplitState): void {
 export function setupPanelSplits(): void {
   if (initialized) return;
   const nextStates = [
-    createState('panel-split', 'inspector', '--panel-width', 'dlightrag-panel-width'),
+    createState(
+      'conversation-split',
+      'conversation-sidebar',
+      '--layout-chat-sidebar-width',
+      'dlightrag-conversation-sidebar-width',
+      CONVERSATION_MIN_WIDTH,
+      CONVERSATION_MAX_WIDTH,
+    ),
+    createState(
+      'panel-split',
+      'inspector',
+      '--panel-width',
+      'dlightrag-panel-width',
+      INSPECTOR_MIN_WIDTH,
+      Number.POSITIVE_INFINITY,
+    ),
     createState(
       'artifact-canvas-split',
       'artifact-canvas',
       '--artifact-canvas-width',
       'dlightrag-artifact-canvas-width',
+      INSPECTOR_MIN_WIDTH,
+      Number.POSITIVE_INFINITY,
     ),
   ].filter((state): state is SplitState => state !== null);
   if (nextStates.length === 0) return;

@@ -87,9 +87,9 @@ template.innerHTML = `
     }
   </style>
   <div id="layout">
-    <slot id="start" name="start"></slot>
+    <slot id="start" name="start" part="start"></slot>
     <div id="divider" part="divider" role="separator" tabindex="0"></div>
-    <slot id="end" name="end"></slot>
+    <slot id="end" name="end" part="end"></slot>
   </div>
 `;
 

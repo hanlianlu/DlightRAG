@@ -7,7 +7,11 @@
 }
 
 :global(dl-conversation-sidebar) {
-    display: contents;
+    display: block;
+    height: 100%;
+    min-width: 0;
+    position: relative;
+    width: 100%;
 }
 
 :global(#chat-sidebar) {
@@ -385,8 +389,12 @@
 }
 
 @media (width >= 1200px) {
-    :global(body.conversation-sidebar-open #chat-sidebar) {
-        transform: translateX(0);
+    :global(#chat-sidebar) {
+        height: 100%;
+        inset: auto;
+        position: absolute;
+        transform: none;
+        width: 100%;
     }
 
     :global(body.conversation-sidebar-open #conversation-sidebar-open) {

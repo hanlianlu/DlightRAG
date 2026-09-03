@@ -1,8 +1,8 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
-import {defineDesignSystemElements} from '../design-system/index.ts';
 import type {ConversationSummary} from '../api/conversations.ts';
+import {defineDesignSystemElements} from '../design-system/index.ts';
 import {conversationRoute, newChatRoute} from '../lib/router.ts';
 import {conversationStore} from '../stores/conversation-store.ts';
 import type {
@@ -82,6 +82,12 @@ function button(root: ParentNode, name: string): HTMLButtonElement {
   return match;
 }
 
+function conversationsOpenButton(): HTMLButtonElement {
+  const match = document.querySelector<HTMLButtonElement>('#conversation-sidebar-open');
+  if (!match) throw new Error('open conversations button not found');
+  return match;
+}
+
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (predicate()) return;
@@ -93,6 +99,11 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 beforeEach(() => {
   document.body.replaceChildren();
   document.body.className = '';
+  const trigger = document.createElement('button');
+  trigger.id = 'conversation-sidebar-open';
+  trigger.type = 'button';
+  trigger.setAttribute('aria-label', 'Open conversations');
+  document.body.append(trigger);
   window.localStorage.removeItem('dlightrag.conversation_sidebar_collapsed');
   conversationStore.openNew();
 });
@@ -249,10 +260,10 @@ it('owns desktop collapse state, focus, and typed Shell state', async () => {
   expect(navigation.inert).to.equal(true);
   expect(navigation.getAttribute('aria-hidden')).to.equal('true');
   expect(state).to.deep.equal({expanded: false, compact: false});
-  expect(document.activeElement).to.equal(button(sidebar, 'Open conversations'));
+  expect(document.activeElement).to.equal(conversationsOpenButton());
   expect(window.localStorage.getItem('dlightrag.conversation_sidebar_collapsed')).to.equal('true');
 
-  await sidebar.open(button(sidebar, 'Open conversations'));
+  await sidebar.open(conversationsOpenButton());
   expect(navigation.inert).to.equal(false);
   expect(state).to.deep.equal({expanded: true, compact: false});
   expect(document.activeElement).to.equal(button(sidebar, 'New chat'));
@@ -284,9 +295,6 @@ it('owns compact modality, a cancelable open command, focus wrapping, and Escape
   const navigation = sidebar.querySelector<HTMLElement>('nav[aria-label="Conversations"]')!;
   expect(navigation.getAttribute('role')).to.equal('dialog');
   expect(navigation.getAttribute('aria-modal')).to.equal('true');
-  const openButton = button(sidebar, 'Open conversations');
-  expect(openButton.getAttribute('aria-expanded')).to.equal('true');
-  expect(openButton.inert).to.equal(true);
   expect(state).to.deep.equal({expanded: true, compact: true});
   expect(document.activeElement).to.equal(button(sidebar, 'New chat'));
 
@@ -318,7 +326,7 @@ it('normalizes drawer state and focus across compact and desktop breakpoints', a
   document.body.appendChild(sidebar);
   await sidebar.updateComplete;
 
-  expect(await sidebar.open(button(sidebar, 'Open conversations'))).to.equal(true);
+  expect(await sidebar.open(conversationsOpenButton())).to.equal(true);
   expect(document.activeElement).to.equal(button(sidebar, 'New chat'));
 
   desktop = true;
@@ -336,7 +344,7 @@ it('normalizes drawer state and focus across compact and desktop breakpoints', a
   expect(state).to.deep.equal({expanded: false, compact: true});
   expect(navigation.inert).to.equal(true);
   expect(navigation.hasAttribute('aria-modal')).to.equal(false);
-  expect(document.activeElement).to.equal(button(sidebar, 'Open conversations'));
+  expect(document.activeElement).to.equal(conversationsOpenButton());
 });
 
 it('owns list loading and route selection while exposing only typed Shell intent', async () => {
