@@ -18,8 +18,8 @@ import {requestToast} from './toast-request.ts';
 import {modalResult} from './modal.ts';
 import type {ToastRequestDetail} from './toast.ts';
 import recoveryStyles from '../styles/failed-file-recovery.module.css';
+import {FailedFileRecoverySession} from './failed-file-recovery-session.ts';
 
-const RECOVERY_POLL_INTERVAL_MS = 2000;
 const ACTIVE_RECOVERY_STATES = new Set(['queued', 'running']);
 
 type PageLoadState = 'idle' | 'loading' | 'error';
@@ -86,14 +86,7 @@ export class DlFailedFileRecovery extends LightElement {
   declare recovery: WebFailedRecoveryJob | null;
   declare recoveryPending: boolean;
 
-  #listController: AbortController | null = null;
-  #loadMoreController: AbortController | null = null;
-  #mutationController: AbortController | null = null;
-  #modalController: AbortController | null = null;
-  #pollController: AbortController | null = null;
-  #pollTimer: number | null = null;
-  #contextGeneration = 0;
-  #listGeneration = 0;
+  readonly #session = new FailedFileRecoverySession();
   #retryTrigger: HTMLElement | null = null;
 
   constructor() {
@@ -116,7 +109,10 @@ export class DlFailedFileRecovery extends LightElement {
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has('workspace')) {
-      this.#cancelContext();
+      this.#session.cancelContext();
+      this.loading = false;
+      this.recoveryPending = false;
+      this.#retryTrigger = null;
       this.page = null;
       this.recovery = null;
       this.error = null;
@@ -134,19 +130,14 @@ export class DlFailedFileRecovery extends LightElement {
   async refresh(showLoading = true): Promise<void> {
     if (!this.active || !this.workspace) return;
     const workspace = this.workspace;
-    const generation = ++this.#listGeneration;
     const observedRecovery = this.recovery;
-    this.#listController?.abort();
-    this.#loadMoreController?.abort();
-    this.#stopPolling();
-    const controller = new AbortController();
-    this.#listController = controller;
+    const {controller, generation} = this.#session.startList();
     if (showLoading) this.loading = true;
     this.error = null;
     this.loadMoreState = 'idle';
     try {
       const response = await getFailedFiles(workspace, null, controller.signal);
-      if (!this.#isCurrent(controller, workspace, generation)) return;
+      if (!this.#session.isListCurrent(controller, workspace, this.workspace, generation, this.active)) return;
       const page = normalizePage(response);
       this.page = page;
       const pageRecovery = page.activeRecovery;
@@ -159,7 +150,7 @@ export class DlFailedFileRecovery extends LightElement {
       this.recovery = recovery;
       if (isRecoveryActive(recovery)) this.#schedulePoll(workspace, recovery.jobId);
     } catch (error) {
-      if (isAbortError(error) || !this.#isCurrent(controller, workspace, generation)) return;
+      if (isAbortError(error) || !this.#session.isListCurrent(controller, workspace, this.workspace, generation, this.active)) return;
       this.page = null;
       this.error = recoveryRequestError(
         error,
@@ -172,29 +163,12 @@ export class DlFailedFileRecovery extends LightElement {
         this.#schedulePoll(workspace, liveRecovery.jobId);
       }
     } finally {
-      if (this.#listController === controller) {
-        this.#listController = null;
-        this.loading = false;
-      }
+      if (this.#session.finishList(controller)) this.loading = false;
     }
   }
 
   pause(): void {
-    this.#cancelContext();
-  }
-
-  #cancelContext(): void {
-    this.#contextGeneration += 1;
-    this.#listGeneration += 1;
-    this.#listController?.abort();
-    this.#listController = null;
-    this.#loadMoreController?.abort();
-    this.#loadMoreController = null;
-    this.#mutationController?.abort();
-    this.#mutationController = null;
-    this.#modalController?.abort();
-    this.#modalController = null;
-    this.#stopPolling();
+    this.#session.cancelContext();
     this.loading = false;
     this.recoveryPending = false;
     this.#retryTrigger = null;
@@ -321,17 +295,14 @@ export class DlFailedFileRecovery extends LightElement {
     const cursor = page?.nextCursor;
     const workspace = this.workspace;
     if (!cursor || !workspace || this.loadMoreState === 'loading') return;
-    this.#loadMoreController?.abort();
-    const controller = new AbortController();
-    this.#loadMoreController = controller;
-    const generation = this.#contextGeneration;
+    const controller = this.#session.startLoadMore();
+    const generation = this.#session.contextGeneration;
     const observedRecovery = this.recovery;
     this.loadMoreState = 'loading';
     try {
       const response = await getFailedFiles(workspace, cursor, controller.signal);
       if (
-        controller !== this.#loadMoreController
-        || generation !== this.#contextGeneration
+        !this.#session.isLoadMoreCurrent(controller, generation)
         || workspace !== this.workspace
         || this.page?.nextCursor !== cursor
       ) return;
@@ -354,7 +325,7 @@ export class DlFailedFileRecovery extends LightElement {
       }
       this.loadMoreState = 'idle';
     } catch (error) {
-      if (isAbortError(error) || controller !== this.#loadMoreController) return;
+      if (isAbortError(error) || !this.#session.isLoadMoreCurrent(controller, generation)) return;
       if (error instanceof FilesApiError && [401, 403, 409].includes(error.status)) {
         this.#stopPolling();
         this.page = null;
@@ -370,7 +341,7 @@ export class DlFailedFileRecovery extends LightElement {
       }
       this.loadMoreState = 'error';
     } finally {
-      if (this.#loadMoreController === controller) this.#loadMoreController = null;
+      this.#session.finishLoadMore(controller);
     }
   }
 
@@ -379,16 +350,14 @@ export class DlFailedFileRecovery extends LightElement {
     const dialog = this.querySelector<HTMLDialogElement>('#retry-failed-files-dialog');
     if (!dialog || this.recoveryPending || isRecoveryActive(this.recovery)) return;
     this.#retryTrigger = trigger;
-    this.#modalController?.abort();
-    const controller = new AbortController();
-    this.#modalController = controller;
+    const controller = this.#session.startModal();
     const result = await modalResult(
       this,
       dialog,
       () => this.#restoreRetryFocus(),
       controller.signal,
     );
-    if (this.#modalController === controller) this.#modalController = null;
+    this.#session.finishModal(controller);
     if (result !== 'retry') return;
     await this.#startRetry();
   };
@@ -396,14 +365,12 @@ export class DlFailedFileRecovery extends LightElement {
   async #startRetry(): Promise<void> {
     const workspace = this.workspace;
     if (!workspace || this.recoveryPending || this.recovery !== null) return;
-    this.#mutationController?.abort();
-    const controller = new AbortController();
-    this.#mutationController = controller;
-    const generation = this.#contextGeneration;
+    const controller = this.#session.startMutation();
+    const generation = this.#session.contextGeneration;
     this.recoveryPending = true;
     try {
       const job = await startFailedFileRetry(workspace, controller.signal);
-      if (!this.#mutationCurrent(controller, workspace, generation)) return;
+      if (!this.#session.isMutationCurrent(controller, workspace, this.workspace, generation, this.active)) return;
       this.recovery = job;
       if (isRecoveryActive(job)) {
         requestToast(this, {
@@ -415,7 +382,7 @@ export class DlFailedFileRecovery extends LightElement {
         await this.#settleRecovery(job);
       }
     } catch (error) {
-      if (isAbortError(error) || !this.#mutationCurrent(controller, workspace, generation)) return;
+      if (isAbortError(error) || !this.#session.isMutationCurrent(controller, workspace, this.workspace, generation, this.active)) return;
       requestToast(this, {
         message: recoveryRequestError(
           error,
@@ -426,20 +393,16 @@ export class DlFailedFileRecovery extends LightElement {
         duration: 3000,
       });
     } finally {
-      if (this.#mutationController === controller) {
-        this.#mutationController = null;
-        this.recoveryPending = false;
-      }
+      if (this.#session.finishMutation(controller)) this.recoveryPending = false;
     }
   }
 
   async #poll(workspace: string, jobId: string): Promise<void> {
-    const controller = new AbortController();
-    this.#pollController = controller;
+    const controller = this.#session.startPollRequest();
     try {
       const job = await getFailedFileRetryStatus(workspace, jobId, controller.signal);
       if (
-        controller !== this.#pollController
+        !this.#session.isPollCurrent(controller)
         || workspace !== this.workspace
         || !this.active
         || !this.isConnected
@@ -453,7 +416,7 @@ export class DlFailedFileRecovery extends LightElement {
     } catch (error) {
       if (isAbortError(error)) return;
       if (
-        controller !== this.#pollController
+        !this.#session.isPollCurrent(controller)
         || workspace !== this.workspace
         || !this.active
         || !this.isConnected
@@ -471,18 +434,18 @@ export class DlFailedFileRecovery extends LightElement {
       }
       this.#schedulePoll(workspace, jobId);
     } finally {
-      if (this.#pollController === controller) this.#pollController = null;
+      this.#session.finishPollRequest(controller);
     }
   }
 
   async #settleRecovery(job: WebFailedRecoveryJob): Promise<void> {
     const workspace = this.workspace;
-    const generation = this.#contextGeneration;
+    const generation = this.#session.contextGeneration;
     this.recovery = job;
     await this.refresh(false);
     if (
       workspace !== this.workspace
-      || generation !== this.#contextGeneration
+      || generation !== this.#session.contextGeneration
       || !this.active
       || !this.isConnected
     ) return;
@@ -510,36 +473,13 @@ export class DlFailedFileRecovery extends LightElement {
   }
 
   #schedulePoll(workspace: string, jobId: string): void {
-    this.#stopPolling();
-    this.#pollTimer = window.setTimeout(() => {
-      this.#pollTimer = null;
-      void this.#poll(workspace, jobId);
-    }, RECOVERY_POLL_INTERVAL_MS);
+    this.#session.schedulePoll(workspace, jobId, (nextWorkspace, nextJob) => {
+      void this.#poll(nextWorkspace, nextJob);
+    });
   }
 
   #stopPolling(): void {
-    if (this.#pollTimer !== null) window.clearTimeout(this.#pollTimer);
-    this.#pollTimer = null;
-    this.#pollController?.abort();
-    this.#pollController = null;
-  }
-
-  #isCurrent(controller: AbortController, workspace: string, generation: number): boolean {
-    return this.#listController === controller
-      && workspace === this.workspace
-      && generation === this.#listGeneration
-      && this.active;
-  }
-
-  #mutationCurrent(
-    controller: AbortController,
-    workspace: string,
-    generation: number,
-  ): boolean {
-    return this.#mutationController === controller
-      && workspace === this.workspace
-      && generation === this.#contextGeneration
-      && this.active;
+    this.#session.stopPolling();
   }
 
   #restoreRetryFocus(): void {
