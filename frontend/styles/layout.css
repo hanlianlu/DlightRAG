@@ -9,6 +9,7 @@
  * dialog, and responsive media queries.
  */
 
+@layer components {
 /* === Layout === */
 
 .app {
@@ -741,4 +742,5 @@ dl-chat-composer {
     .panel {
         border-left: none;
     }
+}
 }

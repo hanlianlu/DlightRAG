@@ -7,6 +7,7 @@ import {getWorkspacesPage} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
 import {LightElement} from '../lib/lit-host.ts';
+import '../styles/layout.css';
 import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import type {AttachmentPolicy} from '../lib/attachment-policy.ts';
 import type {
