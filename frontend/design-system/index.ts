@@ -10,6 +10,7 @@ export {
 } from './icons/registry.generated.ts';
 export {defineDesignSystemElements} from './elements/define.ts';
 export {DlIconButton} from './elements/icon-button.ts';
+export {DlMenu} from './elements/menu.ts';
 export {
   DlSplitLayout,
   type SplitOrientation,

@@ -193,25 +193,10 @@ export class DlConversationList extends LightElement {
   #renderMenu(conversation: ConversationSummary): TemplateResult {
     const conversationId = conversation.conversationId;
     return html`
-      <div
+      <dl-menu
         class="conversation-actions-menu"
-        role="menu"
         aria-label=${msg('Conversation actions', {id: 'conversationList.conversationActions'})}
-        @keydown=${(event: KeyboardEvent) => {
-          const items = [...(event.currentTarget as HTMLElement)
-            .querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-            .filter((item) => !item.disabled);
-          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-            event.preventDefault();
-            const index = items.indexOf(document.activeElement as HTMLButtonElement);
-            const delta = event.key === 'ArrowDown' ? 1 : -1;
-            items[(index + delta + items.length) % items.length]?.focus();
-          } else if (event.key === 'Escape') {
-            event.preventDefault();
-            event.stopPropagation();
-            this.closeMenu(true);
-          }
-        }}
+        @dl-menu-dismiss=${() => { this.closeMenu(true); }}
       >
         <button
           type="button"
@@ -228,7 +213,7 @@ export class DlConversationList extends LightElement {
             this.#emit<ConversationIntentDetail>('dl-conversation-delete', {conversationId});
           }}
         >${msg('Delete', {id: 'conversationList.delete'})}</button>
-      </div>
+      </dl-menu>
     `;
   }
 

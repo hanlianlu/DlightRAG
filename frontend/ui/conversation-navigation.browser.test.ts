@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
+import {defineDesignSystemElements} from '../design-system/index.ts';
 import type {ConversationSummary} from '../api/conversations.ts';
 import {conversationRoute, newChatRoute} from '../lib/router.ts';
 import {conversationStore} from '../stores/conversation-store.ts';
@@ -17,6 +18,8 @@ import type {
 } from './conversation-sidebar.ts';
 import './conversation-sidebar.ts';
 import {webRouter} from './router.ts';
+
+defineDesignSystemElements();
 
 const originalFetch = window.fetch;
 const originalMatchMedia = window.matchMedia;

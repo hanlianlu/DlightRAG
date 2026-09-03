@@ -2,7 +2,7 @@
 
 import {expect} from '@esm-bundle/chai';
 import {render} from 'lit';
-import {defineDesignSystemElements, DlIconButton, DlSplitLayout, icon} from '../index.ts';
+import {defineDesignSystemElements, DlIconButton, DlMenu, DlSplitLayout, icon} from '../index.ts';
 
 defineDesignSystemElements();
 
@@ -44,6 +44,7 @@ it('registers design-system elements idempotently', () => {
   expect(() => defineDesignSystemElements()).not.to.throw();
   expect(customElements.get('dl-split-layout')).to.equal(DlSplitLayout);
   expect(customElements.get('dl-icon-button')).to.equal(DlIconButton);
+  expect(customElements.get('dl-menu')).to.equal(DlMenu);
 });
 
 it('renders a decorative icon inside an accessible host button', () => {
@@ -56,6 +57,21 @@ it('renders a decorative icon inside an accessible host button', () => {
   expect(inner.getAttribute('aria-label')).to.equal('Close panel');
   expect(inner.querySelector('svg')?.getAttribute('aria-hidden')).to.equal('true');
   expect(button.shadowRoot!.querySelector('svg')?.classList.contains('dl-icon--sm')).to.equal(true);
+});
+
+it('moves focus among slotted menuitems and dismisses on Escape', () => {
+  const menu = document.createElement('dl-menu') as DlMenu;
+  menu.innerHTML = '<button type="button" role="menuitem">Rename</button>' +
+    '<button type="button" role="menuitem">Delete</button>';
+  document.body.append(menu);
+  const items = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  items[0].focus();
+  const dismissed: string[] = [];
+  menu.addEventListener('dl-menu-dismiss', () => { dismissed.push('yes'); });
+  menu.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true}));
+  expect(document.activeElement).to.equal(items[1]);
+  menu.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+  expect(dismissed).to.deep.equal(['yes']);
 });
 
 it('emits normalized input and commit events for keyboard resizing', () => {

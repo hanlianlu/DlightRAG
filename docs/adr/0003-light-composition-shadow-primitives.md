@@ -4,7 +4,7 @@ The Web application layer composes in Light DOM so MathJax, Mermaid, and sanitiz
 
 ## Status
 
-Accepted. AppHandles and the Light-composition contract have landed. `dl-icon-button` has shipped beside `dl-split-layout`. `dl-menu` is decided and not yet shipped.
+Accepted. AppHandles and the Light-composition contract have landed. Shadow primitives `dl-split-layout`, `dl-icon-button`, and `dl-menu` have shipped.
 
 ## Context
 
