@@ -39,7 +39,7 @@ def test_bootstrap_advertises_exact_backend_attachment_limits() -> None:
 
 
 def test_frontend_submits_only_the_unified_attachments_part() -> None:
-    request_builder = (FRONTEND / "lib" / "answer_request.ts").read_text(encoding="utf-8")
+    request_builder = (FRONTEND / "lib" / "answer-request.ts").read_text(encoding="utf-8")
 
     assert "form.append('attachments', file, file.name)" in request_builder
     assert "append('images'" not in request_builder
@@ -174,11 +174,11 @@ def test_presentation_preserves_authorized_download_without_nesting_markup() -> 
         source_uri="local://default/notes.md",
         download_url="/web/api/files/raw/doc-notes?workspace=default",
     )
-    source_view = (FRONTEND_UI / "inspector_sources.ts").read_text(encoding="utf-8")
+    source_view = (FRONTEND_UI / "inspector-sources.ts").read_text(encoding="utf-8")
 
     assert source.download_url == "/web/api/files/raw/doc-notes?workspace=default"
     assert source.title == "Source"
-    assert "safeSameOriginHref(source.download_url)" in source_view
+    assert "safeSameOriginHref(source.downloadUrl)" in source_view
     assert "msg('Download source', {id: 'inspectorSources.downloadSource'})" in source_view
     assert "<a href=${download}" in source_view
 
@@ -219,8 +219,8 @@ def test_answer_presentation_uses_semantic_citations_and_no_legacy_paths() -> No
         sources=[],
         evidence_images=[],
     )
-    source_view = (FRONTEND_UI / "inspector_sources.ts").read_text(encoding="utf-8")
-    answer_view = (FRONTEND_UI / "answer_presentation.ts").read_text(encoding="utf-8")
+    source_view = (FRONTEND_UI / "inspector-sources.ts").read_text(encoding="utf-8")
+    answer_view = (FRONTEND_UI / "answer-presentation.ts").read_text(encoding="utf-8")
 
     assert '<cite class="citation-badge"' in presentation.parts[0].html
     assert "answer_images" not in presentation.model_dump()
@@ -260,10 +260,10 @@ def test_inspector_cutover_removes_legacy_setup_and_universal_panel_surface() ->
 
 
 def test_panel_action_icons_use_the_accessible_semantic_registry() -> None:
-    file_panel = (FRONTEND_UI / "inspector_files.ts").read_text(encoding="utf-8")
-    source_panel = (FRONTEND_UI / "inspector_sources.ts").read_text(encoding="utf-8")
+    file_panel = (FRONTEND_UI / "inspector-files.ts").read_text(encoding="utf-8")
+    source_panel = (FRONTEND_UI / "inspector-sources.ts").read_text(encoding="utf-8")
 
-    assert "aria-label=${msg(str`Delete ${file.file_name}`," in file_panel
+    assert "aria-label=${msg(str`Delete ${file.fileName}`," in file_panel
     assert "'inspectorFiles.deleteFileAria'" in file_panel
     assert "icon('close', {size: 'sm', className: 'file-delete-icon'})" in file_panel
     assert "icon('download', {size: 'sm', className: 'source-action-icon-svg'})" in source_panel
@@ -274,8 +274,8 @@ def test_panel_action_icons_use_the_accessible_semantic_registry() -> None:
 
 
 def test_split_layout_separates_behavior_from_product_state() -> None:
-    split_adapter = (FRONTEND_UI / "split_panel.ts").read_text(encoding="utf-8")
-    split_element = (FRONTEND / "design-system" / "elements" / "split_layout.ts").read_text(
+    split_adapter = (FRONTEND_UI / "split-panel.ts").read_text(encoding="utf-8")
+    split_element = (FRONTEND / "design-system" / "elements" / "split-layout.ts").read_text(
         encoding="utf-8"
     )
 
@@ -374,21 +374,15 @@ def test_button_hover_rules_change_something() -> None:
 def test_lit_shell_completion_has_one_owner_and_no_compatibility_layer() -> None:
     app = (FRONTEND_UI / "app.ts").read_text(encoding="utf-8")
     main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
-    bus = (FRONTEND / "events" / "bus.ts").read_text(encoding="utf-8")
     production = "\n".join(
         path.read_text(encoding="utf-8")
         for path in FRONTEND_UI.glob("*.ts")
         if not path.name.endswith((".test.ts", ".browser.test.ts"))
     )
 
-    for replaced in (
-        "images.ts",
-        "memory.ts",
-        "workspaces.ts",
-        "workspace_events.ts",
-    ):
+    for replaced in ("images.ts", "memory.ts", "workspaces.ts", "workspace_events.ts"):
         assert not (FRONTEND_UI / replaced).exists()
-        assert not (FRONTEND / "events" / replaced).exists()
+    assert not (FRONTEND / "events").exists()
     for adapter in (
         "setupSettingsAdapter",
         "setupChatMemoryOperationAdapter",
@@ -416,13 +410,25 @@ def test_lit_shell_completion_has_one_owner_and_no_compatibility_layer() -> None
     assert "@dl-artifact-canvas-state-change" in app
     assert "document.getElementById" not in app
     assert "document.querySelector" not in app
-    browser_adapters = (FRONTEND_UI / "browser_adapters.ts").read_text(encoding="utf-8")
+    browser_adapters = (FRONTEND_UI / "browser-adapters.ts").read_text(encoding="utf-8")
     assert "initializeBrowserAdapters(app)" in main
     assert "document.readyState === 'loading'" in main
     assert "setupPanelSplits();" in browser_adapters
     assert "setupMathRendering();" in browser_adapters
-    assert "workspaceCreated" in bus and "workspaceDeleted" in bus
-    assert "panelOpening" not in bus and "settings" not in bus.lower()
+    for retired in (
+        "workspaceDeleted",
+        "workspaceToggled",
+        "ingestWorkspaceChanged",
+        "bus.emit",
+        "panelOpening",
+    ):
+        assert retired not in app + main + production
+    assert "'events/bus" not in app + main + production
+    workspace_create = (FRONTEND_UI / "workspace-create.ts").read_text(encoding="utf-8")
+    workspace_scope = (FRONTEND_UI / "workspace-scope.ts").read_text(encoding="utf-8")
+    assert "ingestStore.set(created.workspace)" in workspace_create
+    assert "ingestStore.set(deleted.nextWorkspace || workspaceStore.primary)" in workspace_scope
+    assert "nanoevents" not in (FRONTEND / "package.json").read_text(encoding="utf-8")
 
     toast = (FRONTEND_UI / "toast.ts").read_text(encoding="utf-8")
     assert "toastListeners" not in toast and "pendingToast" not in toast
@@ -430,8 +436,8 @@ def test_lit_shell_completion_has_one_owner_and_no_compatibility_layer() -> None
     assert "export function showActionToast" not in toast
     assert "nextRequestId" not in toast and "id: request.id" not in toast
 
-    design_system = (FRONTEND_UI / "design_system.ts").read_text(encoding="utf-8")
-    product_showcase = (FRONTEND_UI / "product_showcase.ts").read_text(encoding="utf-8")
+    design_system = (FRONTEND_UI / "design-system.ts").read_text(encoding="utf-8")
+    product_showcase = (FRONTEND_UI / "product-showcase.ts").read_text(encoding="utf-8")
     for product_import in ("./notifications.ts", "./theme.ts", "./toast.ts"):
         assert product_import not in design_system
         assert product_import in product_showcase
