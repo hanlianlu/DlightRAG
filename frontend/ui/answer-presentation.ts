@@ -10,11 +10,9 @@ import type {
   PresentationPart,
 } from '../api/conversations.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {setSanitizedLlmHtml} from '../lib/safe-html.ts';
-import {renderMath} from '../lib/math.ts';
 import {safeImageSrc} from '../lib/urls.ts';
 import type {ImageOpenDetail} from './image-lightbox.ts';
-import {renderDiagrams} from './mermaid.ts';
+import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
 import chatStyles from '../styles/chat.module.css';
 
 export interface ArtifactOpenDetail {
@@ -27,14 +25,6 @@ export interface AnswerSourceOpenDetail {
   referenceId: string;
   chunkId?: string;
   returnFocus: HTMLElement;
-}
-
-function secureExternalLinks(container: ParentNode): void {
-  container.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((link) => {
-    if (link.hasAttribute('download')) return;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-  });
 }
 
 /** Canonical Answer body, placed Artifacts, Evidence Images, and References. */
@@ -65,10 +55,8 @@ export class AnswerPresentationElement extends LightElement {
       const index = Number(host.dataset.answerPart);
       const part = presentation.parts[index];
       if (part?.type !== 'markdown') return;
-      setSanitizedLlmHtml(host, part.html);
-      renderMath(host);
-      renderDiagrams(host);
-      secureExternalLinks(host);
+      mountRichHtml(host, part.html);
+      typesetRichContent(host);
     });
   }
 

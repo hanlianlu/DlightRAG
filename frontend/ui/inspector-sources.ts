@@ -6,10 +6,9 @@ import {repeat} from 'lit/directives/repeat.js';
 import type {PresentationSource} from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {setSanitizedLlmHtml} from '../lib/safe-html.ts';
 import {safeExternalHttpHref, safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
-import {renderMath} from '../lib/math.ts';
 import type {ImageOpenDetail} from './image-lightbox.ts';
+import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
 
 export interface InspectorSourcesStateDetail {
   hasSources: boolean;
@@ -77,13 +76,13 @@ export class DlInspectorSources extends LightElement {
           const host = this.querySelector<HTMLElement>(
             `[data-source-content="${CSS.escape(source.id)}:${CSS.escape(key)}"]`,
           );
-          if (host) setSanitizedLlmHtml(host, chunk.contentHtml);
+          if (host) mountRichHtml(host, chunk.contentHtml);
         });
       });
     }
     if (changed.has('sources') || changed.has('expandedRef') || changed.has('showAll')) {
       this.querySelectorAll('.source-doc.expanded .source-doc-chunks').forEach((element) => {
-        renderMath(element);
+        typesetRichContent(element);
       });
     }
     this.dispatchEvent(new CustomEvent<InspectorSourcesStateDetail>(

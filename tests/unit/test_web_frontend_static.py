@@ -273,6 +273,24 @@ def test_panel_action_icons_use_the_accessible_semantic_registry() -> None:
     assert "<svg" not in file_panel + source_panel
 
 
+def test_rich_content_pipeline_has_one_owner_and_two_call_sites() -> None:
+    pipeline = (FRONTEND_UI / "rich-rendering.ts").read_text(encoding="utf-8")
+    answer_view = (FRONTEND_UI / "answer-presentation.ts").read_text(encoding="utf-8")
+    source_view = (FRONTEND_UI / "inspector-sources.ts").read_text(encoding="utf-8")
+
+    # The pipeline owns every rendering stage; the surfaces never touch them
+    # directly, so adding a stage in one place cannot be forgotten in another.
+    for stage in ("setSanitizedLlmHtml", "renderMath", "renderDiagrams", "secureExternalLinks"):
+        assert stage in pipeline
+    for stage in ("setSanitizedLlmHtml", "renderMath", "renderDiagrams", "secureExternalLinks"):
+        assert stage not in answer_view + source_view
+
+    # Both surfaces converge on the same two narrow entries.
+    for entry in ("mountRichHtml", "typesetRichContent"):
+        assert entry in answer_view
+        assert entry in source_view
+
+
 def test_split_layout_separates_behavior_from_product_state() -> None:
     split_adapter = (FRONTEND_UI / "split-panel.ts").read_text(encoding="utf-8")
     split_element = (FRONTEND / "design-system" / "elements" / "split-layout.ts").read_text(

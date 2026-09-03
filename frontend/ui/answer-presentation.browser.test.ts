@@ -207,3 +207,86 @@ it('renders sanitized source chunks and rejects cross-origin download links', as
     'https://example.com/report',
   );
 });
+
+it('hardens external links in answer and source content while downloads keep their contract', async () => {
+  const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
+  element.presentation = {
+    ...presentation,
+    parts: [{
+      ...presentation.parts[0],
+      html: '<p><a href="https://elsewhere.example/x">open</a>' +
+        '<a href="/web/api/files/raw/doc" download>save</a></p>',
+    }],
+  };
+  document.body.appendChild(element);
+  await element.updateComplete;
+
+  const [open, save] = [...element.querySelectorAll<HTMLAnchorElement>('a')];
+  expect(open.target).to.equal('_blank');
+  expect(open.rel).to.equal('noopener noreferrer');
+  expect(save.hasAttribute('target')).to.equal(false);
+
+  const view = document.createElement('dl-inspector-sources') as DlInspectorSources;
+  view.sources = [{
+    ...presentation.sources[0],
+    chunks: [{
+      ...presentation.sources[0].chunks[0],
+      contentHtml: '<p><a href="https://elsewhere.example/y">open</a></p>',
+    }],
+  }];
+  view.setSelection('1');
+  document.body.appendChild(view);
+  await view.updateComplete;
+
+  const chunkLink = view.querySelector<HTMLAnchorElement>('.source-chunk-content a')!;
+  expect(chunkLink.target).to.equal('_blank');
+  expect(chunkLink.rel).to.equal('noopener noreferrer');
+});
+
+it('answer and source surfaces typeset through the one rich-content pipeline', async () => {
+  const typesetContainers: Element[][] = [];
+  const windowRef = window as {MathJax?: unknown};
+  const original = windowRef.MathJax;
+  windowRef.MathJax = {
+    typesetPromise: (containers: Element[]) => {
+      typesetContainers.push(containers);
+      return Promise.resolve();
+    },
+  };
+  try {
+    const element = document.createElement('dl-answer-presentation') as AnswerPresentationElement;
+    element.presentation = {
+      ...presentation,
+      parts: [{
+        ...presentation.parts[0],
+        html: '<p>See</p><pre class="mermaid-source" data-lang="mermaid">' +
+          '<code>graph TD;\nA--&gt;B;</code></pre>',
+      }],
+    };
+    document.body.appendChild(element);
+    await element.updateComplete;
+
+    const answerHost = element.querySelector<HTMLElement>('[data-answer-part]')!;
+    expect(typesetContainers.flat().includes(answerHost)).to.equal(true);
+    expect(element.querySelector('pre.mermaid-source')).to.not.equal(null);
+
+    const view = document.createElement('dl-inspector-sources') as DlInspectorSources;
+    view.sources = [{
+      ...presentation.sources[0],
+      chunks: [{
+        ...presentation.sources[0].chunks[0],
+        contentHtml: '<p>before</p><pre class="mermaid-source">' +
+          '<code>graph TD;\nA--&gt;B;</code></pre>',
+      }],
+    }];
+    view.setSelection('1');
+    document.body.appendChild(view);
+    await view.updateComplete;
+
+    const chunkHost = view.querySelector<HTMLElement>('.source-doc-chunks')!;
+    expect(typesetContainers.flat().includes(chunkHost)).to.equal(true);
+  } finally {
+    if (original === undefined) delete windowRef.MathJax;
+    else windowRef.MathJax = original;
+  }
+});
