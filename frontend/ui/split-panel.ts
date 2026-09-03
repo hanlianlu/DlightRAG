@@ -91,11 +91,12 @@ function updateMaximums(): void {
   for (const state of states) {
     if (isConversation(state)) {
       state.split.min = state.minWidth;
-      state.split.max = drawer
-        ? state.minWidth
+      const axis = state.split.clientWidth;
+      state.split.max = drawer || axis <= 0
+        ? (drawer ? state.minWidth : state.maxWidth)
         : Math.min(
           state.maxWidth,
-          Math.max(state.minWidth, state.split.clientWidth - CHAT_RESERVE - DIVIDER_SIZE),
+          Math.max(state.minWidth, axis - CHAT_RESERVE - DIVIDER_SIZE),
         );
       continue;
     }
@@ -118,6 +119,10 @@ function updateMaximums(): void {
 }
 
 function desktopOpen(state: SplitState): boolean {
+  if (isConversation(state)) {
+    return state.panel.classList.contains('open')
+      || document.body.classList.contains('conversation-sidebar-open');
+  }
   return state.panel.classList.contains('open');
 }
 

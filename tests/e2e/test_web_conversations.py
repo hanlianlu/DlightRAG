@@ -928,6 +928,39 @@ def test_resizing_open_files_panel_to_compact_locks_controls_but_not_scroll(page
 
 
 @pytest.mark.e2e
+def test_conversation_split_is_pointer_resizable(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+    _wait_for_shell_settled(page)
+
+    split = page.locator("#conversation-split")
+    handle = split.get_by_role("separator", name="Resize conversations")
+    handle.wait_for(state="visible")
+    assert split.get_attribute("disabled") is None
+    assert split.get_attribute("data-collapsed") is None
+    before = page.locator("#chat-sidebar").evaluate(
+        "element => element.getBoundingClientRect().width"
+    )
+    box = handle.bounding_box()
+    assert box is not None and box["width"] >= 1 and box["height"] > 100
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 120)
+    page.mouse.down()
+    page.wait_for_function("document.body.hasAttribute('data-resizing')")
+    page.mouse.move(box["x"] + 80, box["y"] + 120, steps=8)
+    page.mouse.up()
+    page.wait_for_function("!document.body.hasAttribute('data-resizing')")
+    after = page.locator("#chat-sidebar").evaluate(
+        "element => element.getBoundingClientRect().width"
+    )
+    assert after > before
+    assert 240 <= after <= 360
+    stored = int(page.evaluate("localStorage.getItem('dlightrag-conversation-sidebar-width')"))
+    assert stored == pytest.approx(after, abs=2)
+
+
+@pytest.mark.e2e
 def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page: Page) -> None:
     _install_conversation_routes(page)
     page.set_viewport_size({"width": 1440, "height": 900})
