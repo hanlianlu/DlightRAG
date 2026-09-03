@@ -159,6 +159,7 @@ export class DlApp extends LightElement {
       'panel-drawer-open',
       'artifact-canvas-open',
       'artifact-canvas-overlay',
+      'artifact-canvas-fullscreen',
       'artifact-canvas-modal',
       'artifact-canvas-wide',
       'settings-open',
@@ -430,6 +431,7 @@ export class DlApp extends LightElement {
     );
     document.body.classList.toggle('artifact-canvas-open', this.canvasOpen);
     document.body.classList.toggle('artifact-canvas-overlay', this.canvasOverlay);
+    document.body.classList.toggle('artifact-canvas-fullscreen', this.canvasOverlay);
     document.body.classList.toggle('artifact-canvas-modal', this.canvasModal);
     document.body.classList.toggle('artifact-canvas-wide', this.canvasWide);
     syncPanelSplitState();

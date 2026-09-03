@@ -88,6 +88,8 @@ function scheduleRenderedWidthSync(): void {
 function updateMaximums(): void {
   const drawer = window.matchMedia(COMPACT_SHELL_MEDIA).matches;
   const wideCanvas = document.body.classList.contains('artifact-canvas-wide');
+  const fullscreenCanvas = document.body.classList.contains('artifact-canvas-fullscreen');
+  const expandedCanvas = wideCanvas || fullscreenCanvas;
   const artifact = states.find((state) => state.widthVar === '--artifact-canvas-width');
   for (const state of states) {
     if (isConversation(state)) {
@@ -105,8 +107,8 @@ function updateMaximums(): void {
       state.split.max = Math.max(state.minWidth, state.split.clientWidth);
       continue;
     }
-    if (state.widthVar === '--artifact-canvas-width' && wideCanvas) {
-      // The divider is hidden while wide, so the canvas may take the full column.
+    if (state.widthVar === '--artifact-canvas-width' && expandedCanvas) {
+      // The divider is hidden while expanded, so the canvas may take the full column.
       state.split.max = Math.max(state.minWidth, state.split.clientWidth);
       continue;
     }
@@ -135,11 +137,14 @@ function desktopOpen(state: SplitState): boolean {
 export function syncPanelSplitState(): void {
   const drawer = window.matchMedia(COMPACT_SHELL_MEDIA).matches;
   const wideCanvas = document.body.classList.contains('artifact-canvas-wide');
+  const fullscreenCanvas = document.body.classList.contains('artifact-canvas-fullscreen');
   for (const state of states) {
     const open = desktopOpen(state);
     const canvasState = state.widthVar === '--artifact-canvas-width';
-    const splitOpen = isConversation(state) ? open && !drawer : open;
-    state.split.disabled = drawer || !splitOpen || (canvasState && wideCanvas);
+    const splitOpen = isConversation(state)
+      ? open && !drawer && !fullscreenCanvas
+      : open && !fullscreenCanvas;
+    state.split.disabled = drawer || !splitOpen || (canvasState && (wideCanvas || fullscreenCanvas));
     state.split.toggleAttribute('data-open', splitOpen);
     state.split.size = splitOpen ? state.preferred : 0;
   }
@@ -149,9 +154,11 @@ export function syncPanelSplitState(): void {
   for (const state of states) {
     const open = desktopOpen(state);
     const canvasState = state.widthVar === '--artifact-canvas-width';
-    const splitOpen = isConversation(state) ? open && !drawer : open;
+    const splitOpen = isConversation(state)
+      ? open && !drawer && !fullscreenCanvas
+      : open && !fullscreenCanvas;
     if (!splitOpen) continue;
-    state.split.size = canvasState && wideCanvas
+    state.split.size = canvasState && (wideCanvas || fullscreenCanvas)
       ? state.split.max
       : Math.min(state.preferred, state.split.max);
   }

@@ -185,9 +185,9 @@ dl-artifact-canvas:not(.open) {
 }
 
 dl-artifact-canvas.layout-fullscreen {
-    inset: 0;
-    position: fixed;
-    z-index: 120;
+    /* Fullscreen is the maximal docked layout: the shell collapses the
+       conversation sidebar and the Inspector so the canvas column spans the
+       whole window. No overlay, no fixed positioning. */
 }
 
 dl-artifact-canvas.layout-wide {
