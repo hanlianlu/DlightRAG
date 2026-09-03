@@ -61,6 +61,8 @@ export class DlConversationList extends LightElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    window.clearTimeout(this.#selectTimer);
+    this.#selectTimer = 0;
     this.#dismiss?.abort();
     this.#dismiss = null;
   }
@@ -112,13 +114,37 @@ export class DlConversationList extends LightElement {
     void this.#focusAfterRender('[role="menuitem"]:not([disabled])', conversationId, last);
   }
 
-  #renameFromPointer = (event: MouseEvent): void => {
-    if (this.busy) return;
+  #selectTimer = 0;
+
+  #rowIdFromEvent(event: Event): string | null {
     const target = event.target;
-    if (!(target instanceof Element)) return;
-    if (target.closest('dl-menu, .conversation-actions-button, input')) return;
-    const row = target.closest('[data-conversation-id]');
-    const conversationId = row?.getAttribute('data-conversation-id');
+    if (!(target instanceof Element)) return null;
+    if (target.closest('dl-menu, .conversation-actions-button, input')) return null;
+    return target.closest('[data-conversation-id]')?.getAttribute('data-conversation-id') ?? null;
+  }
+
+  #selectFromPointer = (event: MouseEvent): void => {
+    if (this.busy) return;
+    const conversationId = this.#rowIdFromEvent(event);
+    if (!conversationId) return;
+    if (event.detail >= 2) return;
+    if (conversationId === this.handles.conversations.activeConversationId) return;
+    if (event.detail === 0) {
+      this.#emit<ConversationIntentDetail>('dl-conversation-select', {conversationId});
+      return;
+    }
+    window.clearTimeout(this.#selectTimer);
+    this.#selectTimer = window.setTimeout(() => {
+      this.#selectTimer = 0;
+      this.#emit<ConversationIntentDetail>('dl-conversation-select', {conversationId});
+    }, 250);
+  };
+
+  #renameFromPointer = (event: MouseEvent): void => {
+    window.clearTimeout(this.#selectTimer);
+    this.#selectTimer = 0;
+    if (this.busy) return;
+    const conversationId = this.#rowIdFromEvent(event);
     if (conversationId) this.#startRename(conversationId);
   };
 
@@ -248,9 +274,6 @@ export class DlConversationList extends LightElement {
               aria-label=${conversation.title
                 ? nothing
                 : msg('Open untitled conversation', {id: 'conversationList.openUntitled'})}
-              @click=${() => {
-                this.#emit<ConversationIntentDetail>('dl-conversation-select', {conversationId});
-              }}
             >${conversation.title || msg('New chat', {id: 'conversationList.newChat'})}</button>
           `}
           ${conversation.forkedFromTitle ? html`
@@ -311,6 +334,7 @@ export class DlConversationList extends LightElement {
           )
         : nothing}
       <div class="conversation-items" role="list" aria-live="polite"
+           @click=${this.#selectFromPointer}
            @dblclick=${this.#renameFromPointer}>
         ${repeat(
           conversations,

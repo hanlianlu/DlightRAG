@@ -60,6 +60,7 @@ template.innerHTML = `
     #divider::before {
       content: '';
       inset: 0;
+      pointer-events: auto;
       position: absolute;
     }
     :host(:not([orientation='vertical'])) #divider { cursor: col-resize; }
