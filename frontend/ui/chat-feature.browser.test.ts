@@ -10,26 +10,26 @@ import type {
   ConversationTurn,
   PresentationImage,
 } from '../api/conversations.ts';
+import {answerSubmissionRegistry} from '../stores/answer-submission-registry.ts';
 import {attachmentStore} from '../stores/attachment-store.ts';
 import {conversationStore} from '../stores/conversation-store.ts';
 import {workspaceStore} from '../stores/workspace-store.ts';
-import {answerSubmissionRegistry} from '../stores/answer-submission-registry.ts';
 import type {DlChatComposer} from './chat-composer.ts';
 import './chat-composer.ts';
 import type {DlConversationSidebar} from './conversation-sidebar.ts';
 import './conversation-sidebar.ts';
-import {ANSWER_PHASE_LABELS, answerPhaseLabel} from '../lib/turn-projection.ts';
 import type {ChatTurnView} from '../lib/chat-views.ts';
-import {applyToolEvent, toolStatusText} from '../lib/tool-events.ts';
 import {toolDisplay} from '../lib/tool-display.ts';
+import {applyToolEvent, toolStatusText} from '../lib/tool-events.ts';
+import {ANSWER_PHASE_LABELS, answerPhaseLabel} from '../lib/turn-projection.ts';
 import type {DlChatFeature} from './chat-feature.ts';
 import './chat-feature.ts';
 import {
   ANSWER_RECONNECT_COPY,
   answerReconnectState,
-  storedTurnView,
   type ChatRunActionDetail,
   type DlChatMessageList,
+  storedTurnView,
 } from './chat-message-list.ts';
 import {webRouter} from './router.ts';
 
@@ -1565,9 +1565,11 @@ it('Chat Feature renders every explicitly loaded history page without a product 
   document.body.appendChild(feature);
   await settle(feature);
 
-  expect(feature.querySelector('[role="log"]')?.querySelectorAll('article').length).to.equal(101);
-  expect(feature.textContent).to.contain('Question 0');
-  expect(feature.textContent).to.contain('Question 100');
+  expect(feature.turns).to.have.length(101);
+  expect(feature.querySelectorAll('[data-turn-slot]').length).to.equal(101);
+  const mounted = feature.querySelector('[role="log"]')?.querySelectorAll('article').length ?? 0;
+  expect(mounted).to.be.greaterThan(0);
+  expect(mounted).to.be.lessThan(101);
 });
 
 it('pages more than 40 turns through the wired store, sidebar, and Load older control', async () => {

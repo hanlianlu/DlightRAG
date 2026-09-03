@@ -25,7 +25,7 @@ def test_ingestion_panel_opens(page):
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
     upload_zone = page.locator("#upload-zone")
     assert upload_zone.get_attribute("role") is None
-    assert upload_zone.locator(":scope > .upload-zone-file-action").count() == 1
+    assert upload_zone.locator(":scope > [data-upload-file-action]").count() == 1
 
 
 @pytest.mark.e2e
@@ -105,14 +105,14 @@ def test_file_panel_workspace_switch_replaces_loading_state(page):
     page.click("#files-btn")
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
 
-    page.click(".ingest-target-pill")
+    page.click("[data-ingest-pill]")
     page.locator(".dl-popover--ingest .dl-popover-item", has_text="Research").click()
 
     page.wait_for_function(
         "!document.querySelector('#panel-content')?.textContent.includes('Loading files...')"
     )
     assert "Loading files..." not in page.locator("#panel-content").text_content()
-    assert page.locator(".ingest-target-name").text_content() == "Research"
+    assert page.locator("[data-ingest-name]").text_content() == "Research"
 
 
 @pytest.mark.e2e
@@ -126,4 +126,4 @@ def test_file_panel_uses_last_selected_topbar_workspace(page):
     page.click("#files-btn")
 
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
-    assert page.locator(".ingest-target-name").text_content() == "Research"
+    assert page.locator("[data-ingest-name]").text_content() == "Research"

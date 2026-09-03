@@ -1,15 +1,15 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
+import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {PresentationSource} from '../api/conversations.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeExternalHttpHref, safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
+import sourceStyles from '../styles/inspector-sources.module.css';
 import type {ImageOpenDetail} from './image-lightbox.ts';
 import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
-import sourceStyles from '../styles/inspector-sources.module.css';
 
 export interface InspectorSourcesStateDetail {
   hasSources: boolean;
@@ -122,8 +122,8 @@ export class DlInspectorSources extends LightElement {
     return html`
       <div class=${`${s['source-doc']}${expanded ? ` ${s.expanded}` : ''}`}
            data-ref=${source.id} ?data-expanded=${expanded}>
-        <div class=${s['source-doc-header']}>
-          <button class=${s['source-doc-toggle']} type="button" aria-expanded=${String(expanded)}
+        <div class=${s['source-doc-header']} data-source-header>
+          <button class=${s['source-doc-toggle']} type="button" data-source-toggle aria-expanded=${String(expanded)}
                   @click=${() => { this.#toggle(source.id); }}>
             <span class=${s['collapse-icon']}>${icon('disclosure', {size: 'xs'})}</span>
             <span class=${s['source-doc-title']}>${source.title}</span>

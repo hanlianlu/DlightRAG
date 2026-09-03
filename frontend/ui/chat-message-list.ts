@@ -8,17 +8,17 @@ import type {
   ConversationAttachmentReference,
   ConversationTurn,
 } from '../api/conversations.ts';
-import type {ChatTurnView} from '../lib/chat-views.ts';
 import {icon} from '../design-system/index.ts';
-import {localizedStoredRunError} from '../lib/run-errors.ts';
+import type {ChatTurnView} from '../lib/chat-views.ts';
 import {formatFileSize} from '../lib/file-size.ts';
+import {LightElement} from '../lib/lit-host.ts';
+import {localizedStoredRunError} from '../lib/run-errors.ts';
 import {toolRowText} from '../lib/tool-events.ts';
 import {
   TURN_PLACEHOLDER_MIN_PX,
   turnIsLive,
   visibleTurnWindow,
 } from '../lib/turn-window.ts';
-import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc, safeSameOriginHref} from '../lib/urls.ts';
 import chatStyles from '../styles/chat.module.css';
 import './answer-presentation.ts';
@@ -269,9 +269,7 @@ export class DlChatMessageList extends LightElement {
       }
     }
     this.#measureSlots();
-    const windowChanged = this.#recomputeWindow();
     if (this.#showWelcome()) {
-      if (windowChanged) this.requestUpdate();
       return;
     }
     const previousView = changed.get('view') as ChatView | undefined;
@@ -301,7 +299,6 @@ export class DlChatMessageList extends LightElement {
           else this.querySelector<HTMLElement>('#chat-messages')?.focus({preventScroll: true});
         }
       });
-      if (windowChanged) this.requestUpdate();
       return;
     }
     if (this.#pendingTurnAnchor && this.#scrollFrame) {
@@ -309,7 +306,6 @@ export class DlChatMessageList extends LightElement {
       this.#scrollFrame = 0;
     }
     if ((!this.#stickAfterUpdate && !this.#pendingTurnAnchor) || this.#scrollFrame) {
-      if (windowChanged) this.requestUpdate();
       return;
     }
     const stickToBottom = this.#stickAfterUpdate;
@@ -332,7 +328,6 @@ export class DlChatMessageList extends LightElement {
         area.scrollTop = area.scrollHeight;
       }
     });
-    if (windowChanged) this.requestUpdate();
   }
 
   protected override render(): TemplateResult {

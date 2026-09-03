@@ -675,7 +675,7 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
 
     new_bottom = _text_bottom(page, "#new-conversation-btn")
     search_bottom = _text_bottom(page, ".topbar-scope-label")
-    files_bottom = _text_bottom(page, ".ingest-target-name")
+    files_bottom = _text_bottom(page, "[data-ingest-name]")
     assert (
         max(new_bottom, search_bottom, files_bottom) - min(new_bottom, search_bottom, files_bottom)
         <= 1.5
@@ -867,7 +867,7 @@ def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     )
     bottoms = [
         _text_bottom(page, "#new-conversation-btn"),
-        _text_bottom(page, ".ingest-target-name"),
+        _text_bottom(page, "[data-ingest-name]"),
     ]
     if viewport[0] > 640:
         bottoms.append(_text_bottom(page, ".topbar-scope-label"))

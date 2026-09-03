@@ -1,14 +1,14 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
+import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {icon} from '../design-system/index.ts';
-import type {WorkspaceRecord} from '../stores/workspace-store.ts';
-import {LightElement, StoreController} from '../lib/lit-host.ts';
-import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
+import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
+import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
+import type {WorkspaceRecord} from '../stores/workspace-store.ts';
 import './workspace-create.ts';
 import ingestStyles from '../styles/ingest-target.module.css';
 
@@ -112,6 +112,7 @@ export class DlIngestTarget extends LightElement {
                 <button
                     class=${ingestStyles['ingest-target-pill']}
                     id="ingest-target-trigger"
+                    data-ingest-pill
                     type="button"
                     aria-label=${msg(str`Files in ${displayName}; choose file workspace`, {id: 'ingestTarget.filesInAria'})}
                     aria-haspopup="dialog"
@@ -120,7 +121,7 @@ export class DlIngestTarget extends LightElement {
                     @click=${this.#togglePopover}
                 >
                     <span class=${ingestStyles['ingest-target-dot']}></span>
-                    <span class=${ingestStyles['ingest-target-name']}>${displayName}</span>
+                    <span class=${ingestStyles['ingest-target-name']} data-ingest-name>${displayName}</span>
                     <span class=${ingestStyles['ingest-target-caret']}>
                         ${icon('chevron-down', {size: 'xs'})}
                     </span>

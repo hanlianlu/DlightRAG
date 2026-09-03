@@ -11,10 +11,10 @@ import type {
 } from '../api/conversations.ts';
 import {LightElement} from '../lib/lit-host.ts';
 import {safeImageSrc} from '../lib/urls.ts';
+import answerStyles from '../styles/answer-presentation.module.css';
+import chatStyles from '../styles/chat.module.css';
 import type {ImageOpenDetail} from './image-lightbox.ts';
 import {mountRichHtml, typesetRichContent} from './rich-rendering.ts';
-import chatStyles from '../styles/chat.module.css';
-import answerStyles from '../styles/answer-presentation.module.css';
 
 export interface ArtifactOpenDetail {
   artifact: AnswerArtifact;
@@ -95,7 +95,7 @@ export class AnswerPresentationElement extends LightElement {
             presentation.sources,
             (source) => source.id,
             (source) => html`
-              <button class=${answerStyles['answer-ref-item']} type="button" data-ref=${source.id}>
+              <button class=${answerStyles['answer-ref-item']} type="button" data-ref=${source.id} data-answer-ref>
                 <span class=${answerStyles['answer-ref-id']}>${source.id}</span>
                 <span class=${answerStyles['answer-ref-title']}>${source.title}</span>
               </button>

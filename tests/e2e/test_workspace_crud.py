@@ -161,7 +161,7 @@ def test_workspace_selector_all_sets_default_primary(page):
 
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
     assert page.locator("#workspace-label").text_content() == "All workspaces (2)"
-    assert page.locator(".ingest-target-name").text_content() == "Default"
+    assert page.locator("[data-ingest-name]").text_content() == "Default"
 
 
 @pytest.mark.e2e
@@ -177,7 +177,7 @@ def test_workspace_selector_auto_all_keeps_last_explicit_primary(page):
 
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
     assert page.locator("#workspace-label").text_content() == "All workspaces (2)"
-    assert page.locator(".ingest-target-name").text_content() == "Research"
+    assert page.locator("[data-ingest-name]").text_content() == "Research"
 
 
 @pytest.mark.e2e

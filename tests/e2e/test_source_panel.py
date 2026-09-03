@@ -133,7 +133,7 @@ def _inject_answer_with_sources(page, *, image_url: str | None = None) -> None:
         }""",
         _source_presentation_domain(image_url=image_url),
     )
-    page.locator(".answer-ref-item").last.wait_for()
+    page.locator("[data-answer-ref]").last.wait_for()
 
 
 @pytest.mark.e2e
@@ -142,11 +142,11 @@ def test_reference_item_keyboard_opens_source_panel(page):
     _open_ready_page(page)
     _inject_answer_with_sources(page)
 
-    page.locator(".answer-ref-item").press("Enter")
+    page.locator("[data-answer-ref]").press("Enter")
 
-    page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]', timeout=10000)
+    page.wait_for_selector('#panel-content [data-ref="1"][data-expanded]', timeout=10000)
     assert page.locator("#panel-title").text_content() == "Sources"
-    assert page.locator("#panel-content .source-chunk-content").text_content() == "Evidence text"
+    assert page.locator("#panel-content [data-source-content]").text_content() == "Evidence text"
     assert "Wrong decoy" not in page.locator("#panel-content").text_content()
 
 
@@ -154,7 +154,7 @@ def test_reference_item_keyboard_opens_source_panel(page):
 def test_conversation_route_change_closes_sources_panel(page):
     _open_ready_page(page)
     _inject_answer_with_sources(page)
-    page.locator(".answer-ref-item").last.click()
+    page.locator("[data-answer-ref]").last.click()
     page.wait_for_selector('#panel.open[data-panel-kind="sources"]')
 
     page.get_by_role("button", name="New chat").click()
@@ -168,10 +168,10 @@ def test_composer_attachment_picker_keeps_sources_panel_open(page):
     _open_ready_page(page)
     page.set_viewport_size({"width": 1440, "height": 900})
     _inject_answer_with_sources(page)
-    page.locator(".answer-ref-item").last.click()
+    page.locator("[data-answer-ref]").last.click()
 
     panel = page.locator("#panel")
-    page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
+    page.wait_for_selector('#panel-content [data-ref="1"][data-expanded]')
     with page.expect_file_chooser() as chooser_info:
         page.get_by_role("button", name="Attach files").click()
     chooser_info.value.set_files(
@@ -191,9 +191,9 @@ def test_theme_menu_and_selection_keep_sources_panel_open(page):
     _open_ready_page(page)
     page.set_viewport_size({"width": 1440, "height": 900})
     _inject_answer_with_sources(page)
-    page.locator(".answer-ref-item").last.click()
+    page.locator("[data-answer-ref]").last.click()
     panel = page.locator("#panel")
-    page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
+    page.wait_for_selector('#panel-content [data-ref="1"][data-expanded]')
 
     page.get_by_role("button", name="Appearance").click()
     assert panel.evaluate("element => element.classList.contains('open')") is True
@@ -208,13 +208,13 @@ def test_theme_menu_and_selection_keep_sources_panel_open(page):
 def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
     _open_ready_page(page)
     _inject_answer_with_sources(page)
-    page.locator(".answer-ref-item").press("Enter")
+    page.locator("[data-answer-ref]").press("Enter")
 
-    header = page.locator('#panel-content .source-doc[data-ref="1"] .source-doc-header')
-    download = header.locator(":scope > .source-action-icon[download]")
+    header = page.locator('#panel-content [data-ref="1"] [data-source-header]')
+    download = header.locator(":scope > a[download]")
 
     assert download.count() == 1
-    assert header.locator(":scope > .source-doc-toggle").count() == 1
+    assert header.locator(":scope > [data-source-toggle]").count() == 1
     assert download.get_attribute("href").endswith(
         "/web/api/files/raw/doc-report?workspace=default"
     )
@@ -275,7 +275,7 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
     ) as history_response:
         page.goto("/web/conversations/public-source-history")
     history_response.value.finished()
-    page.locator(".answer-ref-item").press("Enter")
+    page.locator("[data-answer-ref]").press("Enter")
 
     link = page.get_by_role("link", name="Open source")
     assert link.get_attribute("target") == "_blank"
@@ -296,8 +296,8 @@ def test_escape_closes_source_lightbox_only_and_restores_image_focus(page):
         "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
     )
     _inject_answer_with_sources(page, image_url=image_url)
-    page.locator(".answer-ref-item").press("Enter")
-    page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
+    page.locator("[data-answer-ref]").press("Enter")
+    page.wait_for_selector('#panel-content [data-ref="1"][data-expanded]')
 
     image = page.get_by_role("button", name="Open page image")
     image.click()

@@ -9,9 +9,14 @@ import {playwrightLauncher} from '@web/test-runner-playwright';
 const cssModulePlugin = {
   name: 'css-module-projection',
   transformImport({source}) {
-    return source.endsWith('.module.css') ? `${source}?wtr-css-module` : undefined;
+    if (source.endsWith('.module.css')) return `${source}?wtr-css-module`;
+    if (source.endsWith('.css')) return `${source}?wtr-css-empty`;
+    return undefined;
   },
   async serve(context) {
+    if (context.path.endsWith('.css') && 'wtr-css-empty' in context.query) {
+      return {body: 'export {}', type: 'js'};
+    }
     if (!context.path.endsWith('.module.css') || !('wtr-css-module' in context.query)) return;
     const source = await readFile(join(process.cwd(), context.path), 'utf8');
     const names = [...source.matchAll(/\.([A-Za-z_][\w-]*)/g)].map((match) => match[1]);
@@ -29,6 +34,7 @@ const browserProducts = (process.env.WTR_BROWSERS ?? 'chromium')
   .filter(Boolean);
 
 export default {
+  port: 7357,
   files: ['ui/**/*.browser.test.ts', 'design-system/**/*.browser.test.ts'],
   nodeResolve: {exportConditions: ['browser', 'development']},
   plugins: [
@@ -36,6 +42,7 @@ export default {
     esbuildPlugin({ts: true, target: 'auto'}),
   ],
   browsers: browserProducts.map((product) => playwrightLauncher({product})),
+  testsFinishTimeout: 30000,
   testFramework: {
     config: {
       timeout: 5000,

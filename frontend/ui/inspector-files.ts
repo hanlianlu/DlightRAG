@@ -1,11 +1,11 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
+import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
 import {html, nothing, type PropertyValues, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import {
-  FilesApiError,
   deleteFileRequest,
+  FilesApiError,
   getFilePanel,
   getIngestStatus,
   uploadFileBatch,
@@ -15,15 +15,15 @@ import {
 import {icon} from '../design-system/index.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
-import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
-import {requestToast} from './toast-request.ts';
-import {modalResult} from './modal.ts';
+import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 import {withRelativePath} from './folder-upload.ts';
+import {modalResult} from './modal.ts';
+import {requestToast} from './toast-request.ts';
 import './failed-file-recovery.ts';
-import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
-import type {ToastRequestDetail} from './toast.ts';
 import fileStyles from '../styles/inspector-files.module.css';
+import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
 import {InspectorFilesSession} from './inspector-files-session.ts';
+import type {ToastRequestDetail} from './toast.ts';
 
 function uploadLabel(files: readonly File[], label?: string | null): string {
   if (label) return label;
@@ -466,6 +466,7 @@ export class DlInspectorFiles extends LightElement {
       ${this.error ? html`<div class="file-error" role="alert">${this.error}</div>` : nothing}
       <div class=${`${fileStyles['upload-zone']}${this.uploading ? ` ${fileStyles['is-uploading']}` : ''}`} id="upload-zone">
         <button type="button" class=${fileStyles['upload-zone-file-action']}
+                data-upload-file-action
                 aria-label=${msg('Choose files', {id: 'inspectorFiles.chooseFilesAria'})}
                 @click=${() => { this.#chooseFiles(); }}>
           <span class=${fileStyles['upload-text']}>${msg('Drop files or folders, or click to choose files', {id: 'inspectorFiles.dropHint'})}</span>

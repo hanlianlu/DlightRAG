@@ -141,7 +141,7 @@
     margin-top: var(--space-tight);
 }
 
-#ingest-progress {
+:global(#ingest-progress) {
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
@@ -156,12 +156,12 @@
     color: var(--color-text-muted);
 }
 
-#upload-spinner {
+:global(#upload-spinner) {
     display: none;
     justify-content: center;
 }
 
-.upload-zone.is-uploading #upload-spinner {
+.upload-zone.is-uploading :global(#upload-spinner) {
     display: flex;
 }
 
