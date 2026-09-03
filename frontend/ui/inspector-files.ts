@@ -23,8 +23,7 @@ import './failed-file-recovery.ts';
 import type {DlFailedFileRecovery} from './failed-file-recovery.ts';
 import type {ToastRequestDetail} from './toast.ts';
 import fileStyles from '../styles/inspector-files.module.css';
-
-const POLL_INTERVAL_MS = 2000;
+import {InspectorFilesSession} from './inspector-files-session.ts';
 
 function uploadLabel(files: readonly File[], label?: string | null): string {
   if (label) return label;
@@ -56,15 +55,10 @@ export class DlInspectorFiles extends LightElement {
   declare filesLoadMoreState: 'idle' | 'loading' | 'error';
 
   #workspace = '';
-  #request: AbortController | null = null;
-  #pollController: AbortController | null = null;
-  #pollTimer: number | null = null;
-  #olderFilesController: AbortController | null = null;
-  #olderFilesGeneration = 0;
+  readonly #session = new InspectorFilesSession();
   #olderFilesFlight: Promise<void> | null = null;
   #olderFilesAnnouncement = '';
   #restoreOlderFocus = false;
-  #activeMutations = 0;
   #deleteTrigger: HTMLElement | null = null;
   #releaseWorkspaceEvents: (() => void)[] = [];
 
@@ -104,14 +98,14 @@ export class DlInspectorFiles extends LightElement {
       this.#workspace = workspace;
       void this.reload();
     }
-    this.querySelectorAll<HTMLElement>('.progress-bar-fill[data-pct]').forEach((fill) => {
+    this.querySelectorAll<HTMLElement>('[data-pct]').forEach((fill) => {
       const value = Number(fill.dataset.pct);
       fill.style.width = `${Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0))}%`;
     });
   }
 
   get hasActiveMutation(): boolean {
-    return this.#activeMutations > 0;
+    return this.#session.mutating;
   }
 
   async reload(showLoading = true): Promise<void> {
@@ -139,10 +133,7 @@ export class DlInspectorFiles extends LightElement {
         ? error.message
         : msg('Failed to load files.', {id: 'inspectorFiles.loadFailed'});
     } finally {
-      if (this.#request === controller) {
-        this.#request = null;
-        this.loading = false;
-      }
+      if (this.#session.finishRequest(controller)) this.loading = false;
     }
   }
 
@@ -152,13 +143,13 @@ export class DlInspectorFiles extends LightElement {
     const cursor = this.snapshot?.workspace === workspace
       ? this.snapshot.nextCursor
       : null;
-    if (!cursor || this.loading || this.#request !== null || !this.active) {
+    if (!cursor || this.loading || this.#session.requestBusy || !this.active) {
       return Promise.resolve();
     }
     const flight = this.#loadOlderFilesPage(
       workspace,
       cursor,
-      this.#olderFilesGeneration,
+      this.#session.olderGeneration,
     );
     this.#olderFilesFlight = flight;
     void flight.finally(() => {
@@ -172,22 +163,19 @@ export class DlInspectorFiles extends LightElement {
     cursor: string,
     generation: number,
   ): Promise<void> {
-    this.#olderFilesController?.abort();
-    const controller = new AbortController();
-    this.#olderFilesController = controller;
+    const controller = this.#session.startOlder();
     this.filesLoadMoreState = 'loading';
     this.#olderFilesAnnouncement = msg('Loading older files…', {id: 'inspectorFiles.loadingOlder'});
     try {
       const older = await getFilePanel(workspace, cursor, controller.signal);
       const current = this.snapshot;
       if (
-        controller !== this.#olderFilesController
-        || generation !== this.#olderFilesGeneration
+        !this.#session.isOlderCurrent(controller, generation)
         || workspace !== this.handles.ingest.workspace
         || current?.workspace !== workspace
         || current.nextCursor !== cursor
       ) {
-        if (controller === this.#olderFilesController) {
+        if (this.#session.isOlderCurrent(controller, generation)) {
           this.filesLoadMoreState = 'idle';
           this.#olderFilesAnnouncement = '';
         }
@@ -219,13 +207,12 @@ export class DlInspectorFiles extends LightElement {
     } catch (error) {
       if (
         isAbortError(error)
-        || controller !== this.#olderFilesController
-        || generation !== this.#olderFilesGeneration
+        || !this.#session.isOlderCurrent(controller, generation)
       ) return;
       this.filesLoadMoreState = 'error';
       this.#olderFilesAnnouncement = msg('Older files could not be loaded.', {id: 'inspectorFiles.olderFilesFailed'});
     } finally {
-      if (this.#olderFilesController === controller) this.#olderFilesController = null;
+      this.#session.finishOlder(controller);
     }
   }
 
@@ -267,8 +254,7 @@ export class DlInspectorFiles extends LightElement {
       requestToast(this, {message, duration: 3000});
     } finally {
       this.#finishMutation();
-      if (this.#request === controller) {
-        this.#request = null;
+      if (this.#session.finishRequest(controller)) {
         this.uploading = false;
         this.loading = false;
       }
@@ -277,10 +263,8 @@ export class DlInspectorFiles extends LightElement {
 
   pause(): void {
     this.#invalidateOlderFiles();
-    this.#request?.abort();
-    this.#request = null;
+    this.#session.pause();
     this.uploading = false;
-    this.#stopPolling();
   }
 
   async #deleteFile(filePath: string): Promise<void> {
@@ -318,16 +302,12 @@ export class DlInspectorFiles extends LightElement {
       requestToast(this, {message, duration: 3000});
     } finally {
       this.#finishMutation();
-      if (this.#request === controller) {
-        this.#request = null;
-        this.loading = false;
-      }
+      if (this.#session.finishRequest(controller)) this.loading = false;
     }
   }
 
   async #poll(workspace: string): Promise<void> {
-    const controller = new AbortController();
-    this.#pollController = controller;
+    const controller = this.#session.startPollRequest();
     try {
       const status = await getIngestStatus(workspace, controller.signal);
       if (workspace !== this.handles.ingest.workspace || !this.active || !this.isConnected) return;
@@ -345,7 +325,7 @@ export class DlInspectorFiles extends LightElement {
         this.#schedulePoll(workspace);
       }
     } finally {
-      if (this.#pollController === controller) this.#pollController = null;
+      this.#session.finishPollRequest(controller);
     }
   }
 
@@ -361,17 +341,11 @@ export class DlInspectorFiles extends LightElement {
   }
 
   #schedulePoll(workspace: string): void {
-    this.#stopPolling();
-    this.#pollTimer = window.setTimeout(() => {
-      this.#pollTimer = null;
-      void this.#poll(workspace);
-    }, POLL_INTERVAL_MS);
+    this.#session.schedulePoll(workspace, (next) => { void this.#poll(next); });
   }
 
   #invalidateOlderFiles(): void {
-    this.#olderFilesController?.abort();
-    this.#olderFilesController = null;
-    this.#olderFilesGeneration += 1;
+    this.#session.invalidateOlder();
     this.#olderFilesFlight = null;
     this.filesLoadMoreState = 'idle';
     this.#olderFilesAnnouncement = '';
@@ -379,29 +353,23 @@ export class DlInspectorFiles extends LightElement {
   }
 
   #stopPolling(): void {
-    if (this.#pollTimer !== null) window.clearTimeout(this.#pollTimer);
-    this.#pollTimer = null;
-    this.#pollController?.abort();
-    this.#pollController = null;
+    this.#session.stopPolling();
   }
 
   #startRequest(): AbortController {
-    this.#request?.abort();
-    const controller = new AbortController();
-    this.#request = controller;
-    return controller;
+    return this.#session.startRequest();
   }
 
   #isCurrent(controller: AbortController, workspace: string): boolean {
-    return this.#request === controller && this.handles.ingest.workspace === workspace;
+    return this.#session.isCurrent(controller, workspace, this.handles.ingest.workspace);
   }
 
   #beginMutation(): void {
-    this.#activeMutations += 1;
+    this.#session.beginMutation();
   }
 
   #finishMutation(): void {
-    this.#activeMutations = Math.max(0, this.#activeMutations - 1);
+    this.#session.finishMutation();
   }
 
   #chooseFiles(): void {
