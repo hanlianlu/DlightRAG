@@ -197,6 +197,22 @@ it('keeps accessible Load older and retry controls outside list ownership', asyn
   expect(list.querySelector('[aria-label="Load older conversations"]')).to.equal(null);
 });
 
+it('starts rename from a double-click on the conversation title', async () => {
+  window.fetch = async () => conversationPage([first]);
+  await conversationStore.loadList();
+  const list = document.createElement('dl-conversation-list') as DlConversationList;
+  document.body.appendChild(list);
+  await list.updateComplete;
+
+  button(list, 'Research notes').dispatchEvent(new MouseEvent('dblclick', {
+    bubbles: true, cancelable: true,
+  }));
+  await list.updateComplete;
+  const input = list.querySelector<HTMLInputElement>('[aria-label="Conversation title"]');
+  expect(input).not.to.equal(null);
+  expect(document.activeElement).to.equal(input);
+});
+
 it('restores row focus after keyboard rename completion and cancellation', async () => {
   window.fetch = async () => conversationPage([first]);
   await conversationStore.loadList();

@@ -10,6 +10,10 @@ dl-inspector {
     width: 100%;
 }
 
+dl-inspector.open {
+    z-index: 110;
+}
+
 dl-inspector[aria-hidden='true'] {
     pointer-events: none;
 }
@@ -93,6 +97,12 @@ dl-inspector[aria-hidden='true'] {
 
 .inspector-backdrop[hidden] {
     display: none;
+}
+
+dl-icon-button.panel-close {
+    color: var(--color-text-dim);
+    flex: 0 0 auto;
+    margin-left: auto;
 }
 
 .panel-close:hover {

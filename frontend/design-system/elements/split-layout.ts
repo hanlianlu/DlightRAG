@@ -78,7 +78,7 @@ template.innerHTML = `
     }
     :host(:not([disabled]):not([data-collapsed])) #divider:hover,
     :host(:not([disabled]):not([data-collapsed])) #divider:focus-visible {
-      background: var(--focus-ring-color, Highlight);
+      background: var(--color-accent-action, var(--focus-ring-color, Highlight));
     }
     :host(:not([disabled]):not([data-collapsed])) #divider:focus-visible {
       box-shadow: 0 0 0 2px var(--focus-ring-color, Highlight);

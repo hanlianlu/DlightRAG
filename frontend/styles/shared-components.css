@@ -37,6 +37,7 @@
     border-radius: 0 var(--radius-docked) var(--radius-docked) 0;
     box-shadow: var(--shadow-overlay);
     color: var(--color-text-secondary);
+    font-family: var(--font-body);
     height: 100dvh;
     inset: 0 auto 0 0;
     margin: 0;
@@ -54,6 +55,10 @@
 
 .settings-dialog[open] {
     transform: translateX(0);
+}
+
+.settings-dialog[open]:hover {
+    border-right-color: var(--color-accent-action);
 }
 
 @starting-style {
@@ -82,6 +87,7 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-subhead);
     font-weight: 600;
+    line-height: var(--line-height-control);
     margin: 0;
 }
 
@@ -134,14 +140,14 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-body);
     font-weight: 600;
+    line-height: var(--line-height-control);
     margin-bottom: var(--space-component);
 }
 
 .settings-section p {
     color: var(--color-text-muted);
     font-size: var(--font-size-detail);
-    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-    line-height: 1.5;
+    line-height: var(--line-height-control);
     margin-block: var(--space-tight);
 }
 

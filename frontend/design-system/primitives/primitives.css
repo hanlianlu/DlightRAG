@@ -87,7 +87,9 @@
     border-radius: var(--radius-dialog);
     box-shadow: var(--shadow-overlay);
     color: var(--color-text-secondary);
+    font-family: var(--font-body);
     inset: 0;
+    line-height: var(--line-height-control);
     margin: auto;
     max-width: min(420px, calc(100vw - 32px));
     padding: var(--space-section);
@@ -102,14 +104,14 @@
     color: var(--color-text-primary);
     font-size: var(--font-size-subhead);
     font-weight: 600;
+    line-height: var(--line-height-control);
     margin-bottom: var(--space-component);
 }
 
 .confirm-dialog p {
     color: var(--color-text-muted);
     font-size: var(--font-size-detail);
-    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-    line-height: 1.5;
+    line-height: var(--line-height-control);
     margin-bottom: var(--space-tight);
 }
 

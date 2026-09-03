@@ -1,11 +1,11 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
+import {msg, str, updateWhenLocaleChanges } from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {ConversationSummary} from '../api/conversations.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
-import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
+import {type AppHandles, productionHandles } from '../stores/app-handles.ts';
 
 export interface ConversationIntentDetail {
   conversationId: string;
@@ -240,6 +240,10 @@ export class DlConversationList extends LightElement {
                 : msg('Open untitled conversation', {id: 'conversationList.openUntitled'})}
               @click=${() => {
                 this.#emit<ConversationIntentDetail>('dl-conversation-select', {conversationId});
+              }}
+              @dblclick=${(event: MouseEvent) => {
+                event.preventDefault();
+                if (!this.busy) this.#startRename(conversationId);
               }}
             >${conversation.title || msg('New chat', {id: 'conversationList.newChat'})}</button>
           `}

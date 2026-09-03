@@ -2,7 +2,7 @@
 /** Icon-only control. Chrome is Shadow; the host owns the accessible name. */
 
 import {render} from 'lit';
-import {icon, type IconName, type IconSize} from '../icons/icon.ts';
+import {type IconName, type IconSize, icon } from '../icons/icon.ts';
 
 const SIZES = new Set<IconSize>(['xs', 'sm', 'md', 'lg']);
 
@@ -28,6 +28,25 @@ template.innerHTML = `
       outline-offset: 2px;
     }
     button:disabled { cursor: default; opacity: 0.5; }
+    #icon, #icon svg { display: block; }
+    #icon svg {
+      height: var(--dl-icon-size-sm, 16px);
+      overflow: visible;
+      stroke-width: var(--dl-icon-stroke, 1.75);
+      width: var(--dl-icon-size-sm, 16px);
+    }
+    :host([size='xs']) #icon svg {
+      height: var(--dl-icon-size-xs, 12px);
+      width: var(--dl-icon-size-xs, 12px);
+    }
+    :host([size='md']) #icon svg {
+      height: var(--dl-icon-size-md, 20px);
+      width: var(--dl-icon-size-md, 20px);
+    }
+    :host([size='lg']) #icon svg {
+      height: var(--dl-icon-size-lg, 24px);
+      width: var(--dl-icon-size-lg, 24px);
+    }
   </style>
   <button type="button" part="button"><span id="icon"></span><slot></slot></button>
 `;

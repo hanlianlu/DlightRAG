@@ -56,7 +56,10 @@ it('renders a decorative icon inside an accessible host button', () => {
   const inner = button.shadowRoot!.querySelector('button')!;
   expect(inner.getAttribute('aria-label')).to.equal('Close panel');
   expect(inner.querySelector('svg')?.getAttribute('aria-hidden')).to.equal('true');
-  expect(button.shadowRoot!.querySelector('svg')?.classList.contains('dl-icon--sm')).to.equal(true);
+  const glyph = button.shadowRoot!.querySelector('svg')!;
+  expect(glyph.classList.contains('dl-icon--sm')).to.equal(true);
+  expect(glyph.getBoundingClientRect().width).to.be.at.least(12);
+  expect(glyph.getBoundingClientRect().height).to.be.at.least(12);
 });
 
 it('moves focus among slotted menuitems and dismisses on Escape', () => {
