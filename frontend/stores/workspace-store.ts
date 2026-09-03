@@ -26,7 +26,7 @@ function clearCookie(name: string): void {
   document.cookie = `${name}=;path=/;SameSite=Lax;Max-Age=0`;
 }
 
-class WorkspaceStore extends Store {
+export class WorkspaceStore extends Store {
   #records: WorkspaceRecord[] = [];
   #known: string[] = [];
   #active: string[] = [];

@@ -3,7 +3,7 @@
 import { Store } from './base.ts';
 import { workspaceStore } from './workspace-store.ts';
 
-class IngestStore extends Store {
+export class IngestStore extends Store {
   #workspace: string | null = null;
 
   get workspace(): string {

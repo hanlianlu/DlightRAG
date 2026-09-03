@@ -5,8 +5,7 @@ import {html, type TemplateResult} from 'lit';
 import {WorkspaceApiError, createWorkspaceRequest} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {workspaceStore} from '../stores/workspace-store.ts';
-import {ingestStore} from '../stores/ingest-store.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {requestToast} from './toast-request.ts';
 import type {ToastRequestDetail} from './toast.ts';
 
@@ -16,8 +15,9 @@ export interface WorkspaceCreatedDetail {
 
 /** New-workspace row: input intent, asynchronous creation, and pending state. */
 export class DlWorkspaceCreate extends LightElement {
-  static properties = {pending: {state: true}};
+  static properties = {handles: {attribute: false}, pending: {state: true}};
 
+  declare handles: AppHandles;
   declare pending: boolean;
 
   #lifecycle: AbortController | null = null;
@@ -25,6 +25,7 @@ export class DlWorkspaceCreate extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.handles = productionHandles();
     this.pending = false;
     this.className = 'dl-popover-create';
   }
@@ -52,12 +53,12 @@ export class DlWorkspaceCreate extends LightElement {
       if (
         lifecycle.signal.aborted || this.#lifecycle !== lifecycle || !this.isConnected
       ) return;
-      workspaceStore.add({
+      this.handles.workspaces.add({
         workspace: created.workspace,
         displayName: created.displayName,
         embeddingModel: '',
       });
-      ingestStore.set(created.workspace);
+      this.handles.ingest.set(created.workspace);
       input.value = '';
       requestToast(this, {
         message: msg(str`Workspace ${created.displayName} created.`, {id: 'workspaceCreate.created'}),

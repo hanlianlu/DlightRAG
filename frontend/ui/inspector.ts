@@ -7,7 +7,7 @@ import {icon} from '../design-system/index.ts';
 import {COMPACT_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {ingestStore} from '../stores/ingest-store.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import type {DlInspectorFiles} from './inspector-files.ts';
 import './inspector-files.ts';
 import type {
@@ -32,6 +32,7 @@ export interface InspectorOpeningDetail {
 /** Sources/Files pane state, accessibility, focus, and content composition. */
 export class DlInspector extends LightElement {
   static properties = {
+    handles: {attribute: false},
     kind: {state: true},
     presentation: {state: true},
     sourceHasItems: {state: true},
@@ -39,6 +40,7 @@ export class DlInspector extends LightElement {
     shellInert: {state: true},
   };
 
+  declare handles: AppHandles;
   declare kind: InspectorKind | null;
   declare presentation: AnswerPresentation | null;
   declare sourceHasItems: boolean;
@@ -54,6 +56,7 @@ export class DlInspector extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.handles = productionHandles();
     this.kind = null;
     this.presentation = null;
     this.sourceHasItems = false;
@@ -116,7 +119,7 @@ export class DlInspector extends LightElement {
   /** Open workspace Files and refresh its content. */
   async openFiles(returnFocus?: HTMLElement | null): Promise<void> {
     if (!this.#beginOpen('files', returnFocus)) return;
-    ingestStore.resetToPrimary();
+    this.handles.ingest.resetToPrimary();
     await this.updateComplete;
     await this.#focusOnCompact();
   }
@@ -201,6 +204,7 @@ export class DlInspector extends LightElement {
           <dl-ingest-target
             class="ingest-target"
             id="ingest-target"
+            .handles=${this.handles}
             .active=${files}
           ></dl-ingest-target>
           <button class="panel-close" id="panel-close-btn" type="button"
@@ -212,7 +216,7 @@ export class DlInspector extends LightElement {
             ?hidden=${!sources}
             @dl-inspector-sources-state-change=${this.#sourcesStateChanged}
           ></dl-inspector-sources>
-          <dl-inspector-files .active=${files} ?hidden=${!files}></dl-inspector-files>
+          <dl-inspector-files .handles=${this.handles} .active=${files} ?hidden=${!files}></dl-inspector-files>
         </div>
       </aside>
       <div class="inspector-backdrop" aria-hidden="true"

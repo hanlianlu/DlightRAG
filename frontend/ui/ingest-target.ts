@@ -6,19 +6,20 @@ import {repeat} from 'lit/directives/repeat.js';
 import {icon} from '../design-system/index.ts';
 import type {WorkspaceRecord} from '../stores/workspace-store.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
-import {ingestStore} from '../stores/ingest-store.ts';
-import {workspaceStore} from '../stores/workspace-store.ts';
 import './workspace-create.ts';
 
 /** Picks which workspace an upload lands in; shown only while Files is open. */
 export class DlIngestTarget extends LightElement {
     static properties = {
+    handles: {attribute: false},
         active: {attribute: false},
         open: {state: true},
     };
 
+    declare handles: AppHandles;
     declare active: boolean;
     declare open: boolean;
 
@@ -31,10 +32,11 @@ export class DlIngestTarget extends LightElement {
     constructor() {
         super();
         updateWhenLocaleChanges(this);
+        this.handles = productionHandles();
         this.active = false;
         this.open = false;
-        /** Store reads: workspaceStore.records, ingestStore.workspace. */
-        new StoreController(this, workspaceStore, ingestStore);
+        /** Store reads: workspaces.records, ingest.workspace. */
+        new StoreController(this, this.handles.workspaces, this.handles.ingest);
     }
 
     override disconnectedCallback(): void {
@@ -55,13 +57,13 @@ export class DlIngestTarget extends LightElement {
     }
 
     get #displayName(): string {
-        const workspace = ingestStore.workspace;
-        return workspaceStore.records.find((r) => r.workspace === workspace)?.displayName
+        const workspace = this.handles.ingest.workspace;
+        return this.handles.workspaces.records.find((r) => r.workspace === workspace)?.displayName
             ?? workspace;
     }
 
     #renderOption(record: WorkspaceRecord) {
-        const selected = record.workspace === ingestStore.workspace;
+        const selected = record.workspace === this.handles.ingest.workspace;
         return html`
             <button
                 class="dl-popover-item"
@@ -71,7 +73,7 @@ export class DlIngestTarget extends LightElement {
                 @click=${(event: Event) => {
                     event.stopPropagation();
                     this.open = false;
-                    ingestStore.set(record.workspace);
+                    this.handles.ingest.set(record.workspace);
                     void this.updateComplete.then(() => { this.#trigger()?.focus(); });
                 }}
             >
@@ -82,7 +84,7 @@ export class DlIngestTarget extends LightElement {
     }
 
     #renderPopover() {
-        const sorted = [...workspaceStore.records]
+        const sorted = [...this.handles.workspaces.records]
             .sort((left, right) => left.displayName.localeCompare(right.displayName));
         return html`
             <div
@@ -96,7 +98,7 @@ export class DlIngestTarget extends LightElement {
                 }}
             >
                 ${repeat(sorted, (record) => record.workspace, (record) => this.#renderOption(record))}
-                <dl-workspace-create @dl-workspace-created=${this.#workspaceCreated}></dl-workspace-create>
+                <dl-workspace-create .handles=${this.handles} @dl-workspace-created=${this.#workspaceCreated}></dl-workspace-create>
             </div>
         `;
     }

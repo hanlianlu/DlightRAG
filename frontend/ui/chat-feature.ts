@@ -20,15 +20,12 @@ import {
   type FollowResult,
 } from '../lib/run-controller.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {answerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
-import {attachmentStore} from '../stores/attachment-store.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {AnswerSubmissionController} from '../stores/answer-submission-controller.ts';
 import {
   answerSubmissionSnapshot,
   type AnswerSubmissionActor,
 } from '../stores/answer-submission-machine.ts';
-import {conversationStore} from '../stores/conversation-store.ts';
-import {workspaceStore} from '../stores/workspace-store.ts';
 import type {AttachmentPolicy} from '../lib/attachment-policy.ts';
 import type {
   AnswerMode,
@@ -114,6 +111,7 @@ function optimisticTurn(
 /** Chat composition root: owns submission, following, replay, and run intent. */
 export class DlChatFeature extends LightElement {
   static properties = {
+    handles: {attribute: false},
     view: {attribute: false},
     attachmentPolicy: {attribute: false},
     attachmentAccept: {type: String},
@@ -122,6 +120,7 @@ export class DlChatFeature extends LightElement {
     runRevision: {state: true},
   };
 
+  declare handles: AppHandles;
   declare view: ChatView;
   declare attachmentPolicy: AttachmentPolicy | null;
   declare attachmentAccept: string;
@@ -143,6 +142,7 @@ export class DlChatFeature extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.handles = productionHandles();
     this.view = {kind: 'new'};
     this.attachmentPolicy = null;
     this.attachmentAccept = '';
@@ -151,6 +151,7 @@ export class DlChatFeature extends LightElement {
     this.runRevision = 0;
     this.#runController = new RunController({
       onStateChange: () => this.#runStateChanged(),
+      cursorStore: this.handles.answerEventCursors,
     });
   }
 
@@ -165,7 +166,7 @@ export class DlChatFeature extends LightElement {
   }
 
   get hasDraft(): boolean {
-    return this.#composer()?.hasDraft ?? attachmentStore.size > 0;
+    return this.#composer()?.hasDraft ?? this.handles.attachments.size > 0;
   }
 
   override disconnectedCallback(): void {
@@ -181,7 +182,7 @@ export class DlChatFeature extends LightElement {
 
   clearDraft(): void {
     this.#composer()?.clearDraft();
-    if (!this.#composer()) attachmentStore.clear();
+    if (!this.#composer()) this.handles.attachments.clear();
   }
 
   focusComposer(): void {
@@ -217,11 +218,11 @@ export class DlChatFeature extends LightElement {
         controller.signal,
       );
       if (controller.signal.aborted || this.#continuationController !== controller) return;
-      conversationStore.upsertSummary(descriptor.conversation);
+      this.handles.conversations.upsertSummary(descriptor.conversation);
       if (kind === 'fork') {
         await webRouter.navigate(conversationRoute(descriptor.conversation.conversationId));
       } else {
-        await conversationStore.open(descriptor.conversation.conversationId, {
+        await this.handles.conversations.open(descriptor.conversation.conversationId, {
           showLoading: false,
           preserveOnError: true,
         });
@@ -306,7 +307,7 @@ export class DlChatFeature extends LightElement {
     queueMicrotask(() => {
       if (!this.isConnected || this.view.kind !== 'ready'
           || this.view.conversationId !== pending.conversationId) return;
-      const conversationId = conversationStore.activeConversationId || pending.conversationId;
+      const conversationId = this.handles.conversations.activeConversationId || pending.conversationId;
       if (conversationId) void this.#resumeStoredTurn(conversationId, pending.stored);
     });
   }
@@ -322,6 +323,7 @@ export class DlChatFeature extends LightElement {
         @dl-chat-load-older=${this.#loadOlderMessages}></dl-chat-message-list>
       ${this.#submissionFailureControls()}
       <dl-chat-composer
+        .handles=${this.handles}
         ?inert=${this.interactionLocked}
         .running=${this.#runController.active}
         .submissionPending=${this.submissionPending}
@@ -365,7 +367,7 @@ export class DlChatFeature extends LightElement {
 
   #loadOlderMessages = (event: Event): void => {
     event.stopPropagation();
-    void conversationStore.loadOlderMessages();
+    void this.handles.conversations.loadOlderMessages();
   };
 
   #abortContinuation(): void {
@@ -436,7 +438,7 @@ export class DlChatFeature extends LightElement {
   #reconnect = (event: CustomEvent<ChatReconnectDetail>): void => {
     event.stopPropagation();
     const turn = this.turns.find((candidate) => candidate.runId === event.detail.runId);
-    const conversationId = conversationStore.activeConversationId;
+    const conversationId = this.handles.conversations.activeConversationId;
     if (!turn || !conversationId || this.#runController.active) return;
     this.#setTurn(turn.id, {
       state: 'pending',
@@ -445,7 +447,7 @@ export class DlChatFeature extends LightElement {
         ? msg('Stopping...', {id: 'chatFeature.stopping'})
         : msg('Answer in progress...', {id: 'chatFeature.answerInProgress'}),
     });
-    answerEventCursorStore.trackRun(conversationId, turn.runId);
+    this.handles.answerEventCursors.trackRun(conversationId, turn.runId);
     if (!this.#runController.beginFollow(turn.runId, turn.cancelRequested)) return;
     void this.#followTurn(turn.id, conversationId, turn.runId);
   };
@@ -456,7 +458,7 @@ export class DlChatFeature extends LightElement {
     requestedSkill: string | null = null,
   ): Promise<void> {
     if (this.#runController.active || this.#submissionActor) return;
-    if (!conversationStore.canAnswer) {
+    if (!this.handles.conversations.canAnswer) {
       requestToast(this, {
         message: msg('Conversation service is unavailable. Please retry loading the conversation.', {
           id: 'chatFeature.conversationUnavailable',
@@ -465,8 +467,8 @@ export class DlChatFeature extends LightElement {
       });
       return;
     }
-    const conversationId = conversationStore.answerConversationId;
-    const lease = attachmentStore.leaseAll();
+    const conversationId = this.handles.conversations.answerConversationId;
+    const lease = this.handles.attachments.leaseAll();
     const liveAttachmentRefs: ConversationAttachmentReference[] = lease.items.map((item, index) => ({
       attachmentId: item.id,
       ordinal: index + 1,
@@ -485,7 +487,7 @@ export class DlChatFeature extends LightElement {
       mode,
       conversationId,
       submissionId,
-      workspaces: [...workspaceStore.active],
+      workspaces: [...this.handles.workspaces.active],
       ...(requestedSkill ? {requestedSkill} : {}),
     }, lease, this.#submissionAdapter);
     if (!actor) {
@@ -542,17 +544,17 @@ export class DlChatFeature extends LightElement {
     this.#submissionActor = null;
     this.#submissionTurnId = null;
     if (!expectedConversationId) {
-      conversationStore.adoptCreatedConversation(accepted.conversation);
+      this.handles.conversations.adoptCreatedConversation(accepted.conversation);
       await webRouter.navigate(conversationRoute(acceptedConversationId), {
         replace: true,
         notify: false,
         bypassGuard: true,
       });
     } else {
-      conversationStore.upsertSummary(accepted.conversation);
+      this.handles.conversations.upsertSummary(accepted.conversation);
     }
     const stored = accepted.turn;
-    answerEventCursorStore.trackRun(acceptedConversationId, stored.answerRunId);
+    this.handles.answerEventCursors.trackRun(acceptedConversationId, stored.answerRunId);
     this.#replaceStoredTurn(turnId, stored);
     const following = this.#runController.beginFollow(
       stored.answerRunId,
@@ -590,7 +592,7 @@ export class DlChatFeature extends LightElement {
     const intent = actor.getSnapshot().context.intent;
     actor.send({type});
     if (type === 'EDIT') {
-      workspaceStore.restoreActive(intent.workspaces);
+      this.handles.workspaces.restoreActive(intent.workspaces);
       this.querySelector<DlChatComposer>('dl-chat-composer')
         ?.restoreSubmission(intent.query, intent.mode, intent.requestedSkill ?? null);
     }
@@ -605,7 +607,7 @@ export class DlChatFeature extends LightElement {
 
   async #resumeStoredTurn(conversationId: string, stored: ConversationTurn): Promise<void> {
     if (this.#runController.active) return;
-    answerEventCursorStore.trackRun(conversationId, stored.answerRunId);
+    this.handles.answerEventCursors.trackRun(conversationId, stored.answerRunId);
     if (!this.#runController.beginFollow(stored.answerRunId, stored.cancelRequested)) return;
     await this.#followTurn(
       stored.turnId || stored.answerRunId,
@@ -652,8 +654,8 @@ export class DlChatFeature extends LightElement {
     }
     this.#runController.finish(runId);
     if (!finished) return;
-    answerEventCursorStore.clear(conversationId);
-    void conversationStore.refreshActive();
+    this.handles.answerEventCursors.clear(conversationId);
+    void this.handles.conversations.refreshActive();
   }
 
   async #steerRun(query: string): Promise<void> {

@@ -17,7 +17,7 @@ import {
 } from '../api/memory.ts';
 import {icon} from '../design-system/index.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
-import {conversationStore} from '../stores/conversation-store.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {requestToast} from './toast-request.ts';
 import type {ChatMemoryOperationDetail} from './chat-feature.ts';
 import {modalResult, publishModalState, showOwnedModal} from './modal.ts';
@@ -58,6 +58,7 @@ function memorySummary(event: ChatMemoryOperationDetail): string {
 /** Owns Settings state, asynchronous mutations, focus, and native Dialog semantics. */
 export class DlSettingsDialog extends LightElement {
   static properties = {
+    handles: {attribute: false},
     deleteAllConversations: {attribute: false},
     memory: {state: true},
     memoryLoading: {state: true},
@@ -65,6 +66,7 @@ export class DlSettingsDialog extends LightElement {
     language: {state: true},
   };
 
+  declare handles: AppHandles;
   declare deleteAllConversations: (returnFocus?: HTMLElement | null) => Promise<boolean>;
   declare memory: MemorySettings | null;
   declare memoryLoading: boolean;
@@ -79,13 +81,14 @@ export class DlSettingsDialog extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.handles = productionHandles();
     this.deleteAllConversations = async () => false;
     this.memory = null;
     this.memoryLoading = false;
     this.memoryPending = false;
     this.language = currentLanguagePreference();
     /** Store reads: conversations.length. */
-    new StoreController(this, conversationStore);
+    new StoreController(this, this.handles.conversations);
   }
 
   override connectedCallback(): void {
@@ -164,7 +167,7 @@ export class DlSettingsDialog extends LightElement {
   }
 
   protected override render(): TemplateResult {
-    const total = conversationStore.conversations.length;
+    const total = this.handles.conversations.conversations.length;
     const active = this.memory?.activeCount;
     return html`
       <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title"

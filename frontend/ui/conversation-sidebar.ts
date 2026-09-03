@@ -8,8 +8,8 @@ import {DESKTOP_SHELL_MEDIA} from '../lib/breakpoints.ts';
 import {wrapTabFocus} from '../lib/dom.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
 import {conversationRoute, newChatRoute, type WebRoute} from '../lib/router.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {
-  conversationStore,
   type ConversationMutationResult,
 } from '../stores/conversation-store.ts';
 import conversationStyles from '../styles/conversations.module.css';
@@ -52,6 +52,7 @@ export interface ConversationChat {
 /** Conversation route lifecycle, navigation commands, and sidebar accessibility. */
 export class DlConversationSidebar extends LightElement {
   static properties = {
+    handles: {attribute: false},
     enabled: {attribute: false},
     chatFeature: {attribute: false},
     drawerOpen: {state: true},
@@ -61,6 +62,7 @@ export class DlConversationSidebar extends LightElement {
     shellInert: {state: true},
   };
 
+  declare handles: AppHandles;
   declare enabled: boolean;
   declare chatFeature: ConversationChat | null;
   declare drawerOpen: boolean;
@@ -78,6 +80,7 @@ export class DlConversationSidebar extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.handles = productionHandles();
     this.enabled = false;
     this.chatFeature = null;
     this.drawerOpen = false;
@@ -86,7 +89,7 @@ export class DlConversationSidebar extends LightElement {
     this.pendingLifecycleAction = false;
     this.shellInert = false;
     /** Store reads: activeConversationId, fallbackConversationId, mutationPending. */
-    new StoreController(this, conversationStore);
+    new StoreController(this, this.handles.conversations);
   }
 
   override connectedCallback(): void {
@@ -107,7 +110,7 @@ export class DlConversationSidebar extends LightElement {
     this.#releaseRouter?.();
     this.#releaseRouter = null;
     webRouter.setGuard(null);
-    conversationStore.dispose();
+    this.handles.conversations.dispose();
     this.#stateSignature = '';
   }
 
@@ -187,13 +190,13 @@ export class DlConversationSidebar extends LightElement {
     const alsoClearMemory = this.querySelector<HTMLInputElement>(
       '#delete-all-also-clear-memory',
     )?.checked;
-    const previousConversationId = conversationStore.activeConversationId;
+    const previousConversationId = this.handles.conversations.activeConversationId;
     let result: ConversationMutationResult = 'error';
 
     this.pendingLifecycleAction = true;
     try {
       this.chatFeature?.detachRun();
-      result = await conversationStore.deleteAll(signal);
+      result = await this.handles.conversations.deleteAll(signal);
       if (signal.aborted) return false;
       if (result === 'error') {
         requestToast(this, {
@@ -236,17 +239,17 @@ export class DlConversationSidebar extends LightElement {
       return;
     }
     if (action === 'recent') {
-      const fallback = conversationStore.fallbackConversationId;
+      const fallback = this.handles.conversations.fallbackConversationId;
       if (fallback) void webRouter.navigate(conversationRoute(fallback));
       return;
     }
-    const conversationId = conversationStore.activeConversationId;
-    if (conversationId) void conversationStore.open(conversationId);
-    else void conversationStore.loadList();
+    const conversationId = this.handles.conversations.activeConversationId;
+    if (conversationId) void this.handles.conversations.open(conversationId);
+    else void this.handles.conversations.loadList();
   }
 
   get #busy(): boolean {
-    return this.pendingLifecycleAction || conversationStore.mutationPending;
+    return this.pendingLifecycleAction || this.handles.conversations.mutationPending;
   }
 
   #collapsedPreference(): boolean {
@@ -287,7 +290,7 @@ export class DlConversationSidebar extends LightElement {
   }
 
   async #focusSurvivingConversation(): Promise<void> {
-    const active = conversationStore.activeConversationId;
+    const active = this.handles.conversations.activeConversationId;
     if (active && await this.#list()?.focusConversation(active)) return;
     await this.#focusNewConversation();
   }
@@ -348,26 +351,26 @@ export class DlConversationSidebar extends LightElement {
   }
 
   async #initialize(): Promise<void> {
-    await conversationStore.loadList();
+    await this.handles.conversations.loadList();
     if (this.#releaseRouter) await this.#applyRoute(webRouter.current, false);
   }
 
   #renderCurrentConversationView(): void {
-    if (!this.chatFeature || this.#renderedViewRevision === conversationStore.viewRevision) return;
-    this.#renderedViewRevision = conversationStore.viewRevision;
+    if (!this.chatFeature || this.#renderedViewRevision === this.handles.conversations.viewRevision) return;
+    this.#renderedViewRevision = this.handles.conversations.viewRevision;
 
-    if (conversationStore.viewState === 'new') {
+    if (this.handles.conversations.viewState === 'new') {
       this.chatFeature.view = {kind: 'new'};
       return;
     }
-    if (conversationStore.viewState === 'loading') {
+    if (this.handles.conversations.viewState === 'loading') {
       this.chatFeature.view = {kind: 'loading'};
       return;
     }
-    if (conversationStore.viewState === 'ready') {
-      const history = conversationStore.history;
+    if (this.handles.conversations.viewState === 'ready') {
+      const history = this.handles.conversations.history;
       if (!history) return;
-      const lineage = conversationStore.conversations.find(
+      const lineage = this.handles.conversations.conversations.find(
         (summary) => summary.conversationId === history.conversation.conversationId,
       )?.forkedFromTitle ?? null;
       this.chatFeature.view = {
@@ -375,15 +378,15 @@ export class DlConversationSidebar extends LightElement {
         conversationId: history.conversation.conversationId,
         history: history.turns,
         lineage,
-        hasOlderMessages: conversationStore.hasOlderMessages,
-        olderMessagesState: conversationStore.historyLoadMoreState,
+        hasOlderMessages: this.handles.conversations.hasOlderMessages,
+        olderMessagesState: this.handles.conversations.historyLoadMoreState,
       };
       return;
     }
-    if (conversationStore.viewState === 'unavailable') {
+    if (this.handles.conversations.viewState === 'unavailable') {
       this.chatFeature.view = {
         kind: 'unavailable',
-        hasRecent: Boolean(conversationStore.fallbackConversationId),
+        hasRecent: Boolean(this.handles.conversations.fallbackConversationId),
       };
       return;
     }
@@ -391,7 +394,7 @@ export class DlConversationSidebar extends LightElement {
   }
 
   async #applyRoute(route: WebRoute, closeDrawer = true): Promise<void> {
-    const previous = conversationStore.activeConversationId;
+    const previous = this.handles.conversations.activeConversationId;
     const next = route.kind === 'conversation' ? route.conversationId : null;
     if (previous !== next) {
       this.chatFeature?.detachRun();
@@ -399,11 +402,11 @@ export class DlConversationSidebar extends LightElement {
     }
 
     if (route.kind === 'conversation') {
-      await conversationStore.open(route.conversationId);
+      await this.handles.conversations.open(route.conversationId);
     } else if (route.kind === 'new') {
-      conversationStore.openNew();
+      this.handles.conversations.openNew();
     } else {
-      conversationStore.openNew();
+      this.handles.conversations.openNew();
       await this.updateComplete;
       if (this.chatFeature) this.chatFeature.view = {kind: 'unavailable', hasRecent: false};
     }
@@ -422,7 +425,7 @@ export class DlConversationSidebar extends LightElement {
   }
 
   async #requestSelectConversation(conversationId: string): Promise<void> {
-    if (conversationId === conversationStore.activeConversationId) {
+    if (conversationId === this.handles.conversations.activeConversationId) {
       await this.close(true);
       window.requestAnimationFrame(() => this.chatFeature?.focusComposer());
       return;
@@ -448,7 +451,7 @@ export class DlConversationSidebar extends LightElement {
   async #commitRename(conversationId: string, title: string): Promise<void> {
     const signal = this.#events?.signal;
     if (!signal || signal.aborted) return;
-    const result = await conversationStore.rename(conversationId, title, signal);
+    const result = await this.handles.conversations.rename(conversationId, title, signal);
     if (signal.aborted || result === 'ok') return;
     if (result === 'missing') {
       requestToast(this, {
@@ -469,7 +472,7 @@ export class DlConversationSidebar extends LightElement {
 
   async #requestDelete(conversationId: string): Promise<void> {
     if (this.#busy || this.#lifecycleBlocked()) return;
-    const wasActive = conversationStore.activeConversationId === conversationId;
+    const wasActive = this.handles.conversations.activeConversationId === conversationId;
     const discardsDraft = wasActive && this.#hasUnsavedDraft();
     const dialog = this.#dialog('delete-conversation-dialog');
     const warning = this.querySelector<HTMLElement>('#delete-conversation-draft-warning');
@@ -496,7 +499,7 @@ export class DlConversationSidebar extends LightElement {
     this.pendingLifecycleAction = true;
     try {
       if (wasActive) this.chatFeature?.detachRun();
-      result = await conversationStore.delete(conversationId, signal);
+      result = await this.handles.conversations.delete(conversationId, signal);
       if (signal.aborted) return;
       if (result === 'error') {
         requestToast(this, {
@@ -507,7 +510,7 @@ export class DlConversationSidebar extends LightElement {
         });
       } else if (wasActive) {
         this.chatFeature?.clearDraft();
-        const fallback = conversationStore.fallbackConversationId;
+        const fallback = this.handles.conversations.fallbackConversationId;
         await webRouter.navigate(
           fallback ? conversationRoute(fallback) : newChatRoute(),
           {replace: true, bypassGuard: true},
@@ -647,6 +650,7 @@ export class DlConversationSidebar extends LightElement {
           </button>
         </div>
         <dl-conversation-list
+          .handles=${this.handles}
           .busy=${this.#busy}
           @dl-conversation-select=${this.#selectConversation}
           @dl-conversation-delete=${this.#deleteConversation}

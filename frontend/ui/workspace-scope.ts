@@ -6,11 +6,10 @@ import {repeat} from 'lit/directives/repeat.js';
 import {WorkspaceApiError, deleteWorkspaceRequest} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
 import type {WorkspaceRecord} from '../stores/workspace-store.ts';
-import {ingestStore} from '../stores/ingest-store.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
-import {workspaceStore} from '../stores/workspace-store.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
 import {requestToast} from './toast-request.ts';
 import {publishModalState, showOwnedModal} from './modal.ts';
@@ -20,12 +19,14 @@ import './workspace-create.ts';
 /** Search-scope selection, workspace deletion, popover, and Dialog lifecycle. */
 export class DlWorkspaceScope extends LightElement {
   static properties = {
+    handles: {attribute: false},
     open: {state: true},
     deleteWorkspace: {state: true},
     deletePending: {state: true},
     deleteConfirmed: {state: true},
   };
 
+  declare handles: AppHandles;
   declare open: boolean;
   declare deleteWorkspace: string | null;
   declare deletePending: boolean;
@@ -46,12 +47,13 @@ export class DlWorkspaceScope extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.handles = productionHandles();
     this.open = false;
     this.deleteWorkspace = null;
     this.deletePending = false;
     this.deleteConfirmed = false;
     /** Store reads: records, active, primary. */
-    new StoreController(this, workspaceStore);
+    new StoreController(this, this.handles.workspaces);
   }
 
   override disconnectedCallback(): void {
@@ -74,7 +76,7 @@ export class DlWorkspaceScope extends LightElement {
   }
 
   protected override willUpdate(_changed: PropertyValues<this>): void {
-    const state = workspaceStore.workspaceLoadMoreState;
+    const state = this.handles.workspaces.workspaceLoadMoreState;
     const previous = this.#lastLoadMoreState;
     if (state === previous) return;
     this.#lastLoadMoreState = state;
@@ -103,7 +105,7 @@ export class DlWorkspaceScope extends LightElement {
   }
 
   protected override render(): TemplateResult {
-    const multi = workspaceStore.active.length > 1 || this.#allSelected;
+    const multi = this.handles.workspaces.active.length > 1 || this.#allSelected;
     return html`
       <button class="workspace-selector-trigger" id="workspace-trigger" type="button"
               aria-label=${msg('Choose search workspaces', {id: 'workspaceScope.chooseSearchWorkspaces'})}
@@ -145,21 +147,21 @@ export class DlWorkspaceScope extends LightElement {
   }
 
   get #allSelected(): boolean {
-    const known = workspaceStore.knownWorkspaces;
-    const active = workspaceStore.active;
+    const known = this.handles.workspaces.knownWorkspaces;
+    const active = this.handles.workspaces.active;
     return known.length > 0 && known.every((workspace) => active.includes(workspace));
   }
 
   get #label(): string {
-    const total = workspaceStore.knownWorkspaces.length;
-    const active = workspaceStore.active;
+    const total = this.handles.workspaces.knownWorkspaces.length;
+    const active = this.handles.workspaces.active;
     if (active.length === 0 || this.#allSelected) {
       return total > 0
         ? msg(str`All workspaces (${total})`, {id: 'workspaceScope.allWithCount'})
         : msg('All workspaces', {id: 'workspaceScope.all'});
     }
-    const anchor = active.includes(workspaceStore.primary) ? workspaceStore.primary : active[0];
-    const name = workspaceStore.records.find((record) => record.workspace === anchor)?.displayName
+    const anchor = active.includes(this.handles.workspaces.primary) ? this.handles.workspaces.primary : active[0];
+    const name = this.handles.workspaces.records.find((record) => record.workspace === anchor)?.displayName
       ?? anchor;
     return active.length === 1 ? name : `${name} + ${active.length - 1}`;
   }
@@ -170,7 +172,7 @@ export class DlWorkspaceScope extends LightElement {
   }
 
   #popover(): TemplateResult {
-    const sorted = [...workspaceStore.records]
+    const sorted = [...this.handles.workspaces.records]
       .sort((left, right) => left.displayName.localeCompare(right.displayName));
     return html`
       <div class="dl-popover dl-popover--workspace" id="workspace-popover"
@@ -186,14 +188,14 @@ export class DlWorkspaceScope extends LightElement {
         <span class="sr-only" data-workspaces-status role="status" aria-live="polite">
           ${this.#loadMoreAnnouncement}
         </span>
-        <dl-workspace-create></dl-workspace-create>
+        <dl-workspace-create .handles=${this.handles}></dl-workspace-create>
       </div>
     `;
   }
 
   #loadMoreControl(): TemplateResult | typeof nothing {
-    if (!workspaceStore.hasMoreWorkspaces) return nothing;
-    const state = workspaceStore.workspaceLoadMoreState;
+    if (!this.handles.workspaces.hasMoreWorkspaces) return nothing;
+    const state = this.handles.workspaces.workspaceLoadMoreState;
     return html`
       <div class="workspace-load-more">
         <button type="button" data-load-more-workspaces class="dl-popover-item"
@@ -210,14 +212,14 @@ export class DlWorkspaceScope extends LightElement {
   #loadMore = (event: Event): void => {
     const button = event.currentTarget as HTMLButtonElement;
     this.#restoreLoadMoreFocus = document.activeElement === button;
-    void workspaceStore.loadMoreWorkspaces();
+    void this.handles.workspaces.loadMoreWorkspaces();
   };
 
   #allOption(): TemplateResult {
     const selected = this.#allSelected;
     const selectAll = (event: Event): void => {
       event.stopPropagation();
-      workspaceStore.selectAll();
+      this.handles.workspaces.selectAll();
     };
     return html`
       <button class="dl-popover-item ${workspaceStyles.workspacePopoverAll}" type="button"
@@ -229,10 +231,10 @@ export class DlWorkspaceScope extends LightElement {
   }
 
   #option(record: WorkspaceRecord): TemplateResult {
-    const selected = workspaceStore.active.includes(record.workspace);
+    const selected = this.handles.workspaces.active.includes(record.workspace);
     const toggle = (event: Event): void => {
       event.stopPropagation();
-      workspaceStore.toggle(record.workspace);
+      this.handles.workspaces.toggle(record.workspace);
     };
     return html`
       <div class=${workspaceStyles.workspacePopoverItem}>
@@ -278,7 +280,7 @@ export class DlWorkspaceScope extends LightElement {
 
   #deleteDialog(): TemplateResult {
     const workspace = this.deleteWorkspace ?? '';
-    const displayName = workspaceStore.records.find((record) => record.workspace === workspace)
+    const displayName = this.handles.workspaces.records.find((record) => record.workspace === workspace)
       ?.displayName ?? workspace;
     return html`
       <dialog id="delete-workspace-dialog" class="workspace-dialog"
@@ -315,7 +317,7 @@ export class DlWorkspaceScope extends LightElement {
   #deleteInput = (event: Event): void => {
     const input = event.currentTarget as HTMLInputElement;
     const workspace = this.deleteWorkspace ?? '';
-    const displayName = workspaceStore.records.find((record) => record.workspace === workspace)
+    const displayName = this.handles.workspaces.records.find((record) => record.workspace === workspace)
       ?.displayName ?? workspace;
     this.deleteConfirmed = input.value.trim() === displayName || input.value.trim() === workspace;
   };
@@ -333,8 +335,8 @@ export class DlWorkspaceScope extends LightElement {
         operation.signal.aborted || this.#deleteOperation !== operation
         || this.deleteWorkspace !== workspace
       ) return;
-      workspaceStore.remove(deleted.workspace, deleted.nextWorkspace);
-      ingestStore.set(deleted.nextWorkspace || workspaceStore.primary);
+      this.handles.workspaces.remove(deleted.workspace, deleted.nextWorkspace);
+      this.handles.ingest.set(deleted.nextWorkspace || this.handles.workspaces.primary);
       this.querySelector<HTMLDialogElement>('#delete-workspace-dialog')?.close();
       requestToast(this, {
         message: msg(str`Workspace ${workspace} deleted.`, {id: 'workspaceScope.deleted'}),

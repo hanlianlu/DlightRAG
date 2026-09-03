@@ -5,7 +5,7 @@ import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {ConversationSummary} from '../api/conversations.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
-import {conversationStore} from '../stores/conversation-store.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 
 export interface ConversationIntentDetail {
   conversationId: string;
@@ -24,11 +24,13 @@ const SKELETON_COUNT = 3;
 /** Conversation rows, row accessibility, and item intent. */
 export class DlConversationList extends LightElement {
   static properties = {
+    handles: {attribute: false},
     busy: {attribute: false},
     openMenuId: {state: true},
     renameId: {state: true},
   };
 
+  declare handles: AppHandles;
   declare busy: boolean;
   declare openMenuId: string | null;
   declare renameId: string | null;
@@ -38,11 +40,12 @@ export class DlConversationList extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.handles = productionHandles();
     this.busy = false;
     this.openMenuId = null;
     this.renameId = null;
     /** Store reads: conversations, listState, loadMoreState, hasOlderConversations, activeConversationId. */
-    new StoreController(this, conversationStore);
+    new StoreController(this, this.handles.conversations);
   }
 
   override connectedCallback(): void {
@@ -231,7 +234,7 @@ export class DlConversationList extends LightElement {
 
   #renderRow(conversation: ConversationSummary): TemplateResult {
     const conversationId = conversation.conversationId;
-    const active = conversationId === conversationStore.activeConversationId;
+    const active = conversationId === this.handles.conversations.activeConversationId;
     const renaming = this.renameId === conversationId;
     const expanded = this.openMenuId === conversationId;
     return html`
@@ -287,8 +290,8 @@ export class DlConversationList extends LightElement {
   }
 
   protected override render(): TemplateResult | TemplateResult[] {
-    const conversations = conversationStore.conversations;
-    const listState = conversationStore.listState;
+    const conversations = this.handles.conversations.conversations;
+    const listState = this.handles.conversations.listState;
     if (listState === 'loading' && conversations.length === 0) {
       return html`
         ${Array.from({length: SKELETON_COUNT}, () => html`
@@ -319,25 +322,25 @@ export class DlConversationList extends LightElement {
           (conversation) => this.#renderRow(conversation),
         )}
       </div>
-      ${conversationStore.loadMoreState === 'error'
+      ${this.handles.conversations.loadMoreState === 'error'
         ? html`
           <div class="conversation-list-status" role="status">
             <span>${msg('Could not load older conversations.', {id: 'conversationList.couldNotLoadOlder'})}</span>
             <button type="button" @click=${() => {
-              void conversationStore.loadOlder();
+              void this.handles.conversations.loadOlder();
             }}>${msg('Retry loading older conversations', {id: 'conversationList.retryLoadOlder'})}</button>
           </div>
         `
         : nothing}
-      ${conversationStore.hasOlderConversations && conversationStore.loadMoreState !== 'error'
+      ${this.handles.conversations.hasOlderConversations && this.handles.conversations.loadMoreState !== 'error'
         ? html`
           <button
             type="button"
             class="conversation-load-older"
-            ?disabled=${conversationStore.loadMoreState === 'loading'}
+            ?disabled=${this.handles.conversations.loadMoreState === 'loading'}
             aria-label=${msg('Load older conversations', {id: 'conversationList.loadOlderAria'})}
-            @click=${() => { void conversationStore.loadOlder(); }}
-          >${conversationStore.loadMoreState === 'loading'
+            @click=${() => { void this.handles.conversations.loadOlder(); }}
+          >${this.handles.conversations.loadMoreState === 'loading'
             ? msg('Loading older…', {id: 'conversationList.loadingOlder'})
             : msg('Load older', {id: 'conversationList.loadOlder'})}</button>
         `

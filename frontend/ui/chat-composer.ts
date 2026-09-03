@@ -8,13 +8,14 @@ import {listSkills, type SkillSummary} from '../api/skills.ts';
 import type {AnswerMode} from '../lib/answer-request.ts';
 import {formatFileSize} from '../lib/file-size.ts';
 import {LightElement} from '../lib/lit-host.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {
   committedSkillDirective,
   parseSkillDirective,
   skillDirectiveState,
   skillGhostSuffix,
 } from '../lib/skill-directive.ts';
-import {attachmentStore, type PendingAttachment} from '../stores/attachment-store.ts';
+import type {PendingAttachment} from '../stores/attachment-store.ts';
 import chatStyles from '../styles/chat.module.css';
 import {
   acceptsAttachmentUpload,
@@ -61,6 +62,7 @@ function storedMode(): AnswerMode | null {
 /** Lit-owned draft, attachment admission, answer mode, and keyboard interaction. */
 export class DlChatComposer extends LightElement {
   static properties = {
+    handles: {attribute: false},
     running: {type: Boolean},
     submissionPending: {type: Boolean},
     stopping: {type: Boolean},
@@ -78,6 +80,7 @@ export class DlChatComposer extends LightElement {
     skillActive: {state: true},
   };
 
+  declare handles: AppHandles;
   declare running: boolean;
   declare submissionPending: boolean;
   declare stopping: boolean;
@@ -102,6 +105,7 @@ export class DlChatComposer extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.handles = productionHandles();
     this.running = false;
     this.submissionPending = false;
     this.stopping = false;
@@ -113,7 +117,7 @@ export class DlChatComposer extends LightElement {
     this.modeOpen = false;
     this.multiline = false;
     this.dragActive = false;
-    this.attachments = [...attachmentStore.list()];
+    this.attachments = [...this.handles.attachments.list()];
     this.skills = [];
     this.skillNotice = false;
     this.skillMenuOpen = false;
@@ -121,14 +125,14 @@ export class DlChatComposer extends LightElement {
   }
 
   get hasDraft(): boolean {
-    return Boolean(this.draft) || attachmentStore.size > 0;
+    return Boolean(this.draft) || this.handles.attachments.size > 0;
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
     // Attachment store reads: list(), size, imageCount.
-    this.#unsubscribe ??= attachmentStore.subscribe(() => {
-      this.attachments = [...attachmentStore.list()];
+    this.#unsubscribe ??= this.handles.attachments.subscribe(() => {
+      this.attachments = [...this.handles.attachments.list()];
     });
     document.addEventListener('click', this.#closeModeMenu);
     document.addEventListener('dragenter', this.#dragEnter);
@@ -156,7 +160,7 @@ export class DlChatComposer extends LightElement {
 
   clearDraft(): void {
     this.clearText();
-    attachmentStore.clear();
+    this.handles.attachments.clear();
   }
 
   clearText(): void {
@@ -299,7 +303,7 @@ export class DlChatComposer extends LightElement {
           <img class=${chatStyles.thumbnailImg} src=${item.objectUrl} alt=${item.file.name}>
           <button type="button" class=${chatStyles.thumbnailRemove}
                   aria-label=${msg(str`Remove ${item.file.name}`, {id: 'chatComposer.removeAttachment'})}
-                  @click=${() => attachmentStore.remove(item.id)}>${icon('close', {size: 'xs'})}</button>
+                  @click=${() => this.handles.attachments.remove(item.id)}>${icon('close', {size: 'xs'})}</button>
         </div>
       `;
     }
@@ -311,7 +315,7 @@ export class DlChatComposer extends LightElement {
         </span>
         <button type="button" class=${chatStyles.documentChipRemove}
                 aria-label=${msg(str`Remove ${item.file.name}`, {id: 'chatComposer.removeAttachment'})}
-                @click=${() => attachmentStore.remove(item.id)}>${icon('close', {size: 'xs'})}</button>
+                @click=${() => this.handles.attachments.remove(item.id)}>${icon('close', {size: 'xs'})}</button>
       </span>
     `;
   }
@@ -508,10 +512,10 @@ export class DlChatComposer extends LightElement {
     if (kind === 'unsupported') return;
     if (!acceptsAttachmentUpload(
       file,
-      {total: attachmentStore.size, images: attachmentStore.imageCount},
+      {total: this.handles.attachments.size, images: this.handles.attachments.imageCount},
       policy,
     )) return;
-    attachmentStore.add(file, kind);
+    this.handles.attachments.add(file, kind);
   }
 
   #toggleModeMenu = (event: Event): void => {

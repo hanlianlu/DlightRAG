@@ -15,8 +15,7 @@ import {
 import {icon} from '../design-system/index.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {LightElement, StoreController} from '../lib/lit-host.ts';
-import {ingestStore} from '../stores/ingest-store.ts';
-import {workspaceStore} from '../stores/workspace-store.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import {requestToast} from './toast-request.ts';
 import {modalResult} from './modal.ts';
 import {withRelativePath} from './folder-upload.ts';
@@ -36,6 +35,7 @@ function uploadLabel(files: readonly File[], label?: string | null): string {
 /** File-management content, async work, and upload intent owned by the Inspector. */
 export class DlInspectorFiles extends LightElement {
   static properties = {
+    handles: {attribute: false},
     active: {attribute: false},
     snapshot: {state: true},
     loading: {state: true},
@@ -45,6 +45,7 @@ export class DlInspectorFiles extends LightElement {
     filesLoadMoreState: {state: true},
   };
 
+  declare handles: AppHandles;
   declare active: boolean;
   declare snapshot: WebFilePanelSnapshot | null;
   declare loading: boolean;
@@ -69,6 +70,7 @@ export class DlInspectorFiles extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.handles = productionHandles();
     this.active = false;
     this.snapshot = null;
     this.loading = true;
@@ -76,9 +78,9 @@ export class DlInspectorFiles extends LightElement {
     this.uploading = false;
     this.acceptedFiles = 0;
     this.filesLoadMoreState = 'idle';
-    this.#workspace = ingestStore.workspace;
-    /** Store reads: ingestStore.workspace. */
-    new StoreController(this, ingestStore);
+    this.#workspace = this.handles.ingest.workspace;
+    /** Store reads: this.handles.ingest.workspace. */
+    new StoreController(this, this.handles.ingest);
   }
 
   override connectedCallback(): void {
@@ -96,7 +98,7 @@ export class DlInspectorFiles extends LightElement {
       if (this.active) void this.reload();
       else this.pause();
     }
-    const workspace = ingestStore.workspace;
+    const workspace = this.handles.ingest.workspace;
     if (this.active && workspace !== this.#workspace && this.isConnected) {
       this.#workspace = workspace;
       void this.reload();
@@ -112,7 +114,7 @@ export class DlInspectorFiles extends LightElement {
   }
 
   async reload(showLoading = true): Promise<void> {
-    const workspace = ingestStore.workspace;
+    const workspace = this.handles.ingest.workspace;
     this.#invalidateOlderFiles();
     if (this.snapshot !== null && this.snapshot.workspace !== workspace) {
       this.snapshot = null;
@@ -145,7 +147,7 @@ export class DlInspectorFiles extends LightElement {
 
   loadOlderFiles(): Promise<void> {
     if (this.#olderFilesFlight !== null) return this.#olderFilesFlight;
-    const workspace = ingestStore.workspace;
+    const workspace = this.handles.ingest.workspace;
     const cursor = this.snapshot?.workspace === workspace
       ? this.snapshot.nextCursor
       : null;
@@ -180,7 +182,7 @@ export class DlInspectorFiles extends LightElement {
       if (
         controller !== this.#olderFilesController
         || generation !== this.#olderFilesGeneration
-        || workspace !== ingestStore.workspace
+        || workspace !== this.handles.ingest.workspace
         || current?.workspace !== workspace
         || current.nextCursor !== cursor
       ) {
@@ -228,7 +230,7 @@ export class DlInspectorFiles extends LightElement {
 
   async upload(files: readonly File[], label?: string | null): Promise<void> {
     if (files.length === 0) return;
-    const workspace = ingestStore.workspace;
+    const workspace = this.handles.ingest.workspace;
     this.#invalidateOlderFiles();
     this.#workspace = workspace;
     const controller = this.#startRequest();
@@ -291,7 +293,7 @@ export class DlInspectorFiles extends LightElement {
       {id: 'inspectorFiles.deleteNotice'},
     );
     if (await modalResult(this, dialog, () => this.#restoreDeleteTrigger()) !== 'confirm') return;
-    const workspace = ingestStore.workspace;
+    const workspace = this.handles.ingest.workspace;
     this.#invalidateOlderFiles();
     this.#stopPolling();
     const controller = this.#startRequest();
@@ -327,7 +329,7 @@ export class DlInspectorFiles extends LightElement {
     this.#pollController = controller;
     try {
       const status = await getIngestStatus(workspace, controller.signal);
-      if (workspace !== ingestStore.workspace || !this.active || !this.isConnected) return;
+      if (workspace !== this.handles.ingest.workspace || !this.active || !this.isConnected) return;
       if (!status.busy) {
         await this.reload(false);
         const recovery = this.querySelector<DlFailedFileRecovery>('dl-failed-file-recovery');
@@ -338,7 +340,7 @@ export class DlInspectorFiles extends LightElement {
       this.#schedulePoll(workspace);
     } catch (error) {
       if (isAbortError(error)) return;
-      if (workspace === ingestStore.workspace && this.active && this.isConnected) {
+      if (workspace === this.handles.ingest.workspace && this.active && this.isConnected) {
         this.#schedulePoll(workspace);
       }
     } finally {
@@ -390,7 +392,7 @@ export class DlInspectorFiles extends LightElement {
   }
 
   #isCurrent(controller: AbortController, workspace: string): boolean {
-    return this.#request === controller && ingestStore.workspace === workspace;
+    return this.#request === controller && this.handles.ingest.workspace === workspace;
   }
 
   #beginMutation(): void {
@@ -508,7 +510,7 @@ export class DlInspectorFiles extends LightElement {
         <div id="upload-spinner" class="file-status">${msg('Uploading...', {id: 'inspectorFiles.uploadingStatus'})}</div>
       </div>
       <dl-failed-file-recovery
-        .workspace=${ingestStore.workspace}
+        .workspace=${this.handles.ingest.workspace}
         .active=${this.active}
         @dl-failed-file-recovery-complete=${() => { void this.reload(false); }}
       ></dl-failed-file-recovery>

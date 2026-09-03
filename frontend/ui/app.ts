@@ -7,7 +7,7 @@ import {getWorkspacesPage} from '../api/workspaces.ts';
 import {icon} from '../design-system/index.ts';
 import type {AnswerArtifact} from '../api/conversations.ts';
 import {LightElement} from '../lib/lit-host.ts';
-import {workspaceStore} from '../stores/workspace-store.ts';
+import {productionHandles, type AppHandles} from '../stores/app-handles.ts';
 import type {AttachmentPolicy} from '../lib/attachment-policy.ts';
 import type {
   ArtifactCanvasStateDetail,
@@ -73,6 +73,7 @@ const EMPTY_BOOTSTRAP: WebBootstrap = {
 /** Authenticated bootstrap, top-level capabilities, and Feature composition only. */
 export class DlApp extends LightElement {
   static properties = {
+    handles: {attribute: false},
     bootState: {state: true},
     hasMessages: {state: true},
     conversationExpanded: {state: true},
@@ -88,6 +89,7 @@ export class DlApp extends LightElement {
     nativeModalOpen: {state: true},
   };
 
+  declare handles: AppHandles;
   declare bootState: 'loading' | 'ready' | 'error';
   declare hasMessages: boolean;
   declare conversationExpanded: boolean;
@@ -113,6 +115,7 @@ export class DlApp extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.handles = productionHandles();
     this.bootState = 'loading';
     this.hasMessages = false;
     this.conversationExpanded = false;
@@ -167,7 +170,7 @@ export class DlApp extends LightElement {
       const bootstrap = await getWebBootstrap(controller.signal);
       if (this.#controller !== controller) return;
       this.#bootstrap = bootstrap;
-      workspaceStore.init(
+      this.handles.workspaces.init(
         bootstrap.workspaces.map((workspace) => ({
           workspace: workspace.workspace,
           displayName: workspace.displayName,
@@ -231,11 +234,11 @@ export class DlApp extends LightElement {
             <div class="primary-shell" slot="start">
               <div class="app-shell">
                 <header class="topbar" ?inert=${inspectorModal || this.canvasModal}>
-                  <dl-conversation-sidebar .enabled=${ready} .chatFeature=${chatFeature}
+                  <dl-conversation-sidebar .handles=${this.handles} .enabled=${ready} .chatFeature=${chatFeature}
                     .shellInert=${this.canvasModal}></dl-conversation-sidebar>
                   <span class="topbar-scope-label" ?inert=${shellModal}>${msg('Search in:', {id: 'app.searchIn'})}</span>
                   <dl-workspace-scope class="workspace-selector" id="workspace-selector"
-                    ?inert=${shellModal}></dl-workspace-scope>
+                    .handles=${this.handles} ?inert=${shellModal}></dl-workspace-scope>
                   <div class="topbar-spacer" ?inert=${shellModal}></div>
                   <button class="topbar-btn" id="files-btn" type="button"
                           aria-label=${msg('Files', {id: 'app.files'})}
@@ -246,7 +249,7 @@ export class DlApp extends LightElement {
                   <dl-theme-control id="theme-control" ?inert=${shellModal}></dl-theme-control>
                 </header>
 
-                <dl-chat-feature .attachmentPolicy=${this.#attachmentPolicy()}
+                <dl-chat-feature .handles=${this.handles} .attachmentPolicy=${this.#attachmentPolicy()}
                   .attachmentAccept=${attachments.accept}
                   .interactionLocked=${panelInteractionLocked}
                   ?inert=${blockingShellModal}
@@ -261,7 +264,7 @@ export class DlApp extends LightElement {
             ></dl-artifact-canvas>
           </dl-split-layout>
           <dl-inspector id="inspector" slot="end"
-            .shellInert=${this.canvasModal}></dl-inspector>
+            .handles=${this.handles} .shellInert=${this.canvasModal}></dl-inspector>
         </dl-split-layout>
 
         <dl-toast-region class="toast" id="toast" role="status" aria-live="polite"
@@ -271,6 +274,7 @@ export class DlApp extends LightElement {
           aria-label=${msg('Answer notifications', {id: 'app.answerNotificationsLabel'})} .running=${this.chatRunning}
           ?inert=${shellModal}></dl-notification-offer>
         <dl-settings-dialog
+          .handles=${this.handles}
           .deleteAllConversations=${this.#requestDeleteAllConversations}
         ></dl-settings-dialog>
         ${this.#dialogs()}

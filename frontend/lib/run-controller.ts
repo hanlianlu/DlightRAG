@@ -6,7 +6,10 @@ import {
   type ConversationTurn,
 } from '../api/conversations.ts';
 import {createSSEParser, parseData} from './sse.ts';
-import {answerEventCursorStore} from '../stores/answer-event-cursor-store.ts';
+import {
+  answerEventCursorStore,
+  type AnswerEventCursorStore,
+} from '../stores/answer-event-cursor-store.ts';
 
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_DELAY_MS = 500;
@@ -77,6 +80,7 @@ export interface RunControllerOptions {
   onStateChange?: () => void;
   scheduleFrame?: RunFrameScheduler;
   cancelFrame?: RunFrameCanceller;
+  cursorStore?: AnswerEventCursorStore;
 }
 
 /** Owns the transport and lifecycle resources for this tab's one followed run. */
@@ -89,6 +93,7 @@ export class RunController {
   readonly #onStateChange: () => void;
   readonly #scheduleFrame: RunFrameScheduler;
   readonly #cancelFrame: RunFrameCanceller;
+  readonly #cursors: AnswerEventCursorStore;
 
   #lifecycleController: AbortController | null = null;
   readonly #cancelControllers = new Map<string, AbortController>();
@@ -111,6 +116,7 @@ export class RunController {
     }
     this.#scheduleFrame = options.scheduleFrame ?? scheduleDefaultFrame;
     this.#cancelFrame = options.cancelFrame ?? cancelDefaultFrame;
+    this.#cursors = options.cursorStore ?? answerEventCursorStore;
   }
 
   get active(): boolean {
@@ -205,7 +211,7 @@ export class RunController {
     let barrenAttempts = 0;
 
     const mayRetry = (before: number): boolean => {
-      barrenAttempts = answerEventCursorStore.lastSequence(conversationId, runId) > before
+      barrenAttempts = this.#cursors.lastSequence(conversationId, runId) > before
         ? 0
         : barrenAttempts + 1;
       return barrenAttempts <= this.#maxReconnectAttempts;
@@ -213,7 +219,7 @@ export class RunController {
 
     try {
       while (!signal.aborted) {
-        const after = answerEventCursorStore.lastSequence(conversationId, runId);
+        const after = this.#cursors.lastSequence(conversationId, runId);
         let response: Response;
         try {
           response = await this.#fetch(`/web/api/answer/${encodeURIComponent(runId)}/events`, {
@@ -402,8 +408,8 @@ export class RunController {
       if (signal.aborted || this.#batch !== batch) return;
       const sequence = Number(id);
       if (Number.isFinite(sequence) && sequence > 0) {
-        if (sequence <= answerEventCursorStore.lastSequence(conversationId, runId)) return;
-        answerEventCursorStore.recordSequence(conversationId, runId, sequence);
+        if (sequence <= this.#cursors.lastSequence(conversationId, runId)) return;
+        this.#cursors.recordSequence(conversationId, runId, sequence);
       }
       const event = this.#interpretEvent(eventType, data);
       if (!event) return;
