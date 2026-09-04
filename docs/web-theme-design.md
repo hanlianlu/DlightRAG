@@ -132,17 +132,21 @@ Spacing and typography remain unchanged by the theme. Geometry and panel behavio
 Geometry follows surface role rather than component size. Controls use 10px,
 cards and rich-content containers 16px, popovers 18px, dialogs 22px, and the
 composer 24px. Pills remain `999px` and circles remain 50%. Full-viewport app
-shells, docked sidebars/panels/reports, structural sections, and internal seams
-stay square at every viewport. This keeps Soft contained surfaces from rounding
-the application silhouette or opening dark corner wedges.
+shells, docked sidebars and panels, structural sections, and internal seams stay
+square at every viewport. This keeps Soft contained surfaces from rounding the
+application silhouette or opening dark corner wedges.
 
-Files/Sources and Report use nested local `dl-split-layout` elements on wide
-screens. The design-system element owns axis layout, pointer and keyboard input,
-and separator ARIA; the app adapter owns open state, breakpoints, clamping, and
-persistence. Files/Sources and Report persist separate preferred pixel widths;
-clamping for the conversation sidebar and minimum chat width never overwrites
-those preferences. A single token-backed hairline has an invisible 12px hit area,
-so the previous double-border seam is not possible.
+Inspector and Artifact Canvas use nested local `dl-split-layout` elements on
+wide screens. The design-system element owns axis layout, pointer and keyboard
+input, and separator ARIA; the app adapter owns open state, breakpoints,
+clamping, and persistence. Inspector and Artifact Canvas persist separate
+preferred pixel widths; clamping for the conversation sidebar and minimum chat
+width never overwrites those preferences. A single token-backed hairline has an
+invisible 12px hit area, so the previous double-border seam is not possible.
+
+Opening an Artifact citation is Shell-mediated. On desktop, Side remains Side,
+Wide remains Wide, and Fullscreen reduces only to Wide while Sources opens. On
+compact screens, the Canvas closes and Sources opens in the Inspector drawer.
 
 Below 1200px resizing is disabled and the panel is an overlay: the primary app
 remains full viewport width under the scrim, while modal focus, inert state,

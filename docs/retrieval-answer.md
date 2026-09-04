@@ -204,10 +204,11 @@ reserved filename, privileged Artifact role, or hidden finalizer call.
 
 Native tool-turn text deltas are streamed optimistically when the provider
 supports them. They are transient presentation: the Host resets them when the
-same turn contains tool calls, when a follow-up/correction continues the Session,
-or when citation/Artifact finalization changes the terminal text. Persisted
-Request Snapshots, Assistant Turns, tool settlements, and the canonical result
-remain the recovery authorities.
+same turn contains tool calls, a provider attempt fails or is cancelled after
+emitting text, a follow-up/correction continues the Session, interrupted
+generation is recovered, or citation/Artifact finalization changes the terminal
+text. Persisted Request Snapshots, Assistant Turns, tool settlements, and the
+canonical result remain the recovery authorities.
 
 Both modes produce the same canonical result: ordered `parts`, cited `sources`,
 `references`, `evidence_images`, Artifacts/outcome, usage, and Evidence counts.

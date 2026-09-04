@@ -70,8 +70,8 @@
   <line class="divider" x1="333" y1="553" x2="333" y2="680"/>
   <line class="divider" x1="607" y1="553" x2="607" y2="680"/>
   <text class="node-title" x="196" y="590" text-anchor="middle">Operational state</text>
-  <text class="node-copy" x="196" y="620" text-anchor="middle">runs · events · Web</text>
-  <text class="node-copy" x="196" y="645" text-anchor="middle">both roles write</text>
+  <text class="node-copy" x="196" y="620" text-anchor="middle">runs · events · attachments</text>
+  <text class="node-copy" x="196" y="645" text-anchor="middle">Web · both roles write</text>
   <text class="node-title" x="470" y="590" text-anchor="middle">Corpus state</text>
   <text class="node-copy" x="470" y="620" text-anchor="middle">graph · vector · BM25</text>
   <text class="node-copy" x="470" y="645" text-anchor="middle">writer mutates</text>

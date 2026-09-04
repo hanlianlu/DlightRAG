@@ -275,7 +275,7 @@ SSE event types are exactly:
 |---|---|
 | `progress` | Current `phase` |
 | `token` | Coalesced answer text |
-| `reset` | Clear a partial draft before regeneration |
+| `reset` | Invalidate all previously streamed draft text before continuation, replacement, or terminal projection |
 | `tool_start`, `tool_progress`, `tool_end` | Safe metadata only; no raw stdout/stderr |
 | `done` | Terminal success with full `result`, or cancellation without one |
 | `error` | Terminal `{kind, message}` failure |

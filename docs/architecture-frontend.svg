@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1500" height="920" viewBox="0 0 1500 920" role="img" aria-labelledby="title description">
   <title id="title">DlightRAG Web frontend ownership</title>
-  <desc id="description">Inside the browser process, Vite document startup boots the dl-app Shell. The Shell composes light-DOM Lit Feature owners for conversation navigation, chat, Inspector, Artifact Canvas, and shared controls. Features receive an AppHandles store bag, use RunController, same-origin API clients, and the package-owned design system (Shadow primitives such as dl-split-layout). Artifact Canvas alone loads untrusted active HTML into an explicit-consent opaque-origin iframe. API clients call the FastAPI Web adapter over same-origin HTTP and server-sent events.</desc>
+  <desc id="description">Inside the browser process, Vite document startup boots the dl-app Shell. The Shell composes light-DOM Lit Feature owners for conversation navigation, chat, Inspector, Artifact Canvas, and shared controls. The Shell coordinates source opening: desktop Side and Wide layouts persist, Fullscreen reduces to Wide, and compact Canvas closes for the Inspector drawer. Features receive an AppHandles store bag, use RunController, same-origin API clients, and the package-owned design system (Shadow primitives such as dl-split-layout). Artifact Canvas alone loads untrusted active HTML into an explicit-consent opaque-origin iframe. API clients call the FastAPI Web adapter over same-origin HTTP and server-sent events.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 1.2 L 8 5 L 0 8.8 z" class="arrow-head"/>
@@ -53,7 +53,7 @@
 
   <rect class="shell" x="650" y="210" width="440" height="95" rx="12"/>
   <text class="node-title" x="870" y="247" text-anchor="middle">dl-app Shell</text>
-  <text class="node-copy" x="870" y="277" text-anchor="middle">route · layout · accessibility · typed coordination</text>
+  <text class="node-copy" x="870" y="277" text-anchor="middle">route · layout · source handoff · accessibility</text>
 
   <rect class="feature-group" x="90" y="350" width="1020" height="215" rx="14"/>
   <text class="group-title" x="115" y="380">LIGHT-DOM LIT FEATURE OWNERS</text>
@@ -71,12 +71,12 @@
   <rect class="feature" x="502" y="405" width="176" height="130" rx="10"/>
   <text class="small-title" x="590" y="438" text-anchor="middle">Inspector</text>
   <text class="node-copy" x="590" y="472" text-anchor="middle">Sources · Files</text>
-  <text class="node-copy" x="590" y="497" text-anchor="middle">pane lifecycle</text>
+  <text class="node-copy" x="590" y="497" text-anchor="middle">pane · compact drawer</text>
 
   <rect class="feature" x="698" y="405" width="176" height="130" rx="10"/>
   <text class="small-title" x="786" y="438" text-anchor="middle">Artifact Canvas</text>
-  <text class="node-copy" x="786" y="472" text-anchor="middle">renderer selection</text>
-  <text class="node-copy" x="786" y="497" text-anchor="middle">presentation + focus</text>
+  <text class="node-copy" x="786" y="472" text-anchor="middle">renderers · preview</text>
+  <text class="node-copy" x="786" y="497" text-anchor="middle">Side · Wide · Fullscreen</text>
 
   <rect class="feature" x="894" y="405" width="176" height="130" rx="10"/>
   <text class="small-title" x="982" y="438" text-anchor="middle">Shared UI owners</text>
@@ -116,4 +116,6 @@
   <text class="edge-label" x="1095" y="780" text-anchor="end">loads</text>
   <path class="edge" d="M 1090 675 H 1200"/>
   <text class="edge-label" x="1145" y="661" text-anchor="middle">HTTP · SSE</text>
+
+  <text class="note" x="750" y="902" text-anchor="middle">Source handoff: Side stays Side · Wide stays Wide · Fullscreen → Wide · compact Canvas closes for Inspector</text>
 </svg>

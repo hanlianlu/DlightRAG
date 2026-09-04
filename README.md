@@ -119,8 +119,9 @@ host alias with loopback. Native managed inputs live under
 
 The Web UI supports workspace and file management, durable Fast and Research
 conversations, answer attachments, citations, source highlights, child-agent
-status, and typed Answer Artifacts. English, Chinese, and automatic browser
-language modes are available under Settings.
+status, and typed Answer Artifacts. Research publishes only workspace roots it
+explicitly attaches; prose links alone never publish files. English, Chinese,
+and automatic browser language modes are available under Settings.
 
 ### REST
 
@@ -183,6 +184,7 @@ answers, then call `application.aclose()`. Complete typed examples are in
 | Retrieval | LightRAG mix retrieval plus metadata, BM25, visual fusion, rerank, and packing | [Retrieval and Answer](docs/retrieval-answer.md) |
 | Answer run | One durable lifecycle shared by REST, MCP, Web, Python, and evaluation | [Durable Answer Runs](docs/durable-answer-runs.md) |
 | Resource | Request-local attachment read deterministically or inspected visually on demand | [Retrieval and Answer](docs/retrieval-answer.md#answer-attachments-and-resources) |
+| Published Artifact | Owner-visible Research output authorized by a settled root attachment and validated at publication | [Domain language](docs/domain-language.md) |
 | Source | Durable provenance and download contract for an ingested document | [Interfaces](docs/interfaces.md#sources) |
 
 ## Security

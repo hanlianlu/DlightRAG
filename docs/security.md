@@ -291,6 +291,14 @@ Admitted bytes are content-addressed within one owner. A fetched resource is
 stored only after validation and is linked atomically before its effect settles,
 so recovery reads the same bytes. Deduplication never crosses owners.
 
+Only a settled parent-Research `attach_artifact` call authorizes a workspace
+root for publication. Fast and Child Sessions do not receive that capability,
+and answer or Markdown `artifact:` links grant no authority. At the terminal
+boundary, the Host rechecks the attachment's raw digest and size, validates its
+safe dependency closure, and fails closed for missing, stale, or unattached
+roots. Published descriptors and bytes remain owner/run scoped. See
+[ADR 0004](adr/0004-structured-artifact-attachment-authority.md).
+
 Execution modes:
 
 - `disabled`: no local execution tools;

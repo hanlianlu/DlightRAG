@@ -560,8 +560,10 @@ answer:
 
 `trust` runs rooted tools as the service user; Bash still has process-level
 filesystem and network access. `disabled` removes path, Bash, spill, and
-publication tools. This distribution has no sandbox backend, so selecting
-`sandbox` fails rather than downgrading.
+`attach_artifact`. That publication-authority tool is available only to the
+parent Research Session; Fast and Child Sessions cannot authorize publication.
+This distribution has no sandbox backend, so selecting `sandbox` fails rather
+than downgrading.
 
 An explicit workspace root must be absolute, must not overlap
 `deployment.working_dir`, and must be the same shared RWX path on every worker.

@@ -163,8 +163,10 @@ terminal event:
 
 SSE closes after replaying the terminal event. Intermediate contexts are not
 published because Research may change them. `progress` is last-writer-wins and
-may move backward after recovery; only regenerated token output requires
-`reset`.
+may move backward after recovery. `reset` invalidates all previously streamed
+draft text before a tool-bearing turn, provider retry or failure, continuing
+follow-up/correction, interrupted regeneration, or canonical citation/Artifact
+rewrite. Only a successful `done.result` is terminal answer authority.
 
 Stored results/events contain transport-neutral source identities. Each
 authorized read projects fresh download URLs without modifying stored events.
@@ -215,15 +217,31 @@ request; ordinary live URL reads remain revalidated.
 
 ### `dlightrag_answer_run_artifacts`
 
-This join table records ordered input/discovered resources: safe filename, MIME
-type, ordinal, resource kind, and deterministic transform locator. It references
-`(owner, digest)` with `ON DELETE RESTRICT`, so insertion takes the PostgreSQL
-key-share lock that serializes against blob deletion.
+This join table records ordered request attachments, fetched resources, and
+terminal Published Artifacts: safe filename, MIME type, ordinal, resource kind,
+and deterministic transform locator. It references `(owner, digest)` with
+`ON DELETE RESTRICT`, so insertion takes the PostgreSQL key-share lock that
+serializes against blob deletion.
 
 Deleting a run removes only its references. Blob deletion occurs in one
 transaction only when no references survive; the foreign key protects a
 concurrent reuse. Deterministic conversion is recomputed from stored bytes.
 VLM inspection prose remains run Evidence rather than a cross-run cache.
+
+### `dlightrag_answer_artifact_attachments`
+
+One row per `(owner_id, run_id, relative_path)` is the durable Root Artifact
+Attachment authority. It records the display label, raw SHA-256 digest and byte
+size, presentation capability, originating Session/Effect Intent, attachment
+time, and monotonic settlement order. It is distinct from
+`dlightrag_answer_run_artifacts`: attachment rows authorize workspace roots;
+run-artifact rows reference owner-visible published bytes and other run
+resources.
+
+The row cascades with its run. Reattaching the same path replaces the authority
+and assigns the latest settlement order. Workspace inventory refresh or deletion
+does not erase the attachment: terminal publication must instead compare it
+with the current raw bytes and fail closed when the file is missing or stale.
 
 ## Agent Session Recovery
 
@@ -242,6 +260,11 @@ Recovery treats effects by contract:
 - `replayable`: reconcile or dispatch again under the unchanged contract;
 - `never`: settle as `outcome_unknown`;
 - changed contract: settle `tool_contract_changed` without dispatch.
+
+`attach_artifact` is replayable because it only validates current workspace
+bytes and produces authority through settlement. Its model-visible `ToolResult`
+and `ArtifactAttachmentUpdate` commit atomically; a crash cannot commit one
+without the other.
 
 Image state stores resource/corpus identities, never data URIs. A missing corpus
 visual drops only its image while preserving text/citation; a missing attachment

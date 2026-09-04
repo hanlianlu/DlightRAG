@@ -109,6 +109,26 @@ The last Research assistant turn with no tool call is the answer. Citation,
 source, media, usage, and Artifact finalization is deterministic for both paths;
 there is no hidden finalizer model call.
 
+Research provider text is an optimistic projection. Native provider deltas flow
+through `emit_token`; `reset` invalidates them before a tool-bearing turn,
+provider retry/failure, correction/follow-up, recovery, or canonical rewrite.
+The complete Assistant Turn and tool plan settle through the Agent Session, and
+the canonical result remains terminal authority.
+
+Artifact publication follows a separate structured authority path:
+
+```text
+parent Research attach_artifact
+  -> ToolResult + ArtifactAttachment Host update (one Effect Settlement)
+  -> PostgreSQL Root Artifact Attachment authority
+  -> fenced terminal raw-digest and safe-dependency validation
+  -> Published Artifacts + canonical result
+```
+
+`artifact:` links control placement and dependencies but never authorize a
+workspace file. Fast and Child Sessions cannot attach roots. See
+[ADR 0004](adr/0004-structured-artifact-attachment-authority.md).
+
 `RetrievalPlanner` is internal to retrieval. It may derive lexical terms,
 metadata filters, and image context but never receives attachment bytes or
 rewrites an agent-selected semantic query. Workspace authorization resolves at
@@ -164,8 +184,10 @@ recover -> reclaim expired lease and restore total durable state
 A disconnected client only detaches. Research restores immutable Session
 entries, typed registers, exact request/effect state, and selected Lane. Fast
 restores staged answer phases and can terminalize an already staged result
-without regeneration. Interrupted generation emits `reset` before regenerated
-tokens.
+without regeneration. Provider deltas are observational; persisted Request
+Snapshots, Assistant Turns, ToolResult/Host-update settlements, and canonical
+results are recovery authority. Recovery resets any invalid optimistic draft
+before replacement output.
 
 Engine Runtime owns storage-neutral lifecycle records, its store protocol,
 subscriptions, fencing, and coordination. Engine Answer maps product failures
@@ -194,17 +216,22 @@ query sibling Feature custom elements, not their internals, and does not use
 module-global notification channels.
 
 The package design system owns tokens, icons, Shadow primitives, and split
-layout. Sanitized answer/source HTML is the only same-DOM HTML sink and is
-never typeset inside a shadow root. Active HTML Artifacts require explicit
-consent and render in a destroyed-on-close, opaque-origin iframe. Security
-details live in [Security](security.md#answer-artifact-browser-boundary).
+layout. The Shell mediates Artifact-to-Inspector source opening: on desktop,
+Side stays Side, Wide stays Wide, and Fullscreen reduces to Wide; on compact
+layouts the Canvas closes and Sources opens in the Inspector drawer. Sanitized
+answer/source HTML is the only same-DOM HTML sink and is never typeset inside a
+shadow root. Active HTML Artifacts require explicit consent and render in a
+destroyed-on-close, opaque-origin iframe. Security details live in
+[Security](security.md#answer-artifact-browser-boundary).
 
 A custom element is a Feature only when it independently owns at least two of
 state, lifecycle, user intent, async work, accessibility, or reusable structure.
 Otherwise keep a function or a private template. Binding decisions:
 [ADR 0001](adr/0001-application-engine-adapters-architecture.md) (process zones),
-[ADR 0002](adr/0002-browser-wire-validation.md) (browser wire),
+[ADR 0002](adr/0002-browser-wire-validation.md) (browser wire), and
 [ADR 0003](adr/0003-light-composition-shadow-primitives.md) (Light vs Shadow).
+Publication authority is recorded separately in
+[ADR 0004](adr/0004-structured-artifact-attachment-authority.md).
 
 ### Web Conversation Boundary
 
@@ -227,8 +254,9 @@ them. See [Interfaces](interfaces.md#web) for browser contracts.
 All service processes use the same PostgreSQL 18 primary. The default `writer`
 owns migrations, corpus mutations, and every interface. A `reader` is
 **corpus-read-only**, not process-read-only: it may write operational state for
-answers, events, artifacts, and Web conversations while rejecting ingestion,
-workspace changes, metadata mutation, retry, and file deletion.
+answers, events, Root Artifact Attachments, Published Artifacts, and Web
+conversations while rejecting ingestion, workspace changes, metadata mutation,
+retry, and file deletion.
 
 | Component | Backend |
 |---|---|

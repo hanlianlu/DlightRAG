@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="0 0 1600 1200" role="img" aria-labelledby="title description">
   <title id="title">DlightRAG runtime ownership</title>
-  <desc id="description">Inside one DlightRAG process, inbound HTTP and MCP adapters call the transport-neutral Application Access policy before protected calls and invoke Application services separately; public status calls reach the Application facade directly. The trusted embedded Python Application interface also calls the facade directly. Application owns lifecycle and service accessors. Web Conversations accepts runs through Answer Service. Answer Service pins capabilities and schedules durable work through Engine Runtime; Runtime executes Engine Answer. Retrieval and Corpus Administration use Engine RAG. Memory is an Application capability over the independent Memory package. Model Catalogue publication invalidates Answer capability profiles. Engine Answer, Agent, and RAG call provider-neutral AI, and RAG reaches LightRAG.</desc>
+  <desc id="description">Inside one DlightRAG process, inbound HTTP and MCP adapters call the transport-neutral Application Access policy before protected calls and invoke Application services separately; public status calls reach the Application facade directly. The trusted embedded Python Application interface also calls the facade directly. Application owns lifecycle and service accessors. Web Conversations accepts runs through Answer Service. Answer Service pins capabilities and schedules durable work through Engine Runtime; Runtime executes Engine Answer. Engine Answer projects optimistic provider streams, while Agent owns durable Assistant Turns and atomic ToolResult plus Host-update settlements. Parent Research Artifact attachments become fenced terminal publications. Retrieval and Corpus Administration use Engine RAG. Memory is an Application capability over the independent Memory package. Model Catalogue publication invalidates Answer capability profiles. Engine Answer, Agent, and RAG call provider-neutral AI, and RAG reaches LightRAG.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 1.2 L 8 5 L 0 8.8 z" class="arrow-head"/>
@@ -98,12 +98,12 @@
   <rect class="module" x="110" y="820" width="260" height="115" rx="12"/>
   <text class="node-title" x="240" y="860" text-anchor="middle">engine.runtime</text>
   <text class="node-copy" x="240" y="890" text-anchor="middle">RunCoordinator · leases</text>
-  <text class="node-copy" x="240" y="913" text-anchor="middle">fencing · events</text>
+  <text class="node-copy" x="240" y="913" text-anchor="middle">fencing · durable events</text>
 
   <rect class="module" x="430" y="820" width="280" height="115" rx="12"/>
   <text class="node-title" x="570" y="860" text-anchor="middle">engine.answer</text>
-  <text class="node-copy" x="570" y="890" text-anchor="middle">Fast and Research execution</text>
-  <text class="node-copy" x="570" y="913" text-anchor="middle">evidence · citations · profile memory</text>
+  <text class="node-copy" x="570" y="890" text-anchor="middle">AnswerExecutor · Fast / Research</text>
+  <text class="node-copy" x="570" y="913" text-anchor="middle">stream · citations · publication</text>
 
   <rect class="module" x="770" y="820" width="280" height="115" rx="12"/>
   <text class="node-title" x="910" y="860" text-anchor="middle">engine.rag</text>
@@ -116,12 +116,13 @@
   <text class="node-copy" x="1250" y="913" text-anchor="middle">Application owns the product gate</text>
 
   <rect class="foundation" x="330" y="1020" width="250" height="90" rx="12"/>
-  <text class="node-title" x="455" y="1056" text-anchor="middle">engine.agent</text>
-  <text class="node-copy" x="455" y="1086" text-anchor="middle">product-neutral Session kernel</text>
+  <text class="node-title" x="455" y="1052" text-anchor="middle">engine.agent</text>
+  <text class="node-copy" x="455" y="1077" text-anchor="middle">AgentSessionRuntime · durable Session</text>
+  <text class="node-copy" x="455" y="1098" text-anchor="middle">turns · effect/Host settlement</text>
 
   <rect class="foundation" x="675" y="1020" width="260" height="90" rx="12"/>
   <text class="node-title" x="805" y="1056" text-anchor="middle">engine.ai</text>
-  <text class="node-copy" x="805" y="1086" text-anchor="middle">Model lifecycles and provider adapters</text>
+  <text class="node-copy" x="805" y="1086" text-anchor="middle">Models · native provider streams</text>
 
   <rect class="external" x="1030" y="1020" width="250" height="90" rx="12"/>
   <text class="node-title" x="1155" y="1056" text-anchor="middle">LightRAG</text>
@@ -155,15 +156,15 @@
   <text class="edge-label" x="740" y="863" text-anchor="middle">retrieve</text>
 
   <path class="edge" d="M 500 935 V 980 H 455 V 1020"/>
-  <text class="edge-label" x="470" y="999">invokes</text>
+  <text class="edge-label" x="470" y="999">hosts Session</text>
   <path class="edge" d="M 570 935 V 990 H 805 V 1020"/>
-  <text class="edge-label" x="685" y="982" text-anchor="middle">model calls</text>
+  <text class="edge-label" x="685" y="982" text-anchor="middle">provider stream</text>
   <path class="edge" d="M 910 935 V 970 H 805 V 1020"/>
   <text class="edge-label" x="870" y="962">model calls</text>
   <path class="edge" d="M 960 935 V 990 H 1155 V 1020"/>
   <text class="edge-label" x="1060" y="982" text-anchor="middle">uses</text>
   <path class="edge" d="M 580 1065 H 675"/>
-  <text class="edge-label" x="627.5" y="1051" text-anchor="middle">uses</text>
+  <text class="edge-label" x="627.5" y="1051" text-anchor="middle">turn contract</text>
 
   <text class="note" x="800" y="1140" text-anchor="middle">Access precedes protected remote calls; public status calls reach the facade directly; the embedded interface has no transport ACL.</text>
 </svg>
