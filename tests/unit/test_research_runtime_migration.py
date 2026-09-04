@@ -2,12 +2,14 @@
 """Research Host migration through the canonical AgentSessionRuntime."""
 
 from dataclasses import asdict, replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
 
+from dlightrag.engine.agent.environment.access import AccessScheduler
 from dlightrag.engine.agent.session.entries import CompactionEntry, ToolResultMessageEntry
 from dlightrag.engine.agent.session.ids import (
     AttemptId,
@@ -20,7 +22,7 @@ from dlightrag.engine.agent.session.ids import (
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.operation import OperationCompleted, ToolBatchItem
 from dlightrag.engine.agent.session.plan import AgentRunPlan
-from dlightrag.engine.agent.session.runtime import AgentSessionRuntime
+from dlightrag.engine.agent.session.runtime import AgentOperationCancelled, AgentSessionRuntime
 from dlightrag.engine.agent.tools import (
     AgentTool,
     EvidenceSourceFact,
@@ -36,12 +38,15 @@ from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.publication import PublicationLimits
 from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     ResearchRuntimeEffects,
 )
 from dlightrag.engine.answer.resources.models import TextWindowBudget
+from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
 from dlightrag.engine.rag.retrieval import RetrievalResult
+from dlightrag.engine.runtime import RunCancelledError
 from dlightrag.engine.runtime.settlements import EffectHostUpdate
 from tests.unit.conftest import answer_model_profile
 
@@ -56,6 +61,22 @@ class _Session:
 
     async def emit_tool_event(self, _kind: str, _payload: object) -> None:
         return None
+
+
+class _StreamingSession(_Session):
+    def __init__(self) -> None:
+        self.tokens: list[str] = []
+        self.phases: list[str] = []
+        self.resets = 0
+
+    async def emit_token(self, token: str) -> None:
+        self.tokens.append(token)
+
+    async def enter_phase(self, phase: str) -> None:
+        self.phases.append(phase)
+
+    async def reset_output(self) -> None:
+        self.resets += 1
 
 
 class _EmptyToolInput(BaseModel):
@@ -144,6 +165,209 @@ async def test_research_tool_settlement_rejects_nonempty_result_with_zero_residu
 
     with pytest.raises(ToolResultCapacityError, match="no residual"):
         await _settle_bounded_research_tool(profile, "cannot fit")
+
+
+@pytest.mark.asyncio
+async def test_provider_text_streams_optimistically_for_a_terminal_turn() -> None:
+    session = _StreamingSession()
+    prepared = SimpleNamespace(
+        tools=(),
+        model_profile=answer_model_profile(),
+        streamed_terminal_text=None,
+    )
+
+    class _Orchestrator:
+        async def call_runtime_provider(self, _request: object, **kwargs: Any) -> AssistantTurn:
+            emit_text = kwargs["emit_text"]
+            await emit_text("draft ")
+            await emit_text("answer")
+            return AssistantTurn(text="draft answer", tool_calls=(), stop_reason="stop")
+
+    effects = ResearchRuntimeEffects(
+        orchestrator=cast(Any, _Orchestrator()),
+        prepared=prepared,
+        session=session,  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+        publish_provider_text=True,
+    )
+    context = SimpleNamespace(
+        session_id=SessionId.new(),
+        lane_id=LaneId.main(),
+        operation_id=OperationId.new(),
+    )
+
+    async def emit_ephemeral(_event: object) -> None:
+        return None
+
+    turn = await effects.call_provider(
+        cast(Any, context), cast(Any, object()), AttemptId.new(), emit_ephemeral
+    )
+
+    assert turn.text == "draft answer"
+    assert session.tokens == ["draft ", "answer"]
+    assert session.phases == ["generating"]
+    assert session.resets == 0
+    assert prepared.streamed_terminal_text == "draft answer"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_a_provider_delta_cancels_without_retry() -> None:
+    class _CancellingSession(_StreamingSession):
+        async def emit_token(self, token: str) -> None:
+            self.tokens.append(token)
+            raise RunCancelledError
+
+    session = _CancellingSession()
+    prepared = SimpleNamespace(
+        tools=(),
+        model_profile=answer_model_profile(),
+        streamed_terminal_text=None,
+    )
+
+    class _Orchestrator:
+        async def call_runtime_provider(self, _request: object, **kwargs: Any) -> AssistantTurn:
+            await kwargs["emit_text"]("partial")
+            raise AssertionError("cancelled callback returned")
+
+    effects = ResearchRuntimeEffects(
+        orchestrator=cast(Any, _Orchestrator()),
+        prepared=prepared,
+        session=session,  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+        publish_provider_text=True,
+    )
+    context = SimpleNamespace(
+        session_id=SessionId.new(),
+        lane_id=LaneId.main(),
+        operation_id=OperationId.new(),
+    )
+
+    async def emit_ephemeral(_event: object) -> None:
+        return None
+
+    with pytest.raises(AgentOperationCancelled):
+        await effects.call_provider(
+            cast(Any, context), cast(Any, object()), AttemptId.new(), emit_ephemeral
+        )
+
+    assert session.tokens == ["partial"]
+    assert session.resets == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_draft_is_reset_when_the_turn_contains_tool_calls() -> None:
+    session = _StreamingSession()
+    prepared = SimpleNamespace(
+        tools=(),
+        model_profile=answer_model_profile(),
+        streamed_terminal_text="older",
+    )
+
+    class _Orchestrator:
+        async def call_runtime_provider(self, _request: object, **kwargs: Any) -> AssistantTurn:
+            await kwargs["emit_text"]("working")
+            return AssistantTurn(
+                text="working",
+                tool_calls=(ToolCall(id="call", name="read", arguments={}),),
+                stop_reason="tool_use",
+            )
+
+    effects = ResearchRuntimeEffects(
+        orchestrator=cast(Any, _Orchestrator()),
+        prepared=prepared,
+        session=session,  # type: ignore[arg-type]
+        session_id=SessionId.new(),
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+        publish_provider_text=True,
+    )
+    context = SimpleNamespace(
+        session_id=SessionId.new(),
+        lane_id=LaneId.main(),
+        operation_id=OperationId.new(),
+    )
+
+    async def emit_ephemeral(_event: object) -> None:
+        return None
+
+    await effects.call_provider(
+        cast(Any, context), cast(Any, object()), AttemptId.new(), emit_ephemeral
+    )
+
+    assert session.tokens == ["working"]
+    assert session.phases == ["generating", "researching"]
+    assert session.resets == 1
+    assert prepared.streamed_terminal_text is None
+
+
+@pytest.mark.asyncio
+async def test_artifact_attachment_settles_as_a_typed_host_update(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "analysis.md").write_text("analysis", encoding="utf-8")
+    tool = attach_artifact_tool(
+        root,
+        scheduler=AccessScheduler(),
+        limits=PublicationLimits(),
+    )
+    prepared = SimpleNamespace(
+        tools=(tool,),
+        model_profile=answer_model_profile(),
+        trace={"tool_observations": []},
+        evidence=SimpleNamespace(ledger_state_json=lambda: "{}"),
+    )
+    session_id = SessionId.new()
+    effects = ResearchRuntimeEffects(
+        orchestrator=cast(Any, SimpleNamespace(bind_child_context=lambda *_args: None)),
+        prepared=prepared,
+        session=_Session(),  # type: ignore[arg-type]
+        session_id=session_id,
+        fetched_buffer=FetchedResourceBuffer(),
+        persist_child_intent=None,
+    )
+    item = ToolBatchItem(
+        source_index=0,
+        call_id="attach-call",
+        tool_name=tool.name,
+        disposition="executable",
+        result_entry_id=EntryId.new(),
+        intent_id=IntentId.new(),
+        replay_policy=tool.replay_policy,
+        contract_version=tool.contract_version,
+        input_schema_digest=tool.input_schema_digest,
+        effective_input_digest="0" * 64,
+    )
+
+    async def emit_ephemeral(_event: object) -> None:
+        return None
+
+    settled = await effects.execute_tool(
+        cast(
+            Any,
+            SimpleNamespace(
+                session_id=session_id,
+                lane_id=LaneId.main(),
+                operation_id=OperationId.new(),
+            ),
+        ),
+        item,
+        {"path": "analysis.md", "label": "Open analysis"},
+        AttemptId.new(),
+        emit_ephemeral,
+    )
+
+    assert settled.host_delta is not None
+    attachment = settled.host_delta.artifact_attachment
+    assert attachment is not None
+    assert attachment.relative_path == "analysis.md"
+    assert attachment.label == "Open analysis"
+    assert attachment.session_id == session_id.value
+    assert item.intent_id is not None
+    assert attachment.intent_id == item.intent_id.value
 
 
 @pytest.mark.asyncio

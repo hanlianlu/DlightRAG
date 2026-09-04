@@ -13,6 +13,7 @@ from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
+from dlightrag.engine.answer.workspace import RunWorkspace
 from tests.unit.conftest import answer_model_profile
 
 
@@ -146,11 +147,21 @@ async def test_parent_prompt_advertises_artifacts_only_with_workspace_tools(
     async def model(**_kwargs):
         return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
 
-    with_workspace = _orchestrator(
+    environment = LocalExecutionEnvironment(tmp_path)
+    orchestrator = _orchestrator(
         mode="research",
         model=model,
-        environment=LocalExecutionEnvironment(tmp_path),
-    ).prepare_run("question")
+        environment=environment,
+    )
+    orchestrator.bind_workspace(
+        RunWorkspace(
+            epoch=1,
+            workspace=tmp_path,
+            spill_dir=tmp_path / "spill",
+            environment=environment,
+        )
+    )
+    with_workspace = orchestrator.prepare_run("question")
     without_workspace = _orchestrator(mode="research", model=model).prepare_run("question")
 
     with_messages = await with_workspace.context.control_turn(
@@ -164,8 +175,8 @@ async def test_parent_prompt_advertises_artifacts_only_with_workspace_tools(
         tool_schema_tokens=0,
     )
 
-    assert "artifact:analysis.md" in str(with_messages[0]["content"])
-    assert "artifact:analysis.md" not in str(without_messages[0]["content"])
+    assert "attach_artifact" in str(with_messages[0]["content"])
+    assert "attach_artifact" not in str(without_messages[0]["content"])
 
 
 def test_child_preparation_excludes_every_parent_subagent_control() -> None:

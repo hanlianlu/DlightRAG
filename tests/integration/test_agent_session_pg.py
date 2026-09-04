@@ -76,6 +76,7 @@ from dlightrag.engine.runtime.blob_chunks import BLOB_CHUNK_BYTES, plan_blob
 from dlightrag.engine.runtime.progress import StageCommit, StageEvidenceConflict
 from dlightrag.engine.runtime.records import ClaimedRun, PendingArtifact, PendingArtifactReference
 from dlightrag.engine.runtime.settlements import (
+    ArtifactAttachmentUpdate,
     CommittedSpillUpdate,
     CompleteBlobDescriptor,
     EffectHostUpdate,
@@ -1300,6 +1301,105 @@ async def test_host_delta_commits_workspace_inventory_and_spill(pool) -> None:
     ]
     assert len({item.resource_id for item in spills}) == len(spills)
     assert all(item.content_digest == "c" * 64 for item in spills)
+
+
+async def test_host_delta_upserts_artifact_attachment_by_root_path(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_repository
+    run_store = await _store(pool)
+    epoch = claimed.execution.fencing_epoch
+    session_id = _claimed_session(claimed)
+    await _seed_transaction_session(store, session_id, epoch)
+
+    first_intent = IntentId.new()
+    first = ArtifactAttachmentUpdate(
+        relative_path="analysis.md",
+        label="Open analysis",
+        content_digest="a" * 64,
+        size_bytes=10,
+        presentation="markdown",
+        session_id=session_id.value,
+        intent_id=first_intent.value,
+    )
+    outcome = await _append_transaction_entry(
+        store,
+        session_id,
+        _tool_result(session_id, first_intent),
+        fencing_epoch=epoch,
+        intent_id=first_intent,
+        host_delta=EffectHostUpdate(artifact_attachment=first),
+    )
+    assert isinstance(outcome, TransactionCommit)
+
+    second_intent = IntentId.new()
+    second = replace(
+        first,
+        label="Read analysis",
+        content_digest="b" * 64,
+        size_bytes=11,
+        intent_id=second_intent.value,
+    )
+    outcome = await _append_transaction_entry(
+        store,
+        session_id,
+        _tool_result(session_id, second_intent),
+        fencing_epoch=epoch,
+        intent_id=second_intent,
+        host_delta=EffectHostUpdate(artifact_attachment=second),
+    )
+    assert isinstance(outcome, TransactionCommit)
+
+    third_intent = IntentId.new()
+    third = replace(
+        second,
+        relative_path="appendix.md",
+        label="Open appendix",
+        content_digest="c" * 64,
+        intent_id=third_intent.value,
+    )
+    outcome = await _append_transaction_entry(
+        store,
+        session_id,
+        _tool_result(session_id, third_intent),
+        fencing_epoch=epoch,
+        intent_id=third_intent,
+        host_delta=EffectHostUpdate(artifact_attachment=third),
+    )
+    assert isinstance(outcome, TransactionCommit)
+
+    mutation_intent = IntentId.new()
+    outcome = await _append_transaction_entry(
+        store,
+        session_id,
+        _tool_result(session_id, mutation_intent),
+        fencing_epoch=epoch,
+        intent_id=mutation_intent,
+        host_delta=EffectHostUpdate(
+            workspace_inventory=WorkspaceInventoryUpdate(
+                upserts=(
+                    InventoryPathRecord(
+                        relative_path="analysis.md",
+                        entry_type="file",
+                        size_bytes=12,
+                        mode=0o644,
+                        content_digest="d" * 64,
+                    ),
+                )
+            )
+        ),
+    )
+    assert isinstance(outcome, TransactionCommit)
+
+    rows = await run_store.list_artifact_attachments(
+        owner_id=_OWNER,
+        run_id=claimed.run.run_id,
+    )
+    assert [row.relative_path for row in rows] == ["analysis.md", "appendix.md"]
+    assert rows[0].relative_path == "analysis.md"
+    assert rows[0].label == "Read analysis"
+    assert rows[0].content_digest == "b" * 64
+    assert rows[0].size_bytes == 11
+    assert rows[0].intent_id == second_intent.value
 
 
 async def test_memory_operation_event_is_exactly_once_with_transaction(pool) -> None:

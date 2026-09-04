@@ -144,6 +144,31 @@ class CommittedSpillUpdate:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactAttachmentUpdate:
+    """One validated Artifact root attached by a settled parent tool call."""
+
+    relative_path: str
+    label: str
+    content_digest: str
+    size_bytes: int
+    presentation: str
+    session_id: str
+    intent_id: str
+
+    def __post_init__(self) -> None:
+        if not self.relative_path.strip():
+            raise ValueError("Artifact attachment path cannot be empty")
+        if len(self.content_digest) != 64:
+            raise ValueError("Artifact attachment digest must be a SHA-256 hex digest")
+        if self.size_bytes < 0:
+            raise ValueError("Artifact attachment size cannot be negative")
+        if self.presentation not in {"image", "markdown", "html", "pdf", "text", "download"}:
+            raise ValueError("Artifact attachment presentation is invalid")
+        if not self.session_id.strip() or not self.intent_id.strip():
+            raise ValueError("Artifact attachment provenance cannot be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryOperationSettlement:
     """Owner-safe product receipt projected from one settled Memory tool call."""
 
@@ -166,10 +191,12 @@ class EffectHostUpdate:
     fetched: Sequence[FetchedResourceSettlementUpdate] = ()
     committed_outputs: Sequence[CommittedSpillUpdate] = ()
     workspace_inventory: WorkspaceInventoryUpdate | None = None
+    artifact_attachment: ArtifactAttachmentUpdate | None = None
     memory_operation: MemoryOperationSettlement | None = None
 
 
 __all__ = [
+    "ArtifactAttachmentUpdate",
     "CommittedSpillUpdate",
     "CompleteBlobDescriptor",
     "EffectHostUpdate",

@@ -3,7 +3,7 @@
 
 import re
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
 from dlightrag.engine.ai.messages import (
@@ -251,6 +251,35 @@ class CompletionProvider(ABC):
         """Run one structured tool-capable turn when the provider supports it."""
         raise ToolCallingUnavailableError(
             f"{type(self).__name__} does not implement tool-capable turns"
+        )
+
+    async def complete_tool_turn_streaming(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        tools: list[ToolDefinition],
+        emit_text: Callable[[str], Awaitable[None]],
+        tool_choice: ToolChoice = "auto",
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+    ) -> AssistantTurn:
+        """Complete one tool-capable turn, publishing provider text deltas when supported.
+
+        The provider must return the same text that its callbacks concatenate. The
+        default deliberately emits nothing, preserving a truthful non-streaming
+        fallback for providers without a normalized tool-turn stream.
+        """
+        del emit_text
+        return await self.complete_tool_turn(
+            messages,
+            model,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model_kwargs=model_kwargs,
         )
 
     async def stream_tool_text(

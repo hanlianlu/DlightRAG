@@ -33,6 +33,10 @@ Every citation marker is defined where its evidence appears, and nowhere else:
 - Do not cite missing information, unsupported statements, or abstention messages
 - If there are no supported factual claims, do not output any citation markers
 - Avoid long citation chains; prefer [n] for claims spanning a whole document.
+- Apply this contract independently to the final answer and every Markdown Artifact you
+  create. Put an Artifact's citations inline in that .md file beside the evidence-backed
+  factual claims they support; citations in the final answer or another Artifact do not
+  cover it. If it has no evidence-backed factual claims, do not add citation markers.
 - Do not add a "References", "Sources", or bibliography section; the system validates inline citations and builds sources separately
 """
 

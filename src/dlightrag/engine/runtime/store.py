@@ -20,6 +20,7 @@ from dlightrag.engine.runtime.records import (
     SweepOutcome,
     TerminalOutcome,
 )
+from dlightrag.engine.runtime.settlements import ArtifactAttachmentUpdate
 
 
 class AnswerRunStore(Protocol):
@@ -112,6 +113,10 @@ class AnswerRunStore(Protocol):
     async def list_run_artifacts(
         self, *, owner_id: str, run_id: str
     ) -> tuple[RunArtifactReference, ...]: ...
+
+    async def list_artifact_attachments(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[ArtifactAttachmentUpdate, ...]: ...
 
     async def read_event_page(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0

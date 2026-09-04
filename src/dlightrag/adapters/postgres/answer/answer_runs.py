@@ -77,6 +77,7 @@ from dlightrag.engine.runtime.records import (
     advance_reclaim,
     parse_run_id,
 )
+from dlightrag.engine.runtime.settlements import ArtifactAttachmentUpdate
 
 ANSWER_RUN_MIGRATION_SCOPE = "answer_runs"
 
@@ -487,6 +488,37 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_workspace_inventory (
 )
 """
 
+_CREATE_ARTIFACT_ATTACHMENT_ORDER = """
+CREATE SEQUENCE IF NOT EXISTS dlightrag_answer_artifact_attachment_order_seq
+"""
+
+_CREATE_ARTIFACT_ATTACHMENTS = """
+CREATE TABLE IF NOT EXISTS dlightrag_answer_artifact_attachments (
+    owner_id        TEXT        NOT NULL,
+    run_id          UUID        NOT NULL,
+    relative_path   TEXT        NOT NULL,
+    label           TEXT        NOT NULL,
+    content_digest  TEXT        NOT NULL,
+    size_bytes      BIGINT      NOT NULL,
+    presentation    TEXT        NOT NULL,
+    session_id      UUID        NOT NULL,
+    intent_id       UUID        NOT NULL,
+    attachment_order BIGINT     NOT NULL DEFAULT nextval(
+        'dlightrag_answer_artifact_attachment_order_seq'
+    ),
+    attached_at     TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (owner_id, run_id, relative_path),
+    FOREIGN KEY (owner_id, run_id)
+        REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE,
+    CONSTRAINT dlightrag_answer_artifact_attachments_digest_check
+        CHECK (content_digest ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT dlightrag_answer_artifact_attachments_size_check
+        CHECK (size_bytes >= 0),
+    CONSTRAINT dlightrag_answer_artifact_attachments_presentation_check
+        CHECK (presentation IN ('image', 'markdown', 'html', 'pdf', 'text', 'download'))
+)
+"""
+
 _CREATE_COMMITTED_SPILLS = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
     owner_id        TEXT        NOT NULL,
@@ -526,6 +558,8 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_AGENT_CONTROLS,
             *_CREATE_INDEXES,
             _CREATE_WORKSPACE_INVENTORY,
+            _CREATE_ARTIFACT_ATTACHMENT_ORDER,
+            _CREATE_ARTIFACT_ATTACHMENTS,
             _CREATE_COMMITTED_SPILLS,
             *MEMORY_SETTINGS_DDL,
         ),
@@ -560,6 +594,11 @@ ANSWER_RUN_MIGRATIONS = (
             "('current_attachment', 'history_attachment', 'fetched_resource', "
             "'published_artifact'))",
         ),
+    ),
+    Migration(
+        "write_model_root_artifact_attachments",
+        "Stage root Artifact attachments through settled Agent tool effects",
+        (_CREATE_ARTIFACT_ATTACHMENT_ORDER, _CREATE_ARTIFACT_ATTACHMENTS),
     ),
 )
 
@@ -859,6 +898,33 @@ ANSWER_RUN_SCHEMA_TABLES = (
             ForeignKeyRequirement(
                 columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
             ),
+        ),
+    ),
+    TableRequirement(
+        name="dlightrag_answer_artifact_attachments",
+        columns=(
+            "owner_id",
+            "run_id",
+            "relative_path",
+            "label",
+            "content_digest",
+            "size_bytes",
+            "presentation",
+            "session_id",
+            "intent_id",
+            "attachment_order",
+            "attached_at",
+        ),
+        primary_key=("owner_id", "run_id", "relative_path"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
+            ),
+        ),
+        checks=(
+            "dlightrag_answer_artifact_attachments_digest_check",
+            "dlightrag_answer_artifact_attachments_size_check",
+            "dlightrag_answer_artifact_attachments_presentation_check",
         ),
     ),
     TableRequirement(
@@ -1515,6 +1581,14 @@ SELECT resource_id, reference_kind, ordinal, digest, filename, mime_type,
 FROM dlightrag_answer_run_artifacts
 WHERE owner_id = $1 AND run_id = $2
 ORDER BY reference_kind, ordinal
+"""
+
+_SELECT_ARTIFACT_ATTACHMENTS = """
+SELECT relative_path, label, content_digest, size_bytes, presentation,
+       session_id::text, intent_id::text
+FROM dlightrag_answer_artifact_attachments
+WHERE owner_id = $1 AND run_id = $2
+ORDER BY attachment_order
 """
 
 _SELECT_RUN_DIGESTS = """
@@ -2728,6 +2802,31 @@ class PGAnswerRunStore(PostgresOperationRunner):
         async def _operation(conn: Any) -> tuple[RunArtifactReference, ...]:
             rows = await conn.fetch(_SELECT_RUN_ARTIFACTS, owner, run_uuid)
             return tuple(_reference_record(row) for row in rows)
+
+        return await self._run_read(_operation)
+
+    async def list_artifact_attachments(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[ArtifactAttachmentUpdate, ...]:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            return ()
+
+        async def _operation(conn: Any) -> tuple[ArtifactAttachmentUpdate, ...]:
+            rows = await conn.fetch(_SELECT_ARTIFACT_ATTACHMENTS, owner, run_uuid)
+            return tuple(
+                ArtifactAttachmentUpdate(
+                    relative_path=str(row["relative_path"]),
+                    label=str(row["label"]),
+                    content_digest=str(row["content_digest"]),
+                    size_bytes=int(row["size_bytes"]),
+                    presentation=str(row["presentation"]),
+                    session_id=str(row["session_id"]),
+                    intent_id=str(row["intent_id"]),
+                )
+                for row in rows
+            )
 
         return await self._run_read(_operation)
 

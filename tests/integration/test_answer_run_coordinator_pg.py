@@ -893,9 +893,15 @@ async def test_publication_correction_is_one_linked_agent_operation(
     )
     publication_calls = 0
 
-    def publication_plan(_root: Any, *, answer: str, limits: Any) -> PublicationPlan:
+    def publication_plan(
+        _root: Any,
+        *,
+        answer: str,
+        attachments: Any,
+        limits: Any,
+    ) -> PublicationPlan:
         nonlocal publication_calls
-        del limits
+        del attachments, limits
         publication_calls += 1
         if publication_calls == 1:
             return PublicationPlan(

@@ -3,7 +3,7 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
 from typing import Any
 
@@ -70,6 +70,28 @@ class ToolModel:
             )
         )
 
+    async def stream_turn(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[ToolDefinition],
+        emit_text: Callable[[str], Awaitable[None]],
+        tool_choice: ToolChoice = "auto",
+        max_tokens: int | None = None,
+        model_profile: ModelProfile | None = None,
+    ) -> AssistantTurn:
+        """Run one tool-capable turn and forward native provider text deltas."""
+        return await self._scheduler.run(
+            lambda: self._complete_tool_turn(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_tokens=max_tokens,
+                model_profile=model_profile,
+                emit_text=emit_text,
+            )
+        )
+
     async def _complete_tool_turn(
         self,
         *,
@@ -78,6 +100,7 @@ class ToolModel:
         tool_choice: ToolChoice,
         max_tokens: int | None,
         model_profile: ModelProfile | None,
+        emit_text: Callable[[str], Awaitable[None]] | None = None,
     ) -> AssistantTurn:
         resolved = self._resolve_reasoning(
             self.settings.effective_agentic_reasoning,
@@ -99,14 +122,24 @@ class ToolModel:
             model=self.settings.model,
         ) as observation:
             try:
-                turn = await self._provider.complete_tool_turn(
+                provider_method = (
+                    self._provider.complete_tool_turn
+                    if emit_text is None
+                    else self._provider.complete_tool_turn_streaming
+                )
+                provider_kwargs: dict[str, Any] = {
+                    "tools": tools,
+                    "tool_choice": tool_choice,
+                    "temperature": self.settings.temperature,
+                    "max_tokens": max_tokens,
+                    "model_kwargs": model_kwargs,
+                }
+                if emit_text is not None:
+                    provider_kwargs["emit_text"] = emit_text
+                turn = await provider_method(
                     messages_for_model(messages, self.fingerprint),
                     self.settings.model,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    temperature=self.settings.temperature,
-                    max_tokens=max_tokens,
-                    model_kwargs=model_kwargs,
+                    **provider_kwargs,
                 )
                 turn = bind_provider_replay(turn, self.fingerprint)
             except asyncio.CancelledError:

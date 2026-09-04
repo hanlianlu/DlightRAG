@@ -320,8 +320,8 @@ async def test_control_turn_projects_artifact_publication_as_one_capability() ->
         tool_schema_tokens=0,
     )
 
-    assert "artifact:analysis.md" in str(messages[0]["content"])
-    assert "Artifact URI" in str(messages[-1]["content"])
+    assert "attach_artifact" in str(messages[0]["content"])
+    assert "root Artifact" in str(messages[-1]["content"])
 
 
 async def test_control_turn_carries_non_citable_memory() -> None:

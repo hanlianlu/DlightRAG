@@ -5,7 +5,7 @@ import base64
 import json
 import logging
 import re
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
 from google import genai
@@ -342,6 +342,99 @@ class GeminiProvider(CompletionProvider):
                 getattr(candidate, "finish_reason", None), has_tool_calls=bool(calls)
             ),
             usage_details=_gemini_usage(response),
+        )
+
+    async def complete_tool_turn_streaming(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        tools: list[ToolDefinition],
+        emit_text: Callable[[str], Awaitable[None]],
+        tool_choice: ToolChoice = "auto",
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+    ) -> AssistantTurn:
+        model_id, _, config = self._build_args(
+            messages,
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=None,
+            model_kwargs=model_kwargs,
+        )
+        contents = _gemini_tool_contents(
+            [message for message in messages if message.get("role") != "system"]
+        )
+        if tools:
+            config["tools"] = [
+                {
+                    "function_declarations": [
+                        {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.parameters,
+                        }
+                        for tool in tools
+                    ]
+                }
+            ]
+            config["tool_config"] = {
+                "function_calling_config": {
+                    "mode": {"auto": "AUTO", "required": "ANY", "none": "NONE"}[tool_choice]
+                }
+            }
+
+        response = await self._get_client().aio.models.generate_content_stream(
+            model=model_id,
+            contents=contents,
+            config=config,
+        )
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        calls: list[ToolCall] = []
+        usage: dict[str, int] | None = None
+        finish_reason: Any = None
+        async for chunk in response:
+            parsed_usage = _gemini_usage(chunk)
+            if parsed_usage is not None:
+                usage = parsed_usage
+            candidates = getattr(chunk, "candidates", None) or ()
+            if not candidates:
+                continue
+            candidate = candidates[0]
+            if getattr(candidate, "finish_reason", None) is not None:
+                finish_reason = candidate.finish_reason
+            parts = getattr(getattr(candidate, "content", None), "parts", None) or ()
+            for part in parts:
+                text = getattr(part, "text", None)
+                if isinstance(text, str) and text:
+                    if getattr(part, "thought", False):
+                        reasoning_parts.append(text)
+                    else:
+                        text_parts.append(text)
+                        await emit_text(text)
+                function_call = getattr(part, "function_call", None)
+                if function_call is None:
+                    continue
+                index = len(calls)
+                calls.append(
+                    ToolCall(
+                        id=str(getattr(function_call, "id", None) or f"gemini-{index}"),
+                        name=str(getattr(function_call, "name", "") or ""),
+                        arguments=dict(getattr(function_call, "args", None) or {}),
+                        thought_signature=getattr(part, "thought_signature", None),
+                    )
+                )
+        reasoning = "".join(reasoning_parts)
+        self.last_reasoning = reasoning
+        return AssistantTurn(
+            text="".join(text_parts),
+            reasoning=reasoning,
+            tool_calls=tuple(calls),
+            stop_reason=_gemini_stop_reason(finish_reason, has_tool_calls=bool(calls)),
+            usage_details=usage,
         )
 
     async def stream(

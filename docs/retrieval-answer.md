@@ -185,10 +185,29 @@ run-local registry may include:
   return.
 
 Tool errors return to the model for correction; they do not terminate research.
-A no-tool assistant turn ends the run, and that text is the answer. Files become
-Published Artifacts only when the final answer or another published Markdown or
-HTML Artifact explicitly references them with a relative `artifact:` URI. There
-is no reserved filename, privileged Artifact role, or hidden finalizer call.
+A no-tool assistant turn ends the run, and that text is the answer. The parent
+Research Session authorizes a root Workspace file for publication only through
+`attach_artifact`; Fast and Child Sessions do not receive that product tool. A
+successful attachment binds the root's normalized relative path, label, media
+capability, byte size, and raw-content digest in the same settlement as the tool
+result. Reattaching the same path replaces its intent and moves it to the latest
+settlement position.
+
+At the terminal boundary, the Host verifies every attachment against current
+bytes and publishes each valid root plus the safe transitive dependency closure
+reachable through Markdown/HTML `artifact:` links. Those links are placement
+syntax, not publication authority: an unattached answer link fails validation,
+and an attached root omitted by the answer receives a trailing link in attachment
+settlement order. Dependencies are published but are not auto-placed. Failed or
+stale attachments receive the single bounded correction pass. There is no
+reserved filename, privileged Artifact role, or hidden finalizer call.
+
+Native tool-turn text deltas are streamed optimistically when the provider
+supports them. They are transient presentation: the Host resets them when the
+same turn contains tool calls, when a follow-up/correction continues the Session,
+or when citation/Artifact finalization changes the terminal text. Persisted
+Request Snapshots, Assistant Turns, tool settlements, and the canonical result
+remain the recovery authorities.
 
 Both modes produce the same canonical result: ordered `parts`, cited `sources`,
 `references`, `evidence_images`, Artifacts/outcome, usage, and Evidence counts.

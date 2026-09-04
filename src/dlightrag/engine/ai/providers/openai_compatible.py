@@ -3,7 +3,7 @@
 
 import json
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
 from openai import APIStatusError, AsyncOpenAI
@@ -251,6 +251,116 @@ class OpenAICompatibleProvider(CompletionProvider):
             provider_state=_openai_provider_state(message),
         )
 
+    async def complete_tool_turn_streaming(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        tools: list[ToolDefinition],
+        emit_text: Callable[[str], Awaitable[None]],
+        tool_choice: ToolChoice = "auto",
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+    ) -> AssistantTurn:
+        call_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": _openai_tool_messages(messages),
+            "stream": True,
+        }
+        if tools:
+            call_kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in tools
+            ]
+            call_kwargs["tool_choice"] = tool_choice
+        if temperature is not None:
+            call_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
+        if model_kwargs:
+            call_kwargs["extra_body"] = model_kwargs
+
+        response = await self._open_stream(call_kwargs)
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        reasoning_details: list[Any] = []
+        call_parts: dict[int, dict[str, str]] = {}
+        finish_reason: Any = None
+        usage: Any = None
+        async for chunk in response:
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                usage = chunk_usage
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            choice = choices[0]
+            if getattr(choice, "finish_reason", None) is not None:
+                finish_reason = choice.finish_reason
+            delta = choice.delta
+            extras = getattr(delta, "model_extra", None) or {}
+            reasoning = extras.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning:
+                reasoning_parts.append(reasoning)
+            details = extras.get("reasoning_details")
+            if isinstance(details, list):
+                reasoning_details.extend(details)
+            content = getattr(delta, "content", None)
+            if isinstance(content, str) and content:
+                text_parts.append(content)
+                await emit_text(content)
+            for position, raw_call in enumerate(getattr(delta, "tool_calls", None) or ()):
+                index = getattr(raw_call, "index", None)
+                if not isinstance(index, int):
+                    index = position
+                parts = call_parts.setdefault(
+                    index,
+                    {"id": "", "name": "", "arguments": ""},
+                )
+                call_id = getattr(raw_call, "id", None)
+                if isinstance(call_id, str):
+                    parts["id"] += call_id
+                function = getattr(raw_call, "function", None)
+                name = getattr(function, "name", None)
+                if isinstance(name, str):
+                    parts["name"] += name
+                arguments = getattr(function, "arguments", None)
+                if isinstance(arguments, str):
+                    parts["arguments"] += arguments
+
+        reasoning = "".join(reasoning_parts)
+        self.last_reasoning = reasoning
+        calls = tuple(
+            _openai_tool_call_parts(
+                parts["id"],
+                parts["name"],
+                parts["arguments"],
+            )
+            for _, parts in sorted(call_parts.items())
+        )
+        provider_state: dict[str, Any] = {}
+        if reasoning:
+            provider_state["reasoning_content"] = reasoning
+        if reasoning_details:
+            provider_state["reasoning_details"] = reasoning_details
+        return AssistantTurn(
+            text="".join(text_parts),
+            reasoning=reasoning,
+            tool_calls=calls,
+            stop_reason=_openai_stop_reason(finish_reason, has_tool_calls=bool(calls)),
+            usage_details=usage_to_dict(usage),
+            cost_details=_cost_to_dict(usage),
+            provider_state=provider_state or None,
+        )
+
     async def stream_tool_text(
         self,
         messages: list[dict[str, Any]],
@@ -337,24 +447,26 @@ class OpenAICompatibleProvider(CompletionProvider):
 
 def _openai_tool_call(raw: Any) -> ToolCall:
     function = getattr(raw, "function", None)
-    name = str(getattr(function, "name", "") or "")
-    encoded = str(getattr(function, "arguments", "") or "")
+    return _openai_tool_call_parts(
+        str(getattr(raw, "id", "") or ""),
+        str(getattr(function, "name", "") or ""),
+        str(getattr(function, "arguments", "") or ""),
+    )
+
+
+def _openai_tool_call_parts(call_id: str, name: str, encoded: str) -> ToolCall:
     try:
         parsed = json.loads(encoded)
         if not isinstance(parsed, dict):
             raise TypeError("tool arguments must be a JSON object")
     except (json.JSONDecodeError, TypeError) as exc:
         return ToolCall(
-            id=str(getattr(raw, "id", "") or ""),
+            id=call_id,
             name=name,
             arguments={},
             argument_error=str(exc),
         )
-    return ToolCall(
-        id=str(getattr(raw, "id", "") or ""),
-        name=name,
-        arguments=parsed,
-    )
+    return ToolCall(id=call_id, name=name, arguments=parsed)
 
 
 def _openai_stop_reason(reason: Any, *, has_tool_calls: bool) -> ToolStopReason:

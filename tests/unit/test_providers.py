@@ -213,6 +213,87 @@ class TestAnthropicProvider:
         assert turn.usage_details == {"input_tokens": 8, "output_tokens": 3}
 
     @pytest.mark.asyncio
+    async def test_complete_tool_turn_streaming_preserves_text_thinking_and_tool_calls(self):
+        p = get_provider("anthropic", api_key="test-key")
+
+        async def fake_stream():
+            yield SimpleNamespace(
+                type="message_start",
+                message=SimpleNamespace(usage=SimpleNamespace(input_tokens=5)),
+            )
+            yield SimpleNamespace(
+                type="content_block_start",
+                index=0,
+                content_block=SimpleNamespace(type="thinking", thinking="", signature=""),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="thinking_delta", thinking="Think."),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="signature_delta", signature="signed"),
+            )
+            yield SimpleNamespace(
+                type="content_block_start",
+                index=1,
+                content_block=SimpleNamespace(type="text", text="Draft "),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=1,
+                delta=SimpleNamespace(type="text_delta", text="answer"),
+            )
+            yield SimpleNamespace(
+                type="content_block_start",
+                index=2,
+                content_block=SimpleNamespace(
+                    type="tool_use", id="call-1", name="search_web", input={}
+                ),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=2,
+                delta=SimpleNamespace(type="input_json_delta", partial_json='{"query":'),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=2,
+                delta=SimpleNamespace(type="input_json_delta", partial_json='"inflation"}'),
+            )
+            yield SimpleNamespace(
+                type="message_delta",
+                delta=SimpleNamespace(stop_reason="tool_use"),
+                usage=SimpleNamespace(output_tokens=7),
+            )
+
+        emitted: list[str] = []
+
+        async def emit_text(text: str) -> None:
+            emitted.append(text)
+
+        with patch("dlightrag.engine.ai.providers.anthropic_native.AsyncAnthropic") as sdk:
+            sdk.return_value.messages.create = AsyncMock(return_value=fake_stream())
+            cast(Any, p)._client = None
+            turn = await p.complete_tool_turn_streaming(
+                [{"role": "user", "content": "latest inflation"}],
+                "claude-sonnet-4-20250514",
+                tools=[],
+                emit_text=emit_text,
+            )
+
+        assert emitted == ["Draft ", "answer"]
+        assert turn.text == "Draft answer"
+        assert turn.reasoning == "Think."
+        assert turn.tool_calls[0].arguments == {"query": "inflation"}
+        assert turn.provider_state == {
+            "thinking_blocks": [{"type": "thinking", "thinking": "Think.", "signature": "signed"}]
+        }
+        assert turn.usage_details == {"input_tokens": 5, "output_tokens": 7}
+
+    @pytest.mark.asyncio
     async def test_complete_routes_thinking_to_top_level(self):
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
@@ -625,6 +706,89 @@ class TestOpenAICompatibleProvider:
         assert turn.stop_reason == "stop"
         assert turn.text == "final answer"
         assert turn.tool_calls == ()
+
+    @pytest.mark.asyncio
+    async def test_complete_tool_turn_streaming_accumulates_fragmented_calls(self):
+        p = get_provider("openai", api_key="test-key")
+
+        async def fake_stream():
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="Draft ",
+                            model_extra={"reasoning_content": "Think."},
+                            tool_calls=None,
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            )
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            model_extra=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    index=0,
+                                    id="call-1",
+                                    function=SimpleNamespace(
+                                        name="search_web", arguments='{"query":'
+                                    ),
+                                )
+                            ],
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            )
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            model_extra=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    index=0,
+                                    id=None,
+                                    function=SimpleNamespace(name=None, arguments='"inflation"}'),
+                                )
+                            ],
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ],
+                usage=None,
+            )
+            yield SimpleNamespace(
+                choices=[], usage=SimpleNamespace(prompt_tokens=4, completion_tokens=3)
+            )
+
+        emitted: list[str] = []
+
+        async def emit_text(text: str) -> None:
+            emitted.append(text)
+
+        with patch.object(p, "_open_stream", AsyncMock(return_value=fake_stream())):
+            turn = await p.complete_tool_turn_streaming(
+                [{"role": "user", "content": "latest inflation"}],
+                "mimo-v2.5",
+                tools=[],
+                emit_text=emit_text,
+            )
+
+        assert emitted == ["Draft "]
+        assert turn.text == "Draft "
+        assert turn.reasoning == "Think."
+        assert turn.stop_reason == "tool_use"
+        assert turn.tool_calls[0].id == "call-1"
+        assert turn.tool_calls[0].arguments == {"query": "inflation"}
+        assert turn.usage_details == {"prompt_tokens": 4, "completion_tokens": 3}
 
     @pytest.mark.asyncio
     async def test_stream_captures_usage_and_cost_from_final_chunk(self):
@@ -1205,6 +1369,78 @@ class TestGeminiProvider:
         assert turn.tool_calls[0].arguments == {"query": "inflation"}
         assert turn.tool_calls[0].thought_signature == "gemini-signature"
         assert turn.usage_details == {"prompt_tokens": 8, "candidates_tokens": 3}
+
+    @pytest.mark.asyncio
+    async def test_complete_tool_turn_streaming_preserves_text_thoughts_and_calls(self):
+        p = get_provider("gemini", api_key="test-key")
+        function_call = SimpleNamespace(id="call-1", name="search_web", args={"query": "inflation"})
+
+        async def fake_stream():
+            yield SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        finish_reason=None,
+                        content=SimpleNamespace(
+                            parts=[
+                                SimpleNamespace(text="Think.", thought=True, function_call=None),
+                                SimpleNamespace(text="Draft ", thought=False, function_call=None),
+                            ]
+                        ),
+                    ),
+                    SimpleNamespace(
+                        finish_reason=None,
+                        content=SimpleNamespace(
+                            parts=[
+                                SimpleNamespace(text="alternate", thought=False, function_call=None)
+                            ]
+                        ),
+                    ),
+                ],
+                usage_metadata=None,
+            )
+            yield SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        finish_reason="STOP",
+                        content=SimpleNamespace(
+                            parts=[
+                                SimpleNamespace(
+                                    text=None,
+                                    thought=False,
+                                    function_call=function_call,
+                                    thought_signature="signed",
+                                )
+                            ]
+                        ),
+                    )
+                ],
+                usage_metadata=SimpleNamespace(prompt_token_count=5, candidates_token_count=3),
+            )
+
+        emitted: list[str] = []
+
+        async def emit_text(text: str) -> None:
+            emitted.append(text)
+
+        with patch("dlightrag.engine.ai.providers.gemini_native.genai") as sdk:
+            client = MagicMock()
+            sdk.Client.return_value = client
+            client.aio.models.generate_content_stream = AsyncMock(return_value=fake_stream())
+            cast(Any, p)._client = None
+            turn = await p.complete_tool_turn_streaming(
+                [{"role": "user", "content": "latest inflation"}],
+                "gemini-2.5-flash",
+                tools=[],
+                emit_text=emit_text,
+            )
+
+        assert emitted == ["Draft "]
+        assert turn.text == "Draft "
+        assert turn.reasoning == "Think."
+        assert turn.stop_reason == "tool_use"
+        assert turn.tool_calls[0].arguments == {"query": "inflation"}
+        assert turn.tool_calls[0].thought_signature == "signed"
+        assert turn.usage_details == {"prompt_tokens": 5, "candidates_tokens": 3}
 
     @pytest.mark.asyncio
     async def test_stream_uses_gemini_async_stream_api(self):

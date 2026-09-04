@@ -105,6 +105,7 @@ from dlightrag.engine.answer.memory import memory_owner_allowed, render_auto_rec
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.publication import (
+    ArtifactAttachment,
     PublicationLimits,
     PublicationPlan,
     is_empty_answer,
@@ -173,6 +174,7 @@ from dlightrag.engine.runtime import (
 )
 from dlightrag.engine.runtime.records import PendingPublication, artifact_digest
 from dlightrag.engine.runtime.settlements import (
+    ArtifactAttachmentUpdate,
     EffectHostUpdate,
 )
 
@@ -192,6 +194,9 @@ class ArtifactReader(Protocol):
         length: int | None = None,
     ) -> AsyncIterator[bytes]: ...
     async def list_run_artifacts(self, *, owner_id: str, run_id: str) -> tuple[Any, ...]: ...
+    async def list_artifact_attachments(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[ArtifactAttachmentUpdate, ...]: ...
 
 
 class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, Protocol):
@@ -702,6 +707,7 @@ class AnswerExecutor:
         from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
         from dlightrag.engine.agent.tools.files import path_tools, read_tool
         from dlightrag.engine.agent.tools.registry import ToolRegistry
+        from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
         from dlightrag.engine.answer.tools.memory import (
             forget_tool,
             recall_memory_tool,
@@ -721,6 +727,13 @@ class AnswerExecutor:
                     scheduler=access,
                 )
                 if tool.name != "read"
+            )
+            tools.append(
+                attach_artifact_tool(
+                    Path.cwd() / "artifacts",
+                    scheduler=access,
+                    limits=self._settings.publication,
+                )
             )
         tools.extend(subagent_tools(host=SubagentHost()))
         if self._memory_store is not None:
@@ -1202,6 +1215,7 @@ class AnswerExecutor:
                         store, "upsert_child_session", session
                     ),
                     validate_pins=validate_research_pins,
+                    publish_provider_text=True,
                 )
                 control_reader = _fenced_control_reader(store, session)
                 control_ack = _fenced_control_ack(store, session)
@@ -1285,6 +1299,10 @@ class AnswerExecutor:
                             "Research linked-operation bound was exhausted.",
                         )
                     validate_research_pins()
+                    if prepared_early.streamed_terminal_text is not None:
+                        await session.reset_output()
+                        prepared_early.streamed_terminal_text = None
+                        await session.enter_phase("researching")
                     accepted = await agent_runtime.accept(
                         session_id=session_id,
                         lane_id=agent_lane_id,
@@ -1384,14 +1402,19 @@ class AnswerExecutor:
                 },
             ) as pipeline_trace:
                 prepared = prepared_early
+                stream: AsyncIterator[str] | None = None
                 if resolved_mode == "research":
                     if prepared is None:
                         raise RunExecutionError(
                             "run_execution_failed",
                             "Research Runtime lost its prepared Host state.",
                         )
-                    await session.enter_phase("generating")
-                    contexts, stream = run.orchestrator.runtime_answer_stream(prepared)
+                    contexts, answer_text, already_streamed = run.orchestrator.runtime_answer(
+                        prepared
+                    )
+                    if not already_streamed:
+                        await session.enter_phase("generating")
+                        await session.emit_token(answer_text)
                 else:
                     contexts, stream = await run.orchestrator.answer_stream(
                         request.query,
@@ -1399,17 +1422,30 @@ class AnswerExecutor:
                         query_images=run.query_images,
                         boundaries=fast_boundaries,
                     )
-                answer_parts: list[str] = []
-                if stream is not None:
-                    async for chunk in stream:
-                        answer_parts.append(chunk)
-                        await session.emit_token(chunk)
+                    answer_parts: list[str] = []
+                    if stream is not None:
+                        async for chunk in stream:
+                            answer_parts.append(chunk)
+                            await session.emit_token(chunk)
+                    answer_text = getattr(stream, "answer", "") or "".join(answer_parts)
+                emitted_answer_text = answer_text
                 await session.flush_tokens()
-                answer_text = getattr(stream, "answer", "") or "".join(answer_parts)
                 finalized = finalize_answer(answer_text, contexts)
+                artifact_root = run.orchestrator.artifact_root()
+                artifact_attachments = (
+                    _publication_attachments(
+                        await self._store.list_artifact_attachments(
+                            owner_id=session.owner_id,
+                            run_id=session.run_id,
+                        )
+                    )
+                    if artifact_root is not None
+                    else ()
+                )
                 publication = _publication_plan(
-                    run.orchestrator.artifact_root(),
+                    artifact_root,
                     answer=finalized.answer,
+                    attachments=artifact_attachments,
                     limits=self._settings.publication,
                 )
                 finalized.answer = publication.answer
@@ -1419,6 +1455,9 @@ class AnswerExecutor:
                     and research_plan is not None
                     and prepared_early is not None
                 ):
+                    await session.reset_output()
+                    prepared_early.streamed_terminal_text = None
+                    await session.enter_phase("researching")
                     correction = await agent_runtime.accept(
                         session_id=agent_session_id,
                         lane_id=agent_lane_id,
@@ -1461,23 +1500,42 @@ class AnswerExecutor:
                         prepared_early,
                         corrected_snapshot,
                     )
-                    contexts, stream = run.orchestrator.runtime_answer_stream(prepared_early)
-                    await session.reset_output()
-                    corrected_parts: list[str] = []
-                    if stream is not None:
-                        async for chunk in stream:
-                            corrected_parts.append(chunk)
-                            await session.emit_token(chunk)
+                    contexts, answer_text, already_streamed = run.orchestrator.runtime_answer(
+                        prepared_early
+                    )
+                    if not already_streamed:
+                        await session.enter_phase("generating")
+                        await session.emit_token(answer_text)
+                    emitted_answer_text = answer_text
                     await session.flush_tokens()
-                    answer_text = getattr(stream, "answer", "") or "".join(corrected_parts)
                     finalized = finalize_answer(answer_text, contexts)
+                    artifact_root = run.orchestrator.artifact_root()
+                    artifact_attachments = (
+                        _publication_attachments(
+                            await self._store.list_artifact_attachments(
+                                owner_id=session.owner_id,
+                                run_id=session.run_id,
+                            )
+                        )
+                        if artifact_root is not None
+                        else ()
+                    )
                     publication = _publication_plan(
-                        run.orchestrator.artifact_root(),
+                        artifact_root,
                         answer=finalized.answer,
+                        attachments=artifact_attachments,
                         limits=self._settings.publication,
                     )
                     finalized.answer = publication.answer
                     correction_record["publication_outcome"] = publication.outcome
+                if resolved_mode == "research" and finalized.answer != emitted_answer_text:
+                    await session.reset_output()
+                    if prepared_early is not None:
+                        prepared_early.streamed_terminal_text = None
+                    await session.enter_phase("generating")
+                    await session.emit_token(finalized.answer)
+                    await session.flush_tokens()
+                    emitted_answer_text = finalized.answer
                 if request.semantic_highlights:
                     finalized.sources = await enrich_semantic_highlights(
                         finalized.sources,
@@ -1485,7 +1543,11 @@ class AnswerExecutor:
                         settings=self._settings.semantic_highlights,
                         model_factory=self._models.new_highlight_model,
                     )
-                trace = dict(getattr(stream, "trace", None) or {})
+                trace = dict(
+                    prepared.trace
+                    if resolved_mode == "research" and prepared is not None
+                    else getattr(stream, "trace", None) or {}
+                )
                 if fast_compaction_trace:
                     trace.update(fast_compaction_trace)
                 if agent_runtime is not None and research_operation_id is not None:
@@ -1709,6 +1771,7 @@ class AnswerExecutor:
                 text_window_budget=text_window_budget,
                 model_profile=query_profile,
                 context_policy=CONTEXT_POLICY,
+                publication_limits=self._settings.publication,
                 telemetry=self._telemetry,
                 environment=environment,
                 resolved_mode=resolved_mode,
@@ -2081,15 +2144,36 @@ def _context_count(contexts: RetrievalContexts, key: str) -> int:
     return len(items) if isinstance(items, list) else 0
 
 
+def _publication_attachments(
+    records: Sequence[ArtifactAttachmentUpdate],
+) -> tuple[ArtifactAttachment, ...]:
+    return tuple(
+        ArtifactAttachment(
+            relative_path=record.relative_path,
+            label=record.label,
+            content_digest=record.content_digest,
+            size_bytes=record.size_bytes,
+            presentation=record.presentation,  # type: ignore[arg-type]
+        )
+        for record in records
+    )
+
+
 def _publication_plan(
     root: Path | None,
     *,
     answer: str,
+    attachments: Sequence[ArtifactAttachment],
     limits: PublicationLimits,
 ) -> PublicationPlan:
     if not isinstance(root, Path):
         return PublicationPlan(answer=answer)
-    return validate_publication(root, answer=answer, limits=limits)
+    return validate_publication(
+        root,
+        answer=answer,
+        attachments=attachments,
+        limits=limits,
+    )
 
 
 def _stage_publications(

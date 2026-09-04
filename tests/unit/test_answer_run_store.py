@@ -48,6 +48,7 @@ class TestMigrationDeclaration:
             "dlightrag_blobs",
             "dlightrag_blob_chunks",
             "dlightrag_answer_run_artifacts",
+            "dlightrag_answer_artifact_attachments",
             "dlightrag_answer_workspace_inventory",
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",
@@ -66,7 +67,9 @@ class TestMigrationDeclaration:
     def test_schema_enforces_one_durable_publication_kind(self) -> None:
         statements = _all_statements()
         assert "'published_artifact'" in statements
-        assert ANSWER_RUN_MIGRATIONS[-1].version == "write_model_published_artifact_kind"
+        assert "write_model_published_artifact_kind" in {
+            migration.version for migration in ANSWER_RUN_MIGRATIONS
+        }
         assert "DROP CONSTRAINT dlightrag_answer_run_artifacts_kind_check" in statements
 
     def test_run_artifacts_reference_blobs_not_a_content_table(self) -> None:

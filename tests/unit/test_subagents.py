@@ -3,6 +3,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -639,11 +640,13 @@ def test_child_inherits_parent_path_tools_except_spawn() -> None:
         resource_tools=[],
         register_web_source=None,
         environment=MagicMock(),
+        artifacts_root=Path("/unused/artifacts"),
         child=True,
     )
     names = {tool.name for tool in child}
     assert names >= {"search_knowledge_base", "read", "write", "edit", "grep", "bash"}
     assert "spawn_agent" not in names
+    assert "attach_artifact" not in names
 
 
 async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:

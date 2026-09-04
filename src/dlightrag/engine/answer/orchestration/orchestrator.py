@@ -65,10 +65,10 @@ from dlightrag.engine.ai.capacity import (
 from dlightrag.engine.ai.messages import AssistantTurn, ToolDefinition
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.ai.tokens import estimate_tokens
-from dlightrag.engine.answer.citations.streaming import AnswerStream
 from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.images import AnswerImageBudget
+from dlightrag.engine.answer.publication import PublicationLimits
 from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
@@ -84,6 +84,7 @@ logger = logging.getLogger(__name__)
 ToolModel = ToolModelFunc
 StreamModel = Callable[..., AsyncIterator[str]]
 EventSink = Callable[[AgentEvent], Awaitable[None]]
+ProviderTextSink = Callable[[str], Awaitable[None]]
 
 
 class PhaseBoundaries(Protocol):
@@ -124,6 +125,7 @@ class PreparedRun:
     stop_reason: str = "model_stop"
     last_turn: ExecutedTurn | None = None
     compaction_overflow_retried: bool = False
+    streamed_terminal_text: str | None = None
 
 
 class AnswerOrchestrator:
@@ -144,6 +146,7 @@ class AnswerOrchestrator:
         text_window_budget: TextWindowBudget,
         model_profile: ModelProfile,
         context_policy: ContextPolicy = CONTEXT_POLICY,
+        publication_limits: PublicationLimits | None = None,
         telemetry: Telemetry,
         environment: ExecutionEnvironment | None = None,
         resource_reader: ResourceReader | None = None,
@@ -166,6 +169,7 @@ class AnswerOrchestrator:
         self._text_window_budget = text_window_budget
         self._model_profile = model_profile
         self._context_policy = context_policy
+        self._publication_limits = publication_limits or PublicationLimits()
         self._telemetry = telemetry
         self._environment = environment
         self._resource_reader = resource_reader
@@ -333,16 +337,11 @@ class AnswerOrchestrator:
     # Research path
     # ------------------------------------------------------------------
 
-    def runtime_answer_stream(
-        self, run: PreparedRun
-    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        """Present a Research result already completed by AgentSessionRuntime."""
+    def runtime_answer(self, run: PreparedRun) -> tuple[RetrievalContexts, str, bool]:
+        """Return a completed Research answer and whether it is already visible."""
         run.trace["agent_stop_reason"] = run.stop_reason
         text = run.last_turn.assistant.text if run.last_turn is not None else ""
-        indexer = run.evidence.render_blocks()[1]
-        stream = AnswerStream(_single_chunk(text), indexer=indexer)
-        stream.trace = run.trace  # type: ignore[attr-defined]
-        return run.evidence.contexts, stream
+        return run.evidence.contexts, text, run.streamed_terminal_text == text
 
     async def assemble_runtime_request(
         self,
@@ -388,6 +387,7 @@ class AnswerOrchestrator:
         request: RequestSnapshot,
         *,
         model_profile: ModelProfile | None = None,
+        emit_text: ProviderTextSink | None = None,
     ) -> AssistantTurn:
         """Execute one already-persisted exact provider Request Snapshot."""
         definitions = [ToolDefinition(**definition) for definition in request.tools]
@@ -399,6 +399,10 @@ class AnswerOrchestrator:
         if request.max_tokens is not None:
             kwargs["max_tokens"] = request.max_tokens
         kwargs["model_profile"] = model_profile or self._model_profile
+        stream_turn = getattr(self._model_func, "stream_turn", None)
+        if emit_text is not None and callable(stream_turn):
+            kwargs["emit_text"] = emit_text
+            return await cast(Callable[..., Awaitable[AssistantTurn]], stream_turn)(**kwargs)
         return await cast(ToolModelFunc, self._model_func)(**kwargs)
 
     async def compact_runtime_context(
@@ -507,7 +511,7 @@ class AnswerOrchestrator:
                 contributions=() if skills is None else skills.context_contributions(),
                 tool_guidance=_tool_guidance(tools),
                 profile_memory_write=any(tool.name == "remember" for tool in tools),
-                artifact_publication=any(tool.name == "write" for tool in tools),
+                artifact_publication=any(tool.name == "attach_artifact" for tool in tools),
             ),
             tools=tools,
             evidence=evidence,
@@ -658,6 +662,8 @@ class AnswerOrchestrator:
             output_stage_factory=(
                 None if self._workspace is None else self._output_stage_factory()
             ),
+            artifacts_root=self.artifact_root(),
+            publication_limits=self._publication_limits,
             subagent_host=subagent_host,
             memory_host=memory_host,
             skill_tools=skill_tools,
@@ -841,11 +847,6 @@ def _tool_schema_tokens(tools: list[AgentTool]) -> int:
             separators=(",", ":"),
         )
     )
-
-
-async def _single_chunk(text: str) -> AsyncIterator[str]:
-    if text:
-        yield text
 
 
 __all__ = [

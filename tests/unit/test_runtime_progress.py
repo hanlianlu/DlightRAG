@@ -250,6 +250,7 @@ class TestEffectHostUpdate:
             "fetched",
             "committed_outputs",
             "workspace_inventory",
+            "artifact_attachment",
             "memory_operation",
         }
 

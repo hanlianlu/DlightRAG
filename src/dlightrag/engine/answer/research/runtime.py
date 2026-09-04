@@ -59,6 +59,7 @@ from dlightrag.engine.runtime import (
 )
 from dlightrag.engine.runtime.blob_chunks import blob_digest, plan_blob
 from dlightrag.engine.runtime.settlements import (
+    ArtifactAttachmentUpdate,
     CommittedSpillUpdate,
     CompleteBlobDescriptor,
     EffectHostUpdate,
@@ -149,6 +150,32 @@ def _memory_operation_settlement(
         supersedes_id=str(raw["supersedes_id"]) if raw.get("supersedes_id") else None,
         target_change_id=(str(raw["target_change_id"]) if raw.get("target_change_id") else None),
     )
+
+
+def _artifact_attachment_update(
+    details: Mapping[str, Any] | None,
+    *,
+    session_id: SessionId,
+    intent_id: IntentId,
+) -> ArtifactAttachmentUpdate | None:
+    """Decode the product-owned attachment receipt; never infer it from text."""
+    if not isinstance(details, Mapping):
+        return None
+    raw = details.get("artifact_attachment")
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        return ArtifactAttachmentUpdate(
+            relative_path=str(raw["relative_path"]),
+            label=str(raw.get("label") or ""),
+            content_digest=str(raw["content_digest"]),
+            size_bytes=int(raw["size_bytes"]),
+            presentation=str(raw["presentation"]),
+            session_id=session_id.value,
+            intent_id=intent_id.value,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("invalid Artifact attachment receipt") from exc
 
 
 def _build_effect_host_update(
@@ -263,6 +290,15 @@ def _build_effect_host_update(
                 replace_all=inventory.replace_all,
             )
         ),
+        artifact_attachment=(
+            _artifact_attachment_update(
+                details,
+                session_id=session_id,
+                intent_id=intent.intent_id,
+            )
+            if intent.tool_name == "attach_artifact"
+            else None
+        ),
         memory_operation=_memory_operation_settlement(details),
     )
 
@@ -320,6 +356,7 @@ class ResearchRuntimeEffects:
         fetched_buffer: FetchedResourceBuffer,
         persist_child_intent: Callable[..., Awaitable[Any]] | None,
         validate_pins: Callable[[], None] | None = None,
+        publish_provider_text: bool = False,
     ) -> None:
         self._orchestrator = orchestrator
         self._prepared = prepared
@@ -328,6 +365,7 @@ class ResearchRuntimeEffects:
         self._fetched_buffer = fetched_buffer
         self._persist_child_intent = persist_child_intent
         self._validate_pins = validate_pins
+        self._publish_provider_text = publish_provider_text
         self._tools = {tool.name: tool for tool in prepared.tools}
 
     async def assemble_request(self, context: RuntimeContext) -> RequestSnapshot | Any:
@@ -358,17 +396,56 @@ class ResearchRuntimeEffects:
                 ephemeral=True,
             )
         )
+        emitted: list[str] = []
+
+        async def emit_text(text: str) -> None:
+            if not text:
+                return
+            if not emitted:
+                await self._session.enter_phase("generating")
+            emitted.append(text)
+            await self._session.emit_token(text)
+            await emit_ephemeral(
+                AgentSessionEvent(
+                    kind="provider_delta",
+                    session_id=context.session_id,
+                    lane_id=context.lane_id,
+                    operation_id=context.operation_id,
+                    commit_sequence=None,
+                    data={"text": text},
+                    ephemeral=True,
+                )
+            )
+
         try:
             assistant = await self._orchestrator.call_runtime_provider(
                 request,
                 model_profile=self._prepared.model_profile,
+                emit_text=emit_text if self._publish_provider_text else None,
             )
         except asyncio.CancelledError:
             raise
+        except RunCancelledError as exc:
+            if emitted:
+                await self._session.reset_output()
+            raise AgentOperationCancelled(exc) from exc
         except Exception as exc:
+            if emitted:
+                await self._session.reset_output()
             if is_provider_context_overflow(exc):
                 raise ProviderContextOverflow from exc
             raise ProviderAttemptFailed(str(exc), retryable=True) from exc
+
+        streamed_text = "".join(emitted)
+        if assistant.tool_calls or streamed_text != assistant.text:
+            if emitted:
+                await self._session.reset_output()
+            if assistant.tool_calls and emitted:
+                await self._session.enter_phase("researching")
+            self._prepared.streamed_terminal_text = None
+        elif emitted:
+            self._prepared.streamed_terminal_text = streamed_text
+
         await emit_ephemeral(
             AgentSessionEvent(
                 kind="model_end",

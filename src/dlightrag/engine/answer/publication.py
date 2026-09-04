@@ -1,9 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Validate and settle explicitly referenced Agent artifacts.
+"""Validate and settle attached Agent Workspace Artifacts.
 
-Agent paths are request-local input.  This module is the only boundary that may
-read them: successful settlement replaces every relative ``artifact:`` target
-with a stable resource id and exposes only sanitized filenames and safe issues.
+Agent paths are request-local input. This module is the only publication boundary
+that may read them: structured attachments authorize roots, safe links discover
+dependencies and place outputs, and settlement replaces relative ``artifact:``
+targets with stable resource ids while exposing only safe metadata and issues.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from typing import Literal
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import pypdfium2 as pdfium
 from defusedxml import ElementTree as DefusedElementTree
@@ -38,6 +39,8 @@ ArtifactIssueKind = Literal[
     "image_too_large",
     "active_preview_too_large",
     "reference_cycle",
+    "stale_attachment",
+    "unattached_reference",
 ]
 
 _ARTIFACT_TARGET = re.compile(
@@ -126,8 +129,19 @@ class ArtifactIssue:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactAttachment:
+    """One durable root attachment authorized for terminal publication."""
+
+    relative_path: str
+    label: str
+    content_digest: str
+    size_bytes: int
+    presentation: PresentationCapability
+
+
+@dataclass(frozen=True, slots=True)
 class StagedArtifact:
-    """One validated, referenced file ready for durable publication."""
+    """One validated attached root or dependency ready for publication."""
 
     relative_path: str
     media_type: str
@@ -135,6 +149,8 @@ class StagedArtifact:
     resource_id: str = ""
     filename: str = ""
     digest: str = ""
+    source_digest: str = ""
+    source_size_bytes: int = 0
     presentation: PresentationCapability = "download"
     width: int | None = None
     height: int | None = None
@@ -180,9 +196,10 @@ class PublicationPlan:
 
     def correction_feedback(self) -> str:
         lines = [
-            "Artifact publication validation failed. This is the one correction pass. ",
-            "Use the existing file tools to repair the Artifact root, then return the complete final answer again. ",
-            "Reference every user-facing file with Markdown artifact:relative/path links.",
+            "Artifact publication validation failed. This is the one correction pass.",
+            "Repair each root Artifact, then call attach_artifact after its final modification before returning the complete final answer again.",
+            "Artifact links only place successfully attached roots or their validated dependencies; attach_artifact returns the canonical link.",
+            "Apply the same inline Citation Contract to evidence-backed factual claims; citations are validated independently for each Markdown Artifact.",
         ]
         lines.extend(f"- {issue.kind}: {issue.description}" for issue in self.issues)
         return "\n".join(lines)
@@ -199,18 +216,85 @@ def is_empty_answer(*, answer: str, has_artifacts: bool) -> bool:
     return not has_artifacts and not is_substantive_text(answer)
 
 
+def prepare_artifact_attachment(
+    artifacts_root: Path,
+    *,
+    path: str,
+    label: str = "",
+    limits: PublicationLimits | None = None,
+) -> ArtifactAttachment:
+    """Validate one model-selected root and bind its current content digest."""
+    limits = limits or PublicationLimits()
+    try:
+        relative = _normalize_reference(path, parent=None)
+    except ValueError as exc:
+        raise ArtifactValidationError(
+            "invalid_reference", "Artifact path must be relative to the Artifact root."
+        ) from exc
+    try:
+        files = _inventory(artifacts_root, limits=limits)
+    except PublicationScanError as exc:
+        raise ArtifactValidationError("unsafe_file", _safe_issue_text(str(exc))) from exc
+    target = files.get(relative)
+    if target is None:
+        raise ArtifactValidationError(
+            "missing_file", f"Artifact {Path(relative).name or 'file'} is missing."
+        )
+    staged = _validate_file(relative, target, limits=limits)
+    normalized_label = " ".join(label.split())[:200]
+    return ArtifactAttachment(
+        relative_path=relative,
+        label=normalized_label or staged.filename,
+        content_digest=staged.source_digest,
+        size_bytes=staged.source_size_bytes,
+        presentation=staged.presentation,
+    )
+
+
 def validate_publication(
     artifacts_root: Path,
     *,
     answer: str,
+    attachments: Sequence[ArtifactAttachment] = (),
     limits: PublicationLimits | None = None,
 ) -> PublicationPlan:
-    """Resolve explicit Artifact references into one bounded publication plan.
+    """Resolve attached roots and their safe dependency closure for publication.
 
-    Invalid references become stable unavailable descriptors so every failed
-    placement remains visible in the Answer. Unreferenced files are ignored.
+    ``attachments`` is the publication authority. ``artifact:`` references only
+    place authorized roots or dependencies; unplaced roots receive a deterministic
+    trailing affordance and un-attached references remain unavailable.
     """
     limits = limits or PublicationLimits()
+    roots: list[str] = []
+    attached: dict[str, ArtifactAttachment] = {}
+    invalid_references: dict[tuple[str | None, str], tuple[str, ArtifactIssue]] = {}
+    for attachment in attachments:
+        try:
+            relative = _normalize_reference(attachment.relative_path, parent=None)
+        except ValueError:
+            invalid_references.setdefault(
+                (None, attachment.relative_path),
+                (
+                    attachment.label,
+                    ArtifactIssue("invalid_reference", "An attached Artifact path is not safe."),
+                ),
+            )
+            continue
+        if relative in attached:
+            roots.remove(relative)
+        roots.append(relative)
+        attached[relative] = attachment
+
+    placed: set[str] = set()
+    for raw, _label, _image in _references(answer, html=False):
+        try:
+            placed.add(_normalize_reference(raw, parent=None))
+        except ValueError:
+            continue
+    for relative in roots:
+        if relative not in placed:
+            answer = _append_artifact_affordance(answer, attached[relative])
+
     try:
         files = _inventory(artifacts_root, limits=limits)
     except PublicationScanError as exc:
@@ -218,16 +302,14 @@ def validate_publication(
         settled, descriptor = _unavailable_answer(answer, issue)
         return PublicationPlan(answer=settled, descriptors=descriptor, issues=(issue,))
 
-    discovery: deque[str] = deque()
-    roots: list[str] = []
-    labels: dict[str, str] = {}
-    invalid_references: dict[tuple[str | None, str], tuple[str, ArtifactIssue]] = {}
-    for path, label, _image in _references(answer, html=False):
+    labels = {relative: attachment.label for relative, attachment in attached.items()}
+    answer_references: list[tuple[str, str]] = []
+    for raw, label, _image in _references(answer, html=False):
         try:
-            normalized = _normalize_reference(path, parent=None)
+            normalized = _normalize_reference(raw, parent=None)
         except ValueError:
             invalid_references.setdefault(
-                (None, path),
+                (None, raw),
                 (
                     label,
                     ArtifactIssue(
@@ -236,10 +318,11 @@ def validate_publication(
                 ),
             )
             continue
-        labels.setdefault(normalized, label)
-        roots.append(normalized)
-        discovery.append(normalized)
+        if label:
+            labels[normalized] = label
+        answer_references.append((normalized, label))
 
+    discovery: deque[str] = deque(roots)
     candidates: dict[str, StagedArtifact] = {}
     graph: dict[str, list[str]] = {}
     issues_by_path: dict[str, ArtifactIssue] = {}
@@ -254,8 +337,18 @@ def validate_publication(
             continue
         try:
             staged = _validate_file(relative, files[relative], limits=limits)
-        except _FileValidationError as exc:
+        except ArtifactValidationError as exc:
             issues_by_path[relative] = ArtifactIssue(exc.kind, exc.description)
+            continue
+        attachment = attached.get(relative)
+        if attachment is not None and (
+            attachment.content_digest != staged.source_digest
+            or attachment.size_bytes != staged.source_size_bytes
+        ):
+            issues_by_path[relative] = ArtifactIssue(
+                "stale_attachment",
+                f"Attached Artifact {staged.filename} changed and must be attached again.",
+            )
             continue
         candidates[relative] = staged
         if staged.media_type in {"text/markdown", "text/html"}:
@@ -312,12 +405,17 @@ def validate_publication(
         total += staged.size_bytes
         pending.extend(graph.get(relative, ()))
 
-    visible_paths = set(roots)
-    for relative in admitted:
-        visible_paths.update(graph.get(relative, ()))
-    issues_by_path = {
-        relative: issue for relative, issue in issues_by_path.items() if relative in visible_paths
-    }
+    authorized = set(candidates) | set(issues_by_path)
+    for relative, _label in answer_references:
+        if relative not in authorized:
+            issues_by_path.setdefault(
+                relative,
+                ArtifactIssue(
+                    "unattached_reference",
+                    f"Artifact {Path(relative).name or 'file'} was not attached.",
+                ),
+            )
+
     invalid_references = {
         key: value
         for key, value in invalid_references.items()
@@ -405,7 +503,7 @@ def validate_publication(
 
 
 @dataclass(frozen=True, slots=True)
-class _FileValidationError(ValueError):
+class ArtifactValidationError(ValueError):
     kind: ArtifactIssueKind
     description: str
 
@@ -437,9 +535,11 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
     try:
         size = path.stat().st_size
     except OSError as exc:
-        raise _FileValidationError("unsafe_file", "An Artifact could not be read safely.") from exc
+        raise ArtifactValidationError(
+            "unsafe_file", "An Artifact could not be read safely."
+        ) from exc
     if size > limits.max_file_bytes:
-        raise _FileValidationError(
+        raise ArtifactValidationError(
             "file_too_large",
             f"Artifact {Path(relative).name} exceeds {limits.max_file_bytes} bytes.",
         )
@@ -452,7 +552,11 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
     try:
         content = path.read_bytes()
     except OSError as exc:
-        raise _FileValidationError("unsafe_file", "An Artifact could not be read safely.") from exc
+        raise ArtifactValidationError(
+            "unsafe_file", "An Artifact could not be read safely."
+        ) from exc
+    source_digest = hashlib.sha256(content).hexdigest()
+    source_size_bytes = len(content)
     width: int | None = None
     height: int | None = None
     try:
@@ -468,7 +572,7 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
                 width * height > limits.original_image_max_pixels
                 or max(width, height) > limits.original_image_max_edge
             ):
-                raise _FileValidationError(
+                raise ArtifactValidationError(
                     "image_too_large",
                     "Artifact image exceeds the 64-megapixel or 8000-pixel original limit.",
                 )
@@ -517,7 +621,7 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
             if not re.search(r"<!doctype\s+html|<html\b|<body\b|<head\b", text, re.IGNORECASE):
                 raise ValueError("not HTML")
             if size > limits.active_html_max_bytes:
-                raise _FileValidationError(
+                raise ArtifactValidationError(
                     "active_preview_too_large",
                     f"Active HTML preview is limited to {limits.active_html_max_bytes} bytes.",
                 )
@@ -527,10 +631,10 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
                 or _CSS_EXTERNAL_URL.search(text)
                 or _CSS_EXTERNAL_IMPORT.search(text)
             ):
-                raise _FileValidationError(
+                raise ArtifactValidationError(
                     "media_mismatch", "Active HTML must be a self-contained single file."
                 )
-    except _FileValidationError:
+    except ArtifactValidationError:
         raise
     except (
         OSError,
@@ -542,7 +646,7 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
         json.JSONDecodeError,
         pdfium.PdfiumError,
     ) as exc:
-        raise _FileValidationError(
+        raise ArtifactValidationError(
             "media_mismatch", f"Artifact {Path(relative).name} does not match its file extension."
         ) from exc
     resource_id = _resource_id(relative)
@@ -553,6 +657,8 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
         resource_id=resource_id,
         filename=_safe_filename(relative),
         digest=hashlib.sha256(content).hexdigest(),
+        source_digest=source_digest,
+        source_size_bytes=source_size_bytes,
         presentation=capability,
         width=width,
         height=height,
@@ -582,6 +688,19 @@ def _sanitize_svg(content: bytes) -> bytes:
             ):
                 del parent.attrib[attribute]
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def artifact_link(attachment: ArtifactAttachment) -> str:
+    """Return the canonical model-facing placement syntax for one attachment."""
+    label = attachment.label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    uri = quote(attachment.relative_path, safe="/")
+    prefix = "!" if attachment.presentation == "image" else ""
+    return f"{prefix}[{label}](artifact:{uri})"
+
+
+def _append_artifact_affordance(answer: str, attachment: ArtifactAttachment) -> str:
+    separator = "\n\n" if answer.strip() else ""
+    return f"{answer.rstrip()}{separator}{artifact_link(attachment)}"
 
 
 def _references(text: str, *, html: bool) -> list[tuple[str, str, bool]]:
@@ -734,11 +853,15 @@ def _reject_special(path: Path) -> None:
 
 
 __all__ = [
+    "ArtifactAttachment",
     "ArtifactIssue",
     "ArtifactIssueKind",
     "PublicationLimits",
     "PublicationPlan",
     "StagedArtifact",
+    "ArtifactValidationError",
+    "artifact_link",
     "is_empty_answer",
+    "prepare_artifact_attachment",
     "validate_publication",
 ]

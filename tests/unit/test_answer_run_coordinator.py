@@ -412,6 +412,9 @@ class _MemoryStore:
     async def list_run_artifacts(self, *, owner_id: str, run_id: str) -> tuple[Any, ...]:
         return ()
 
+    async def list_artifact_attachments(self, *, owner_id: str, run_id: str) -> tuple[Any, ...]:
+        return ()
+
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> Any:
         self.runs[run_id]["cancel_requested"] = True
         return None

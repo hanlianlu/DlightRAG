@@ -2,6 +2,7 @@
 """The peer tools one research run offers, composed per run and never globally."""
 
 import hashlib
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -13,6 +14,8 @@ from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.engine.agent.tools.files import path_tools, read_tool
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.engine.answer.evidence import EvidenceLedger
+from dlightrag.engine.answer.publication import PublicationLimits
+from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
 from dlightrag.engine.answer.tools.memory import (
     MemoryHost,
     forget_tool,
@@ -42,6 +45,8 @@ def compose_research_tools(
     scheduler: AccessScheduler | None = None,
     spill: Any | None = None,
     output_stage_factory: Any | None = None,
+    artifacts_root: Path | None = None,
+    publication_limits: PublicationLimits | None = None,
     ripgrep: str = "rg",
     subagent_host: SubagentHost | None = None,
     memory_host: MemoryHost | None = None,
@@ -92,6 +97,14 @@ def compose_research_tools(
         )
         existing_names = {tool.name for tool in tools}
         tools.extend(tool for tool in path if tool.name not in existing_names)
+        if artifacts_root is not None and not child:
+            tools.append(
+                attach_artifact_tool(
+                    artifacts_root,
+                    scheduler=access,
+                    limits=publication_limits or PublicationLimits(),
+                )
+            )
     if subagent_host is not None:
         tools.extend(subagent_tools(host=subagent_host))
     if memory_host is not None:

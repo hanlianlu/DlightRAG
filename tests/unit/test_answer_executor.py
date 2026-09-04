@@ -49,7 +49,7 @@ from dlightrag.engine.answer.execution.executor import (
 )
 from dlightrag.engine.answer.fast import ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
-from dlightrag.engine.answer.publication import validate_publication
+from dlightrag.engine.answer.publication import prepare_artifact_attachment, validate_publication
 from dlightrag.engine.answer.resources import ResourceInput
 from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.runtime import (
@@ -119,6 +119,10 @@ def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) ->
     plan = validate_publication(
         root,
         answer=("[Open analysis](artifact:analysis.md) [Open appendix](artifact:appendix.md)"),
+        attachments=(
+            prepare_artifact_attachment(root, path="analysis.md"),
+            prepare_artifact_attachment(root, path="appendix.md"),
+        ),
     )
     contexts = {
         "chunks": [
@@ -208,6 +212,7 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         "read",
         "write",
         "edit",
+        "attach_artifact",
         "grep",
         "bash",
         "spawn_agent",
@@ -255,6 +260,8 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         resource_tools=[],
         register_web_source=None,
         environment=LocalExecutionEnvironment(tmp_path),
+        artifacts_root=tmp_path / "artifacts",
+        publication_limits=executor._settings.publication,
         subagent_host=SubagentHost(),
         skill_tools=[],
     )

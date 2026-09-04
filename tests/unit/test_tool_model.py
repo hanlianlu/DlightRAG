@@ -50,6 +50,36 @@ async def test_ai_tool_model_accepts_settings_and_owns_provider(monkeypatch) -> 
     provider.aclose.assert_awaited_once()
 
 
+async def test_tool_model_routes_streaming_turns_through_the_provider(monkeypatch) -> None:
+    provider = AsyncMock()
+
+    async def complete_streaming(*_args: object, **kwargs: Any) -> AssistantTurn:
+        await kwargs["emit_text"]("live")
+        return AssistantTurn(text="live", tool_calls=(), stop_reason="stop")
+
+    provider.complete_tool_turn_streaming.side_effect = complete_streaming
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.tool_model.get_provider",
+        lambda *_args, **_kwargs: provider,
+    )
+    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
+    emitted: list[str] = []
+
+    async def emit_text(text: str) -> None:
+        emitted.append(text)
+
+    turn = await model.stream_turn(
+        messages=[{"role": "user", "content": "q"}],
+        tools=[],
+        emit_text=emit_text,
+    )
+
+    assert turn.text == "live"
+    assert emitted == ["live"]
+    provider.complete_tool_turn_streaming.assert_awaited_once()
+    provider.complete_tool_turn.assert_not_awaited()
+
+
 async def test_tool_turn_executor_uses_the_production_model_output_contract(monkeypatch) -> None:
     provider = AsyncMock()
     provider.complete_tool_turn.return_value = AssistantTurn(

@@ -4,7 +4,7 @@
 import json
 import logging
 import re
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from typing import Any
 
 from anthropic import AsyncAnthropic
@@ -351,6 +351,166 @@ class AnthropicProvider(CompletionProvider):
                 getattr(response, "stop_reason", None), has_tool_calls=bool(calls)
             ),
             usage_details=usage_to_dict(getattr(response, "usage", None)),
+            provider_state={"thinking_blocks": thinking_blocks} if thinking_blocks else None,
+        )
+
+    async def complete_tool_turn_streaming(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        tools: list[ToolDefinition],
+        emit_text: Callable[[str], Awaitable[None]],
+        tool_choice: ToolChoice = "auto",
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+    ) -> AssistantTurn:
+        system, non_system = _extract_system(messages)
+        call_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": _anthropic_tool_messages(non_system),
+            "max_tokens": max_tokens or 8192,
+            "stream": True,
+        }
+        if system:
+            call_kwargs["system"] = system
+        if tools:
+            call_kwargs["tools"] = [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.parameters,
+                }
+                for tool in tools
+            ]
+            call_kwargs["tool_choice"] = {
+                "auto": {"type": "auto"},
+                "required": {"type": "any"},
+                "none": {"type": "none"},
+            }[tool_choice]
+        if temperature is not None:
+            call_kwargs["temperature"] = temperature
+        _apply_model_kwargs(call_kwargs, model_kwargs)
+
+        response = await self._get_client().messages.create(**call_kwargs)
+        text_parts: list[str] = []
+        block_parts: dict[int, dict[str, Any]] = {}
+        usage_parts: list[Any] = []
+        stop_reason: Any = None
+        async for event in response:
+            event_type = getattr(event, "type", None)
+            if event_type == "message_start":
+                usage_parts.append(getattr(getattr(event, "message", None), "usage", None))
+                continue
+            if event_type == "message_delta":
+                usage_parts.append(getattr(event, "usage", None))
+                delta = getattr(event, "delta", None)
+                delta_stop_reason = getattr(delta, "stop_reason", None)
+                if delta_stop_reason is not None:
+                    stop_reason = delta_stop_reason
+                continue
+            if event_type == "content_block_start":
+                index = int(getattr(event, "index", 0))
+                block = getattr(event, "content_block", None)
+                block_type = str(getattr(block, "type", "") or "")
+                parts = block_parts.setdefault(index, {"type": block_type})
+                if block_type == "text":
+                    text = str(getattr(block, "text", "") or "")
+                    if text:
+                        text_parts.append(text)
+                        await emit_text(text)
+                elif block_type == "thinking":
+                    parts["thinking"] = str(getattr(block, "thinking", "") or "")
+                    parts["signature"] = str(getattr(block, "signature", "") or "")
+                elif block_type == "redacted_thinking":
+                    parts["data"] = str(getattr(block, "data", "") or "")
+                elif block_type == "tool_use":
+                    parts["id"] = str(getattr(block, "id", "") or "")
+                    parts["name"] = str(getattr(block, "name", "") or "")
+                    initial = getattr(block, "input", None)
+                    parts["input"] = dict(initial) if isinstance(initial, Mapping) else {}
+                    parts["input_json"] = ""
+                continue
+            if event_type != "content_block_delta":
+                continue
+            index = int(getattr(event, "index", 0))
+            delta = getattr(event, "delta", None)
+            delta_type = getattr(delta, "type", None)
+            parts = block_parts.setdefault(index, {"type": ""})
+            if delta_type == "text_delta":
+                text = str(getattr(delta, "text", "") or "")
+                if text:
+                    text_parts.append(text)
+                    await emit_text(text)
+            elif delta_type == "thinking_delta":
+                parts["thinking"] = str(parts.get("thinking") or "") + str(
+                    getattr(delta, "thinking", "") or ""
+                )
+            elif delta_type == "signature_delta":
+                parts["signature"] = str(parts.get("signature") or "") + str(
+                    getattr(delta, "signature", "") or ""
+                )
+            elif delta_type == "input_json_delta":
+                parts["input_json"] = str(parts.get("input_json") or "") + str(
+                    getattr(delta, "partial_json", "") or ""
+                )
+
+        thinking_blocks: list[dict[str, Any]] = []
+        reasoning_parts: list[str] = []
+        calls: list[ToolCall] = []
+        for _, parts in sorted(block_parts.items()):
+            block_type = parts.get("type")
+            if block_type == "thinking":
+                thinking = str(parts.get("thinking") or "")
+                reasoning_parts.append(thinking)
+                thinking_blocks.append(
+                    {
+                        "type": "thinking",
+                        "thinking": thinking,
+                        "signature": str(parts.get("signature") or ""),
+                    }
+                )
+            elif block_type == "redacted_thinking":
+                thinking_blocks.append(
+                    {"type": "redacted_thinking", "data": str(parts.get("data") or "")}
+                )
+            elif block_type == "tool_use":
+                encoded = str(parts.get("input_json") or "")
+                argument_error: str | None = None
+                arguments = parts.get("input") or {}
+                if encoded:
+                    try:
+                        arguments = json.loads(encoded)
+                        if not isinstance(arguments, dict):
+                            raise TypeError("tool arguments must be a JSON object")
+                    except (json.JSONDecodeError, TypeError) as exc:
+                        arguments = {}
+                        argument_error = str(exc)
+                calls.append(
+                    ToolCall(
+                        id=str(parts.get("id") or ""),
+                        name=str(parts.get("name") or ""),
+                        arguments=dict(arguments),
+                        argument_error=argument_error,
+                    )
+                )
+
+        reasoning = "".join(reasoning_parts)
+        self.last_reasoning = reasoning
+        usage: dict[str, int] = {}
+        for raw_usage in usage_parts:
+            if raw_usage is None:
+                continue
+            parsed = usage_to_dict(raw_usage)
+            if parsed:
+                usage.update(parsed)
+        return AssistantTurn(
+            text="".join(text_parts),
+            reasoning=reasoning,
+            tool_calls=tuple(calls),
+            stop_reason=_anthropic_stop_reason(stop_reason, has_tool_calls=bool(calls)),
+            usage_details=usage or None,
             provider_state={"thinking_blocks": thinking_blocks} if thinking_blocks else None,
         )
 

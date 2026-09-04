@@ -184,6 +184,7 @@ class TestSchema:
             "dlightrag_blobs",
             "dlightrag_blob_chunks",
             "dlightrag_answer_run_artifacts",
+            "dlightrag_answer_artifact_attachments",
             "dlightrag_answer_workspace_inventory",
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",

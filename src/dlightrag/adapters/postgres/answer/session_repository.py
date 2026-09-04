@@ -1032,6 +1032,32 @@ class PGAgentSessionRepository:
                     record.size_bytes,
                     record.content_digest,
                 )
+
+        attachment = update.artifact_attachment
+        if attachment is not None:
+            if attachment.session_id != session_id.value or attachment.intent_id != intent_id.value:
+                raise ValueError("Artifact attachment provenance mismatches its settlement")
+            await conn.execute(
+                "INSERT INTO dlightrag_answer_artifact_attachments ("
+                " owner_id, run_id, relative_path, label, content_digest, size_bytes,"
+                " presentation, session_id, intent_id)"
+                " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+                " ON CONFLICT (owner_id, run_id, relative_path) DO UPDATE SET"
+                " label = EXCLUDED.label, content_digest = EXCLUDED.content_digest,"
+                " size_bytes = EXCLUDED.size_bytes, presentation = EXCLUDED.presentation,"
+                " session_id = EXCLUDED.session_id, intent_id = EXCLUDED.intent_id,"
+                " attachment_order = EXCLUDED.attachment_order,"
+                " attached_at = EXCLUDED.attached_at",
+                self._owner_id,
+                self._run_id,
+                attachment.relative_path,
+                attachment.label,
+                attachment.content_digest,
+                attachment.size_bytes,
+                attachment.presentation,
+                _uuid(attachment.session_id),
+                _uuid(attachment.intent_id),
+            )
         return _host_update_digest(update)
 
     async def _write_evidence_resource(self, conn: Any, write: OpaqueEvidenceResourceWrite) -> None:
@@ -1409,6 +1435,19 @@ def _host_update_digest(update: EffectHostUpdate) -> str:
                 "replace_all": update.workspace_inventory.replace_all,
                 "upserts": [record.relative_path for record in update.workspace_inventory.upserts],
                 "deletes": list(update.workspace_inventory.deletes),
+            }
+        ),
+        "artifact_attachment": (
+            None
+            if update.artifact_attachment is None
+            else {
+                "relative_path": update.artifact_attachment.relative_path,
+                "label": update.artifact_attachment.label,
+                "content_digest": update.artifact_attachment.content_digest,
+                "size_bytes": update.artifact_attachment.size_bytes,
+                "presentation": update.artifact_attachment.presentation,
+                "session_id": update.artifact_attachment.session_id,
+                "intent_id": update.artifact_attachment.intent_id,
             }
         ),
         "memory_operation": (

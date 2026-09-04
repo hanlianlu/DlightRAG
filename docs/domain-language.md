@@ -225,9 +225,13 @@ _Avoid_: Failed artifact
 Private full tool output retained for the life of an active Answer Run and addressed only through a Resource Handle.
 _Avoid_: Artifact, report, Journal Entry, Blob when referring to the handle
 
+**Root Artifact Attachment**:
+A run-scoped publication authorization settled by the parent Research Session for one normalized Agent Workspace path at an exact raw-content digest. It carries the root's display label and settlement order; answer links may place it but cannot create the authorization.
+_Avoid_: Published Artifact, Workspace file, `artifact:` link, upload attachment
+
 **Published Artifact**:
-An owner-visible, run-scoped output descriptor created by fenced publication of explicitly referenced Agent Workspace bytes. It carries stable resource identity, validated media type, presentation capability, publication status, and an owner-scoped data plane without exposing a Workspace path.
-_Avoid_: Spill, Blob when referring to the reference rather than the bytes, unreferenced workspace file
+An owner-visible, run-scoped output descriptor created by fenced publication of an authorized Root Artifact Attachment or its validated dependency bytes. It carries stable resource identity, validated media type, presentation capability, publication status, and an owner-scoped data plane without exposing a Workspace path.
+_Avoid_: Spill, Blob when referring to the reference rather than the bytes, unattached workspace file
 
 **Artifact Canvas**:
 The Web Feature that opens any presentable Published Artifact and owns loading, safe renderer selection, side/wide/fullscreen layout, focus restoration, and preview teardown.

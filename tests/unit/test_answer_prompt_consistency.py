@@ -28,6 +28,8 @@ def test_research_agent_is_told_the_citation_contract() -> None:
     assert 'Do not add a "References", "Sources", or bibliography section' in prompt
     assert "output only this abstention message" in normalized
     assert "answer from general knowledge without citations" in normalized
+    assert "every Markdown Artifact you create" in normalized
+    assert "citations in the final answer or another Artifact do not cover it" in normalized
 
 
 def test_profile_memory_guidance_is_product_owned_and_capability_gated() -> None:
@@ -45,12 +47,15 @@ def test_artifact_publication_guidance_is_capability_gated() -> None:
     disabled = agent_control_prompt()
     enabled = agent_control_prompt(artifact_publication=True)
 
-    assert "artifact:analysis.md" not in disabled
+    assert "attach_artifact" not in disabled
     assert "Artifact URI" not in disabled
-    assert "artifact:analysis.md" in enabled
-    assert "Unlinked files are not published" in enabled
-    assert "Artifact URI" not in control_turn_instruction()
-    assert "Artifact URI" in control_turn_instruction(artifact_publication=True)
+    assert "attach_artifact" in enabled
+    assert "attachment, not answer text, authorizes publication" in enabled
+    assert "same Citation Contract" in enabled
+    assert "citations are resolved independently" in enabled
+    assert "safe dependency closure is included automatically" in enabled
+    assert "root Artifact" not in control_turn_instruction()
+    assert "root Artifact" in control_turn_instruction(artifact_publication=True)
 
 
 def test_research_agent_keeps_its_own_loop_guidance() -> None:
