@@ -12,7 +12,7 @@ from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.answer.citations.indexer import CitationIndexer
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.memory import standing_memory_message
-from dlightrag.engine.answer.prompts import CONTROL_TURN_INSTRUCTION, agent_control_prompt
+from dlightrag.engine.answer.prompts import agent_control_prompt, control_turn_instruction
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 
@@ -38,6 +38,7 @@ class ContextAssembler:
         contributions: tuple[ContextContribution, ...] = (),
         tool_guidance: tuple[str, ...] = (),
         profile_memory_write: bool = False,
+        artifact_publication: bool = False,
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
@@ -49,6 +50,10 @@ class ContextAssembler:
         self._contributions = contributions
         self._tool_guidance = tool_guidance
         self._profile_memory_write = profile_memory_write
+        self._artifact_publication = artifact_publication
+        self._control_instruction = control_turn_instruction(
+            artifact_publication=artifact_publication
+        )
 
     async def control_turn(
         self,
@@ -81,13 +86,13 @@ class ContextAssembler:
     ) -> int:
         """Return capacity left for the next model-visible tool-result batch."""
         fixed = list(transcript_with_assistant)
-        if len(fixed) >= 2 and _is_control_evidence_message(fixed[-2]):
+        if len(fixed) >= 2 and _is_control_evidence_message(fixed[-2], self._control_instruction):
             fixed.pop(-2)
         assistant = fixed[-1] if fixed else {}
         tool_messages = [_empty_tool_message(call) for call in assistant.get("tool_calls") or ()]
         instruction = {
             "role": "user",
-            "content": [{"type": "text", "text": CONTROL_TURN_INSTRUCTION}],
+            "content": [{"type": "text", "text": self._control_instruction}],
         }
         used = estimate_messages_tokens([*fixed, *tool_messages, instruction]) + tool_schema_tokens
         return max(0, self._control_target - used)
@@ -155,7 +160,10 @@ class ContextAssembler:
     ) -> list[dict[str, Any]]:
         system = {
             "role": "system",
-            "content": agent_control_prompt(profile_memory_write=self._profile_memory_write),
+            "content": agent_control_prompt(
+                profile_memory_write=self._profile_memory_write,
+                artifact_publication=self._artifact_publication,
+            ),
         }
         head = self._head(system, working.messages())
         tail: list[ContextContribution] = []
@@ -262,7 +270,7 @@ class ContextAssembler:
         head: list[dict[str, Any]],
         tool_schema_tokens: int = 0,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        instruction_block = {"type": "text", "text": CONTROL_TURN_INSTRUCTION}
+        instruction_block = {"type": "text", "text": self._control_instruction}
         fixed_input_tokens = estimate_messages_tokens(
             [*head, {"role": "user", "content": [instruction_block]}]
         )
@@ -306,14 +314,14 @@ def _question_message(
     return {"role": "user", "content": content}
 
 
-def _is_control_evidence_message(message: dict[str, Any]) -> bool:
+def _is_control_evidence_message(message: dict[str, Any], instruction: str) -> bool:
     content = message.get("content")
     return bool(
         message.get("role") == "user"
         and isinstance(content, list)
         and content
         and isinstance(content[-1], dict)
-        and content[-1].get("text") == CONTROL_TURN_INSTRUCTION
+        and content[-1].get("text") == instruction
     )
 
 

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
 from dlightrag.engine.agent.skills import SkillsBundle
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
@@ -15,7 +16,7 @@ from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from tests.unit.conftest import answer_model_profile
 
 
-def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
+def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None, environment=None):
 
     profile = answer_model_profile()
 
@@ -30,6 +31,7 @@ def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None):
         text_window_budget=TextWindowBudget(profile.context_window_tokens),
         model_profile=profile,
         telemetry=NOOP_TELEMETRY,
+        environment=environment,
         resolved_mode=mode,  # type: ignore[arg-type]
     )
 
@@ -135,6 +137,35 @@ def test_research_preparation_composes_closed_host_tools() -> None:
     names = {tool.name for tool in prepared.tools}
     assert "search_knowledge_base" in names
     assert "subagent_status" not in names
+
+
+@pytest.mark.asyncio
+async def test_parent_prompt_advertises_artifacts_only_with_workspace_tools(
+    tmp_path: Path,
+) -> None:
+    async def model(**_kwargs):
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    with_workspace = _orchestrator(
+        mode="research",
+        model=model,
+        environment=LocalExecutionEnvironment(tmp_path),
+    ).prepare_run("question")
+    without_workspace = _orchestrator(mode="research", model=model).prepare_run("question")
+
+    with_messages = await with_workspace.context.control_turn(
+        evidence=with_workspace.evidence,
+        working=with_workspace.working,
+        tool_schema_tokens=0,
+    )
+    without_messages = await without_workspace.context.control_turn(
+        evidence=without_workspace.evidence,
+        working=without_workspace.working,
+        tool_schema_tokens=0,
+    )
+
+    assert "artifact:analysis.md" in str(with_messages[0]["content"])
+    assert "artifact:analysis.md" not in str(without_messages[0]["content"])
 
 
 def test_child_preparation_excludes_every_parent_subagent_control() -> None:

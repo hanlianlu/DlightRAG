@@ -12,12 +12,13 @@ from dlightrag.engine.ai.tokens import estimate_messages_tokens
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.execution import research_history_input_measure
 from dlightrag.engine.answer.memory import reserved_auto_recall_text
-from dlightrag.engine.answer.prompts import CONTROL_TURN_INSTRUCTION
+from dlightrag.engine.answer.prompts import control_turn_instruction
 from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 
 _WINDOW = 80_000
 _RETAINED_TAIL = 13_600
+_CONTROL_TURN_INSTRUCTION = control_turn_instruction()
 
 
 def _assembler(history: list[dict[str, Any]]) -> ContextAssembler:
@@ -233,7 +234,7 @@ def test_observation_residual_targets_the_next_control_threshold() -> None:
             "role": "user",
             "content": [
                 {"type": "text", "text": "large transient evidence"},
-                {"type": "text", "text": CONTROL_TURN_INSTRUCTION},
+                {"type": "text", "text": _CONTROL_TURN_INSTRUCTION},
             ],
         },
         assistant,
@@ -250,7 +251,7 @@ def test_observation_residual_targets_the_next_control_threshold() -> None:
         },
         {
             "role": "user",
-            "content": [{"type": "text", "text": CONTROL_TURN_INSTRUCTION}],
+            "content": [{"type": "text", "text": _CONTROL_TURN_INSTRUCTION}],
         },
     ]
     used = estimate_messages_tokens(next_fixed)
@@ -301,6 +302,26 @@ def test_research_seed_measure_grows_when_memory_is_reserved() -> None:
     empty = research_history_input_measure(**kwargs)
     reserved = research_history_input_measure(**kwargs, memory_text=reserved_auto_recall_text())
     assert reserved([]) > empty([])
+
+
+async def test_control_turn_projects_artifact_publication_as_one_capability() -> None:
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW),
+        query="Create an analysis",
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+        artifact_publication=True,
+    )
+
+    messages = await assembler.control_turn(
+        evidence=_ledger(1),
+        working=WorkingContextProjection(retained_tail_tokens=_RETAINED_TAIL),
+        tool_schema_tokens=0,
+    )
+
+    assert "artifact:analysis.md" in str(messages[0]["content"])
+    assert "Artifact URI" in str(messages[-1]["content"])
 
 
 async def test_control_turn_carries_non_citable_memory() -> None:

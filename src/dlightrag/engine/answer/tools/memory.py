@@ -103,8 +103,9 @@ def remember_tool(*, host: MemoryHost) -> AgentTool:
         "remember",
         (
             "Store one durable owner preference or fact for future conversations. "
-            "Use only for stable user-authored information or a minimally inferred repeated "
-            "preference. Never store task state, research claims, evidence, citations, "
+            "Use when the user explicitly asks to remember eligible stable information, or "
+            "for one minimally inferred repeated preference. Never store task state, "
+            "research claims, evidence, citations, "
             "transcripts, credentials, or private keys. Recall first and pass supersedes_id "
             "when correcting an existing memory."
         ),
