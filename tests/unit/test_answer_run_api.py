@@ -856,6 +856,28 @@ async def test_markdown_artifact_presentation_route_matches_its_advertised_url(
     assert response.json()["artifacts"][0]["uri"].startswith("dlightrag://answer/")
 
 
+async def test_markdown_attachment_presentation_returns_artifact_scoped_sources(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    _publish_test_artifact(run_application, filename="analysis.md")
+    assert run_application.record is not None
+    assert run_application.record.result is not None
+    result = dict(run_application.record.result)
+    descriptor = dict(result["artifacts"][0])
+    descriptor["role"] = "attachment"
+    result["artifacts"] = [descriptor]
+    result["artifact_sources"] = {_ARTIFACT_ID: result["sources"]}
+    run_application.record = _record(status="succeeded", result=result)
+    run_application.artifact_bytes = b"# Analysis\n\nEvidence [1-1]."
+
+    response = await client.get(f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}/presentation")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["references"] == [{"id": "1", "title": "report.pdf"}]
+    assert body["sources"][0]["chunks"][0]["chunk_idx"] == 1
+
+
 async def test_full_artifact_read_streams_without_a_range(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:

@@ -762,6 +762,40 @@ async def test_general_artifact_route_returns_markdown_presentation(
     application_double.answers.read_artifact.assert_awaited_once()
 
 
+async def test_markdown_attachment_presentation_projects_its_own_citation_sources(
+    client: AsyncClient, service: AsyncMock, application_double: AsyncMock
+) -> None:
+    result = _with_primary_report(stored_result(answer=""), answer="")
+    descriptor = result["artifacts"][0]
+    descriptor.update(role="attachment", filename="analysis.md", label="Analysis")
+    source = dict(result["sources"][0])
+    source["chunks"] = [
+        {
+            "chunk_id": "chunk-1",
+            "chunk_idx": 1,
+            "page_number": 3,
+            "content": "Grounded detail.",
+            "highlight_phrases": None,
+            "has_visual": False,
+        }
+    ]
+    result["artifact_sources"] = {_REPORT_RESOURCE: [source]}
+    service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
+    application_double.answers.read_artifact = AsyncMock(
+        return_value=b"# Analysis\n\nGrounded detail [1-1]."
+    )
+
+    response = await client.get(
+        f"/web/api/answer/{RUN_ID}/artifacts/{_REPORT_RESOURCE}/presentation"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [source["id"] for source in body["sources"]] == ["1"]
+    assert body["sources"][0]["chunks"][0]["chunk_idx"] == 1
+    assert 'data-ref="1" data-chunk="1"' in body["parts"][0]["html"]
+
+
 async def test_browser_artifact_data_is_attachment_nosniff_and_no_store(
     client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:

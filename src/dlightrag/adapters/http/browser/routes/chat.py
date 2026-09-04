@@ -55,7 +55,10 @@ from dlightrag.application.answer_runs import (
     ChildRosterPageRequest,
     IdempotencyKeyConflict,
 )
-from dlightrag.application.answer_runs.results import project_answer_result, project_report_sources
+from dlightrag.application.answer_runs.results import (
+    project_answer_result,
+    project_artifact_sources,
+)
 from dlightrag.application.answer_runs.sources import SourceDownloadLinkBuilder
 from dlightrag.application.corpus_admin import normalize_workspace_ids
 from dlightrag.application.web_conversations import (
@@ -488,16 +491,13 @@ async def answer_artifact_presentation(
         run_id=run_id,
         artifact_url_prefix="/web/api/answer",
     )
-    sources = (
-        project_report_sources(
-            turn.run.result,
-            source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
-            downloadable_workspaces=downloadable,
-            visual_workspaces=visual,
-            image_url_prefix=WEB_IMAGE_URL_BASE,
-        )
-        if descriptor.get("role") == "primary_report"
-        else []
+    sources = project_artifact_sources(
+        turn.run.result,
+        resource_id=resource_id,
+        source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
+        downloadable_workspaces=downloadable,
+        visual_workspaces=visual,
+        image_url_prefix=WEB_IMAGE_URL_BASE,
     )
     response.headers["Cache-Control"] = "private, no-store"
     return build_answer_presentation(

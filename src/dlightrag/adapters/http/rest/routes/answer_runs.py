@@ -55,7 +55,7 @@ from dlightrag.application.answer_runs.resource_links import answer_link_resourc
 from dlightrag.application.answer_runs.results import (
     answer_parts_from_markdown,
     project_answer_result,
-    project_report_sources,
+    project_artifact_sources,
 )
 from dlightrag.application.answer_runs.sources import SourceDownloadLinkBuilder
 from dlightrag.application.config import AnswerConfig
@@ -390,15 +390,12 @@ async def read_answer_artifact_presentation(
         run_id=run_id,
         artifact_url_prefix="/answer",
     )
-    report_sources = (
-        project_report_sources(
-            record.result or {},
-            source_link_builder=SourceDownloadLinkBuilder(),
-            downloadable_workspaces=downloadable,
-            visual_workspaces=visual,
-        )
-        if descriptor.get("role") == "primary_report"
-        else []
+    artifact_sources = project_artifact_sources(
+        record.result or {},
+        resource_id=resource_id,
+        source_link_builder=SourceDownloadLinkBuilder(),
+        downloadable_workspaces=downloadable,
+        visual_workspaces=visual,
     )
     projected.update(
         answer=markdown,
@@ -409,9 +406,9 @@ async def read_answer_artifact_presentation(
         ),
         contexts={},
         references=[
-            {"id": source.id, "title": source.title or "Source"} for source in report_sources
+            {"id": source.id, "title": source.title or "Source"} for source in artifact_sources
         ],
-        sources=[source.model_dump() for source in report_sources],
+        sources=[source.model_dump() for source in artifact_sources],
         evidence_images=[],
     )
     response.headers["Cache-Control"] = "private, no-store"

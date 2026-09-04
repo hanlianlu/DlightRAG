@@ -126,7 +126,7 @@ def store_answer_result(
     image_descriptions: Sequence[str],
     artifacts: Sequence[Mapping[str, Any]] = (),
     artifact_outcome: Mapping[str, Any] | None = None,
-    report_sources: Sequence[SourceReference] = (),
+    artifact_sources: Mapping[str, Sequence[SourceReference]] | None = None,
 ) -> dict[str, Any]:
     """Store one canonical Markdown Answer and transport-neutral identities."""
     workspaces = _image_workspaces(sources)
@@ -144,9 +144,11 @@ def store_answer_result(
         "image_descriptions": list(image_descriptions),
         "artifacts": [dict(item) for item in artifacts],
         "artifact_outcome": dict(artifact_outcome or {"status": "complete", "issues": []}),
-        "report_sources": dump_answer_snapshot(list(report_sources))["sources"]
-        if report_sources
-        else [],
+        "artifact_sources": {
+            str(resource_id): dump_answer_snapshot(list(source_values))["sources"]
+            for resource_id, source_values in (artifact_sources or {}).items()
+            if source_values
+        },
     }
 
 
@@ -293,17 +295,21 @@ def answer_parts_from_markdown(
     return [part for part in result if part.get("type") != "markdown" or part.get("text")]
 
 
-def project_report_sources(
+def project_artifact_sources(
     stored: Mapping[str, Any],
     *,
+    resource_id: str,
     source_link_builder: SourceDownloadLinkBuilder | None = None,
     downloadable_workspaces: set[str] | None = None,
     visual_workspaces: set[str] | None = None,
     image_url_prefix: str = IMAGE_URL_PREFIX,
 ) -> list[SourceReferencePayload]:
+    """Project citation sources belonging to one Markdown Artifact."""
+    snapshots = stored.get("artifact_sources")
+    source_values = snapshots.get(resource_id, []) if isinstance(snapshots, Mapping) else []
     return project_source_payloads(
         load_answer_snapshot(
-            {"sources": stored.get("report_sources") or []},
+            {"sources": source_values},
             image_url_prefix=image_url_prefix,
         ),
         resolver=source_link_builder,
@@ -526,7 +532,7 @@ __all__ = [
     "Reference",
     "answer_parts_from_markdown",
     "project_answer_result",
-    "project_report_sources",
+    "project_artifact_sources",
     "restore_answer_result",
     "store_answer_result",
 ]

@@ -254,7 +254,7 @@ HTTP 202:
 | `GET /answer/{run_id}/events` | Reconnectable SSE; resume with `Last-Event-ID` or integer `after`. |
 | `GET /answer/{run_id}/artifacts` | List stored-result Artifact descriptors/outcome; 409 before a result exists. |
 | `GET /answer/{run_id}/artifacts/{resource_id}` | Stream Artifact bytes with Range support; `download=true` forces attachment. |
-| `GET /answer/{run_id}/artifacts/{resource_id}/presentation` | Project an available Markdown Artifact as typed `AnswerResponse`. |
+| `GET /answer/{run_id}/artifacts/{resource_id}/presentation` | Project an available Markdown Artifact as typed `AnswerResponse`, including that Artifact's validated citation sources. |
 | `DELETE /answer/{run_id}` | Idempotent cancellation; 200 if terminal, otherwise 202. |
 | `POST /answer/{run_id}/steer` | Queue an instruction for live Research. |
 | `POST /answer/{run_id}/follow-up` | Create a child run using the selected terminal answer as context. |

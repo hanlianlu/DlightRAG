@@ -45,9 +45,11 @@ from dlightrag.engine.answer.execution import (
 from dlightrag.engine.answer.execution.executor import (
     _close_execution_resources,
     _memory_recall_allowed,
+    _stage_publications,
 )
 from dlightrag.engine.answer.fast import ensure_session_lane
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
+from dlightrag.engine.answer.publication import validate_publication
 from dlightrag.engine.answer.resources import ResourceInput
 from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.runtime import (
@@ -107,6 +109,64 @@ def _executor() -> AnswerExecutor:
         telemetry=NOOP_TELEMETRY,
         model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
     )
+
+
+def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "report.md").write_text("Primary fact [1-1].", encoding="utf-8")
+    (root / "appendix.md").write_text("Appendix fact [2-1].", encoding="utf-8")
+    plan = validate_publication(
+        root,
+        answer=("[View report](artifact:report.md) [View appendix](artifact:appendix.md)"),
+    )
+    contexts = {
+        "chunks": [
+            {
+                "chunk_id": "chunk-primary",
+                "reference_id": "1",
+                "file_path": "primary.pdf",
+                "content": "Primary fact.",
+                "_workspace": "default",
+                "full_doc_id": "doc-primary",
+                "metadata": {
+                    "source_uri": "local://default/primary.pdf",
+                    "source_download_locator": "/private/primary.pdf",
+                    "source_file_name": "primary.pdf",
+                },
+            },
+            {
+                "chunk_id": "chunk-appendix",
+                "reference_id": "2",
+                "file_path": "appendix.pdf",
+                "content": "Appendix fact.",
+                "_workspace": "default",
+                "full_doc_id": "doc-appendix",
+                "metadata": {
+                    "source_uri": "local://default/appendix.pdf",
+                    "source_download_locator": "/private/appendix.pdf",
+                    "source_file_name": "appendix.pdf",
+                },
+            },
+        ]
+    }
+
+    publications, descriptors, artifact_sources = _stage_publications(
+        plan=plan,
+        answer=plan.answer,
+        contexts=contexts,
+    )
+
+    resource_by_filename = {
+        str(descriptor["filename"]): str(descriptor["resource_id"]) for descriptor in descriptors
+    }
+    assert [source.id for source in artifact_sources[resource_by_filename["report.md"]]] == ["1"]
+    assert [source.id for source in artifact_sources[resource_by_filename["appendix.md"]]] == ["2"]
+    content_by_filename = {
+        publication.filename: publication.content for publication in publications
+    }
+    assert content_by_filename["report.md"] == b"Primary fact [1-1]."
+    assert content_by_filename["appendix.md"] == b"Appendix fact [2-1]."
 
 
 def test_acceptance_research_tools_include_every_configured_non_resource_surface() -> None:

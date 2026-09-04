@@ -194,6 +194,76 @@ def test_markdown_primary_report_uses_the_general_artifact_canvas(page: Page) ->
     assert page.locator("#report-panel").count() == 0
 
 
+def test_markdown_attachment_citation_opens_its_source_beside_the_canvas(page: Page) -> None:
+    page.set_viewport_size({"width": 1440, "height": 900})
+    artifact = _artifact_wire(
+        presentation="markdown", media_type="text/markdown", filename="analysis.md"
+    )
+    artifact["role"] = "attachment"
+    _install_history(page, _presentation_wire(artifact))
+
+    page.route(
+        f"**/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}/presentation",
+        lambda route: route.fulfill(
+            json={
+                "answer_text": "# Analysis\n\nRevenue increased [1-1].",
+                "parts": [
+                    {
+                        "type": "markdown",
+                        "text": "# Analysis\n\nRevenue increased [1-1].",
+                        "html": (
+                            "<h1>Analysis</h1><p>Revenue increased "
+                            '<cite class="citation-badge" data-ref="1" data-chunk="1" '
+                            'role="button" tabindex="0">1-1</cite>.</p>'
+                        ),
+                        "artifact": None,
+                        "evidence_image": None,
+                        "inline": False,
+                    }
+                ],
+                "sources": [
+                    {
+                        "id": "1",
+                        "title": "report.pdf",
+                        "source_url": None,
+                        "download_url": "/web/api/files/raw/doc-report?workspace=default",
+                        "chunks": [
+                            {
+                                "chunk_idx": 1,
+                                "page_number": 2,
+                                "content_html": "<p>Revenue evidence</p>",
+                                "image_url": None,
+                                "thumbnail_url": None,
+                            }
+                        ],
+                    }
+                ],
+                "evidence_images": [],
+                "artifacts": [artifact],
+                "artifact_outcome": {"status": "complete", "issues": []},
+            }
+        ),
+    )
+    _open_ready_page(page)
+    page.get_by_role("button", name="Open Artifact").click()
+    citation = page.locator("#artifact-canvas .citation-badge[data-ref='1'][data-chunk='1']")
+    citation.wait_for(timeout=10000)
+
+    citation.click()
+
+    panel = page.locator('#panel.open[data-panel-kind="sources"]')
+    panel.wait_for(timeout=10000)
+    selected = panel.locator('[data-ref="1"][data-expanded] [data-chunk="1"]')
+    selected.wait_for(timeout=10000)
+    assert "Revenue evidence" in selected.inner_text()
+    assert page.locator("#artifact-canvas").evaluate(
+        "element => element.classList.contains('open')"
+    )
+    panel_box = panel.bounding_box()
+    assert panel_box is not None
+    assert panel_box["width"] >= 320
+
+
 def test_desktop_conversation_area_dismisses_a_lone_artifact_canvas(page: Page) -> None:
     page.set_viewport_size({"width": 1440, "height": 900})
     _install_history(

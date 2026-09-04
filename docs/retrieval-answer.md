@@ -262,9 +262,13 @@ context:
 - cited sources/references are derived from the surviving inline markers.
 
 Finalization also derives `evidence_images` and ordered Markdown/Artifact/image
-`parts`; transports never trust model-generated Markdown image URLs. Streaming
-may expose tokens immediately, but the final `done` result contains normalized
-text and authoritative metadata.
+`parts`; transports never trust model-generated Markdown image URLs. Every
+published Markdown Artifact is citation-finalized against the same admitted
+context and stores its cited sources under that Artifact's resource identity.
+Artifact presentations therefore resolve their own citation indexes without
+borrowing sources from the chat Answer or another Artifact. Streaming may expose
+tokens immediately, but the final `done` result contains normalized text and
+authoritative metadata.
 
 Semantic highlights run only after citation validation. They enrich cited source
 chunks with phrases from the finalized answer. Web requests them by default;

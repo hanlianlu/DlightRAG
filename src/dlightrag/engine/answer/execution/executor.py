@@ -1526,7 +1526,7 @@ class AnswerExecutor:
                         capture_sensitive_data=self._telemetry.capture_sensitive_data,
                     )
                 )
-                publications, artifact_descriptors, report_sources = _stage_publications(
+                publications, artifact_descriptors, artifact_sources = _stage_publications(
                     plan=publication,
                     answer=finalized.answer,
                     contexts=contexts,
@@ -1544,7 +1544,7 @@ class AnswerExecutor:
                     image_descriptions=run.image_descriptions,
                     artifacts=artifact_descriptors,
                     artifact_outcome=publication.outcome,
-                    report_sources=report_sources,
+                    artifact_sources=artifact_sources,
                 )
                 if fast_boundaries is not None:
                     await fast_boundaries.settle_retrieval(contexts)
@@ -2098,19 +2098,19 @@ def _stage_publications(
     answer: str,
     contexts: RetrievalContexts,
     require_answer: bool = False,
-) -> tuple[list[PendingPublication], list[dict[str, Any]], list[Any]]:
+) -> tuple[list[PendingPublication], list[dict[str, Any]], dict[str, list[Any]]]:
     has_report = any(item.role == "primary_report" for item in plan.artifacts)
     if require_answer and is_empty_answer(answer=answer, has_primary_report=has_report):
         raise RunExecutionError("empty_answer", "The run produced no answer.")
     publications: list[PendingPublication] = []
-    report_sources: list[Any] = []
+    artifact_sources: dict[str, list[Any]] = {}
     descriptors = [dict(item) for item in plan.descriptors]
     for item in plan.artifacts:
         payload = item.content
-        if item.role == "primary_report" and item.media_type == "text/markdown":
+        if item.media_type == "text/markdown":
             cleaned = finalize_answer(payload.decode("utf-8"), contexts)
             payload = cleaned.answer.encode("utf-8")
-            report_sources = list(cleaned.sources)
+            artifact_sources[item.resource_id] = list(cleaned.sources)
             for descriptor in descriptors:
                 if descriptor.get("resource_id") == item.resource_id:
                     descriptor["byte_size"] = len(payload)
@@ -2125,7 +2125,7 @@ def _stage_publications(
                 content=payload,
             )
         )
-    return publications, descriptors, report_sources
+    return publications, descriptors, artifact_sources
 
 
 def answer_trace_output(
