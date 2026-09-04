@@ -232,6 +232,18 @@ def _required_member_hashes(
         raise ValueError(f"{artifact}: must contain LICENSE and NOTICE") from exc
 
 
+def _reject_forbidden_members(names: Iterable[str], *, artifact: str) -> None:
+    forbidden = sorted(
+        name
+        for name in names
+        if ".DS_Store" in Path(name).parts
+        or "__pycache__" in Path(name).parts
+        or Path(name).suffix in {".pyc", ".pyo"}
+    )
+    if forbidden:
+        raise ValueError(f"{artifact}: contains forbidden generated files {forbidden}")
+
+
 def _top_level_from_wheel(names: list[str]) -> frozenset[str]:
     top_level: set[str] = set()
     for name in names:
@@ -262,7 +274,9 @@ def _wheel_facts(
     rules_by_distribution: dict[str, tuple[ImportRule, ...]],
 ) -> WheelFacts:
     with zipfile.ZipFile(path) as wheel:
-        metadata_paths = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
+        member_names = wheel.namelist()
+        _reject_forbidden_members(member_names, artifact=path.name)
+        metadata_paths = [name for name in member_names if name.endswith(".dist-info/METADATA")]
         if len(metadata_paths) != 1:
             raise ValueError(f"{path.name}: expected one METADATA file")
         distribution, version, requirements, extras, license_files = _metadata_facts(
@@ -500,6 +514,7 @@ def _sdist_facts(
 ) -> SdistFacts:
     with tarfile.open(path, "r:gz") as sdist:
         members = [member for member in sdist.getmembers() if member.isfile()]
+        _reject_forbidden_members((member.name for member in members), artifact=path.name)
         metadata_members = [member for member in members if member.name.endswith("/PKG-INFO")]
         if len(metadata_members) != 1:
             raise ValueError(f"{path.name}: expected one PKG-INFO file")
@@ -588,27 +603,34 @@ def verify_workspace_definition(workspace_root: Path) -> None:
     versions: set[str] = set()
     direct_dependencies: dict[str, set[str]] = {}
 
-    for distribution, (relative_path, _, package_path) in _WORKSPACE_MANIFESTS.items():
+    for distribution, (relative_path, _, _) in _WORKSPACE_MANIFESTS.items():
         manifest_path = workspace_root / relative_path
         try:
             config = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
             project = config["project"]
             build_system = config["build-system"]
-            wheel_target = config["tool"]["hatch"]["build"]["targets"]["wheel"]
+            uv_build = config["tool"]["uv"]["build-backend"]
         except (KeyError, TypeError) as exc:
             raise ValueError(f"{relative_path}: incomplete workspace manifest") from exc
         if _normalize_distribution(str(project.get("name") or "")) != distribution:
             raise ValueError(f"{relative_path}: unexpected project name")
         version = str(project.get("version") or "")
         versions.add(version)
-        if project.get("requires-python") != ">=3.14,<3.15":
-            raise ValueError(f"{distribution}: Python requirement must be >=3.14,<3.15")
+        if project.get("requires-python") != ">=3.14":
+            raise ValueError(f"{distribution}: Python requirement must be >=3.14")
         if project.get("license") != "Apache-2.0":
             raise ValueError(f"{distribution}: license must be Apache-2.0")
-        if build_system.get("build-backend") != "hatchling.build":
-            raise ValueError(f"{distribution}: build backend must be Hatchling")
-        if wheel_target.get("packages") != [package_path]:
-            raise ValueError(f"{distribution}: wheel must own only {package_path}")
+        if build_system.get("build-backend") != "uv_build":
+            raise ValueError(f"{distribution}: build backend must be uv_build")
+        if build_system.get("requires") != ["uv_build>=0.11.21"]:
+            raise ValueError(f"{distribution}: uv_build requirement must be >=0.11.21")
+        if uv_build.get("source-exclude") != ["**/.DS_Store"]:
+            raise ValueError(f"{distribution}: source build must exclude .DS_Store")
+        expected_source_include = (
+            ["compose.yaml", "examples/**"] if distribution == "dlightrag-memory" else []
+        )
+        if uv_build.get("source-include", []) != expected_source_include:
+            raise ValueError(f"{distribution}: unexpected source distribution includes")
         dependencies = project.get("dependencies")
         if not isinstance(dependencies, list) or not all(
             isinstance(dependency, str) for dependency in dependencies
@@ -638,7 +660,7 @@ def verify_workspace_definition(workspace_root: Path) -> None:
         lock_packages = lock["package"]
     except (KeyError, TypeError) as exc:
         raise ValueError("uv.lock is missing package records") from exc
-    if lock.get("requires-python") != "==3.14.*":
+    if lock.get("requires-python") != ">=3.14":
         raise ValueError("uv.lock Python requirement differs from workspace manifests")
     if lock.get("manifest", {}).get("members") != list(_EXPECTED_PACKAGES):
         raise ValueError("uv.lock manifest members differ from the root-plus-Memory contract")

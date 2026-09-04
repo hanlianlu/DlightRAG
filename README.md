@@ -9,7 +9,7 @@ knowledge-graph and vector retrieval with metadata filtering, BM25, visual
 retrieval, reranking, citations, highlights, and durable agentic answers. The
 same runtime is available through Web, REST, MCP, and an in-process Python API.
 
-**Runtime:** Python ≥3.14.7,<3.15 · PostgreSQL 18 ecosystem · Apache-2.0
+**Runtime:** Python ≥3.14.7 · PostgreSQL 18 ecosystem · Apache-2.0
 
 ## Architecture
 

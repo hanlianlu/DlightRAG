@@ -25,6 +25,26 @@ def test_workspace_versions_are_lockstep() -> None:
     assert len(versions) == 1
 
 
+def test_workspace_requirements_use_floors_without_upper_bounds() -> None:
+    for path in _MANIFESTS:
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        project = config["project"]
+        requirements = [
+            project["requires-python"],
+            *project["dependencies"],
+            *config["build-system"]["requires"],
+        ]
+        requirements.extend(
+            requirement
+            for group in config.get("dependency-groups", {}).values()
+            for requirement in group
+        )
+
+        assert all(
+            "<" not in requirement and "~=" not in requirement for requirement in requirements
+        )
+
+
 def test_root_is_batteries_included_and_depends_only_on_standalone_memory() -> None:
     dependencies = _dependencies()
     version = _project()["version"]

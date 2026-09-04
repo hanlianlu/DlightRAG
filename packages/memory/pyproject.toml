@@ -4,7 +4,7 @@
 name = "dlightrag-memory"
 version = "2.0.4"
 description = "Reusable cross-conversation profile memory for DlightRAG"
-requires-python = ">=3.14,<3.15"
+requires-python = ">=3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
@@ -18,8 +18,10 @@ dependencies = [
 dlightrag-memory-mcp = "dlightrag_memory.mcp_server:main"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# Forward-only policy: CI verifies new backend releases; do not add an upper bound.
+requires = ["uv_build>=0.11.21"]
+build-backend = "uv_build"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/dlightrag_memory"]
+[tool.uv.build-backend]
+source-include = ["compose.yaml", "examples/**"]
+source-exclude = ["**/.DS_Store"]

@@ -48,7 +48,7 @@ jobs:
       - run: make release-check
       - run: npm --prefix frontend ci
       - run: npm --prefix frontend run build
-      - run: uv build --all-packages --out-dir dist
+      - run: uv build --all-packages --no-sources --out-dir dist
       - run: uv run python scripts/verify_workspace_wheels.py --dist dist --smoke-installed
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:

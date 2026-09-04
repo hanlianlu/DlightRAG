@@ -324,6 +324,16 @@ def test_workspace_wheel_verifier_rejects_wrong_top_level_package(tmp_path: Path
     assert "expected top-level package" in completed.stderr
 
 
+@pytest.mark.parametrize("junk_path", [".DS_Store", "__pycache__/probe.pyc", "probe.pyo"])
+def test_workspace_wheel_verifier_rejects_generated_junk(tmp_path: Path, junk_path: str) -> None:
+    _write_workspace_artifacts(tmp_path, root_additional_sources={junk_path: "junk"})
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 1
+    assert "contains forbidden generated files" in completed.stderr
+
+
 def test_workspace_wheel_verifier_requires_memory_dependency(tmp_path: Path) -> None:
     _write_workspace_artifacts(tmp_path, root_requires=_BATTERIES)
 

@@ -5,7 +5,7 @@ name = "dlightrag"
 version = "2.0.4"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
-requires-python = ">=3.14,<3.15"
+requires-python = ">=3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
@@ -97,8 +97,9 @@ dlightrag-rebuild-bm25 = "dlightrag.engine.rag.corpus.rebuild_bm25:main"
 dlightrag-rebuild-vdb = "dlightrag.engine.rag.corpus.rebuild_vdb:main"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# Forward-only policy: CI verifies new backend releases; do not add an upper bound.
+requires = ["uv_build>=0.11.21"]
+build-backend = "uv_build"
 
 [tool.uv.workspace]
 members = ["packages/memory"]
@@ -106,14 +107,9 @@ members = ["packages/memory"]
 [tool.uv.sources]
 dlightrag-memory = { workspace = true }
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/dlightrag"]
-# Built by Vite and gitignored, so hatchling would otherwise leave the UI out.
-artifacts = ["src/dlightrag/adapters/http/browser/static/app/**"]
-
-[tool.hatch.build.targets.sdist]
-include = ["src/dlightrag", "README.md", "LICENSE", "NOTICE"]
-artifacts = ["src/dlightrag/adapters/http/browser/static/app/**"]
+[tool.uv.build-backend]
+# uv_build includes generated module data even when gitignored; reject local OS metadata.
+source-exclude = ["**/.DS_Store"]
 
 [tool.ruff]
 target-version = "py314"

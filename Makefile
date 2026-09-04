@@ -148,7 +148,7 @@ release-check:
 
 workspace-wheels: frontend-build
 	rm -rf dist
-	uv build --all-packages --out-dir dist
+	uv build --all-packages --no-sources --out-dir dist
 	uv run python scripts/verify_workspace_wheels.py --dist dist --smoke-installed
 
 test-unit:
