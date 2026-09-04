@@ -25,7 +25,6 @@ def _artifact_wire(*, presentation: str, media_type: str, filename: str) -> dict
     base = f"/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}"
     return {
         "resource_id": _RESOURCE_ID,
-        "role": "primary_report",
         "media_type": media_type,
         "label": "Quarterly report",
         "filename": filename,
@@ -48,7 +47,6 @@ def _artifact_domain(*, presentation: str, media_type: str, filename: str) -> di
     base = f"/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}"
     return {
         "resourceId": _RESOURCE_ID,
-        "role": "primary_report",
         "mediaType": media_type,
         "label": "Quarterly report",
         "filename": filename,
@@ -138,7 +136,7 @@ def _open_ready_page(page: Page) -> None:
     page.wait_for_selector(".composer-input", timeout=10000)
 
 
-def test_markdown_primary_report_uses_the_general_artifact_canvas(page: Page) -> None:
+def test_markdown_artifact_uses_the_general_artifact_canvas(page: Page) -> None:
     _install_history(
         page,
         _presentation_wire(
@@ -180,7 +178,7 @@ def test_markdown_primary_report_uses_the_general_artifact_canvas(page: Page) ->
         presentation_route,
     )
     _open_ready_page(page)
-    page.get_by_role("button", name="View report").click()
+    page.get_by_role("button", name="Open Artifact").click()
 
     canvas = page.locator("#artifact-canvas")
     page.wait_for_function(
@@ -194,12 +192,11 @@ def test_markdown_primary_report_uses_the_general_artifact_canvas(page: Page) ->
     assert page.locator("#report-panel").count() == 0
 
 
-def test_markdown_attachment_citation_opens_its_source_beside_the_canvas(page: Page) -> None:
+def test_markdown_artifact_citation_opens_its_source_beside_the_canvas(page: Page) -> None:
     page.set_viewport_size({"width": 1440, "height": 900})
     artifact = _artifact_wire(
         presentation="markdown", media_type="text/markdown", filename="analysis.md"
     )
-    artifact["role"] = "attachment"
     _install_history(page, _presentation_wire(artifact))
 
     page.route(
@@ -301,7 +298,7 @@ def test_desktop_conversation_area_dismisses_a_lone_artifact_canvas(page: Page) 
         ),
     )
     _open_ready_page(page)
-    page.get_by_role("button", name="View report").click()
+    page.get_by_role("button", name="Open Artifact").click()
     page.get_by_text("Report body.").wait_for(timeout=10000)
     assert page.locator("#panel").get_attribute("data-panel-kind") is None
 
@@ -450,7 +447,7 @@ def test_active_html_is_sandboxed_and_destroyed_on_close(page: Page) -> None:
     page.route(f"**/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}", artifact_data)
     page.route("**://network.invalid/**", network_probe)
     _open_ready_page(page)
-    page.get_by_role("button", name="View report").click()
+    page.get_by_role("button", name="Open Artifact").click()
 
     canvas = page.locator("#artifact-canvas")
     iframe = canvas.locator("dl-active-artifact-frame").locator("iframe")
@@ -489,6 +486,6 @@ def test_active_html_is_sandboxed_and_destroyed_on_close(page: Page) -> None:
         timeout=10000,
     )
     assert page.locator("dl-active-artifact-frame iframe").count() == 0
-    assert page.get_by_role("button", name="View report").evaluate(
+    assert page.get_by_role("button", name="Open Artifact").evaluate(
         "element => document.activeElement === element"
     )

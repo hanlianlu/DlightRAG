@@ -144,7 +144,6 @@ class ArtifactOutcome:
 @dataclass(frozen=True, slots=True)
 class AnswerArtifact:
     resource_id: str
-    role: Literal["primary_report", "attachment"]
     media_type: str
     label: str
     filename: str
@@ -163,11 +162,9 @@ class AnswerArtifact:
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> AnswerArtifact:
         issue = payload.get("issue")
-        role = payload.get("role")
         status = payload.get("status")
         return cls(
             resource_id=str(payload["resource_id"]),
-            role=role if role in {"primary_report", "attachment"} else "attachment",
             media_type=str(payload.get("media_type") or "application/octet-stream"),
             label=str(payload.get("label") or payload.get("filename") or "Artifact"),
             filename=str(payload.get("filename") or "artifact"),

@@ -91,7 +91,6 @@ def test_artifact_source_snapshots_round_trip_by_resource_id() -> None:
 def test_parts_derive_artifact_and_inline_evidence_placements() -> None:
     artifact = {
         "resource_id": "artifact-report",
-        "role": "primary_report",
         "media_type": "text/markdown",
         "label": "Report",
         "filename": "report.md",
@@ -132,7 +131,7 @@ def test_parts_derive_artifact_and_inline_evidence_placements() -> None:
         "evidence_image",
         "markdown",
     ]
-    assert projected["parts"][1]["artifact"]["role"] == "primary_report"
+    assert "role" not in projected["parts"][1]["artifact"]
     assert projected["parts"][1]["artifact"]["data_url"].endswith(
         "/run-1/artifacts/artifact-report"
     )

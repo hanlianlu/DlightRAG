@@ -789,16 +789,15 @@ def _publish_test_artifact(
     *,
     media_type: str = "text/markdown",
     presentation: str = "markdown",
-    filename: str = "report.md",
+    filename: str = "analysis.md",
     content: bytes = b"0123456789",
 ) -> None:
     result = _stored_result()
     result["artifacts"] = [
         {
             "resource_id": _ARTIFACT_ID,
-            "role": "primary_report",
             "media_type": media_type,
-            "label": "Report",
+            "label": "Analysis",
             "filename": filename,
             "byte_size": len(content),
             "digest": "a" * 64,
@@ -832,7 +831,7 @@ async def test_artifact_list_returns_typed_owner_links_without_bytes(
 
     assert response.status_code == 200
     artifact = response.json()["artifacts"][0]
-    assert artifact["role"] == "primary_report"
+    assert "role" not in artifact
     assert artifact["uri"].startswith("dlightrag://answer/")
     assert artifact["data_url"].endswith(f"/{_RUN_ID}/artifacts/{_ARTIFACT_ID}")
     assert "content" not in artifact
@@ -856,16 +855,13 @@ async def test_markdown_artifact_presentation_route_matches_its_advertised_url(
     assert response.json()["artifacts"][0]["uri"].startswith("dlightrag://answer/")
 
 
-async def test_markdown_attachment_presentation_returns_artifact_scoped_sources(
+async def test_markdown_presentation_returns_artifact_scoped_sources(
     client: AsyncClient, run_application: _RunApplication
 ) -> None:
     _publish_test_artifact(run_application, filename="analysis.md")
     assert run_application.record is not None
     assert run_application.record.result is not None
     result = dict(run_application.record.result)
-    descriptor = dict(result["artifacts"][0])
-    descriptor["role"] = "attachment"
-    result["artifacts"] = [descriptor]
     result["artifact_sources"] = {_ARTIFACT_ID: result["sources"]}
     run_application.record = _record(status="succeeded", result=result)
     run_application.artifact_bytes = b"# Analysis\n\nEvidence [1-1]."

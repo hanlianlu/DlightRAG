@@ -1,13 +1,14 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {expect} from '@esm-bundle/chai';
-import type {AnswerArtifact, AnswerPresentation} from '../api/conversations.ts';
+import type {AnswerArtifact} from '../api/conversations.ts';
 import {defineDesignSystemElements} from '../design-system/index.ts';
 import './artifact-canvas.ts';
 
 defineDesignSystemElements();
-import type {DlArtifactCanvas} from './artifact-canvas.ts';
+
 import type {DlActiveArtifactFrame} from './active-artifact-frame.ts';
+import type {DlArtifactCanvas} from './artifact-canvas.ts';
 import './active-artifact-frame.ts';
 
 const originalFetch = window.fetch;
@@ -29,7 +30,6 @@ function desktopMedia(query: string): MediaQueryList {
 function htmlArtifact(): AnswerArtifact {
   return {
     resourceId: 'artifact-html',
-    role: 'primary_report',
     mediaType: 'text/html',
     label: 'Interactive report',
     filename: 'report.html',

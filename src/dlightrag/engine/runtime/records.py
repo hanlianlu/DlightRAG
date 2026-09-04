@@ -32,7 +32,6 @@ type ArtifactReferenceKind = Literal[
     "current_attachment",
     "history_attachment",
     "fetched_resource",
-    "primary_report",
     "published_artifact",
 ]
 #: How a graceful shutdown left one owned run.

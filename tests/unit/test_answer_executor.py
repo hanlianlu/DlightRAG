@@ -114,11 +114,11 @@ def _executor() -> AnswerExecutor:
 def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
-    (root / "report.md").write_text("Primary fact [1-1].", encoding="utf-8")
+    (root / "analysis.md").write_text("Primary fact [1-1].", encoding="utf-8")
     (root / "appendix.md").write_text("Appendix fact [2-1].", encoding="utf-8")
     plan = validate_publication(
         root,
-        answer=("[View report](artifact:report.md) [View appendix](artifact:appendix.md)"),
+        answer=("[Open analysis](artifact:analysis.md) [Open appendix](artifact:appendix.md)"),
     )
     contexts = {
         "chunks": [
@@ -155,17 +155,18 @@ def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) ->
         plan=plan,
         answer=plan.answer,
         contexts=contexts,
+        require_answer=True,
     )
 
     resource_by_filename = {
         str(descriptor["filename"]): str(descriptor["resource_id"]) for descriptor in descriptors
     }
-    assert [source.id for source in artifact_sources[resource_by_filename["report.md"]]] == ["1"]
+    assert [source.id for source in artifact_sources[resource_by_filename["analysis.md"]]] == ["1"]
     assert [source.id for source in artifact_sources[resource_by_filename["appendix.md"]]] == ["2"]
     content_by_filename = {
         publication.filename: publication.content for publication in publications
     }
-    assert content_by_filename["report.md"] == b"Primary fact [1-1]."
+    assert content_by_filename["analysis.md"] == b"Primary fact [1-1]."
     assert content_by_filename["appendix.md"] == b"Appendix fact [2-1]."
 
 

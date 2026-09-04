@@ -151,7 +151,6 @@ function presentationImageWire(image: PresentationImage): Record<string, unknown
 function artifactWire(artifact: AnswerArtifact): Record<string, unknown> {
   return {
     resource_id: artifact.resourceId,
-    role: artifact.role,
     media_type: artifact.mediaType,
     label: artifact.label,
     filename: artifact.filename,

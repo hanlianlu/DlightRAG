@@ -24,7 +24,7 @@ export interface ArtifactCanvasStateDetail {
 
 const TEXT_PREVIEW_BYTES = 1024 * 1024;
 
-/** General presentation surface for every Answer Artifact, including Primary Reports. */
+/** General presentation surface for every presentable Answer Artifact. */
 export class DlArtifactCanvas extends LightElement {
   static properties = {
     activePreviewEnabled: {type: Boolean, attribute: 'active-preview-enabled'},

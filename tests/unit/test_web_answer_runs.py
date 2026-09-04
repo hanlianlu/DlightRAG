@@ -65,19 +65,18 @@ _BODY = {
 _REPORT_RESOURCE = "artifact-report"
 
 
-def _with_primary_report(result: dict[str, Any], *, answer: str | None = None) -> dict[str, Any]:
+def _with_artifact(result: dict[str, Any], *, answer: str | None = None) -> dict[str, Any]:
     result["answer"] = (
         answer
         if answer is not None
-        else (f"Revenue increased [1]. [View report](artifact:{_REPORT_RESOURCE})")
+        else (f"Revenue increased [1]. [Open analysis](artifact:{_REPORT_RESOURCE})")
     )
     result["artifacts"] = [
         {
             "resource_id": _REPORT_RESOURCE,
-            "role": "primary_report",
             "media_type": "text/markdown",
-            "label": "View report",
-            "filename": "report.md",
+            "label": "Open analysis",
+            "filename": "analysis.md",
             "byte_size": 13,
             "digest": "a" * 64,
             "presentation": "markdown",
@@ -742,7 +741,7 @@ async def test_a_run_this_principal_does_not_own_is_404(
 async def test_general_artifact_route_returns_markdown_presentation(
     client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:
-    result = _with_primary_report(
+    result = _with_artifact(
         stored_result(answer=""), answer=f"[View report](artifact:{_REPORT_RESOURCE})"
     )
     service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
@@ -758,16 +757,16 @@ async def test_general_artifact_route_returns_markdown_presentation(
     assert body["answer_text"] == "# Title\n\nBody"
     assert "<h1>Title</h1>" in body["parts"][0]["html"]
     assert "<p>Body</p>" in body["parts"][0]["html"]
-    assert body["artifacts"][0]["role"] == "primary_report"
+    assert "role" not in body["artifacts"][0]
     application_double.answers.read_artifact.assert_awaited_once()
 
 
-async def test_markdown_attachment_presentation_projects_its_own_citation_sources(
+async def test_markdown_artifact_presentation_projects_its_own_citation_sources(
     client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:
-    result = _with_primary_report(stored_result(answer=""), answer="")
+    result = _with_artifact(stored_result(answer=""), answer="")
     descriptor = result["artifacts"][0]
-    descriptor.update(role="attachment", filename="analysis.md", label="Analysis")
+    descriptor.update(filename="analysis.md", label="Analysis")
     source = dict(result["sources"][0])
     source["chunks"] = [
         {
@@ -799,7 +798,7 @@ async def test_markdown_attachment_presentation_projects_its_own_citation_source
 async def test_browser_artifact_data_is_attachment_nosniff_and_no_store(
     client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:
-    result = _with_primary_report(stored_result())
+    result = _with_artifact(stored_result())
     result["artifacts"][0]["media_type"] = "text/html"
     result["artifacts"][0]["presentation"] = "html"
     result["artifacts"][0]["filename"] = "report.html"
@@ -823,7 +822,7 @@ async def test_browser_artifact_data_is_attachment_nosniff_and_no_store(
 async def test_browser_svg_artifact_is_inline_only_under_an_inert_document_policy(
     client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:
-    result = _with_primary_report(stored_result())
+    result = _with_artifact(stored_result())
     result["artifacts"][0].update(
         media_type="image/svg+xml", presentation="image", filename="chart.svg"
     )
@@ -861,7 +860,7 @@ async def test_general_artifact_presentation_is_404_without_a_descriptor(
 async def test_general_artifact_presentation_rejects_an_unavailable_descriptor(
     client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:
-    result = _with_primary_report(stored_result())
+    result = _with_artifact(stored_result())
     result["artifacts"][0]["status"] = "unavailable"
     service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
     application_double.answers.read_artifact = AsyncMock(return_value=b"must not be read")
@@ -1265,21 +1264,20 @@ def test_a_succeeded_turn_renders_from_the_run_result() -> None:
     assert "principal_id" not in turn.model_dump_json()
 
 
-def test_a_succeeded_turn_exposes_primary_report_as_an_artifact_part() -> None:
-    result = _with_primary_report(stored_result())
+def test_a_succeeded_turn_exposes_a_published_artifact_part() -> None:
+    result = _with_artifact(stored_result())
     turn = project_conversation_turn(
         linked_turn(answer_run(status="succeeded", result=result)),
     )
 
     assert turn.presentation is not None
-    assert turn.presentation.artifacts[0].role == "primary_report"
     assert turn.presentation.parts[-1].artifact is not None
     assert turn.presentation.parts[-1].artifact.resource_id == _REPORT_RESOURCE
     assert turn.assistant_text == result["answer"]
 
 
-def test_the_done_event_carries_primary_report_only_as_an_artifact() -> None:
-    result = _with_primary_report(stored_result())
+def test_the_done_event_carries_the_published_artifact() -> None:
+    result = _with_artifact(stored_result())
     done = render_done_event(
         {"status": "succeeded", "result": result},
         downloadable_workspaces=None,
@@ -1288,10 +1286,9 @@ def test_the_done_event_carries_primary_report_only_as_an_artifact() -> None:
     )
 
     assert done.presentation is not None
-    assert done.presentation.artifacts[0].role == "primary_report"
     assert done.presentation.artifacts[0].data_url is not None
     assert done.presentation.artifacts[0].data_url.startswith("/web/api/answer/")
-    assert "primary_report" not in done.presentation.model_dump()
+    assert "role" not in done.presentation.model_dump()["artifacts"][0]
 
 
 async def test_terminal_attachment_is_read_through_the_answer_service() -> None:

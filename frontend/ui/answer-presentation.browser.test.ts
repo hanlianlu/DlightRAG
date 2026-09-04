@@ -97,7 +97,6 @@ it('expands and collapses long References lists locally per Answer', async () =>
 it('renders Artifact intent and semantic Visual Evidence in approved order', async () => {
   const artifact = {
     resourceId: 'artifact-report',
-    role: 'primary_report' as const,
     mediaType: 'text/markdown',
     label: 'Quarterly report',
     filename: 'report.md',

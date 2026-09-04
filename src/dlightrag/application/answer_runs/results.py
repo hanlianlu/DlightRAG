@@ -61,7 +61,6 @@ class ArtifactOutcome:
 @dataclass(frozen=True, slots=True)
 class AnswerArtifact:
     resource_id: str
-    role: Literal["primary_report", "attachment"]
     media_type: str
     label: str
     filename: str
@@ -328,9 +327,6 @@ def _public_artifact(
     issue = item.get("issue")
     value: dict[str, Any] = {
         "resource_id": resource_id,
-        "role": item.get("role")
-        if item.get("role") in {"primary_report", "attachment"}
-        else "attachment",
         "media_type": str(item.get("media_type") or "application/octet-stream"),
         "label": str(item.get("label") or item.get("filename") or "Artifact"),
         "filename": str(item.get("filename") or "artifact"),
@@ -452,7 +448,6 @@ def _artifact_model(value: Mapping[str, Any]) -> AnswerArtifact:
     )
     return AnswerArtifact(
         resource_id=str(value["resource_id"]),
-        role=value["role"],
         media_type=str(value["media_type"]),
         label=str(value["label"]),
         filename=str(value["filename"]),

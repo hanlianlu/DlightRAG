@@ -185,9 +185,10 @@ run-local registry may include:
   return.
 
 Tool errors return to the model for correction; they do not terminate research.
-A no-tool assistant turn ends the run, and that text is the answer. One explicitly
-referenced, nonblank `artifacts/report.md`, `.html`, or `.pdf` may become the
-Primary Report Artifact. There is no hidden finalizer call.
+A no-tool assistant turn ends the run, and that text is the answer. Files become
+Published Artifacts only when the final answer or another published Markdown or
+HTML Artifact explicitly references them with a relative `artifact:` URI. There
+is no reserved filename, privileged Artifact role, or hidden finalizer call.
 
 Both modes produce the same canonical result: ordered `parts`, cited `sources`,
 `references`, `evidence_images`, Artifacts/outcome, usage, and Evidence counts.

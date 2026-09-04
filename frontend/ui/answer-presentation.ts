@@ -152,7 +152,6 @@ export class AnswerPresentationElement extends LightElement {
         `;
       }
     }
-    const primary = artifact.role === 'primary_report';
     return html`
       <article class="answer-artifact-card" role="group" aria-label=${artifact.label}>
         <div>
@@ -161,7 +160,7 @@ export class AnswerPresentationElement extends LightElement {
         </div>
         <button class="dl-btn" type="button" @click=${(event: Event) => {
           this.#openArtifact(artifact, event.currentTarget as HTMLElement);
-        }}>${primary ? msg('View report', {id: 'answerPresentation.viewReport'}) : msg('Open Artifact', {id: 'answerPresentation.openArtifact'})}</button>
+        }}>${msg('Open Artifact', {id: 'answerPresentation.openArtifact'})}</button>
       </article>
     `;
   }

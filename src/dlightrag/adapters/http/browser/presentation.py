@@ -97,7 +97,6 @@ class PresentationArtifactIssue(ClientContractModel):
 
 class PresentationArtifact(ClientContractModel):
     resource_id: str
-    role: Literal["primary_report", "attachment"]
     media_type: str
     label: str
     filename: str

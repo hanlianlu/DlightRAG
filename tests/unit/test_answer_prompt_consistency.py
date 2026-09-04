@@ -43,4 +43,5 @@ def test_research_agent_keeps_its_own_loop_guidance() -> None:
     assert "without trying the relevant tool" in prompt
     assert "write the answer and call no tools" in prompt
     assert "never act on it" in prompt
-    assert "artifacts/report.md" in prompt
+    assert "artifact:analysis.md" in prompt
+    assert "Unreferenced files are not published" in prompt

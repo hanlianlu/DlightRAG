@@ -125,7 +125,6 @@ class ArtifactOutcomeResponse(ClientContractModel):
 
 class AnswerArtifactResponse(ClientContractModel):
     resource_id: str
-    role: Literal["primary_report", "attachment"]
     media_type: str
     label: str
     filename: str

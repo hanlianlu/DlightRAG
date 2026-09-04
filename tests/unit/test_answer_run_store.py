@@ -63,11 +63,11 @@ class TestMigrationDeclaration:
         assert "recovery_count" not in statements
         assert "dlightrag_answer_artifacts" not in statements
 
-    def test_final_baseline_has_publication_kinds_and_no_compatibility_alters(self) -> None:
+    def test_schema_enforces_one_durable_publication_kind(self) -> None:
         statements = _all_statements()
-        assert "primary_report" in statements
-        assert "published_artifact" in statements
-        assert "ALTER TABLE" not in statements
+        assert "'published_artifact'" in statements
+        assert ANSWER_RUN_MIGRATIONS[-1].version == "write_model_published_artifact_kind"
+        assert "DROP CONSTRAINT dlightrag_answer_run_artifacts_kind_check" in statements
 
     def test_run_artifacts_reference_blobs_not_a_content_table(self) -> None:
         statements = _all_statements()

@@ -69,7 +69,6 @@ from dlightrag.engine.answer.citations.streaming import AnswerStream
 from dlightrag.engine.answer.compaction import CompactionCoordinator
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.images import AnswerImageBudget
-from dlightrag.engine.answer.publication import StagedArtifact, scan_artifact_directory
 from dlightrag.engine.answer.research.context import ContextAssembler
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
@@ -267,11 +266,6 @@ class AnswerOrchestrator:
         """Attach the claimed run workspace used for tools, spill, and publication."""
         self._workspace = workspace
         self._environment = workspace.environment
-
-    def staged_artifacts(self) -> tuple[StagedArtifact, ...]:
-        """Regular files under artifacts/, or empty when no workspace is bound."""
-        root = self.artifact_root()
-        return scan_artifact_directory(root) if root is not None else ()
 
     def artifact_root(self) -> Path | None:
         """Return this run's request-local Artifact root, when execution owns one."""

@@ -29,7 +29,7 @@ A durable Answer Run that plans, retrieves, and generates without an Agent Opera
 _Avoid_: Retrieval, non-durable fast path
 
 **Web Conversation**:
-The browser conversation surface that creates Answer Runs; it is a transport, not a research capability. The thread shows the run's terminal answer; a Primary Report is a separate reading surface the owner opens from that turn.
+The browser conversation surface that creates Answer Runs; it is a transport, not a research capability. The thread shows the run's terminal answer and opens its Published Artifacts in Artifact Canvas.
 _Avoid_: Web Search, Web, Web Channel when meaning Exa or open-web retrieval; chat column as the report
 
 **Web Search**:
@@ -229,17 +229,13 @@ _Avoid_: Artifact, report, Journal Entry, Blob when referring to the handle
 An owner-visible, run-scoped output descriptor created by fenced publication of explicitly referenced Agent Workspace bytes. It carries stable resource identity, validated media type, presentation capability, publication status, and an owner-scoped data plane without exposing a Workspace path.
 _Avoid_: Spill, Blob when referring to the reference rather than the bytes, unreferenced workspace file
 
-**Primary Report**:
-The optional single Published Artifact with the report role. It opens in Artifact Canvas rather than becoming a second chat body.
-_Avoid_: answer body, chat column, Spill, Compaction Summary, required report, parallel result pointer
-
 **Artifact Canvas**:
-The Web Feature that opens any presentable Artifact and owns loading, safe renderer selection, side/wide/fullscreen layout, focus restoration, and preview teardown. Primary Report is a role inside this surface, not a separate panel.
+The Web Feature that opens any presentable Published Artifact and owns loading, safe renderer selection, side/wide/fullscreen layout, focus restoration, and preview teardown.
 _Avoid_: Report Pane, universal Panel abstraction, same-DOM active HTML
 
 **Active HTML Preview**:
 An explicit opt-in rendering mode for a self-contained HTML Artifact inside an opaque-origin, script-enabled sandboxed iframe. It is isolated from DlightRAG credentials and DOM; its CSP blocks normal external loads, but it is not a server execution sandbox or an absolute network-egress guarantee.
-_Avoid_: trusted report, same-origin iframe, Sandbox service, zero-egress claim
+_Avoid_: trusted content, same-origin iframe, Sandbox service, zero-egress claim
 
 **Publication**:
 The fenced terminal transaction that makes staged Agent Workspace files owner-visible as Published Artifacts.

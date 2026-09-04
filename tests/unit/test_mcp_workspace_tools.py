@@ -224,7 +224,6 @@ async def test_list_answer_artifacts_uses_canonical_semantic_descriptors(
     stored["artifacts"] = [
         {
             "resource_id": "artifact-report",
-            "role": "primary_report",
             "media_type": "text/markdown",
             "label": "Quarterly report",
             "filename": "report.md",
@@ -243,7 +242,6 @@ async def test_list_answer_artifacts_uses_canonical_semantic_descriptors(
     descriptor = payload["artifacts"][0]
     assert descriptor == {
         "resource_id": "artifact-report",
-        "role": "primary_report",
         "media_type": "text/markdown",
         "label": "Quarterly report",
         "filename": "report.md",

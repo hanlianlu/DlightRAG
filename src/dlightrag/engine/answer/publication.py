@@ -9,7 +9,6 @@ with a stable resource id and exposes only sanitized filenames and safe issues.
 from __future__ import annotations
 
 import hashlib
-import html as html_lib
 import json
 import re
 import stat
@@ -17,7 +16,6 @@ import xml.etree.ElementTree as ET
 import zipfile
 from collections import deque
 from collections.abc import Mapping, Sequence
-from contextlib import closing
 from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path, PurePosixPath
@@ -28,8 +26,6 @@ import pypdfium2 as pdfium
 from defusedxml import ElementTree as DefusedElementTree
 from PIL import Image
 
-ArtifactRole = Literal["primary_report", "attachment"]
-ArtifactStatus = Literal["available", "unavailable"]
 PresentationCapability = Literal["image", "markdown", "html", "pdf", "text", "download"]
 ArtifactIssueKind = Literal[
     "invalid_reference",
@@ -41,11 +37,9 @@ ArtifactIssueKind = Literal[
     "too_many_artifacts",
     "image_too_large",
     "active_preview_too_large",
-    "multiple_primary_reports",
     "reference_cycle",
 ]
 
-PRIMARY_REPORT_NAMES = frozenset({"report.md", "report.html", "report.pdf"})
 _ARTIFACT_TARGET = re.compile(
     r"(?P<prefix>!?(?:\[[^\]]*\])\(\s*<?artifact:)(?P<path>[^\s)>]+)(?P<suffix>>?(?:\s+[^)]*)?\))",
     re.IGNORECASE,
@@ -65,19 +59,6 @@ _HTML_STYLESHEET = re.compile(
 _CSS_EXTERNAL_URL = re.compile(r"url\(\s*[\"']?(?!data:|blob:)[^)]+\)", re.IGNORECASE)
 _CSS_EXTERNAL_IMPORT = re.compile(r"@import\s+(?!url\(\s*[\"']?data:)", re.IGNORECASE)
 _SVG_RASTER_DATA_URL = re.compile(r"^data:image/(?:gif|jpeg|png|webp)(?:;[^,]*)?,", re.IGNORECASE)
-_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
-_HTML_SUBSTANTIVE_ELEMENT = re.compile(
-    r"<(?:audio|embed|iframe|img|object|source|video)\b[^>]*(?:src|data)\s*="
-    r"|<(?:input|button)\b"
-    r"|<(?:circle|ellipse|line|path|polygon|polyline|rect|text)\b"
-    r"|<(?:link|script)\b[^>]*(?:href|src)\s*=",
-    re.IGNORECASE,
-)
-_HTML_STYLE_BLOCK = re.compile(r"<style\b[^>]*>.*?</style\s*>", re.DOTALL | re.IGNORECASE)
-_HTML_TAG = re.compile(r"<[^>]*>")
-_PDF_REPORT_SCAN_PAGES = 256
-_PDF_REPORT_TEXT_CHARS_PER_PAGE = 4096
-
 _MEDIA_BY_EXTENSION: dict[str, tuple[str, PresentationCapability]] = {
     ".md": ("text/markdown", "markdown"),
     ".html": ("text/html", "html"),
@@ -149,10 +130,8 @@ class StagedArtifact:
     """One validated, referenced file ready for durable publication."""
 
     relative_path: str
-    role: ArtifactRole
     media_type: str
     size_bytes: int
-    path: Path
     resource_id: str = ""
     filename: str = ""
     digest: str = ""
@@ -161,15 +140,9 @@ class StagedArtifact:
     height: int | None = None
     content: bytes = b""
 
-    @property
-    def kind(self) -> Literal["primary_report", "published_artifact"]:
-        """Internal run-store reference kind, not a client compatibility field."""
-        return "primary_report" if self.role == "primary_report" else "published_artifact"
-
     def descriptor(self, *, label: str = "") -> dict[str, object]:
         value: dict[str, object] = {
             "resource_id": self.resource_id,
-            "role": self.role,
             "media_type": self.media_type,
             "label": label or self.filename,
             "filename": self.filename,
@@ -221,23 +194,9 @@ def is_substantive_text(text: str) -> bool:
     return bool(without_artifacts.strip(" \t\r\n.,;:!?，。；：！？"))
 
 
-def is_empty_answer(*, answer: str, has_primary_report: bool) -> bool:
-    """Fail only when neither visible text nor an available Primary Report exists."""
-    return not has_primary_report and not is_substantive_text(answer)
-
-
-def scan_artifact_directory(
-    artifacts_root: Path, *, limits: PublicationLimits | None = None
-) -> tuple[StagedArtifact, ...]:
-    """Validate regular files under the Artifact root without publishing them."""
-    limits = limits or PublicationLimits()
-    files = _inventory(artifacts_root, limits=limits)
-    staged: list[StagedArtifact] = []
-    for relative, path in files.items():
-        if relative in PRIMARY_REPORT_NAMES and not _report_has_body(path, limits=limits):
-            continue
-        staged.append(_validate_file(relative, path, limits=limits))
-    return tuple(staged)
+def is_empty_answer(*, answer: str, has_artifacts: bool) -> bool:
+    """Fail only when neither visible text nor an available Artifact exists."""
+    return not has_artifacts and not is_substantive_text(answer)
 
 
 def validate_publication(
@@ -259,68 +218,86 @@ def validate_publication(
         settled, descriptor = _unavailable_answer(answer, issue)
         return PublicationPlan(answer=settled, descriptors=descriptor, issues=(issue,))
 
-    report_names = sorted(name for name in files if name in PRIMARY_REPORT_NAMES)
-    files = {
-        relative: path
-        for relative, path in files.items()
-        if relative not in PRIMARY_REPORT_NAMES or _report_has_body(path, limits=limits)
-    }
-    global_issues: list[ArtifactIssue] = []
-    if len(report_names) > 1:
-        global_issues.append(
-            ArtifactIssue(
-                "multiple_primary_reports",
-                "The Artifact root may contain only one of report.md, report.html, or report.pdf.",
-            )
-        )
-
-    queue: deque[tuple[str | None, str, bool]] = deque()
+    discovery: deque[str] = deque()
+    roots: list[str] = []
     labels: dict[str, str] = {}
-    invalid_references: list[tuple[str, ArtifactIssue]] = []
+    invalid_references: dict[tuple[str | None, str], tuple[str, ArtifactIssue]] = {}
     for path, label, _image in _references(answer, html=False):
         try:
             normalized = _normalize_reference(path, parent=None)
         except ValueError:
-            invalid_references.append(
+            invalid_references.setdefault(
+                (None, path),
                 (
-                    path,
+                    label,
                     ArtifactIssue(
                         "invalid_reference", "An Artifact reference is not a safe relative path."
                     ),
-                )
+                ),
             )
             continue
         labels.setdefault(normalized, label)
-        queue.append((None, normalized, False))
+        roots.append(normalized)
+        discovery.append(normalized)
 
-    selected: dict[str, StagedArtifact] = {}
-    graph: dict[str, set[str]] = {}
+    candidates: dict[str, StagedArtifact] = {}
+    graph: dict[str, list[str]] = {}
     issues_by_path: dict[str, ArtifactIssue] = {}
-    total = 0
-    while queue:
-        parent, relative, _is_image = queue.popleft()
-        if parent == relative:
-            issues_by_path.setdefault(
-                relative,
-                ArtifactIssue("reference_cycle", "An Artifact cannot reference itself."),
-            )
-            continue
-        if relative in selected or relative in issues_by_path:
+    while discovery:
+        relative = discovery.popleft()
+        if relative in candidates or relative in issues_by_path:
             continue
         if relative not in files:
             issues_by_path[relative] = ArtifactIssue(
                 "missing_file", f"Referenced Artifact {Path(relative).name or 'file'} is missing."
             )
             continue
-        if len(report_names) > 1 and relative in PRIMARY_REPORT_NAMES:
-            issues_by_path[relative] = global_issues[0]
-            continue
         try:
             staged = _validate_file(relative, files[relative], limits=limits)
         except _FileValidationError as exc:
             issues_by_path[relative] = ArtifactIssue(exc.kind, exc.description)
             continue
-        if len(selected) >= limits.max_artifacts:
+        candidates[relative] = staged
+        if staged.media_type in {"text/markdown", "text/html"}:
+            text = staged.content.decode("utf-8")
+            children: list[str] = []
+            for path, label, _image in _references(text, html=staged.media_type == "text/html"):
+                try:
+                    child = _normalize_reference(path, parent=relative)
+                except ValueError:
+                    invalid_references.setdefault(
+                        (relative, path),
+                        (
+                            label,
+                            ArtifactIssue(
+                                "invalid_reference",
+                                "An Artifact reference is not a safe relative path.",
+                            ),
+                        ),
+                    )
+                    continue
+                labels.setdefault(child, label)
+                if child not in children:
+                    children.append(child)
+                    discovery.append(child)
+            graph[relative] = children
+
+    for relative in _cycle_nodes(graph):
+        issues_by_path[relative] = ArtifactIssue(
+            "reference_cycle", "Artifact references must not contain a cycle."
+        )
+
+    admitted: dict[str, StagedArtifact] = {}
+    pending = deque(roots)
+    total = 0
+    while pending:
+        relative = pending.popleft()
+        if relative in admitted or relative in issues_by_path:
+            continue
+        staged = candidates.get(relative)
+        if staged is None:
+            continue
+        if len(admitted) >= limits.max_artifacts:
             issues_by_path[relative] = ArtifactIssue(
                 "too_many_artifacts", f"At most {limits.max_artifacts} Artifacts may be published."
             )
@@ -331,54 +308,44 @@ def validate_publication(
                 f"Published Artifacts may total at most {limits.max_total_bytes} bytes.",
             )
             continue
-        selected[relative] = staged
+        admitted[relative] = staged
         total += staged.size_bytes
-        if staged.role == "primary_report" and staged.media_type in {"text/markdown", "text/html"}:
-            text = staged.content.decode("utf-8")
-            children: set[str] = set()
-            for path, label, image in _references(text, html=staged.media_type == "text/html"):
-                try:
-                    child = _normalize_reference(path, parent=relative)
-                except ValueError:
-                    invalid_references.append(
-                        (
-                            path,
-                            ArtifactIssue(
-                                "invalid_reference",
-                                "A report Artifact reference is not a safe relative path.",
-                            ),
-                        )
-                    )
-                    continue
-                labels.setdefault(child, label)
-                children.add(child)
-                queue.append((relative, child, image))
-            graph[relative] = children
+        pending.extend(graph.get(relative, ()))
 
-    cycle_nodes = _cycle_nodes(graph)
-    for relative in cycle_nodes:
-        selected.pop(relative, None)
-        issues_by_path[relative] = ArtifactIssue(
-            "reference_cycle", "Artifact references must not contain a cycle."
-        )
+    visible_paths = set(roots)
+    for relative in admitted:
+        visible_paths.update(graph.get(relative, ()))
+    issues_by_path = {
+        relative: issue for relative, issue in issues_by_path.items() if relative in visible_paths
+    }
+    invalid_references = {
+        key: value
+        for key, value in invalid_references.items()
+        if key[0] is None or key[0] in admitted
+    }
+    invalid_resources: dict[str | None, dict[str, str]] = {}
+    for parent, raw in invalid_references:
+        invalid_resources.setdefault(parent, {})[raw] = _invalid_reference_id(raw, parent=parent)
 
-    path_to_resource = {relative: item.resource_id for relative, item in selected.items()}
+    path_to_resource = {relative: item.resource_id for relative, item in admitted.items()}
     unavailable_ids: dict[str, str] = {
         relative: _unavailable_id(relative) for relative in issues_by_path
     }
     answer_settled = _rewrite_references(
         answer,
         resources={**path_to_resource, **unavailable_ids},
+        invalid_resources=invalid_resources.get(None, {}),
         parent=None,
         html=False,
     )
     settled_artifacts: list[StagedArtifact] = []
-    for relative, staged in selected.items():
+    for relative, staged in admitted.items():
         content = staged.content
-        if staged.role == "primary_report" and staged.media_type in {"text/markdown", "text/html"}:
+        if staged.media_type in {"text/markdown", "text/html"}:
             content = _rewrite_references(
                 content.decode("utf-8"),
                 resources={**path_to_resource, **unavailable_ids},
+                invalid_resources=invalid_resources.get(relative, {}),
                 parent=relative,
                 html=staged.media_type == "text/html",
             ).encode("utf-8")
@@ -393,7 +360,7 @@ def validate_publication(
     descriptors: list[Mapping[str, object]] = [
         item.descriptor(label=labels.get(item.relative_path, "")) for item in settled_artifacts
     ]
-    issues = list(global_issues)
+    issues: list[ArtifactIssue] = []
     for relative, issue in issues_by_path.items():
         resource_id = unavailable_ids[relative]
         issue = replace(issue, resource_id=resource_id)
@@ -401,7 +368,6 @@ def validate_publication(
         descriptors.append(
             {
                 "resource_id": resource_id,
-                "role": "primary_report" if relative in PRIMARY_REPORT_NAMES else "attachment",
                 "media_type": "application/octet-stream",
                 "label": labels.get(relative) or Path(relative).name or "Unavailable Artifact",
                 "filename": _safe_filename(relative),
@@ -412,16 +378,15 @@ def validate_publication(
                 "issue": issue.as_dict(),
             }
         )
-    for raw, issue in invalid_references:
-        resource_id = _unavailable_id(raw)
+    for (parent, raw), (label, issue) in invalid_references.items():
+        resource_id = invalid_resources[parent][raw]
         safe_issue = replace(issue, resource_id=resource_id)
         issues.append(safe_issue)
         descriptors.append(
             {
                 "resource_id": resource_id,
-                "role": "attachment",
                 "media_type": "application/octet-stream",
-                "label": "Unavailable Artifact",
+                "label": label or "Unavailable Artifact",
                 "filename": "artifact",
                 "byte_size": 0,
                 "digest": "",
@@ -430,7 +395,6 @@ def validate_publication(
                 "issue": safe_issue.as_dict(),
             }
         )
-        answer_settled = answer_settled.replace(f"artifact:{raw}", f"artifact:{resource_id}")
 
     return PublicationPlan(
         answer=answer_settled,
@@ -519,8 +483,6 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
             with pdfium.PdfDocument(content) as document:
                 if len(document) == 0:
                     raise ValueError("PDF has no pages")
-            if relative in PRIMARY_REPORT_NAMES and not _pdf_has_body(content):
-                raise ValueError("PDF report is blank")
         elif media_type.startswith("application/vnd.openxmlformats-officedocument"):
             expected_root = {
                 ".docx": "word/",
@@ -586,10 +548,8 @@ def _validate_file(relative: str, path: Path, *, limits: PublicationLimits) -> S
     resource_id = _resource_id(relative)
     return StagedArtifact(
         relative_path=relative,
-        role="primary_report" if relative in PRIMARY_REPORT_NAMES else "attachment",
         media_type=media_type,
         size_bytes=len(content),
-        path=path,
         resource_id=resource_id,
         filename=_safe_filename(relative),
         digest=hashlib.sha256(content).hexdigest(),
@@ -654,6 +614,7 @@ def _rewrite_references(
     text: str,
     *,
     resources: Mapping[str, str],
+    invalid_resources: Mapping[str, str],
     parent: str | None,
     html: bool,
 ) -> str:
@@ -664,8 +625,9 @@ def _rewrite_references(
         try:
             normalized = _normalize_reference(raw, parent=parent)
         except ValueError:
-            return match.group(0)
-        resource = resources.get(normalized)
+            resource = invalid_resources.get(raw)
+        else:
+            resource = resources.get(normalized)
         if resource is None:
             return match.group(0)
         return f"{match.group('prefix')}{resource}{match.group('suffix')}"
@@ -673,7 +635,7 @@ def _rewrite_references(
     return pattern.sub(replace_target, text)
 
 
-def _cycle_nodes(graph: Mapping[str, set[str]]) -> set[str]:
+def _cycle_nodes(graph: Mapping[str, Sequence[str]]) -> set[str]:
     visiting: set[str] = set()
     visited: set[str] = set()
     cyclic: set[str] = set()
@@ -707,6 +669,11 @@ def _unavailable_id(value: str) -> str:
     return f"unavailable-{hashlib.sha256(value.encode('utf-8')).hexdigest()[:20]}"
 
 
+def _invalid_reference_id(raw: str, *, parent: str | None) -> str:
+    identity = raw if parent is None else f"{parent}\0{raw}"
+    return _unavailable_id(identity)
+
+
 def _safe_filename(relative: str) -> str:
     name = PurePosixPath(relative).name.strip().replace("\x00", "")
     name = re.sub(r"[^A-Za-z0-9._ -]+", "_", name).strip(" .")
@@ -731,7 +698,6 @@ def _unavailable_answer(
         descriptors.append(
             {
                 "resource_id": resource_id,
-                "role": "attachment",
                 "media_type": "application/octet-stream",
                 "label": label or "Unavailable Artifact",
                 "filename": "artifact",
@@ -756,58 +722,6 @@ def _dedupe_issues(issues: Sequence[ArtifactIssue]) -> list[ArtifactIssue]:
     return result
 
 
-def _pdf_has_body(content: bytes) -> bool:
-    visual_types = [
-        pdfium.raw.FPDF_PAGEOBJ_IMAGE,
-        pdfium.raw.FPDF_PAGEOBJ_PATH,
-        pdfium.raw.FPDF_PAGEOBJ_SHADING,
-    ]
-    with pdfium.PdfDocument(content) as document:
-        page_count = min(len(document), _PDF_REPORT_SCAN_PAGES)
-        for page_index in range(page_count):
-            page = document[page_index]
-            try:
-                text_page = page.get_textpage()
-                try:
-                    count = min(
-                        text_page.count_chars(),
-                        _PDF_REPORT_TEXT_CHARS_PER_PAGE,
-                    )
-                    text = text_page.get_text_range(count=count) if count > 0 else ""
-                finally:
-                    text_page.close()
-                if is_substantive_text(text):
-                    return True
-                with closing(page.get_objects(filter=visual_types, max_depth=8)) as objects:
-                    for page_object in objects:
-                        page_object.close()
-                        return True
-            finally:
-                page.close()
-    return False
-
-
-def _report_has_body(path: Path, *, limits: PublicationLimits) -> bool:
-    try:
-        if path.stat().st_size > limits.max_file_bytes:
-            return True  # Let _validate_file report the stable size issue without reading it.
-        if path.suffix.lower() == ".pdf":
-            content = path.read_bytes()
-            try:
-                return _pdf_has_body(content)
-            except pdfium.PdfiumError, RuntimeError, ValueError:
-                return True  # Let _validate_file report malformed PDF media.
-        text = path.read_text(encoding="utf-8")
-    except OSError, UnicodeDecodeError:
-        return True  # Let _validate_file report unreadable or malformed text media.
-    if path.suffix.lower() in {".html", ".htm"}:
-        text = _HTML_COMMENT.sub(" ", text)
-        if _HTML_SUBSTANTIVE_ELEMENT.search(text):
-            return True
-        text = html_lib.unescape(_HTML_TAG.sub(" ", _HTML_STYLE_BLOCK.sub(" ", text)))
-    return is_substantive_text(text)
-
-
 def _reject_special(path: Path) -> None:
     if path.is_symlink():
         raise PublicationScanError("Artifact root contains a symlink")
@@ -820,16 +734,11 @@ def _reject_special(path: Path) -> None:
 
 
 __all__ = [
-    "PRIMARY_REPORT_NAMES",
     "ArtifactIssue",
     "ArtifactIssueKind",
-    "ArtifactRole",
     "PublicationLimits",
     "PublicationPlan",
-    "PublicationScanError",
     "StagedArtifact",
     "is_empty_answer",
-    "is_substantive_text",
-    "scan_artifact_directory",
     "validate_publication",
 ]

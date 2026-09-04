@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Publication scan: optional report, no symlinks, empty-answer rule."""
+"""Artifact publication validates explicit references without filename semantics."""
 
 from io import BytesIO
 from pathlib import Path
@@ -10,9 +10,7 @@ from PIL import Image
 
 from dlightrag.engine.answer.publication import (
     PublicationLimits,
-    PublicationScanError,
     is_empty_answer,
-    scan_artifact_directory,
     validate_publication,
 )
 
@@ -38,146 +36,84 @@ def _pdf_bytes(*, visual: bool) -> bytes:
     return output.getvalue()
 
 
-def test_missing_artifacts_dir_is_empty(tmp_path: Path) -> None:
-    assert scan_artifact_directory(tmp_path / "artifacts") == ()
-
-
-def test_blank_report_is_not_published(tmp_path: Path) -> None:
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    (root / "report.md").write_text("  \n", encoding="utf-8")
-    (root / "table.csv").write_text("a,b\n", encoding="utf-8")
-    staged = scan_artifact_directory(root)
-    assert [item.kind for item in staged] == ["published_artifact"]
-    assert staged[0].relative_path == "table.csv"
-
-
-def test_blank_referenced_report_is_unavailable_in_production_validation(tmp_path: Path) -> None:
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    (root / "report.md").write_text("  \n", encoding="utf-8")
-
-    plan = validate_publication(root, answer="[View report](artifact:report.md)")
+def test_missing_artifacts_dir_has_no_publication(tmp_path: Path) -> None:
+    plan = validate_publication(tmp_path / "artifacts", answer="Text only")
 
     assert plan.artifacts == ()
-    assert plan.issues[0].kind == "missing_file"
-    assert plan.descriptors[0]["role"] == "primary_report"
-    assert is_empty_answer(answer=plan.answer, has_primary_report=bool(plan.artifacts)) is True
+    assert plan.outcome == {"status": "complete", "issues": []}
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        "<!doctype html><html><body></body></html>",
-        "<!-- blank -->",
-        "<style>body { color: red }</style><script>   </script><svg></svg>",
-    ],
-)
-def test_blank_html_report_is_not_published(tmp_path: Path, body: str) -> None:
+def test_explicitly_referenced_artifact_satisfies_answer_output(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
-    (root / "report.html").write_text(body, encoding="utf-8")
+    (root / "analysis.md").write_text("  \n", encoding="utf-8")
 
-    plan = validate_publication(root, answer="[View report](artifact:report.html)")
+    plan = validate_publication(root, answer="[Open analysis](artifact:analysis.md)")
 
-    assert plan.artifacts == ()
-    assert plan.issues[0].kind == "missing_file"
+    assert [item.relative_path for item in plan.artifacts] == ["analysis.md"]
+    assert plan.outcome == {"status": "complete", "issues": []}
+    assert is_empty_answer(answer=plan.answer, has_artifacts=bool(plan.artifacts)) is False
 
 
-def test_blank_pdf_report_is_not_published(tmp_path: Path) -> None:
+def test_valid_empty_html_and_pdf_are_published_when_referenced(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
-    (root / "report.pdf").write_bytes(_pdf_bytes(visual=False))
+    (root / "page.html").write_text("<!doctype html><html><body></body></html>", encoding="utf-8")
+    (root / "document.pdf").write_bytes(_pdf_bytes(visual=False))
 
-    plan = validate_publication(root, answer="[View report](artifact:report.pdf)")
+    plan = validate_publication(
+        root,
+        answer="[Open page](artifact:page.html) [Open PDF](artifact:document.pdf)",
+    )
 
-    assert plan.artifacts == ()
-    assert plan.issues[0].kind == "missing_file"
+    assert [item.relative_path for item in plan.artifacts] == ["page.html", "document.pdf"]
+    assert plan.outcome == {"status": "complete", "issues": []}
 
 
-@pytest.mark.parametrize("filename", ["report.md", "report.html"])
-def test_malformed_text_report_is_rejected_as_media_mismatch(tmp_path: Path, filename: str) -> None:
+@pytest.mark.parametrize("filename", ["analysis.md", "page.html"])
+def test_malformed_text_artifact_is_rejected_as_media_mismatch(
+    tmp_path: Path, filename: str
+) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
     (root / filename).write_bytes(b"\xff\xfe")
 
-    plan = validate_publication(root, answer=f"[View report](artifact:{filename})")
+    plan = validate_publication(root, answer=f"[Open Artifact](artifact:{filename})")
 
     assert plan.artifacts == ()
     assert plan.issues[0].kind == "media_mismatch"
 
 
-def test_malformed_pdf_report_is_rejected_as_media_mismatch(tmp_path: Path) -> None:
+def test_malformed_pdf_artifact_is_rejected_as_media_mismatch(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
-    (root / "report.pdf").write_bytes(b"%PDF-1.7\n%%EOF")
+    (root / "document.pdf").write_bytes(b"%PDF-1.7\n%%EOF")
 
-    plan = validate_publication(root, answer="[View report](artifact:report.pdf)")
+    plan = validate_publication(root, answer="[Open PDF](artifact:document.pdf)")
 
     assert plan.artifacts == ()
     assert plan.issues[0].kind == "media_mismatch"
 
 
-def test_visual_pdf_report_is_published(tmp_path: Path) -> None:
+def test_visual_pdf_artifact_is_published(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
-    (root / "report.pdf").write_bytes(_pdf_bytes(visual=True))
+    (root / "document.pdf").write_bytes(_pdf_bytes(visual=True))
 
-    plan = validate_publication(root, answer="[View report](artifact:report.pdf)")
+    plan = validate_publication(root, answer="[Open PDF](artifact:document.pdf)")
 
     assert plan.outcome == {"status": "complete", "issues": []}
-    assert [item.relative_path for item in plan.artifacts] == ["report.pdf"]
+    assert [item.relative_path for item in plan.artifacts] == ["document.pdf"]
 
 
-def test_visual_pdf_scan_closes_the_page_object_iterator(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    iterator_closed = False
-    object_closed = False
-
-    class PageObject:
-        def close(self) -> None:
-            nonlocal object_closed
-            object_closed = True
-
-    class PageObjects:
-        def __iter__(self):
-            yield PageObject()
-
-        def close(self) -> None:
-            nonlocal iterator_closed
-            iterator_closed = True
-
-    def get_objects(*_args: object, **_kwargs: object) -> PageObjects:
-        return PageObjects()
-
-    monkeypatch.setattr(pdfium.PdfPage, "get_objects", get_objects)
+def test_oversized_artifact_is_rejected_before_content_validation(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
-    (root / "report.pdf").write_bytes(_pdf_bytes(visual=False))
+    (root / "analysis.md").write_bytes(b"large")
 
-    plan = validate_publication(root, answer="[View report](artifact:report.pdf)")
-
-    assert [item.relative_path for item in plan.artifacts] == ["report.pdf"]
-    assert object_closed is True
-    assert iterator_closed is True
-
-
-def test_oversized_report_is_rejected_before_substantive_content_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    report = root / "report.md"
-    report.write_bytes(b"large")
-
-    def fail_read_text(*_args: object, **_kwargs: object) -> str:
-        raise AssertionError("oversized report content must not be read")
-
-    monkeypatch.setattr(Path, "read_text", fail_read_text)
     plan = validate_publication(
         root,
-        answer="[View report](artifact:report.md)",
+        answer="[Open analysis](artifact:analysis.md)",
         limits=PublicationLimits(max_file_bytes=4),
     )
 
@@ -185,53 +121,127 @@ def test_oversized_report_is_rejected_before_substantive_content_read(
     assert plan.issues[0].kind == "file_too_large"
 
 
-def test_report_and_extra_file_are_both_staged(tmp_path: Path) -> None:
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    (root / "report.md").write_text("# Findings\n", encoding="utf-8")
-    (root / "notes.txt").write_text("extra", encoding="utf-8")
-    kinds = {item.relative_path: item.kind for item in scan_artifact_directory(root)}
-    assert kinds == {"notes.txt": "published_artifact", "report.md": "primary_report"}
-
-
-def test_symlink_is_rejected(tmp_path: Path) -> None:
+def test_symlink_makes_publication_unavailable(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
     (root / "link.md").symlink_to(tmp_path / "outside.md")
-    with pytest.raises(PublicationScanError, match="symlink"):
-        scan_artifact_directory(root)
+
+    plan = validate_publication(root, answer="[Open link](artifact:link.md)")
+
+    assert plan.artifacts == ()
+    assert plan.issues[0].kind == "unsafe_file"
 
 
-def test_empty_answer_requires_neither_report_nor_text() -> None:
-    assert is_empty_answer(answer="  ", has_primary_report=False) is True
-    assert is_empty_answer(answer="42", has_primary_report=False) is False
-    assert is_empty_answer(answer="", has_primary_report=True) is False
+def test_empty_answer_requires_neither_artifact_nor_text() -> None:
+    assert is_empty_answer(answer="  ", has_artifacts=False) is True
+    assert is_empty_answer(answer="42", has_artifacts=False) is False
+    assert is_empty_answer(answer="", has_artifacts=True) is False
     assert (
         is_empty_answer(
-            answer="[View report](artifact:unavailable-report)",
-            has_primary_report=False,
+            answer="[Open Artifact](artifact:unavailable-artifact)",
+            has_artifacts=False,
         )
         is True
     )
 
 
-def test_only_explicitly_referenced_files_are_settled_to_stable_ids(tmp_path: Path) -> None:
+def test_any_markdown_artifact_can_publish_linked_artifacts(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
-    (root / "report.md").write_text(
-        "# Report\n\n[Download data](artifact:data.csv)", encoding="utf-8"
+    (root / "peer_analysis.md").write_text(
+        "# Analysis\n\n[Download data](artifact:data.csv)", encoding="utf-8"
     )
     (root / "data.csv").write_text("name,value\na,1\n", encoding="utf-8")
     (root / "scratch.txt").write_text("private intermediate", encoding="utf-8")
 
-    plan = validate_publication(root, answer="Done. [View report](artifact:report.md)")
+    plan = validate_publication(root, answer="Done. [Open analysis](artifact:peer_analysis.md)")
 
     assert plan.outcome == {"status": "complete", "issues": []}
-    assert [item.relative_path for item in plan.artifacts] == ["report.md", "data.csv"]
+    assert [item.relative_path for item in plan.artifacts] == ["peer_analysis.md", "data.csv"]
     assert all("scratch" not in str(item) for item in plan.descriptors)
-    assert "artifact:report.md" not in plan.answer
+    assert "artifact:peer_analysis.md" not in plan.answer
     assert "artifact:artifact-" in plan.answer
     assert b"artifact:data.csv" not in plan.artifacts[0].content
+
+
+def test_any_html_artifact_can_publish_linked_artifacts(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "dashboard.html").write_text(
+        '<!doctype html><html><body><a href="artifact:data.csv">Data</a></body></html>',
+        encoding="utf-8",
+    )
+    (root / "data.csv").write_text("name,value\na,1\n", encoding="utf-8")
+
+    plan = validate_publication(root, answer="[Open dashboard](artifact:dashboard.html)")
+
+    assert [item.relative_path for item in plan.artifacts] == ["dashboard.html", "data.csv"]
+    assert b"artifact:data.csv" not in plan.artifacts[0].content
+
+
+def test_invalid_nested_markdown_reference_is_settled_to_an_unavailable_artifact(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "analysis.md").write_text("[Unsafe](artifact:../secret.txt)", encoding="utf-8")
+
+    plan = validate_publication(root, answer="[Open analysis](artifact:analysis.md)")
+
+    assert [item.relative_path for item in plan.artifacts] == ["analysis.md"]
+    unavailable = next(item for item in plan.descriptors if item["status"] == "unavailable")
+    assert unavailable["label"] == "Unsafe"
+    assert b"artifact:../secret.txt" not in plan.artifacts[0].content
+    assert f"artifact:{unavailable['resource_id']}".encode() in plan.artifacts[0].content
+
+
+def test_invalid_nested_html_reference_is_settled_to_an_unavailable_artifact(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "dashboard.html").write_text(
+        '<!doctype html><html><body><a href="artifact:../secret.txt">Unsafe</a></body></html>',
+        encoding="utf-8",
+    )
+
+    plan = validate_publication(root, answer="[Open dashboard](artifact:dashboard.html)")
+
+    assert [item.relative_path for item in plan.artifacts] == ["dashboard.html"]
+    unavailable = next(item for item in plan.descriptors if item["status"] == "unavailable")
+    assert b"artifact:../secret.txt" not in plan.artifacts[0].content
+    assert f"artifact:{unavailable['resource_id']}".encode() in plan.artifacts[0].content
+
+
+def test_nested_artifact_reference_cycles_are_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "a.md").write_text("[B](artifact:b.md)", encoding="utf-8")
+    (root / "b.md").write_text("[A](artifact:a.md)", encoding="utf-8")
+
+    plan = validate_publication(root, answer="[A](artifact:a.md)")
+
+    assert plan.artifacts == ()
+    assert {issue.kind for issue in plan.issues} == {"reference_cycle"}
+
+
+def test_cycles_do_not_consume_the_artifact_admission_limit(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    (root / "a.md").write_text("[B](artifact:b.md)", encoding="utf-8")
+    (root / "b.md").write_text("[A](artifact:a.md)", encoding="utf-8")
+    (root / "c.md").write_text("[D](artifact:d.md)", encoding="utf-8")
+    (root / "d.md").write_text("D", encoding="utf-8")
+
+    plan = validate_publication(
+        root,
+        answer="[A](artifact:a.md) [C](artifact:c.md)",
+        limits=PublicationLimits(max_artifacts=2),
+    )
+
+    assert [item.relative_path for item in plan.artifacts] == ["c.md", "d.md"]
+    assert {issue.kind for issue in plan.issues} == {"reference_cycle"}
+    assert b"artifact:d.md" not in plan.artifacts[0].content
 
 
 def test_missing_reference_becomes_an_unavailable_part_issue(tmp_path: Path) -> None:
@@ -243,50 +253,34 @@ def test_missing_reference_becomes_an_unavailable_part_issue(tmp_path: Path) -> 
     assert plan.outcome["status"] == "failed"
     assert plan.issues[0].kind == "missing_file"
     assert plan.descriptors[0]["status"] == "unavailable"
+    assert "role" not in plan.descriptors[0]
     assert str(plan.descriptors[0]["resource_id"]) in plan.answer
     assert "missing.png" not in plan.answer
 
 
-def test_primary_report_slot_is_unique_and_must_be_referenced(tmp_path: Path) -> None:
+def test_multiple_artifacts_with_report_like_names_are_independent(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
     (root / "report.md").write_text("# Markdown", encoding="utf-8")
     (root / "report.html").write_text(
         "<!doctype html><html><body>HTML</body></html>", encoding="utf-8"
     )
-
-    ignored = validate_publication(root, answer="Text only")
-    attempted = validate_publication(root, answer="[Report](artifact:report.md)")
-
-    assert ignored.artifacts == ()
-    assert ignored.outcome["status"] == "failed"
-    assert ignored.issues[0].kind == "multiple_primary_reports"
-    assert attempted.outcome["status"] == "failed"
-    assert attempted.issues[0].kind == "multiple_primary_reports"
-
-
-def test_blank_extra_report_still_violates_primary_report_uniqueness(tmp_path: Path) -> None:
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    (root / "report.md").write_text("# Findings", encoding="utf-8")
-    (root / "report.html").write_text("<!doctype html><html><body></body></html>", encoding="utf-8")
-
-    plan = validate_publication(root, answer="[Report](artifact:report.md)")
-
-    assert plan.artifacts == ()
-    assert plan.issues[0].kind == "multiple_primary_reports"
-
-
-def test_blank_markdown_slot_conflicts_with_visual_pdf_report(tmp_path: Path) -> None:
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    (root / "report.md").write_text("  \n", encoding="utf-8")
     (root / "report.pdf").write_bytes(_pdf_bytes(visual=True))
 
-    plan = validate_publication(root, answer="[Report](artifact:report.pdf)")
+    plan = validate_publication(
+        root,
+        answer=(
+            "[Markdown](artifact:report.md) [HTML](artifact:report.html) [PDF](artifact:report.pdf)"
+        ),
+    )
 
-    assert plan.artifacts == ()
-    assert plan.issues[0].kind == "multiple_primary_reports"
+    assert [item.relative_path for item in plan.artifacts] == [
+        "report.md",
+        "report.html",
+        "report.pdf",
+    ]
+    assert plan.outcome == {"status": "complete", "issues": []}
+    assert all("role" not in descriptor for descriptor in plan.descriptors)
 
 
 def test_media_and_publication_budgets_reject_whole_files(tmp_path: Path) -> None:
@@ -350,18 +344,18 @@ def test_svg_static_projection_rejects_nested_svg_data_but_keeps_raster_data(
 def test_active_html_must_be_self_contained_and_within_preview_budget(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()
-    (root / "report.html").write_text(
+    (root / "page.html").write_text(
         '<!doctype html><html><body><script src="https://evil.test/x.js"></script></body></html>',
         encoding="utf-8",
     )
-    external = validate_publication(root, answer="[Report](artifact:report.html)")
-    (root / "report.html").write_text(
+    external = validate_publication(root, answer="[Open page](artifact:page.html)")
+    (root / "page.html").write_text(
         "<!doctype html><html><body><script>document.body.dataset.ok='1'</script></body></html>",
         encoding="utf-8",
     )
     oversized = validate_publication(
         root,
-        answer="[Report](artifact:report.html)",
+        answer="[Open page](artifact:page.html)",
         limits=PublicationLimits(active_html_max_bytes=8),
     )
 

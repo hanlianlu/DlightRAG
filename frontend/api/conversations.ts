@@ -98,7 +98,6 @@ export type ArtifactOutcome = v.InferOutput<typeof artifactOutcome>;
 const answerArtifact = v.pipe(
   v.object({
     resource_id: v.string(),
-    role: v.picklist(['primary_report', 'attachment']),
     media_type: v.string(),
     label: v.string(),
     filename: v.string(),
@@ -116,7 +115,6 @@ const answerArtifact = v.pipe(
   }),
   v.transform((w) => ({
     resourceId: w.resource_id,
-    role: w.role,
     mediaType: w.media_type,
     label: w.label,
     filename: w.filename,

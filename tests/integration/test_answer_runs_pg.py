@@ -192,6 +192,19 @@ class TestSchema:
             "dlightrag_answer_memory_settings",
         }
 
+    async def test_artifact_reference_constraint_uses_one_output_kind(self, store, pool) -> None:
+        async with pool.acquire() as conn:
+            definition = await conn.fetchval(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conname = 'dlightrag_answer_run_artifacts_kind_check'"
+            )
+
+        assert definition == (
+            "CHECK ((reference_kind = ANY (ARRAY['current_attachment'::text, "
+            "'history_attachment'::text, 'fetched_resource'::text, "
+            "'published_artifact'::text])))"
+        )
+
     async def test_bounded_operational_scans_use_their_ordered_indexes(
         self,
         store,

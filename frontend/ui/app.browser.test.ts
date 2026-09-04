@@ -6,16 +6,17 @@ import {defineDesignSystemElements} from '../design-system/index.ts';
 import './app.ts';
 
 defineDesignSystemElements();
+
+import type {
+  AnswerPresentationElement,
+  AnswerSourceOpenDetail,
+} from './answer-presentation.ts';
 import type {DlApp} from './app.ts';
 import type {DlChatFeature} from './chat-feature.ts';
 import type {DlConversationSidebar} from './conversation-sidebar.ts';
 import type {ImageOpenDetail} from './image-lightbox.ts';
 import type {DlContinuationDialog} from './run-dialogs.ts';
 import type {DlSettingsDialog} from './settings.ts';
-import type {
-  AnswerPresentationElement,
-  AnswerSourceOpenDetail,
-} from './answer-presentation.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
 
 const bootstrap = {
@@ -429,7 +430,7 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
   await app.ready;
   const returnFocus = app.querySelector<HTMLButtonElement>('#files-btn')!;
   const artifact: AnswerArtifact = {
-    resourceId: 'report-1', role: 'primary_report', mediaType: 'text/markdown',
+    resourceId: 'report-1', mediaType: 'text/markdown',
     label: 'Report', filename: 'report.md', byteSize: 20, digest: 'a'.repeat(64),
     presentation: 'markdown', status: 'available',
     uri: 'dlightrag://answer/run-1/artifacts/report-1', width: null, height: null,
@@ -501,7 +502,7 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
   document.body.appendChild(app);
   await app.ready;
   const artifact: AnswerArtifact = {
-    resourceId: 'report-desktop', role: 'primary_report', mediaType: 'text/markdown',
+    resourceId: 'report-desktop', mediaType: 'text/markdown',
     label: 'Report', filename: 'report.md', byteSize: 20, digest: 'b'.repeat(64),
     presentation: 'markdown', status: 'available',
     uri: 'dlightrag://answer/run-1/artifacts/report-desktop', width: null, height: null,
@@ -543,7 +544,7 @@ it('dismisses a lone desktop Artifact Canvas from the conversation area', async 
   await app.ready;
   const canvas = app.querySelector('dl-artifact-canvas')!;
   const artifact: AnswerArtifact = {
-    resourceId: 'chart-1', role: 'attachment', mediaType: 'image/png',
+    resourceId: 'chart-1', mediaType: 'image/png',
     label: 'Chart', filename: 'chart.png', byteSize: 20, digest: 'c'.repeat(64),
     presentation: 'image', status: 'available',
     uri: 'dlightrag://answer/run-1/artifacts/chart-1', width: 100, height: 100,

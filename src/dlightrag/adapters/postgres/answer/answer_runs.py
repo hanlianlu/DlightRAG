@@ -348,7 +348,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_artifacts (
     CONSTRAINT dlightrag_answer_run_artifacts_kind_check
         CHECK (reference_kind IN
                ('current_attachment', 'history_attachment', 'fetched_resource',
-                'primary_report', 'published_artifact')),
+                'published_artifact')),
     CONSTRAINT dlightrag_answer_run_artifacts_ordinal_check
         CHECK (ordinal >= 0)
 )
@@ -502,8 +502,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
 )
 """
 
-# The single final baseline bakes every column and constraint directly into its
-# CREATE statements; compatibility ALTER paths are intentionally absent.
+# The baseline bakes the current schema directly into CREATE statements. Later
+# migrations advance initialized databases without adding runtime compatibility paths.
 
 ANSWER_RUN_MIGRATIONS = (
     Migration(
@@ -546,6 +546,19 @@ ANSWER_RUN_MIGRATIONS = (
             "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_runs_cancel_pending "
             "ON dlightrag_answer_runs (lease_owner, created_at, run_id) "
             "WHERE cancel_requested_at IS NOT NULL AND status = 'running'",
+        ),
+    ),
+    Migration(
+        "write_model_published_artifact_kind",
+        "Restrict durable output references to the unified publication kind",
+        (
+            "ALTER TABLE dlightrag_answer_run_artifacts "
+            "DROP CONSTRAINT dlightrag_answer_run_artifacts_kind_check",
+            "ALTER TABLE dlightrag_answer_run_artifacts "
+            "ADD CONSTRAINT dlightrag_answer_run_artifacts_kind_check "
+            "CHECK (reference_kind IN "
+            "('current_attachment', 'history_attachment', 'fetched_resource', "
+            "'published_artifact'))",
         ),
     ),
 )

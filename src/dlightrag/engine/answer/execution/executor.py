@@ -2099,8 +2099,7 @@ def _stage_publications(
     contexts: RetrievalContexts,
     require_answer: bool = False,
 ) -> tuple[list[PendingPublication], list[dict[str, Any]], dict[str, list[Any]]]:
-    has_report = any(item.role == "primary_report" for item in plan.artifacts)
-    if require_answer and is_empty_answer(answer=answer, has_primary_report=has_report):
+    if require_answer and is_empty_answer(answer=answer, has_artifacts=bool(plan.artifacts)):
         raise RunExecutionError("empty_answer", "The run produced no answer.")
     publications: list[PendingPublication] = []
     artifact_sources: dict[str, list[Any]] = {}
@@ -2119,7 +2118,7 @@ def _stage_publications(
         publications.append(
             PendingPublication(
                 resource_id=item.resource_id,
-                reference_kind=item.kind,
+                reference_kind="published_artifact",
                 filename=item.filename,
                 mime_type=item.media_type,
                 content=payload,
