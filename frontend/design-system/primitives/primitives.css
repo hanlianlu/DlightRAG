@@ -15,6 +15,7 @@
     display: flex;
     font-size: var(--font-size-caption);
     gap: var(--space-tight);
+    min-height: var(--size-button);
     margin-block: var(--space-component);
 }
 
@@ -200,6 +201,7 @@ textarea.dl-dialog-input {
     font: inherit;
     font-size: var(--font-size-detail);
     gap: var(--space-component);
+    min-height: var(--size-button);
     padding: var(--space-tight) var(--space-component);
     text-align: left;
     transition: background 0.1s;

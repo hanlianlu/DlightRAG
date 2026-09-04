@@ -12,6 +12,10 @@
     transition: background 0.15s, color 0.15s;
 }
 
+dl-icon-button.panel-close {
+    padding: 0;
+}
+
 
 /* Child-agent roster list inside a confirm dialog. */
 .roster-list {
@@ -167,6 +171,12 @@
 
 .workspace-dialog::backdrop {
     background: var(--color-scrim-strong);
+}
+
+@media (width <= 640px), (height <= 640px) and (width < 1200px) {
+    .settings-dialog {
+        width: 100vw;
+    }
 }
 
 .workspace-dialog-title {

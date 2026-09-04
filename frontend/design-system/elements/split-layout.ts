@@ -34,9 +34,10 @@ template.innerHTML = `
       min-inline-size: 0;
       overflow: hidden;
       position: relative;
-      z-index: 0;
     }
     #start, #end { flex: 1 1 auto; }
+    #start { z-index: var(--split-start-layer, 0); }
+    #end { z-index: var(--split-end-layer, 0); }
     :host([primary='start']) #start,
     :host(:not([primary='end'])) #start { flex: 0 0 var(--dl-split-size); }
     :host([primary='end']) #end { flex: 0 0 var(--dl-split-size); }

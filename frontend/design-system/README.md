@@ -48,7 +48,7 @@ The pinned `lucide-static` package is generation-only. Production bundles contai
 
 Prefer native `button`, `input`, `radio`, `checkbox`, and `dialog` with `.dl-*` classes. Add a custom `dl-*` element only when behavior and accessibility state justify it. Classes have no compatibility aliases.
 
-`dl-split-layout` owns axis layout, pointer/keyboard resizing, and separator ARIA. Its pixel interface is `size`, `min`, `max`, `primary=start|end`, and `orientation=horizontal|vertical`. It emits `dl-split-input` while resizing and `dl-split-change` when committed, both with `{position}` in normalized pixels. Product adapters own breakpoints, open/close meaning, and persistence.
+`dl-split-layout` owns axis layout, pointer/keyboard resizing, and separator ARIA. Its pixel interface is `size`, `min`, `max`, `primary=start|end`, and `orientation=horizontal|vertical`. It emits `dl-split-input` while resizing and `dl-split-change` when committed, both with `{position}` in normalized pixels. Product adapters own breakpoints, open/close meaning, and persistence. When a product overlay is trapped by the split's isolated panes, the owning adapter may raise that pane with `--split-start-layer` or `--split-end-layer`; the default for both is `0`.
 
 Element modules have no registration side effects. Entrypoints explicitly call the idempotent `defineDesignSystemElements()`.
 

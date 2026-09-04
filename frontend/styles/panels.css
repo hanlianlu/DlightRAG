@@ -68,6 +68,7 @@ dl-inspector[aria-hidden='true'] {
     font-size: var(--font-size-detail);
     font-weight: 500;
     letter-spacing: 0;
+    min-height: var(--size-button);
     padding: var(--space-inline) var(--space-component);
     border-radius: var(--radius-control);
     transition: color 0.15s, background 0.15s;
@@ -119,5 +120,13 @@ dl-inspector-files {
 dl-inspector-sources[hidden],
 dl-inspector-files[hidden] {
     display: none;
+}
+
+@media (height <= 640px) and (width < 1200px) {
+    .panel.open {
+        inset: 0;
+        position: fixed;
+        width: 100vw;
+    }
 }
 

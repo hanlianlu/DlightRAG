@@ -151,6 +151,43 @@ def test_reference_item_keyboard_opens_source_panel(page):
 
 
 @pytest.mark.e2e
+def test_mobile_source_panel_is_full_bleed_and_touch_reachable(page):
+    page.set_viewport_size({"width": 390, "height": 844})
+    _open_ready_page(page)
+    _inject_answer_with_sources(page)
+    page.locator("[data-answer-ref]").press("Enter")
+
+    panel = page.locator('#panel.open[data-panel-kind="sources"]')
+    panel.wait_for()
+    details = panel.evaluate(
+        """element => {
+            const rect = element.getBoundingClientRect();
+            const top = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+            return {
+                rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
+                topmost: top === element || (top !== null && element.contains(top)),
+                overflow: document.documentElement.scrollWidth - innerWidth,
+            };
+        }"""
+    )
+    assert details["rect"]["x"] == pytest.approx(0, abs=1)
+    assert details["rect"]["width"] == pytest.approx(390, abs=1)
+    assert details["rect"]["height"] == pytest.approx(844, abs=1)
+    assert details["topmost"] is True, details
+    assert details["overflow"] <= 1, details
+
+    for control in (
+        panel.get_by_role("button", name="Close panel"),
+        panel.locator("[data-source-toggle]").first,
+        panel.get_by_role("link", name="Download source"),
+    ):
+        box = control.bounding_box()
+        assert box is not None
+        assert box["width"] >= 44, box
+        assert box["height"] >= 44, box
+
+
+@pytest.mark.e2e
 def test_conversation_route_change_closes_sources_panel(page):
     _open_ready_page(page)
     _inject_answer_with_sources(page)

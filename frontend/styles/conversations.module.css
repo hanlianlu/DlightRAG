@@ -143,6 +143,7 @@
     cursor: pointer;
     font: inherit;
     font-size: var(--font-size-detail);
+    min-height: var(--size-button);
     min-width: 0;
     overflow: hidden;
     padding: var(--space-tight);
@@ -198,6 +199,7 @@
     cursor: pointer;
     font: inherit;
     font-size: var(--font-size-detail);
+    min-height: var(--size-button);
     padding: var(--space-tight) var(--space-component);
     text-align: left;
 }
@@ -385,6 +387,12 @@
 
     :global(body.conversation-drawer-open #chat-sidebar) {
         transform: translateX(0);
+    }
+}
+
+@media (height <= 640px) and (width < 1200px) {
+    :global(#chat-sidebar) {
+        width: 100vw;
     }
 }
 

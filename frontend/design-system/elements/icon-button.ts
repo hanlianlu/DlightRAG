@@ -20,6 +20,8 @@ template.innerHTML = `
       display: inline-flex;
       justify-content: center;
       margin: 0;
+      min-block-size: var(--control-hit-target, 44px);
+      min-inline-size: var(--control-hit-target, 44px);
       padding: var(--space-inline, 0.25rem) var(--space-tight, 0.5rem);
     }
     button:hover { background: var(--color-bg-elevated, transparent); }

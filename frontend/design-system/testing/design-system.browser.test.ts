@@ -60,6 +60,8 @@ it('renders a decorative icon inside an accessible host button', () => {
   expect(glyph.classList.contains('dl-icon--sm')).to.equal(true);
   expect(glyph.getBoundingClientRect().width).to.be.at.least(12);
   expect(glyph.getBoundingClientRect().height).to.be.at.least(12);
+  expect(inner.getBoundingClientRect().width).to.be.at.least(44);
+  expect(inner.getBoundingClientRect().height).to.be.at.least(44);
 });
 
 it('moves focus among slotted menuitems and dismisses on Escape', () => {
@@ -173,6 +175,23 @@ it('keeps the divider above a high z-index slotted pane', () => {
   expect(overlap, `overlap=${overlap?.nodeName}.${(overlap as HTMLElement | null)?.id}`).to.equal(
     split.divider,
   );
+});
+
+it('lets a product owner raise one isolated pane for an overlay', () => {
+  const split = document.createElement('dl-split-layout');
+  split.style.cssText = [
+    'display:block',
+    'width:500px',
+    'height:160px',
+    '--split-start-layer:2',
+  ].join(';');
+  split.innerHTML = '<div slot="start"></div><div slot="end"></div>';
+  document.body.append(split);
+
+  const start = split.shadowRoot?.querySelector<HTMLElement>('#start');
+  const end = split.shadowRoot?.querySelector<HTMLElement>('#end');
+  expect(getComputedStyle(start!).zIndex).to.equal('2');
+  expect(getComputedStyle(end!).zIndex).to.equal('0');
 });
 
 it('mirrors horizontal pointer and keyboard direction under RTL', () => {

@@ -32,6 +32,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-tight);
+    min-height: var(--size-button);
     min-width: 0;
     flex: 1;
     padding: 0;
@@ -187,6 +188,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    min-height: var(--size-button);
+    min-width: var(--size-button);
     padding: var(--space-inline);
     margin: calc(-1 * var(--space-inline));
     margin-left: 0;

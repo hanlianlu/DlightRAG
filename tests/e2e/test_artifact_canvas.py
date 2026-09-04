@@ -192,6 +192,88 @@ def test_markdown_artifact_uses_the_general_artifact_canvas(page: Page) -> None:
     assert page.locator("#report-panel").count() == 0
 
 
+@pytest.mark.parametrize(
+    "viewport",
+    [(390, 844), (844, 390)],
+    ids=["phone", "phone-landscape"],
+)
+def test_mobile_artifact_canvas_is_full_bleed_and_restores_focus(
+    page: Page, viewport: tuple[int, int]
+) -> None:
+    page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
+    artifact = _artifact_wire(
+        presentation="markdown", media_type="text/markdown", filename="report.md"
+    )
+    _install_history(page, _presentation_wire(artifact))
+    page.route(
+        f"**/web/api/answer/{_RUN_ID}/artifacts/{_RESOURCE_ID}/presentation",
+        lambda route: route.fulfill(
+            json={
+                "answer_text": "# Quarterly review\n\nLong body.",
+                "parts": [
+                    {
+                        "type": "markdown",
+                        "text": "# Quarterly review\n\nLong body.",
+                        "html": "<h1>Quarterly review</h1><p>Long body.</p>",
+                        "artifact": None,
+                        "evidence_image": None,
+                        "inline": False,
+                    }
+                ],
+                "sources": [],
+                "evidence_images": [],
+                "artifacts": [artifact],
+                "artifact_outcome": {"status": "complete", "issues": []},
+            }
+        ),
+    )
+    _open_ready_page(page)
+    conversations_close = page.get_by_role("button", name="Close conversations")
+    if conversations_close.is_visible():
+        conversations_close.click()
+    opener = page.get_by_role("button", name="Open Artifact")
+    opener.click()
+
+    canvas = page.locator("#artifact-canvas.open")
+    canvas.get_by_text("Quarterly review").wait_for(timeout=10000)
+    details = canvas.evaluate(
+        """element => {
+            const rect = element.getBoundingClientRect();
+            const top = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+            return {
+                rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
+                topmost: top === element || (top !== null && element.contains(top)),
+                overflow: document.documentElement.scrollWidth - innerWidth,
+            };
+        }"""
+    )
+    assert details["rect"]["x"] == pytest.approx(0, abs=1)
+    assert details["rect"]["width"] == pytest.approx(viewport[0], abs=1)
+    assert details["rect"]["height"] == pytest.approx(viewport[1], abs=1)
+    assert details["topmost"] is True, details
+    assert details["overflow"] <= 1, details
+
+    close = canvas.get_by_role("button", name="Close Artifact")
+    download = canvas.get_by_role("link", name="Download", exact=True)
+    for control in (close, download):
+        box = control.bounding_box()
+        assert box is not None
+        assert box["width"] >= 44, box
+        assert box["height"] >= 44, box
+    assert canvas.locator("dl-icon-button[data-action='close']").evaluate(
+        "element => document.activeElement === element"
+    )
+    page.keyboard.press("Tab")
+    assert download.evaluate("element => document.activeElement === element")
+
+    close.click()
+    page.wait_for_function(
+        "!document.getElementById('artifact-canvas')?.classList.contains('open')"
+        " && document.activeElement?.textContent?.includes('Open Artifact')"
+    )
+    assert opener.evaluate("element => document.activeElement === element")
+
+
 def test_markdown_artifact_citation_opens_its_source_beside_the_canvas(page: Page) -> None:
     page.set_viewport_size({"width": 1440, "height": 900})
     artifact = _artifact_wire(

@@ -17,6 +17,10 @@
     display: flex;
     flex-direction: column;
     height: 100dvh;
+    max-width: 100vw;
+    min-width: 0;
+    overflow: hidden;
+    width: 100%;
 }
 
 /* === Top Bar — ghost style === */
@@ -375,6 +379,8 @@ body.files-panel-open #files-btn {
     color: var(--color-text-dim);
     font: inherit;
     font-size: 0.75rem;
+    min-height: var(--size-button);
+    min-width: var(--size-button);
     padding: 0.25rem 0.4rem;
     cursor: pointer;
     border-radius: var(--radius-control);
@@ -459,6 +465,7 @@ body.files-panel-open #files-btn {
     background: transparent;
     text-align: left;
     font: inherit;
+    min-height: var(--size-button);
     padding: 0.35rem 0.5rem;
     border-radius: var(--radius-control);
     cursor: pointer;
@@ -513,6 +520,7 @@ body.files-panel-open #files-btn {
     text-align: left;
     font: inherit;
     font-size: 0.8rem;
+    min-height: var(--size-button);
     padding: 0.35rem 0.5rem;
     border-radius: var(--radius-control);
     cursor: pointer;
@@ -678,9 +686,24 @@ dl-chat-composer {
 }
 
 @media (width < 1200px) {
+    :root {
+        --size-button: var(--control-hit-target);
+    }
+
     .app-shell {
         inset: 0;
         position: fixed;
+    }
+
+    /* The split primitive isolates its panes. Raise the pane that owns the
+       modal conversation drawer, not only the fixed child inside it. */
+    body.conversation-drawer-open #conversation-split {
+        --split-start-layer: 1;
+    }
+
+    body:is(.files-panel-open, .sources-panel-open) #panel-split,
+    body.artifact-canvas-open #artifact-canvas-split {
+        --split-end-layer: 1;
     }
 
     .panel {

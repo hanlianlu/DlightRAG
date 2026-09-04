@@ -24,6 +24,7 @@
     font-size: var(--font-size-detail);
     font-weight: 500;
     gap: var(--space-inline);
+    min-height: var(--size-button);
     padding: var(--space-inline) var(--space-tight);
     transition: background 0.15s, border-color 0.15s;
     user-select: none;

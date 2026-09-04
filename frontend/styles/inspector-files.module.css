@@ -41,12 +41,12 @@
     cursor: pointer;
     display: flex;
     flex-shrink: 0;
-    height: var(--size-icon-md);
+    height: var(--size-button);
     justify-content: center;
     opacity: 0.45;
     padding: 0;
     transition: all 0.15s;
-    width: var(--size-icon-md);
+    width: var(--size-button);
 }
 
 @media (hover: hover) {
@@ -200,6 +200,7 @@
     cursor: pointer;
     display: block;
     font: inherit;
+    min-height: var(--size-button);
     padding: 0;
     width: 100%;
 }
@@ -229,6 +230,7 @@
     font-family: inherit;
     font-size: var(--font-size-caption);
     cursor: pointer;
+    min-height: var(--size-button);
     padding: var(--space-inline) var(--space-tight);
     text-decoration: underline;
     text-decoration-color: transparent;

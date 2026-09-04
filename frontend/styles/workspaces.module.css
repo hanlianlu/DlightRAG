@@ -61,11 +61,11 @@
   flex-shrink: 0;
   font: inherit;
   font-size: var(--font-size-caption);
-  height: var(--size-icon-md);
+  height: var(--size-button);
   justify-content: center;
   opacity: 0.45;
   transition: all 0.15s;
-  width: var(--size-icon-md);
+  width: var(--size-button);
 }
 
 @media (hover: hover) {

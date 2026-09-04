@@ -59,6 +59,34 @@ def _wait_for_shell_settled(page: Page) -> None:
     raise AssertionError("shell layout did not settle")
 
 
+def _assert_surface_owns_viewport_layer(page: Page, selector: str) -> None:
+    details = page.locator(selector).evaluate(
+        """element => {
+            const rect = element.getBoundingClientRect();
+            const x = Math.max(0, Math.min(innerWidth - 1, rect.left + rect.width / 2));
+            const y = Math.max(0, Math.min(innerHeight - 1, rect.top + rect.height / 2));
+            const top = document.elementFromPoint(x, y);
+            return {
+                contained: rect.left >= -0.5 && rect.top >= -0.5
+                    && rect.right <= innerWidth + 0.5 && rect.bottom <= innerHeight + 0.5,
+                topmost: top === element || (top !== null && element.contains(top)),
+                top: top ? `${top.tagName.toLowerCase()}.${top.className}` : null,
+                rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
+                viewport: {width: innerWidth, height: innerHeight},
+            };
+        }"""
+    )
+    assert details["contained"] is True, details
+    assert details["topmost"] is True, details
+
+
+def _assert_touch_target(locator: Locator) -> None:
+    box = locator.bounding_box()
+    assert box is not None
+    assert box["width"] >= 44, box
+    assert box["height"] >= 44, box
+
+
 def _install_conversation_routes(page: Page) -> ConversationRouteState:
     now = datetime.now(UTC)
     state = ConversationRouteState()
@@ -826,7 +854,11 @@ def test_only_the_conversation_area_dismisses_an_open_panel(page: Page) -> None:
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize("viewport", [(900, 800), (390, 844)])
+@pytest.mark.parametrize(
+    "viewport",
+    [(900, 800), (844, 390), (390, 844), (320, 568)],
+    ids=["tablet", "phone-landscape", "phone", "small-phone"],
+)
 def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     page: Page, viewport: tuple[int, int]
 ) -> None:
@@ -843,6 +875,14 @@ def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     sidebar = page.locator("#chat-sidebar")
     assert sidebar.get_attribute("role") == "dialog"
     assert sidebar.get_attribute("aria-modal") == "true"
+    page.wait_for_function(
+        "document.querySelector('#chat-sidebar')?.getBoundingClientRect().left >= -0.5"
+    )
+    _assert_surface_owns_viewport_layer(page, "#chat-sidebar")
+    sidebar_box = sidebar.bounding_box()
+    assert sidebar_box is not None
+    if min(viewport) <= 640:
+        assert sidebar_box["width"] == pytest.approx(viewport[0], abs=1)
     assert page.locator("dl-chat-feature").evaluate("element => element.inert") is True
     assert notification_offer.evaluate("element => element.inert") is True
     assert (
@@ -858,6 +898,13 @@ def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     panel = page.locator("#panel")
     assert panel.get_attribute("role") == "dialog"
     assert panel.get_attribute("aria-modal") == "true"
+    _assert_surface_owns_viewport_layer(page, "#panel")
+    panel_box = panel.bounding_box()
+    assert panel_box is not None
+    if min(viewport) <= 640:
+        assert panel_box["width"] == pytest.approx(viewport[0], abs=1)
+    else:
+        assert panel_box["width"] == pytest.approx(420, abs=1)
     assert page.locator("dl-chat-feature").evaluate("element => element.inert") is False
     assert page.locator("#chat-messages").evaluate("element => element.inert") is True
     assert page.locator("dl-chat-composer").evaluate("element => element.inert") is True
@@ -875,9 +922,23 @@ def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     page.keyboard.press("Escape")
     page.wait_for_function("document.activeElement?.id === 'files-btn'")
 
+    if min(viewport) <= 640:
+        open_conversations.click()
+        page.wait_for_function(
+            "document.querySelector('#chat-sidebar')?.getBoundingClientRect().left >= -0.5"
+        )
+        settings = _open_settings(page)
+        page.wait_for_function(
+            "document.querySelector('.settings-dialog')?.getBoundingClientRect().left >= -0.5"
+        )
+        _assert_surface_owns_viewport_layer(page, ".settings-dialog")
+        settings_box = settings.bounding_box()
+        assert settings_box is not None
+        assert settings_box["width"] == pytest.approx(viewport[0], abs=1)
+
 
 @pytest.mark.e2e
-def test_mobile_topbar_hides_scope_copy_and_keeps_an_accessible_icon_files_action(
+def test_mobile_shell_keeps_primary_actions_reachable(
     page: Page,
 ) -> None:
     _install_conversation_routes(page)
@@ -894,9 +955,130 @@ def test_mobile_topbar_hides_scope_copy_and_keeps_an_accessible_icon_files_actio
     expect(files).to_be_visible()
     expect(files.locator(".files-button-label")).to_be_hidden()
     expect(files.locator(".files-button-icon")).to_be_visible()
-    box = files.bounding_box()
-    assert box is not None
-    assert box["width"] == pytest.approx(box["height"], abs=1)
+    for control in (
+        page.get_by_role("button", name="Open conversations"),
+        page.get_by_role("button", name="Choose search workspaces"),
+        files,
+        page.get_by_role("button", name="Appearance"),
+        page.get_by_role("button", name="Attach files"),
+        page.get_by_role("button", name="Answer mode: Auto"),
+        page.get_by_role("button", name="Send"),
+    ):
+        _assert_touch_target(control)
+
+    page.get_by_role("button", name="Choose search workspaces").click()
+    workspace_popover = page.get_by_role("dialog", name="Workspaces")
+    workspace_popover.wait_for()
+    for control in workspace_popover.locator("button").all():
+        _assert_touch_target(control)
+    page.keyboard.press("Escape")
+
+    page.get_by_role("button", name="Appearance").click()
+    for control in page.locator("#theme-menu button").all():
+        _assert_touch_target(control)
+    page.keyboard.press("Escape")
+
+    page.get_by_role("button", name="Open conversations").click()
+    page.wait_for_function(
+        "document.querySelector('#chat-sidebar')?.getBoundingClientRect().left >= -0.5"
+    )
+    _assert_surface_owns_viewport_layer(page, "#chat-sidebar")
+    actions = page.get_by_role("button", name="Conversation actions").first
+    for control in (
+        page.get_by_role("button", name="New chat"),
+        page.get_by_role("button", name="Close conversations"),
+        page.locator(".conversation-select").first,
+        actions,
+    ):
+        _assert_touch_target(control)
+    actions.click()
+    for control in page.get_by_role("menuitem").all():
+        _assert_touch_target(control)
+    page.keyboard.press("Escape")
+
+    settings = _open_settings(page)
+    page.wait_for_function(
+        "document.querySelector('.settings-dialog')?.getBoundingClientRect().left >= -0.5"
+    )
+    _assert_surface_owns_viewport_layer(page, ".settings-dialog")
+    settings_box = settings.bounding_box()
+    assert settings_box is not None
+    assert settings_box["width"] == pytest.approx(390, abs=1)
+    _assert_touch_target(settings.get_by_role("button", name="Close settings"))
+    for control in settings.locator(".dl-dialog-checkbox").all():
+        _assert_touch_target(control)
+    page.keyboard.press("Escape")
+    page.get_by_role("button", name="Close conversations").click()
+    page.wait_for_function(
+        "document.querySelector('#chat-sidebar')?.getBoundingClientRect().right <= 0.5"
+    )
+
+    files.click()
+    panel = page.locator("#panel")
+    panel.wait_for()
+    _assert_surface_owns_viewport_layer(page, "#panel")
+    for control in (
+        panel.get_by_role("button", name="Close panel"),
+        panel.get_by_role("button", name="Choose files"),
+        panel.get_by_role("button", name="Choose folder"),
+        panel.locator("dl-ingest-target").get_by_role("button"),
+    ):
+        _assert_touch_target(control)
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize(
+    "viewport",
+    [(320, 568), (390, 500), (844, 390)],
+    ids=["small-phone", "reduced-height", "phone-landscape"],
+)
+def test_compact_dynamic_viewport_keeps_shell_and_composer_reachable(
+    page: Page, viewport: tuple[int, int]
+) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+    close = page.get_by_role("button", name="Close conversations")
+    if close.is_visible():
+        close.click()
+        page.wait_for_function(
+            "document.querySelector('#chat-sidebar')?.getBoundingClientRect().right <= 0.5"
+        )
+    page.get_by_role("textbox", name="Message").focus()
+
+    page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
+    page.wait_for_function(
+        "size => document.querySelector('#app')?.getBoundingClientRect().height === size.height",
+        arg={"height": viewport[1]},
+    )
+    layout = page.locator("#app").evaluate(
+        """element => {
+            const rect = node => {
+                const box = node.getBoundingClientRect();
+                return {
+                    width: box.width,
+                    height: box.height,
+                    top: box.top,
+                    right: box.right,
+                    bottom: box.bottom,
+                };
+            };
+            return {
+                app: rect(element),
+                topbar: rect(document.querySelector('.topbar')),
+                composer: rect(document.querySelector('#composer')),
+                send: rect(document.querySelector('.composer-send')),
+            };
+        }"""
+    )
+    assert layout["app"]["width"] == pytest.approx(viewport[0], abs=1), layout
+    assert layout["app"]["height"] == pytest.approx(viewport[1], abs=1), layout
+    assert layout["topbar"]["top"] >= -0.5, layout
+    assert layout["composer"]["bottom"] <= viewport[1] + 0.5, layout
+    assert layout["composer"]["top"] >= layout["topbar"]["bottom"], layout
+    assert layout["send"]["right"] <= viewport[0] + 0.5, layout
+    assert layout["send"]["bottom"] <= viewport[1] + 0.5, layout
 
 
 @pytest.mark.e2e
