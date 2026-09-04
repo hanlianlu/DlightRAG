@@ -112,7 +112,7 @@ export class DlArtifactCanvas extends LightElement {
       this.close(false);
       return returnFocus;
     }
-    this.#setLayout('side');
+    if (this.layout === 'fullscreen') this.#setLayout('wide');
     return null;
   }
 

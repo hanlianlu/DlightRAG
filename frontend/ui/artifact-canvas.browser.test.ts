@@ -237,8 +237,17 @@ it('publishes modal, overlay, and wide predicates for Shell composition', async 
   expect(canvas.getAttribute('aria-modal')).to.equal(null);
   expect(states.at(-1)).to.deep.equal({open: true, modal: false, overlay: false, wide: true});
 
+  // Opening Sources preserves a docked layout that can coexist with Inspector.
+  canvas.prepareForInspector();
+  await canvas.updateComplete;
+  expect(canvas.layout).to.equal('wide');
+  expect(states.at(-1)).to.deep.equal({open: true, modal: false, overlay: false, wide: true});
+
   // Fullscreen is the modal; focus trapping applies there.
-  const fullscreenButton = Array.from(canvas.querySelectorAll<HTMLButtonElement>('.artifact-canvas-layout-actions button'))
+  const layoutButtons = Array.from(canvas.querySelectorAll<HTMLButtonElement>(
+    '.artifact-canvas-layout-actions button',
+  ));
+  const fullscreenButton = layoutButtons
     .find((button) => button.textContent?.trim() === 'Fullscreen');
   fullscreenButton?.click();
   await canvas.updateComplete;
@@ -255,8 +264,15 @@ it('publishes modal, overlay, and wide predicates for Shell composition', async 
 
   canvas.prepareForInspector();
   await canvas.updateComplete;
-  expect(canvas.layout).to.equal('side');
+  expect(canvas.layout).to.equal('wide');
   expect(canvas.hasAttribute('aria-modal')).to.equal(false);
+  expect(states.at(-1)).to.deep.equal({open: true, modal: false, overlay: false, wide: true});
+
+  const sideButton = layoutButtons.find((button) => button.textContent?.trim() === 'Side');
+  sideButton?.click();
+  canvas.prepareForInspector();
+  await canvas.updateComplete;
+  expect(canvas.layout).to.equal('side');
   expect(states.at(-1)).to.deep.equal({open: true, modal: false, overlay: false, wide: false});
 });
 

@@ -466,7 +466,7 @@ it('opens Sources as the only compact modal when intent originates in Canvas', a
   expect(document.activeElement).to.equal(returnFocus);
 });
 
-it('restores a desktop Canvas citation when Sources closes alongside it', async () => {
+it('preserves a wide desktop Canvas when Sources opens and restores its citation', async () => {
   window.matchMedia = desktopMedia;
   // The canvas parses this response through the api schema: serve wire shape.
   const presentationWire = {
@@ -517,6 +517,11 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
   const canvasPresentation = canvas.querySelector<AnswerPresentationElement>(
     'dl-answer-presentation',
   )!;
+  const wideButton = Array.from(canvas.querySelectorAll<HTMLButtonElement>(
+    '.artifact-canvas-layout-actions button',
+  )).find((button) => button.textContent?.trim() === 'Wide');
+  wideButton?.click();
+  await canvas.updateComplete;
   canvasPresentation.tabIndex = 0;
   canvasPresentation.focus();
   canvasPresentation.dispatchEvent(new CustomEvent<AnswerSourceOpenDetail>('dl-answer-source-open', {
@@ -526,7 +531,7 @@ it('restores a desktop Canvas citation when Sources closes alongside it', async 
   }));
   await waitFor(() => app.querySelector('#panel')?.classList.contains('open') === true);
   expect(canvas.classList.contains('open')).to.equal(true);
-  expect(canvas.layout).to.equal('side');
+  expect(canvas.layout).to.equal('wide');
 
   app.querySelector<HTMLButtonElement>('#panel-close-btn')?.click();
   await new Promise((resolve) => requestAnimationFrame(resolve));
