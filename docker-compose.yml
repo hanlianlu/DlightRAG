@@ -1,14 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-# Credentials come from .env (not tracked in git).
+# Application behavior comes from config.yaml, credentials from .env (not
+# tracked in git), and this file owns only container-topology bindings.
 #
 # Optional parser profile (the default uses host-native MinerU):
 #   docker compose --profile docling up -d  # bundled CPU Docling alternative
 
-x-common-env: &common-env
-  # Container-topology binding only: Compose service discovery differs from a
-  # native run. Application behavior comes from config.yaml, credentials from
-  # .env, and filesystem paths use the image's canonical application defaults.
-  DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
 x-global-skills-mount: &global-skills-mount
   type: bind
   source: ${COMPOSE_GLOBAL_SKILLS_DIR:-${HOME}/.dlightrag/skills}
@@ -17,19 +13,18 @@ x-global-skills-mount: &global-skills-mount
   bind:
     # Never let Docker create an operator-managed host directory as root.
     create_host_path: false
-x-app-image: &app-image dlightrag:local
-x-app-build: &app-build
-  context: .
 
 services:
   dlightrag-api:
     restart: unless-stopped
-    image: *app-image
-    build: *app-build
+    image: dlightrag:local
+    build:
+      context: .
     ports:
       - "127.0.0.1:8100:8100"
     environment:
-      <<: *common-env
+      # Compose Service DNS; the native application default remains localhost.
+      DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
       # The container binds 0.0.0.0, but the port above is published to
       # 127.0.0.1 only, so no-auth is acceptable for local dev. Set
       # access.auth_mode: simple in config.yaml, provide
@@ -68,8 +63,9 @@ services:
 
   dlightrag-mcp:
     restart: unless-stopped
-    image: *app-image
-    build: *app-build
+    image: dlightrag:local
+    build:
+      context: .
     # SECURITY: MCP streamable-http exposes ingest / delete_files / answer.
     # This maps the host port to 127.0.0.1 only; set access.auth_mode: simple in
     # config.yaml and provide DLIGHTRAG_ACCESS__API_TOKEN as a Secret before
@@ -77,7 +73,8 @@ services:
     ports:
       - "127.0.0.1:8101:8101"
     environment:
-      <<: *common-env
+      # Compose Service DNS; the native application default remains localhost.
+      DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
       DLIGHTRAG_INTERFACES__MCP__TRANSPORT: streamable-http
       DLIGHTRAG_INTERFACES__MCP__HOST: "0.0.0.0"
       DLIGHTRAG_INTERFACES__MCP__PORT: "8101"

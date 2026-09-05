@@ -189,6 +189,22 @@ def test_compose_builds_pg18_postgres_image_locally() -> None:
     assert "dlightrag-postgres:pg18" in workflow
 
 
+def test_compose_keeps_only_the_complex_shared_mount_extension() -> None:
+    """Two services are clearer with explicit image/build/topology bindings."""
+    compose_text = Path("docker-compose.yml").read_text(encoding="utf-8")
+    compose = yaml.safe_load(compose_text)
+
+    assert "x-common-env:" not in compose_text
+    assert "x-app-image:" not in compose_text
+    assert "x-app-build:" not in compose_text
+    assert "x-global-skills-mount:" in compose_text
+    for service_name in ("dlightrag-api", "dlightrag-mcp"):
+        service = compose["services"][service_name]
+        assert service["image"] == "dlightrag:local"
+        assert service["build"] == {"context": "."}
+        assert service["environment"]["DLIGHTRAG_STORAGE__POSTGRES__HOST"] == "postgres"
+
+
 def test_compose_grants_application_config_as_a_config_not_a_data_volume() -> None:
     """The canonical YAML is configuration in both Compose and Kubernetes."""
     compose_text = Path("docker-compose.yml").read_text(encoding="utf-8")

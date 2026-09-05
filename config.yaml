@@ -2,6 +2,8 @@
 # Priority: env > .env > config.yaml > defaults
 
 models:
+  # Optional deployment-specific model capability profiles. Empty falls
+  # through to the built-in catalogue (and any PostgreSQL runtime overlay).
   catalogue: []
   chat:
     default:
@@ -54,7 +56,10 @@ models:
     max_concurrency: 16
 
 deployment:
+  # Relative to the process working directory. In the bundled image this
+  # resolves to /app/dlightrag_storage, matching the Compose volume target.
   working_dir: ./dlightrag_storage
+  # Default logical Corpus Workspace, not a Docker or Agent Workspace path.
   workspace: default
 
 corpus:
@@ -91,8 +96,11 @@ answer:
   agent:
     # disabled | trust | sandbox. Sandbox requires an installed trusted adapter.
     execution_environment: trust
+    # null uses ~/.dlightrag/agent_workspaces; Compose mounts its named volume at
+    # that canonical container path instead of overriding this application value.
     workspace_root: null
-    # Explicit remote tools only; see docs/configuration.md for endpoint examples.
+    # Explicit remote tools only; [] disables outbound MCP. See
+    # docs/configuration.md for endpoint examples.
     outbound_mcp: []
 
 access:
