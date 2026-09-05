@@ -193,6 +193,16 @@ capability, byte size, and raw-content digest in the same settlement as the tool
 result. Reattaching the same path replaces its intent and moves it to the latest
 settlement position.
 
+The Answer remains the default deliverable; Workspace and publication-tool
+availability do not imply that Research should create an Artifact. The Agent uses
+a separate Artifact when the user requests one, when a complete deliverable is
+too long or structurally rich for one practical Answer, or when a visual,
+interactive, or downloadable surface materially improves use. If the Artifact
+contains the complete deliverable, the Answer is a concise orientation and
+handoff rather than a substantial copy. Explicit requests for both inline and
+file versions are the exception. Independent citation validation governs support
+on each surface, not duplicated prose.
+
 At the terminal boundary, the Host verifies every attachment against current
 bytes and publishes each valid root plus the safe transitive dependency closure
 reachable through Markdown/HTML `artifact:` links. Those links are placement

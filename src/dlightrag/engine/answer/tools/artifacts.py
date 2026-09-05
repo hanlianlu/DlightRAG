@@ -72,17 +72,20 @@ def attach_artifact_tool(
     return AgentTool(
         name="attach_artifact",
         description=(
-            "Attach one completed artifacts/ file as a root user deliverable. Call only "
-            "after its final write or edit; linked dependencies are included automatically."
+            "Attach one optional, completed artifacts/ file as a root user deliverable. "
+            "Call only after its final write or edit; linked dependencies are included "
+            "automatically."
         ),
         input_model=AttachArtifactArgs,
         execute=execute,
         replay_policy="replayable",
         contract_version=1,
         guidance=(
-            "attach_artifact: path is relative to artifacts/; attach only root deliverables "
-            "after their final modification. The returned artifact link controls placement; "
-            "the Host places an attached root automatically if the final answer omits it."
+            "attach_artifact: path is relative to artifacts/. Attach only a root deliverable "
+            "the user requested as a file or that genuinely benefits from a separate reading "
+            "or download surface, never merely because the tool is available. Attach after "
+            "the final modification. The returned Artifact link controls placement; the Host "
+            "places an attached root automatically if the final Answer omits it."
         ),
     )
 

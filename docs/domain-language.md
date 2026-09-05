@@ -8,6 +8,10 @@ DlightRAG is a durable research-and-retrieval product that joins reusable AI, ag
 The local in-process DlightRAG product surface that exposes Answer, retrieval, and corpus-administration capabilities and owns their shared lifetime.
 _Avoid_: Manager, service locator
 
+**Answer**:
+The default owner-visible terminal prose of an Answer Run, shown in the conversation surface. It directly satisfies the request unless a separate deliverable is warranted; when a Published Artifact carries the complete deliverable, the Answer is a concise orientation and handoff rather than a second copy.
+_Avoid_: Answer Run, Published Artifact, parallel report body
+
 **Answer Run**:
 An owner-scoped durable execution accepted once and observable through status, events, cancellation, and a terminal result.
 _Avoid_: Request, job, task
@@ -234,8 +238,8 @@ A run-scoped publication authorization settled by the parent Research Session fo
 _Avoid_: Published Artifact, Workspace file, `artifact:` link, upload attachment
 
 **Published Artifact**:
-An owner-visible, run-scoped output descriptor created by fenced publication of an authorized Root Artifact Attachment or its validated dependency bytes. It carries stable resource identity, validated media type, presentation capability, publication status, and an owner-scoped data plane without exposing a Workspace path.
-_Avoid_: Spill, Blob when referring to the reference rather than the bytes, unattached workspace file
+An optional owner-visible, run-scoped output descriptor created by fenced publication of an authorized Root Artifact Attachment or its validated dependency bytes. It is a separate reading, presentation, or download surface for a user-requested file, an impractically long or structurally rich deliverable, or content materially improved by that surface. It carries stable resource identity, validated media type, presentation capability, publication status, and an owner-scoped data plane without exposing a Workspace path.
+_Avoid_: Answer, parallel Answer, routine Research by-product, Spill, Blob when referring to the reference rather than the bytes, unattached workspace file
 
 **Artifact Canvas**:
 The Web Feature that opens any presentable Published Artifact and owns loading, safe renderer selection, side/wide/fullscreen layout, focus restoration, and preview teardown.

@@ -54,8 +54,17 @@ def test_artifact_publication_guidance_is_capability_gated() -> None:
     assert "same Citation Contract" in enabled
     assert "citations are resolved independently" in enabled
     assert "safe dependency closure is included automatically" in enabled
+    assert "The final Answer is the default deliverable" in enabled
+    assert "Do not create an Artifact merely because" in enabled
+    assert "too long or structurally rich" in enabled
+    assert "separate visual, interactive, or downloadable surface" in enabled
+    assert "Do not reproduce substantial portions of the Artifact" in enabled
+    assert "explicitly requests both inline and file versions" in enabled
+    assert "does not require duplicated prose" in enabled
     assert "root Artifact" not in control_turn_instruction()
-    assert "root Artifact" in control_turn_instruction(artifact_publication=True)
+    terminal = control_turn_instruction(artifact_publication=True)
+    assert "root Artifact" in terminal
+    assert "concise handoff rather than repeat" in terminal
 
 
 def test_research_agent_keeps_its_own_loop_guidance() -> None:
