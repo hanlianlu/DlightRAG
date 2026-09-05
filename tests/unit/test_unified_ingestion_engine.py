@@ -43,6 +43,14 @@ def _make_engine(**overrides):
         "chunks_list": ["chunk-a"],
         "content_hash": "sha256:abc",
     }
+    stores.get_full_doc_statuses.side_effect = lambda doc_ids: {
+        doc_id: {
+            "status": "processed",
+            "chunks_list": ["chunk-a"],
+            "content_hash": "sha256:abc",
+        }
+        for doc_id in doc_ids
+    }
     stores.get_full_doc.return_value = {
         "parse_engine": "mineru",
         "process_options": "iteP",
@@ -141,6 +149,100 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     assert kwargs["process_options"] == ["iteP"]
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
     assert deps["metadata_index"].upsert.await_count == 2
+
+
+async def test_ingest_waits_when_processing_is_queued_behind_busy_owner(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "queued.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    statuses: dict[str, dict[str, object]] = {}
+    processing_call_returned = asyncio.Event()
+
+    async def enqueue(**_kwargs: object) -> str:
+        statuses[doc_id] = {"status": "pending", "chunks_list": []}
+        return "track-queued"
+
+    async def queue_behind_busy_owner() -> None:
+        processing_call_returned.set()
+
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc_statuses.side_effect = lambda doc_ids: {
+        doc_id: statuses[doc_id] for doc_id in doc_ids if doc_id in statuses
+    }
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = enqueue
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = queue_behind_busy_owner
+
+    task = asyncio.create_task(engine.aingest_files([source]))
+    await asyncio.wait_for(processing_call_returned.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert not task.done()
+
+    statuses[doc_id] = {"status": "processed", "chunks_list": ["chunk-queued"]}
+    result = await asyncio.wait_for(task, timeout=1)
+
+    assert result["processed"] == 1
+    assert result["errors"] == []
+    assert result["results"][0]["chunks"] == ["chunk-queued"]
+
+
+async def test_ingest_redrives_queue_after_busy_owner_exits_abnormally(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "retry-queued.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    statuses: dict[str, dict[str, object]] = {}
+    processing_calls = 0
+
+    async def enqueue(**_kwargs: object) -> str:
+        statuses[doc_id] = {"status": "pending", "chunks_list": []}
+        return "track-retry-queued"
+
+    async def process_or_observe_busy_owner() -> None:
+        nonlocal processing_calls
+        processing_calls += 1
+        if processing_calls == 2:
+            statuses[doc_id] = {
+                "status": "processed",
+                "chunks_list": ["chunk-retry-queued"],
+            }
+
+    deps["stores"].get_doc_status.side_effect = lambda current: statuses.get(current)
+    deps["stores"].get_full_doc_statuses.side_effect = lambda doc_ids: {
+        doc_id: statuses[doc_id] for doc_id in doc_ids if doc_id in statuses
+    }
+    deps["lightrag"].apipeline_enqueue_documents.side_effect = enqueue
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = process_or_observe_busy_owner
+
+    result = await asyncio.wait_for(engine.aingest_files([source]), timeout=1)
+
+    assert processing_calls == 2
+    assert result["processed"] == 1
+    assert result["errors"] == []
+    assert result["results"][0]["chunks"] == ["chunk-retry-queued"]
+
+
+async def test_ingest_does_not_wait_forever_on_unknown_pipeline_status(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "unknown-status.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    unknown_status = {"status": "future-state", "chunks_list": []}
+
+    deps["stores"].get_doc_status.return_value = unknown_status
+    deps["stores"].get_full_doc_statuses.side_effect = lambda _doc_ids: {doc_id: unknown_status}
+
+    result = await asyncio.wait_for(engine.aingest_files([source]), timeout=1)
+
+    assert result["processed"] == 0
+    assert result["errors"] == ["unknown-status.pdf: document processing failed"]
 
 
 async def test_document_ingest_persists_lightrag_archived_source_locator(

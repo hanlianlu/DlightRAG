@@ -44,6 +44,11 @@ from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup, defer
 logger = logging.getLogger(__name__)
 
 _FINALIZATION_COMPLETE_KEY = INGEST_FINALIZATION_COMPLETE_FIELD
+_ACTIVE_INGEST_STATUSES = frozenset(
+    {"pending", "parsing", "analyzing", "processing", "preprocessed"}
+)
+_STATUS_POLL_INITIAL_SECONDS = 0.05
+_STATUS_POLL_MAX_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -125,13 +130,39 @@ class UnifiedIngestionEngine:
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
     async def _process_enqueued(self, doc_ids: list[str]) -> None:
-        """Root span for the run, so extraction calls land in one trace instead of thousands."""
+        """Drive the shared queue and wait until this accepted cohort settles.
+
+        LightRAG returns immediately when another owner already holds its single
+        processing reservation. The enqueue is still durable and wakes that owner,
+        so an immediate finalization read would misclassify the PENDING row as a
+        processing failure. Poll the accepted cohort while rows report a known
+        active state; missing or unknown rows fall through to finalization's
+        existing consistency error instead of waiting forever.
+        """
         async with self._telemetry.observe(
             "ingest_pipeline",
             as_type="chain",
             metadata={"document_count": len(doc_ids), "doc_ids": doc_ids},
         ):
             await self._lightrag.apipeline_process_enqueue_documents()
+            pending = list(dict.fromkeys(doc_ids))
+            delay = _STATUS_POLL_INITIAL_SECONDS
+            while pending:
+                statuses = await self._stores.get_full_doc_statuses(pending)
+                pending = [
+                    doc_id
+                    for doc_id in pending
+                    if (status := statuses.get(doc_id)) is not None
+                    and _normalized_status(status) in _ACTIVE_INGEST_STATUSES
+                ]
+                if not pending:
+                    return
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, _STATUS_POLL_MAX_SECONDS)
+                # A prior owner can abort after restoring its cohort to PENDING.
+                # Re-drive the queue so this waiter does not depend on a future,
+                # unrelated ingest to provide LightRAG's next explicit trigger.
+                await self._lightrag.apipeline_process_enqueue_documents()
 
     async def aingest_file(
         self,
