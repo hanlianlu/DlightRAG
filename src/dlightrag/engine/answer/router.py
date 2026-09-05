@@ -38,10 +38,15 @@ def _coerce_mode(raw: Any, valid_modes: Sequence[str]) -> ResolvedMode:
             return mode
     except ValueError, TypeError:
         pass
-    token = str(raw).strip().strip("`\"'").casefold()
+    text = str(raw)
+    token = text.strip().strip("`\"'").casefold()
     if token in {"fast", "research"} and token in valid_modes:
         return token  # type: ignore[return-value]
-    raise RoutingFailedError(f"router chose {raw!r} outside {list(valid_modes)}")
+    raise RoutingFailedError(
+        "router returned an invalid mode "
+        f"(type={type(raw).__name__}, chars={len(text)}, "
+        f"non_whitespace={bool(text.strip())}, allowed={list(valid_modes)})"
+    )
 
 
 class RoutingFailedError(RuntimeError):
@@ -121,6 +126,11 @@ class AnswerModeRouter:
         roles = ",".join(resource.role for resource in resources) or "none"
         tools = ",".join(tool_categories) or "none"
         allowed = ",".join(valid_modes)
+        allowed_outputs = " or ".join(f'{{"mode":"{mode}"}}' for mode in valid_modes)
+        system = (
+            f"{_ROUTER_SYSTEM} Return exactly one JSON object: {allowed_outputs}. "
+            "No other keys or text."
+        )
         user = (
             f"query: {query}\n"
             f"resources: {roles}\n"
@@ -128,7 +138,7 @@ class AnswerModeRouter:
             f"tools: {tools}\n"
             f"allowed: {allowed}"
         )
-        messages: list[dict[str, Any]] = [{"role": "system", "content": _ROUTER_SYSTEM}]
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
         messages.extend(history)
         messages.append({"role": "user", "content": user})
         return messages

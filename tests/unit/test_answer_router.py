@@ -39,6 +39,24 @@ async def test_router_accepts_structured_mode() -> None:
     assert chosen == "research"
 
 
+async def test_router_prompt_declares_the_exact_json_contract() -> None:
+    async def llm(**kwargs: object) -> str:
+        messages = kwargs["messages"]
+        assert isinstance(messages, list)
+        system = str(messages[0]["content"])
+        if '{"mode":"fast"}' not in system or '{"mode":"research"}' not in system:
+            return " " * 96
+        return '{"mode":"research"}'
+
+    chosen = await AnswerModeRouter(llm).choose(
+        query="compare a long conversation",
+        history=[{"role": "assistant", "content": "prior answer " * 500}],
+        valid_modes=("fast", "research"),
+    )
+
+    assert chosen == "research"
+
+
 async def test_router_defaults_to_research_and_reads_full_context() -> None:
     captured: dict[str, object] = {}
 
@@ -83,9 +101,16 @@ async def test_router_accepts_a_bare_mode_token() -> None:
     assert chosen == "research"
 
 
-async def test_router_rejects_invalid_structured_output() -> None:
-    async def llm(**_kwargs: object) -> str:
-        return "not-json"
+async def test_router_rejects_invalid_structured_output_without_echoing_it() -> None:
+    invalid_output = "sensitive model echo"
 
-    with pytest.raises(RoutingFailedError):
+    async def llm(**_kwargs: object) -> str:
+        return invalid_output
+
+    with pytest.raises(RoutingFailedError) as raised:
         await AnswerModeRouter(llm).choose(query="q", valid_modes=("fast", "research"))
+
+    message = str(raised.value)
+    assert "invalid mode" in message
+    assert "chars=20" in message
+    assert invalid_output not in message
