@@ -7,7 +7,7 @@
 
 FROM pgvector/pgvector:pg18
 
-ARG PG_TEXTSEARCH_REF=v1.3.1
+ARG PG_TEXTSEARCH_REF=v1.4.0
 ARG PG_JIEBA_REF=v2.0.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

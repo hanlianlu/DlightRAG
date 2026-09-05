@@ -10,6 +10,48 @@ mount one non-secret `config.yaml`, inject credentials from a Secret, and keep
 only topology bindings in Compose or Kubernetes manifests. The rationale is
 recorded in [ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md).
 
+## pg_textsearch 1.4 Upgrade
+
+The PostgreSQL image pins the extension binary, while PostgreSQL records the SQL
+extension version inside each database. Rebuilding the image does not update an
+existing data volume, and `postgres/init.sql` runs only for a new volume. Upgrade
+both sides in this order:
+
+```bash
+# Build first to minimize downtime.
+docker compose build --pull postgres
+
+# Quiesce application traffic and take a logical backup.
+docker compose stop dlightrag-api dlightrag-mcp
+mkdir -p ~/.dlightrag/backups
+backup="$HOME/.dlightrag/backups/dlightrag-before-pg_textsearch-1.4-$(date +%Y%m%d-%H%M%S).dump"
+docker compose exec -T postgres sh -ec \
+  'pg_dump --format=custom --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
+  > "$backup"
+
+# Load the new preloaded library, then update the extension catalog.
+docker compose up -d --wait --force-recreate postgres
+docker compose exec -T postgres sh -ec \
+  'psql --set=ON_ERROR_STOP=1 --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
+   --command="ALTER EXTENSION pg_textsearch UPDATE TO '\''1.4.0'\''"'
+
+# Both values must report 1.4.0; filtered top-K seeding should be on / 3.
+docker compose exec -T postgres sh -ec \
+  'psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
+   --command="SELECT extversion FROM pg_extension WHERE extname = '\''pg_textsearch'\''" \
+   --command="SHOW pg_textsearch.library_version" \
+   --command="SHOW pg_textsearch.filtered_seed" \
+   --command="SHOW pg_textsearch.filtered_seed_margin"'
+
+docker compose up -d dlightrag-api dlightrag-mcp
+```
+
+The upstream 1.3.1→1.4.0 path preserves existing BM25 indexes and does not
+require `REINDEX`. A later maintenance-window `REINDEX` is optional to reclaim
+pages freed by the old binary. Use
+[Workspace BM25 Rebuild](#workspace-bm25-rebuild) instead when changing
+DlightRAG language profiles, `bm25_k1`, or `bm25_b`.
+
 ## Full Development Reset
 
 `scripts/reset_development.py` erases the complete development environment:

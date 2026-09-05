@@ -156,6 +156,18 @@ def test_compose_preloads_postgres_extensions() -> None:
     assert "shared_preload_libraries=pg_textsearch,pg_jieba" in compose
 
 
+def test_compose_enables_filtered_pg_textsearch_top_k_seed() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert (
+        "pg_textsearch.filtered_seed=${DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED:-on}"
+    ) in compose
+    assert (
+        "pg_textsearch.filtered_seed_margin="
+        "${DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN:-3.0}"
+    ) in compose
+
+
 def test_compose_postgres_endpoint_is_env_overridable() -> None:
     """The container wires the service host while env still outranks YAML."""
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")

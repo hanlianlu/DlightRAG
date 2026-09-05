@@ -25,7 +25,8 @@ should not mix embedding models or dimensions after indexing; changing
 `models.embedding.dim` requires clearing/rebuilding vectors.
 
 The checked-in Docker Compose stack builds `dlightrag-postgres:pg18` from the
-local `postgres/` image definition and preloads `pg_textsearch,pg_jieba`.
+local `postgres/` image definition, pins `pg_textsearch` to v1.4.0, and preloads
+`pg_textsearch,pg_jieba`.
 
 Default vector storage is `HALFVEC(dim)` with HNSW. Plain `HNSW` over
 `VECTOR(dim)` remains available as an explicit fallback for deployments that
@@ -141,6 +142,37 @@ For a single DlightRAG process, reserve roughly
 connections. Multiply that by API worker count before comparing it with
 PostgreSQL `max_connections`, leaving room for migrations, admin sessions,
 health checks, and managed-service maintenance.
+
+## Filtered BM25 Top-K
+
+DlightRAG issues one explicit pg_textsearch top-K scan per selected language
+profile. The checked-in retrieval defaults are:
+
+- `corpus.retrieval.top_k: 40` for LightRAG graph/entity breadth;
+- `corpus.retrieval.chunk_top_k: 20` for text candidates, including the BM25
+  SQL `LIMIT`; and
+- `corpus.retrieval.direct_visual_top_k: 20` for the independent visual leg.
+
+The BM25 query filters by workspace and may additionally filter by language and
+metadata scope before returning those 20 candidates. pg_textsearch v1.4.0 uses
+planner selectivity to seed the internal scan limit for this query shape,
+avoiding repeated score-and-filter passes for selective filters. Compose makes
+the upstream defaults explicit:
+
+```text
+pg_textsearch.filtered_seed=on
+pg_textsearch.filtered_seed_margin=3.0
+```
+
+The approximate initial internal budget is
+`ceil(margin * chunk_top_k / estimated_filter_selectivity)`; the SQL filter and
+`LIMIT` still determine the exact result. The optimization therefore changes
+work performed, not result correctness. Override the two server settings with
+`DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED` and
+`DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN` only after comparing
+representative `EXPLAIN (ANALYZE, BUFFERS)` plans and latency. External
+PostgreSQL deployments should set the equivalent GUCs in their own server or
+session configuration.
 
 ## DlightRAG Schema Migrations
 

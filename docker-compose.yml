@@ -118,6 +118,13 @@ services:
       # pg_textsearch and pg_jieba require preloading
       - "-c"
       - "shared_preload_libraries=pg_textsearch,pg_jieba"
+      # pg_textsearch 1.4 seeds filtered top-K scans from planner selectivity.
+      # corpus.retrieval.chunk_top_k still owns the requested result count;
+      # these GUCs only reduce rescoring retries and do not change correctness.
+      - "-c"
+      - "pg_textsearch.filtered_seed=${DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED:-on}"
+      - "-c"
+      - "pg_textsearch.filtered_seed_margin=${DLIGHTRAG_POSTGRES_PG_TEXTSEARCH_FILTERED_SEED_MARGIN:-3.0}"
       # Memory
       - "-c"
       - "shared_buffers=${DLIGHTRAG_POSTGRES_SHARED_BUFFERS:-8GB}"
