@@ -189,6 +189,19 @@ def test_compose_builds_pg18_postgres_image_locally() -> None:
     assert "dlightrag-postgres:pg18" in workflow
 
 
+def test_compose_grants_application_config_as_a_config_not_a_data_volume() -> None:
+    """The canonical YAML is configuration in both Compose and Kubernetes."""
+    compose_text = Path("docker-compose.yml").read_text(encoding="utf-8")
+    compose = yaml.safe_load(compose_text)
+
+    assert compose["configs"]["dlightrag_config"] == {"file": "./config.yaml"}
+    assert "./config.yaml:/app/config.yaml" not in compose_text
+    for service_name in ("dlightrag-api", "dlightrag-mcp"):
+        assert {"source": "dlightrag_config", "target": "/app/config.yaml"} in compose["services"][
+            service_name
+        ]["configs"]
+
+
 def test_compose_uses_config_and_default_paths_without_duplicate_overrides() -> None:
     """Compose owns topology; canonical config/defaults own application paths."""
     compose_text = Path("docker-compose.yml").read_text(encoding="utf-8")

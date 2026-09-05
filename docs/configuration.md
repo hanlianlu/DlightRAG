@@ -68,8 +68,11 @@ Usually leave these at code defaults unless measurement proves otherwise:
 ## Container And Kubernetes Contract
 
 The process reads `config.yaml` from its current working directory. The bundled
-image uses `/app`, so Compose mounts the file at `/app/config.yaml`; a Kubernetes
-ConfigMap should do the same. Inject only credentials from Secrets and the
+image uses `/app`, so Compose grants the canonical file through its top-level
+`configs` resource at `/app/config.yaml`; this keeps configuration distinct from
+data volumes. A Kubernetes ConfigMap should mount the same file at the same
+path. Compose/Kubernetes mount the file but do not interpret its fields or
+derive volume topology from them. Inject only credentials from Secrets and the
 minimal topology bindings required by that workload. In particular:
 
 - mount corpus storage at `/app/dlightrag_storage`, matching the checked-in

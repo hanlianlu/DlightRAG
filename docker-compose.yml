@@ -38,12 +38,14 @@ services:
       DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
       DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
     env_file: .env
+    configs:
+      - source: dlightrag_config
+        target: /app/config.yaml
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - dlightrag_data:/app/dlightrag_storage
       - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
-      - ./config.yaml:/app/config.yaml:ro
       # Operator-provisioned global Skills; read-only for every user's Agent.
       - *global-skills-mount
       # Per-owner Agent Skills, written only through the validated
@@ -81,12 +83,14 @@ services:
       DLIGHTRAG_INTERFACES__MCP__PORT: "8101"
       DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
     env_file: .env
+    configs:
+      - source: dlightrag_config
+        target: /app/config.yaml
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - dlightrag_data:/app/dlightrag_storage
       - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
-      - ./config.yaml:/app/config.yaml:ro
       # Operator-provisioned global Skills; read-only for every user's Agent.
       - *global-skills-mount
       # Per-owner Agent Skills, written only through the validated
@@ -179,6 +183,10 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+configs:
+  dlightrag_config:
+    file: ./config.yaml
 
 volumes:
   dlightrag_data:
