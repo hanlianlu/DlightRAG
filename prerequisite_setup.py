@@ -1379,8 +1379,8 @@ def _prepare_compose_bind_sources(
     """Create operator-owned bind sources before Compose can run as root."""
     env_path = ENV_PATH if env_path is None else env_path
     environment = os.environ if environment is None else environment
-    configured = environment.get("DLIGHTRAG_SKILLS_DIR") or _dotenv_value(
-        env_path, "DLIGHTRAG_SKILLS_DIR"
+    configured = environment.get("COMPOSE_GLOBAL_SKILLS_DIR") or _dotenv_value(
+        env_path, "COMPOSE_GLOBAL_SKILLS_DIR"
     )
     raw_path = configured.strip() if configured else ""
     if len(raw_path) >= 2 and raw_path[0] == raw_path[-1] and raw_path[0] in {'"', "'"}:

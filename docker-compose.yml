@@ -11,7 +11,7 @@ x-common-env: &common-env
   DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
 x-global-skills-mount: &global-skills-mount
   type: bind
-  source: ${DLIGHTRAG_SKILLS_DIR:-${HOME}/.dlightrag/skills}
+  source: ${COMPOSE_GLOBAL_SKILLS_DIR:-${HOME}/.dlightrag/skills}
   target: /home/app/.dlightrag/skills
   read_only: true
   bind:

@@ -94,6 +94,7 @@ def test_auxiliary_environment_is_not_misread_as_server_config(
     monkeypatch.setenv("DLIGHTRAG_API_URL", "https://client.example")
     monkeypatch.setenv("DLIGHTRAG_API_TOKEN", "client-token")
     monkeypatch.setenv("DLIGHTRAG_POSTGRES_SHARED_BUFFERS", "8GB")
+    monkeypatch.setenv("COMPOSE_GLOBAL_SKILLS_DIR", "/srv/operator-skills")
 
     assert DlightragConfig().interfaces.api.host == "127.0.0.1"
 

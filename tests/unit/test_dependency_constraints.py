@@ -217,9 +217,12 @@ def test_compose_requires_an_explicit_operator_skills_directory() -> None:
         assert skills_mount["read_only"] is True
         assert skills_mount["bind"]["create_host_path"] is False
 
+    compose_text = Path("docker-compose.yml").read_text(encoding="utf-8")
     env_example = Path(".env.example").read_text(encoding="utf-8")
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert "DLIGHTRAG_SKILLS_DIR=" in env_example
+    assert "COMPOSE_GLOBAL_SKILLS_DIR=" in env_example
+    assert "${COMPOSE_GLOBAL_SKILLS_DIR:-" in compose_text
+    assert "DLIGHTRAG_SKILLS_DIR" not in compose_text + env_example
     assert 'mkdir -p "${HOME}/.dlightrag/skills"' in readme
 
 

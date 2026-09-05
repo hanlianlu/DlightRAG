@@ -1174,7 +1174,7 @@ def test_run_parser_step_mineru_local_title_aided(wiz, tmp_path, monkeypatch):
 def test_prepare_compose_bind_sources_creates_configured_skills_directory(wiz, tmp_path):
     skills_dir = tmp_path / "operator-skills"
     env_path = tmp_path / ".env"
-    env_path.write_text(f"DLIGHTRAG_SKILLS_DIR={skills_dir}\n", encoding="utf-8")
+    env_path.write_text(f"COMPOSE_GLOBAL_SKILLS_DIR={skills_dir}\n", encoding="utf-8")
 
     resolved = wiz._prepare_compose_bind_sources(env_path=env_path, environment={})
 

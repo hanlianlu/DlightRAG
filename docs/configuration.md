@@ -642,7 +642,7 @@ Research discovers Skill metadata from two tiers and loads content on demand.
 The global root is `answer.agent.skills_root`, defaulting to
 `~/.dlightrag/skills`; it is operator-provisioned and read-only for the answer
 agent. The bundled Compose stack keeps `skills_root: null`, mounts the
-operator's `${DLIGHTRAG_SKILLS_DIR:-$HOME/.dlightrag/skills}` at that default
+operator's `${COMPOSE_GLOBAL_SKILLS_DIR:-$HOME/.dlightrag/skills}` at that default
 container path, and refuses to create a missing host source as root. The setup
 wizard prepares the directory; manual operators must create it before
 `docker compose up`.

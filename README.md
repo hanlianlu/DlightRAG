@@ -62,7 +62,7 @@ mkdir -p "${HOME}/.dlightrag/skills"
 ```
 
 The last command prepares the default read-only operator Skills bind source;
-when `DLIGHTRAG_SKILLS_DIR` selects another host path, create that directory
+when `COMPOSE_GLOBAL_SKILLS_DIR` selects another host path, create that directory
 instead. Add the keys required by your `config.yaml` model blocks:
 
 ```bash
