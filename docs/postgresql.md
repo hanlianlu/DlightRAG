@@ -171,7 +171,7 @@ blob references:
 | `dlightrag_answer_runs` | `(owner_id, run_id)` | status, phase, durable progress, stop reason, cancellation, lease, fencing epoch, reclaim-without-progress count, event sequence, event-trim timestamp, Prepared Input, canonical result or terminal error |
 | `dlightrag_answer_run_events` | `(owner_id, run_id, event_sequence)` | gap-free `progress` / `token` / `reset` / `tool_start` / `tool_progress` / `tool_end` / `done` / `error` events |
 | `dlightrag_blobs` | `(owner_id, digest)` | immutable content-addressed blob metadata within one owner |
-| `dlightrag_answer_run_artifacts` | `(owner_id, run_id, resource_id)` | ordered request attachments, fetched resources, and Published Artifact bytes |
+| `dlightrag_answer_run_artifacts` | `(owner_id, run_id, resource_id)` | ordered request attachments and Published Artifact bytes |
 | `dlightrag_answer_artifact_attachments` | `(owner_id, run_id, relative_path)` | settled Root Artifact Attachment authority: label, raw digest/size, presentation, Effect provenance, and settlement order |
 | `dlightrag_answer_run_routing` | `(owner_id, run_id)` | requested/valid/resolved mode and canonical Agent Session/Lane mapping |
 | `dlightrag_agent_sessions` | `(owner_id, session_id)` | Session commit sequence, Entry sequence, current run owner and fencing epoch |

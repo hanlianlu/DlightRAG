@@ -210,16 +210,19 @@ chunk is exactly 1,048,576 bytes. One transaction writes all chunks, then insert
 the blob metadata; metadata therefore means complete. There is no independent
 blob-retention clock and no cross-owner deduplication.
 
-Accepted uploads link atomically during run acceptance. A fetched URL links only
-after HTTP(S)/redirect/DNS/SSRF/byte validation settles its effect. Recovery reads
-those stored bytes without live DNS validation because it performs no network
-request; ordinary live URL reads remain revalidated.
+Accepted uploads link atomically during run acceptance. A fetched Web Resource
+links only after HTTP(S)/redirect/DNS/SSRF/byte validation settles its effect.
+Its resource catalog row retains the canonical locator, provenance capabilities,
+and replay ordinal. Recovery reads those stored bytes without live DNS validation
+because it performs no network request; a settled Resource remains one fixed
+snapshot, while an acquisition that admitted no Evidence may retry later.
 
 ### `dlightrag_answer_run_artifacts`
 
-This join table records ordered request attachments, fetched resources, and
-terminal Published Artifacts: safe filename, MIME type, ordinal, resource kind,
-and deterministic transform locator. It references `(owner, digest)` with
+This join table records ordered request attachments and terminal Published
+Artifacts: safe filename, MIME type, ordinal, resource kind, and deterministic
+transform locator. Fetched Web snapshots use `dlightrag_answer_resources` plus
+the shared Blob tables instead. The artifact table references `(owner, digest)` with
 `ON DELETE RESTRICT`, so insertion takes the PostgreSQL key-share lock that
 serializes against blob deletion.
 

@@ -7,10 +7,12 @@ Research mode enters the agent loop: the model selects from the available peer
 tools and writes the answer when it stops calling tools.
 """
 
+import base64
+import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -55,7 +57,7 @@ from dlightrag.engine.agent.tools import (
     ToolRuntime,
 )
 from dlightrag.engine.agent.tools.contracts import ToolModelFunc
-from dlightrag.engine.agent.tools.files import ResourceReader
+from dlightrag.engine.agent.tools.files import ResourceReader, ResourceReadRequest
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.engine.ai.capacity import (
     CONTEXT_POLICY,
@@ -120,6 +122,7 @@ class PreparedRun:
     model_func: ToolModelFunc
     stream_model_func: StreamModel | None
     model_profile: ModelProfile
+    attachment_snapshots: dict[str, bytes] = field(default_factory=dict)
     model_role: str = "query"
     agent_turn_count: int = 0
     stop_reason: str = "model_stop"
@@ -224,14 +227,16 @@ class AnswerOrchestrator:
             runtime_context.snapshot,
             selected_lane_id=runtime_context.lane_id,
         )
+        messages = project_session_messages(
+            selected.tree.ancestry(runtime_context.lane_id),
+            selected.active_projection,
+        )
+        _hydrate_attachment_messages(messages, run.attachment_snapshots)
         self._subagent_host.context_snapshot = ChildContextSnapshot.from_values(
             parent_session_id=runtime_context.session_id,
             parent_entry_id=parent_entry_id,
             depth=self._subagent_host.depth,
-            messages=project_session_messages(
-                selected.tree.ancestry(runtime_context.lane_id),
-                selected.active_projection,
-            ),
+            messages=messages,
             evidence_state=run.evidence.durable_state(),
         )
 
@@ -482,6 +487,7 @@ class AnswerOrchestrator:
         conversation_history: PriorTurns | None = None,
         query_images: list[dict[str, Any]] | None = None,
         registry: ResourceRegistry | None = None,
+        attachment_snapshots: Mapping[str, bytes] | None = None,
         agent_turn_count: int = 0,
     ) -> PreparedRun:
         """Build one run's memory and the tools bound to it, before any restore."""
@@ -518,6 +524,7 @@ class AnswerOrchestrator:
             working=WorkingContextProjection(retained_tail_tokens=retained_tail_tokens),
             registry=registry,
             trace=trace,
+            attachment_snapshots=dict(attachment_snapshots or {}),
             model_func=self._model_func,
             stream_model_func=self._stream_model_func,
             model_profile=self._model_profile,
@@ -592,6 +599,7 @@ class AnswerOrchestrator:
         graph = getattr(snapshot, "graph", None)
         entries = graph.ancestry() if graph is not None else snapshot.entries
         messages = project_session_messages(entries, projection)
+        _hydrate_attachment_messages(messages, run.attachment_snapshots)
         working = WorkingContextProjection(
             retained_tail_tokens=self._context_policy.retained_tail_target(run.model_profile)
         )
@@ -693,17 +701,16 @@ class AnswerOrchestrator:
             return None
 
         async def read(
-            resource_id: str,
-            focus: str | None,
-            cursor: str | None,
+            request: ResourceReadRequest,
             runtime: ToolRuntime,
         ) -> ToolResult:
             workspace = self._workspace
+            resource_id = request.resource_id or ""
             if workspace is not None and resource_id.startswith("spill_"):
-                return _read_committed_spill(workspace.spill_dir, resource_id, cursor)
+                return _read_committed_spill(workspace.spill_dir, resource_id, request.cursor)
             if base_reader is None:
                 return ToolResult.text("resource read is not available", is_error=True)
-            return await base_reader(resource_id, focus, cursor, runtime)
+            return await base_reader(request, runtime)
 
         return read
 
@@ -766,6 +773,30 @@ class AnswerOrchestrator:
             )
         except AgentInputOverflowError as exc:
             raise AnswerInputOverflowError(str(exc)) from exc
+
+
+def _hydrate_attachment_messages(
+    messages: list[dict[str, Any]],
+    snapshots: Mapping[str, bytes],
+) -> None:
+    """Restore transport-private attachment bytes after durable Session decode."""
+    for message in messages:
+        attachments = message.get("attachments")
+        if not isinstance(attachments, list):
+            continue
+        for attachment in attachments:
+            if not isinstance(attachment, dict) or attachment.get("data_url"):
+                continue
+            content = snapshots.get(str(attachment.get("resource_id") or ""))
+            if content is None:
+                continue
+            digest = str(attachment.get("content_digest") or "")
+            size = int(attachment.get("size_bytes") or 0)
+            if hashlib.sha256(content).hexdigest() != digest or len(content) != size:
+                raise ValueError("durable tool attachment does not match its Blob snapshot")
+            media_type = str(attachment.get("media_type") or "application/octet-stream")
+            encoded = base64.b64encode(content).decode("ascii")
+            attachment["data_url"] = f"data:{media_type};base64,{encoded}"
 
 
 def _read_committed_spill(

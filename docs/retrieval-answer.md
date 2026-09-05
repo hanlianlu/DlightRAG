@@ -11,7 +11,7 @@ filtering, optional direct image retrieval, PostgreSQL BM25, RRF fusion,
 provenance hydration, reranking, answer packing, and citation validation.
 
 - `/retrieve` is knowledge-base-only and may take `query_images`.
-- `/answer` takes a query plus optional request-local attachments, then resolves
+- `/answer` takes a query plus optional attachments, then resolves
   `auto | fast | research`.
 - `auto` considers the valid mode set and conversation context. When both paths
   are legal, routing defaults to Research unless the turn is corpus-grounded.
@@ -79,7 +79,7 @@ their profile; unknown/ambiguous languages use `simple`.
 
 Changing profile signatures, `k1`, or `b` for an existing workspace requires an
 offline BM25 rebuild. Disabling BM25 removes only this PostgreSQL lane;
-attachment lexical search remains request-local and in memory.
+Resource lexical search remains run-scoped and in memory.
 
 ## Metadata In-Filtering
 
@@ -176,7 +176,7 @@ publication, or Profile Memory interaction.
 Research drives `AgentSessionRuntime` over one selected Lane. Its closed
 run-local registry may include:
 
-- knowledge-base, resource, and optional Exa Web tools;
+- knowledge-base, resource, and optional provider-neutral public Web tools;
 - rooted file/Bash tools when execution is enabled;
 - Profile Memory tools for the parent (children recall only);
 - progressive `load_skill`;
@@ -298,30 +298,40 @@ or failure leaves original sources unchanged.
 
 ## Answer Attachments And Resources
 
-Attachments are request-local resources, never workspace data. `ResourceRegistry`
-owns inline bytes or lazy public HTTP(S) references for one answer. URL reads
-revalidate scheme, redirect, DNS, SSRF, byte, and pixel limits; settled fetched
-bytes replay from owner-scoped blob storage after recovery rather than making a
-second network request.
+Attachments are run-scoped Resources, never workspace data. `ResourceRegistry`
+owns inline bytes or lazy public HTTP(S) references for one answer. Research may
+also admit a public URL through `read(url=...)`; only `User-Agent`, `Accept`, and
+`Accept-Language` are configurable. The shared public-HTTP boundary validates
+scheme, credentials, every redirect, resolved addresses, HTTPS downgrade, byte
+limits, and pixel limits. Validated DNS targets are pinned for the connection.
+Settled fetched bytes and their canonical locators replay from owner-scoped blob
+storage after recovery rather than making a second network request.
 
 `read` is deterministic:
 
 - UTF-8 and CSV decode directly;
 - HTML, PDF, DOCX, PPTX, and XLSX use selected offline MarkItDown converters;
-- OOXML archives pass zip-bomb preflight; and
-- opaque single-use cursors continue bounded text without exposing offsets or
-  provider locators.
+- OOXML archives pass zip-bomb preflight;
+- each acquired URL is one fixed snapshot for the run; and
+- opaque signed cursors continue bounded text without exposing offsets or
+  provider locators. A focused first window starts near the best match, then
+  continuation rotates through the entire document without skipping content.
 
 `inspect` sends a bounded image or PDF page to the VLM role (default model as
 fallback) and marks output `derived_by_vlm` with its exact locator. It does not
 accept arbitrary bounding boxes; page and embedded-visual handles provide
 structural narrowing.
 
-When Exa is configured, Research can search Web passages as peer evidence.
-Result URLs become inert resource handles and are fetched only by explicit
-`read` under normal guards. Exa Contents is a bounded internal extraction
-fallback, not a model-visible tool. DlightRAG supplies no cookies, authenticated
-browser session, or Playwright; callers must attach protected bytes/screenshots.
+When Exa or Tavily is configured, Research can search Web passages as peer
+evidence through one provider-neutral tool. Search and Extract use independently
+ordered failover chains. Failover occurs only for provider failures, never to
+seek a subjectively better result; malformed individual results are dropped and
+reported, and an empty successful result stops the chain. Result URLs become
+inert resource handles and are fetched only by explicit `read` under normal
+guards. Direct anonymous HTTP is attempted first; the configured Extract chain
+is a bounded internal fallback, not a model-visible tool. DlightRAG supplies no
+cookies, authenticated browser session, or Playwright; callers must attach
+protected bytes/screenshots.
 
 Web uploads are content-addressed blobs owned by durable runs. Follow-up
 re-registers historical attachments lazily, newest first within limits. There

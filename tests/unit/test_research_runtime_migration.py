@@ -10,6 +10,7 @@ import pytest
 from pydantic import BaseModel
 
 from dlightrag.engine.agent.environment.access import AccessScheduler
+from dlightrag.engine.agent.session.effects import EffectIntent
 from dlightrag.engine.agent.session.entries import CompactionEntry, ToolResultMessageEntry
 from dlightrag.engine.agent.session.ids import (
     AttemptId,
@@ -38,12 +39,18 @@ from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
+from dlightrag.engine.answer.orchestration.orchestrator import _hydrate_attachment_messages
 from dlightrag.engine.answer.publication import PublicationLimits
 from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     ResearchRuntimeEffects,
+    _build_effect_host_update,
 )
 from dlightrag.engine.answer.resources.models import TextWindowBudget
+from dlightrag.engine.answer.resources.registry import (
+    FetchedResourceBytes,
+    ResourceEffectOwner,
+)
 from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime import RunCancelledError
@@ -503,6 +510,76 @@ async def test_research_host_uses_runtime_instead_of_a_second_answer_interpreter
     assert calls == 1
 
 
+def test_web_image_effect_deduplicates_its_tool_attachment_settlement() -> None:
+    intent_id = IntentId.new()
+    intent = EffectIntent(
+        intent_id=intent_id,
+        tool_name="read",
+        replay_policy="replayable",
+        contract_version=3,
+        input_schema_digest="a" * 64,
+        canonical_input="{}",
+        source_call_id="read-1",
+    )
+    content = b"image-bytes"
+    fetched = FetchedResourceBytes(
+        resource_id="res-image",
+        ordinal=2,
+        filename="image.png",
+        mime_type="image/png",
+        url="https://example.com/image.png",
+        content=content,
+        admission_origin="agent",
+        acquisition="direct_http",
+    )
+    buffer = FetchedResourceBuffer()
+    buffer.append(fetched, ResourceEffectOwner("session", intent_id))
+
+    update = _build_effect_host_update(
+        session_id=SessionId.new(),
+        intent=intent,
+        ledger_state=lambda: "{}",
+        fetched_buffer=buffer,
+        execution_scope="session",
+        tool_effects=ToolEffects(
+            attached_resources=(
+                ResourceAttachmentBytes(
+                    resource_id="res-image",
+                    filename="image.png",
+                    mime_type="image/png",
+                    source_locator="res-image",
+                    content=content,
+                ),
+            )
+        ),
+    )
+
+    assert len(update.fetched) == 1
+    assert update.fetched[0].resource.capabilities["resource_kind"] == "web"
+
+
+def test_durable_tool_attachment_is_hydrated_for_provider_projection() -> None:
+    messages = [
+        {
+            "role": "tool",
+            "attachments": [
+                {
+                    "resource_id": "res-image",
+                    "media_type": "image/png",
+                    "content_digest": (
+                        "2c8648d103e3dd7ad87660da0f126a1443b6d21ac1bd3ec000c5e24e2373a90c"
+                    ),
+                    "size_bytes": 11,
+                }
+            ],
+        }
+    ]
+
+    _hydrate_attachment_messages(messages, {"res-image": b"image-bytes"})
+
+    assert messages[0]["attachments"][0]["data_url"] == ("data:image/png;base64,aW1hZ2UtYnl0ZXM=")
+
+
 @pytest.mark.asyncio
 async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta() -> None:
     turns = [
@@ -520,12 +597,8 @@ async def test_research_runtime_effects_convert_one_resource_tool_to_host_delta(
     async def retrieve(_query: str) -> RetrievalResult:
         raise AssertionError("knowledge retrieval was not requested")
 
-    async def read_resource(
-        resource_id: str,
-        _focus: str | None,
-        _cursor: str | None,
-        _runtime: Any,
-    ) -> ToolResult:
+    async def read_resource(request: Any, _runtime: Any) -> ToolResult:
+        resource_id = request.resource_id
         assert resource_id == "attachment-1"
         return ToolResult.text(
             "bounded attachment text",

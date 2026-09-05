@@ -301,6 +301,7 @@ def write_config_yaml(
     mineru_api_mode: str | None = None,
     docling_endpoint: str | None = None,
     docling_code_formula_preset: str | None = None,
+    web_sources: dict | None = None,
 ) -> None:
     yaml = _yaml()
     data = yaml.load(path)
@@ -325,6 +326,11 @@ def write_config_yaml(
     agent.setdefault("execution_environment", "trust")
     agent.setdefault("workspace_root", None)
     agent.setdefault("outbound_mcp", [])
+    if web_sources is not None:
+        node = answer.setdefault("web_sources", {})
+        node.clear()
+        node.update(web_sources)
+        answer.pop("web_search", None)
     models = data.setdefault("models", {})
     chat = models.setdefault("chat", {})
     if llm_default is not None:
@@ -886,6 +892,173 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
     }
 
 
+def _dotenv_value(path: Path, key: str) -> str | None:
+    if not path.exists():
+        return None
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if raw.lstrip().startswith("#") or "=" not in raw:
+            continue
+        candidate, value = raw.split("=", 1)
+        if candidate.strip() == key:
+            return value
+    return None
+
+
+def legacy_web_settings_present(
+    *,
+    config_path: Path = CONFIG_PATH,
+    env_path: Path = ENV_PATH,
+) -> bool:
+    """Return whether setup can offer the explicit one-time Web migration."""
+    if _dotenv_value(env_path, "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY") is not None:
+        return True
+    if not config_path.exists():
+        return False
+    data = _yaml().load(config_path) or {}
+    answer = data.get("answer") or {}
+    return isinstance(answer, dict) and "web_search" in answer
+
+
+def migrate_legacy_web_settings(
+    *,
+    config_path: Path = CONFIG_PATH,
+    env_path: Path = ENV_PATH,
+) -> bool:
+    """Transactionally migrate the legacy Exa setting and keep secrets in ``.env``."""
+    old_env = "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY"
+    new_env = "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY"
+    old_value = _dotenv_value(env_path, old_env)
+    yaml = _yaml()
+    data = yaml.load(config_path) if config_path.exists() else {}
+    data = data or {}
+    answer = data.get("answer") or {}
+    had_legacy = isinstance(answer, dict) and "web_search" in answer
+    legacy = answer.pop("web_search", None) if had_legacy else None
+    if old_value is None and not had_legacy:
+        return False
+
+    inline_value = legacy.get("api_key") if isinstance(legacy, dict) else None
+    migrated_value = old_value
+    if migrated_value is None and isinstance(inline_value, str) and inline_value.strip():
+        migrated_value = inline_value.strip()
+    env_values = (
+        {new_env: migrated_value}
+        if migrated_value is not None and _dotenv_value(env_path, new_env) is None
+        else {}
+    )
+    if had_legacy:
+        web = answer.setdefault("web_sources", {})
+        exa = web.setdefault("exa", {})
+        exa["api_key"] = None
+
+    config_existed = config_path.exists()
+    env_existed = env_path.exists()
+    config_backup = backup_file(config_path) if config_existed else None
+    env_backup = backup_file(env_path) if env_existed else None
+    try:
+        if old_value is not None or env_values:
+            upsert_env(env_path, env_values, remove_keys=(old_env,))
+        if had_legacy:
+            yaml.dump(data, config_path)
+        _load_effective_config(config_path, env_path)
+    except BaseException:
+        _restore_file(config_path, config_existed, config_backup)
+        _restore_file(env_path, env_existed, env_backup)
+        raise
+    return True
+
+
+def run_web_research_step(
+    prompter: Prompter,
+    *,
+    optional: bool,
+    require_confirm: bool = False,
+) -> bool:
+    """Configure first-class REST Web providers without remote key verification."""
+    choices = ([WEB_SKIP] if optional else []) + [WEB_EXA, WEB_TAVILY, WEB_BOTH, WEB_DISABLE]
+    choice = prompter.select("Web research provider · 网络研究服务", choices)
+    if choice == WEB_SKIP:
+        return False
+    if require_confirm and not prompter.confirm(
+        "Overwrite Web research settings and keys? · 覆盖网络研究设置与密钥？",
+        default=False,
+    ):
+        return False
+
+    providers: list[str]
+    if choice == WEB_DISABLE:
+        providers = []
+    elif choice == WEB_EXA:
+        providers = ["exa"]
+    elif choice == WEB_TAVILY:
+        providers = ["tavily"]
+    else:
+        providers = ["exa", "tavily"]
+
+    search_order = list(providers)
+    extract_order = list(providers)
+    if len(providers) == 2:
+        primary = prompter.select(
+            "Provider order · 服务顺序",
+            [WEB_COMMON_EXA, WEB_COMMON_TAVILY, WEB_INDEPENDENT],
+        )
+        if primary == WEB_COMMON_TAVILY:
+            search_order = extract_order = ["tavily", "exa"]
+        elif primary == WEB_INDEPENDENT:
+            search_first = prompter.select("Search first · 搜索优先", [WEB_EXA, WEB_TAVILY])
+            extract_first = prompter.select("Extract first · 网页提取优先", [WEB_EXA, WEB_TAVILY])
+            search_order = [
+                search_first.lower(),
+                WEB_TAVILY.lower() if search_first == WEB_EXA else WEB_EXA.lower(),
+            ]
+            extract_order = [
+                extract_first.lower(),
+                WEB_TAVILY.lower() if extract_first == WEB_EXA else WEB_EXA.lower(),
+            ]
+
+    env_values: dict[str, str] = {}
+    remove = [
+        "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY",
+        "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY",
+        "DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY",
+    ]
+    if "exa" in providers:
+        env_values["DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY"] = _ask_required(
+            lambda: prompter.password("Exa API key (required)")
+        )
+    if "tavily" in providers:
+        env_values["DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY"] = _ask_required(
+            lambda: prompter.password("Tavily API key (required)")
+        )
+    env_existed = ENV_PATH.exists()
+    config_existed = CONFIG_PATH.exists()
+    env_backup = backup_file(ENV_PATH) if env_existed else None
+    config_backup = backup_file(CONFIG_PATH) if config_existed else None
+    try:
+        if not ENV_PATH.exists() and ENV_EXAMPLE_PATH.exists():
+            ENV_PATH.write_bytes(ENV_EXAMPLE_PATH.read_bytes())
+        upsert_env(
+            ENV_PATH,
+            env_values,
+            remove_keys=tuple(key for key in remove if key not in env_values),
+        )
+        write_config_yaml(
+            CONFIG_PATH,
+            web_sources={
+                "search_providers": search_order,
+                "extract_providers": extract_order,
+                "exa": {"api_key": None},
+                "tavily": {"api_key": None},
+            },
+        )
+        validate_config()
+    except BaseException:
+        _restore_file(ENV_PATH, env_existed, env_backup)
+        _restore_file(CONFIG_PATH, config_existed, config_backup)
+        raise
+    return True
+
+
 class SetupCancelled(Exception):
     """Raised when the user picks the in-menu Quit option (a clean, non-error exit)."""
 
@@ -904,9 +1077,10 @@ HOME_PROMPT = "DlightRAG is already set up — what next? · DlightRAG 已配置
 # "Change settings" sub-menu (section-level, per the design).
 SEC_MODELS = "Models & API keys · 模型与密钥"
 SEC_PARSER = "Document parser · 文档解析器"
+SEC_WEB = "Web research · 网络研究"
 SEC_ALL = "Everything · 全部"
 SEC_BACK = "← Back · 返回"
-CHANGE_CHOICES = [SEC_MODELS, SEC_PARSER, SEC_ALL, SEC_BACK]
+CHANGE_CHOICES = [SEC_MODELS, SEC_PARSER, SEC_WEB, SEC_ALL, SEC_BACK]
 CHANGE_PROMPT = "What do you want to change? · 你想修改什么？"
 
 MODEL_MODE_MINIMUM = "Minimum · one LLM + one embedding"
@@ -927,6 +1101,15 @@ MODELS_OVERWRITE_CONFIRM = (
     "Overwrite your current model settings and API keys with these answers? · "
     "用这些答案覆盖当前的模型设置与密钥？"
 )
+WEB_SKIP = "Skip Web research · 暂不配置"
+WEB_EXA = "Exa"
+WEB_TAVILY = "Tavily"
+WEB_BOTH = "Exa + Tavily"
+WEB_DISABLE = "Disable Web research · 停用网络研究"
+WEB_COMMON_EXA = "Exa first for Search and Extract"
+WEB_COMMON_TAVILY = "Tavily first for Search and Extract"
+WEB_INDEPENDENT = "Choose Search and Extract order independently"
+
 PARSER_OVERWRITE_CONFIRM = (
     "Overwrite your current document-parser settings? · 覆盖当前的文档解析器设置？"
 )
@@ -1103,11 +1286,18 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             "model": inspection_settings.model,
         },
         "parser": parser,
+        "web_research": {
+            "direct_url_read": True,
+            "search": list(config.answer.web_sources.search_order()),
+            "extract": list(config.answer.web_sources.extract_order()),
+        },
         "workspace": config.deployment.workspace,
         "keys_set": {
             "LLM": bool(default_settings.api_key),
             "Embedding": bool(embedding.api_key),
             "Rerank": bool(rerank.api_key),
+            "Exa": bool(config.answer.web_sources.exa.api_key),
+            "Tavily": bool(config.answer.web_sources.tavily.api_key),
         },
     }
 
@@ -1140,6 +1330,12 @@ def render_summary(console, summary: dict) -> None:
         table.add_row("", f"[dim]{rerank['base_url']}[/dim]")
     parser = summary["parser"]
     table.add_row("Parser", f"{parser['name']} · {parser['detail']}")
+    web = summary["web_research"]
+    table.add_row(
+        "Web research",
+        f"Direct URL read: available · Search: {', '.join(web['search']) or 'off'} · "
+        f"Extract: {', '.join(web['extract']) or 'off'}",
+    )
     answer = summary["answer"]
     per_mib = answer["max_attachment_bytes"] // (1024 * 1024)
     total_mib = answer["max_total_attachment_bytes"] // (1024 * 1024)
@@ -1243,6 +1439,11 @@ def run_first_time_setup(
         llm_title_aided=result["llm"],
         require_confirm=require_confirm,
     )
+    run_web_research_step(
+        prompter,
+        optional=True,
+        require_confirm=require_confirm,
+    )
     return (
         _bring_up_stack(console, profile="docling" if parser_mode == "docling" else None)
         if launch
@@ -1272,6 +1473,14 @@ def run_change_settings(console, prompter: Prompter, info: PlatformInfo) -> None
             llm_title_aided=result["llm"] if result else None,
             require_confirm=True,
         ):
+            changed = True
+    if section in (SEC_WEB, SEC_ALL):
+        if run_web_research_step(prompter, optional=False, require_confirm=True):
+            try:
+                validate_config()
+            except Exception as exc:
+                console.print(f"[red]Web research config is invalid:[/red] {exc}")
+                return
             changed = True
     if changed:
         console.print(
@@ -1369,6 +1578,14 @@ def main(prompter: Prompter | None = None) -> int:
     prompter = prompter or _questionary_prompter()
     info = detect_platform()
     try:
+        if legacy_web_settings_present():
+            if not prompter.confirm(
+                "Migrate the legacy Exa Web setting now? · 迁移旧版 Exa 网络设置？",
+                default=True,
+            ):
+                raise SetupCancelled
+            if migrate_legacy_web_settings():
+                console.print("[green]Migrated legacy Exa Web setting.[/green]")
         if is_configured():
             return run_home(console, prompter, info)
         rc = run_first_time_setup(console, prompter, info)

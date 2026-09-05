@@ -975,6 +975,7 @@ async def test_host_delta_identity_conflict_rolls_back_entry_and_register(pool) 
     fetched = FetchedResourceSettlementUpdate(
         resource=OpaqueFetchedResourceWrite(
             resource_id="rolled-back-fetched",
+            ordinal=0,
             safe_name="rolled-back.txt",
             media_type="text/plain",
             capabilities={},
@@ -1059,9 +1060,15 @@ async def test_fetched_resource_host_delta_writes_complete_blob(pool) -> None:
     fetched = FetchedResourceSettlementUpdate(
         resource=OpaqueFetchedResourceWrite(
             resource_id="fetched-1",
+            ordinal=0,
             safe_name="page.html",
             media_type="text/html",
-            capabilities={},
+            capabilities={
+                "resource_kind": "web",
+                "admission_origin": "agent",
+                "acquisition": "direct_http",
+                "resource_aliases": [],
+            },
             blob_digest=blob.digest,
             source_locator_digest=hashlib.sha256(b"https://example.test/page").hexdigest(),
             source_locator=b"https://example.test/page",
@@ -1113,6 +1120,20 @@ async def test_fetched_resource_host_delta_writes_complete_blob(pool) -> None:
         )
     assert resource is not None
     assert (resource["kind"], resource["blob_digest"]) == ("fetched_blob", blob.digest)
+    catalog = await (await _store(pool)).list_fetched_resources(
+        owner_id=_OWNER,
+        run_id=claimed.run.run_id,
+    )
+    assert len(catalog) == 1
+    assert catalog[0].resource_id == "fetched-1"
+    assert catalog[0].ordinal == 0
+    assert catalog[0].source_locator == b"https://example.test/page"
+    assert catalog[0].capabilities == {
+        "resource_kind": "web",
+        "admission_origin": "agent",
+        "acquisition": "direct_http",
+        "resource_aliases": [],
+    }
 
 
 async def test_fetched_blob_size_collision_is_an_evidence_identity_conflict(pool) -> None:
@@ -1137,6 +1158,7 @@ async def test_fetched_blob_size_collision_is_an_evidence_identity_conflict(pool
     fetched = FetchedResourceSettlementUpdate(
         resource=OpaqueFetchedResourceWrite(
             resource_id="fetched-collision",
+            ordinal=0,
             safe_name="collision.txt",
             media_type="text/plain",
             capabilities={},

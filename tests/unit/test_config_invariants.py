@@ -23,6 +23,8 @@ from dlightrag.application.config import (
     McpInterfaceSettings,
     PostgresSettings,
     StorageSettings,
+    WebSourceProviderConfig,
+    WebSourcesConfig,
     load_config,
 )
 from dlightrag.engine.ai.settings import (
@@ -431,6 +433,41 @@ def test_legacy_dotenv_key_is_rejected(tmp_path: Any, monkeypatch: pytest.Monkey
 
     with pytest.raises(ValueError, match="postgres_host: Extra inputs"):
         load_config(env_file)
+
+
+def test_web_source_orders_derive_from_available_credentials() -> None:
+    config = WebSourcesConfig(
+        exa=WebSourceProviderConfig(api_key="exa-key"),
+        tavily=WebSourceProviderConfig(api_key="tavily-key"),
+    )
+
+    assert config.search_order() == ("exa", "tavily")
+    assert config.extract_order() == ("exa", "tavily")
+
+
+def test_web_source_orders_are_independent_and_empty_disables_operation() -> None:
+    config = WebSourcesConfig(
+        exa=WebSourceProviderConfig(api_key="exa-key"),
+        tavily=WebSourceProviderConfig(api_key="tavily-key"),
+        search_providers=("tavily", "exa"),
+        extract_providers=(),
+    )
+
+    assert config.search_order() == ("tavily", "exa")
+    assert config.extract_order() == ()
+
+
+def test_web_source_order_rejects_provider_without_credential() -> None:
+    with pytest.raises(ValidationError, match="lack api_key"):
+        WebSourcesConfig(search_providers=("tavily",))
+
+
+def test_web_source_order_rejects_duplicate_provider() -> None:
+    with pytest.raises(ValidationError, match="contain duplicates"):
+        WebSourcesConfig(
+            exa=WebSourceProviderConfig(api_key="exa-key"),
+            search_providers=("exa", "exa"),
+        )
 
 
 def test_config_composes_canonical_models_without_snapshot_copy() -> None:

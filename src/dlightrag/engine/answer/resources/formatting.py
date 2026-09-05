@@ -9,10 +9,10 @@ from dlightrag.engine.answer.resources.models import (
 
 
 def format_resource_read(result: ResourceReadResult) -> str:
-    parts: list[str] = []
-    if result.locator is not None:
-        parts.append(f"[{_describe_text_locator(result.locator)}]")
-    parts.append(result.content)
+    locator = f" | {_describe_text_locator(result.locator)}" if result.locator is not None else ""
+    parts = [f"[resource: {result.resource_id}{locator}]", result.content]
+    if result.note:
+        parts.append(f"[{result.note}]")
     if result.visual_handles:
         parts.append(f"[visual handles: {_describe_handles(result.visual_handles)}]")
     if continuation := resource_read_continuation(result):
@@ -22,7 +22,7 @@ def format_resource_read(result: ResourceReadResult) -> str:
 
 def resource_read_continuation(result: ResourceReadResult) -> str:
     if result.has_more and result.next_cursor:
-        return f"[more text available; cursor={result.next_cursor}]"
+        return f"[more; cursor={result.next_cursor}]"
     return ""
 
 

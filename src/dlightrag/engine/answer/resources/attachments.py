@@ -75,7 +75,7 @@ def resource_inputs_from_attachments(
     *,
     max_attachment_bytes: int = _DEFAULT_MAX_ATTACHMENT_BYTES,
 ) -> list[ResourceInput]:
-    """Normalize SDK attachments into request-local :class:`ResourceInput` objects."""
+    """Normalize SDK attachments into run-scoped :class:`ResourceInput` objects."""
     resources: list[ResourceInput] = []
     for attachment in attachments:
         if attachment._path is not None:

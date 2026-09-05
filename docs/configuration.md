@@ -525,7 +525,7 @@ answer:
     image_min_quality: 79
 ```
 
-Attachments are request-local resources. Full bytes do not enter model context;
+Attachments are run-scoped Resources. Full bytes do not enter model context;
 text is decoded/converted and figures are inspected on demand. `query_images`
 is a separate retrieve-only path limited to three current images. The final
 answer image count is clamped to the query model's discovered capability.
@@ -598,16 +598,32 @@ see the same shared paths. A reference creator workflow ships at
 `examples/skills/skill-creator/SKILL.md`; copy it into the global skills root
 to guide conversational skill creation for all users.
 
-## Web Search
+## Public Web Sources
 
 ```yaml
 answer:
-  web_search:
-    api_key: null  # DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY
+  web_sources:
+    exa:
+      api_key: null     # DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY
+    tavily:
+      api_key: null     # DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY
+    search_providers: null
+    extract_providers: null
 ```
 
-An Exa key enables search and bounded content fallback for Research. Without it,
-web tools are absent. DlightRAG supplies no cookies or browser automation.
+Exa and Tavily are optional provider adapters. A `null` provider order derives
+an Exa-then-Tavily chain from configured keys; `[]` disables that operation.
+Set each list explicitly to give Search and Extract independent failover order.
+Every provider named in a list must have a key. The setup wizard can configure
+Exa, Tavily, both with one shared order, or independent Search/Extract orders.
+
+Research exposes provider-neutral `search_web` controls for result count,
+domains, date range, and `fast`/`balanced`/`deep` effort. Its `read` tool can
+also admit one anonymous public HTTP(S) URL with only `User-Agent`, `Accept`, and
+`Accept-Language` presentation options. DlightRAG validates every redirect and
+resolved address against the shared SSRF policy, pins validated DNS targets,
+fetches direct HTTP first, and uses the Extract chain only when direct retrieval
+fails or produces no usable text. It supplies no cookies or browser automation.
 
 ## Citations And Highlights
 

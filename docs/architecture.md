@@ -14,7 +14,7 @@ boundaries, and [Retrieval and Answer](retrieval-answer.md) for query behavior.
 
 Browsers, REST clients, MCP agents, and trusted embedded callers use the same
 Application services. External dependencies are PostgreSQL, configured model
-providers, one parser sidecar, optional Exa Web Search, and optional outbound
+providers, one parser sidecar, optional Exa/Tavily Web sources, and optional outbound
 MCP endpoints.
 
 Browser identity may terminate at a trusted Cloudflare/Azure/AWS edge or at
@@ -141,7 +141,7 @@ Detailed filtering, reranking, multimodal, and packing behavior lives in
 
 ```text
 query + attachments
-  -> request-local ResourceRegistry
+  -> run-scoped ResourceRegistry
   -> deterministic read or focused VLM inspect
   -> bounded text/image evidence
   -> Fast or Research context
@@ -153,7 +153,7 @@ converters; OOXML passes a zip-bomb preflight. `inspect` performs focused VLM
 inspection and records exact source/page/sheet/cell provenance. Current images
 may also feed retrieval and final generation within separate budgets.
 
-Resources are request-local during execution. Accepted uploads and settled URL
+Resources are scoped to one Answer Run. Accepted uploads and settled Web
 fetches use owner-scoped content-addressed blobs so recovery does not re-fetch
 or cross owner boundaries. They never become corpus documents, chunks, vectors,
 BM25 rows, or KG data.

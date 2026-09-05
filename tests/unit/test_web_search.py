@@ -1,25 +1,32 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for Exa web search."""
+"""Provider adapters, ordered failover, and Web Evidence projection."""
 
 import json
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from dlightrag.engine.agent.session.ids import IntentId
 from dlightrag.engine.agent.tools import ToolResult, ToolRuntime
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.tools.search import (
     SearchInput,
+    WebSearchInput,
     knowledge_base_search_tool,
     web_search_tool,
 )
-from dlightrag.engine.answer.tools.web import (
-    ExaSearch,
+from dlightrag.engine.answer.tools.web_search import web_context_rows
+from dlightrag.engine.answer.web_sources import (
+    ExaWebSource,
+    TavilyWebSource,
+    WebEffort,
+    WebExtractResult,
     WebSearchHit,
+    WebSearchRequest,
     WebSearchResult,
-    WebSearchUnavailable,
-    web_context_rows,
+    WebSourceService,
+    WebSourceUnavailable,
 )
 from dlightrag.engine.rag.retrieval import RetrievalResult
 
@@ -32,20 +39,15 @@ _PAGE = {
 }
 
 
-async def _unused_search(_query: str):
-    raise RuntimeError("tool contract test never executes search")
+def _client(handler) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-def test_web_search_tool_guides_external_resource_discovery() -> None:
-    tool = web_search_tool(
-        search=_unused_search,
-        evidence=EvidenceLedger(),
-        trace={"web_search_cost_dollars": 0.0},
-        register_web_source=None,
-    )
+def _responds(payload: dict, status: int = 200):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=payload)
 
-    assert "source page, document, image, or file" in tool.description
-    assert "before claiming open-web search is unavailable" in tool.description
+    return handler
 
 
 def _label_capture_runtime(updates: list[ToolResult]) -> ToolRuntime:
@@ -61,7 +63,46 @@ def _label_capture_runtime(updates: list[ToolResult]) -> ToolRuntime:
     )
 
 
-@pytest.mark.asyncio
+def test_web_search_schema_exposes_provider_neutral_controls() -> None:
+    async def unused(_request: WebSearchRequest) -> WebSearchResult:
+        return WebSearchResult(())
+
+    tool = web_search_tool(
+        search=unused,
+        evidence=EvidenceLedger(),
+        trace={"web_search_cost_dollars": 0.0},
+        register_web_source=None,
+    )
+
+    assert set(tool.input_model.model_fields) == {
+        "query",
+        "max_results",
+        "include_domains",
+        "exclude_domains",
+        "start_date",
+        "end_date",
+        "effort",
+    }
+    assert "source page, document, image, or file" in tool.description
+    parsed = tool.input_model.model_validate(
+        {
+            "query": "policy",
+            "max_results": 20,
+            "include_domains": ["EXAMPLE.ORG"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-31",
+            "effort": "deep",
+        }
+    )
+    assert parsed.model_dump()["include_domains"] == ("example.org",)
+    with pytest.raises(ValidationError):
+        tool.input_model.model_validate({"query": "q", "max_results": 21})
+    with pytest.raises(ValidationError):
+        tool.input_model.model_validate(
+            {"query": "q", "include_domains": ["a.example"], "exclude_domains": ["a.example"]}
+        )
+
+
 async def test_both_search_tools_report_the_query_as_object_label_live() -> None:
     updates: list[ToolResult] = []
     query = "quarterly revenue 2026"
@@ -69,8 +110,8 @@ async def test_both_search_tools_report_the_query_as_object_label_live() -> None
     async def retrieve(_query: str) -> RetrievalResult:
         return RetrievalResult()
 
-    async def search(_query: str) -> WebSearchResult:
-        return WebSearchResult(hits=(), cost_dollars=0.0)
+    async def search(_request: WebSearchRequest) -> WebSearchResult:
+        return WebSearchResult(())
 
     await knowledge_base_search_tool(
         retrieve=retrieve,
@@ -82,91 +123,89 @@ async def test_both_search_tools_report_the_query_as_object_label_live() -> None
         evidence=EvidenceLedger(),
         trace={"web_search_cost_dollars": 0.0},
         register_web_source=None,
-    ).execute(SearchInput(query=query), _label_capture_runtime(updates))
+    ).execute(WebSearchInput(query=query), _label_capture_runtime(updates))
 
-    labels = [update.details["object_label"] for update in updates if update.details]
-    assert labels == [query, query]
-
-
-def _client(handler) -> httpx.AsyncClient:
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    assert [update.details["object_label"] for update in updates if update.details] == [
+        query,
+        query,
+    ]
 
 
-def _responds(payload: dict, status: int = 200):
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status, json=payload)
-
-    return handler
-
-
-@pytest.mark.asyncio
-async def test_every_highlight_arrives_with_the_page_it_came_from() -> None:
-    search = ExaSearch("k", client=_client(_responds({"results": [_PAGE]})))
-
-    result = await search.search("taylor rule coefficients")
-
-    assert [hit.text for hit in result.hits] == _PAGE["highlights"]
-    assert {hit.url for hit in result.hits} == {_PAGE["url"]}
-    assert result.hits[0].published_date == _PAGE["publishedDate"]
-    assert result.hits[0].image_url == _PAGE["image"]
-
-
-@pytest.mark.asyncio
-async def test_a_passage_is_never_asked_for_at_its_provider_default_length() -> None:
-    asked: list[dict] = []
+async def test_exa_maps_all_search_controls_and_passages() -> None:
+    requests: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        asked.append(json.loads(request.content))
-        return httpx.Response(200, json={"results": [_PAGE]})
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"results": [{**_PAGE, "text": "Full body."}], "costDollars": {"total": 0.007}},
+        )
 
-    search = ExaSearch("k", client=_client(handler))
+    provider = ExaWebSource("k", client=_client(handler))
+    result = await provider.search(
+        WebSearchRequest(
+            "coefficients",
+            max_results=7,
+            include_domains=("example.org",),
+            exclude_domains=("bad.example",),
+            start_date="2026-01-01",
+            end_date="2026-02-01",
+            effort="deep",
+        )
+    )
 
-    await search.search("q")
-
-    assert asked[0]["type"] == "auto"
-    assert "maxCharacters" in asked[0]["contents"]["highlights"]
-
-
-@pytest.mark.asyncio
-async def test_a_returned_page_body_becomes_a_passage_of_its_own() -> None:
-    page = {**_PAGE, "text": "Full article body."}
-    search = ExaSearch("k", client=_client(_responds({"results": [page]})))
-
-    result = await search.search("q")
-
-    assert result.hits[-1].text == "Full article body."
-    assert result.hits[-1].url == _PAGE["url"]
-
-
-@pytest.mark.asyncio
-async def test_the_reported_cost_is_carried_back_to_the_caller() -> None:
-    payload = {"results": [_PAGE], "costDollars": {"total": 0.007}}
-    search = ExaSearch("k", client=_client(_responds(payload)))
-
-    assert (await search.search("q")).cost_dollars == 0.007
-
-
-@pytest.mark.asyncio
-async def test_contents_fetches_known_url_text_via_the_contents_endpoint() -> None:
-    seen: list[dict] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append({"url": str(request.url), "body": json.loads(request.content)})
-        return httpx.Response(200, json={"results": [{**_PAGE, "text": "Body text."}]})
-
-    search = ExaSearch("k", client=_client(handler))
-
-    result = await search.contents("https://example.org/taylor")
-
-    assert seen[0]["url"] == "https://api.exa.ai/contents"
-    assert seen[0]["body"]["urls"] == ["https://example.org/taylor"]
-    assert seen[0]["body"]["text"] == {"maxCharacters": 10_000}
-    assert "highlights" not in seen[0]["body"]
-    assert result.hits[-1].text == "Body text."
+    assert requests == [
+        {
+            "query": "coefficients",
+            "type": "deep",
+            "numResults": 7,
+            "contents": {"highlights": {"maxCharacters": 4000}},
+            "includeDomains": ["example.org"],
+            "excludeDomains": ["bad.example"],
+            "startPublishedDate": "2026-01-01",
+            "endPublishedDate": "2026-02-01",
+        }
+    ]
+    assert [hit.text for hit in result.hits] == [*_PAGE["highlights"], "Full body."]
+    assert result.hits[0].acquisition == "exa_search"
+    assert result.cost_dollars == 0.007
 
 
-@pytest.mark.asyncio
-async def test_contents_respects_the_same_parking_as_search() -> None:
+async def test_exa_extract_and_malformed_partial_results() -> None:
+    provider = ExaWebSource(
+        "k",
+        client=_client(
+            _responds(
+                {
+                    "results": [
+                        {**_PAGE, "text": "  Extracted body.\n"},
+                        {"url": "https://other.example/page", "text": "other body"},
+                        {"title": "missing locator"},
+                        {"url": "http://127.0.0.1/admin", "text": "private"},
+                    ]
+                }
+            )
+        ),
+    )
+
+    result = await provider.extract("https://example.org/start", effort="balanced")
+
+    assert result.url == _PAGE["url"]
+    assert result.text == "  Extracted body.\n"
+    assert result.acquisition == "exa_extract"
+    assert result.dropped_results == 3
+
+
+async def test_exa_missing_results_is_provider_failure_not_empty_success() -> None:
+    provider = ExaWebSource("k", client=_client(_responds({"unexpected": []})))
+
+    with pytest.raises(WebSourceUnavailable) as failure:
+        await provider.search(WebSearchRequest("q"))
+
+    assert failure.value.reason == "invalid_response"
+
+
+async def test_exa_auth_failure_is_not_parked() -> None:
     calls = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -174,187 +213,206 @@ async def test_contents_respects_the_same_parking_as_search() -> None:
         calls += 1
         return httpx.Response(401, json={})
 
-    search = ExaSearch("k", client=_client(handler))
-
-    with pytest.raises(WebSearchUnavailable) as first:
-        await search.contents("https://a/x")
-    with pytest.raises(WebSearchUnavailable) as second:
-        await search.contents("https://a/x")
-
-    assert first.value.reason == "unauthorized"
-    assert second.value.reason == "unauthorized"
-    assert calls == 1
-
-
-@pytest.mark.asyncio
-async def test_an_empty_balance_stops_the_next_search_before_it_leaves_the_process() -> None:
-    calls = 0
-
-    def handler(_request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        return httpx.Response(402, json={})
-
-    search = ExaSearch("k", client=_client(handler))
-
-    with pytest.raises(WebSearchUnavailable) as first:
-        await search.search("q")
-    with pytest.raises(WebSearchUnavailable) as second:
-        await search.search("q")
-
-    assert first.value.reason == "payment_required"
-    assert second.value.reason == "payment_required"
-    assert calls == 1
-
-
-@pytest.mark.asyncio
-async def test_a_parked_search_tries_again_once_the_wait_is_over(monkeypatch) -> None:
-    now = 0.0
-    monkeypatch.setattr("dlightrag.engine.answer.tools.web.time.monotonic", lambda: now)
-    replies = [httpx.Response(402, json={}), httpx.Response(200, json={"results": [_PAGE]})]
-    search = ExaSearch("k", client=_client(lambda _request: replies.pop(0)))
-
-    with pytest.raises(WebSearchUnavailable):
-        await search.search("q")
-    now = 15 * 60
-
-    assert len((await search.search("q")).hits) == 2
-
-
-@pytest.mark.asyncio
-async def test_a_slow_provider_is_reported_rather_than_raised_at_the_caller() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ReadTimeout("too slow", request=request)
-
-    search = ExaSearch("k", client=_client(handler))
-
-    with pytest.raises(WebSearchUnavailable) as failure:
-        await search.search("q")
-
-    assert failure.value.reason == "timeout"
-
-
-@pytest.mark.asyncio
-async def test_a_server_error_does_not_park_the_client() -> None:
-    calls = 0
-
-    def handler(_request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        return httpx.Response(500, json={})
-
-    search = ExaSearch("k", client=_client(handler))
-
+    provider = ExaWebSource("k", client=_client(handler))
     for _ in range(2):
-        with pytest.raises(WebSearchUnavailable):
-            await search.search("q")
-
+        with pytest.raises(WebSourceUnavailable) as failure:
+            await provider.search(WebSearchRequest("q"))
+        assert failure.value.reason == "unauthorized"
     assert calls == 2
 
 
-@pytest.mark.asyncio
-async def test_the_wait_outlasts_a_live_crawl() -> None:
-    search = ExaSearch("k")
-    try:
-        assert search._client.timeout.read is not None
-        assert search._client.timeout.read > 10.0
-    finally:
-        await search.aclose()
+async def test_tavily_maps_effort_filters_and_drops_only_bad_items() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"url": "https://a.example/x", "title": "A", "content": "body"},
+                    {"url": "https://bad.example"},
+                    {"url": "https://bad.example/?token=secret", "content": "credential"},
+                ]
+            },
+        )
+
+    provider = TavilyWebSource("tk", client=_client(handler))
+    result = await provider.search(
+        WebSearchRequest(
+            "q",
+            max_results=5,
+            include_domains=("a.example",),
+            exclude_domains=("b.example",),
+            effort="deep",
+        )
+    )
+
+    assert requests[0]["api_key"] == "tk"
+    assert requests[0]["search_depth"] == "advanced"
+    assert requests[0]["chunks_per_source"] == 3
+    assert requests[0]["include_answer"] is False
+    assert result.provider == "tavily"
+    assert result.dropped_results == 2
+    assert result.hits[0].acquisition == "tavily_search"
 
 
-@pytest.mark.asyncio
-async def test_pages_that_stop_reading_are_complained_about_not_dropped(caplog) -> None:
-    unreadable = {"results": [{"title": "no url here"}]}
-    search = ExaSearch("k", client=_client(_responds(unreadable)))
+async def test_tavily_extract_keeps_one_exact_representation() -> None:
+    provider = TavilyWebSource(
+        "tk",
+        client=_client(
+            _responds(
+                {
+                    "results": [
+                        {
+                            "url": "https://a.example/page",
+                            "raw_content": "  exact body\n",
+                        },
+                        {"url": "https://b.example/page", "raw_content": "wrong body"},
+                    ]
+                }
+            )
+        ),
+    )
 
-    with caplog.at_level("WARNING"):
-        result = await search.search("q")
+    result = await provider.extract("https://a.example/start", effort="balanced")
+
+    assert result.url == "https://a.example/page"
+    assert result.text == "  exact body\n"
+    assert result.dropped_results == 1
+
+
+async def test_provider_response_bytes_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("dlightrag.engine.answer.web_sources.exa._MAX_RESPONSE_BYTES", 8)
+    provider = ExaWebSource("k", client=_client(_responds({"results": []})))
+
+    with pytest.raises(WebSourceUnavailable) as failure:
+        await provider.search(WebSearchRequest("q"))
+
+    assert failure.value.reason == "response_too_large"
+
+
+class _StubProvider:
+    def __init__(
+        self,
+        name: str,
+        *,
+        search: WebSearchResult | Exception,
+        extract: WebExtractResult | Exception,
+    ) -> None:
+        self.name = name
+        self._search = search
+        self._extract = extract
+        self.search_calls = 0
+        self.extract_calls = 0
+
+    async def search(self, request: WebSearchRequest) -> WebSearchResult:
+        self.search_calls += 1
+        if isinstance(self._search, Exception):
+            raise self._search
+        return self._search
+
+    async def extract(self, url: str, *, effort: WebEffort) -> WebExtractResult:
+        self.extract_calls += 1
+        if isinstance(self._extract, Exception):
+            raise self._extract
+        return self._extract
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_search_and_extract_fail_over_in_independent_orders() -> None:
+    exa = _StubProvider(
+        "exa",
+        search=WebSourceUnavailable("exa", "search", "timeout"),
+        extract=WebExtractResult(
+            "https://a.example/final", "exa text", provider="exa", acquisition="exa_extract"
+        ),
+    )
+    tavily = _StubProvider(
+        "tavily",
+        search=WebSearchResult(
+            (WebSearchHit("https://a.example", "A", "fact", acquisition="tavily_search"),),
+            provider="tavily",
+        ),
+        extract=WebSourceUnavailable("tavily", "extract", "timeout"),
+    )
+    service = WebSourceService(
+        search_providers=(exa, tavily),
+        extract_providers=(tavily, exa),
+    )
+
+    searched = await service.search(WebSearchRequest("q"))
+    extracted = await service.extract("https://a.example", effort="fast")
+
+    assert searched.provider == "tavily"
+    assert searched.degradation == "Provider fallback: exa (timeout); used tavily."
+    assert extracted.provider == "exa"
+    assert extracted.degradation == "Provider fallback: tavily (timeout); used exa."
+    assert (exa.search_calls, tavily.search_calls) == (1, 1)
+    assert (tavily.extract_calls, exa.extract_calls) == (1, 1)
+
+
+async def test_empty_search_is_success_not_quality_based_fallback() -> None:
+    first = _StubProvider(
+        "exa",
+        search=WebSearchResult((), provider="exa"),
+        extract=WebSourceUnavailable("exa", "extract", "unused"),
+    )
+    second = _StubProvider(
+        "tavily",
+        search=WebSearchResult(
+            (WebSearchHit("https://a.example", "A", "fact", acquisition="tavily_search"),),
+            provider="tavily",
+        ),
+        extract=WebSourceUnavailable("tavily", "extract", "unused"),
+    )
+    result = await WebSourceService(search_providers=(first, second)).search(WebSearchRequest("q"))
 
     assert result.hits == ()
-    assert "no usable passage" in caplog.text
+    assert second.search_calls == 0
 
 
-@pytest.mark.asyncio
-async def test_finding_nothing_is_not_complained_about() -> None:
-    search = ExaSearch("k", client=_client(_responds({"results": []})))
-
-    assert (await search.search("q")).hits == ()
+def _hit(url: str, text: str, **kwargs) -> WebSearchHit:
+    return WebSearchHit(url=url, title=kwargs.pop("title", "T"), text=text, **kwargs)
 
 
-@pytest.mark.asyncio
-async def test_a_payload_without_the_required_field_is_complained_about(caplog) -> None:
-    search = ExaSearch("k", client=_client(_responds({"items": [_PAGE]})))
-
-    with caplog.at_level("WARNING"):
-        result = await search.search("q")
-
-    assert result.hits == ()
-    assert "without a results field" in caplog.text
-
-
-def _hit(url: str, text: str, **kw) -> WebSearchHit:
-    return WebSearchHit(url=url, title=kw.pop("title", "T"), text=text, **kw)
-
-
-def test_passages_from_one_page_share_one_source() -> None:
-    rows = web_context_rows([_hit("https://a/x#one", "one"), _hit("https://a/x#two", "two")])
-
-    assert len({row["reference_id"] for row in rows}) == 1
-    assert {row["metadata"]["source_uri"] for row in rows} == {"https://a/x"}
-    assert [row["chunk_id"] for row in rows] == [
-        f"{rows[0]['reference_id']}-1",
-        f"{rows[0]['reference_id']}-2",
-    ]
-
-
-def test_a_repeated_passage_is_dropped_but_a_new_angle_is_kept() -> None:
+def test_web_context_rows_use_final_url_and_web_resource_metadata() -> None:
     rows = web_context_rows(
         [
-            _hit("https://a/x", "same"),
-            _hit("https://a/x", "same"),
-            _hit("https://a/x", "different"),
+            _hit("https://a/x#one", "one"),
+            _hit("https://a/x#two", "two"),
+            _hit("https://a/x", "one"),
         ]
     )
 
-    assert [row["content"] for row in rows] == ["same", "different"]
+    assert len(rows) == 2
+    assert len({row["reference_id"] for row in rows}) == 1
+    metadata = rows[0]["metadata"]
+    assert metadata["source_uri"] == "https://a/x"
+    assert metadata["resource_kind"] == "web"
+    assert metadata["admission_origin"] == "search"
+    assert metadata["acquisition"] == "exa_search"
+    assert rows[0]["_workspace"] == "__web_search__"
 
 
-def test_a_web_passage_says_it_came_from_the_web() -> None:
-    (row,) = web_context_rows([_hit("https://a/x", "body", published_date="2026-01-01")])
+async def test_search_tool_reports_partial_drop_and_provider_degradation() -> None:
+    async def search(_request: WebSearchRequest) -> WebSearchResult:
+        return WebSearchResult(
+            (WebSearchHit("https://a.example", "A", "fact"),),
+            provider="tavily",
+            dropped_results=2,
+            degradation="Provider fallback: exa (timeout); used tavily.",
+        )
 
-    assert row["metadata"]["source_type"] == "web_search"
-    assert row["metadata"]["source_uri"] == "https://a/x"
-    assert row["metadata"]["source_download_locator"] == "https://a/x"
-    assert row["metadata"]["published_date"] == "2026-01-01"
-    assert row["_workspace"] == "__web_search__"
+    result = await web_search_tool(
+        search=search,
+        evidence=EvidenceLedger(),
+        trace={"web_search_cost_dollars": 0.0},
+        register_web_source=lambda _url: "res-1",
+    ).execute(WebSearchInput(query="q"), _label_capture_runtime([]))
 
-
-def test_a_remote_image_is_carried_but_not_yet_shown() -> None:
-    (row,) = web_context_rows([_hit("https://a/x", "body", image_url="https://a/pic.png")])
-
-    assert row["metadata"]["remote_image_url"] == "https://a/pic.png"
-    assert "image_url" not in row
-
-
-def test_an_empty_passage_never_becomes_a_source() -> None:
-    assert web_context_rows([_hit("https://a/x", "   ")]) == []
-
-
-def test_a_web_passage_survives_the_citation_builder_as_a_real_source() -> None:
-    from dlightrag.engine.answer.citations.source_builder import build_sources_from_chunks
-
-    rows = web_context_rows(
-        [_hit("https://a/x", "one", title="A page"), _hit("https://a/x", "two", title="A page")]
-    )
-
-    (source,) = build_sources_from_chunks(rows, image_url_prefix="/web/api/images")
-
-    assert source.source_uri == "https://a/x"
-    assert source.download_locator == "https://a/x"
-    assert source.title is None or isinstance(source.title, str)
-    assert source.chunks is not None
-    assert [chunk.content for chunk in source.chunks] == ["one", "two"]
-    # A remote address would be rejected by the browser's same-origin image rule,
-    # so nothing is offered until it is served from here.
-    assert [chunk.image_url for chunk in source.chunks] == [None, None]
-    assert [chunk.thumbnail_url for chunk in source.chunks] == [None, None]
+    assert "Dropped 2 malformed result(s)." in result.text_content
+    assert "Provider fallback" in result.text_content
+    assert "[resource: res-1]" in result.text_content

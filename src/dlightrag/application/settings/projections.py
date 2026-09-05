@@ -25,7 +25,10 @@ from dlightrag.engine.answer.execution import (
     AnswerResourceSettings,
 )
 from dlightrag.engine.answer.highlights import SemanticHighlightSettings
-from dlightrag.engine.answer.model_runtime import AnswerModelRuntimeSettings
+from dlightrag.engine.answer.model_runtime import (
+    AnswerModelRuntimeSettings,
+    WebSourceRuntimeSettings,
+)
 from dlightrag.engine.answer.resources.images import MAX_QUERY_IMAGES
 from dlightrag.engine.rag.workspace.settings import RagSettings
 from dlightrag.engine.rag.workspace.workspaces import normalize_workspace
@@ -86,7 +89,7 @@ def answer_capability_settings(config: DlightragConfig) -> AnswerCapabilitySetti
             quality=answer.image_quality,
             min_quality=answer.image_min_quality,
         ),
-        web_search_enabled=bool(config.answer.web_search.api_key),
+        web_search_enabled=bool(config.answer.web_sources.search_order()),
         rerank_enabled=config.models.rerank.enabled,
         rerank_strategy=config.models.rerank.strategy,
     )
@@ -107,9 +110,15 @@ def semantic_highlight_settings(config: DlightragConfig) -> SemanticHighlightSet
 
 def answer_model_runtime_settings(config: DlightragConfig) -> AnswerModelRuntimeSettings:
     """Snapshot Answer model roles and Web-search configuration."""
+    web = config.answer.web_sources
     return AnswerModelRuntimeSettings(
         model_roles=config.models.chat,
-        web_search_api_key=config.answer.web_search.api_key,
+        web_sources=WebSourceRuntimeSettings(
+            exa_api_key=web.exa.api_key,
+            tavily_api_key=web.tavily.api_key,
+            search_providers=web.search_order(),
+            extract_providers=web.extract_order(),
+        ),
         query_image_limit=MAX_QUERY_IMAGES,
     )
 

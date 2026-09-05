@@ -63,7 +63,7 @@
   <line class="external-divider" x1="980" y1="270" x2="1290" y2="270"/>
   <text class="node-title" x="1135" y="312" text-anchor="middle">Parser sidecars</text>
   <text class="node-copy" x="1135" y="341" text-anchor="middle">MinerU · Docling</text>
-  <text class="node-copy" x="1135" y="376" text-anchor="middle">Optional Exa and outbound MCP</text>
+  <text class="node-copy" x="1135" y="376" text-anchor="middle">Optional Exa/Tavily and outbound MCP</text>
 
   <rect class="store" x="60" y="500" width="820" height="200" rx="16"/>
   <text class="node-title" x="470" y="536" text-anchor="middle">PostgreSQL 18 primary</text>

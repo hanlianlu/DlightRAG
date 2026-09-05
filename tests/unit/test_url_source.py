@@ -4,13 +4,21 @@
 import logging
 import socket
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 import pytest
 
+from dlightrag.engine.public_http import (
+    PublicHttpPresentation,
+    avalidate_public_http_url,
+    fetch_public_http,
+    normalize_public_http_url_identity,
+)
 from dlightrag.engine.rag.corpus.sources.base import SourceDocument
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 from dlightrag.engine.rag.corpus.sources.uri import parse_remote_uri
-from dlightrag.engine.rag.corpus.sources.url import URLDataSource, afetch_public_https_bytes
+from dlightrag.engine.rag.corpus.sources.url import URLDataSource
 
 
 class _Response:
@@ -54,9 +62,9 @@ class _Client:
         self.urls: list[str] = []
         self.closed = False
 
-    def stream(self, method: str, url: str) -> _Response:
+    def stream(self, method: str, url: str, **kwargs) -> _Response:
         assert method == "GET"
-        self.urls.append(url)
+        self.urls.append(_logical_url(url, kwargs))
         return _Response(self.content, url=self.final_url)
 
     async def aclose(self) -> None:
@@ -70,17 +78,24 @@ class _RedirectClient:
         self.content = content
         self.urls: list[str] = []
 
-    def stream(self, method: str, url: str) -> _Response:
+    def stream(self, method: str, url: str, **kwargs) -> _Response:
         assert method == "GET"
-        self.urls.append(url)
-        if url == self.start_url:
+        logical_url = _logical_url(url, kwargs)
+        self.urls.append(logical_url)
+        if logical_url == self.start_url:
             return _Response(
                 b"",
                 url=url,
                 status_code=302,
                 headers={"location": self.target_url},
             )
-        return _Response(self.content, url=url)
+        return _Response(self.content, url=logical_url)
+
+
+def _logical_url(url: str, kwargs: dict) -> str:
+    parts = urlsplit(url)
+    host = (kwargs.get("headers") or {}).get("host", parts.netloc)
+    return urlunsplit((parts.scheme, host, parts.path, parts.query, ""))
 
 
 @pytest.fixture(autouse=True)
@@ -232,16 +247,20 @@ def test_url_data_source_rejects_non_durable_explicit_download_uri() -> None:
         )
 
 
-async def test_url_data_source_revalidates_final_response_url(tmp_path: Path) -> None:
+async def test_url_data_source_uses_validated_target_not_transport_reported_url(
+    tmp_path: Path,
+) -> None:
     source = URLDataSource(
         urls=["https://cdn.example.com/report.pdf"],
         client=_Client(final_url="https://127.0.0.1/report.pdf"),
     )
+    destination = tmp_path / "report.pdf"
 
-    with pytest.raises(ValueError, match="public"):
-        await source.amaterialize_document(
-            ([d async for d in source.aiter_documents()])[0], tmp_path / "report.pdf"
-        )
+    await source.amaterialize_document(
+        ([d async for d in source.aiter_documents()])[0], destination
+    )
+
+    assert destination.read_bytes() == b"document"
 
 
 async def test_url_data_source_rejects_private_redirect_before_following(tmp_path: Path) -> None:
@@ -376,6 +395,13 @@ async def test_url_data_source_keeps_allowlisted_private_fetch_url_out_of_downlo
     assert document.download_uri is None
 
 
+def test_public_url_identity_normalizes_authority_and_discards_fragment() -> None:
+    assert (
+        normalize_public_http_url_identity("HTTPS://EXAMPLE.COM.:443/report?id=7#section")
+        == "https://example.com/report?id=7"
+    )
+
+
 def test_parse_remote_uri_treats_http_and_https_as_url_source() -> None:
     assert parse_remote_uri("https://api.bynder.com/docs/getting-started") == (
         "url",
@@ -387,81 +413,83 @@ def test_parse_remote_uri_treats_http_and_https_as_url_source() -> None:
     )
 
 
-async def test_afetch_public_https_bytes_returns_bounded_content() -> None:
+async def test_fetch_public_http_returns_bounded_content_and_final_identity() -> None:
     client = _Client(content=b"hello world", final_url="https://cdn.example.com/report.txt")
 
-    data = await afetch_public_https_bytes(
+    result = await fetch_public_http(
         "https://cdn.example.com/report.txt", max_bytes=1024, client=client
     )
 
-    assert data == b"hello world"
+    assert result.content == b"hello world"
+    assert result.final_url == "https://cdn.example.com/report.txt"
     assert client.urls == ["https://cdn.example.com/report.txt"]
 
 
-async def test_afetch_public_https_bytes_enforces_max_bytes() -> None:
-    client = _Client(content=b"x" * 100, final_url="https://cdn.example.com/big.txt")
+async def test_injected_httpx_client_cannot_add_credentials_or_arbitrary_headers() -> None:
+    requests: list[httpx.Request] = []
 
-    with pytest.raises(ValueError, match="maximum"):
-        await afetch_public_https_bytes(
-            "https://cdn.example.com/big.txt", max_bytes=10, client=client
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=b"body")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        headers={"authorization": "Bearer secret", "x-extra": "forbidden"},
+        cookies={"session": "secret"},
+    ) as client:
+        result = await fetch_public_http(
+            "https://cdn.example.com/report.txt",
+            max_bytes=1024,
+            presentation=PublicHttpPresentation(user_agent="Allowed/1"),
+            client=client,
         )
 
+    assert result.content == b"body"
+    assert requests[0].headers["user-agent"] == "Allowed/1"
+    assert requests[0].extensions["sni_hostname"] == "cdn.example.com"
+    assert "authorization" not in requests[0].headers
+    assert "cookie" not in requests[0].headers
+    assert "x-extra" not in requests[0].headers
 
-async def test_afetch_public_https_bytes_follows_and_revalidates_redirects() -> None:
+
+async def test_fetch_public_http_enforces_max_bytes() -> None:
+    client = _Client(content=b"x" * 100, final_url="https://cdn.example.com/big.txt")
+    with pytest.raises(ValueError, match="maximum"):
+        await fetch_public_http("https://cdn.example.com/big.txt", max_bytes=10, client=client)
+
+
+async def test_fetch_public_http_follows_redirects_and_pins_validated_ip() -> None:
     client = _RedirectClient(
         "https://cdn.example.com/start.txt",
         "https://cdn.example.com/final.txt",
     )
 
-    data = await afetch_public_https_bytes(
+    result = await fetch_public_http(
         "https://cdn.example.com/start.txt", max_bytes=1024, client=client
     )
 
-    assert data == b"final body"
+    assert result.content == b"final body"
+    assert result.final_url == "https://cdn.example.com/final.txt"
     assert client.urls == [
         "https://cdn.example.com/start.txt",
         "https://cdn.example.com/final.txt",
     ]
 
 
-async def test_afetch_public_https_bytes_fetches_public_http() -> None:
-    client = _Client(content=b"hello http", final_url="http://cdn.example.com/report.txt")
-
-    data = await afetch_public_https_bytes(
-        "http://cdn.example.com/report.txt", max_bytes=1024, client=client
-    )
-
-    assert data == b"hello http"
-    assert client.urls == ["http://cdn.example.com/report.txt"]
-
-
-async def test_afetch_public_https_bytes_rejects_non_http_schemes() -> None:
-    with pytest.raises(ValueError, match="http or https"):
-        await afetch_public_https_bytes(
-            "ftp://cdn.example.com/report.txt", max_bytes=1024, client=_Client()
-        )
-
-
-async def test_afetch_public_https_bytes_follows_http_to_https() -> None:
+async def test_fetch_public_http_accepts_http_and_http_to_https() -> None:
     client = _RedirectClient(
         "http://cdn.example.com/start.txt",
         "https://cdn.example.com/final.txt",
     )
-
-    data = await afetch_public_https_bytes(
+    result = await fetch_public_http(
         "http://cdn.example.com/start.txt", max_bytes=1024, client=client
     )
-
-    assert data == b"final body"
-    assert client.urls == [
-        "http://cdn.example.com/start.txt",
-        "https://cdn.example.com/final.txt",
-    ]
+    assert result.content == b"final body"
 
 
-async def test_afetch_public_https_bytes_rejects_https_to_http_downgrade() -> None:
+async def test_fetch_public_http_rejects_scheme_downgrade_and_private_redirect() -> None:
     with pytest.raises(ValueError, match="downgrade"):
-        await afetch_public_https_bytes(
+        await fetch_public_http(
             "https://cdn.example.com/start.txt",
             max_bytes=1024,
             client=_RedirectClient(
@@ -469,11 +497,8 @@ async def test_afetch_public_https_bytes_rejects_https_to_http_downgrade() -> No
                 "http://cdn.example.com/final.txt",
             ),
         )
-
-
-async def test_afetch_public_https_bytes_rejects_private_redirect() -> None:
     with pytest.raises(ValueError, match="public"):
-        await afetch_public_https_bytes(
+        await fetch_public_http(
             "https://cdn.example.com/start.txt",
             max_bytes=1024,
             client=_RedirectClient(
@@ -483,7 +508,7 @@ async def test_afetch_public_https_bytes_rejects_private_redirect() -> None:
         )
 
 
-async def test_afetch_rejects_redirect_hostname_that_resolves_private(
+async def test_fetch_rejects_redirect_hostname_that_resolves_private(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def resolver(host: str, port: int, *args: object, **kwargs: object):
@@ -491,20 +516,12 @@ async def test_afetch_rejects_redirect_hostname_that_resolves_private(
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", resolver)
-
     client = _RedirectClient(
         "https://public.example/start.txt",
         "https://private.example/admin.txt",
-        content=b"private body",
     )
-
     with pytest.raises(ValueError, match="public"):
-        await afetch_public_https_bytes(
-            "https://public.example/start.txt",
-            max_bytes=1024,
-            client=client,
-        )
-
+        await fetch_public_http("https://public.example/start.txt", max_bytes=1024, client=client)
     assert client.urls == ["https://public.example/start.txt"]
 
 
@@ -512,8 +529,6 @@ async def test_public_url_dns_validation_runs_off_the_event_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import threading
-
-    from dlightrag.engine.rag.corpus.sources.url import avalidate_public_https_url
 
     loop_thread = threading.get_ident()
     resolver_threads: list[int] = []
@@ -523,8 +538,7 @@ async def test_public_url_dns_validation_runs_off_the_event_loop(
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
 
     monkeypatch.setattr(socket, "getaddrinfo", resolver)
-
-    assert await avalidate_public_https_url("https://public.example/doc.pdf") == (
+    assert await avalidate_public_http_url("https://public.example/doc.pdf") == (
         "https://public.example/doc.pdf"
     )
     assert resolver_threads and loop_thread not in resolver_threads
@@ -533,12 +547,12 @@ async def test_public_url_dns_validation_runs_off_the_event_loop(
 async def test_async_public_url_validation_still_rejects_private_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.engine.rag.corpus.sources.url import avalidate_public_https_url
-
-    def resolver(host: str, port: int, *args: object, **kwargs: object):
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", port))]
-
-    monkeypatch.setattr(socket, "getaddrinfo", resolver)
-
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port, *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", port))
+        ],
+    )
     with pytest.raises(ValueError, match="public"):
-        await avalidate_public_https_url("https://private.example/doc.pdf")
+        await avalidate_public_http_url("https://private.example/doc.pdf")

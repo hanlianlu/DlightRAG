@@ -1,19 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """URL-backed data source for remote document ingestion."""
 
-import asyncio
-import fnmatch
-import inspect
-import ipaddress
 import logging
-import socket
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import unquote, urljoin, urlparse, urlsplit, urlunsplit
+from urllib.parse import unquote, urlparse
 
-import httpx
-
+from dlightrag.engine.public_http import (
+    download_public_http,
+    validate_public_http_url,
+)
 from dlightrag.engine.rag.corpus.sources.base import AsyncDataSource, SourceDocument
 from dlightrag.engine.rag.corpus.sources.source_contract import (
     implicit_https_download_uri,
@@ -22,21 +19,11 @@ from dlightrag.engine.rag.corpus.sources.source_contract import (
     validate_source_uri,
 )
 
-_MAX_REDIRECTS = 5
-_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
-
 logger = logging.getLogger(__name__)
 
 
 class URLDataSource(AsyncDataSource):
-    """Download public HTTP(S) documents by URL.
-
-    This adapter is intentionally small: it supports signed/public URLs for
-    REST/MCP ingestion. Sources that need auth headers or custom pagination must
-    stage content through a supported local, Azure Blob, or S3 source. Private
-    hosts stay denied unless ``allow_private_hosts`` names them; HTTPS responses
-    cannot redirect to HTTP.
-    """
+    """Download bounded HTTP(S) documents through the shared public client."""
 
     def __init__(
         self,
@@ -84,10 +71,9 @@ class URLDataSource(AsyncDataSource):
             raise ValueError("'download_uris' must match the number of urls")
 
         self._client = client
-        self._owns_client = client is None
         self._timeout = timeout
         self._max_download_bytes = max(1, int(max_download_bytes))
-        self._allow_private_hosts = _normalize_host_patterns(allow_private_hosts or ())
+        self._allow_private_hosts = tuple(allow_private_hosts or ())
         self._url_by_key: dict[str, str] = {}
         self._source_uri_by_key: dict[str, str] = {}
         self._download_uri_by_key: dict[str, str | None] = {}
@@ -114,7 +100,7 @@ class URLDataSource(AsyncDataSource):
             ]
 
         for index, document in enumerate(document_inputs):
-            url = _validate_public_https_url(
+            url = validate_public_http_url(
                 document.key,
                 resolve_host=True,
                 allow_private_hosts=self._allow_private_hosts,
@@ -122,17 +108,19 @@ class URLDataSource(AsyncDataSource):
             key = _document_key_from_url(url, index=index, filename=document.display_filename)
             key = _dedupe_key(key, self._url_by_key)
             self._url_by_key[key] = url
-            stable_source_uri = document.source_uri or _default_source_uri_from_url(url)
-            stable_source_uri = validate_source_uri(stable_source_uri)
+            stable_source_uri = validate_source_uri(
+                document.source_uri or _default_source_uri_from_url(url)
+            )
             self._source_uri_by_key[key] = stable_source_uri
-            if document.download_uri is not None:
-                explicit_download_uri = document.download_uri
-            elif download_uri is not None:
-                explicit_download_uri = download_uri
-            elif download_uris is not None:
-                explicit_download_uri = download_uris[index]
-            else:
-                explicit_download_uri = None
+            explicit_download_uri = (
+                document.download_uri
+                if document.download_uri is not None
+                else download_uri
+                if download_uri is not None
+                else download_uris[index]
+                if download_uris is not None
+                else None
+            )
             if explicit_download_uri is not None:
                 resolved_download_uri = validate_download_uri(explicit_download_uri)
             else:
@@ -168,27 +156,18 @@ class URLDataSource(AsyncDataSource):
                 yield document
 
     async def amaterialize_document(self, document: SourceDocument, destination: Path) -> None:
-        key = document.key
         try:
-            url = self._url_by_key[key]
+            url = self._url_by_key[document.key]
         except KeyError as exc:
-            raise KeyError(f"unknown URL document id: {key}") from exc
-
-        client = self._ensure_client()
-
-        async def _consume(response: Any) -> None:
-            await self._write_response(response, destination)
-
-        try:
-            await _follow_and_consume(
-                client,
-                url,
-                allow_private_hosts=self._allow_private_hosts,
-                consume=_consume,
-            )
-        except Exception:
-            destination.unlink(missing_ok=True)
-            raise
+            raise KeyError(f"unknown URL document id: {document.key}") from exc
+        await download_public_http(
+            url,
+            destination,
+            max_bytes=self._max_download_bytes,
+            timeout=self._timeout,
+            allow_private_hosts=self._allow_private_hosts,
+            client=self._client,
+        )
 
     def source_uri_for_key(self, key: str) -> str:
         try:
@@ -200,219 +179,9 @@ class URLDataSource(AsyncDataSource):
         return self._download_uri_by_key[key]
 
     async def aclose(self) -> None:
-        if not self._owns_client or self._client is None:
-            return
-        close = getattr(self._client, "aclose", None)
-        if not callable(close):
-            return
-        result = close()
-        if inspect.isawaitable(result):
-            _ = await result
-
-    def _ensure_client(self) -> Any:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                follow_redirects=False,
-                timeout=httpx.Timeout(self._timeout),
-            )
-        return self._client
-
-    async def _write_response(self, response: Any, destination: Path) -> None:
-        written = 0
-        with destination.open("wb") as out:
-            async for chunk in response.aiter_bytes():
-                if not chunk:
-                    continue
-                written += len(chunk)
-                if written > self._max_download_bytes:
-                    raise ValueError(
-                        f"url ingest exceeds maximum size of {self._max_download_bytes} bytes"
-                    )
-                out.write(chunk)
-
-
-def _validate_public_https_url(
-    raw_url: str,
-    *,
-    resolve_host: bool = False,
-    allow_private_hosts: frozenset[str] = frozenset(),
-) -> str:
-    pending = _static_url_checks(raw_url, allow_private_hosts)
-    if resolve_host and pending is not None:
-        _validate_resolved_public_host(*pending)
-    return raw_url
-
-
-async def _avalidate_public_https_url(
-    raw_url: str,
-    *,
-    allow_private_hosts: frozenset[str] = frozenset(),
-) -> str:
-    """Validate *raw_url* with the blocking DNS lookup on a worker thread."""
-    pending = _static_url_checks(raw_url, allow_private_hosts)
-    if pending is not None:
-        await asyncio.to_thread(_validate_resolved_public_host, *pending)
-    return raw_url
-
-
-def _static_url_checks(
-    raw_url: str,
-    allow_private_hosts: frozenset[str],
-) -> tuple[str, int] | None:
-    """Apply every non-DNS check; return the host/port still needing resolution."""
-    parsed = urlparse(raw_url)
-    scheme = parsed.scheme.lower()
-    if scheme not in {"http", "https"}:
-        raise ValueError("url fetch only accepts http or https URLs")
-    if not parsed.hostname:
-        raise ValueError("url ingestion requires a hostname")
-    if parsed.username or parsed.password:
-        raise ValueError("url ingestion does not accept credentials in URLs")
-
-    host = _normalize_host(parsed.hostname)
-    if _host_allowed_private(host, allow_private_hosts):
+        # Shared public HTTP owns default clients per request; injected clients
+        # are caller-owned test/integration transports.
         return None
-    if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
-        raise ValueError("url ingestion requires a public host")
-
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return (host, parsed.port or (80 if scheme == "http" else 443))
-    if not ip.is_global:
-        raise ValueError("url ingestion requires a public host")
-    return None
-
-
-def _validate_resolved_public_host(host: str, port: int) -> None:
-    try:
-        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except OSError as exc:
-        raise ValueError("url ingestion requires a resolvable public host") from exc
-    for info in infos:
-        sockaddr = info[4]
-        if not sockaddr:
-            continue
-        if not ipaddress.ip_address(str(sockaddr[0])).is_global:
-            raise ValueError("url ingestion requires a public host")
-
-
-def _url_scheme(url: str) -> str:
-    return urlparse(url).scheme.lower()
-
-
-async def _redirect_target(
-    current_url: str,
-    response: Any,
-    *,
-    allow_private_hosts: frozenset[str],
-) -> str:
-    headers = getattr(response, "headers", {}) or {}
-    location = headers.get("location") or headers.get("Location")
-    if not location:
-        raise ValueError("url redirect is missing Location header")
-    target = urljoin(current_url, str(location))
-    if _url_scheme(current_url) == "https" and _url_scheme(target) == "http":
-        raise ValueError("url redirect cannot downgrade https to http")
-    return await _avalidate_public_https_url(
-        target,
-        allow_private_hosts=allow_private_hosts,
-    )
-
-
-async def _follow_and_consume[T](
-    client: Any,
-    url: str,
-    *,
-    allow_private_hosts: frozenset[str],
-    consume: Callable[[Any], Awaitable[T]],
-) -> T:
-    """Follow bounded HTTP(S) redirects, revalidate each hop, then consume the body.
-
-    The single redirect/validation loop is the sole place DNS, scheme, redirect,
-    and public-host checks are applied so callers cannot weaken them. HTTPS hops
-    cannot downgrade to HTTP.
-    """
-    current_url = url
-    for _ in range(_MAX_REDIRECTS + 1):
-        async with client.stream("GET", current_url) as response:
-            if response.status_code in _REDIRECT_STATUSES:
-                current_url = await _redirect_target(
-                    current_url,
-                    response,
-                    allow_private_hosts=allow_private_hosts,
-                )
-                continue
-            response.raise_for_status()
-            _validate_public_https_url(
-                str(getattr(response, "url", current_url)),
-                allow_private_hosts=allow_private_hosts,
-            )
-            return await consume(response)
-    raise ValueError("url ingestion exceeded maximum redirects")
-
-
-async def afetch_public_https_bytes(
-    url: str,
-    *,
-    max_bytes: int,
-    timeout: float = 120.0,
-    client: Any | None = None,
-    allow_private_hosts: Sequence[str] | None = None,
-) -> bytes:
-    """Fetch a public HTTP(S) URL into memory under the same SSRF and size checks.
-
-    Applies the identical scheme/credential/public-host/DNS/redirect/byte-limit
-    validation used for ingestion downloads, but returns bounded bytes instead of
-    streaming to disk. ``max_bytes`` caps the accumulated body; the fetch aborts
-    as soon as the limit is exceeded. DNS validation remains enabled when a
-    caller injects an HTTP client; transport ownership never weakens SSRF policy.
-    HTTP stays HTTP; HTTPS cannot redirect to HTTP.
-    """
-    patterns = _normalize_host_patterns(allow_private_hosts or ())
-    owns_client = client is None
-    validated = await _avalidate_public_https_url(url, allow_private_hosts=patterns)
-    active = client or httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(timeout))
-    limit = max(1, int(max_bytes))
-
-    async def _read(response: Any) -> bytes:
-        return await _read_bounded_bytes(response, limit)
-
-    try:
-        return await _follow_and_consume(
-            active,
-            validated,
-            allow_private_hosts=patterns,
-            consume=_read,
-        )
-    finally:
-        if owns_client:
-            await active.aclose()
-
-
-async def _read_bounded_bytes(response: Any, limit: int) -> bytes:
-    chunks: list[bytes] = []
-    written = 0
-    async for chunk in response.aiter_bytes():
-        if not chunk:
-            continue
-        written += len(chunk)
-        if written > limit:
-            raise ValueError(f"url fetch exceeds maximum size of {limit} bytes")
-        chunks.append(chunk)
-    return b"".join(chunks)
-
-
-def _normalize_host_patterns(values: Sequence[str]) -> frozenset[str]:
-    return frozenset(_normalize_host(value) for value in values if value)
-
-
-def _normalize_host(value: str) -> str:
-    return value.lower().strip("[]").rstrip(".")
-
-
-def _host_allowed_private(host: str, patterns: frozenset[str]) -> bool:
-    return any(fnmatch.fnmatchcase(host, pattern) for pattern in patterns)
 
 
 def _default_source_uri_from_url(url: str) -> str:
@@ -420,53 +189,14 @@ def _default_source_uri_from_url(url: str) -> str:
     return parsed._replace(query="", fragment="").geturl()
 
 
-def _document_key_from_url(
-    url: str,
-    *,
-    index: int,
-    filename: str | None,
-) -> str:
+def _document_key_from_url(url: str, *, index: int, filename: str | None) -> str:
     if filename is not None:
         return _clean_filename(filename)
-
     parsed = urlparse(url)
     name = _clean_filename(unquote(PurePosixPath(parsed.path).name or f"document-{index + 1}"))
     if not Path(name).suffix:
         name = f"{name}.html"
     return name
-
-
-def validate_public_https_url(raw_url: str, *, resolve_host: bool = False) -> str:
-    """Return *raw_url* if it is a safe public HTTP or HTTPS URL, else raise ``ValueError``.
-
-    Rejects non-http(s) schemes, embedded credentials, and localhost/``.local``/
-    private/non-global IP-literal hosts. Does not rewrite ``http`` to ``https``.
-    With ``resolve_host=True`` the hostname is additionally resolved and every
-    address checked (blocking DNS lookup); async callers use
-    :func:`avalidate_public_https_url` instead.
-    """
-    return _validate_public_https_url(raw_url, resolve_host=resolve_host)
-
-
-async def avalidate_public_https_url(raw_url: str) -> str:
-    """Full public HTTP(S) validation for async callers, DNS included.
-
-    Identical policy to :func:`validate_public_https_url` with ``resolve_host``,
-    but the blocking name resolution runs on a worker thread so one slow or
-    unreachable host cannot stall the event loop.
-    """
-    return await _avalidate_public_https_url(raw_url)
-
-
-def validate_public_web_url(raw_url: str) -> str:
-    """Validate a public HTTP(S) provenance URL for browser navigation."""
-    return _validate_public_https_url(raw_url)
-
-
-def normalize_https_url_identity(url: str) -> str:
-    """Normalize scheme/host and discard fragments that never reach an HTTP server."""
-    parts = urlsplit(url)
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, parts.query, ""))
 
 
 def _clean_filename(value: str) -> str:
@@ -491,10 +221,4 @@ def _dedupe_key(key: str, existing: dict[str, str]) -> str:
         digest += 1
 
 
-__all__ = [
-    "URLDataSource",
-    "afetch_public_https_bytes",
-    "normalize_https_url_identity",
-    "validate_public_https_url",
-    "validate_public_web_url",
-]
+__all__ = ["URLDataSource"]

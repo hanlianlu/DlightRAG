@@ -305,10 +305,26 @@ LIMIT 1
 _INSERT_RESOURCE = """
 INSERT INTO dlightrag_answer_resources (
     owner_id, run_id, resource_id, kind, safe_name, media_type, capabilities,
-    ordinal, blob_digest, locator_digest, session_id, intent_id, result_ordinal
+    ordinal, blob_digest, locator_digest, source_locator,
+    session_id, intent_id, result_ordinal
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13)
-ON CONFLICT (owner_id, run_id, resource_id) DO NOTHING
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
+ON CONFLICT (owner_id, run_id, resource_id) DO UPDATE
+SET capabilities = EXCLUDED.capabilities || jsonb_build_object(
+    'resource_aliases',
+    to_jsonb(ARRAY(
+        SELECT DISTINCT alias
+        FROM jsonb_array_elements_text(
+            COALESCE(dlightrag_answer_resources.capabilities->'resource_aliases', '[]'::jsonb)
+            || COALESCE(EXCLUDED.capabilities->'resource_aliases', '[]'::jsonb)
+        ) AS merged(alias)
+        ORDER BY alias
+    ))
+)
+WHERE dlightrag_answer_resources.kind = 'fetched_blob'
+  AND EXCLUDED.kind = 'fetched_blob'
+  AND dlightrag_answer_resources.blob_digest = EXCLUDED.blob_digest
+  AND dlightrag_answer_resources.locator_digest = EXCLUDED.locator_digest
 """
 
 _SELECT_RESOURCE_DIGESTS = """
@@ -1073,6 +1089,7 @@ class PGAgentSessionRepository:
             None,
             None,
             write.locator_digest,
+            None,
             write.session_id,
             write.intent_id,
             write.result_ordinal,
@@ -1109,9 +1126,10 @@ class PGAgentSessionRepository:
             write.safe_name,
             write.media_type,
             json.dumps(write.capabilities, ensure_ascii=False),
-            None,
+            write.ordinal,
             write.blob_digest,
             write.source_locator_digest,
+            write.source_locator,
             write.session_id,
             write.intent_id,
             None,

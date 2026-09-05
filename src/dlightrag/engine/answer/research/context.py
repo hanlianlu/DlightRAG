@@ -338,7 +338,7 @@ def _empty_tool_message(call: dict[str, Any]) -> dict[str, Any]:
 def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> str:
     if not manifest:
         return ""
-    lines = ["## Registered request-local resources"]
+    lines = ["## Registered run-scoped Resources"]
     for entry in manifest:
         filename = safe_source_filename(entry.filename or "resource")
         kind = "image" if (entry.declared_mime or "").lower().startswith("image/") else "resource"

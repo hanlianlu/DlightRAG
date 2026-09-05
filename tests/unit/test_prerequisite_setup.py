@@ -1443,7 +1443,18 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
     }
     assert s["parser"] == {"name": "MinerU", "detail": "local"}
     assert s["workspace"] == "default"
-    assert s["keys_set"] == {"LLM": True, "Embedding": True, "Rerank": False}
+    assert s["keys_set"] == {
+        "LLM": True,
+        "Embedding": True,
+        "Rerank": False,
+        "Exa": False,
+        "Tavily": False,
+    }
+    assert s["web_research"] == {
+        "direct_url_read": True,
+        "search": [],
+        "extract": [],
+    }
     assert "sk-a" not in repr(s) and "sk-b" not in repr(s)
     assert s["model_capacities"]["default"]["source"] == "fallback"
     assert s["model_capacities"]["default"]["context_window_tokens"] == 1_048_576
@@ -1642,6 +1653,121 @@ def test_change_models_only(wiz, monkeypatch):
     assert parser == []
 
 
+def test_legacy_web_settings_migrate_to_exa(wiz, tmp_path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY=legacy-key\nOTHER=value\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("answer:\n  web_search:\n    api_key: null\n", encoding="utf-8")
+
+    assert wiz.legacy_web_settings_present(config_path=config_path, env_path=env_path)
+    assert wiz.migrate_legacy_web_settings(config_path=config_path, env_path=env_path)
+    assert not wiz.legacy_web_settings_present(config_path=config_path, env_path=env_path)
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY=legacy-key" in env_text
+    assert "WEB_SEARCH" not in env_text
+    data = wiz._yaml().load(config_path)
+    assert data["answer"]["web_sources"]["exa"]["api_key"] is None
+    assert "web_search" not in data["answer"]
+
+
+def test_legacy_inline_web_secret_moves_to_env_with_backups(wiz, tmp_path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("OTHER=value\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "answer:\n  web_search:\n    api_key: inline-secret\n",
+        encoding="utf-8",
+    )
+
+    assert wiz.migrate_legacy_web_settings(config_path=config_path, env_path=env_path)
+
+    assert "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY=inline-secret" in (
+        env_path.read_text(encoding="utf-8")
+    )
+    data = wiz._yaml().load(config_path)
+    assert data["answer"]["web_sources"]["exa"]["api_key"] is None
+    assert list(tmp_path.glob("config.yaml.bak-*"))
+    assert list(tmp_path.glob(".env.bak-*"))
+
+
+def test_commented_legacy_web_key_does_not_trigger_migration(wiz, tmp_path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "# DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY=example-only\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("answer: {}\n", encoding="utf-8")
+
+    assert not wiz.legacy_web_settings_present(config_path=config_path, env_path=env_path)
+    assert not wiz.migrate_legacy_web_settings(config_path=config_path, env_path=env_path)
+    assert "WEB_SEARCH" in env_path.read_text(encoding="utf-8")
+
+
+def test_web_setup_writes_independent_provider_orders(wiz, tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("answer: {}\n", encoding="utf-8")
+    env_path = tmp_path / ".env"
+    env_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(wiz, "ENV_PATH", env_path)
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
+    monkeypatch.setattr(wiz, "validate_config", lambda: None)
+    prompter = _ScriptedPrompter(
+        [
+            wiz.WEB_BOTH,
+            wiz.WEB_INDEPENDENT,
+            wiz.WEB_TAVILY,
+            wiz.WEB_EXA,
+            "exa-key",
+            "tavily-key",
+        ]
+    )
+
+    assert wiz.run_web_research_step(prompter, optional=False)
+    data = wiz._yaml().load(config_path)["answer"]["web_sources"]
+    assert data["search_providers"] == ["tavily", "exa"]
+    assert data["extract_providers"] == ["exa", "tavily"]
+    assert data["exa"]["api_key"] is None
+    assert data["tavily"]["api_key"] is None
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "DLIGHTRAG_ANSWER__WEB_SOURCES__EXA__API_KEY=exa-key" in env_text
+    assert "DLIGHTRAG_ANSWER__WEB_SOURCES__TAVILY__API_KEY=tavily-key" in env_text
+    assert list(tmp_path.glob("config.yaml.bak-*"))
+    assert list(tmp_path.glob(".env.bak-*"))
+
+
+def test_web_setup_rolls_back_config_and_env_when_validation_fails(
+    wiz, tmp_path, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_before = b"answer: {}\n"
+    config_path.write_bytes(config_before)
+    env_path = tmp_path / ".env"
+    env_before = b"OTHER=value\n"
+    env_path.write_bytes(env_before)
+    monkeypatch.setattr(wiz, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(wiz, "ENV_PATH", env_path)
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
+    monkeypatch.setattr(
+        wiz,
+        "validate_config",
+        lambda: (_ for _ in ()).throw(ValueError("invalid")),
+    )
+
+    with pytest.raises(ValueError, match="invalid"):
+        wiz.run_web_research_step(
+            _ScriptedPrompter([wiz.WEB_EXA, "exa-key"]),
+            optional=False,
+        )
+
+    assert config_path.read_bytes() == config_before
+    assert env_path.read_bytes() == env_before
+
+
 def test_change_parser_only(wiz, monkeypatch):
     models: list = []
     monkeypatch.setattr(wiz, "run_models_step", lambda p, **k: models.append(True))
@@ -1659,8 +1785,15 @@ def test_change_everything_runs_both(wiz, monkeypatch):
     monkeypatch.setattr(wiz, "validate_config", lambda: None)
     parser: list = []
     monkeypatch.setattr(wiz, "run_parser_step", lambda *a, **k: parser.append(True) or "mineru")
+    web: list = []
+    monkeypatch.setattr(
+        wiz,
+        "run_web_research_step",
+        lambda *a, **k: web.append(True) or True,
+    )
     wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_ALL]), _info(wiz))
     assert parser == [True]
+    assert web == [True]
 
 
 def test_change_back_does_nothing(wiz, monkeypatch):

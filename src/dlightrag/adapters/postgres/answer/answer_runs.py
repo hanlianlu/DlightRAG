@@ -70,6 +70,7 @@ from dlightrag.engine.runtime.records import (
     RunCreation,
     RunDeletion,
     RunExecutionContext,
+    RunFetchedResource,
     ShutdownOutcome,
     SweepOutcome,
     TerminalOutcome,
@@ -284,6 +285,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_resources (
     ordinal        INTEGER,
     blob_digest    TEXT,
     locator_digest TEXT,
+    source_locator BYTEA,
     session_id     UUID,
     intent_id      UUID,
     result_ordinal INTEGER,
@@ -296,7 +298,9 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_resources (
     CONSTRAINT dlightrag_answer_resources_blob_link_check
         CHECK ((kind = 'accepted_blob' AND blob_digest IS NOT NULL)
                OR (kind = 'fetched_blob'
-                   AND blob_digest IS NOT NULL AND locator_digest IS NOT NULL)
+                   AND blob_digest IS NOT NULL AND locator_digest IS NOT NULL
+                   AND (capabilities->>'resource_kind' IS DISTINCT FROM 'web'
+                        OR source_locator IS NOT NULL))
                OR (kind = 'evidence' AND locator_digest IS NOT NULL)
                OR (kind = 'committed_spill'
                    AND blob_digest IS NULL AND locator_digest IS NULL))
@@ -600,6 +604,25 @@ ANSWER_RUN_MIGRATIONS = (
         "Stage root Artifact attachments through settled Agent tool effects",
         (_CREATE_ARTIFACT_ATTACHMENT_ORDER, _CREATE_ARTIFACT_ATTACHMENTS),
     ),
+    Migration(
+        "write_model_web_resource_catalog",
+        "Persist fetched Web locators for process-independent resource recovery",
+        (
+            "ALTER TABLE dlightrag_answer_resources ADD COLUMN IF NOT EXISTS source_locator BYTEA",
+            "ALTER TABLE dlightrag_answer_resources "
+            "DROP CONSTRAINT dlightrag_answer_resources_blob_link_check",
+            "ALTER TABLE dlightrag_answer_resources "
+            "ADD CONSTRAINT dlightrag_answer_resources_blob_link_check "
+            "CHECK ((kind = 'accepted_blob' AND blob_digest IS NOT NULL) "
+            "OR (kind = 'fetched_blob' AND blob_digest IS NOT NULL "
+            "AND locator_digest IS NOT NULL "
+            "AND (capabilities->>'resource_kind' IS DISTINCT FROM 'web' "
+            "OR source_locator IS NOT NULL)) "
+            "OR (kind = 'evidence' AND locator_digest IS NOT NULL) "
+            "OR (kind = 'committed_spill' AND blob_digest IS NULL "
+            "AND locator_digest IS NULL))",
+        ),
+    ),
 )
 
 ANSWER_RUN_SCHEMA_TABLES = (
@@ -816,6 +839,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "ordinal",
             "blob_digest",
             "locator_digest",
+            "source_locator",
             "session_id",
             "intent_id",
             "result_ordinal",
@@ -1550,9 +1574,10 @@ FOR UPDATE SKIP LOCKED
 _INSERT_RESOURCE = """
 INSERT INTO dlightrag_answer_resources (
     owner_id, run_id, resource_id, kind, safe_name, media_type, capabilities,
-    ordinal, blob_digest, locator_digest, session_id, intent_id, result_ordinal
+    ordinal, blob_digest, locator_digest, source_locator,
+    session_id, intent_id, result_ordinal
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (owner_id, run_id, resource_id) DO NOTHING
 """
 
@@ -1581,6 +1606,15 @@ SELECT resource_id, reference_kind, ordinal, digest, filename, mime_type,
 FROM dlightrag_answer_run_artifacts
 WHERE owner_id = $1 AND run_id = $2
 ORDER BY reference_kind, ordinal
+"""
+
+_SELECT_RUN_FETCHED_RESOURCES = """
+SELECT resource_id, ordinal, blob_digest, safe_name, media_type, source_locator, capabilities
+FROM dlightrag_answer_resources
+WHERE owner_id = $1 AND run_id = $2 AND kind = 'fetched_blob'
+  AND capabilities->>'resource_kind' IN ('web', 'tool_attachment')
+  AND ordinal IS NOT NULL AND source_locator IS NOT NULL
+ORDER BY ordinal, resource_id
 """
 
 _SELECT_ARTIFACT_ATTACHMENTS = """
@@ -2028,6 +2062,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
                         json.dumps(resource.get("capabilities") or {}, ensure_ascii=False),
                         int(str(resource["ordinal"])),
                         str(resource["blob_digest"]),
+                        None,
                         None,
                         None,
                         None,
@@ -2802,6 +2837,31 @@ class PGAnswerRunStore(PostgresOperationRunner):
         async def _operation(conn: Any) -> tuple[RunArtifactReference, ...]:
             rows = await conn.fetch(_SELECT_RUN_ARTIFACTS, owner, run_uuid)
             return tuple(_reference_record(row) for row in rows)
+
+        return await self._run_read(_operation)
+
+    async def list_fetched_resources(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[RunFetchedResource, ...]:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            return ()
+
+        async def _operation(conn: Any) -> tuple[RunFetchedResource, ...]:
+            rows = await conn.fetch(_SELECT_RUN_FETCHED_RESOURCES, owner, run_uuid)
+            return tuple(
+                RunFetchedResource(
+                    resource_id=str(row["resource_id"]),
+                    ordinal=int(row["ordinal"]),
+                    digest=str(row["blob_digest"]),
+                    filename=str(row["safe_name"]),
+                    mime_type=str(row["media_type"]),
+                    source_locator=bytes(row["source_locator"]),
+                    capabilities=_json_object(row["capabilities"]),
+                )
+                for row in rows
+            )
 
         return await self._run_read(_operation)
 

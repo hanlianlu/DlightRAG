@@ -366,6 +366,19 @@ class PendingArtifactReference:
 
 
 @dataclass(frozen=True, slots=True)
+class RunFetchedResource:
+    """Durable catalog entry for one fixed Web or tool-attachment snapshot."""
+
+    resource_id: str
+    ordinal: int
+    digest: str
+    filename: str
+    mime_type: str
+    source_locator: bytes
+    capabilities: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class RunArtifactReference:
     """A stored run-artifact reference read back with its creation time."""
 
@@ -394,6 +407,7 @@ __all__ = [
     "ReclaimDecision",
     "ReclaimState",
     "RunArtifactReference",
+    "RunFetchedResource",
     "RunCreation",
     "RunDeletion",
     "RunExecutionContext",

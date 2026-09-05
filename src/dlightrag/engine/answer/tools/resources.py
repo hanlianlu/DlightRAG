@@ -24,6 +24,7 @@ from dlightrag.engine.agent.tools import (
     ToolResult,
     ToolRuntime,
 )
+from dlightrag.engine.agent.tools.files import ResourceReadRequest
 from dlightrag.engine.answer.resources.formatting import (
     format_resource_read,
     resource_read_continuation,
@@ -38,9 +39,10 @@ from dlightrag.engine.answer.resources.visual import (
     ResourceInspectionResult,
     ResourceInspector,
 )
+from dlightrag.engine.public_http import PublicHttpPresentation
 
 _INSPECT_DESCRIPTION = (
-    "Visually inspect one request-local resource whose id starts with res-. "
+    "Visually inspect one run-scoped Resource whose id starts with res-. "
     "Never pass a filename, source_uri, or local:// corpus locator. "
     "focus says what to look for. locator is a PDF page or visual handle; omit it "
     "for a PDF overview. locator and cursor are mutually exclusive. "
@@ -146,21 +148,37 @@ def make_resource_reader(
     """Adapt the registry into the agent-core resource-read callback."""
 
     async def read_registered(
-        resource_id: str,
-        focus: str | None,
-        cursor: str | None,
+        request: ResourceReadRequest,
         runtime: ToolRuntime,
     ) -> ToolResult:
-        try:
-            target = await registry.inspection_target(
-                resource_id,
-                effect_owner=_effect_owner(runtime),
-            )
-        except ResourceRegistryError:
-            raise
-        except Exception as exc:
-            raise ResourceRegistryError("resource read failed") from exc
-        if target.kind == "image" and cursor is None:
+        resource_id = request.resource_id
+        if resource_id is None:
+            if request.url is None:  # pragma: no cover - Agent Core validates this
+                raise ResourceRegistryError("resource read target is missing")
+            try:
+                resource_id = registry.register_agent_url(
+                    request.url,
+                    presentation=PublicHttpPresentation(
+                        user_agent=request.user_agent,
+                        accept=request.accept,
+                        accept_language=request.accept_language,
+                    ),
+                )
+            except Exception as exc:
+                raise ResourceRegistryError("resource read failed") from exc
+        target = None
+        if request.cursor is None and registry.is_declared_image(resource_id):
+            try:
+                target = await registry.inspection_target(
+                    resource_id,
+                    effect_owner=_effect_owner(runtime),
+                )
+            except Exception:
+                # Let the text read path apply direct-HTTP -> Extract fallback and
+                # return its bounded no-evidence summary when acquisition fails.
+                target = None
+        if target is not None and target.kind == "image":
+            resource_id = registry.canonical_resource_id(resource_id)
             # A verified original image snapshot goes straight to the query
             # model as an attachment instead of a text window.
             digest = hashlib.sha256(target.content).hexdigest()
@@ -199,21 +217,23 @@ def make_resource_reader(
             result = await registry.read(
                 resource_id,
                 max_window_tokens=text_window_budget.tokens,
-                focus=focus,
-                cursor=cursor,
+                focus=request.focus,
+                cursor=request.cursor,
                 effect_owner=_effect_owner(runtime),
             )
         except ResourceRegistryError:
             raise
         except Exception as exc:
             raise ResourceRegistryError("resource read failed") from exc
+        effects = (
+            _evidence_effects(result.resource_id, registry.evidence_source(result.resource_id))
+            if result.evidence_available
+            else ToolEffects()
+        )
         return ToolResult.text(
             format_resource_read(result),
             protected_text=resource_read_continuation(result),
-            effects=_evidence_effects(
-                result.resource_id,
-                registry.evidence_source(result.resource_id),
-            ),
+            effects=effects,
         )
 
     return read_registered
@@ -232,6 +252,11 @@ def _evidence_effects(resource_id: str, source: dict[str, str]) -> ToolEffects:
                 source_type=source.get("source_type", "unknown"),
                 source_uri=source.get("source_uri", resource_id),
                 title=source.get("title", resource_id),
+                attributes=tuple(
+                    (name, source[name])
+                    for name in ("resource_kind", "admission_origin", "acquisition")
+                    if source.get(name)
+                ),
             ),
         )
     )

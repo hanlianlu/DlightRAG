@@ -94,6 +94,14 @@ answer:
     workspace_root: null
     # Explicit remote tools only; see docs/configuration.md for endpoint examples.
     outbound_mcp: []
-    
+  web_sources:
+    # null derives Exa → Tavily from configured keys; use [] to disable one operation.
+    search_providers: null
+    extract_providers: null
+    exa:
+      api_key: null
+    tavily:
+      api_key: null
+
 observability:
   langfuse_host: http://host.docker.internal:3300

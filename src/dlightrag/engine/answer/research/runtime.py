@@ -33,6 +33,7 @@ from dlightrag.engine.agent.session.runtime import (
     SteerCommand,
     ToolEffectResult,
 )
+from dlightrag.engine.agent.tool_content import tool_content_attachments
 from dlightrag.engine.agent.tools import ToolEffects, ToolResult, ToolRuntime, fit_tool_result
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.messages import AssistantTurn
@@ -90,7 +91,7 @@ class FetchedResourceBuffer:
     """Fetched bytes partitioned by explicit Session and model tool call."""
 
     def __init__(self) -> None:
-        self._items: dict[tuple[str, str], list[FetchedResourceBytes]] = {}
+        self._items: dict[tuple[str, str], dict[str, FetchedResourceBytes]] = {}
 
     def append(
         self,
@@ -98,13 +99,13 @@ class FetchedResourceBuffer:
         owner: ResourceEffectOwner | None,
     ) -> None:
         key = (owner.execution_scope, owner.intent_id.value) if owner is not None else ("", "")
-        self._items.setdefault(key, []).append(fetched)
+        self._items.setdefault(key, {})[fetched.resource_id] = fetched
 
     def drain(self, *, scope: str, intent_id: IntentId) -> tuple[FetchedResourceBytes, ...]:
-        fetched = [*self._items.pop((scope, intent_id.value), ())]
+        fetched = list(self._items.pop((scope, intent_id.value), {}).values())
         # Acceptance-time fetches happen before a tool task has a scope. Bind
         # them to the first durable settlement rather than sharing a live list.
-        fetched.extend(self._items.pop(("", ""), ()))
+        fetched.extend(self._items.pop(("", ""), {}).values())
         return tuple(fetched)
 
 
@@ -205,18 +206,27 @@ def _build_effect_host_update(
             ),
         )
     fetched_updates: list[FetchedResourceSettlementUpdate] = []
+    fetched_digests: dict[str, str] = {}
     for fetched in fetched_buffer.drain(
         scope=execution_scope,
         intent_id=intent.intent_id,
     ):
+        digest = blob_digest(fetched.content)
+        fetched_digests[fetched.resource_id] = digest
         plan = plan_blob(fetched.content)
         fetched_updates.append(
             FetchedResourceSettlementUpdate(
                 resource=OpaqueFetchedResourceWrite(
                     resource_id=fetched.resource_id,
+                    ordinal=fetched.ordinal,
                     safe_name=fetched.filename,
                     media_type=fetched.mime_type,
-                    capabilities={},
+                    capabilities={
+                        "resource_kind": "web",
+                        "admission_origin": fetched.admission_origin,
+                        "acquisition": fetched.acquisition,
+                        "resource_aliases": list(fetched.aliases),
+                    },
                     blob_digest=plan.digest,
                     source_locator_digest=blob_digest(fetched.url.encode("utf-8")),
                     source_locator=fetched.url.encode("utf-8"),
@@ -242,23 +252,31 @@ def _build_effect_host_update(
             chunks=tuple(plan.chunk(content, index) for index in range(plan.chunk_count)),
         )
 
-    attached_updates = [
-        FetchedResourceSettlementUpdate(
-            resource=OpaqueFetchedResourceWrite(
-                resource_id=attached.resource_id,
-                safe_name=attached.filename,
-                media_type=attached.mime_type,
-                capabilities={"tool_attachment": True},
-                blob_digest=blob_digest(attached.content),
-                source_locator_digest=blob_digest(attached.source_locator.encode("utf-8")),
-                source_locator=attached.source_locator.encode("utf-8"),
-                session_id=session_id.value,
-                intent_id=intent.intent_id.value,
-            ),
-            complete_blob=blob_descriptor(attached.content),
+    attached_updates: list[FetchedResourceSettlementUpdate] = []
+    for attached in tool_effects.attached_resources:
+        digest = blob_digest(attached.content)
+        fetched_digest = fetched_digests.get(attached.resource_id)
+        if fetched_digest is not None:
+            if fetched_digest != digest:
+                raise ValueError("Web snapshot and tool attachment bytes disagree")
+            continue
+        attached_updates.append(
+            FetchedResourceSettlementUpdate(
+                resource=OpaqueFetchedResourceWrite(
+                    resource_id=attached.resource_id,
+                    ordinal=0,
+                    safe_name=attached.filename,
+                    media_type=attached.mime_type,
+                    capabilities={"resource_kind": "tool_attachment"},
+                    blob_digest=digest,
+                    source_locator_digest=blob_digest(attached.source_locator.encode("utf-8")),
+                    source_locator=attached.source_locator.encode("utf-8"),
+                    session_id=session_id.value,
+                    intent_id=intent.intent_id.value,
+                ),
+                complete_blob=blob_descriptor(attached.content),
+            )
         )
-        for attached in tool_effects.attached_resources
-    ]
     return EffectHostUpdate(
         evidence=evidence,
         fetched=(*fetched_updates, *attached_updates),
@@ -565,6 +583,9 @@ class ResearchRuntimeEffects:
             canonical_input=canonical_json(arguments),
             source_call_id=item.call_id,
         )
+        for attachment in tool_content_attachments(durable.parts):
+            if attachment.data:
+                self._prepared.attachment_snapshots[attachment.resource_id] = attachment.data
         delta = _build_effect_host_update(
             session_id=self._session_id,
             intent=intent,

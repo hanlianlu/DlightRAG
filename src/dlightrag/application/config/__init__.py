@@ -26,7 +26,8 @@ from .sections import (
     StorageSettings,
     WebConversationsConfig,
     WebIdentitySettings,
-    WebSearchConfig,
+    WebSourceProviderConfig,
+    WebSourcesConfig,
     _find_yaml_config,
 )
 
@@ -54,7 +55,8 @@ __all__ = [
     "StorageSettings",
     "WebConversationsConfig",
     "WebIdentitySettings",
-    "WebSearchConfig",
+    "WebSourceProviderConfig",
+    "WebSourcesConfig",
     "_find_yaml_config",
     "get_config",
     "load_config",

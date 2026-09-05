@@ -338,19 +338,79 @@ class WebConversationsConfig(BaseModel):
     )
 
 
-class WebSearchConfig(BaseModel):
-    """Web search credentials. A key present is the capability; there is no switch."""
+class WebSourceProviderConfig(BaseModel):
+    """Credential for one first-class Web source provider."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    api_key: str | None = Field(
-        default=None,
-        description=(
-            "Exa API key. Web search is offered to the browser channel when this is "
-            "set and skipped entirely when it is not. Keep it in .env as "
-            "DLIGHTRAG_ANSWER__WEB_SEARCH__API_KEY."
-        ),
-    )
+    api_key: str | None = None
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _normalize_api_key(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+
+class WebSourcesConfig(BaseModel):
+    """Independent ordered Search and Extract provider chains.
+
+    ``None`` derives an order from configured keys (Exa, then Tavily). An
+    explicit empty tuple disables that operation while retaining credentials.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    search_providers: tuple[Literal["exa", "tavily"], ...] | None = None
+    extract_providers: tuple[Literal["exa", "tavily"], ...] | None = None
+    exa: WebSourceProviderConfig = Field(default_factory=WebSourceProviderConfig)
+    tavily: WebSourceProviderConfig = Field(default_factory=WebSourceProviderConfig)
+
+    @field_validator("search_providers", "extract_providers")
+    @classmethod
+    def _unique_provider_order(
+        cls, value: tuple[Literal["exa", "tavily"], ...] | None
+    ) -> tuple[Literal["exa", "tavily"], ...] | None:
+        if value is None:
+            return None
+        if len(set(value)) != len(value):
+            raise ValueError("Web provider order cannot contain duplicates")
+        return value
+
+    def configured_providers(self) -> tuple[Literal["exa", "tavily"], ...]:
+        return tuple(
+            name
+            for name, configured in (("exa", self.exa.api_key), ("tavily", self.tavily.api_key))
+            if configured
+        )  # type: ignore[return-value]
+
+    def search_order(self) -> tuple[Literal["exa", "tavily"], ...]:
+        return (
+            self.search_providers
+            if self.search_providers is not None
+            else self.configured_providers()
+        )
+
+    def extract_order(self) -> tuple[Literal["exa", "tavily"], ...]:
+        return (
+            self.extract_providers
+            if self.extract_providers is not None
+            else self.configured_providers()
+        )
+
+    @model_validator(mode="after")
+    def _orders_have_credentials(self) -> WebSourcesConfig:
+        keys = {"exa": self.exa.api_key, "tavily": self.tavily.api_key}
+        for operation, order in (
+            ("search", self.search_order()),
+            ("extract", self.extract_order()),
+        ):
+            missing = [name for name in order if not keys[name]]
+            if missing:
+                raise ValueError(f"Web {operation} provider(s) lack api_key: {', '.join(missing)}")
+        return self
 
 
 class AccessControlRuleConfig(BaseModel):
@@ -546,7 +606,7 @@ class AnswerSectionSettings(FrozenSettings):
     agent: AgentExecutionConfig = Field(default_factory=AgentExecutionConfig)
     citations: CitationsConfig = Field(default_factory=CitationsConfig)
     conversations: WebConversationsConfig = Field(default_factory=WebConversationsConfig)
-    web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    web_sources: WebSourcesConfig = Field(default_factory=WebSourcesConfig)
 
 
 class AccessSectionSettings(FrozenSettings):

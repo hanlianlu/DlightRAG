@@ -173,6 +173,7 @@ def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
         "source_uri": source_uri,
         "source_download_locator": source_uri,
         "title": source.title,
+        **dict(source.attributes),
     }
     evidence_key = result.text_content
     if tool_name == "read":

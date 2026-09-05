@@ -72,6 +72,7 @@ class EvidenceSourceFact:
     source_type: str
     source_uri: str
     title: str
+    attributes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

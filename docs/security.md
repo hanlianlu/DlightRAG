@@ -277,9 +277,14 @@ that database as secret storage, restrict access, and keep pruning enabled.
 ## Answer Resources And Execution
 
 Attachments are bounded by count, per-item bytes, total bytes, archive expansion,
-and decoded pixels before orchestration. Link resources admit HTTP(S) without
-embedded credentials and repeat scheme/host/DNS/SSRF/redirect checks on each
-live read. HTTPS never downgrades to HTTP.
+and decoded pixels before orchestration. Link resources and agent-supplied
+`read(url=...)` targets admit only anonymous HTTP(S) without embedded credentials,
+signed query credentials, fragments, localhost/private destinations, or unsafe
+redirects. The shared egress boundary repeats scheme/host/DNS/SSRF checks at
+every redirect, pins the validated address for each connection, and never permits
+HTTPS to downgrade to HTTP. Agent reads can vary only `User-Agent`, `Accept`, and
+`Accept-Language`; cookies, authorization, arbitrary headers, and browser sessions
+are unavailable. A successful acquisition becomes one immutable run snapshot.
 
 MarkItDown runs without plugins/network. OOXML files pass central-directory
 zip-bomb checks before conversion. Full bytes never enter model context—only
@@ -309,8 +314,9 @@ Execution modes:
 
 Root checks are not a shell sandbox. Outbound MCP endpoints/tools are deployment
 allowlists; there is no discovery, OAuth brokerage, or management plane. Protect
-tool credentials and egress at deployment level. Exa Web Search exists only
-when its API key is configured.
+tool credentials and egress at deployment level. Public Web Search and Extract
+exist only for explicitly configured Exa/Tavily provider chains; provider failures
+may fail over, while successful empty results do not.
 
 All Agent/child/Fast mutations are fenced by owner, run lease, epoch, and
 register sequence. A completed child outcome is persisted so replay cannot

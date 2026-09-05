@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Request-local answer resource registry and bounded reads."""
+"""Run-scoped answer Resource Registry and bounded reads."""
 
 from dlightrag.engine.answer.resources.models import (
     EXTRACTION_TEXT,

@@ -7,21 +7,23 @@ reply the model reads back.
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from datetime import date
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.engine.answer.evidence import EvidenceLedger
-from dlightrag.engine.answer.tools.web import (
+from dlightrag.engine.answer.tools.web_search import web_context_rows
+from dlightrag.engine.answer.web_sources import (
+    WebSearchRequest,
     WebSearchResult,
-    WebSearchUnavailable,
-    web_context_rows,
+    WebSourceUnavailable,
 )
 from dlightrag.engine.rag.retrieval import RetrievalResult
 
 KnowledgeRetrieval = Callable[[str], Awaitable[RetrievalResult]]
-WebSearch = Callable[[str], Awaitable[WebSearchResult]]
+WebSearch = Callable[[WebSearchRequest], Awaitable[WebSearchResult]]
 RegisterWebSource = Callable[[str], str | None]
 
 
@@ -35,6 +37,48 @@ class SearchInput(BaseModel):
             "language. Search one angle per call rather than combining several."
         ),
     )
+
+
+class WebSearchInput(SearchInput):
+    """Provider-neutral controls accepted by every configured search adapter."""
+
+    max_results: int = Field(default=10, ge=1, le=20)
+    include_domains: tuple[str, ...] = Field(default=(), max_length=20)
+    exclude_domains: tuple[str, ...] = Field(default=(), max_length=20)
+    start_date: str | None = None
+    end_date: str | None = None
+    effort: Literal["fast", "balanced", "deep"] = "balanced"
+
+    @field_validator("include_domains", "exclude_domains")
+    @classmethod
+    def _domains_only(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        normalized: list[str] = []
+        for value in values:
+            domain = value.lower().strip().rstrip(".")
+            if not domain or "://" in domain or "/" in domain or any(ch.isspace() for ch in domain):
+                raise ValueError("domains must be hostnames without scheme or path")
+            if domain not in normalized:
+                normalized.append(domain)
+        return tuple(normalized)
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def _iso_date(cls, value: str | None) -> str | None:
+        if value is not None:
+            date.fromisoformat(value)
+        return value
+
+    @model_validator(mode="after")
+    def _coherent_filters(self) -> WebSearchInput:
+        overlap = set(self.include_domains) & set(self.exclude_domains)
+        if overlap:
+            raise ValueError("the same domain cannot be both included and excluded")
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValueError("start_date cannot be after end_date")
+        return self
+
+    def request(self) -> WebSearchRequest:
+        return WebSearchRequest(**self.model_dump())
 
 
 def knowledge_base_search_tool(
@@ -64,16 +108,17 @@ def web_search_tool(
     register_web_source: RegisterWebSource | None,
 ) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
-        args = _as(raw, SearchInput)
+        args = _as(raw, WebSearchInput)
         await runtime.emit_update(ToolResult.text("", details={"object_label": args.query}))
-        return await _search_open_web(search, args.query, evidence, trace, register_web_source)
+        return await _search_open_web(search, args.request(), evidence, trace, register_web_source)
 
     return AgentTool(
         "search_web",
         "Search the open web for one concrete unresolved or current fact, source page, "
         "document, image, or file. Use it before claiming open-web search is unavailable.",
-        SearchInput,
+        WebSearchInput,
         execute,
+        contract_version=2,
     )
 
 
@@ -97,14 +142,14 @@ async def _search_corpus(
 
 async def _search_open_web(
     search: WebSearch,
-    query: str,
+    request: WebSearchRequest,
     evidence: EvidenceLedger,
     trace: dict[str, Any],
     register_web_source: RegisterWebSource | None,
 ) -> ToolResult:
     try:
-        result = await search(query)
-    except WebSearchUnavailable:
+        result = await search(request)
+    except WebSourceUnavailable:
         raise
     except Exception as exc:
         raise RuntimeError("open-web search failed") from exc
@@ -125,6 +170,10 @@ async def _search_open_web(
     await evidence.aflush_images()
     trace["web_search_cost_dollars"] += result.cost_dollars
     content = f"Open web added {delta.new_chunks} new passages."
+    if result.dropped_results:
+        content += f" Dropped {result.dropped_results} malformed result(s)."
+    if result.degradation:
+        content += f"\n{result.degradation}"
     if delta.new_chunks and readable_sources:
         content += "\nResource handles:\n" + "\n".join(
             f"- {title} [resource: {resource_id}]"
@@ -143,6 +192,7 @@ __all__ = [
     "KnowledgeRetrieval",
     "RegisterWebSource",
     "SearchInput",
+    "WebSearchInput",
     "WebSearch",
     "knowledge_base_search_tool",
     "web_search_tool",

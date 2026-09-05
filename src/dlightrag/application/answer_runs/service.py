@@ -1341,12 +1341,14 @@ class AnswerService:
                     trace={},
                     retrieve_knowledge_base=unused_retrieve,
                     search_web=(
-                        resolved.web_search.search if resolved.web_search is not None else None
+                        resolved.web_sources.search
+                        if resolved.web_sources is not None and resolved.web_sources.search_enabled
+                        else None
                     ),
                     resource_tools=resolved.resource_tools,
                     register_web_source=(
                         resolved.registry.register_discovered_link
-                        if resolved.registry is not None and resolved.web_search is not None
+                        if resolved.registry is not None and resolved.web_sources is not None
                         else None
                     ),
                 )

@@ -30,11 +30,11 @@ _Avoid_: Retrieval, non-durable fast path
 
 **Web Conversation**:
 The browser conversation surface that creates Answer Runs; it is a transport, not a research capability. The thread shows the run's terminal answer and opens its Published Artifacts in Artifact Canvas.
-_Avoid_: Web Search, Web, Web Channel when meaning Exa or open-web retrieval; chat column as the report
+_Avoid_: Web Search, Web, Web Channel when meaning public-Web retrieval; chat column as the report
 
 **Web Search**:
-The optional open-web evidence capability used inside an Answer Run.
-_Avoid_: Web UI, Web Conversation, Web Channel
+The optional capability that discovers open-Web sources and admits their passages as Evidence inside an Answer Run. It is not the direct reading of a known Web Resource.
+_Avoid_: Web UI, Web Conversation, Web Channel, URL read
 
 **Answer Mode**:
 The caller-facing selector `auto | fast | research`. Omitted means `auto` on REST, MCP, Web Conversation, and Python.
@@ -209,6 +209,10 @@ _Avoid_: Agent step, retrieval request, Session replacement
 Citable, run-scoped source material with durable identity and content/locator integrity.
 _Avoid_: Summary, agent prose
 
+**Web Resource**:
+A run-scoped public HTTP(S) source admitted from a caller, Web Search, or an Agent-selected URL and represented by a Resource Handle. Admission origin and acquisition method are independent provenance facts. Within one Answer Run, the same normalized URL resolves to its first successfully admitted durable snapshot rather than silently refetching mutable content. Raw Bash output is model context, not Web Evidence.
+_Avoid_: Web Search result, URL attachment, raw URL, Bash output
+
 **Resource Handle**:
 An opaque owner/run-scoped identity through which prepared, fetched, evidence-backed, or spilled content remains addressable across recovery.
 _Avoid_: File path, URL, blob id
@@ -252,8 +256,8 @@ _Avoid_: workflow engine, max-agent-turn policy, READY protocol, Fast Answer
 ## Execution And Workspace
 
 **Execution Environment**:
-The adapter behind exactly three modes: `disabled`, host-trusted `trust`, and `sandbox`. Sandbox is a seam with explicit unavailable failure unless trusted host code supplies a backend.
-_Avoid_: implicit downgrade, permission catalog, approval prompt
+The adapter behind exactly three modes: `disabled`, host-trusted `trust`, and `sandbox`. Trust grants the Agent the host user's process and network authority, so evidence-tool guidance cannot enforce network egress. Sandbox is the only seam that may enforce egress policy and has an explicit unavailable failure unless trusted host code supplies a backend.
+_Avoid_: implicit downgrade, permission catalog, approval prompt, shell-command filtering as a security boundary
 
 **Agent Skill**:
 A progressively disclosed `SKILL.md` package discovered from the operator-global root or one owner's published skills; owner names shadow global for that owner. Metadata is projected first; contained references are read only through `load_skill` and Skill code is never executed. Users write their own skills only through the validated `publish_skill` tool.

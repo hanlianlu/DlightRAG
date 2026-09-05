@@ -3,6 +3,8 @@
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -145,17 +147,14 @@ from dlightrag.engine.answer.tools.resources import build_resource_tools, make_r
 from dlightrag.engine.answer.tools.subagents import (
     SubagentHost,
 )
-from dlightrag.engine.answer.tools.web import ExaSearch
+from dlightrag.engine.answer.web_sources import WebSourceService
 from dlightrag.engine.answer.workspace import (
     WorkspaceIntegrityError,
     WorkspaceRecoveryFailed,
     bind_run_workspace,
 )
+from dlightrag.engine.public_http import fetch_public_http
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
-from dlightrag.engine.rag.corpus.sources.url import (
-    afetch_public_https_bytes,
-    avalidate_public_https_url,
-)
 from dlightrag.engine.rag.retrieval import (
     MetadataFilter,
     RetrievalContexts,
@@ -172,7 +171,11 @@ from dlightrag.engine.runtime import (
     RunExecutionOutcome,
     RunSession,
 )
-from dlightrag.engine.runtime.records import PendingPublication, artifact_digest
+from dlightrag.engine.runtime.records import (
+    PendingPublication,
+    RunFetchedResource,
+    artifact_digest,
+)
 from dlightrag.engine.runtime.settlements import (
     ArtifactAttachmentUpdate,
     EffectHostUpdate,
@@ -180,6 +183,12 @@ from dlightrag.engine.runtime.settlements import (
 
 logger = logging.getLogger(__name__)
 _FAST_COMPACTION_ATTEMPT_LIMIT = 3
+
+
+def _scoped_secret(secret: bytes | None, scope: str | None) -> bytes | None:
+    if secret is None or scope is None:
+        return secret
+    return hmac.new(secret, scope.encode("utf-8"), hashlib.sha256).digest()
 
 
 class ArtifactReader(Protocol):
@@ -197,6 +206,9 @@ class ArtifactReader(Protocol):
     async def list_artifact_attachments(
         self, *, owner_id: str, run_id: str
     ) -> tuple[ArtifactAttachmentUpdate, ...]: ...
+    async def list_fetched_resources(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[RunFetchedResource, ...]: ...
 
 
 class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, Protocol):
@@ -258,7 +270,7 @@ class OrchestratorRun:
 @dataclass(frozen=True, slots=True)
 class ResolvedAnswerResources:
     models: RequestModelContext
-    web_search: ExaSearch | None
+    web_sources: WebSourceService | None
     registry: ResourceRegistry | None
     resource_tools: list[AgentTool]
     resource_manifest: tuple[ResourceManifestEntry, ...]
@@ -277,10 +289,14 @@ class AnswerResourceResolver:
         settings: AnswerResourceSettings,
         models: AnswerModelRuntime,
         capabilities: AnswerCapabilityCoordinator,
+        resource_identity_secret: bytes | None = None,
+        resource_cursor_secret: bytes | None = None,
     ) -> None:
         self._settings = settings
         self._models = models
         self._capabilities = capabilities
+        self._resource_identity_secret = resource_identity_secret
+        self._resource_cursor_secret = resource_cursor_secret
 
     async def pin_current_image_links(
         self,
@@ -372,6 +388,7 @@ class AnswerResourceResolver:
         ],
         fetched_bytes_sink: FetchedBytesSink | None = None,
         resolved_mode: ResolvedMode,
+        resource_scope: str | None = None,
     ) -> ResolvedAnswerResources:
         """Resolve resource capabilities, manifests, tools, and image transport."""
         declared_image_count = sum(
@@ -407,13 +424,14 @@ class AnswerResourceResolver:
             resolved_mode=resolved_mode,
         )
 
-        web_search = self._models.web_search()
+        web_sources = self._models.web_sources()
         registry, resource_tools = self.build_resource_context(
             remaining_resources,
             text_window_budget=text_window_budget,
-            web_search=web_search,
+            web_sources=web_sources,
             fetched_bytes_sink=fetched_bytes_sink,
             vlm_profile=models.vlm,
+            resource_scope=resource_scope,
         )
         try:
             current_image_resource_ids = (
@@ -441,7 +459,7 @@ class AnswerResourceResolver:
                     query_images = None
             return ResolvedAnswerResources(
                 models=models,
-                web_search=web_search,
+                web_sources=web_sources,
                 registry=registry,
                 resource_tools=resource_tools,
                 resource_manifest=resource_manifest,
@@ -551,12 +569,12 @@ class AnswerResourceResolver:
     async def materialize_link_image(self, url: str) -> bytes | None:
         """Fetch one current-image link under SSRF revalidation."""
         try:
-            await avalidate_public_https_url(url)
-            return await afetch_public_https_bytes(
+            result = await fetch_public_http(
                 url,
                 max_bytes=self._settings.image_max_bytes,
                 timeout=120.0,
             )
+            return result.content
         except Exception:
             logger.warning("Failed to materialize current image link", exc_info=True)
             return None
@@ -566,19 +584,24 @@ class AnswerResourceResolver:
         resources: list[ResourceInput] | None,
         *,
         text_window_budget: TextWindowBudget,
-        web_search: ExaSearch | None = None,
+        web_sources: WebSourceService | None = None,
         fetched_bytes_sink: FetchedBytesSink | None = None,
         vlm_profile: ModelProfile,
+        resource_scope: str | None = None,
     ) -> tuple[ResourceRegistry | None, list[AgentTool]]:
-        """Register resources and compose their text and visual peer tools."""
-        if not resources and web_search is None:
-            return None, []
+        """Register resources and compose their text and visual peer tools.
+
+        The registry always exists in Research-capable composition so ``read(url=...)``
+        does not depend on an Execution Environment or a configured provider.
+        """
         registry = ResourceRegistry(
             max_attachments=self._settings.max_attachments,
             max_attachment_bytes=self._settings.max_attachment_bytes,
             max_total_attachment_bytes=self._settings.max_total_attachment_bytes,
-            url_text_fallback=(web_search.contents_text if web_search is not None else None),
+            url_text_fallback=(web_sources.extract if web_sources is not None else None),
             fetched_bytes_sink=fetched_bytes_sink,
+            resource_secret=_scoped_secret(self._resource_identity_secret, resource_scope),
+            cursor_secret=_scoped_secret(self._resource_cursor_secret, resource_scope),
         )
         try:
             for resource in resources or []:
@@ -819,7 +842,8 @@ class AnswerExecutor:
             for item in (*request.attachments, *request.history_attachments)
         )
         tools = ["search_knowledge_base"]
-        if self._models.web_search() is not None:
+        web_sources = self._models.web_sources()
+        if web_sources is not None and web_sources.search_enabled:
             tools.append("search_web")
         try:
             return await router.choose(
@@ -1044,6 +1068,7 @@ class AnswerExecutor:
             resources=await self._answer_run_resources(request, owner_id=session.owner_id),
             fetched_bytes_sink=_buffered_fetched_bytes_sink(fetched_buffer),
             resolved_mode=resolved_mode,
+            resource_scope=f"{session.owner_id}\0{session.run_id}",
             pinned_image_descriptions=request.image_descriptions,
             projected_history=projected_history,
             model_profiles=model_profiles,
@@ -1053,6 +1078,13 @@ class AnswerExecutor:
                 else None
             ),
         )
+        attachment_snapshots: dict[str, bytes] = {}
+        if run.registry is not None:
+            attachment_snapshots = await self._restore_registry_fetches(
+                run.registry,
+                owner_id=session.owner_id,
+                run_id=str(session.run_id),
+            )
         auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
         prepared_input = session.prepared_input or {}
         recall_allowed = resolved_mode == "research" and bool(
@@ -1188,11 +1220,14 @@ class AnswerExecutor:
                     conversation_history=run.history,
                     query_images=run.query_images,
                     registry=run.registry,
+                    attachment_snapshots=attachment_snapshots,
                 )
                 self.validate_pinned_model_profiles(request)
                 self.validate_pinned_agent_run_plan(request, prepared_early.tools)
                 if not is_new_session:
                     await _restore_durable_evidence(prepared_early, repository, session_id)
+                    if run.registry is not None:
+                        run.registry.restore_discovered_resources(prepared_early.evidence.contexts)
                 plan = request.agent_run_plan
                 if plan is None:
                     raise RunExecutionError(
@@ -1662,6 +1697,7 @@ class AnswerExecutor:
         model_profiles: Mapping[ModelRole, ModelProfile],
         environment: ExecutionEnvironment | None = None,
         resolved_mode: ResolvedMode,
+        resource_scope: str,
         skills: SkillsBundle | None = None,
     ) -> OrchestratorRun:
         history = projected_history
@@ -1678,6 +1714,7 @@ class AnswerExecutor:
             confirm_image_context=self._capabilities.pinned_answer_context,
             fetched_bytes_sink=fetched_bytes_sink,
             resolved_mode=resolved_mode,
+            resource_scope=resource_scope,
         )
         try:
             models = resolved.models
@@ -1756,7 +1793,9 @@ class AnswerExecutor:
                 synthesizer=self._models.answer_synthesizer(query_profile),
                 retrieve_knowledge_base=retrieve_knowledge_base,
                 search_web=(
-                    resolved.web_search.search if resolved.web_search is not None else None
+                    resolved.web_sources.search
+                    if resolved.web_sources is not None and resolved.web_sources.search_enabled
+                    else None
                 ),
                 model_func=model_func,
                 stream_model_func=stream_model_func,
@@ -1764,7 +1803,7 @@ class AnswerExecutor:
                 resource_manifest=resolved.resource_manifest,
                 register_web_source=(
                     resolved.registry.register_discovered_link
-                    if resolved.registry is not None and resolved.web_search is not None
+                    if resolved.registry is not None and resolved.web_sources is not None
                     else None
                 ),
                 image_budget=resolved.image_budget,
@@ -1804,6 +1843,75 @@ class AnswerExecutor:
             if resolved.registry is not None:
                 await resolved.registry.aclose()
             raise
+
+    async def _restore_registry_fetches(
+        self,
+        registry: ResourceRegistry,
+        *,
+        owner_id: str,
+        run_id: str,
+    ) -> dict[str, bytes]:
+        attachment_snapshots: dict[str, bytes] = {}
+        for resource in await self._store.list_fetched_resources(
+            owner_id=owner_id,
+            run_id=run_id,
+        ):
+            pieces: list[bytes] = []
+            async for piece in self._store.stream_artifact(
+                owner_id=owner_id,
+                digest=resource.digest,
+            ):
+                pieces.append(piece)
+            if not pieces:
+                raise RunExecutionError(
+                    "run_execution_failed",
+                    "A durable Web resource representation no longer exists.",
+                )
+            content = b"".join(pieces)
+            capabilities = resource.capabilities
+            attachment_snapshots[resource.resource_id] = content
+            if capabilities.get("resource_kind") == "tool_attachment":
+                continue
+            raw_aliases = capabilities.get("resource_aliases", [])
+            if (
+                not isinstance(raw_aliases, list)
+                or len(raw_aliases) > 64
+                or not all(isinstance(alias, str) for alias in raw_aliases)
+            ):
+                raise RunExecutionError(
+                    "run_execution_failed",
+                    "A durable Web resource catalog entry is invalid.",
+                )
+            origin = str(capabilities.get("admission_origin") or "")
+            if origin not in {"caller", "search", "agent"}:
+                raise RunExecutionError(
+                    "run_execution_failed",
+                    "A durable Web resource catalog entry is invalid.",
+                )
+            acquisition = str(capabilities.get("acquisition") or "")
+            if acquisition not in {"direct_http", "exa_extract", "tavily_extract"}:
+                raise RunExecutionError(
+                    "run_execution_failed",
+                    "A durable Web resource catalog entry is invalid.",
+                )
+            try:
+                registry.restore_fetched_resource(
+                    resource_id=resource.resource_id,
+                    ordinal=resource.ordinal,
+                    filename=resource.filename,
+                    mime_type=resource.mime_type,
+                    url=resource.source_locator.decode("utf-8"),
+                    content=content,
+                    admission_origin=origin,  # type: ignore[arg-type]
+                    acquisition=acquisition,
+                    aliases=tuple(raw_aliases),
+                )
+            except (UnicodeError, ValueError, ResourceRegistryError) as exc:
+                raise RunExecutionError(
+                    "run_execution_failed",
+                    "A durable Web resource catalog entry is invalid.",
+                ) from exc
+        return attachment_snapshots
 
     async def _answer_run_resources(
         self,

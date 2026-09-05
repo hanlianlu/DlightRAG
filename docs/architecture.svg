@@ -85,7 +85,7 @@
 
   <rect class="external optional" x="1230" y="345" width="240" height="110" rx="12"/>
   <text class="node-title" x="1350" y="387" text-anchor="middle">Optional tools</text>
-  <text class="node-copy" x="1350" y="417" text-anchor="middle">Exa · outbound MCP servers</text>
+  <text class="node-copy" x="1350" y="417" text-anchor="middle">Exa/Tavily · outbound MCP servers</text>
 
   <rect class="external optional" x="1230" y="515" width="240" height="130" rx="12"/>
   <text class="node-title" x="1350" y="554" text-anchor="middle">Sources and parsers</text>

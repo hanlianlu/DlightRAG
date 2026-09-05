@@ -159,7 +159,7 @@ class _Resources:
             current_images=(),
             resource_tools=(),
             resource_manifest=(),
-            web_search=None,
+            web_sources=None,
             image_budget=None,
             query_images=(),
         )

@@ -13,6 +13,7 @@ import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -47,15 +48,29 @@ from dlightrag.engine.agent.tools.contracts import (
 )
 from dlightrag.engine.agent.tools.output import OutputStage, StreamingToolOutput, ToolOutputSnapshot
 
-type ResourceReader = Callable[
-    [str, str | None, str | None, ToolRuntime],
-    Awaitable[ToolResult],
-]
 type SpillWriter = Callable[[str], Awaitable[CommittedOutput]]
 type OutputStageFactory = Callable[[str], OutputStage]
 
 
-class ReadArgs(BaseModel):
+class HttpReadOptions(BaseModel):
+    """Representation headers allowed on the first direct URL acquisition."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    user_agent: str | None = Field(default=None, min_length=1, max_length=256)
+    accept: str | None = Field(default=None, min_length=1, max_length=512)
+    accept_language: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def _single_line(self) -> HttpReadOptions:
+        if any("\r" in value or "\n" in value for value in self.model_dump().values() if value):
+            raise ValueError("HTTP representation headers must be single-line values")
+        return self
+
+
+class ReadWithoutUrlArgs(BaseModel):
+    """Read contract for Hosts that do not provide public-URL admission."""
+
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     path: str | None = Field(default=None, description="Workspace-relative path to read.")
@@ -70,12 +85,63 @@ class ReadArgs(BaseModel):
     cursor: str | None = Field(default=None, description="Continuation cursor.")
 
     @model_validator(mode="after")
-    def _exactly_one_target(self) -> ReadArgs:
+    def _exactly_one_target(self) -> ReadWithoutUrlArgs:
         if (self.path is None) == (self.resource_id is None):
             raise ValueError("read requires exactly one of path or resource_id")
-        if self.path is not None and self.focus is not None:
-            raise ValueError("read focus is available only for resource_id")
+        if self.path is not None and (self.focus is not None or self.cursor is not None):
+            raise ValueError("read focus and cursor are available only for resources")
+        if self.path is None and (self.offset is not None or self.limit is not None):
+            raise ValueError("read offset and limit are available only for paths")
         return self
+
+
+class ReadArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    path: str | None = Field(default=None, description="Workspace-relative path to read.")
+    resource_id: str | None = Field(default=None, description="Opaque durable resource id.")
+    url: str | None = Field(default=None, description="Anonymous public HTTP(S) URL to read.")
+    http: HttpReadOptions | None = Field(
+        default=None,
+        description="Optional representation headers for the first direct URL acquisition.",
+    )
+    offset: int | None = Field(default=None, ge=1, description="1-based line offset.")
+    limit: int | None = Field(default=None, ge=1, description="Maximum lines to return.")
+    focus: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Optional relevance focus for a durable resource.",
+    )
+    cursor: str | None = Field(default=None, description="Continuation cursor.")
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self) -> ReadArgs:
+        targets = sum(value is not None for value in (self.path, self.resource_id, self.url))
+        if targets != 1:
+            raise ValueError("read requires exactly one of path, resource_id, or url")
+        if self.path is not None and (self.focus is not None or self.cursor is not None):
+            raise ValueError("read focus and cursor are available only for resources")
+        if self.path is None and (self.offset is not None or self.limit is not None):
+            raise ValueError("read offset and limit are available only for paths")
+        if self.url is not None and self.cursor is not None:
+            raise ValueError("continue a URL read with its returned resource_id")
+        if self.url is None and self.http is not None:
+            raise ValueError("read http options are available only for url")
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceReadRequest:
+    resource_id: str | None
+    url: str | None
+    focus: str | None
+    cursor: str | None
+    user_agent: str | None = None
+    accept: str | None = None
+    accept_language: str | None = None
+
+
+type ResourceReader = Callable[[ResourceReadRequest, ToolRuntime], Awaitable[ToolResult]]
 
 
 class WriteArgs(BaseModel):
@@ -206,15 +272,26 @@ def read_tool(
     """Build ``read`` with whichever branches the host actually has."""
 
     async def execute(args: BaseModel, runtime: ToolRuntime) -> ToolResult:
-        args = cast(ReadArgs, args)
-        if args.resource_id is not None:
+        args = cast(ReadArgs | ReadWithoutUrlArgs, args)
+        url = args.url if isinstance(args, ReadArgs) else None
+        if args.resource_id is not None or url is not None:
             if resource_reader is None:
                 return ToolResult.text("resource read is not available", is_error=True)
-            async with scheduler.hold(PathAccess(path=args.resource_id, kind="read")):
+            target = args.resource_id or url or "resource"
+            options = (
+                args.http or HttpReadOptions() if isinstance(args, ReadArgs) else HttpReadOptions()
+            )
+            async with scheduler.hold(PathAccess(path=target, kind="read")):
                 return await resource_reader(
-                    args.resource_id,
-                    args.focus,
-                    args.cursor,
+                    ResourceReadRequest(
+                        resource_id=args.resource_id,
+                        url=url,
+                        focus=args.focus,
+                        cursor=args.cursor,
+                        user_agent=options.user_agent,
+                        accept=options.accept,
+                        accept_language=options.accept_language,
+                    ),
                     runtime,
                 )
         if environment is None or args.path is None:
@@ -262,17 +339,30 @@ def read_tool(
                 ),
             )
 
+    url_enabled = resource_reader is not None
+    description = (
+        "Read exactly one target: a workspace path, a durable resource_id, or an "
+        "anonymous public HTTP(S) url. URL reads accept only optional http.user_agent, "
+        "http.accept, and http.accept_language representation preferences; continue "
+        "with the returned resource_id and cursor."
+        if url_enabled
+        else "Read one workspace path or Host-provided durable resource_id."
+    )
+    guidance = (
+        "read: one of path, resource_id, or url; path pages carry an offset and "
+        "resource pages carry an opaque cursor. Follow the printed continuation "
+        "instead of re-reading the whole target."
+        if url_enabled
+        else "read: one of path or resource_id; follow the printed continuation."
+    )
     return AgentTool(
         name="read",
-        description="Read a workspace path or a durable resource id.",
-        input_model=ReadArgs,
+        description=description,
+        input_model=ReadArgs if url_enabled else ReadWithoutUrlArgs,
         execute=execute,
         replay_policy="replayable",
-        guidance=(
-            "read: one of path or resource_id; text pages default to 2000 lines and "
-            "carry an offset continuation; follow the printed continuation instead of "
-            "re-reading the whole file."
-        ),
+        contract_version=3 if url_enabled else 2,
+        guidance=guidance,
     )
 
 
@@ -940,8 +1030,10 @@ __all__ = [
     "EditOperation",
     "FindArgs",
     "GrepArgs",
+    "HttpReadOptions",
     "LsArgs",
     "ReadArgs",
+    "ResourceReadRequest",
     "OutputStageFactory",
     "ResourceReader",
     "SpillWriter",

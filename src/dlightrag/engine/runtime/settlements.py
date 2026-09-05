@@ -51,6 +51,7 @@ class OpaqueFetchedResourceWrite:
     """One fetched body registered as a complete blob-backed resource."""
 
     resource_id: str
+    ordinal: int
     safe_name: str
     media_type: str
     capabilities: Any
@@ -63,6 +64,8 @@ class OpaqueFetchedResourceWrite:
     def __post_init__(self) -> None:
         if not self.resource_id.strip():
             raise ValueError("resource id cannot be empty")
+        if self.ordinal < 0:
+            raise ValueError("fetched resource ordinal cannot be negative")
         for name in ("blob_digest", "source_locator_digest"):
             if len(getattr(self, name)) != 64:
                 raise ValueError(f"fetched resource {name} must be a SHA-256 hex digest")

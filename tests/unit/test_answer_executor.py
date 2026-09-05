@@ -389,7 +389,38 @@ def _resource_resolver() -> AnswerResourceResolver:
         ),
         models=MagicMock(),
         capabilities=capabilities,
+        resource_identity_secret=b"i" * 32,
+        resource_cursor_secret=b"c" * 32,
     )
+
+
+def test_resource_identity_is_stable_within_run_and_isolated_across_runs() -> None:
+    resolver = _resource_resolver()
+    resources = [ResourceInput(url="https://example.com/report")]
+    profile = ModelProfile(context_window_tokens=10_000, supports_images=False)
+
+    first, _ = resolver.build_resource_context(
+        resources,
+        text_window_budget=TextWindowBudget(tokens=100),
+        vlm_profile=profile,
+        resource_scope="owner-a\0run-1",
+    )
+    again, _ = resolver.build_resource_context(
+        resources,
+        text_window_budget=TextWindowBudget(tokens=100),
+        vlm_profile=profile,
+        resource_scope="owner-a\0run-1",
+    )
+    other, _ = resolver.build_resource_context(
+        resources,
+        text_window_budget=TextWindowBudget(tokens=100),
+        vlm_profile=profile,
+        resource_scope="owner-a\0run-2",
+    )
+
+    assert first is not None and again is not None and other is not None
+    assert first.manifest()[0].resource_id == again.manifest()[0].resource_id
+    assert first.manifest()[0].resource_id != other.manifest()[0].resource_id
 
 
 def _png_bytes(color: str = "white") -> bytes:
@@ -404,7 +435,7 @@ def _multimodal_resolver(
     policy_overrides: Mapping[str, int] | None = None,
 ) -> AnswerResourceResolver:
     models = MagicMock()
-    models.web_search.return_value = None
+    models.web_sources.return_value = None
     models.vlm_func.return_value = AsyncMock()
     capabilities = MagicMock()
     overrides = dict(policy_overrides or {})

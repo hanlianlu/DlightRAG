@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Answer-owned lazy model and Web-search client lifecycle."""
+"""Answer-owned lazy model and public-Web provider lifecycle."""
 
 import asyncio
 import logging
@@ -16,16 +16,26 @@ from dlightrag.engine.ai.tool_model import ToolModel
 from dlightrag.engine.answer.images import AnswerImagePolicy
 from dlightrag.engine.answer.resources.images import QueryImageDescriber
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
-from dlightrag.engine.answer.tools.web import ExaSearch
+from dlightrag.engine.answer.web_sources import ExaWebSource, TavilyWebSource, WebSourceService
 from dlightrag.engine.rag.workspace.lifecycle import await_shared_cleanup
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class WebSourceRuntimeSettings:
+    """Immutable credentials and independently ordered provider chains."""
+
+    exa_api_key: str | None = None
+    tavily_api_key: str | None = None
+    search_providers: tuple[str, ...] = ()
+    extract_providers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class AnswerModelRuntimeSettings:
     model_roles: ModelRoleSettings
-    web_search_api_key: str | None
+    web_sources: WebSourceRuntimeSettings
     query_image_limit: int
 
 
@@ -56,7 +66,7 @@ class AnswerModelRuntime:
         self._answer_model: CompletionModel | None = None
         self._tool_models: dict[ModelRole, ToolModel] = {}
         self._vlm_model: CompletionModel | None = None
-        self._web_search: ExaSearch | None = None
+        self._web_sources: WebSourceService | None = None
         self._closed = False
         self._close_task: asyncio.Task[asyncio.CancelledError | None] | None = None
 
@@ -112,14 +122,22 @@ class AnswerModelRuntime:
             image_policy=self._vlm_image_policy(profile),
         )
 
-    def web_search(self) -> ExaSearch | None:
+    def web_sources(self) -> WebSourceService | None:
         self._ensure_open()
-        key = self._settings.web_search_api_key
-        if not key:
+        settings = self._settings.web_sources
+        if not settings.search_providers and not settings.extract_providers:
             return None
-        if self._web_search is None:
-            self._web_search = ExaSearch(key)
-        return self._web_search
+        if self._web_sources is None:
+            providers: dict[str, ExaWebSource | TavilyWebSource] = {}
+            if settings.exa_api_key:
+                providers["exa"] = ExaWebSource(settings.exa_api_key)
+            if settings.tavily_api_key:
+                providers["tavily"] = TavilyWebSource(settings.tavily_api_key)
+            self._web_sources = WebSourceService(
+                search_providers=tuple(providers[name] for name in settings.search_providers),
+                extract_providers=tuple(providers[name] for name in settings.extract_providers),
+            )
+        return self._web_sources
 
     def new_highlight_model(self) -> tuple[CompletionModel, Telemetry]:
         self._ensure_open()
@@ -150,12 +168,12 @@ class AnswerModelRuntime:
             *self._tool_models.values(),
             self._answer_model,
             self._vlm_model,
-            self._web_search,
+            self._web_sources,
         )
         self._tool_models.clear()
         self._answer_model = None
         self._vlm_model = None
-        self._web_search = None
+        self._web_sources = None
         self._answer_synthesizers.clear()
         cancellation: asyncio.CancelledError | None = None
         for component in components:
@@ -178,4 +196,5 @@ __all__ = [
     "AnswerModelRuntime",
     "AnswerModelRuntimeClosedError",
     "AnswerModelRuntimeSettings",
+    "WebSourceRuntimeSettings",
 ]

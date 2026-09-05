@@ -258,6 +258,7 @@ class TestEffectHostUpdate:
         with pytest.raises(ValueError):
             OpaqueFetchedResourceWrite(
                 resource_id="r",
+                ordinal=0,
                 safe_name="n",
                 media_type="text/plain",
                 capabilities={},

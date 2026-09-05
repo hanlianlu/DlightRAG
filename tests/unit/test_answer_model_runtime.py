@@ -15,6 +15,7 @@ from dlightrag.engine.answer.model_runtime import (
     AnswerModelRuntime,
     AnswerModelRuntimeClosedError,
     AnswerModelRuntimeSettings,
+    WebSourceRuntimeSettings,
 )
 
 
@@ -36,7 +37,11 @@ def _runtime(*, vlm_profile: ModelProfile | None = None) -> AnswerModelRuntime:
         model_roles=ModelRoleSettings(
             default=ModelSettings(provider="openai", model="test-model", api_key="test")
         ),
-        web_search_api_key="exa-test",
+        web_sources=WebSourceRuntimeSettings(
+            exa_api_key="exa-test",
+            search_providers=("exa",),
+            extract_providers=("exa",),
+        ),
         query_image_limit=3,
     )
     return AnswerModelRuntime(
@@ -93,7 +98,7 @@ async def test_close_is_idempotent_and_prevents_recreation() -> None:
     runtime._tool_models["query"] = components[0]
     runtime._answer_model = components[1]
     runtime._vlm_model = components[2]
-    runtime._web_search = components[3]
+    runtime._web_sources = components[3]
 
     await runtime.aclose()
     await runtime.aclose()
@@ -105,7 +110,7 @@ async def test_close_is_idempotent_and_prevents_recreation() -> None:
     with pytest.raises(AnswerModelRuntimeClosedError):
         runtime.vlm_func()
     with pytest.raises(AnswerModelRuntimeClosedError):
-        runtime.web_search()
+        runtime.web_sources()
 
 
 def test_query_image_describer_follows_vlm_profile() -> None:

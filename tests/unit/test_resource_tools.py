@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import io
+import socket
 from typing import Any
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from PIL import Image
 from pydantic import ValidationError
@@ -111,7 +113,16 @@ def test_read_tool_schema_is_exact() -> None:
     registry = ResourceRegistry()
     (read_tool,) = build_resource_tools(registry)
     fields = read_tool.input_model.model_fields
-    assert set(fields) == {"path", "resource_id", "offset", "limit", "focus", "cursor"}
+    assert set(fields) == {
+        "path",
+        "resource_id",
+        "url",
+        "http",
+        "offset",
+        "limit",
+        "focus",
+        "cursor",
+    }
     assert not fields["resource_id"].is_required()
     assert not fields["focus"].is_required()
     assert not fields["cursor"].is_required()
@@ -121,8 +132,28 @@ def test_read_tool_schema_is_exact() -> None:
     )
     assert parsed.model_dump()["resource_id"] == "res-1"
     assert parsed.model_dump()["focus"] == "revenue"
+    url_read = read_tool.input_model.model_validate(
+        {
+            "url": "https://example.com/article?id=7",
+            "focus": "revenue",
+            "http": {
+                "user_agent": "DlightRAG research",
+                "accept": "text/html",
+                "accept_language": "zh-TW,en;q=0.8",
+            },
+        }
+    )
+    assert url_read.model_dump()["url"] == "https://example.com/article?id=7"
     with pytest.raises(ValidationError):
         read_tool.input_model.model_validate({"resource_id": "res-1", "url": "https://x"})
+    with pytest.raises(ValidationError):
+        read_tool.input_model.model_validate(
+            {"url": "https://example.com", "http": {"authorization": "secret"}}
+        )
+    with pytest.raises(ValidationError):
+        read_tool.input_model.model_validate(
+            {"url": "https://example.com", "http": {"accept": "text/html\r\nX-Evil: 1"}}
+        )
 
 
 def test_inspect_tool_schema_is_exact() -> None:
@@ -156,6 +187,51 @@ async def test_read_tool_returns_text_and_handles() -> None:
     assert "gamma" in result.text_content
     assert result.effects.evidence_sources
     assert result.effects.evidence_sources[0].source_type == "web_attachment"
+
+
+async def test_read_url_registers_handle_applies_representation_headers_and_returns_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "dlightrag.engine.public_http.socket.getaddrinfo",
+        lambda host, port, *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
+        ],
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=b"public body", headers={"content-type": "text/plain"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with ResourceRegistry(url_client=client) as registry:
+        (tool,) = build_resource_tools(registry)
+        args = tool.input_model.model_validate(
+            {
+                "url": "https://example.com/article?id=7",
+                "http": {
+                    "user_agent": "ResearchBot/1",
+                    "accept": "text/plain",
+                    "accept_language": "zh-TW",
+                },
+            }
+        )
+        result = await tool.execute(args, tool_runtime())
+    await client.aclose()
+
+    assert "public body" in result.text_content
+    assert "[resource: res-" in result.text_content
+    assert requests[0].url.host == "93.184.216.34"
+    assert requests[0].headers["host"] == "example.com"
+    assert requests[0].headers["user-agent"] == "ResearchBot/1"
+    source = result.effects.evidence_sources[0]
+    assert source.source_uri == "https://example.com/article?id=7"
+    assert dict(source.attributes) == {
+        "resource_kind": "web",
+        "admission_origin": "agent",
+        "acquisition": "direct_http",
+    }
 
 
 async def test_read_uses_the_current_turn_window_budget() -> None:

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Request-local resource-window focus ranking.
+"""Run-scoped Resource-window focus ranking.
 
 A single mixed-script tokenizer emits Unicode words plus CJK unigrams and
 overlapping bigrams so Latin and CJK queries share one BM25 index. The ranking

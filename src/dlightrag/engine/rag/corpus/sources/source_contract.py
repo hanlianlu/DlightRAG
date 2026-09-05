@@ -102,9 +102,9 @@ def validate_download_uri(value: str) -> str:
                 raise ValueError
             return canonical
         if parsed.scheme == "https":
-            from dlightrag.engine.rag.corpus.sources.url import validate_public_https_url
+            from dlightrag.engine.public_http import validate_public_http_url
 
-            validate_public_https_url(canonical)
+            validate_public_http_url(canonical)
             if (
                 parsed.username is not None
                 or parsed.password is not None
