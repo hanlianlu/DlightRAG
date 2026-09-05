@@ -23,10 +23,15 @@ CORS with explicit origins.
 
 ### Simple Bearer
 
+```yaml
+# config.yaml
+access:
+  auth_mode: simple
+```
+
 ```bash
-openssl rand -base64 32
-DLIGHTRAG_ACCESS__AUTH_MODE=simple
-DLIGHTRAG_ACCESS__API_TOKEN=<generated>
+# .env or an orchestrator Secret
+DLIGHTRAG_ACCESS__API_TOKEN=<generated-by-openssl-rand-base64-32>
 ```
 
 Clients send `Authorization: Bearer <generated>`. REST may accept `X-User-Id`
@@ -37,10 +42,16 @@ control, not multi-user authorization.
 
 JWT mode requires `sub`, which becomes `user_id`.
 
+```yaml
+# config.yaml
+access:
+  auth_mode: jwt
+  jwt_algorithm: HS256
+```
+
 ```bash
-DLIGHTRAG_ACCESS__AUTH_MODE=jwt
+# .env or an orchestrator Secret
 DLIGHTRAG_ACCESS__JWT_VERIFICATION_KEY=<key-or-public-pem>
-DLIGHTRAG_ACCESS__JWT_ALGORITHM=HS256
 ```
 
 Use the shared secret for `HS*`; use issuer public-key PEM for `RS*`/`ES*`.

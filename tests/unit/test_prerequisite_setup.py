@@ -1171,6 +1171,17 @@ def test_run_parser_step_mineru_local_title_aided(wiz, tmp_path, monkeypatch):
     )
 
 
+def test_prepare_compose_bind_sources_creates_configured_skills_directory(wiz, tmp_path):
+    skills_dir = tmp_path / "operator-skills"
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"DLIGHTRAG_SKILLS_DIR={skills_dir}\n", encoding="utf-8")
+
+    resolved = wiz._prepare_compose_bind_sources(env_path=env_path, environment={})
+
+    assert resolved == skills_dir
+    assert skills_dir.is_dir()
+
+
 def test_docker_up_command(wiz):
     assert wiz.docker_up_command() == ["docker", "compose", "up", "-d"]
     assert wiz.docker_up_command(profile="docling") == [
@@ -1205,11 +1216,18 @@ def test_wait_for_readiness_gives_up(wiz):
 
 
 def test_bring_up_stack_waits_for_strict_readiness(wiz, monkeypatch):
+    events: list[str] = []
     urls: list[str] = []
-    monkeypatch.setattr(wiz, "_default_runner", lambda command: None)
+    monkeypatch.setattr(
+        wiz,
+        "_prepare_compose_bind_sources",
+        lambda: events.append("prepare"),
+    )
+    monkeypatch.setattr(wiz, "_default_runner", lambda command: events.append("run"))
     monkeypatch.setattr(wiz, "wait_for_readiness", lambda url: urls.append(url) or True)
 
     assert wiz._bring_up_stack(_NullConsole()) == 0
+    assert events == ["prepare", "run"]
     assert urls == ["http://localhost:8100/ready"]
 
 

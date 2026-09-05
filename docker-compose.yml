@@ -5,12 +5,18 @@
 #   docker compose --profile docling up -d  # bundled CPU Docling alternative
 
 x-common-env: &common-env
-  # Container-specific wiring only: the service host differs from local runs,
-  # and the working directories live inside mounted volumes. Everything else
-  # comes from the mounted config.yaml or .env — no duplicated defaults here.
+  # Container-topology binding only: Compose service discovery differs from a
+  # native run. Application behavior comes from config.yaml, credentials from
+  # .env, and filesystem paths use the image's canonical application defaults.
   DLIGHTRAG_STORAGE__POSTGRES__HOST: postgres
-  DLIGHTRAG_DEPLOYMENT__WORKING_DIR: /app/dlightrag_storage
-  DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT: /app/dlightrag_agent_workspaces
+x-global-skills-mount: &global-skills-mount
+  type: bind
+  source: ${DLIGHTRAG_SKILLS_DIR:-${HOME}/.dlightrag/skills}
+  target: /home/app/.dlightrag/skills
+  read_only: true
+  bind:
+    # Never let Docker create an operator-managed host directory as root.
+    create_host_path: false
 x-app-image: &app-image dlightrag:local
 x-app-build: &app-build
   context: .
@@ -26,8 +32,9 @@ services:
       <<: *common-env
       # The container binds 0.0.0.0, but the port above is published to
       # 127.0.0.1 only, so no-auth is acceptable for local dev. Set
-      # DLIGHTRAG_ACCESS__AUTH_MODE=simple + DLIGHTRAG_ACCESS__API_TOKEN (and drop this
-      # override) before publishing the port on a non-loopback address.
+      # access.auth_mode: simple in config.yaml, provide
+      # DLIGHTRAG_ACCESS__API_TOKEN as a Secret, and drop this override before
+      # publishing the port on a non-loopback address.
       DLIGHTRAG_INTERFACES__API__HOST: "0.0.0.0"
       DLIGHTRAG_ACCESS__ALLOW_INSECURE_NO_AUTH: "true"
     env_file: .env
@@ -35,13 +42,10 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - dlightrag_data:/app/dlightrag_storage
-      - dlightrag_agent_workspaces:/app/dlightrag_agent_workspaces
+      - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
       - ./config.yaml:/app/config.yaml:ro
-      # Global Agent Skills for the answer agent. Read-only: skills are
-      # untrusted context shared by every web user's runs — operators (or
-      # CI) provision this directory, never the agent itself.
-      # Host-side location overridable via DLIGHTRAG_SKILLS_DIR in .env.
-      - ${DLIGHTRAG_SKILLS_DIR:-${HOME}/.dlightrag/skills}:/home/app/.dlightrag/skills:ro
+      # Operator-provisioned global Skills; read-only for every user's Agent.
+      - *global-skills-mount
       # Per-owner Agent Skills, written only through the validated
       # publish_skill/delete_skill tools. Persisted across container
       # recreations; multi-host deployments must share this path.
@@ -65,8 +69,9 @@ services:
     image: *app-image
     build: *app-build
     # SECURITY: MCP streamable-http exposes ingest / delete_files / answer.
-    # This maps the host port to 127.0.0.1 only; set DLIGHTRAG_ACCESS__AUTH_MODE=simple
-    # + DLIGHTRAG_ACCESS__API_TOKEN before exposing it on a non-loopback network.
+    # This maps the host port to 127.0.0.1 only; set access.auth_mode: simple in
+    # config.yaml and provide DLIGHTRAG_ACCESS__API_TOKEN as a Secret before
+    # exposing it on a non-loopback network.
     ports:
       - "127.0.0.1:8101:8101"
     environment:
@@ -80,13 +85,10 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - dlightrag_data:/app/dlightrag_storage
-      - dlightrag_agent_workspaces:/app/dlightrag_agent_workspaces
+      - dlightrag_agent_workspaces:/home/app/.dlightrag/agent_workspaces
       - ./config.yaml:/app/config.yaml:ro
-      # Global Agent Skills for the answer agent. Read-only: skills are
-      # untrusted context shared by every web user's runs — operators (or
-      # CI) provision this directory, never the agent itself.
-      # Host-side location overridable via DLIGHTRAG_SKILLS_DIR in .env.
-      - ${DLIGHTRAG_SKILLS_DIR:-${HOME}/.dlightrag/skills}:/home/app/.dlightrag/skills:ro
+      # Operator-provisioned global Skills; read-only for every user's Agent.
+      - *global-skills-mount
       # Per-owner Agent Skills, written only through the validated
       # publish_skill/delete_skill tools. Persisted across container
       # recreations; multi-host deployments must share this path.

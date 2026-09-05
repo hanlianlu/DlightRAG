@@ -283,6 +283,16 @@ _Avoid_: Durable Progress, Fencing Epoch, checkpoint
 The current Workspace Epoch's path, type, size, and digest observation of an Agent Workspace.
 _Avoid_: Journal Entry, checkpoint, historical epoch listing
 
+## Configuration And Deployment
+
+**Application Configuration**:
+The non-secret operator choices that govern DlightRAG product behavior and integrations independently of how a process is packaged or scheduled.
+_Avoid_: credentials, container topology, duplicated environment override
+
+**Deployment Binding**:
+A value created by the runtime topology or process role to connect DlightRAG to its environment, such as service discovery or a listener binding. It adapts Application Configuration to the deployment without becoming a second owner of product policy.
+_Avoid_: application default, product setting, secret
+
 ## Operations
 
 **Fencing Epoch**:

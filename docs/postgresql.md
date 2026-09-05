@@ -33,8 +33,14 @@ prefer full-precision storage and have rebuilt indexes accordingly.
 
 ## External and Managed Endpoints
 
-Set `DLIGHTRAG_STORAGE__POSTGRES__*` in `.env` (see `.env.example`). `config.yaml` is
-tracked and carries no endpoint; under Compose `.env` outranks it anyway.
+Keep the PostgreSQL password in `.env` locally or an orchestrator Secret. The
+bundled Compose manifest owns `DLIGHTRAG_STORAGE__POSTGRES__HOST=postgres`
+because that hostname is created by Compose service discovery; it inherits the
+remaining non-secret local defaults. For an external or managed endpoint, choose
+one owner for the non-secret connection fields: place stable values under
+`storage.postgres` in the deployment's `config.yaml`, or inject topology-created
+values from its deployment manifest. Do not duplicate them in both. See
+[Configuration](configuration.md#configuration-ownership) and `.env.example`.
 
 Three capabilities are gated independently, so missing one does not force the
 others down:

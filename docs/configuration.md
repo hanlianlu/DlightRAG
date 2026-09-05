@@ -5,31 +5,57 @@ examples. Runtime design belongs in [Architecture](architecture.md), public
 payloads in [Interfaces](interfaces.md), security policy in
 [Security](security.md), and executable procedures in [Operations](operations.md).
 
-Root [`config.yaml`](../config.yaml) contains the choices most deployments need.
-Advanced fields remain available through constructor arguments, nested
-`DLIGHTRAG_*` variables, `.env`, or explicit YAML additions.
+Root [`config.yaml`](../config.yaml) is the canonical home for non-secret
+application behavior. Advanced fields remain available through explicit YAML
+additions; nested `DLIGHTRAG_*` variables are an override mechanism, not a
+second catalogue of normal application settings.
 
 ```text
 constructor args > environment variables > .env > config.yaml > code defaults
 ```
 
-Nested environment variables follow the settings path with `__` separators:
+Precedence determines the effective value; it does not assign ownership. Within
+one deployment, configure a setting in one place rather than relying on a
+higher-precedence source to mask a duplicate lower-precedence value. Nested
+environment variables follow the settings path with `__` separators:
 
 ```bash
 DLIGHTRAG_MODELS__EMBEDDING__API_KEY=...
-DLIGHTRAG_CORPUS__SIDECARS__MINERU__LOCAL_ENDPOINT=http://127.0.0.1:8210
+DLIGHTRAG_STORAGE__POSTGRES__HOST=postgres
 ```
 
 DlightRAG has eight top-level sections: `deployment`, `storage`, `models`,
 `corpus`, `answer`, `access`, `interfaces`, and `observability`. Removed legacy
-flat names are rejected rather than aliased.
+flat names are rejected rather than aliased. The ownership decision is recorded
+in [ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md).
+
+## Configuration Ownership
+
+Use the first matching rule:
+
+| Concern | Canonical owner | Examples |
+|---|---|---|
+| Non-secret product behavior and integration choices | `config.yaml` | model selection, parser provider and endpoint, workspace identity, retrieval breadth, Answer policy, auth mode, access rules, observability behavior |
+| Credentials | `.env` locally; an orchestrator Secret in production | provider API keys, PostgreSQL password, JWT verification key |
+| Facts created by deployment topology | Compose or another deployment manifest | Service DNS, container listener/transport binding, volumes, probes, resource limits, PostgreSQL server tuning |
+| Stable low-level mechanics | Code defaults until measurement requires an explicit override | retry/backoff, cache bounds, parser polling, vector thresholds |
+
+Environment overrides are appropriate for Secrets, topology bindings, and
+short-lived operational exceptions. Do not copy ordinary model, retrieval, or
+Answer policy from `config.yaml` into Compose or Kubernetes manifests.
+
+For filesystem settings, prefer mounting storage at the configured or default
+application path. Override the application path only when the deployment cannot
+align its mount. For infrastructure endpoints such as PostgreSQL Service DNS,
+the deployment manifest may own the typed setting; do not also place that value
+in its mounted `config.yaml`.
 
 ## What Belongs In `config.yaml`
 
-Keep deployment choices, model/provider settings, parser sidecars, workspace and
-PostgreSQL endpoints, high-level concurrency, retrieval breadth, answer policy,
-auth mode, and non-secret observability settings in YAML. Keep credentials in
-`.env`.
+Keep model/provider settings, parser sidecars, workspace identity,
+high-level concurrency, retrieval breadth, Answer policy, auth mode, access
+rules, and non-secret observability settings in YAML. Keep credentials out of
+YAML, and keep container topology out of it.
 
 Usually leave these at code defaults unless measurement proves otherwise:
 
@@ -38,6 +64,31 @@ Usually leave these at code defaults unless measurement proves otherwise:
 - per-stage ingestion workers that already match LightRAG defaults
 - BM25 index signatures, RRF constants, and exact-vector thresholds
 - thumbnail, highlight-cache, and URL-signing internals
+
+## Container And Kubernetes Contract
+
+The process reads `config.yaml` from its current working directory. The bundled
+image uses `/app`, so Compose mounts the file at `/app/config.yaml`; a Kubernetes
+ConfigMap should do the same. Inject only credentials from Secrets and the
+minimal topology bindings required by that workload. In particular:
+
+- mount corpus storage at `/app/dlightrag_storage`, matching the checked-in
+  `deployment.working_dir: ./dlightrag_storage`;
+- mount the shared Agent Workspace, when enabled, at
+  `/home/app/.dlightrag/agent_workspaces`, matching the application default;
+- inject the PostgreSQL Service DNS through
+  `DLIGHTRAG_STORAGE__POSTGRES__HOST` unless the mounted YAML owns it;
+- bind container listeners and select the MCP network transport in the workload
+  manifest because these choices vary by process role;
+- keep a development-only insecure-listener waiver beside the manifest's
+  loopback-only host publication; production deployments configure an auth mode
+  in YAML instead of inheriting that waiver;
+- keep ports, Services, volumes, probes, resource requests/limits, and database
+  server tuning entirely outside DlightRAG application configuration.
+
+This contract lets an operator understand product behavior from one typed YAML
+file while reviewing credentials and infrastructure through their native
+orchestrator surfaces.
 
 ## Parser Sidecars
 
@@ -590,7 +641,13 @@ There is no endpoint discovery, marketplace, OAuth service, or plugin runtime.
 Research discovers Skill metadata from two tiers and loads content on demand.
 The global root is `answer.agent.skills_root`, defaulting to
 `~/.dlightrag/skills`; it is operator-provisioned and read-only for the answer
-agent. The per-owner root is `answer.agent.owner_skills_root`, defaulting to
+agent. The bundled Compose stack keeps `skills_root: null`, mounts the
+operator's `${DLIGHTRAG_SKILLS_DIR:-$HOME/.dlightrag/skills}` at that default
+container path, and refuses to create a missing host source as root. The setup
+wizard prepares the directory; manual operators must create it before
+`docker compose up`.
+
+The per-owner root is `answer.agent.owner_skills_root`, defaulting to
 `~/.dlightrag/owner_skills`; users write their own skills only through the
 validated `publish_skill`/`delete_skill` tools, bounded by a 20-skill / 20MiB
 owner quota. Owner names shadow global names for that owner. Each worker must

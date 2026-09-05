@@ -58,9 +58,12 @@ to self-hosted MinerU and is safe to rerun.
 git clone https://github.com/hanlianlu/dlightrag.git
 cd dlightrag
 cp .env.example .env
+mkdir -p "${HOME}/.dlightrag/skills"
 ```
 
-Add the keys required by your `config.yaml` model blocks:
+The last command prepares the default read-only operator Skills bind source;
+when `DLIGHTRAG_SKILLS_DIR` selects another host path, create that directory
+instead. Add the keys required by your `config.yaml` model blocks:
 
 ```bash
 DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=...

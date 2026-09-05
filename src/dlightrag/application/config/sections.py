@@ -4,7 +4,7 @@
 Configuration sources (highest → lowest precedence):
     1. Constructor arguments (when used as library)
     2. Environment variables (DLIGHTRAG_ prefix)
-    3. .env file (secrets + deployment)
+    3. .env file (secrets + deployment-only overrides)
     4. config.yaml (structured app settings)
     5. Default values
 

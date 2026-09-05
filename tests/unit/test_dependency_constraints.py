@@ -189,6 +189,48 @@ def test_compose_builds_pg18_postgres_image_locally() -> None:
     assert "dlightrag-postgres:pg18" in workflow
 
 
+def test_compose_uses_config_and_default_paths_without_duplicate_overrides() -> None:
+    """Compose owns topology; canonical config/defaults own application paths."""
+    compose_text = Path("docker-compose.yml").read_text(encoding="utf-8")
+    compose = yaml.safe_load(compose_text)
+
+    assert "DLIGHTRAG_DEPLOYMENT__WORKING_DIR" not in compose_text
+    assert "DLIGHTRAG_ANSWER__AGENT__WORKSPACE_ROOT" not in compose_text
+    for service_name in ("dlightrag-api", "dlightrag-mcp"):
+        mounts = compose["services"][service_name]["volumes"]
+        assert any(
+            str(mount).endswith(":/home/app/.dlightrag/agent_workspaces") for mount in mounts
+        )
+
+
+def test_compose_requires_an_explicit_operator_skills_directory() -> None:
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+
+    for service_name in ("dlightrag-api", "dlightrag-mcp"):
+        mounts = compose["services"][service_name]["volumes"]
+        skills_mount = next(
+            mount
+            for mount in mounts
+            if isinstance(mount, dict) and mount.get("target") == "/home/app/.dlightrag/skills"
+        )
+        assert skills_mount["type"] == "bind"
+        assert skills_mount["read_only"] is True
+        assert skills_mount["bind"]["create_host_path"] is False
+
+    env_example = Path(".env.example").read_text(encoding="utf-8")
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "DLIGHTRAG_SKILLS_DIR=" in env_example
+    assert 'mkdir -p "${HOME}/.dlightrag/skills"' in readme
+
+
+def test_runtime_image_precreates_default_application_paths() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert "/app/dlightrag_storage" in dockerfile
+    assert "/home/app/.dlightrag/agent_workspaces" in dockerfile
+    assert "/app/dlightrag_agent_workspaces" not in dockerfile
+
+
 def test_compose_runtime_services_do_not_bind_mount_source_tree() -> None:
     """Default compose should run the built image, not a host source overlay."""
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
@@ -285,6 +327,12 @@ def test_config_yaml_uses_input_modality_for_rerank() -> None:
     assert re.search(r"(?m)^    input_modality: auto$", config)
     assert not re.search(r"(?m)^    api_key:", config)
     assert "multimodal:" not in config
+
+
+def test_curated_config_owns_auth_policy_without_credentials() -> None:
+    config = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+
+    assert config["access"] == {"auth_mode": "none"}
 
 
 def test_curated_config_selects_exactly_one_parser_sidecar() -> None:

@@ -4,6 +4,12 @@ This document owns maintenance and recovery runbooks. PostgreSQL tuning lives in
 [PostgreSQL](postgresql.md); fields/defaults live in
 [Configuration](configuration.md). These commands are not normal query traffic.
 
+Deployments follow the
+[configuration ownership and container contract](configuration.md#container-and-kubernetes-contract):
+mount one non-secret `config.yaml`, inject credentials from a Secret, and keep
+only topology bindings in Compose or Kubernetes manifests. The rationale is
+recorded in [ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md).
+
 ## Full Development Reset
 
 `scripts/reset_development.py` erases the complete development environment:
@@ -43,7 +49,7 @@ Workspaces in a running deployment. Neither delegates to the other.
 - Mount one shared POSIX `deployment.working_dir` for corpus artifacts. With
   trusted/sandboxed Research, mount one shared RWX
   `answer.agent.workspace_root` on every worker (Compose:
-  `/app/dlightrag_agent_workspaces`).
+  `/home/app/.dlightrag/agent_workspaces`).
 - Graceful shutdown fenced-requeues unfinished work; crash recovery waits for
   lease expiry. Four no-progress reclaims fail as `run_abandoned`.
 - Monitor `dlightrag_blobs`, `dlightrag_blob_chunks`, and

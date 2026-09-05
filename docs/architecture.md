@@ -41,6 +41,12 @@ configuration, lifecycle, health, and service accessors. HTTP and MCP adapters
 invoke transport-neutral Access policy, then Application services. Embedded
 callers invoke the facade directly.
 
+Application Configuration has one non-secret YAML owner. Credentials arrive
+from a secret source; Deployment Bindings adapt service discovery, listeners,
+and mounts without restating product policy. The deployment contract lives in
+[Configuration](configuration.md#configuration-ownership) and
+[ADR 0006](adr/0006-configuration-ownership-and-deployment-bindings.md).
+
 Answer Service pins capabilities and accepts work through Engine Runtime.
 `RunCoordinator` owns durable leases, fencing, events, and execution dispatch.
 Engine Answer uses Agent, RAG, Runtime, and provider-neutral AI. Retrieval and

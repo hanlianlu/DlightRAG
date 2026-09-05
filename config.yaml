@@ -95,5 +95,11 @@ answer:
     # Explicit remote tools only; see docs/configuration.md for endpoint examples.
     outbound_mcp: []
 
+access:
+  # Product security policy belongs here. Compose only carries the explicit
+  # local-loopback container waiver required by its 0.0.0.0 listener binding.
+  # For simple or JWT auth, keep tokens/verification keys in .env or a Secret.
+  auth_mode: none
+
 observability:
   langfuse_host: http://host.docker.internal:3300

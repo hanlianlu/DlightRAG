@@ -27,7 +27,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -1371,9 +1371,34 @@ def _capacity_label(capacity: dict) -> str:
     return f"{capacity['source']} · {context} · {input_label} · {output_label}"
 
 
+def _prepare_compose_bind_sources(
+    *,
+    env_path: Path | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Create operator-owned bind sources before Compose can run as root."""
+    env_path = ENV_PATH if env_path is None else env_path
+    environment = os.environ if environment is None else environment
+    configured = environment.get("DLIGHTRAG_SKILLS_DIR") or _dotenv_value(
+        env_path, "DLIGHTRAG_SKILLS_DIR"
+    )
+    raw_path = configured.strip() if configured else ""
+    if len(raw_path) >= 2 and raw_path[0] == raw_path[-1] and raw_path[0] in {'"', "'"}:
+        raw_path = raw_path[1:-1]
+    if raw_path:
+        path = Path(os.path.expandvars(raw_path)).expanduser()
+        if not path.is_absolute():
+            path = REPO_ROOT / path
+    else:
+        path = Path.home() / ".dlightrag" / "skills"
+    path.mkdir(parents=True, exist_ok=True)
+    return path.absolute()
+
+
 def _bring_up_stack(console, *, profile: str | None = None) -> int:
     console.print("Starting DlightRAG + PostgreSQL… · 正在启动…")
     try:
+        _prepare_compose_bind_sources()
         _default_runner(docker_up_command(profile=profile))
     except Exception as exc:
         console.print(f"[red]docker compose up failed:[/red] {exc}")

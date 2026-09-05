@@ -47,9 +47,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
 RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app \
-    && mkdir -p /app/dlightrag_storage /app/dlightrag_agent_workspaces \
+    && mkdir -p /app/dlightrag_storage /home/app/.dlightrag/agent_workspaces \
     /home/app/.dlightrag/skills /home/app/.dlightrag/owner_skills \
-    && chown app:app /app/dlightrag_storage /app/dlightrag_agent_workspaces \
+    && chown app:app /app/dlightrag_storage /home/app/.dlightrag/agent_workspaces \
     /home/app/.dlightrag/skills /home/app/.dlightrag/owner_skills
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
