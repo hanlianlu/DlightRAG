@@ -109,6 +109,11 @@ class LightRagChatModels:
                 role_configs[role] = RoleLLMConfig(
                     func=adapt_completion_for_lightrag(model),
                     timeout=int(role_settings.timeout),
+                    metadata={
+                        "binding": role_settings.provider,
+                        "model": role_settings.model,
+                        "host": role_settings.base_url,
+                    },
                 )
             return cls(
                 models=models,

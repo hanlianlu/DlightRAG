@@ -84,6 +84,7 @@ async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypat
                     provider="openai",
                     model="keyword-model",
                     api_key=None,
+                    base_url="https://models.example/v1",
                     timeout=30,
                 )
             ),
@@ -105,7 +106,13 @@ async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypat
     ]
     assert bundle.role_configs is not None
     assert tuple(bundle.role_configs) == ("keyword",)
-    assert bundle.role_configs["keyword"].timeout == 30
+    keyword_config = bundle.role_configs["keyword"]
+    assert keyword_config.timeout == 30
+    assert keyword_config.metadata == {
+        "binding": "openai",
+        "model": "keyword-model",
+        "host": "https://models.example/v1",
+    }
 
     await bundle.aclose()
 
