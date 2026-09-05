@@ -739,9 +739,16 @@ class AnswerExecutor:
         from dlightrag.engine.answer.tools.subagents import subagent_tools
 
         access = AccessScheduler()
-        # Resource reads exist independently of local execution and use the
-        # same ReadArgs schema as the runtime's registry-backed read tool.
-        tools: list[AgentTool] = [read_tool(None, access), *self._external_tools]
+
+        async def unused_resource_reader(_request: Any, _runtime: Any) -> Any:
+            raise RuntimeError("acceptance tool definitions are never executed")
+
+        # Research always creates a ResourceRegistry so direct public-URL reads
+        # and later resource cursors have one stable accepted contract.
+        tools: list[AgentTool] = [
+            read_tool(None, access, resource_reader=unused_resource_reader),
+            *self._external_tools,
+        ]
         if self._execution_adapter is not None:
             tools.extend(
                 tool

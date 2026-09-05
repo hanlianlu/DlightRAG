@@ -252,6 +252,9 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
     async def retrieve(_query: str) -> Any:
         raise RuntimeError("tool definitions are never executed")
 
+    async def read_resource(_request: Any, _runtime: Any) -> Any:
+        raise RuntimeError("tool definitions are never executed")
+
     runtime_tools = compose_research_tools(
         evidence=EvidenceLedger(),
         trace={},
@@ -259,6 +262,7 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         search_web=None,
         resource_tools=[],
         register_web_source=None,
+        resource_reader=read_resource,
         environment=LocalExecutionEnvironment(tmp_path),
         artifacts_root=tmp_path / "artifacts",
         publication_limits=executor._settings.publication,
