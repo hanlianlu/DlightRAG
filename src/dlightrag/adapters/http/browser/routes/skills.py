@@ -3,7 +3,8 @@
 
 Names and descriptions only: skill documents themselves stay reachable through
 the answer agent's ``load_skill`` tool inside an authorized run. The catalog
-merges operator-global skills with the current user's own published skills.
+merges packaged built-ins, operator-global skills, and the current user's own
+published skills.
 """
 
 from typing import Any
@@ -22,7 +23,7 @@ router = APIRouter()
 
 
 def require_known_skill(application: Any, owner_id: str, name: str) -> str:
-    """Validate one requested skill against the viewer's merged catalog."""
+    """Validate one requested skill against the viewer's three-tier catalog."""
     catalog = skills_bundle_factory(application.config)(owner_id).catalog()
     if catalog is None or name not in {skill.name for skill in catalog.metadata}:
         raise ValueError(f"Unknown Agent Skill: {name}")

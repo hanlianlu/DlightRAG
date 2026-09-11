@@ -154,6 +154,11 @@ def owner_skills_root(config: DlightragConfig) -> Path:
     )
 
 
+def disabled_builtin_skills(config: DlightragConfig) -> frozenset[str]:
+    """Snapshot the administrator's built-in-only Skill suppression list."""
+    return frozenset(config.answer.agent.disabled_builtin_skills)
+
+
 def answer_executor_settings(config: DlightragConfig) -> AnswerExecutorSettings:
     """Snapshot durable Answer execution and Artifact publication policy."""
     from dlightrag.engine.answer.publication import PublicationLimits

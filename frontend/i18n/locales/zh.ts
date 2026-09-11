@@ -158,7 +158,8 @@ export const templates: Record<
   'chatComposer.send': '发送',
   'chatComposer.skillMenuAria': '可用技能',
   'chatComposer.skillSource.owner': '我的',
-  'chatComposer.skillSource.global': '内置',
+  'chatComposer.skillSource.global': '全局',
+  'chatComposer.skillSource.builtin': '内置',
   'chatComposer.skillQuestionRequired': '技能指令需要具体问题。',
   'chatComposer.removeAttachment': str`移除 ${0}`,
 

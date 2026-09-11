@@ -1677,6 +1677,7 @@ it('Composer completes skill directives with ghost preview, Tab, and shorthand',
     skills: [
       {name: 'tdd', description: 'TDD loop', source: 'global'},
       {name: 'weekly-report', description: 'Weekly reports', source: 'owner'},
+      {name: 'z-creator', description: 'Create skills', source: 'builtin'},
     ],
   }), {status: 200, headers: {'Content-Type': 'application/json'}});
   const composer = document.createElement('dl-chat-composer') as DlChatComposer;
@@ -1693,7 +1694,9 @@ it('Composer completes skill directives with ghost preview, Tab, and shorthand',
   await new Promise((resolve) => setTimeout(resolve, 0));
   await composer.updateComplete;
   expect(mirror.textContent).to.equal('/skill:tdd');
-  expect(composer.querySelectorAll('.skill-menu-item').length).to.equal(2);
+  expect(composer.querySelectorAll('.skill-menu-item').length).to.equal(3);
+  expect([...composer.querySelectorAll('.skill-menu-source')].map((item) => item.textContent))
+    .to.deep.equal(['Global', 'Mine', 'Built-in']);
 
   // Tab commits the canonical form with a trailing space and closes the menu.
   input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}));

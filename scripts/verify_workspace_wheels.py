@@ -69,6 +69,7 @@ _ROOT_CONSOLE_SCRIPTS = (
     "dlightrag-rebuild-vdb",
 )
 _CONCRETE_LIGHTRAG_BACKEND = "lightrag.kg.postgres_impl"
+_BUILTIN_SKILL_CREATOR = "dlightrag/engine/agent/builtin_skills/skill-creator/SKILL.md"
 # import-linter rejects external submodules as contract targets, so the built
 # artifact gate owns this one exact LightRAG implementation prohibition.
 _SPECIFIC_SOURCE_PROHIBITIONS = {
@@ -168,6 +169,7 @@ class WheelFacts:
     has_py_typed: bool
     has_frontend: bool
     has_model_catalog: bool
+    has_builtin_skill_creator: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +185,7 @@ class SdistFacts:
     has_py_typed: bool
     has_frontend: bool
     has_model_catalog: bool
+    has_builtin_skill_creator: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,6 +300,7 @@ def _wheel_facts(
             prefix="dlightrag/adapters/http/browser/static/app",
         )
         has_model_catalog = "dlightrag/engine/ai/model_catalog.json" in wheel.namelist()
+        has_builtin_skill_creator = _BUILTIN_SKILL_CREATOR in wheel.namelist()
         sources = (
             (name, wheel.read(name))
             for name in wheel.namelist()
@@ -320,6 +324,7 @@ def _wheel_facts(
         has_py_typed,
         has_frontend,
         has_model_catalog,
+        has_builtin_skill_creator,
     )
 
 
@@ -532,6 +537,7 @@ def _sdist_facts(
         has_py_typed = False
         frontend_members: set[str] = set()
         has_model_catalog = False
+        has_builtin_skill_creator = False
         sources: list[tuple[str, bytes]] = []
         for member in members:
             parts = Path(member.name).parts
@@ -547,6 +553,8 @@ def _sdist_facts(
                 has_py_typed = True
             if member.name == f"{sdist_root}/src/dlightrag/engine/ai/model_catalog.json":
                 has_model_catalog = True
+            if member.name == f"{sdist_root}/src/{_BUILTIN_SKILL_CREATOR}":
+                has_builtin_skill_creator = True
             if len(parts) > 1:
                 frontend_members.add("/".join(parts[1:]))
             relative_parts = parts[1:]
@@ -580,6 +588,7 @@ def _sdist_facts(
             prefix="src/dlightrag/adapters/http/browser/static/app",
         ),
         has_model_catalog,
+        has_builtin_skill_creator,
     )
 
 
@@ -768,6 +777,8 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             raise ValueError(f"{distribution}: wheel must contain py.typed")
         if distribution == "dlightrag" and not facts.has_model_catalog:
             raise ValueError("dlightrag: wheel must contain engine/ai/model_catalog.json")
+        if distribution == "dlightrag" and not facts.has_builtin_skill_creator:
+            raise ValueError("dlightrag: wheel must contain the built-in skill-creator SKILL.md")
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: wheel must contain generated frontend assets")
 
@@ -807,6 +818,8 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             raise ValueError(f"{distribution}: sdist must contain py.typed")
         if distribution == "dlightrag" and not facts.has_model_catalog:
             raise ValueError("dlightrag: sdist must contain engine/ai/model_catalog.json")
+        if distribution == "dlightrag" and not facts.has_builtin_skill_creator:
+            raise ValueError("dlightrag: sdist must contain the built-in skill-creator SKILL.md")
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: sdist must contain generated frontend assets")
 
@@ -890,6 +903,7 @@ def _smoke_root_interfaces() -> None:
         RetrievalSettings,
     )
     from dlightrag.application.settings import rag_settings
+    from dlightrag.application.skills import skills_bundle_factory
     from dlightrag.engine.agent import AgentSessionRuntime, ContextContribution, ToolRegistry
     from dlightrag.engine.ai.settings import ModelsSettings
     from dlightrag.engine.ai.telemetry import NoopTelemetry
@@ -1019,6 +1033,12 @@ def _smoke_root_interfaces() -> None:
 
     config = DlightragConfig(
         models=ModelsSettings(max_concurrency=2),
+        answer={
+            "agent": {
+                "skills_root": str(Path.cwd() / "empty-global-skills"),
+                "owner_skills_root": str(Path.cwd() / "empty-owner-skills"),
+            }
+        },
         runtime=RuntimeConfig(
             query=LaneRuntimeConfig(
                 worker_concurrency=3,
@@ -1030,6 +1050,17 @@ def _smoke_root_interfaces() -> None:
         ),
     )
     settings = rag_settings(config)
+    skill_catalog = skills_bundle_factory(config)("installed-wheel-owner").catalog()
+    if skill_catalog is None:
+        raise ValueError("installed root package did not expose its built-in Skills catalog")
+    skill_creator = next(
+        (skill for skill in skill_catalog.metadata if skill.name == "skill-creator"),
+        None,
+    )
+    if skill_creator is None or skill_creator.source != "builtin":
+        raise ValueError("installed root package did not discover the built-in skill-creator")
+    if "# Skill Creator" not in skill_catalog.read("skill-creator"):
+        raise ValueError("installed root package did not read the built-in skill-creator")
     if len(DEPLOYMENT_OWNER_ID) != 64:
         raise ValueError("installed Access package did not expose a SHA-256 owner id")
     if AnswerRunClient.__module__ != "dlightrag.adapters.http.client.client":

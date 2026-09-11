@@ -86,8 +86,8 @@ description: Guide the user through creating, improving, or removing personal Dl
 - `files` 必须包含恰好一个 `"SKILL.md"`，其余为技能内相对路径（POSIX，无 `..`）
 - frontmatter 的 `name` 必须等于发布名；`description` 非空
 - 每文件 ≤50,000 字符；每用户 20 个技能 / 20MiB 配额
-- 发布同名 = 更新该技能；发布只写入**当前用户自己的**技能层，永远不碰运营者全局技能
-- 用户自己的技能同名时会覆盖全局技能（只对他自己生效）
+- 发布同名 = 更新该技能；发布只写入**当前用户自己的**技能层，永远不碰运营者全局或 DlightRAG 内置技能
+- 优先级是内置 < 运营者全局 < 用户；同名覆盖只对当前用户生效
 
 发布成功后告知用户：下一次对话用 `/skill:<name> 具体问题` 即可显式触发，或靠 description 自动触发。
 
@@ -96,7 +96,7 @@ description: Guide the user through creating, improving, or removing personal Dl
 - 提醒用户可以试跑一次，把"没触发/步骤不对/格式不对"的反馈带回来
 - 用户反馈触发不准 → 优先改 `description`（触发词/场景描述）
 - 用户反馈流程不对 → 改正文步骤
-- 用户不想要了 → 调 `delete_skill(name)`
+- 用户不想要了 → 调 `delete_skill(name)`；删除只移除用户层，下一次对话会重新显示同名的全局或内置技能（如有）
 
 ## 注意事项
 

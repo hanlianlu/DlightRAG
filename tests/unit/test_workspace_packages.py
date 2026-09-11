@@ -133,6 +133,7 @@ def _write_workspace_artifacts(
     root_sdist_source: str | None = None,
     root_include_legal: bool = True,
     root_include_model_catalog: bool = True,
+    root_include_builtin_skill_creator: bool = True,
     root_include_frontend: bool = True,
     root_extras: tuple[str, ...] = ("milvus",),
     memory_source: str = "",
@@ -142,6 +143,10 @@ def _write_workspace_artifacts(
     root_sources = dict(root_additional_sources or {})
     if root_include_model_catalog:
         root_sources["engine/ai/model_catalog.json"] = '{"models":[]}'
+    if root_include_builtin_skill_creator:
+        root_sources["engine/agent/builtin_skills/skill-creator/SKILL.md"] = (
+            "---\nname: skill-creator\ndescription: Create skills.\n---\n# Skill Creator"
+        )
     _write_wheel(
         tmp_path,
         distribution="dlightrag",
@@ -394,6 +399,15 @@ def test_workspace_wheel_verifier_requires_root_model_catalog(tmp_path: Path) ->
 
     assert completed.returncode == 1
     assert "model_catalog.json" in completed.stderr
+
+
+def test_workspace_wheel_verifier_requires_builtin_skill_creator(tmp_path: Path) -> None:
+    _write_workspace_artifacts(tmp_path, root_include_builtin_skill_creator=False)
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 1
+    assert "built-in skill-creator SKILL.md" in completed.stderr
 
 
 def test_workspace_wheel_verifier_rejects_unexpected_root_extras(tmp_path: Path) -> None:

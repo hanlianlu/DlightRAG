@@ -5,11 +5,11 @@ Only Skill metadata is projected initially. The model must call ``load_skill``
 to read SKILL.md or a relative reference. Skill text is untrusted context: this
 loader never imports or executes Skill code.
 
-Skills are discovered from two tiers — operator-provisioned global skills and
-per-owner skills — with the owner tier taking precedence. Publication is the
-only write channel: ``publish_skill`` writes into the caller's owner directory
-through validation, quotas, and an atomic swap; the answer agent's filesystem
-tools never reach these directories.
+Skills merge in three tiers: packaged built-ins, operator-provisioned global
+skills, then per-owner skills. Publication is the only write channel:
+``publish_skill`` writes into the caller's owner directory through validation,
+quotas, and an atomic swap; the answer agent's filesystem tools never reach
+these directories.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ import shutil
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
+from importlib.resources import files
+from importlib.resources.abc import Traversable
 from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol, cast
 
@@ -35,12 +37,16 @@ _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _SKILL_NAME_MAX_CHARS = 64
 
 
+type SkillSource = Literal["builtin", "global", "owner"]
+type SkillRoot = Path | Traversable
+
+
 @dataclass(frozen=True, slots=True)
 class SkillMetadata:
     name: str
     description: str
-    root: Path
-    source: Literal["global", "owner"]
+    root: SkillRoot
+    source: SkillSource
 
 
 class LoadSkillInput(BaseModel):
@@ -90,7 +96,7 @@ def owner_skill_root(base: Path, owner_id: str) -> Path:
 
 
 class SkillCatalog:
-    """Merged global/owner catalog; owner names take precedence."""
+    """Merged built-in/global/owner catalog in increasing precedence."""
 
     def __init__(self, skills: tuple[SkillMetadata, ...] = ()) -> None:
         self._skills = {skill.name: skill for skill in skills}
@@ -99,9 +105,16 @@ class SkillCatalog:
     def discover(
         cls,
         *,
+        builtin_root: Traversable | None = None,
         global_root: Path | None = None,
         owner_root: Path | None = None,
+        disabled_builtin_skills: frozenset[str] = frozenset(),
     ) -> SkillCatalog:
+        builtin_skills = tuple(
+            skill
+            for skill in _discover_root(builtin_root, source="builtin")
+            if skill.name not in disabled_builtin_skills
+        )
         global_skills = _discover_root(
             global_root.expanduser() if global_root is not None else None,
             source="global",
@@ -110,7 +123,8 @@ class SkillCatalog:
             owner_root.expanduser() if owner_root is not None else None,
             source="owner",
         )
-        merged = {skill.name: skill for skill in global_skills}
+        merged = {skill.name: skill for skill in builtin_skills}
+        merged.update((skill.name, skill) for skill in global_skills)
         merged.update((skill.name, skill) for skill in owner_skills)
         return cls(tuple(merged[name] for name in sorted(merged)))
 
@@ -138,13 +152,23 @@ class SkillCatalog:
         skill = self._skills.get(name)
         if skill is None:
             raise KeyError(f"unknown Agent Skill: {name}")
-        root = skill.root.resolve()
-        candidate = (root / relative_path).resolve()
-        if candidate != root and not candidate.is_relative_to(root):
-            raise ValueError("Skill path escapes its Skill directory")
-        if not candidate.is_file() or candidate.is_symlink():
-            raise FileNotFoundError(relative_path)
-        text = candidate.read_text(encoding="utf-8")
+        parts = _skill_relative_parts(relative_path)
+        if isinstance(skill.root, Path):
+            root = skill.root.resolve()
+            unresolved = root.joinpath(*parts)
+            candidate = unresolved.resolve()
+            if candidate != root and not candidate.is_relative_to(root):
+                raise ValueError("Skill path escapes its Skill directory")
+            if not candidate.is_file() or unresolved.is_symlink():
+                raise FileNotFoundError(relative_path)
+            text = candidate.read_text(encoding="utf-8")
+        else:
+            # Keep packaged resources as Traversables. Storing an ``as_file``
+            # path would outlive the extraction context that owns it.
+            candidate = skill.root.joinpath(*parts)
+            if not candidate.is_file():
+                raise FileNotFoundError(relative_path)
+            text = candidate.read_text(encoding="utf-8")
         if len(text) > _MAX_SKILL_FILE_CHARS:
             raise ValueError(f"Skill document exceeds {_MAX_SKILL_FILE_CHARS} characters")
         return text
@@ -153,20 +177,24 @@ class SkillCatalog:
 class SkillsBundle:
     """One run's complete skills slice behind a narrow interface.
 
-    Hides dual-root discovery, owner precedence, context contribution
-    ordering, and tool membership (parents publish, children only load).
-    Callers hold one object instead of three roots plus a directive.
+    Hides three-tier discovery, precedence, context contribution ordering,
+    and tool membership (parents publish, children only load). Callers hold
+    one object instead of resource/filesystem roots plus a directive.
     """
 
     def __init__(
         self,
         *,
+        builtin_root: Traversable | None = None,
         global_root: Path | None = None,
         owner_root: Path | None = None,
+        disabled_builtin_skills: frozenset[str] = frozenset(),
         requested_skill: str | None = None,
     ) -> None:
+        self._builtin_root = builtin_root
         self._global_root = global_root.expanduser() if global_root is not None else None
         self._owner_root = owner_root.expanduser() if owner_root is not None else None
+        self._disabled_builtin_skills = disabled_builtin_skills
         self._requested_skill = requested_skill
 
     @property
@@ -174,11 +202,13 @@ class SkillsBundle:
         return self._owner_root
 
     def catalog(self) -> SkillCatalog | None:
-        if self._global_root is None and self._owner_root is None:
+        if self._builtin_root is None and self._global_root is None and self._owner_root is None:
             return None
         return SkillCatalog.discover(
+            builtin_root=self._builtin_root,
             global_root=self._global_root,
             owner_root=self._owner_root,
+            disabled_builtin_skills=self._disabled_builtin_skills,
         )
 
     def context_contributions(self) -> tuple[ContextContribution, ...]:
@@ -280,7 +310,7 @@ def publish_skill_tool(owner_root: Path | None) -> AgentTool:
             "Publish one durable Agent Skill for the current user. Validates the skill "
             "(frontmatter name/description, kebab-case name, per-file 50K char cap, "
             "20 skills / 20MiB owner quota) and installs it atomically. Publishing an "
-            "existing name updates it. Never touches operator-global skills."
+            "existing name updates it. Never touches global or built-in skills."
         ),
         input_model=PublishSkillInput,
         execute=execute,
@@ -315,7 +345,10 @@ def delete_skill_tool(owner_root: Path | None) -> AgentTool:
         input_model=DeleteSkillInput,
         execute=execute,
         replay_policy="never",
-        guidance="delete_skill removes only the current user's own skills, never global ones.",
+        guidance=(
+            "delete_skill removes only the current user's own skills, never global or built-in "
+            "ones. A same-named lower-tier skill becomes visible on the next answer run."
+        ),
     )
 
 
@@ -458,22 +491,33 @@ def _delete_owner_skill(owner_root: Path, name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def builtin_skills_root() -> Traversable:
+    """Return packaged built-ins without extracting them into a writable runtime root."""
+    return files("dlightrag.engine.agent.builtin_skills")
+
+
+def _skill_relative_parts(relative_path: str) -> tuple[str, ...]:
+    if not relative_path or relative_path != relative_path.strip() or "\\" in relative_path:
+        raise ValueError("Skill path escapes its Skill directory")
+    path = PurePosixPath(relative_path)
+    if path.is_absolute() or any(part == ".." for part in path.parts):
+        raise ValueError("Skill path escapes its Skill directory")
+    return path.parts
+
+
 def _discover_root(
-    root: Path | None,
+    root: SkillRoot | None,
     *,
-    source: Literal["global", "owner"],
+    source: SkillSource,
 ) -> tuple[SkillMetadata, ...]:
     if root is None or not root.is_dir():
         return ()
     found: list[SkillMetadata] = []
     for child in sorted(root.iterdir(), key=lambda item: item.name):
-        skill_file = child / "SKILL.md"
-        if (
-            not child.is_dir()
-            or child.is_symlink()
-            or not skill_file.is_file()
-            or skill_file.is_symlink()
-        ):
+        skill_file = child.joinpath("SKILL.md")
+        if not child.is_dir() or not skill_file.is_file():
+            continue
+        if isinstance(child, Path) and (child.is_symlink() or (child / "SKILL.md").is_symlink()):
             continue
         name, description = _frontmatter(skill_file, fallback_name=child.name)
         if name:
@@ -488,8 +532,9 @@ def _discover_root(
     return tuple(found)
 
 
-def _frontmatter(path: Path, *, fallback_name: str) -> tuple[str, str]:
-    text = path.read_text(encoding="utf-8")[:8192]
+def _frontmatter(path: SkillRoot, *, fallback_name: str) -> tuple[str, str]:
+    with path.open("r", encoding="utf-8") as stream:
+        text = stream.read(8192)
     return _frontmatter_text(text, fallback_name=fallback_name)
 
 
@@ -499,8 +544,10 @@ __all__ = [
     "PublishSkillInput",
     "SkillCatalog",
     "SkillMetadata",
+    "SkillSource",
     "SkillsBundle",
     "SkillsBundleFactory",
+    "builtin_skills_root",
     "delete_skill_tool",
     "load_skill_tool",
     "owner_skill_root",

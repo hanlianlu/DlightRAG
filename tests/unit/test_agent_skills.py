@@ -69,6 +69,58 @@ def test_discovery_merges_distinct_names_across_tiers(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_three_tier_precedence_and_owner_delete_reveals_lower_tiers(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    global_root = tmp_path / "global"
+    owner_root = tmp_path / "owner"
+    _skill(builtin_root, "review", name="review", description="builtin", body="BUILTIN")
+    _skill(global_root, "review", name="review", description="global", body="GLOBAL")
+    await publish_skill_tool(owner_root).execute(
+        PublishSkillInput(
+            name="review",
+            files=_skill_files(name="review", description="owner", body="OWNER"),
+        ),
+        tool_runtime(),
+    )
+
+    catalog = SkillCatalog.discover(
+        builtin_root=builtin_root,
+        global_root=global_root,
+        owner_root=owner_root,
+    )
+
+    assert [(skill.name, skill.source) for skill in catalog.metadata] == [("review", "owner")]
+    assert catalog.read("review").endswith("OWNER")
+
+    removed = await delete_skill_tool(owner_root).execute(
+        DeleteSkillInput(name="review"), tool_runtime()
+    )
+    catalog = SkillCatalog.discover(
+        builtin_root=builtin_root,
+        global_root=global_root,
+        owner_root=owner_root,
+    )
+
+    assert not removed.is_error
+    assert catalog.metadata[0].source == "global"
+    assert catalog.read("review").endswith("GLOBAL")
+    assert (global_root / "review" / "SKILL.md").read_text(encoding="utf-8").endswith("GLOBAL")
+    assert (builtin_root / "review" / "SKILL.md").read_text(encoding="utf-8").endswith("BUILTIN")
+
+    (global_root / "review" / "SKILL.md").unlink()
+    (global_root / "review").rmdir()
+    catalog = SkillCatalog.discover(
+        builtin_root=builtin_root,
+        global_root=global_root,
+        owner_root=owner_root,
+    )
+    assert catalog.metadata[0].source == "builtin"
+    assert catalog.read("review").endswith("BUILTIN")
+
+
+@pytest.mark.asyncio
 async def test_load_skill_reads_body_on_demand_but_never_executes_it(tmp_path: Path) -> None:
     owner_root = tmp_path / "owner"
     _skill(

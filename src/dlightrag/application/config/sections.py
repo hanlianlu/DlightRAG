@@ -358,6 +358,13 @@ class AgentExecutionConfig(BaseModel):
             "operator-provisioned and read-only."
         ),
     )
+    disabled_builtin_skills: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Names of packaged built-in Agent Skills to hide. Global and owner skills "
+            "with the same names remain discoverable."
+        ),
+    )
     fd_path: str = Field(
         default="fd",
         description="Absolute fd executable path or PATH command name (minimum 10.5.0).",

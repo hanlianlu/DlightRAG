@@ -659,6 +659,7 @@ answer:
     workspace_root: null
     skills_root: null              # absolute path; null → ~/.dlightrag/skills
     owner_skills_root: null        # absolute path; null → ~/.dlightrag/owner_skills
+    disabled_builtin_skills: []    # packaged Skill names only
     outbound_mcp: []
     publication:
       max_artifacts: 20
@@ -703,7 +704,17 @@ answer:
 ```
 
 There is no endpoint discovery, marketplace, OAuth service, or plugin runtime.
-Research discovers Skill metadata from two tiers and loads content on demand.
+Research discovers Skill metadata from three tiers and loads content on demand:
+packaged built-ins, operator-global skills, then owner skills. A same-named
+higher tier shadows lower tiers. The standard
+[`skill-creator`](../src/dlightrag/engine/agent/builtin_skills/skill-creator/SKILL.md)
+is available immediately from the installed package; DlightRAG neither copies
+nor extracts it into a runtime root.
+
+Built-ins are read-only application resources. Administrators can hide named
+built-ins with `answer.agent.disabled_builtin_skills`; this filter does not hide
+a same-named global or owner override.
+
 The global root is `answer.agent.skills_root`, defaulting to
 `~/.dlightrag/skills`; it is operator-provisioned and read-only for the answer
 agent. The bundled Compose stack keeps `skills_root: null`, mounts the
@@ -715,10 +726,8 @@ wizard prepares the directory; manual operators must create it before
 The per-owner root is `answer.agent.owner_skills_root`, defaulting to
 `~/.dlightrag/owner_skills`; users write their own skills only through the
 validated `publish_skill`/`delete_skill` tools, bounded by a 20-skill / 20MiB
-owner quota. Owner names shadow global names for that owner. Each worker must
-see the same shared paths. A reference creator workflow ships at
-`examples/skills/skill-creator/SKILL.md`; copy it into the global skills root
-to guide conversational skill creation for all users.
+owner quota. Deleting an owner override reveals a same-named global or built-in
+Skill on the next run. Each worker must see the same shared filesystem paths.
 
 ## Public Web Sources
 

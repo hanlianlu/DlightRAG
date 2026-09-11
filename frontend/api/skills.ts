@@ -1,12 +1,12 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-/** Web API client for the discovered global Agent Skill catalog. */
+/** Web API client for the merged Agent Skill catalog. */
 
 import * as v from 'valibot';
 
 const skillSummary = v.object({
   name: v.string(),
   description: v.string(),
-  source: v.picklist(['global', 'owner']),
+  source: v.picklist(['builtin', 'global', 'owner']),
 });
 export type SkillSummary = v.InferOutput<typeof skillSummary>;
 

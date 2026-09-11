@@ -38,6 +38,15 @@ def _fake_application(**attrs: object) -> Application:
 
 CONVERSATION_ID = "11111111-1111-4111-8111-111111111111"
 SUBMISSION_ID = "22222222-2222-4222-8222-222222222222"
+BUILTIN_SKILL_CREATOR = {
+    "name": "skill-creator",
+    "description": (
+        "Guide the user through creating, improving, or removing personal DlightRAG skills. "
+        "Use when the user wants to make, edit, or delete a skill "
+        "(interview → draft → publish_skill)."
+    ),
+    "source": "builtin",
+}
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -214,6 +223,7 @@ async def test_skills_endpoint_merges_owner_skills(
         "skills": [
             {"name": "mine", "description": "My skill.", "source": "owner"},
             {"name": "review", "description": "Global review.", "source": "global"},
+            BUILTIN_SKILL_CREATOR,
         ]
     }
 
@@ -234,11 +244,14 @@ async def test_skills_endpoint_lists_discovered_global_skills(
 
     assert response.status_code == 200
     assert response.json() == {
-        "skills": [{"name": "review", "description": "Review plans.", "source": "global"}]
+        "skills": [
+            {"name": "review", "description": "Review plans.", "source": "global"},
+            BUILTIN_SKILL_CREATOR,
+        ]
     }
 
 
-async def test_skills_endpoint_returns_an_empty_catalog(
+async def test_skills_endpoint_lists_builtin_for_empty_filesystem_roots(
     client, test_config: DlightragConfig, tmp_path: Path
 ) -> None:
     mutate_config(test_config, "answer.agent.skills_root", str(tmp_path / "global"))
@@ -247,7 +260,7 @@ async def test_skills_endpoint_returns_an_empty_catalog(
     response = await client.get("/web/api/skills")
 
     assert response.status_code == 200
-    assert response.json() == {"skills": []}
+    assert response.json() == {"skills": [BUILTIN_SKILL_CREATOR]}
 
 
 async def test_answer_rejects_unknown_requested_skill(

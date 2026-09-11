@@ -228,7 +228,9 @@ export class DlChatComposer extends LightElement {
                 <span class="skill-menu-desc">${skill.description}</span>
                 <span class="skill-menu-source ${skill.source}">${skill.source === 'owner'
                   ? msg('Mine', {id: 'chatComposer.skillSource.owner'})
-                  : msg('Built-in', {id: 'chatComposer.skillSource.global'})}</span>
+                  : skill.source === 'global'
+                    ? msg('Global', {id: 'chatComposer.skillSource.global'})
+                    : msg('Built-in', {id: 'chatComposer.skillSource.builtin'})}</span>
               </button>
             `)}
           </div>

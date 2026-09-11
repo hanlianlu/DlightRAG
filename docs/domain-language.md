@@ -324,7 +324,7 @@ The adapter behind exactly three modes: `disabled`, host-trusted `trust`, and `s
 _Avoid_: implicit downgrade, permission catalog, approval prompt, shell-command filtering as a security boundary
 
 **Agent Skill**:
-A progressively disclosed `SKILL.md` package discovered from the operator-global root or one owner's published skills; owner names shadow global for that owner. Metadata is projected first; contained references are read only through `load_skill` and Skill code is never executed. Users write their own skills only through the validated `publish_skill` tool.
+A progressively disclosed `SKILL.md` package discovered from packaged built-ins, the operator-global root, or one owner's published skills. Precedence is built-in, then global, then owner. Metadata is projected first; contained references are read only through `load_skill` and Skill code is never executed. Users write their own skills only through the validated `publish_skill` tool.
 _Avoid_: owner Profile Memory, marketplace plugin, arbitrary extension
 
 **Outbound MCP Tool**:

@@ -148,6 +148,14 @@ def test_owner_skills_root_rejects_a_relative_path() -> None:
         AgentExecutionConfig.model_validate({"owner_skills_root": "owner_skills"})
 
 
+def test_disabled_builtin_skills_defaults_empty_and_accepts_names() -> None:
+    assert AgentExecutionConfig().disabled_builtin_skills == ()
+    config = AgentExecutionConfig.model_validate(
+        {"disabled_builtin_skills": ["skill-creator", "operator-disabled"]}
+    )
+    assert config.disabled_builtin_skills == ("skill-creator", "operator-disabled")
+
+
 def test_search_tool_configuration_defaults_and_absolute_paths() -> None:
     default = AgentExecutionConfig()
     assert default.fd_path == "fd"
