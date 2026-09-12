@@ -642,6 +642,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_child_sessions (
     parent_call_id     TEXT        NOT NULL,
     parent_intent_id   UUID,
     status             TEXT        NOT NULL,
+    cancel_requested_at TIMESTAMPTZ,
     summary            TEXT,
     objective          TEXT,
     context_mode       TEXT,
@@ -918,6 +919,14 @@ RUN_MIGRATIONS = (
             "ALTER TABLE dlightrag_runs "
             "DROP CONSTRAINT IF EXISTS dlightrag_runs_permit_check, "
             "DROP COLUMN IF EXISTS active_permit",
+        ),
+    ),
+    Migration(
+        "interactive_child_async_lifecycle",
+        "Persist Child cancellation intent before closing its Agent Operation",
+        (
+            "ALTER TABLE dlightrag_answer_child_sessions "
+            "ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ",
         ),
     ),
 )
@@ -1289,6 +1298,7 @@ RUN_SCHEMA_TABLES = (
             "parent_call_id",
             "parent_intent_id",
             "status",
+            "cancel_requested_at",
             "summary",
             "objective",
             "context_mode",
@@ -1652,10 +1662,27 @@ SET parent_intent_id = COALESCE(
         dlightrag_answer_child_sessions.parent_intent_id,
         EXCLUDED.parent_intent_id
     ),
-    plan_json = COALESCE(EXCLUDED.plan_json, dlightrag_answer_child_sessions.plan_json),
-    budget_json = COALESCE(EXCLUDED.budget_json, dlightrag_answer_child_sessions.budget_json),
-    host_state_json = COALESCE(
-        EXCLUDED.host_state_json, dlightrag_answer_child_sessions.host_state_json
+    objective = COALESCE(dlightrag_answer_child_sessions.objective, EXCLUDED.objective),
+    context_mode = COALESCE(
+        dlightrag_answer_child_sessions.context_mode, EXCLUDED.context_mode
+    ),
+    model_role = COALESCE(dlightrag_answer_child_sessions.model_role, EXCLUDED.model_role),
+    tools_json = COALESCE(dlightrag_answer_child_sessions.tools_json, EXCLUDED.tools_json),
+    depth = CASE
+        WHEN dlightrag_answer_child_sessions.context_snapshot_json = '{}'::jsonb
+             AND EXCLUDED.context_snapshot_json <> '{}'::jsonb THEN EXCLUDED.depth
+        ELSE dlightrag_answer_child_sessions.depth
+    END,
+    context_snapshot_json = CASE
+        WHEN dlightrag_answer_child_sessions.context_snapshot_json = '{}'::jsonb
+             AND EXCLUDED.context_snapshot_json <> '{}'::jsonb
+            THEN EXCLUDED.context_snapshot_json
+        ELSE dlightrag_answer_child_sessions.context_snapshot_json
+    END,
+    plan_json = COALESCE(dlightrag_answer_child_sessions.plan_json, EXCLUDED.plan_json),
+    budget_json = COALESCE(dlightrag_answer_child_sessions.budget_json, EXCLUDED.budget_json),
+    host_state_json = (
+        dlightrag_answer_child_sessions.host_state_json || EXCLUDED.host_state_json
     ),
     updated_at = NOW()
 """
@@ -1672,6 +1699,24 @@ WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
 RETURNING fencing_epoch
 """
 
+_REQUEST_CHILD_CANCELLATION = """
+UPDATE dlightrag_answer_child_sessions
+SET cancel_requested_at = COALESCE(cancel_requested_at, NOW()),
+    updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND status = 'running'
+RETURNING 1
+"""
+
+_RELEASE_CHILD_SESSION_LEASES = """
+UPDATE dlightrag_answer_child_sessions
+SET lease_owner = NULL,
+    lease_expires_at = NULL,
+    updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND lease_owner = $3
+  AND status = 'running'
+"""
+
 _RENEW_CHILD_SESSION_LEASE = """
 UPDATE dlightrag_answer_child_sessions
 SET lease_expires_at = NOW() + ($6 * INTERVAL '1 second'),
@@ -1683,7 +1728,7 @@ RETURNING 1
 """
 
 _SELECT_CHILD_SESSION = """
-SELECT child_session_id, status, summary, parent_intent_id,
+SELECT child_session_id, status, cancel_requested_at, summary, parent_intent_id,
        objective, context_mode, model_role, tools_json, usage_json,
        depth, context_snapshot_json, plan_json, budget_json, host_state_json,
        lease_owner, lease_expires_at, fencing_epoch
@@ -1693,7 +1738,7 @@ WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
 
 _SELECT_CHILD_SESSIONS = """
 SELECT child_session_id, parent_session_id, parent_call_id, parent_intent_id,
-       status, summary, objective, context_mode, model_role, tools_json, usage_json,
+       status, cancel_requested_at, summary, objective, context_mode, model_role, tools_json, usage_json,
        depth, context_snapshot_json, plan_json, budget_json, host_state_json,
        lease_owner, lease_expires_at, fencing_epoch, created_at, updated_at
 FROM dlightrag_answer_child_sessions
@@ -1703,7 +1748,7 @@ ORDER BY created_at, child_session_id
 
 _CHILD_ROSTER_COLUMNS = """
 child_session_id, parent_session_id, parent_call_id, parent_intent_id,
-status, summary, objective, context_mode, model_role, tools_json, usage_json,
+status, cancel_requested_at, summary, objective, context_mode, model_role, tools_json, usage_json,
 depth, context_snapshot_json, plan_json, budget_json, host_state_json,
 lease_owner, lease_expires_at, fencing_epoch, created_at, updated_at
 """
@@ -1809,8 +1854,11 @@ SET status = $4,
         $7::jsonb,
         true
     ),
+    lease_owner = NULL,
+    lease_expires_at = NULL,
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND status = 'running'
 """
 
 _CLAIM_RUN = f"""
@@ -1910,6 +1958,34 @@ WITH bumped AS (
       AND r.status IN ('queued', 'running')
       AND (r.lease_expires_at IS NULL OR r.lease_expires_at < NOW())
     RETURNING r.owner_id, r.run_id, r.next_event_sequence - 1 AS event_sequence
+), cancelled_children AS (
+    UPDATE dlightrag_answer_child_sessions AS child
+    SET status = 'cancelled',
+        cancel_requested_at = COALESCE(child.cancel_requested_at, NOW()),
+        summary = 'Child session cancelled because its parent Run terminated.',
+        usage_json = NULL,
+        host_state_json = jsonb_set(
+            child.host_state_json,
+            '{terminal_outcome}',
+            jsonb_build_object(
+                'status', 'cancelled',
+                'summary', 'Child session cancelled because its parent Run terminated.',
+                'handles', jsonb_build_array(),
+                'usage', jsonb_build_object(),
+                'child_session_id', child.child_session_id::text,
+                'operation_id', '',
+                'evidence_state', NULL
+            ),
+            true
+        ),
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        updated_at = NOW()
+    WHERE (child.owner_id, child.run_id) IN (
+        SELECT owner_id, run_id FROM bumped
+    )
+      AND child.status = 'running'
+    RETURNING child.child_session_id
 ), inserted AS (
     INSERT INTO dlightrag_run_events (
         owner_id, run_id, event_sequence, event_type, payload
@@ -2303,6 +2379,7 @@ def _child_roster_row(row: Any) -> dict[str, Any]:
             str(row["parent_intent_id"]) if row["parent_intent_id"] is not None else None
         ),
         "status": str(row["status"]),
+        "cancel_requested_at": row["cancel_requested_at"],
         "summary": row["summary"],
         "objective": row["objective"],
         "context": row["context_mode"],
@@ -3000,6 +3077,70 @@ class PGRunStore(PostgresOperationRunner):
 
         return await self._run_write(_operation)
 
+    async def request_child_cancellation(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+    ) -> bool:
+        """Persist cancellation before the active Child writer closes its Operation."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        if run_uuid is None or child_uuid is None:
+            raise ValueError("child session ids must be canonical UUIDs")
+
+        async def _operation(conn: Any) -> bool:
+            async with conn.transaction():
+                held = await conn.fetchval(
+                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
+                )
+                if held is None:
+                    return False
+                requested = await conn.fetchval(
+                    _REQUEST_CHILD_CANCELLATION,
+                    owner,
+                    run_uuid,
+                    child_uuid,
+                )
+                return requested is not None
+
+        return await self._run_write(_operation)
+
+    async def release_child_sessions(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+    ) -> bool:
+        """Release this worker's Child leases without changing accepted lifecycle."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            return False
+
+        async def _operation(conn: Any) -> bool:
+            async with conn.transaction():
+                held = await conn.fetchval(
+                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
+                )
+                if held is None:
+                    return False
+                await conn.execute(
+                    _RELEASE_CHILD_SESSION_LEASES,
+                    owner,
+                    run_uuid,
+                    worker_id,
+                )
+                return True
+
+        return await self._run_write(_operation)
+
     async def heartbeat_child_session(
         self,
         *,
@@ -3053,6 +3194,7 @@ class PGRunStore(PostgresOperationRunner):
             return {
                 "child_session_id": str(row["child_session_id"]),
                 "status": str(row["status"]),
+                "cancel_requested_at": row["cancel_requested_at"],
                 "summary": row["summary"],
                 "parent_intent_id": (
                     str(row["parent_intent_id"]) if row["parent_intent_id"] is not None else None

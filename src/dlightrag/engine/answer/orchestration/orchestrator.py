@@ -205,7 +205,11 @@ class AnswerOrchestrator:
         owner_id: str,
         persist: Any = None,
         load_child: Any = None,
+        list_children: Any = None,
         finish_child: Any = None,
+        request_cancel: Any = None,
+        release_children: Any = None,
+        prepare_dispatch: Any = None,
         run_child: Any = None,
         check_cancelled: Any = None,
     ) -> None:
@@ -216,7 +220,11 @@ class AnswerOrchestrator:
         self._subagent_host.owner_id = owner_id
         self._subagent_host.persist = persist
         self._subagent_host.load_child = load_child
+        self._subagent_host.list_children = list_children
         self._subagent_host.finish_child = finish_child
+        self._subagent_host.request_cancel = request_cancel
+        self._subagent_host.release_children = release_children
+        self._subagent_host.prepare_dispatch = prepare_dispatch
         self._subagent_host.run_child = run_child
         self._subagent_host.check_cancelled = check_cancelled
 
@@ -309,6 +317,11 @@ class AnswerOrchestrator:
     def resolved_mode(self) -> ResolvedMode:
         """The durable Fast or Research path this orchestrator was built for."""
         return self._resolved_mode
+
+    @property
+    def subagent_host(self) -> SubagentHost | None:
+        """Return the parent-owned child lifecycle bound to this orchestrator."""
+        return self._subagent_host
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -709,14 +722,32 @@ class AnswerOrchestrator:
             memory_host=memory_host,
             skill_tools=skill_tools,
             child=child,
+            tool_names=tool_names,
         )
         try:
             registry = ToolRegistry(composed)
         except DuplicateToolError as exc:
             raise InvalidToolConfigurationError(exc.names) from exc
+        selected_names = tool_names
+        if child and selected_names is None:
+            # Independent deliberation is read-only by default. A parent can
+            # explicitly request a narrower side-effecting subset, but resolve
+            # still enforces the host-composed permission ceiling.
+            read_only = {
+                "search_knowledge_base",
+                "search_web",
+                "read",
+                "inspect",
+                "grep",
+                "find",
+                "ls",
+                "recall_memory",
+                "load_skill",
+            }
+            selected_names = tuple(tool.name for tool in composed if tool.name in read_only)
         return list(
             registry.resolve(
-                tool_names,
+                selected_names,
                 exclude={
                     "spawn_agent",
                     "subagent_status",

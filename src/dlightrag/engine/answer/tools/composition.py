@@ -133,9 +133,23 @@ def compose_research_tools(
         tools.extend(skill_tools)
     try:
         registry = ToolRegistry(tools)
+        selected_names = tool_names
+        if child and selected_names is None:
+            read_only = {
+                "search_knowledge_base",
+                "search_web",
+                "read",
+                "inspect",
+                "grep",
+                "find",
+                "ls",
+                "recall_memory",
+                "load_skill",
+            }
+            selected_names = tuple(tool.name for tool in tools if tool.name in read_only)
         return list(
             registry.resolve(
-                tool_names,
+                selected_names,
                 exclude={
                     "spawn_agent",
                     "subagent_status",

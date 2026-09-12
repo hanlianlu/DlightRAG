@@ -33,15 +33,17 @@ from dlightrag.application import Application
 from dlightrag.application.config import DlightragConfig, LaneRuntimeConfig, RuntimeConfig
 from dlightrag.application.settings import answer_executor_settings, answer_resource_settings
 from dlightrag.engine.agent.session.effects import canonical_json
-from dlightrag.engine.agent.session.entries import UserMessageEntry
+from dlightrag.engine.agent.session.entries import ToolResultMessageEntry, UserMessageEntry
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.agent.session.fold import WorkingContextProjection as _RunWorking
 from dlightrag.engine.agent.session.ids import EntryId, LaneId, SessionId, StageIntentId
+from dlightrag.engine.agent.session.operation import OperationCancelled
 from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.agent.session.registers import (
     HostTurnReservation,
     LaneHead,
     LaneState,
+    OperationStateRegister,
     SetRegister,
 )
 from dlightrag.engine.agent.session.transactions import (
@@ -52,7 +54,7 @@ from dlightrag.engine.agent.session.transactions import (
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
-from dlightrag.engine.ai.messages import AssistantTurn
+from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.citations.streaming import AnswerStream
 from dlightrag.engine.answer.execution import (
@@ -67,6 +69,7 @@ from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.publication import ArtifactIssue, PublicationPlan
 from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
+from dlightrag.engine.answer.tools.subagents import SubagentHost
 from dlightrag.engine.rag.retrieval import RetrievalResult
 from dlightrag.engine.runtime.coordinator import (
     RunCoordinator,
@@ -193,12 +196,215 @@ async def _settle(predicate: Any, *, timeout: float = 10.0) -> None:
     raise AssertionError("condition never became true")
 
 
+async def _wait_for_status(
+    store: PGRunStore,
+    *,
+    owner_id: str,
+    run_id: str,
+    status: str,
+    timeout: float = 10.0,
+) -> Any:
+    async def _check() -> bool:
+        run = await store.get_run(owner_id=owner_id, run_id=run_id)
+        return run is not None and run.status == status
+
+    await _settle(_check, timeout=timeout)
+    run = await store.get_run(owner_id=owner_id, run_id=run_id)
+    assert run is not None
+    return run
+
+
 def _status_is(store: PGRunStore, run_id: str, status: str) -> Any:
     async def _check() -> bool:
         run = await store.get_run(owner_id=_OWNER, run_id=run_id)
         return run is not None and run.status == status
 
     return _check
+
+
+class _AsyncChildProvider:
+    """Controlled provider for the real parent/Child Agent composition."""
+
+    def __init__(
+        self,
+        *,
+        resumed_parent: bool = False,
+        fail_children: bool = False,
+        child_evidence: bool = False,
+    ) -> None:
+        self.resumed_parent = resumed_parent
+        self.fail_children = fail_children
+        self.child_evidence = child_evidence
+        self.release_children = asyncio.Event()
+        self.children_started = asyncio.Event()
+        self.parent_progressed = asyncio.Event()
+        self.parent_notification_started = asyncio.Event()
+        self.parent_calls = 0
+        self.child_calls = 0
+
+    async def __call__(self, **kwargs: Any) -> AssistantTurn:
+        tools = kwargs.get("tools") or ()
+        names = {str(tool.name) for tool in tools}
+        if "spawn_agent" not in names:
+            self.child_calls += 1
+            messages = kwargs.get("messages") or ()
+            has_tool_result = any(
+                isinstance(message, dict) and message.get("role") == "tool" for message in messages
+            )
+            if self.child_calls >= 2:
+                self.children_started.set()
+            if self.fail_children:
+                raise RuntimeError("controlled child provider failure")
+            if self.child_evidence and not has_tool_result:
+                await self.release_children.wait()
+                return AssistantTurn(
+                    text="",
+                    tool_calls=(
+                        ToolCall(
+                            id=f"child-search-{self.child_calls}",
+                            name="search_knowledge_base",
+                            arguments={"query": "durable child evidence"},
+                        ),
+                    ),
+                    stop_reason="tool_use",
+                    usage_details={"input_tokens": 2, "output_tokens": 1},
+                )
+            if not self.child_evidence:
+                await self.release_children.wait()
+            return AssistantTurn(
+                text=f"child finding {self.child_calls}",
+                tool_calls=(),
+                stop_reason="stop",
+                usage_details={"input_tokens": 2, "output_tokens": 1},
+            )
+
+        self.parent_calls += 1
+        if not self.resumed_parent and self.parent_calls == 1:
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="spawn-investigations",
+                        name="spawn_agent",
+                        arguments={
+                            "children": [
+                                {"objective": "investigation one"},
+                                {"objective": "investigation two"},
+                            ]
+                        },
+                    ),
+                ),
+                stop_reason="tool_use",
+                usage_details={"input_tokens": 3, "output_tokens": 1},
+            )
+        if not self.resumed_parent and self.parent_calls == 2:
+            self.parent_progressed.set()
+            return AssistantTurn(
+                text="parent completed useful independent analysis",
+                tool_calls=(),
+                stop_reason="stop",
+                usage_details={"input_tokens": 4, "output_tokens": 2},
+            )
+        self.parent_notification_started.set()
+        return AssistantTurn(
+            text="parent synthesis after child settlement",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"input_tokens": 5, "output_tokens": 2},
+        )
+
+
+class _CancelPendingChildProvider:
+    def __init__(self) -> None:
+        self.parent_calls = 0
+        self.child_tool_started = asyncio.Event()
+        self._block_tool = asyncio.Event()
+
+    async def __call__(self, **kwargs: Any) -> AssistantTurn:
+        tools = kwargs.get("tools") or ()
+        names = {str(tool.name) for tool in tools}
+        if "spawn_agent" not in names:
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="pending-child-search",
+                        name="search_knowledge_base",
+                        arguments={"query": "pending child effect"},
+                    ),
+                ),
+                stop_reason="tool_use",
+            )
+
+        self.parent_calls += 1
+        if self.parent_calls == 1:
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="spawn-pending-child",
+                        name="spawn_agent",
+                        arguments={"children": [{"objective": "pending child"}]},
+                    ),
+                ),
+                stop_reason="tool_use",
+            )
+        if self.parent_calls == 2:
+            await self.child_tool_started.wait()
+            last_content = str(kwargs["messages"][-1].get("content", ""))
+            child_id = next(
+                token.strip(".,;:()[]{}")
+                for token in last_content.split()
+                if len(token.strip(".,;:()[]{}")) == 36
+                and token.strip(".,;:()[]{}").count("-") == 4
+            )
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="cancel-pending-child",
+                        name="cancel_subagent",
+                        arguments={"child_session_id": child_id},
+                    ),
+                ),
+                stop_reason="tool_use",
+            )
+        return AssistantTurn(
+            text="parent cancelled the active child coherently",
+            tool_calls=(),
+            stop_reason="stop",
+        )
+
+    async def retrieve(self, _query: str) -> RetrievalResult:
+        self.child_tool_started.set()
+        await self._block_tool.wait()
+        raise AssertionError("blocked child retrieval should be cancelled")
+
+
+def _async_child_orchestrator(
+    provider: Any,
+    *,
+    retrieve: Any = None,
+) -> AnswerOrchestrator:
+    profile = ModelProfile(context_window_tokens=1_000_000)
+    return AnswerOrchestrator(
+        synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
+        retrieve_knowledge_base=retrieve or _retrieve_visual,
+        model_func=provider,
+        model_profile=profile,
+        telemetry=NOOP_TELEMETRY,
+        text_window_budget=TextWindowBudget(tokens=850_000),
+        resolved_mode="research",
+        subagent_host=SubagentHost(),
+    )
+
+
+def _async_child_plan(orchestrator: AnswerOrchestrator) -> AgentRunPlan:
+    return AgentRunPlan.from_tools(
+        orchestrator.prepare_run("why").tools,
+        model_role="query",
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+    )
 
 
 async def test_session_turn_survives_a_new_worker(store: FingerprintingRunStore) -> None:
@@ -864,6 +1070,445 @@ async def test_fast_failure_clears_reservation_and_keeps_unanswered_user(
     snapshot = await reader.load(SessionId(routing.agent_session_id))
     assert [entry.entry_type for entry in snapshot.tree.ancestry()] == ["user_message"]
     assert not any(isinstance(record.value, HostTurnReservation) for record in snapshot.registers)
+
+
+async def test_async_children_run_while_parent_progresses_and_barrier_adopts_results(
+    store: FingerprintingRunStore,
+) -> None:
+    provider = _AsyncChildProvider()
+    orchestrator = _async_child_orchestrator(provider)
+    plan = _async_child_plan(orchestrator)
+    application, coordinator = _answer_runtime(store=store, orchestrator=orchestrator)
+    creation = await store.create_run(
+        owner_id="owner-async-child",
+        request=_answer_run_request(mode="research", agent_run_plan=plan),
+    )
+    try:
+        await coordinator.start()
+        coordinator.wake()
+        await asyncio.wait_for(provider.children_started.wait(), timeout=10.0)
+        await asyncio.wait_for(provider.parent_progressed.wait(), timeout=10.0)
+        active = await store.get_run(owner_id="owner-async-child", run_id=creation.run.run_id)
+        children = await store.list_child_sessions(
+            owner_id="owner-async-child", run_id=creation.run.run_id
+        )
+        assert active is not None and active.status == "running"
+        assert len(children) == 2
+        assert {row["status"] for row in children} == {"running"}
+        assert all(row["plan"]["model_identity"]["scope"] == "child" for row in children)
+        assert all(row["budget"]["provider_attempt_limit"] == 2 for row in children)
+        assert all("context_snapshot" in row for row in children)
+
+        provider.release_children.set()
+        run = await _wait_for_status(
+            store,
+            owner_id="owner-async-child",
+            run_id=creation.run.run_id,
+            status="succeeded",
+            timeout=15.0,
+        )
+    finally:
+        provider.release_children.set()
+        await coordinator.aclose()
+        await application.aclose()
+
+    children = await store.list_child_sessions(
+        owner_id="owner-async-child", run_id=creation.run.run_id
+    )
+    assert {row["status"] for row in children} == {"succeeded"}
+    assert provider.parent_calls == 3
+    assert run.result is not None
+    assert run.result["answer"] == "parent synthesis after child settlement"
+    assert [item["purpose"] for item in run.result["trace"]["agent_operations"]] == [
+        "research",
+        "child_result",
+    ]
+    assert run.result["trace"]["usage"]["child_usage_details"] == {
+        "input_tokens": 4,
+        "output_tokens": 2,
+    }
+    assert run.result["trace"]["usage"]["inclusive_usage_details"]["input_tokens"] >= 16
+
+
+async def test_async_child_dispatch_reconstructs_after_parent_worker_detach(
+    store: FingerprintingRunStore,
+) -> None:
+    first_provider = _AsyncChildProvider()
+    first_orchestrator = _async_child_orchestrator(first_provider)
+    plan = _async_child_plan(first_orchestrator)
+    first_application, first = _answer_runtime(store=store, orchestrator=first_orchestrator)
+    creation = await store.create_run(
+        owner_id="owner-async-restart",
+        request=_answer_run_request(mode="research", agent_run_plan=plan),
+    )
+    await first.start()
+    first.wake()
+    try:
+        await asyncio.wait_for(first_provider.children_started.wait(), timeout=10.0)
+        await asyncio.wait_for(first_provider.parent_progressed.wait(), timeout=10.0)
+    finally:
+        await first.aclose()
+        await first_application.aclose()
+
+    detached = await store.list_child_sessions(
+        owner_id="owner-async-restart", run_id=creation.run.run_id
+    )
+    accepted_ids = {row["child_session_id"] for row in detached}
+    assert len(accepted_ids) == 2
+    assert {row["status"] for row in detached} == {"running"}
+    assert {row["cancel_requested_at"] for row in detached} == {None}
+
+    second_provider = _AsyncChildProvider(resumed_parent=True)
+    second_provider.release_children.set()
+    second_orchestrator = _async_child_orchestrator(second_provider)
+    second_application, second = _answer_runtime(store=store, orchestrator=second_orchestrator)
+    try:
+        await second.start()
+        second.wake()
+        try:
+            run = await _wait_for_status(
+                store,
+                owner_id="owner-async-restart",
+                run_id=creation.run.run_id,
+                status="succeeded",
+                timeout=15.0,
+            )
+        except AssertionError as exc:
+            current = await store.get_run(
+                owner_id="owner-async-restart", run_id=creation.run.run_id
+            )
+            current_children = await store.list_child_sessions(
+                owner_id="owner-async-restart", run_id=creation.run.run_id
+            )
+            raise AssertionError(
+                (
+                    current,
+                    current_children,
+                    second_provider.parent_calls,
+                    second_provider.child_calls,
+                )
+            ) from exc
+    finally:
+        await second.aclose()
+        await second_application.aclose()
+
+    restored = await store.list_child_sessions(
+        owner_id="owner-async-restart", run_id=creation.run.run_id
+    )
+    assert {row["child_session_id"] for row in restored} == accepted_ids
+    assert {row["status"] for row in restored} == {"succeeded"}
+    assert second_provider.child_calls == 2
+    # The detach can land immediately before or after the parent's independent
+    # second turn is durable; reclaim must correctly resume either boundary.
+    assert second_provider.parent_calls in {1, 2}, (
+        second_provider.child_calls,
+        run.result,
+    )
+    assert run.result is not None
+    assert run.result["answer"] == "parent synthesis after child settlement"
+
+
+async def test_terminal_child_race_and_second_scan_survive_reclaim_exactly_once(
+    store: FingerprintingRunStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _AsyncChildProvider(child_evidence=True)
+    orchestrator = _async_child_orchestrator(provider)
+    plan = _async_child_plan(orchestrator)
+    application, coordinator = _answer_runtime(store=store, orchestrator=orchestrator)
+    creation = await store.create_run(
+        owner_id="owner-result-before-adoption",
+        request=_answer_run_request(mode="research", agent_run_plan=plan),
+    )
+    host = orchestrator.subagent_host
+    assert host is not None
+    original_notifications = host.completed_dispatch_notifications
+    original_finish = store.finish_child_session
+    first_scan = asyncio.Event()
+    terminalized = asyncio.Event()
+    second_scan = asyncio.Event()
+    allow_second_scan = asyncio.Event()
+    terminal_count = 0
+    forced_race = False
+    second_scan_interrupted = False
+
+    async def _counted_finish(**kwargs: Any) -> bool:
+        nonlocal terminal_count
+        finished = await original_finish(**kwargs)
+        if finished and str(kwargs["status"]) != "running":
+            terminal_count += 1
+            if terminal_count == 2:
+                terminalized.set()
+        return finished
+
+    async def _controlled_notifications(*, seen: set[str]) -> tuple[tuple[str, str], ...]:
+        nonlocal forced_race, second_scan_interrupted
+        notifications = await original_notifications(seen=seen)
+        if not forced_race and not notifications:
+            rows = await store.list_child_sessions(
+                owner_id="owner-result-before-adoption",
+                run_id=creation.run.run_id,
+            )
+            if len(rows) == 2 and any(row["status"] == "running" for row in rows):
+                first_scan.set()
+                provider.release_children.set()
+                await terminalized.wait()
+                forced_race = True
+                return ()
+        if forced_race and notifications and not second_scan_interrupted:
+            second_scan.set()
+            try:
+                await allow_second_scan.wait()
+            except asyncio.CancelledError:
+                second_scan_interrupted = True
+                raise
+        return notifications
+
+    monkeypatch.setattr(store, "finish_child_session", _counted_finish)
+    monkeypatch.setattr(host, "completed_dispatch_notifications", _controlled_notifications)
+    await coordinator.start()
+    coordinator.wake()
+    try:
+        await asyncio.wait_for(provider.parent_progressed.wait(), timeout=10.0)
+        await asyncio.wait_for(first_scan.wait(), timeout=10.0)
+        await asyncio.wait_for(second_scan.wait(), timeout=10.0)
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    assert provider.parent_calls == 2
+    assert forced_race is True
+    assert terminal_count == 2
+    terminal = await store.list_child_sessions(
+        owner_id="owner-result-before-adoption", run_id=creation.run.run_id
+    )
+    terminal_states: dict[str, list[str]] = {}
+    if any(row["status"] != "succeeded" for row in terminal):
+        diagnostic_reader = PGAgentSessionRepository(
+            pool=cast(Any, store)._operation_pool,
+            owner_id="owner-result-before-adoption",
+            run_id=uuid.UUID(creation.run.run_id),
+            worker_id="reader",
+            lease_owner="reader",
+            fencing_epoch=1,
+        )
+        for row in terminal:
+            diagnostic_snapshot = await diagnostic_reader.load(SessionId(row["child_session_id"]))
+            terminal_states[row["child_session_id"]] = [
+                repr(record.value) for record in diagnostic_snapshot.registers
+            ]
+    assert {row["status"] for row in terminal} == {"succeeded"}, (
+        [(row["status"], row["summary"], row["host_state"]) for row in terminal],
+        terminal_states,
+    )
+    assert {tuple(sorted((row["usage"] or {}).items())) for row in terminal} == {
+        (("input_tokens", 4), ("output_tokens", 2))
+    }
+
+    resumed_provider = _AsyncChildProvider(resumed_parent=True)
+    resumed_orchestrator = _async_child_orchestrator(resumed_provider)
+    resumed_application, resumed = _answer_runtime(store=store, orchestrator=resumed_orchestrator)
+    try:
+        await resumed.start()
+        resumed.wake()
+        run = await _wait_for_status(
+            store,
+            owner_id="owner-result-before-adoption",
+            run_id=creation.run.run_id,
+            status="succeeded",
+            timeout=15.0,
+        )
+    finally:
+        allow_second_scan.set()
+        await resumed.aclose()
+        await resumed_application.aclose()
+
+    assert resumed_provider.child_calls == 0
+    assert resumed_provider.parent_calls == 1
+    assert run.result is not None
+    assert run.result["answer"] == "parent synthesis after child settlement"
+    assert [item["purpose"] for item in run.result["trace"]["agent_operations"]] == [
+        "research",
+        "child_result",
+    ]
+    assert len(run.result["contexts"]["chunks"]) == 1
+    assert run.result["contexts"]["chunks"][0]["chunk_id"] == "c1"
+    assert run.result["usage"]["child_usage_details"] == {
+        "input_tokens": 8,
+        "output_tokens": 4,
+    }
+    async with cast(Any, store)._operation_pool.acquire() as conn:
+        evidence_rows = await conn.fetch(
+            "SELECT session_id, intent_id, result_ordinal "
+            "FROM dlightrag_answer_evidence WHERE owner_id = $1 AND run_id = $2",
+            "owner-result-before-adoption",
+            uuid.UUID(creation.run.run_id),
+        )
+    evidence_keys = {
+        (str(row["session_id"]), str(row["intent_id"]), int(row["result_ordinal"]))
+        for row in evidence_rows
+    }
+    assert len(evidence_rows) == 2
+    assert len(evidence_keys) == 2
+
+
+async def test_child_provider_exceptions_finalize_roster_and_notify_parent(
+    store: FingerprintingRunStore,
+) -> None:
+    provider = _AsyncChildProvider(fail_children=True)
+    orchestrator = _async_child_orchestrator(provider)
+    application, coordinator = _answer_runtime(store=store, orchestrator=orchestrator)
+    creation = await store.create_run(
+        owner_id="owner-child-exception",
+        request=_answer_run_request(
+            mode="research", agent_run_plan=_async_child_plan(orchestrator)
+        ),
+    )
+    try:
+        await coordinator.start()
+        coordinator.wake()
+        run = await _wait_for_status(
+            store,
+            owner_id="owner-child-exception",
+            run_id=creation.run.run_id,
+            status="succeeded",
+            timeout=15.0,
+        )
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    children = await store.list_child_sessions(
+        owner_id="owner-child-exception", run_id=creation.run.run_id
+    )
+    assert {row["status"] for row in children} == {"failed"}
+    assert provider.parent_calls == 3
+    assert run.result is not None
+    assert run.result["answer"] == "parent synthesis after child settlement"
+
+
+async def test_cancel_active_child_closes_pending_agent_effect_before_roster_terminal(
+    store: FingerprintingRunStore,
+) -> None:
+    provider = _CancelPendingChildProvider()
+    orchestrator = _async_child_orchestrator(provider, retrieve=provider.retrieve)
+    application, coordinator = _answer_runtime(store=store, orchestrator=orchestrator)
+    creation = await store.create_run(
+        owner_id="owner-cancel-pending-child",
+        request=_answer_run_request(
+            mode="research", agent_run_plan=_async_child_plan(orchestrator)
+        ),
+    )
+    try:
+        await coordinator.start()
+        coordinator.wake()
+        try:
+            run = await _wait_for_status(
+                store,
+                owner_id="owner-cancel-pending-child",
+                run_id=creation.run.run_id,
+                status="succeeded",
+                timeout=15.0,
+            )
+        except AssertionError as exc:
+            current = await store.get_run(
+                owner_id="owner-cancel-pending-child", run_id=creation.run.run_id
+            )
+            current_children = await store.list_child_sessions(
+                owner_id="owner-cancel-pending-child", run_id=creation.run.run_id
+            )
+            raise AssertionError((current, current_children, provider.parent_calls)) from exc
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    children = await store.list_child_sessions(
+        owner_id="owner-cancel-pending-child", run_id=creation.run.run_id
+    )
+    assert len(children) == 1
+    assert children[0]["status"] == "cancelled"
+    assert children[0]["cancel_requested_at"] is not None
+    assert provider.parent_calls >= 3
+    assert run.result is not None
+    assert run.result["answer"] == "parent cancelled the active child coherently"
+
+    reader = PGAgentSessionRepository(
+        pool=cast(Any, store)._operation_pool,
+        owner_id="owner-cancel-pending-child",
+        run_id=uuid.UUID(creation.run.run_id),
+        worker_id="reader",
+        lease_owner="reader",
+        fencing_epoch=1,
+    )
+    child_snapshot = await reader.load(SessionId(children[0]["child_session_id"]))
+    child_state = next(
+        record.value.state
+        for record in child_snapshot.registers
+        if isinstance(record.value, OperationStateRegister)
+    )
+    assert isinstance(child_state, OperationCancelled)
+    pending_result = next(
+        entry for entry in child_snapshot.entries if isinstance(entry, ToolResultMessageEntry)
+    )
+    assert pending_result.result.call_id == "pending-child-search"
+    assert pending_result.result.outcome == "outcome_unknown"
+
+
+async def test_parent_cancellation_settles_active_children_before_terminal_run(
+    store: FingerprintingRunStore,
+) -> None:
+    provider = _AsyncChildProvider()
+    orchestrator = _async_child_orchestrator(provider)
+    application, coordinator = _answer_runtime(store=store, orchestrator=orchestrator)
+    creation = await store.create_run(
+        owner_id="owner-parent-cancel",
+        request=_answer_run_request(
+            mode="research", agent_run_plan=_async_child_plan(orchestrator)
+        ),
+    )
+    try:
+        await coordinator.start()
+        coordinator.wake()
+        await asyncio.wait_for(provider.children_started.wait(), timeout=10.0)
+        outcome = await store.request_cancellation(
+            owner_id="owner-parent-cancel", run_id=creation.run.run_id
+        )
+        assert outcome.outcome == "pending"
+        coordinator.cancel_local("owner-parent-cancel", creation.run.run_id)
+        await _wait_for_status(
+            store,
+            owner_id="owner-parent-cancel",
+            run_id=creation.run.run_id,
+            status="cancelled",
+            timeout=15.0,
+        )
+    finally:
+        provider.release_children.set()
+        await coordinator.aclose()
+        await application.aclose()
+
+    children = await store.list_child_sessions(
+        owner_id="owner-parent-cancel", run_id=creation.run.run_id
+    )
+    assert len(children) == 2
+    assert {row["status"] for row in children} == {"cancelled"}
+    assert all(row["cancel_requested_at"] is not None for row in children)
+    reader = PGAgentSessionRepository(
+        pool=cast(Any, store)._operation_pool,
+        owner_id="owner-parent-cancel",
+        run_id=uuid.UUID(creation.run.run_id),
+        worker_id="reader",
+        lease_owner="reader",
+        fencing_epoch=1,
+    )
+    for child in children:
+        snapshot = await reader.load(SessionId(child["child_session_id"]))
+        child_state = next(
+            record.value.state
+            for record in snapshot.registers
+            if isinstance(record.value, OperationStateRegister)
+        )
+        assert isinstance(child_state, OperationCancelled)
 
 
 async def test_publication_correction_is_one_linked_agent_operation(

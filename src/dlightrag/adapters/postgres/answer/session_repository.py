@@ -408,6 +408,7 @@ class PGAgentSessionRepository:
         fencing_epoch: int,
         primary_session_id: SessionId | None = None,
         child_session_id: SessionId | None = None,
+        parent_fencing_epoch: int | None = None,
     ) -> None:
         self._pool = pool
         self._owner_id = owner_id
@@ -417,6 +418,7 @@ class PGAgentSessionRepository:
         self._fencing_epoch = fencing_epoch
         self._primary_session_id = primary_session_id
         self._child_session_id = child_session_id
+        self._parent_fencing_epoch = parent_fencing_epoch
 
     def for_child(
         self, child_session_id: SessionId, *, fencing_epoch: int
@@ -431,6 +433,7 @@ class PGAgentSessionRepository:
             fencing_epoch=fencing_epoch,
             primary_session_id=self._primary_session_id,
             child_session_id=child_session_id,
+            parent_fencing_epoch=self._fencing_epoch,
         )
 
     @asynccontextmanager
@@ -926,6 +929,21 @@ class PGAgentSessionRepository:
 
     async def _hold_lease(self, conn: Any) -> Any:
         if self._child_session_id is not None:
+            # Lock the parent Run before the Child row. Child settlements can
+            # insert Evidence (taking an FK key-share lock) and then advance
+            # parent progress; one lock order prevents sibling lock-upgrade
+            # deadlocks and keeps the parent lease as the final authority.
+            if self._parent_fencing_epoch is None:
+                return None
+            parent_held = await conn.fetchval(
+                _LEASE_PREDICATE,
+                self._owner_id,
+                self._run_id,
+                self._lease_owner,
+                self._parent_fencing_epoch,
+            )
+            if parent_held is None:
+                return None
             return await conn.fetchval(
                 _CHILD_LEASE_PREDICATE,
                 self._owner_id,

@@ -567,7 +567,8 @@ class TestSchema:
             )
             await conn.execute(
                 "DELETE FROM dlightrag_schema_migrations "
-                "WHERE scope = 'runs' AND version = 'remove_run_active_permit'"
+                "WHERE scope = 'runs' AND version = ANY($1::text[])",
+                ["remove_run_active_permit", "interactive_child_async_lifecycle"],
             )
 
         migrated = PGRunStore(pool=pool)
@@ -2694,6 +2695,308 @@ class TestAgentControlsAndChildren:
             item["host_state"]["terminal_outcome"]["evidence_state"] == {"contexts": {}}
             for item in roster
         )
+
+    async def test_sparse_precreate_promotes_to_full_reconstructible_child_envelope(
+        self, store
+    ) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        parent_id = str(uuid.uuid7())
+        child_id = str(uuid.uuid7())
+        parent_entry_id = str(uuid.uuid7())
+        parent_intent_id = str(uuid.uuid7())
+
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            parent_call_id="sparse-first",
+            parent_intent_id=parent_intent_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            parent_call_id="sparse-first",
+            parent_intent_id=parent_intent_id,
+            objective="full objective",
+            context_mode="parent",
+            model_role="query",
+            tools=("search_knowledge_base",),
+            depth=2,
+            context_snapshot={
+                "parent_session_id": parent_id,
+                "parent_entry_id": parent_entry_id,
+                "depth": 1,
+                "messages": [{"role": "user", "content": "full context"}],
+                "evidence_state": {"contexts": {}},
+            },
+            plan={"schema_version": 2},
+            budget={"provider_attempt_limit": 2},
+            host_state={"dispatch_version": 3},
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            parent_call_id="sparse-first",
+            parent_intent_id=parent_intent_id,
+            objective="drifted objective",
+            context_mode="isolated",
+            model_role="extract",
+            tools=(),
+            depth=9,
+            context_snapshot={
+                "parent_session_id": parent_id,
+                "parent_entry_id": str(uuid.uuid7()),
+                "depth": 8,
+                "messages": [],
+                "evidence_state": {},
+            },
+            plan={"schema_version": 999},
+            budget={"provider_attempt_limit": 999},
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+
+        child = await store.load_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+        )
+        assert child is not None
+        assert child["objective"] == "full objective"
+        assert child["context"] == "parent"
+        assert child["model_role"] == "query"
+        assert child["tools"] == ["search_knowledge_base"]
+        assert child["depth"] == 2
+        assert child["context_snapshot"]["parent_entry_id"] == parent_entry_id
+        assert child["plan"] == {"schema_version": 2}
+        assert child["budget"] == {"provider_attempt_limit": 2}
+        assert child["host_state"] == {"dispatch_version": 3}
+
+    async def test_child_cancel_request_preserves_writer_until_operation_closes(
+        self, store
+    ) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        parent_id = str(uuid.uuid7())
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            parent_call_id="cancel-call",
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child_epoch = await store.claim_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        assert child_epoch == 1
+        assert await store.request_child_cancellation(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+
+        from dlightrag.engine.agent.session.ids import LaneId, SessionId
+        from dlightrag.engine.agent.session.registers import LaneHead, LaneState, SetRegister
+        from dlightrag.engine.agent.session.transactions import (
+            RegisterExpectation,
+            SessionTransaction,
+            TransactionCommit,
+            TransactionLeaseLost,
+        )
+
+        child_store = claim.execution.session_repository.for_child(
+            SessionId(child_id), fencing_epoch=child_epoch
+        )
+        head = LaneHead(LaneId.main(), None)
+        state = LaneState(LaneId.main())
+        closure_write = await child_store.transact(
+            session_id=SessionId(child_id),
+            fencing_epoch=child_epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(head), SetRegister(state)],
+                expectations=[
+                    RegisterExpectation(head.ref, None),
+                    RegisterExpectation(state.ref, None),
+                ],
+            ),
+        )
+        assert isinstance(closure_write, TransactionCommit)
+        child = await store.load_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+        )
+        assert child is not None
+        assert child["status"] == "running"
+        assert child["cancel_requested_at"] is not None
+
+        assert await store.finish_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            status="cancelled",
+            summary="closed",
+            outcome={
+                "status": "cancelled",
+                "summary": "closed",
+                "handles": [],
+                "usage": {},
+                "child_session_id": child_id,
+                "operation_id": str(uuid.uuid7()),
+                "evidence_state": None,
+            },
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        stale = await child_store.transact(
+            session_id=SessionId(child_id),
+            fencing_epoch=child_epoch,
+            transaction=SessionTransaction.from_parts(
+                register_writes=[SetRegister(state)],
+                expectations=[RegisterExpectation(state.ref, closure_write.commit_sequence)],
+            ),
+        )
+        assert isinstance(stale, TransactionLeaseLost)
+
+    async def test_parent_success_is_blocked_until_children_settle(self, store) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            parent_session_id=str(uuid.uuid7()),
+            parent_call_id="barrier",
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+
+        blocked = await store.finish_success(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            result={"answer": "too early"},
+        )
+        assert blocked.committed is False
+        assert await store.finish_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            status="failed",
+            summary="settled failure",
+            outcome={
+                "status": "failed",
+                "summary": "settled failure",
+                "handles": [],
+                "usage": {},
+                "child_session_id": child_id,
+                "operation_id": str(uuid.uuid7()),
+                "evidence_state": None,
+            },
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        committed = await store.finish_success(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            result={"answer": "after settlement"},
+        )
+        assert committed.committed is True
+
+    async def test_parent_failure_cancels_any_remaining_children(self, store) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            parent_session_id=str(uuid.uuid7()),
+            parent_call_id="parent-failure",
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+
+        terminal = await store.finish_failure(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            error_kind="run_execution_failed",
+            error_message="parent failed",
+        )
+        child = await store.load_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+        )
+
+        assert terminal.committed is True
+        assert child is not None and child["status"] == "cancelled"
+        assert child["cancel_requested_at"] is not None
+        assert child["host_state"]["terminal_outcome"]["child_session_id"] == child_id
+
+    async def test_queued_parent_cancellation_atomically_cancels_accepted_children(
+        self, store
+    ) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            parent_session_id=str(uuid.uuid7()),
+            parent_call_id="queued-parent-cancel",
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        released = await store.release_for_shutdown(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        assert released == "requeued"
+
+        cancellation = await store.request_cancellation(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+        )
+        child = await store.load_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+        )
+
+        assert cancellation.outcome == "cancelled"
+        assert cancellation.run is not None and cancellation.run.status == "cancelled"
+        assert child is not None and child["status"] == "cancelled"
+        assert child["cancel_requested_at"] is not None
+        assert child["host_state"]["terminal_outcome"]["status"] == "cancelled"
 
     async def test_child_lease_heartbeat_survives_original_window_and_fences_takeover(
         self, store, pool

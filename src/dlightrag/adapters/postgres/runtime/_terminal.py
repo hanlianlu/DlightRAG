@@ -31,7 +31,43 @@ WITH bumped AS (
       AND lease_owner = $3 AND fencing_epoch = $4
       AND status = 'running' AND lease_expires_at > NOW()
       AND (NOT $12::boolean OR cancel_requested_at IS NULL)
+      AND (
+          $5::text <> 'succeeded'
+          OR NOT EXISTS (
+              SELECT 1
+              FROM dlightrag_answer_child_sessions AS child
+              WHERE child.owner_id = $1 AND child.run_id = $2
+                AND child.status = 'running'
+          )
+      )
     RETURNING next_event_sequence - 1 AS event_sequence
+), cancelled_children AS (
+    UPDATE dlightrag_answer_child_sessions AS child
+    SET status = 'cancelled',
+        cancel_requested_at = COALESCE(child.cancel_requested_at, NOW()),
+        summary = 'Child session cancelled because its parent Run terminated.',
+        usage_json = NULL,
+        host_state_json = jsonb_set(
+            child.host_state_json,
+            '{terminal_outcome}',
+            jsonb_build_object(
+                'status', 'cancelled',
+                'summary', 'Child session cancelled because its parent Run terminated.',
+                'handles', jsonb_build_array(),
+                'usage', jsonb_build_object(),
+                'child_session_id', child.child_session_id::text,
+                'operation_id', '',
+                'evidence_state', NULL
+            ),
+            true
+        ),
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        updated_at = NOW()
+    WHERE child.owner_id = $1 AND child.run_id = $2
+      AND child.status = 'running'
+      AND EXISTS (SELECT 1 FROM bumped)
+    RETURNING child.child_session_id
 ), inserted AS (
     INSERT INTO dlightrag_run_events (
         owner_id, run_id, event_sequence, event_type, payload

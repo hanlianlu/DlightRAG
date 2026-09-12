@@ -9,6 +9,7 @@ from dataclasses import asdict
 from typing import Any, Literal, cast
 
 from dlightrag.engine.agent.session.effects import EffectIntent, ToolResultEntry, canonical_json
+from dlightrag.engine.agent.session.entries import AssistantMessageEntry
 from dlightrag.engine.agent.session.ids import AttemptId, IntentId, LaneId, OperationId, SessionId
 from dlightrag.engine.agent.session.operation import (
     OperationCancelled,
@@ -705,11 +706,15 @@ async def _drive_answer_operation(
 ) -> Any:
     try:
         return await runtime.drive(session_id=session_id, operation_id=operation_id)
-    except (
-        asyncio.CancelledError,
-        RunCancellationObserved,
-        AgentOperationCancelled,
-    ) as exc:
+    except asyncio.CancelledError:
+        if not session.cancel_requested:
+            # Graceful process detach leaves the durable Operation resumable;
+            # user cancellation marks the RunSession before interruption.
+            raise
+        await runtime.cancel(session_id=session_id, operation_id=operation_id)
+        await runtime.close(session_id=session_id, operation_id=operation_id)
+        raise
+    except (RunCancellationObserved, AgentOperationCancelled) as exc:
         await runtime.cancel(session_id=session_id, operation_id=operation_id)
         await runtime.close(session_id=session_id, operation_id=operation_id)
         if isinstance(exc, AgentOperationCancelled):
@@ -729,6 +734,45 @@ def _oldest_pending_input(snapshot: Any, lane_id: LaneId) -> tuple[str, Any] | N
     return None
 
 
+def _child_agent_plan(prepared: Any, request: ChildRequest) -> AgentRunPlan:
+    return AgentRunPlan.from_tools(
+        prepared.tools,
+        model_role=request.model_role,
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+        model_identity={"role": request.model_role, "scope": "child"},
+        model_profile=asdict(prepared.model_profile),
+    )
+
+
+def _bound_child_dispatch_preparer(
+    orchestrator: AnswerOrchestrator,
+) -> Callable[[SessionId, ChildRequest, ChildContextSnapshot], Mapping[str, Any]]:
+    """Freeze the reconstructible Child plan and budget before handle return."""
+
+    def prepare(
+        child_id: SessionId,
+        request: ChildRequest,
+        context_snapshot: ChildContextSnapshot,
+    ) -> Mapping[str, Any]:
+        prepared = orchestrator.prepare_child_session(
+            request,
+            context_snapshot=context_snapshot,
+            child_session_id=child_id.value,
+        )
+        plan = _child_agent_plan(prepared, request)
+        return {
+            "plan": plan.canonical_payload(),
+            "budget": {
+                "provider_attempt_limit": plan.provider_attempt_limit,
+                "compaction_attempt_limit": plan.compaction_attempt_limit,
+                "model_profile": asdict(prepared.model_profile),
+            },
+            "host_state": {"inherits_parent_evidence": bool(context_snapshot.evidence_state)},
+        }
+
+    return prepare
+
+
 def _bound_child_runner(
     *,
     orchestrator: AnswerOrchestrator,
@@ -739,6 +783,8 @@ def _bound_child_runner(
     persist_child_runtime: Callable[..., Awaitable[Any]],
     claim_child: Callable[..., Awaitable[Any]],
     renew_child: Callable[..., Awaitable[Any]],
+    load_child: Callable[..., Awaitable[Any]] | None = None,
+    is_detaching: Callable[[], bool] | None = None,
 ) -> Callable[[SessionId, ChildRequest, str, ChildContextSnapshot], Awaitable[ChildOutcome]]:
     async def run_child(
         child_id: SessionId,
@@ -759,6 +805,8 @@ def _bound_child_runner(
             persist_child_runtime=persist_child_runtime,
             claim_child=claim_child,
             renew_child=renew_child,
+            load_child=load_child,
+            is_detaching=is_detaching,
         )
 
     return run_child
@@ -778,6 +826,8 @@ async def run_child_session(
     persist_child_runtime: Callable[..., Awaitable[Any]],
     claim_child: Callable[..., Awaitable[Any]],
     renew_child: Callable[..., Awaitable[Any]] | None = None,
+    load_child: Callable[..., Awaitable[Any]] | None = None,
+    is_detaching: Callable[[], bool] | None = None,
 ) -> ChildOutcome:
     """Run or restore one Child through the same deep AgentSessionRuntime."""
     if context_snapshot.parent_session_id != parent_session_id:
@@ -790,13 +840,7 @@ async def run_child_session(
         context_snapshot=context_snapshot,
         child_session_id=child_id.value,
     )
-    plan = AgentRunPlan.from_tools(
-        prepared.tools,
-        model_role=request.model_role,
-        context_policy_revision=CONTEXT_POLICY_REVISION,
-        model_identity={"role": request.model_role, "scope": "child"},
-        model_profile=asdict(prepared.model_profile),
-    )
+    plan = _child_agent_plan(prepared, request)
     await persist_child_runtime(
         owner_id=session.owner_id,
         run_id=session.run_id,
@@ -817,13 +861,58 @@ async def run_child_session(
         },
         host_state={"inherits_parent_evidence": bool(context_snapshot.evidence_state)},
     )
-    child_epoch = await claim_child(
-        owner_id=session.owner_id,
-        run_id=session.run_id,
-        child_session_id=child_id.value,
-    )
-    if not isinstance(child_epoch, int):
-        raise LeaseLostError
+    if load_child is not None:
+        accepted_dispatch = await load_child(
+            owner_id=session.owner_id,
+            run_id=session.run_id,
+            child_session_id=child_id.value,
+        )
+        persisted_plan_payload = (
+            accepted_dispatch.get("plan") if accepted_dispatch is not None else None
+        )
+        if not isinstance(persisted_plan_payload, Mapping):
+            raise IncompatibleActiveRunError(
+                "Accepted Child Session is missing its pinned Agent Plan"
+            )
+        persisted_plan = AgentRunPlan.from_payload(persisted_plan_payload)
+        if persisted_plan.canonical_payload() != plan.canonical_payload():
+            raise IncompatibleActiveRunError(
+                "Child Session Agent Plan differs from its accepted tool contracts"
+            )
+        plan = persisted_plan
+    while True:
+        child_epoch = await claim_child(
+            owner_id=session.owner_id,
+            run_id=session.run_id,
+            child_session_id=child_id.value,
+        )
+        if isinstance(child_epoch, int):
+            break
+        await session.check_cancelled()
+        if bool(getattr(session, "lease_lost", False)):
+            raise LeaseLostError
+        if load_child is not None:
+            current = await load_child(
+                owner_id=session.owner_id,
+                run_id=session.run_id,
+                child_session_id=child_id.value,
+            )
+            if current is None:
+                raise LeaseLostError
+            if str(current.get("status")) != "running":
+                host_state = current.get("host_state")
+                payload = (
+                    host_state.get("terminal_outcome") if isinstance(host_state, Mapping) else None
+                )
+                if not isinstance(payload, Mapping):
+                    raise RunExecutionError(
+                        "run_execution_failed",
+                        "Terminal Child Session lost its durable outcome.",
+                    )
+                return ChildOutcome.from_durable_payload(payload)
+        # Parent and Child leases can expire at slightly different instants.
+        # Park rather than treating a still-live older Child fence as failure.
+        await asyncio.sleep(1)
     child_repository = repository
     bind_child = getattr(repository, "for_child", None)
     if callable(bind_child):
@@ -855,6 +944,21 @@ async def run_child_session(
         plan=plan,
     )
     try:
+        cancellation_requested = False
+        if load_child is not None:
+            current = await load_child(
+                owner_id=session.owner_id,
+                run_id=session.run_id,
+                child_session_id=child_id.value,
+            )
+            cancellation_requested = bool(
+                current is not None and current.get("cancel_requested_at") is not None
+            )
+        if cancellation_requested:
+            await runtime.cancel(
+                session_id=child_id,
+                operation_id=accepted.operation_id,
+            )
         operation = await _drive_child_with_lease_renewal(
             runtime,
             session_id=child_id,
@@ -862,11 +966,13 @@ async def run_child_session(
             child_fencing_epoch=child_epoch,
             renew_child=renew_child,
         )
-    except (
-        asyncio.CancelledError,
-        RunCancellationObserved,
-        AgentOperationCancelled,
-    ) as exc:
+    except asyncio.CancelledError:
+        if is_detaching is not None and is_detaching():
+            raise
+        await runtime.cancel(session_id=child_id, operation_id=accepted.operation_id)
+        await runtime.close(session_id=child_id, operation_id=accepted.operation_id)
+        raise
+    except (RunCancellationObserved, AgentOperationCancelled) as exc:
         await runtime.cancel(session_id=child_id, operation_id=accepted.operation_id)
         await runtime.close(session_id=child_id, operation_id=accepted.operation_id)
         if isinstance(exc, AgentOperationCancelled):
@@ -893,10 +999,11 @@ async def run_child_session(
         status=status,
         summary=summary,
         handles=tuple(prepared.evidence.citation_handles()),
-        usage=_usage_from_snapshot_entries(snapshot_entries=snapshot.entries),
+        usage=_usage_from_operation(snapshot=snapshot, operation=operation.state),
         delta=_delta_from_ledger(prepared.evidence),
         child_session_id=child_id.value,
         evidence_state=prepared.evidence.durable_state(),
+        operation_id=accepted.operation_id.value,
     )
 
 
@@ -958,6 +1065,28 @@ async def _drive_child_with_lease_renewal(
 def _child_summary(prepared: Any, status: str) -> str:
     text = prepared.last_turn.assistant.text if prepared.last_turn is not None else ""
     return text.strip() or f"Child session {status}."
+
+
+def _usage_from_operation(*, snapshot: Any, operation: Any) -> dict[str, int] | None:
+    """Attribute only Assistant usage belonging to one completed Operation."""
+    if not isinstance(operation, OperationCompleted):
+        return _usage_from_snapshot_entries(snapshot_entries=snapshot.entries)
+    terminal_sequence = next(
+        (
+            entry.sequence
+            for entry in snapshot.entries
+            if entry.entry_id == operation.assistant_entry_id
+        ),
+        None,
+    )
+    if terminal_sequence is None or operation.turn_count < 1:
+        return None
+    assistants = [
+        entry
+        for entry in snapshot.entries
+        if isinstance(entry, AssistantMessageEntry) and entry.sequence <= terminal_sequence
+    ]
+    return _usage_from_snapshot_entries(snapshot_entries=assistants[-operation.turn_count :])
 
 
 def _usage_from_snapshot_entries(*, snapshot_entries: Any) -> dict[str, int] | None:
@@ -1052,7 +1181,13 @@ def _fenced_control_ack(
     return acknowledge
 
 
-def _fenced_child_writer(store: object, name: str, session: RunSession) -> Any | None:
+def _fenced_child_writer(
+    store: object,
+    name: str,
+    session: RunSession,
+    *,
+    false_is_lease_loss: bool = True,
+) -> Any | None:
     method = _async_store_method(store, name)
     if method is None:
         return None
@@ -1063,7 +1198,7 @@ def _fenced_child_writer(store: object, name: str, session: RunSession) -> Any |
             worker_id=session.worker_id,
             fencing_epoch=session.fencing_epoch,
         )
-        if held is False:
+        if held is False and false_is_lease_loss:
             raise LeaseLostError
         return held
 

@@ -120,6 +120,7 @@ from dlightrag.engine.answer.research.runtime import (
     ResearchRuntimeEffects,
     _answer_runtime_event_sink,
     _async_store_method,
+    _bound_child_dispatch_preparer,
     _bound_child_runner,
     _buffered_fetched_bytes_sink,
     _drive_answer_operation,
@@ -200,6 +201,20 @@ _DEPENDENCY_DEFER_BASE_SECONDS = 5
 _DEPENDENCY_DEFER_MAX_SECONDS = 60
 
 type DependencyStateCallback = Callable[[DependencyComponent], None]
+
+
+def _async_subagents_for_plan(plan: AgentRunPlan | None) -> bool:
+    """Select the exact accepted child lifecycle contract without plan rewriting."""
+    if plan is None:
+        raise IncompatibleActiveRunError("Research answer run is missing its accepted Agent Plan")
+    spawn = next((tool for tool in plan.tools if tool.name == "spawn_agent"), None)
+    if spawn is None:
+        return False
+    if spawn.contract_version == 2:
+        return False
+    if spawn.contract_version == 3:
+        return True
+    raise IncompatibleActiveRunError("Research answer run uses an unsupported child lifecycle")
 
 
 def _scoped_secret(secret: bytes | None, scope: str | None) -> bytes | None:
@@ -1164,6 +1179,11 @@ class AnswerExecutor:
             pinned_image_descriptions=request.image_descriptions,
             projected_history=projected_history,
             model_profiles=model_profiles,
+            async_subagents=(
+                _async_subagents_for_plan(request.agent_run_plan)
+                if resolved_mode == "research"
+                else True
+            ),
             skills=(
                 self._skills_bundle_factory(session.owner_id, request.requested_skill)
                 if self._skills_bundle_factory is not None
@@ -1200,6 +1220,8 @@ class AnswerExecutor:
                 self._memory_recall_enabled, owner_id=session.owner_id
             )
         stream: AsyncIterator[str] | None = None
+        subagent_host = run.orchestrator.subagent_host
+        cancel_children_on_exit = False
         try:
             await ensure_session_lane(
                 repository=repository,
@@ -1267,7 +1289,18 @@ class AnswerExecutor:
                     owner_id=session.owner_id,
                     persist=_fenced_child_writer(store, "upsert_child_session", session),
                     load_child=_async_store_method(store, "load_child_session"),
-                    finish_child=_fenced_child_writer(store, "finish_child_session", session),
+                    list_children=_async_store_method(store, "list_child_sessions"),
+                    finish_child=_fenced_child_writer(
+                        store,
+                        "finish_child_session",
+                        session,
+                        false_is_lease_loss=False,
+                    ),
+                    request_cancel=_fenced_child_writer(
+                        store, "request_child_cancellation", session
+                    ),
+                    release_children=_fenced_child_writer(store, "release_child_sessions", session),
+                    prepare_dispatch=_bound_child_dispatch_preparer(run.orchestrator),
                     run_child=_bound_child_runner(
                         orchestrator=run.orchestrator,
                         repository=repository,
@@ -1277,6 +1310,10 @@ class AnswerExecutor:
                         persist_child_runtime=persist_child_runtime,
                         claim_child=claim_child,
                         renew_child=renew_child,
+                        load_child=_async_store_method(store, "load_child_session"),
+                        is_detaching=(
+                            (lambda: subagent_host.detaching) if subagent_host is not None else None
+                        ),
                     ),
                     check_cancelled=session.check_cancelled,
                 )
@@ -1370,6 +1407,8 @@ class AnswerExecutor:
                         snapshot=snapshot,
                     ),
                 )
+                if subagent_host is not None:
+                    await subagent_host.restore_pending()
                 accepted = await agent_runtime.accept(
                     session_id=session_id,
                     lane_id=agent_lane_id,
@@ -1377,6 +1416,8 @@ class AnswerExecutor:
                     content=request.query,
                     plan=plan,
                 )
+                accepted_purpose = "research"
+                notified_child_operations: set[str] = set()
                 research_operation_id = accepted.operation_id
                 await session.enter_phase("researching")
                 while True:
@@ -1404,12 +1445,13 @@ class AnswerExecutor:
                     agent_operations.append(
                         {
                             "operation_id": accepted.operation_id.value,
-                            "purpose": "research" if not agent_operations else "follow_up",
+                            "purpose": accepted_purpose,
                             "status": "completed",
                             "usage": operation_usage,
                         }
                     )
                     next_input = _oldest_pending_input(snapshot, agent_lane_id)
+                    next_purpose = "follow_up"
                     command_ids: tuple[str, ...] = ()
                     if next_input is None and controls is not None:
                         commands = await controls.poll(operation.context)
@@ -1423,13 +1465,40 @@ class AnswerExecutor:
                                 )
                             else:
                                 next_input = (command.command_id, command.content)
+                    while (
+                        next_input is None
+                        and subagent_host is not None
+                        and subagent_host.async_lifecycle
+                    ):
+                        notifications = await subagent_host.completed_dispatch_notifications(
+                            seen=notified_child_operations
+                        )
+                        if notifications:
+                            notification_id, content = notifications[0]
+                            notified_child_operations.add(notification_id)
+                            next_input = (notification_id, content)
+                            next_purpose = "child_result"
+                            break
+                        if not await subagent_host.has_running_children():
+                            # A Child can settle between the notification scan
+                            # and the running-row check. Re-scan before breaking
+                            # so that durable completion cannot be lost in that
+                            # subscribe/park window.
+                            notifications = await subagent_host.completed_dispatch_notifications(
+                                seen=notified_child_operations
+                            )
+                            if notifications:
+                                notification_id, content = notifications[0]
+                                notified_child_operations.add(notification_id)
+                                next_input = (notification_id, content)
+                                next_purpose = "child_result"
+                            break
+                        # Parent completion parks on child lifecycle activity,
+                        # not on an all-child gather. A future durable question
+                        # can wake this same seam while its Child remains parked.
+                        await subagent_host.wait_for_activity()
                     if next_input is None:
                         break
-                    if len(agent_operations) >= 1 + plan.max_pending_follow_ups:
-                        raise RunExecutionError(
-                            "run_execution_failed",
-                            "Research linked-operation bound was exhausted.",
-                        )
                     validate_research_pins()
                     if prepared_early.streamed_terminal_text is not None:
                         await session.reset_output()
@@ -1442,6 +1511,7 @@ class AnswerExecutor:
                         content=next_input[1],
                         plan=plan,
                     )
+                    accepted_purpose = next_purpose
                     research_operation_id = accepted.operation_id
                     if command_ids and controls is not None:
                         if not await controls.acknowledge(command_ids):
@@ -1766,7 +1836,10 @@ class AnswerExecutor:
                     )
                     return AlreadyCommittedTerminal(terminal)
                 return Succeeded(stored)
-        except BaseException:
+        except BaseException as exc:
+            cancel_children_on_exit = not isinstance(exc, LeaseLostError) and not (
+                isinstance(exc, asyncio.CancelledError) and not session.cancel_requested
+            )
             if fast_session_host is not None and fast_reservation_active:
                 try:
                     await fast_session_host.fail(
@@ -1778,6 +1851,11 @@ class AnswerExecutor:
                     logger.exception("Failed to clear Fast Host turn reservation")
             raise
         finally:
+            if subagent_host is not None and subagent_host.async_lifecycle:
+                try:
+                    await subagent_host.stop(cancel=cancel_children_on_exit)
+                except Exception:
+                    logger.exception("Failed to settle local Child Session tasks")
             await _close_execution_resources(stream, run.registry)
 
     async def prepare_orchestrated_run(
@@ -1796,6 +1874,7 @@ class AnswerExecutor:
         resolved_mode: ResolvedMode,
         resource_scope: str,
         skills: SkillsBundle | None = None,
+        async_subagents: bool = True,
     ) -> OrchestratorRun:
         history = projected_history
         models = self._capabilities.request_model_context(model_profiles)
@@ -1912,7 +1991,11 @@ class AnswerExecutor:
                 environment=environment,
                 search_toolchain=self._search_toolchain,
                 resolved_mode=resolved_mode,
-                subagent_host=SubagentHost() if resolved_mode == "research" else None,
+                subagent_host=(
+                    SubagentHost(async_lifecycle=async_subagents)
+                    if resolved_mode == "research"
+                    else None
+                ),
                 memory_host=(
                     MemoryHost()
                     if resolved_mode == "research" and self._memory_store is not None

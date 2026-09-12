@@ -195,12 +195,13 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
         "corpus_mutation_runtime",
         "normalize_run_event_constraints",
         "remove_run_active_permit",
+        "interactive_child_async_lifecycle",
     )
     assert tuple(migration.version for migration in RUN_MIGRATIONS) == expected_versions
     assert all(
         "dlightrag_enforce_run_event_constraints" not in statement
         and "trg_dlightrag_run_events_enforce" not in statement
-        for migration in RUN_MIGRATIONS[:-2]
+        for migration in RUN_MIGRATIONS[:-3]
         for statement in migration.statements
     )
 
@@ -208,7 +209,7 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
     await apply_migrations(
         conn,
         scope=RUN_MIGRATION_SCOPE,
-        migrations=RUN_MIGRATIONS[:-2],
+        migrations=RUN_MIGRATIONS[:-3],
     )
     executed_before_append = len(conn.executed)
     await apply_migrations(conn, scope=RUN_MIGRATION_SCOPE, migrations=RUN_MIGRATIONS)
@@ -221,8 +222,9 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
         and args[0] == RUN_MIGRATION_SCOPE
     ]
     assert recorded_versions == list(expected_versions)
-    guard_statements = RUN_MIGRATIONS[-2].statements
-    drop_statements = RUN_MIGRATIONS[-1].statements
+    guard_statements = RUN_MIGRATIONS[-3].statements
+    drop_statements = RUN_MIGRATIONS[-2].statements
+    child_statements = RUN_MIGRATIONS[-1].statements
     assert len(guard_statements) == 2
     assert len(drop_statements) == 1
     active_permit_statements = [
@@ -232,7 +234,7 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
         if "active_permit" in statement
     ]
     assert active_permit_statements == [("remove_run_active_permit", drop_statements[0])]
-    appended_statements = (*guard_statements, *drop_statements)
+    appended_statements = (*guard_statements, *drop_statements, *child_statements)
     executed_sql = [query for query, _ in conn.executed]
     assert all(
         statement not in executed_sql[:executed_before_append] for statement in appended_statements

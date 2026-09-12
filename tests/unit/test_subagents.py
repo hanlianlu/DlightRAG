@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Foreground subagent composition, controls, replay, and durable children."""
+"""Versioned foreground and durable asynchronous Child Agent lifecycle tests."""
 
 import asyncio
 from dataclasses import dataclass, field
@@ -57,6 +57,18 @@ async def _retrieve(_query: str) -> object:
     raise RuntimeError("unused")
 
 
+def _durable_dispatch(
+    _child_id: SessionId,
+    _request: ChildRequest,
+    _snapshot: ChildContextSnapshot,
+) -> dict[str, Any]:
+    return {
+        "plan": {"schema_version": 2, "tools": []},
+        "budget": {"provider_attempt_limit": 2},
+        "host_state": {"dispatch_version": 3},
+    }
+
+
 def test_child_identity_uses_durable_intent_not_provider_call_id() -> None:
     run_id = SessionId.new().value
     parent_id = SessionId.new()
@@ -100,6 +112,63 @@ def test_child_outcome_durable_payload_round_trips_evidence_state() -> None:
     invalid["evidence_state"] = []
     with pytest.raises(ValueError, match="evidence state"):
         ChildOutcome.from_durable_payload(invalid)
+
+
+async def test_notification_identity_tracks_child_operation_not_only_session() -> None:
+    ledger = EvidenceLedger()
+    parent_id = SessionId.new()
+    child_id = SessionId.new().value
+    parent_intent_id = IntentId.new().value
+    evidence_state = {
+        "contexts": {
+            "chunks": [{"chunk_id": "e1", "content": "finding"}],
+            "entities": [],
+            "relationships": [],
+        }
+    }
+    operation = {"id": "operation-1"}
+
+    async def list_children(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        outcome = ChildOutcome(
+            status="succeeded",
+            summary=operation["id"],
+            child_session_id=child_id,
+            operation_id=operation["id"],
+            evidence_state=evidence_state,
+            usage={"input_tokens": 3},
+        )
+        return (
+            {
+                "child_session_id": child_id,
+                "parent_call_id": "call",
+                "parent_intent_id": parent_intent_id,
+                "status": "succeeded",
+                "host_state": {"terminal_outcome": outcome.durable_payload()},
+            },
+        )
+
+    def merge(state: Any, child: str, call: str) -> tuple[str, ...]:
+        before = len(ledger.contexts["chunks"])
+        ledger.merge_child_state(state, child_session_id=child, parent_call_id=call)
+        return tuple(ledger.citation_handles(after_chunk_count=before))
+
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        run_id=SessionId.new().value,
+        owner_id="owner",
+        list_children=list_children,
+        merge_evidence=merge,
+    )
+    seen: set[str] = set()
+    first = await host.completed_dispatch_notifications(seen=seen)
+    seen.add(first[0][0])
+    replay = await host.completed_dispatch_notifications(seen=seen)
+    operation["id"] = "operation-2"
+    continued = await host.completed_dispatch_notifications(seen=seen)
+
+    assert first and not replay and continued
+    assert first[0][0] != continued[0][0]
+    assert len(ledger.contexts["chunks"]) == 1
 
 
 def test_parent_tools_include_spawn_and_child_omits_it() -> None:
@@ -156,6 +225,7 @@ async def test_spawn_many_runs_in_parallel_and_aggregates_usage() -> None:
         run_id=SessionId.new().value,
         run_child=run_child,
         context_snapshot=_context_snapshot(),
+        async_lifecycle=False,
     )
     result = await subagent_tools(host=host)[0].execute(
         SpawnAgentInput(
@@ -171,6 +241,217 @@ async def test_spawn_many_runs_in_parallel_and_aggregates_usage() -> None:
     assert len(result.details["children"]) == 2
     assert result.details["inclusive_usage"] == {"input_tokens": 4}
     assert not host.tasks
+
+
+async def test_async_spawn_persists_full_envelope_before_returning_handles() -> None:
+    release = asyncio.Event()
+    persisted: list[dict[str, Any]] = []
+
+    async def persist(**kwargs: Any) -> bool:
+        persisted.append(kwargs)
+        return True
+
+    async def run_child(
+        child_id: SessionId,
+        _request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
+    ) -> ChildOutcome:
+        await release.wait()
+        return ChildOutcome(
+            status="succeeded",
+            summary="late result",
+            child_session_id=child_id.value,
+            operation_id="operation-1",
+        )
+
+    parent_id = SessionId.new()
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        run_id=SessionId.new().value,
+        owner_id="owner",
+        persist=persist,
+        finish_child=AsyncMock(return_value=True),
+        prepare_dispatch=_durable_dispatch,
+        run_child=run_child,
+        context_snapshot=_context_snapshot(parent_id),
+    )
+    spawn = subagent_tools(host=host)[0]
+    result = await spawn.execute(
+        _spawn_input("investigate"),
+        tool_runtime(call_id="async-call", tool_name="spawn_agent"),
+    )
+
+    assert result.details is not None
+    child_id = result.details["children"][0]["child_session_id"]
+    assert result.details["children"][0]["status"] == "running"
+    assert child_id in host.tasks and not host.tasks[child_id].done()
+    assert persisted[0]["parent_intent_id"]
+    assert persisted[0]["context_snapshot"]["parent_entry_id"]
+    assert persisted[0]["objective"] == "investigate"
+    assert persisted[0]["plan"] == {"schema_version": 2, "tools": []}
+    assert persisted[0]["budget"] == {"provider_attempt_limit": 2}
+
+    release.set()
+    waited = await subagent_tools(host=host)[2].execute(
+        ChildControlInput(child_session_id=child_id),
+        tool_runtime(tool_name="wait_subagent"),
+    )
+    assert "late result" in waited.text_content
+    await host.stop(cancel=False)
+
+
+async def test_async_restore_reconstructs_a_pending_child_from_durable_envelope() -> None:
+    parent_id = SessionId.new()
+    child_id = SessionId.new()
+    snapshot = _context_snapshot(parent_id)
+    row: dict[str, Any] = {
+        "child_session_id": child_id.value,
+        "parent_session_id": parent_id.value,
+        "parent_call_id": "call-restart",
+        "parent_intent_id": IntentId.new().value,
+        "status": "running",
+        "objective": "resume",
+        "context": "isolated",
+        "model_role": "query",
+        "tools": None,
+        "context_snapshot": snapshot.canonical_payload(),
+    }
+
+    async def list_children(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return (row,)
+
+    async def run_child(
+        restored_id: SessionId,
+        request: ChildRequest,
+        call_id: str,
+        restored_snapshot: ChildContextSnapshot,
+    ) -> ChildOutcome:
+        assert restored_id == child_id
+        assert request.objective == "resume"
+        assert call_id == "call-restart"
+        assert restored_snapshot == snapshot
+        row["status"] = "succeeded"
+        return ChildOutcome(
+            status="succeeded",
+            summary="recovered",
+            child_session_id=restored_id.value,
+            operation_id="operation-recovered",
+        )
+
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        run_id=SessionId.new().value,
+        owner_id="owner",
+        list_children=list_children,
+        load_child=AsyncMock(return_value=None),
+        finish_child=AsyncMock(return_value=True),
+        run_child=run_child,
+    )
+
+    await host.restore_pending()
+    await host.wait_for_activity()
+
+    assert host.outcomes[child_id.value].summary == "recovered"
+    await host.stop(cancel=False)
+
+
+async def test_async_child_exception_terminalizes_without_failing_sibling() -> None:
+    finished: dict[str, str] = {}
+
+    async def run_child(
+        child_id: SessionId,
+        request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
+    ) -> ChildOutcome:
+        if request.objective == "fails":
+            raise RuntimeError("provider exploded")
+        return ChildOutcome(
+            status="succeeded",
+            summary="sibling survived",
+            child_session_id=child_id.value,
+            operation_id=f"operation-{request.objective}",
+        )
+
+    async def finish_child(**kwargs: Any) -> bool:
+        finished[kwargs["child_session_id"]] = kwargs["status"]
+        return True
+
+    parent_id = SessionId.new()
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        run_id=SessionId.new().value,
+        owner_id="owner",
+        persist=AsyncMock(return_value=True),
+        finish_child=finish_child,
+        prepare_dispatch=_durable_dispatch,
+        run_child=run_child,
+        context_snapshot=_context_snapshot(parent_id),
+    )
+    result = await subagent_tools(host=host)[0].execute(
+        SpawnAgentInput(
+            children=(ChildRequest(objective="fails"), ChildRequest(objective="survives"))
+        ),
+        tool_runtime(call_id="siblings", tool_name="spawn_agent"),
+    )
+    assert result.details is not None
+    child_ids = [item["child_session_id"] for item in result.details["children"]]
+    await asyncio.gather(*(host.tasks[child_id] for child_id in child_ids))
+
+    assert sorted(finished.values()) == ["failed", "succeeded"]
+    assert any(outcome.summary == "sibling survived" for outcome in host.outcomes.values())
+    await host.stop(cancel=False)
+
+
+async def test_process_detach_does_not_terminalize_child_as_cancelled() -> None:
+    started = asyncio.Event()
+
+    async def run_child(
+        child_id: SessionId,
+        _request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
+    ) -> ChildOutcome:
+        started.set()
+        await asyncio.Event().wait()
+        return ChildOutcome(status="succeeded", summary="unused", child_session_id=child_id.value)
+
+    finish = AsyncMock(return_value=True)
+    parent_id = SessionId.new()
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        run_id=SessionId.new().value,
+        persist=AsyncMock(return_value=True),
+        finish_child=finish,
+        prepare_dispatch=_durable_dispatch,
+        run_child=run_child,
+        context_snapshot=_context_snapshot(parent_id),
+    )
+    await subagent_tools(host=host)[0].execute(
+        _spawn_input("survive restart"),
+        tool_runtime(call_id="detach", tool_name="spawn_agent"),
+    )
+    await started.wait()
+
+    await host.stop(cancel=False)
+
+    finish.assert_not_awaited()
+
+
+def test_legacy_foreground_tool_contract_is_exactly_preserved() -> None:
+    legacy = {tool.name: tool for tool in subagent_tools(host=SubagentHost(async_lifecycle=False))}
+    current = {tool.name: tool for tool in subagent_tools(host=SubagentHost())}
+
+    assert legacy["spawn_agent"].contract_version == 2
+    assert legacy["spawn_agent"].input_schema_digest == (
+        "758524c627795a4fdaa920302a8f58163e85641632d85d27880fc831bf26c13e"
+    )
+    assert legacy["spawn_agent"].description == (
+        "Run one or many foreground child Agent Sessions and wait for all results."
+    )
+    assert current["spawn_agent"].contract_version == 3
+    assert current["spawn_agent"].input_schema_digest == legacy["spawn_agent"].input_schema_digest
 
 
 async def test_spawn_checks_parent_cancellation_before_starting_children() -> None:
@@ -210,6 +491,7 @@ async def test_spawn_propagates_parent_cancel_and_finishes_persisted_child() -> 
         finish_child=finish,
         run_child=run_child,
         context_snapshot=_context_snapshot(),
+        async_lifecycle=False,
     )
 
     with pytest.raises(asyncio.CancelledError):
@@ -295,6 +577,7 @@ async def test_terminal_persisted_spawn_replay_never_reenters_child_execution() 
         run_child=run_child,
         context_snapshot=_context_snapshot(),
         merge_evidence=merge_evidence,
+        async_lifecycle=False,
     )
     tool = subagent_tools(host=host)[0]
     runtime = tool_runtime(call_id="call-1", tool_name="spawn_agent")
@@ -351,6 +634,7 @@ async def test_spawn_reports_child_outcome_and_usage() -> None:
         finish_child=finish,
         run_child=run_child,
         context_snapshot=_context_snapshot(),
+        async_lifecycle=False,
     )
     tool = subagent_tools(host=host)[0]
     result = await tool.execute(
@@ -398,6 +682,7 @@ async def test_spawn_adopts_child_evidence_before_returning_result() -> None:
         run_child=run_child,
         context_snapshot=_context_snapshot(),
         merge_evidence=adopted,
+        async_lifecycle=False,
     )
     tool = subagent_tools(host=host)[0]
     result = await tool.execute(
@@ -431,6 +716,7 @@ async def test_failed_child_is_recorded_failed() -> None:
         finish_child=finish,
         run_child=run_child,
         context_snapshot=_context_snapshot(),
+        async_lifecycle=False,
     )
     tool = subagent_tools(host=host)[0]
     result = await tool.execute(
@@ -631,7 +917,7 @@ async def test_child_selects_parent_context_and_an_inherited_tool_subset() -> No
     assert any(message.get("content") == "parent question" for message in messages)
 
 
-def test_child_inherits_parent_path_tools_except_spawn() -> None:
+def test_child_defaults_to_read_only_parent_tools() -> None:
     child = compose_research_tools(
         evidence=EvidenceLedger(),
         trace={},
@@ -644,9 +930,25 @@ def test_child_inherits_parent_path_tools_except_spawn() -> None:
         child=True,
     )
     names = {tool.name for tool in child}
-    assert names >= {"search_knowledge_base", "read", "write", "edit", "grep", "bash"}
-    assert "spawn_agent" not in names
-    assert "attach_artifact" not in names
+    assert names >= {"search_knowledge_base", "read", "grep", "find", "ls"}
+    assert not {"spawn_agent", "attach_artifact", "write", "edit", "bash"} & names
+
+
+def test_child_can_explicitly_narrow_to_host_permitted_side_effect_tools() -> None:
+    child = compose_research_tools(
+        evidence=EvidenceLedger(),
+        trace={},
+        retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
+        search_web=None,
+        resource_tools=[],
+        register_web_source=None,
+        environment=MagicMock(),
+        artifacts_root=Path("/unused/artifacts"),
+        child=True,
+        tool_names=("read", "write"),
+    )
+
+    assert {tool.name for tool in child} == {"read", "write"}
 
 
 async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
