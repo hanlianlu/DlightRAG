@@ -38,6 +38,17 @@ def _fake_application(**attrs: object) -> Application:
 
 CONVERSATION_ID = "11111111-1111-4111-8111-111111111111"
 SUBMISSION_ID = "22222222-2222-4222-8222-222222222222"
+BUILTIN_SKILL_COUNCIL = {
+    "name": "council",
+    "description": (
+        "Council recipe for independent Child Session investigations and one curated "
+        "cross-examination. Load when independent scrutiny would materially improve a "
+        "contested, high-stakes, or multi-source answer, or when the user asks for "
+        "independent critique. Skip ordinary factual or trivial questions. User veto, "
+        "cancellation, and scope constraints win."
+    ),
+    "source": "builtin",
+}
 BUILTIN_SKILL_CREATOR = {
     "name": "skill-creator",
     "description": (
@@ -221,6 +232,7 @@ async def test_skills_endpoint_merges_owner_skills(
     assert response.status_code == 200
     assert response.json() == {
         "skills": [
+            BUILTIN_SKILL_COUNCIL,
             {"name": "mine", "description": "My skill.", "source": "owner"},
             {"name": "review", "description": "Global review.", "source": "global"},
             BUILTIN_SKILL_CREATOR,
@@ -245,6 +257,7 @@ async def test_skills_endpoint_lists_discovered_global_skills(
     assert response.status_code == 200
     assert response.json() == {
         "skills": [
+            BUILTIN_SKILL_COUNCIL,
             {"name": "review", "description": "Review plans.", "source": "global"},
             BUILTIN_SKILL_CREATOR,
         ]
@@ -260,7 +273,7 @@ async def test_skills_endpoint_lists_builtin_for_empty_filesystem_roots(
     response = await client.get("/web/api/skills")
 
     assert response.status_code == 200
-    assert response.json() == {"skills": [BUILTIN_SKILL_CREATOR]}
+    assert response.json() == {"skills": [BUILTIN_SKILL_COUNCIL, BUILTIN_SKILL_CREATOR]}
 
 
 async def test_answer_rejects_unknown_requested_skill(

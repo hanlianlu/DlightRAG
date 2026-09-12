@@ -273,7 +273,10 @@ Answer mode. `POST /retrieve` and `POST /answer` persist a Run and return HTTP
 | `POST /answer/{run_id}/follow-up` | Create a child run using the selected terminal answer as context. |
 | `POST /answer/{run_id}/fork` | Create a sibling branch from accepted context. |
 | `GET /answer/{run_id}/transcript` | Return bounded canonical ancestry. |
-| `GET /answer/{run_id}/children` | Newest-first keyset page (`limit` 1–100, default 50). |
+| `GET /answer/{run_id}/children` | Newest-first Child Session roster page (`limit` 1–100, default 50). Public status only: no host/plan/budget envelopes or provider-private reasoning. |
+| `GET /answer/{run_id}/children/{child_session_id}` | Bounded Child Session observation: public status, transcript tail, queued/consumed controls, questions, and Evidence handles. `limit` 1–100, default 20. |
+| `POST /answer/{run_id}/children/{child_session_id}/control` | Steer, continue, or cancel one Child Session. Requires `Idempotency-Key`. Body `{action, content, reauthorize_user_cancelled}`. 202 for `queued` / `consumed` / `accepted` / `cancellation_requested`; 409 with the explicit outcome (`terminal_child`, `run_terminal`, `reauthorization_required`, …); 404 if unknown. User-cancelled continuation requires `reauthorize_user_cancelled=true`. |
+| `POST /answer/{run_id}/child-guidance/{request_id}/reply` | Reply to one correlated `ask_parent` request. Requires `Idempotency-Key`. 202 for `replied`; 409 otherwise. |
 
 Run status is `queued`, `running`, `succeeded`, `failed`, or `cancelled`. Phase is
 an executor-owned string. Retrieval uses `planning` and `searching`; Answer uses
@@ -380,8 +383,8 @@ common status, listing, subscription, and cancellation.
 Files/URLs become `ResourceInput` values through
 `AnswerAttachment.from_path/from_bytes/from_url` and
 `resource_inputs_from_attachments`. `AnswerService` owns Answer-specific
-steering, continuation, transcript, and roster methods. There is no separate
-public Python SDK for remote callers.
+steering, continuation, transcript, Child Session roster/observation, and child
+control/reply methods. There is no separate public Python SDK for remote callers.
 
 ### MCP Server
 
@@ -395,7 +398,8 @@ Registered public tool names are:
 
 - query/run: `retrieve`, `answer`, `get_run`, `cancel_run`, `list_runs`,
   `steer_answer_run`, `follow_up_answer_run`, `fork_answer_run`,
-  `get_answer_transcript`, `list_answer_children`, `list_answer_artifacts`,
+  `get_answer_transcript`, `list_answer_children`, `get_answer_child`,
+  `control_answer_child`, `reply_answer_child`, `list_answer_artifacts`,
   `read_answer_artifact`
 - corpus: `list_workspaces`, `get_capabilities`,
   `get_workspace_storage_status`, `create_workspace`, `ingest`, `retry_files`,
@@ -416,7 +420,8 @@ Route families cover:
 - `/conversations`, `/conversations/{id}/history`, and
   `/runs/{run_id}/attachments/{ordinal}` (plus `/thumbnail`);
 - `/answer`, submission reconciliation, status/resume/steer/children,
-  follow-up/fork/cancel, Artifacts/presentation, and events; and
+  child observation/control/guidance reply, follow-up/fork/cancel,
+  Artifacts/presentation, and events; and
 - Files/upload and same-origin `/corpus-runs/{run_id}`
   status/events/cancel/resume, workspaces, images, Memory, and model catalogue.
 

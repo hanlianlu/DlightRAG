@@ -70,6 +70,7 @@ _ROOT_CONSOLE_SCRIPTS = (
 )
 _CONCRETE_LIGHTRAG_BACKEND = "lightrag.kg.postgres_impl"
 _BUILTIN_SKILL_CREATOR = "dlightrag/engine/agent/builtin_skills/skill-creator/SKILL.md"
+_BUILTIN_SKILL_COUNCIL = "dlightrag/engine/agent/builtin_skills/council/SKILL.md"
 # import-linter rejects external submodules as contract targets, so the built
 # artifact gate owns this one exact LightRAG implementation prohibition.
 _SPECIFIC_SOURCE_PROHIBITIONS = {
@@ -170,6 +171,7 @@ class WheelFacts:
     has_frontend: bool
     has_model_catalog: bool
     has_builtin_skill_creator: bool
+    has_builtin_skill_council: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +188,7 @@ class SdistFacts:
     has_frontend: bool
     has_model_catalog: bool
     has_builtin_skill_creator: bool
+    has_builtin_skill_council: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,6 +304,7 @@ def _wheel_facts(
         )
         has_model_catalog = "dlightrag/engine/ai/model_catalog.json" in wheel.namelist()
         has_builtin_skill_creator = _BUILTIN_SKILL_CREATOR in wheel.namelist()
+        has_builtin_skill_council = _BUILTIN_SKILL_COUNCIL in wheel.namelist()
         sources = (
             (name, wheel.read(name))
             for name in wheel.namelist()
@@ -325,6 +329,7 @@ def _wheel_facts(
         has_frontend,
         has_model_catalog,
         has_builtin_skill_creator,
+        has_builtin_skill_council,
     )
 
 
@@ -538,6 +543,7 @@ def _sdist_facts(
         frontend_members: set[str] = set()
         has_model_catalog = False
         has_builtin_skill_creator = False
+        has_builtin_skill_council = False
         sources: list[tuple[str, bytes]] = []
         for member in members:
             parts = Path(member.name).parts
@@ -555,6 +561,8 @@ def _sdist_facts(
                 has_model_catalog = True
             if member.name == f"{sdist_root}/src/{_BUILTIN_SKILL_CREATOR}":
                 has_builtin_skill_creator = True
+            if member.name == f"{sdist_root}/src/{_BUILTIN_SKILL_COUNCIL}":
+                has_builtin_skill_council = True
             if len(parts) > 1:
                 frontend_members.add("/".join(parts[1:]))
             relative_parts = parts[1:]
@@ -589,6 +597,7 @@ def _sdist_facts(
         ),
         has_model_catalog,
         has_builtin_skill_creator,
+        has_builtin_skill_council,
     )
 
 
@@ -779,6 +788,8 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             raise ValueError("dlightrag: wheel must contain engine/ai/model_catalog.json")
         if distribution == "dlightrag" and not facts.has_builtin_skill_creator:
             raise ValueError("dlightrag: wheel must contain the built-in skill-creator SKILL.md")
+        if distribution == "dlightrag" and not facts.has_builtin_skill_council:
+            raise ValueError("dlightrag: wheel must contain the built-in council SKILL.md")
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: wheel must contain generated frontend assets")
 
@@ -820,6 +831,8 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             raise ValueError("dlightrag: sdist must contain engine/ai/model_catalog.json")
         if distribution == "dlightrag" and not facts.has_builtin_skill_creator:
             raise ValueError("dlightrag: sdist must contain the built-in skill-creator SKILL.md")
+        if distribution == "dlightrag" and not facts.has_builtin_skill_council:
+            raise ValueError("dlightrag: sdist must contain the built-in council SKILL.md")
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: sdist must contain generated frontend assets")
 
@@ -1061,6 +1074,16 @@ def _smoke_root_interfaces() -> None:
         raise ValueError("installed root package did not discover the built-in skill-creator")
     if "# Skill Creator" not in skill_catalog.read("skill-creator"):
         raise ValueError("installed root package did not read the built-in skill-creator")
+    council = next(
+        (skill for skill in skill_catalog.metadata if skill.name == "council"),
+        None,
+    )
+    if council is None or council.source != "builtin":
+        raise ValueError("installed root package did not discover the built-in council Skill")
+    if "# Council" not in skill_catalog.read("council"):
+        raise ValueError("installed root package did not read the built-in council Skill")
+    if "only when the user" in council.description.lower():
+        raise ValueError("installed council Skill metadata requires an explicit user gate")
     if len(DEPLOYMENT_OWNER_ID) != 64:
         raise ValueError("installed Access package did not expose a SHA-256 owner id")
     if AnswerRunClient.__module__ != "dlightrag.adapters.http.client.client":

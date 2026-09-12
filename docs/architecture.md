@@ -138,7 +138,15 @@ create a nested Retrieval Run:
 - **Research** drives product-neutral `AgentSessionRuntime` on one Lane with a
   closed run-local tool registry. Tools may read attachments, search the corpus
   or Web, use rooted files/Bash when enabled, call allowlisted MCP endpoints,
-  use Profile Memory, load Skills, and run bounded child Sessions.
+  use Profile Memory, load Skills, and run bounded Child Sessions.
+
+Research parents admit Child Sessions asynchronously: `spawn_agent` returns
+stable handles without waiting for children to finish. Children default to the
+host's read-only tool subset, cannot spawn grandchildren, and remain attached
+to the accepting parent Answer Run. Independent critique uses the built-in
+[`council`](../src/dlightrag/engine/agent/builtin_skills/council/SKILL.md)
+Skill as a recipe over those Child Sessions; it is not a runtime, Run kind,
+table, or approval action. Skill loading grants no authority.
 
 The last Research assistant turn with no tool call is the answer. Citation,
 source, media, usage, and Artifact finalization is deterministic for both paths;
@@ -199,7 +207,11 @@ sandbox backend, so `sandbox` fails instead of downgrading. Skills are discovere
 from packaged built-ins, the configured global root (default
 `~/.dlightrag/skills`), and the viewer's own published skills under the
 per-owner root (default `~/.dlightrag/owner_skills`), and loaded progressively.
-Precedence is built-in, then global, then owner. Research parent runs additionally
+Precedence is built-in, then global, then owner. Packaged built-ins currently
+include `skill-creator` and `council`. The `council` Skill is model-invoked
+recipe metadata: the parent may load it when independent scrutiny would
+materially improve an answer. Explicit user selection is optional convenience,
+not a permission gate; user veto wins. Research parent runs additionally
 hold `publish_skill` and `delete_skill`, the validated owner-only publication
 channel; built-in and global Skills stay read-only to the application. Outbound
 MCP tools come only from deployment allowlists.

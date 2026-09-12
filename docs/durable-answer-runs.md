@@ -352,9 +352,13 @@ visual drops only its image while preserving text/citation; a missing attachment
 blob fails the run.
 
 `spawn_agent` is replayable because child IDs derive from parent effect intent
-and terminal roster rows persist parent-visible outcome/Evidence. Replay
+and accepted roster rows persist before handles become visible. Replay
 re-merges that state without creating or driving another child. An interrupted
-ordinary read-only batch may execute again.
+ordinary read-only batch may execute again. Parent reclaim rebuilds running
+children from their stored envelope. Same-Session continuation is a new
+Operation on the existing Child Session; recovery resumes that Operation rather
+than inventing a follow-up. Targeted controls and `ask_parent` requests are
+PostgreSQL-owned; missed notifications do not lose accepted work.
 
 ### Fast Recovery
 

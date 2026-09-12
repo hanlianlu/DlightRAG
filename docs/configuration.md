@@ -657,6 +657,7 @@ answer:
   agent:
     execution_environment: trust   # disabled | trust | sandbox
     workspace_root: null
+    child_guidance_timeout_seconds: 300  # default ask_parent expiry; 1–86400
     skills_root: null              # absolute path; null → ~/.dlightrag/skills
     owner_skills_root: null        # absolute path; null → ~/.dlightrag/owner_skills
     disabled_builtin_skills: []    # packaged Skill names only
@@ -708,8 +709,13 @@ Research discovers Skill metadata from three tiers and loads content on demand:
 packaged built-ins, operator-global skills, then owner skills. A same-named
 higher tier shadows lower tiers. The standard
 [`skill-creator`](../src/dlightrag/engine/agent/builtin_skills/skill-creator/SKILL.md)
-is available immediately from the installed package; DlightRAG neither copies
-nor extracts it into a runtime root.
+and
+[`council`](../src/dlightrag/engine/agent/builtin_skills/council/SKILL.md)
+Skills are available immediately from the installed package; DlightRAG neither
+copies nor extracts them into a runtime root. `council` is a model-invoked
+recipe: the parent may load it when independent scrutiny would materially help.
+Explicit user selection is optional convenience, not a permission gate, and
+loading it cannot widen child tools.
 
 Built-ins are read-only application resources. Administrators can hide named
 built-ins with `answer.agent.disabled_builtin_skills`; this filter does not hide
