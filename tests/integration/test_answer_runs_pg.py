@@ -3617,3 +3617,51 @@ class TestAgentControlsAndChildren:
             ),
         )
         assert isinstance(stale_write, TransactionLeaseLost)
+
+    async def test_child_observation_lists_are_owner_scoped(self, store) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        parent_id = str(uuid.uuid7())
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            parent_call_id="observe-call",
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            objective="observe",
+            context_mode="parent",
+            model_role="extract",
+            tools=("search_knowledge_base",),
+            depth=1,
+        )
+        controls = await store.list_child_controls(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            limit=20,
+        )
+        questions = await store.list_child_guidance(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            limit=20,
+        )
+        foreign = await store.list_child_controls(
+            owner_id=_OTHER_OWNER,
+            run_id=creation.run.run_id,
+            child_session_id=child_id,
+            limit=20,
+        )
+        transcript = await store.load_agent_transcript(
+            owner_id=_OWNER,
+            run_id=creation.run.run_id,
+            session_id=child_id,
+            limit=20,
+        )
+        assert controls == ()
+        assert questions == ()
+        assert foreign == ()
+        assert transcript == ()

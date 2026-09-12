@@ -80,6 +80,12 @@ test('tool events drive the trace and sawChildren', () => {
     payload: {tool_name: 'spawn_agent', call_id: 'c1', object_label: 'review'},
   });
   assert.ok(view.progress.includes('review'));
+  view = applyAnswerEvent(turn(), {
+    kind: 'tool',
+    eventType: 'tool_start',
+    payload: {tool_name: 'wait_subagent', call_id: 'c2'},
+  });
+  assert.equal(view.sawChildren, true);
 });
 
 test('errors fail the turn', () => {

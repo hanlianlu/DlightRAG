@@ -106,6 +106,8 @@ from .child_roster import (
     ChildRosterPage,
     ChildRosterPageRequest,
     ChildRosterRowPage,
+    child_result_lineage,
+    public_child_status,
 )
 
 #: Accepted input uploads, in the precedence one ordinal resolves against.
@@ -121,6 +123,67 @@ def _store_method(store: object, name: str) -> Callable[..., Awaitable[Mapping[s
     if not callable(method):
         raise RuntimeError(f"Answer run store method is unavailable: {name}")
     return cast(Callable[..., Awaitable[Mapping[str, Any]]], method)
+
+
+def _stamp(value: Any) -> str | None:
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return str(isoformat()).replace("+00:00", "Z")
+    text = str(value).strip()
+    return text or None
+
+
+def _public_transcript_message(message: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep useful conversation/tool lineage and drop private reasoning fields."""
+    role = str(message.get("role") or "")
+    projected: dict[str, Any] = {"role": role, "content": message.get("content") or ""}
+    if role == "assistant":
+        projected["tool_calls"] = [
+            {
+                "id": call.get("id"),
+                "name": call.get("name")
+                or (
+                    call.get("function", {}).get("name")
+                    if isinstance(call.get("function"), Mapping)
+                    else None
+                ),
+            }
+            for call in message.get("tool_calls") or ()
+            if isinstance(call, Mapping)
+        ]
+    if role == "tool":
+        projected["tool_call_id"] = str(message.get("tool_call_id") or "")
+        projected["name"] = str(message.get("name") or "")
+        projected["is_error"] = bool(message.get("is_error"))
+    return projected
+
+
+def _public_control_record(row: Mapping[str, Any]) -> dict[str, Any]:
+    consumed_at = row.get("consumed_at")
+    return {
+        "control_sequence": int(row.get("control_sequence") or 0),
+        "kind": str(row.get("kind") or ""),
+        "content": str(row.get("content") or ""),
+        "origin": str(row.get("origin") or ""),
+        "consumed": bool(row.get("consumed") if "consumed" in row else consumed_at),
+        "consumed_at": _stamp(consumed_at),
+        "created_at": _stamp(row.get("created_at")),
+        "operation_id": (str(row["operation_id"]) if row.get("operation_id") else None),
+    }
+
+
+def _public_question_record(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "request_id": str(row.get("request_id") or ""),
+        "question": str(row.get("question") or ""),
+        "status": str(row.get("status") or ""),
+        "reply": row.get("reply"),
+        "reply_origin": row.get("reply_origin"),
+        "expires_at": _stamp(row.get("expires_at")),
+        "created_at": _stamp(row.get("created_at")),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +270,29 @@ class AgentTranscriptTail:
     messages: tuple[Mapping[str, Any], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ChildObservation:
+    """Bounded child transcript, control, question, and result lineage."""
+
+    run_id: str
+    child: Mapping[str, Any]
+    transcript: tuple[Mapping[str, Any], ...]
+    controls: tuple[Mapping[str, Any], ...]
+    questions: tuple[Mapping[str, Any], ...]
+    result: Mapping[str, Any] | None
+
+    def payload(self) -> dict[str, Any]:
+        """Return the transport-neutral observation document."""
+        return {
+            "run_id": self.run_id,
+            "child": dict(self.child),
+            "transcript": [dict(item) for item in self.transcript],
+            "controls": [dict(item) for item in self.controls],
+            "questions": [dict(item) for item in self.questions],
+            "result": dict(self.result) if self.result is not None else None,
+        }
+
+
 class HistoryResolver(Protocol):
     """In-process durable history projection invoked after exact targets exist."""
 
@@ -264,6 +350,18 @@ class _AnswerRunRepository(AnswerRunAcceptor[RuntimeRunCreation], Protocol):
 
     async def load_agent_transcript(
         self, *, owner_id: str, run_id: str, session_id: str, limit: int
+    ) -> tuple[Mapping[str, Any], ...]: ...
+
+    async def load_child_session(
+        self, *, owner_id: str, run_id: str, child_session_id: str
+    ) -> Mapping[str, Any] | None: ...
+
+    async def list_child_controls(
+        self, *, owner_id: str, run_id: str, child_session_id: str, limit: int
+    ) -> tuple[Mapping[str, Any], ...]: ...
+
+    async def list_child_guidance(
+        self, *, owner_id: str, run_id: str, child_session_id: str, limit: int
     ) -> tuple[Mapping[str, Any], ...]: ...
 
     async def list_run_artifacts(
@@ -1008,9 +1106,53 @@ class AnswerService:
                 child_session_id=UUID(str(last["child_session_id"])),
             )
         return ChildRosterPage(
-            children=result.children,
+            children=tuple(public_child_status(row) for row in result.children),
             next_cursor=next_cursor,
             fetched_rows=result.fetched_rows,
+        )
+
+    async def observe_child(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        limit: int = 20,
+    ) -> ChildObservation | None:
+        """Return one bounded child observation, or None if unknown."""
+        if await self._get_answer_run(owner_id=owner_id, run_id=run_id) is None:
+            return None
+        row = await self._store.load_child_session(
+            owner_id=owner_id, run_id=run_id, child_session_id=child_session_id
+        )
+        if row is None:
+            return None
+        cap = max(1, min(int(limit), 100))
+        transcript = await self._store.load_agent_transcript(
+            owner_id=owner_id,
+            run_id=run_id,
+            session_id=child_session_id,
+            limit=cap,
+        )
+        controls = await self._store.list_child_controls(
+            owner_id=owner_id,
+            run_id=run_id,
+            child_session_id=child_session_id,
+            limit=cap,
+        )
+        questions = await self._store.list_child_guidance(
+            owner_id=owner_id,
+            run_id=run_id,
+            child_session_id=child_session_id,
+            limit=cap,
+        )
+        return ChildObservation(
+            run_id=run_id,
+            child=public_child_status(row),
+            transcript=tuple(_public_transcript_message(message) for message in transcript),
+            controls=tuple(_public_control_record(item) for item in controls),
+            questions=tuple(_public_question_record(item) for item in questions),
+            result=child_result_lineage(row),
         )
 
     @property

@@ -22,6 +22,12 @@ const TOOL_VERBS: Record<string, string> = {
   forget: 'Removing a memory',
   recall_memory: 'Recalling memories',
   spawn_agent: 'Dispatching a subagent',
+  wait_subagent: 'Waiting for a child agent',
+  steer_subagent: 'Steering a child agent',
+  continue_subagent: 'Continuing a child agent',
+  cancel_subagent: 'Cancelling a child agent',
+  reply_subagent: 'Replying to a child agent',
+  subagent_status: 'Checking a child agent',
 };
 
 export interface ToolDisplay {

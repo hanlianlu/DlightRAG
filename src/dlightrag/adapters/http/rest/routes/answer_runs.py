@@ -646,4 +646,23 @@ async def answer_run_children(
     }
 
 
+@router.get("/answer/{run_id}/children/{child_session_id}")
+async def observe_answer_child(
+    run_id: str,
+    child_session_id: str,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> dict[str, Any]:
+    observation = await get_application(request).answers.observe_child(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        child_session_id=child_session_id,
+        limit=limit,
+    )
+    if observation is None:
+        raise HTTPException(status_code=404, detail="Answer child not found")
+    return observation.payload()
+
+
 __all__ = ["router"]

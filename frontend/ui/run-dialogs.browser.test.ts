@@ -2,6 +2,7 @@
 
 import {expect} from '@esm-bundle/chai';
 import './run-dialogs.ts';
+import type {ChildObservation} from '../api/conversations.ts';
 import type {ChildRosterEntry, DlChildrenRoster} from './run-dialogs.ts';
 
 function entry(id: string, status = 'succeeded'): ChildRosterEntry {
@@ -170,4 +171,93 @@ it('closing the dialog aborts in-flight pages and resets paging state', async ()
   expect(panel.querySelector('.roster-list')?.textContent).to.contain(
     'No child agents were started.',
   );
+});
+
+function observation(status = 'running'): ChildObservation {
+  return {
+    runId: 'run-1',
+    child: {
+      childSessionId: 'newest',
+      status,
+      objective: 'objective newest',
+      modelRole: 'query',
+      usage: null,
+      operationId: 'op-1',
+      operationSequence: 1,
+      operationStatus: status,
+      cancellationOrigin: status === 'cancelled' ? 'user' : null,
+      summary: 'working',
+      resultHandles: ['ev-1'],
+    },
+    transcript: [{role: 'user', content: 'inspect', toolCalls: [], toolCallId: '', name: '', isError: false}],
+    controls: [{
+      controlSequence: 3, kind: 'steer', content: 'focus', origin: 'user',
+      consumed: false, consumedAt: null, createdAt: null, operationId: 'op-1',
+    }],
+    questions: [{
+      requestId: 'req-1', question: 'Which source?', status: 'pending',
+      reply: null, replyOrigin: null, expiresAt: null, createdAt: null,
+    }],
+    result: {status, summary: 'working', handles: ['ev-1'], operationId: 'op-1'},
+  };
+}
+
+it('selecting a child shows lineage and posts a queued steer', async () => {
+  const steered: string[] = [];
+  const panel = roster();
+  panel.open(
+    async () => [entry('newest', 'running')],
+    async () => ({children: [entry('newest', 'running')], nextCursor: null}),
+    {
+      runId: 'run-1',
+      observe: async () => observation('running'),
+      control: async (_child, action, content) => {
+        steered.push(`${action}:${content}`);
+        return {
+          runId: 'run-1', childSessionId: 'newest', action, outcome: 'queued',
+          operationId: 'op-1', operationSequence: 1, controlSequence: 4, consumedAt: null,
+          requestId: null,
+        };
+      },
+    },
+  );
+  await waitFor(() => Boolean(panel.querySelector('[data-child-session="newest"]')));
+  panel.querySelector<HTMLButtonElement>('[data-child-session="newest"]')!.click();
+  await waitFor(() => Boolean(panel.querySelector('[name="instruction"]')));
+
+  expect(panel.textContent).to.contain('Queued');
+  expect(panel.textContent).to.contain('Which source?');
+  expect(panel.textContent).to.contain('ev-1');
+
+  const instruction = panel.querySelector<HTMLTextAreaElement>('[name="instruction"]')!;
+  instruction.value = 'focus on dates';
+  instruction.closest('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+  await waitFor(() => steered.length === 1);
+  expect(steered[0]).to.equal('steer:focus on dates');
+  await waitFor(() => (panel.textContent || '').includes('has not necessarily followed'));
+});
+
+it('rejected terminal steer stays explicit and does not look like success', async () => {
+  const panel = roster();
+  panel.open(
+    async () => [entry('newest', 'running')],
+    async () => ({children: [entry('newest', 'running')], nextCursor: null}),
+    {
+      runId: 'run-1',
+      observe: async () => observation('running'),
+      control: async () => {
+        const error = new Error('terminal_child') as Error & {status: number; outcome: string};
+        error.status = 409;
+        error.outcome = 'terminal_child';
+        throw error;
+      },
+    },
+  );
+  await waitFor(() => Boolean(panel.querySelector('[data-child-session="newest"]')));
+  panel.querySelector<HTMLButtonElement>('[data-child-session="newest"]')!.click();
+  await waitFor(() => Boolean(panel.querySelector('[name="instruction"]')));
+  const instruction = panel.querySelector<HTMLTextAreaElement>('[name="instruction"]')!;
+  instruction.value = 'too late';
+  instruction.closest('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+  await waitFor(() => (panel.textContent || '').includes('already terminal'));
 });

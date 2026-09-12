@@ -118,6 +118,9 @@ def application_double() -> AsyncMock:
             return_value=ChildRosterPage(children=(), next_cursor=None, fetched_rows=0)
         ),
         child_roster_cursor_codec=ChildRosterCursorCodec(b"web-children-test"),
+        observe_child=AsyncMock(return_value=None),
+        control_child=AsyncMock(return_value=None),
+        reply_to_child=AsyncMock(return_value=None),
     )
     created.corpora = SimpleNamespace(
         alist_workspace_records=AsyncMock(return_value=[{"workspace": "default"}])
@@ -712,6 +715,85 @@ async def test_web_child_roster_unknown_run_is_404_before_cursor_validation(
 
     assert resp.status_code == 404
     application_double.answers.children.assert_not_awaited()
+
+
+async def test_web_observes_and_controls_a_child(
+    client: AsyncClient, application_double: AsyncMock
+) -> None:
+    observation = SimpleNamespace(
+        payload=lambda: {
+            "run_id": RUN_ID,
+            "child": {"child_session_id": "child-1", "status": "running"},
+            "transcript": [{"role": "user", "content": "inspect"}],
+            "controls": [{"control_sequence": 1, "consumed": False, "origin": "user"}],
+            "questions": [{"request_id": "req-1", "status": "pending"}],
+            "result": None,
+        }
+    )
+    application_double.answers.observe_child.return_value = observation
+    application_double.answers.control_child.return_value = SimpleNamespace(
+        run_id=RUN_ID,
+        child_session_id="child-1",
+        action="steer",
+        outcome="queued",
+        operation_id="op-1",
+        operation_sequence=1,
+        control_sequence=4,
+        consumed_at=None,
+    )
+    application_double.answers.reply_to_child.return_value = SimpleNamespace(
+        run_id=RUN_ID,
+        child_session_id="child-1",
+        action="reply",
+        outcome="replied",
+        operation_id="req-1",
+        operation_sequence=None,
+        control_sequence=None,
+        consumed_at=None,
+    )
+
+    observed = await client.get(f"/web/api/answer/{RUN_ID}/children/child-1")
+    steered = await client.post(
+        f"/web/api/answer/{RUN_ID}/children/child-1/control",
+        headers={"Idempotency-Key": "web-steer-1"},
+        json={"action": "steer", "content": "focus"},
+    )
+    replied = await client.post(
+        f"/web/api/answer/{RUN_ID}/child-guidance/req-1/reply",
+        headers={"Idempotency-Key": "web-reply-1"},
+        json={"content": "use the report"},
+    )
+
+    assert observed.status_code == 200
+    assert observed.json()["transcript"][0]["content"] == "inspect"
+    assert steered.status_code == 202
+    assert steered.json()["outcome"] == "queued"
+    assert replied.status_code == 202
+    assert replied.json()["outcome"] == "replied"
+
+
+async def test_web_child_control_terminal_is_conflict(
+    client: AsyncClient, application_double: AsyncMock
+) -> None:
+    application_double.answers.control_child.return_value = SimpleNamespace(
+        run_id=RUN_ID,
+        child_session_id="child-1",
+        action="steer",
+        outcome="terminal_child",
+        operation_id=None,
+        operation_sequence=None,
+        control_sequence=None,
+        consumed_at=None,
+    )
+
+    response = await client.post(
+        f"/web/api/answer/{RUN_ID}/children/child-1/control",
+        headers={"Idempotency-Key": "web-steer-terminal"},
+        json={"action": "steer", "content": "too late"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "terminal_child"
 
 
 @pytest.mark.parametrize(

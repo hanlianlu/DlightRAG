@@ -102,6 +102,7 @@ class _RunApplication:
         self.artifact_bytes: bytes | None = None
         self.controls: list[str] = []
         self.continuations: list[dict[str, Any]] = []
+        self.child_control_outcome = "queued"
 
     async def list_artifacts(self, *, owner_id: str, run_id: str) -> tuple[Any, ...] | None:
         del owner_id, run_id
@@ -190,7 +191,7 @@ class _RunApplication:
             run_id=kwargs["run_id"],
             child_session_id=kwargs["child_session_id"],
             action=kwargs["action"],
-            outcome="queued" if kwargs["action"] == "steer" else "accepted",
+            outcome=(self.child_control_outcome if kwargs["action"] == "steer" else "accepted"),
             operation_id="operation-1",
             operation_sequence=2,
             control_sequence=3,
@@ -258,6 +259,20 @@ class _RunApplication:
             children=(({"child_session_id": "child-1", "status": "running"},)),
             next_cursor=None,
             fetched_rows=1,
+        )
+
+    async def observe_child(self, **kwargs: Any) -> Any:
+        if self.record is None or self.record.run_kind != "answer":
+            return None
+        return SimpleNamespace(
+            payload=lambda: {
+                "run_id": kwargs["run_id"],
+                "child": {"child_session_id": kwargs["child_session_id"], "status": "running"},
+                "transcript": [{"role": "user", "content": "inspect"}],
+                "controls": [],
+                "questions": [],
+                "result": None,
+            }
         )
 
     async def resume(self, *, owner_id: str, run_id: str) -> RunRecord | None:
@@ -1116,6 +1131,29 @@ class TestAgentControls:
             "child:steer:child-1",
             "reply:request-1",
         ]
+
+    async def test_rest_observes_one_child(
+        self, client: AsyncClient, run_application: _RunApplication
+    ) -> None:
+        observed = await client.get(f"/answer/{_RUN_ID}/children/child-1")
+
+        assert observed.status_code == 200
+        assert observed.json()["child"]["child_session_id"] == "child-1"
+        assert observed.json()["transcript"][0]["content"] == "inspect"
+
+    async def test_rest_child_control_terminal_is_conflict(
+        self, client: AsyncClient, run_application: _RunApplication
+    ) -> None:
+        run_application.child_control_outcome = "terminal_child"
+
+        response = await client.post(
+            f"/answer/{_RUN_ID}/children/child-1/control",
+            headers={"Idempotency-Key": "child-steer-terminal"},
+            json={"action": "steer", "content": "too late"},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == "terminal_child"
 
     async def test_continuation_rechecks_current_workspace_authorization(
         self,

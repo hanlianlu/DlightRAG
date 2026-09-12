@@ -554,6 +554,12 @@ async def test_agent_control_methods_project_the_shared_rest_contract() -> None:
             return httpx.Response(202, json=_DESCRIPTOR)
         if request.url.path.endswith("/children"):
             return httpx.Response(200, json={"children": [{"child_session_id": "c"}]})
+        if "/children/" in request.url.path and request.url.path.endswith("/control"):
+            return httpx.Response(202, json={"outcome": "queued"})
+        if request.url.path.endswith("/reply"):
+            return httpx.Response(202, json={"outcome": "replied"})
+        if "/children/" in request.url.path:
+            return httpx.Response(200, json={"run_id": "run-1", "child": {"status": "running"}})
         if request.url.path.endswith("/transcript"):
             return httpx.Response(200, json={"run_id": "run-1", "messages": []})
         if request.url.path.endswith("/steer"):
@@ -622,6 +628,37 @@ async def test_children_page_normalizes_an_absent_continuation() -> None:
         "children": [{"child_session_id": "c1"}],
         "next_cursor": None,
     }
+
+
+async def test_child_observation_and_control_use_rest_contracts() -> None:
+    seen: list[tuple[str, str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, request.headers.get("Idempotency-Key")))
+        if request.url.path.endswith("/control"):
+            return httpx.Response(202, json={"outcome": "queued"})
+        if request.url.path.endswith("/reply"):
+            return httpx.Response(202, json={"outcome": "replied"})
+        return httpx.Response(
+            200, json={"run_id": "run-1", "child": {"child_session_id": "c1", "status": "running"}}
+        )
+
+    http, runs = _client(handler)
+    async with http:
+        observed = await runs.child("run-1", "c1")
+        steered = await runs.control_child(
+            "run-1", "c1", "steer", content="focus", idempotency_key="k1"
+        )
+        replied = await runs.reply_child("run-1", "req-1", "use report", idempotency_key="k2")
+
+    assert observed["child"]["child_session_id"] == "c1"
+    assert steered["outcome"] == "queued"
+    assert replied["outcome"] == "replied"
+    assert seen == [
+        ("GET", "/answer/run-1/children/c1", None),
+        ("POST", "/answer/run-1/children/c1/control", "k1"),
+        ("POST", "/answer/run-1/child-guidance/req-1/reply", "k2"),
+    ]
 
 
 async def test_list_memories_forwards_cursor_and_limit_and_returns_continuation() -> None:

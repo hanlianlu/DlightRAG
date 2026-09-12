@@ -471,6 +471,31 @@ async def list_answer_children_tool(
 
 
 @mcp_app.tool(
+    name="get_answer_child",
+    description=(
+        "Return one bounded observation of an owned child Agent Session: "
+        "status, transcript tail, controls, questions, and evidence handles. "
+        "Does not include provider-private reasoning."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+)
+async def get_answer_child_tool(
+    run_id: Annotated[str, Field(description="Parent Answer run id")],
+    child_session_id: Annotated[str, Field(description="Child Session id")],
+    limit: Annotated[int, Field(default=20, ge=1, le=100)] = 20,
+) -> dict[str, Any]:
+    observation = await (await mcp_server._ensure_application()).answers.observe_child(
+        owner_id=mcp_server._owner_id(),
+        run_id=run_id,
+        child_session_id=child_session_id,
+        limit=limit,
+    )
+    if observation is None:
+        raise ValueError("Answer child not found")
+    return observation.payload()
+
+
+@mcp_app.tool(
     name="list_runs",
     description="List this caller's durable runs, oldest first.",
     annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),

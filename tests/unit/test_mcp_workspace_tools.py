@@ -148,6 +148,7 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
         fork=AsyncMock(return_value=None),
         transcript_tail=AsyncMock(return_value=None),
         children=AsyncMock(return_value=None),
+        observe_child=AsyncMock(return_value=None),
     )
     monkeypatch.setattr(mcp_server, "_ensure_application", AsyncMock(return_value=application))
     monkeypatch.setattr(mcp_server, "create_application", AsyncMock(return_value=application))
@@ -401,6 +402,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "follow_up_answer_run",
         "fork_answer_run",
         "get_answer_transcript",
+        "get_answer_child",
         "list_answer_artifacts",
         "list_answer_children",
         "list_runs",
@@ -1293,6 +1295,11 @@ async def test_mcp_list_workspaces_returns_the_bounded_first_page(
         ("fork_answer_run", {"run_id": _RUN_ID, "query": "branch"}, "terminal owned run"),
         ("get_answer_transcript", {"run_id": _RUN_ID}, "Answer run not found"),
         ("list_answer_children", {"run_id": _RUN_ID}, "Answer run not found"),
+        (
+            "get_answer_child",
+            {"run_id": _RUN_ID, "child_session_id": "child-1"},
+            "Answer child not found",
+        ),
         ("list_answer_artifacts", {"run_id": _RUN_ID}, "Answer run not found"),
         (
             "read_answer_artifact",

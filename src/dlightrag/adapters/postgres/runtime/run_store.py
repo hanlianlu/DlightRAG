@@ -2111,8 +2111,15 @@ ORDER BY child.created_at DESC, child.child_session_id DESC
 _SELECT_AGENT_TRANSCRIPT = """
 WITH RECURSIVE authorized AS (
     SELECT agent_session_id, agent_lane_id
-    FROM dlightrag_answer_run_routing
-    WHERE owner_id = $1 AND run_id = $2 AND agent_session_id = $3
+    FROM (
+        SELECT agent_session_id, agent_lane_id
+        FROM dlightrag_answer_run_routing
+        WHERE owner_id = $1 AND run_id = $2 AND agent_session_id = $3
+        UNION ALL
+        SELECT child_session_id, 'main'
+        FROM dlightrag_answer_child_sessions
+        WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+    ) AS bound
 ), ancestry AS (
     SELECT e.entry_id, e.parent_entry_id, e.sequence, e.entry_type, e.payload_json
     FROM authorized AS a
@@ -2247,6 +2254,25 @@ FROM dlightrag_answer_child_guidance
 WHERE owner_id = $1 AND run_id = $2 AND parent_session_id = $3
   AND status = 'pending' AND expires_at > NOW()
 ORDER BY created_at, request_id
+"""
+
+_SELECT_CHILD_CONTROLS = """
+SELECT control_sequence, kind, content, origin, consumed_at, created_at,
+       target_operation_id
+FROM dlightrag_agent_controls
+WHERE owner_id = $1 AND run_id = $2 AND target_session_id = $3
+ORDER BY control_sequence DESC
+LIMIT $4
+"""
+
+_SELECT_CHILD_GUIDANCE = """
+SELECT request_id, child_session_id, child_operation_id, parent_session_id,
+       question, status, reply, reply_origin, expires_at, replied_at,
+       created_at, updated_at
+FROM dlightrag_answer_child_guidance
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+ORDER BY created_at DESC, request_id DESC
+LIMIT $4
 """
 
 _EXPIRE_GUIDANCE = """
@@ -3887,7 +3913,7 @@ class PGRunStore(PostgresOperationRunner):
         session_id: str,
         limit: int,
     ) -> tuple[dict[str, Any], ...]:
-        """Project one canonical parent Session ancestry without exposing storage rows."""
+        """Project parent or owned child Session ancestry without exposing storage rows."""
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
         session_uuid = parse_run_id(session_id)
@@ -3930,6 +3956,76 @@ class PGRunStore(PostgresOperationRunner):
                         }
                     )
             return tuple(messages)
+
+        return await self._run_read(_operation)
+
+    async def list_child_controls(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        limit: int = 20,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return newest-first targeted Child controls, including queued and consumed."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        if run_uuid is None or child_uuid is None:
+            return ()
+
+        async def _operation(conn: Any) -> tuple[dict[str, Any], ...]:
+            rows = await conn.fetch(
+                _SELECT_CHILD_CONTROLS,
+                owner,
+                run_uuid,
+                child_uuid,
+                max(1, min(int(limit), 100)),
+            )
+            return tuple(
+                {
+                    "control_sequence": int(row["control_sequence"]),
+                    "kind": str(row["kind"]),
+                    "content": str(row["content"]),
+                    "origin": str(row["origin"]),
+                    "consumed": row["consumed_at"] is not None,
+                    "consumed_at": row["consumed_at"],
+                    "created_at": row["created_at"],
+                    "operation_id": (
+                        str(row["target_operation_id"])
+                        if row["target_operation_id"] is not None
+                        else None
+                    ),
+                }
+                for row in rows
+            )
+
+        return await self._run_read(_operation)
+
+    async def list_child_guidance(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        limit: int = 20,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return newest-first Child questions without reply fingerprints."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        if run_uuid is None or child_uuid is None:
+            return ()
+
+        async def _operation(conn: Any) -> tuple[dict[str, Any], ...]:
+            rows = await conn.fetch(
+                _SELECT_CHILD_GUIDANCE,
+                owner,
+                run_uuid,
+                child_uuid,
+                max(1, min(int(limit), 100)),
+            )
+            return tuple(_guidance_row(row) for row in rows)
 
         return await self._run_read(_operation)
 

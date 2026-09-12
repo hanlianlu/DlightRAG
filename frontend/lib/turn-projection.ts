@@ -16,6 +16,16 @@ import {
   type ToolEventPayload,
 } from './tool-events.ts';
 
+const CHILD_TOOL_NAMES = new Set([
+  'spawn_agent',
+  'wait_subagent',
+  'steer_subagent',
+  'continue_subagent',
+  'cancel_subagent',
+  'reply_subagent',
+  'subagent_status',
+]);
+
 type AnswerPhase = 'routing' | 'planning' | 'searching' | 'researching' | 'generating';
 
 export const ANSWER_PHASE_LABELS = {
@@ -94,7 +104,7 @@ export function applyAnswerEvent(turn: ChatTurnView, event: AnswerRunEvent): Cha
         toolTotal,
         progress: text,
         liveStatus: text,
-        sawChildren: turn.sawChildren || info.tool_name === 'spawn_agent',
+        sawChildren: turn.sawChildren || CHILD_TOOL_NAMES.has(info.tool_name),
         error: '',
       };
     }
