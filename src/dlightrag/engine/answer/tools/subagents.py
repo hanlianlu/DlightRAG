@@ -450,6 +450,11 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     async def wait(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
+        current = await _status(host, args.child_session_id)
+        if current.status != "running":
+            return _result_with_guidance(
+                host, current, await _pending_guidance_for_child(host, args.child_session_id)
+            )
         await host.restore_pending()
         pending = await _pending_guidance_for_child(host, args.child_session_id)
         if not pending:
@@ -983,7 +988,12 @@ async def _cancel_child(host: SubagentHost, child_id: str) -> ChildOutcome:
     if task is not None and not task.done():
         task.cancel()
         try:
-            return await task
+            outcome = await task
+            if host.load_child is None:
+                return outcome
+            current = await _status(host, child_id)
+            if current.status != "running":
+                return current
         except asyncio.CancelledError:
             # Cancellation before coroutine entry leaves the durable request for
             # the reconstructed closure path below.
@@ -994,7 +1004,7 @@ async def _cancel_child(host: SubagentHost, child_id: str) -> ChildOutcome:
     await host.restore_pending()
     task = host.tasks.get(child_id)
     if task is not None and not task.done():
-        return await task
+        await task
     outcome = await _status(host, child_id)
     if outcome.status == "running":
         raise RuntimeError("cancelled Child Session did not close its Agent Operation")
@@ -1044,17 +1054,6 @@ async def _load_terminal_child(host: SubagentHost, child_id: str) -> ChildOutcom
 
 
 async def _status(host: SubagentHost, child_id: str) -> ChildOutcome:
-    task = host.tasks.get(child_id)
-    if task is not None:
-        if not task.done():
-            return ChildOutcome(
-                status="running",
-                summary="Child session is running.",
-                child_session_id=child_id,
-            )
-        return task.result()
-    if child_id in host.outcomes:
-        return host.outcomes[child_id]
     if host.load_child is not None:
         row = await host.load_child(
             owner_id=host.owner_id,
@@ -1062,18 +1061,26 @@ async def _status(host: SubagentHost, child_id: str) -> ChildOutcome:
             child_session_id=child_id,
         )
         if row is not None:
-            status = str(row.get("status") or "failed")
-            if status != "running":
+            if str(row.get("status") or "failed") != "running":
                 return _terminal_outcome_from_row(row, child_id)
             return ChildOutcome(
                 status="running",
-                summary=str(row.get("summary") or ""),
+                summary="Child session is running.",
                 child_session_id=child_id,
+                operation_id=str(row.get("operation_id") or ""),
             )
+    else:
+        task = host.tasks.get(child_id)
+        if task is not None:
+            if task.done():
+                return task.result()
+            return ChildOutcome(
+                status="running", summary="Child session is running.", child_session_id=child_id
+            )
+        if child_id in host.outcomes:
+            return host.outcomes[child_id]
     return ChildOutcome(
-        status="failed",
-        summary="Unknown child session.",
-        child_session_id=child_id,
+        status="failed", summary="Unknown child session.", child_session_id=child_id
     )
 
 

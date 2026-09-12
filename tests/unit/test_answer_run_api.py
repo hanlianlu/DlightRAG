@@ -1101,16 +1101,16 @@ class TestAgentControls:
         self, client: AsyncClient, run_application: _RunApplication
     ) -> None:
         missing = await client.post(
-            f"/answer/{_RUN_ID}/children/child-1/control",
+            f"/answer/{_RUN_ID}/children/{_RUN_ID}/control",
             json={"action": "steer", "content": "focus"},
         )
         controlled = await client.post(
-            f"/answer/{_RUN_ID}/children/child-1/control",
+            f"/answer/{_RUN_ID}/children/{_RUN_ID}/control",
             headers={"Idempotency-Key": "child-steer-1"},
             json={"action": "steer", "content": "focus"},
         )
         replied = await client.post(
-            f"/answer/{_RUN_ID}/child-guidance/request-1/reply",
+            f"/answer/{_RUN_ID}/child-guidance/{_RUN_ID}/reply",
             headers={"Idempotency-Key": "child-reply-1"},
             json={"content": "use the report"},
         )
@@ -1119,7 +1119,7 @@ class TestAgentControls:
         assert controlled.status_code == 202
         assert controlled.json() == {
             "run_id": _RUN_ID,
-            "child_session_id": "child-1",
+            "child_session_id": _RUN_ID,
             "request_id": None,
             "action": "steer",
             "outcome": "queued",
@@ -1129,12 +1129,12 @@ class TestAgentControls:
             "consumed_at": None,
         }
         assert replied.status_code == 202
-        assert replied.json()["request_id"] == "request-1"
+        assert replied.json()["request_id"] == _RUN_ID
         assert replied.json()["child_session_id"] == "child-1"
         assert replied.json()["operation_id"] is None
         assert run_application.controls[-2:] == [
-            "child:steer:child-1",
-            "reply:request-1",
+            f"child:steer:{_RUN_ID}",
+            f"reply:{_RUN_ID}",
         ]
 
     async def test_rest_observes_one_child(
@@ -1152,7 +1152,7 @@ class TestAgentControls:
         run_application.child_control_outcome = "terminal_child"
 
         response = await client.post(
-            f"/answer/{_RUN_ID}/children/child-1/control",
+            f"/answer/{_RUN_ID}/children/{_RUN_ID}/control",
             headers={"Idempotency-Key": "child-steer-terminal"},
             json={"action": "steer", "content": "too late"},
         )
@@ -1231,3 +1231,82 @@ async def test_retrieval_run_id_cannot_read_published_artifacts_over_rest(
     response = await client.get(f"/answer/{_RUN_ID}/artifacts/{_ARTIFACT_ID}{suffix}")
 
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize("action", ["steer", "continue"])
+@pytest.mark.parametrize("content", [None, "", "   "])
+async def test_child_control_rejects_empty_content_before_application(
+    _app: FastAPI, action: str, content: str | None
+) -> None:
+    # Production Application validation and real ASGI routing, not a permissive fake.
+    from dlightrag.application.answer_runs.service import AnswerService
+
+    service: Any = object.__new__(AnswerService)
+    service._store = SimpleNamespace(get_run=AsyncMock(return_value=_record()))
+    _app.state.application = SimpleNamespace(answers=service)
+    body = {"action": action}
+    if content is not None:
+        body["content"] = content
+    async with AsyncClient(
+        transport=ASGITransport(app=_app, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/answer/{_RUN_ID}/children/{_RUN_ID}/control",
+            headers={"Idempotency-Key": "empty-control"},
+            json=body,
+        )
+    assert response.status_code == 422
+
+
+async def test_child_control_does_not_translate_internal_value_error(
+    _app: FastAPI,
+) -> None:
+    _app.state.application = SimpleNamespace(
+        answers=SimpleNamespace(
+            control_child=AsyncMock(side_effect=ValueError("internal invariant"))
+        )
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=_app, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            f"/answer/{_RUN_ID}/children/{_RUN_ID}/control",
+            headers={"Idempotency-Key": "valid-control"},
+            json={"action": "steer", "content": "valid"},
+        )
+    assert response.status_code == 500
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"/answer/{_RUN_ID}/children/not-a-uuid/control",
+        f"/answer/{_RUN_ID}/child-guidance/not-a-uuid/reply",
+    ],
+)
+async def test_child_command_validates_uuid_before_storage(_app: FastAPI, path: str) -> None:
+    from dlightrag.application.answer_runs.service import AnswerService
+
+    service: Any = object.__new__(AnswerService)
+    service._store = SimpleNamespace(
+        get_run=AsyncMock(return_value=_record()),
+        enqueue_child_control=AsyncMock(
+            side_effect=ValueError("child control ids must be canonical UUIDs")
+        ),
+        reply_child_guidance=AsyncMock(
+            side_effect=ValueError("guidance ids must be canonical UUIDs")
+        ),
+    )
+    _app.state.application = SimpleNamespace(answers=service)
+    async with AsyncClient(
+        transport=ASGITransport(app=_app, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            path,
+            headers={"Idempotency-Key": "valid"},
+            json={
+                "content": "guidance",
+                **({"action": "steer"} if path.endswith("control") else {}),
+            },
+        )
+    assert response.status_code == 422

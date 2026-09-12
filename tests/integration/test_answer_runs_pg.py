@@ -572,6 +572,7 @@ class TestSchema:
                     "remove_run_active_permit",
                     "interactive_child_async_lifecycle",
                     "interactive_child_controls",
+                    "child_cancel_submission_receipts",
                 ],
             )
 
@@ -2984,6 +2985,7 @@ class TestAgentControlsAndChildren:
             child_fencing_epoch=next_epoch,
         )
         cancelled = await store.cancel_child_session_by_owner(
+            submission_key="cancel-child",
             owner_id=_OWNER,
             run_id=run_id,
             child_session_id=child_id,
@@ -3590,6 +3592,7 @@ class TestAgentControlsAndChildren:
         assert replied is not None and replied["status"] == "replied"
         assert (
             await store.cancel_child_session_by_owner(
+                submission_key="cancel-child",
                 owner_id=_OWNER,
                 run_id=run_id,
                 child_session_id=child_id,
@@ -3952,3 +3955,215 @@ class TestAgentControlsAndChildren:
         assert questions == ()
         assert foreign == ()
         assert transcript == ()
+
+
+async def _interactive_terminal_child(store: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+    claim = await _claimed(store)
+    identity: dict[str, Any] = dict(
+        owner_id=_OWNER, run_id=creation.run.run_id, child_session_id=str(uuid.uuid4())
+    )
+    fence: dict[str, Any] = dict(worker_id=_WORKER, fencing_epoch=claim.run.fencing_epoch)
+    parent_id = _request()["agent_session_id"]
+    assert await store.upsert_child_session(
+        **identity,
+        **fence,
+        parent_session_id=parent_id,
+        parent_call_id="terminal-race",
+        parent_intent_id=str(uuid.uuid4()),
+        objective="check",
+        context_mode="isolated",
+        model_role="query",
+        tools=("search_knowledge_base",),
+        depth=1,
+        context_snapshot={
+            "parent_session_id": parent_id,
+            "parent_entry_id": str(uuid.uuid4()),
+            "depth": 0,
+            "messages": [],
+            "evidence_state": {},
+        },
+        plan={"schema_version": 2, "tools": ["search_knowledge_base"]},
+        budget={"provider_attempt_limit": 2},
+    )
+    await _settle_interactive_child(store, identity, fence, "succeeded")
+    return identity, fence
+
+
+async def _settle_interactive_child(store, identity, fence, status):
+    child = await store.load_child_session(**identity)
+    assert await store.finish_child_session(
+        **identity,
+        **fence,
+        status=status,
+        summary=status,
+        outcome={
+            "status": status,
+            "summary": status,
+            "handles": [],
+            "usage": {},
+            "child_session_id": identity["child_session_id"],
+            "operation_id": child["operation_id"],
+            "evidence_state": None,
+        },
+    )
+
+
+async def _wait_for_run_lock_wait(pool, task) -> None:
+    async with asyncio.timeout(8):
+        while True:
+            async with pool.acquire() as observer:
+                blocked = await observer.fetchval(
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() "
+                    "AND wait_event_type='Lock' AND query LIKE '%dlightrag_runs%'"
+                )
+            if blocked:
+                return
+            assert not task.done(), "competing transition did not wait for Run lock"
+            await asyncio.sleep(0.01)
+
+
+@pytest.mark.parametrize("continuation_first", [True, False])
+async def test_success_serializes_snapshot_after_child_continuation(
+    store: Any,
+    pool: Any,
+    continuation_first: bool,
+) -> None:
+    identity, fence = await _interactive_terminal_child(store)
+    finish_args: dict[str, Any] = dict(
+        owner_id=_OWNER, run_id=identity["run_id"], **fence, result={"answer": "done"}
+    )
+    continue_args: dict[str, Any] = dict(
+        **identity, content="second operation", submission_key="terminal-race-continue"
+    )
+    async with pool.acquire() as held:
+        tx = held.transaction()
+        await tx.start()
+
+        class HeldStore(FingerprintingRunStore):
+            async def _run_write(self, operation):
+                return await operation(held)
+
+        serialized = HeldStore(pool=pool)
+        continuation: Any = None
+        terminal: Any = None
+        task: asyncio.Task[Any]
+        if continuation_first:
+            continuation = await serialized.continue_child_session(**continue_args)
+            task = asyncio.create_task(store.finish_success(**finish_args))
+        else:
+            terminal = await serialized.finish_success(**finish_args)
+            task = asyncio.create_task(store.continue_child_session(**continue_args))
+        try:
+            await _wait_for_run_lock_wait(pool, task)
+            await tx.commit()
+            result = await asyncio.wait_for(task, 8)
+        except BaseException:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await tx.rollback()
+            raise
+    child = await store.load_child_session(**identity)
+    run = await store.get_run(owner_id=_OWNER, run_id=identity["run_id"])
+    if continuation_first:
+        assert continuation["outcome"] == "accepted"
+        assert not result.committed
+        assert run.status == child["status"] == child["operation_status"] == "running"
+        assert child["operation_id"] == continuation["operation_id"]
+        assert await store.claim_child_session(**identity, **fence)
+    else:
+        assert terminal.committed
+        assert result["outcome"] == "run_terminal"
+        assert run.status == "succeeded"
+        assert child["operation_sequence"] == 1
+
+
+async def test_owner_cancel_replays_original_operation_after_reauthorization_and_run_terminal(
+    store: Any,
+) -> None:
+    from types import SimpleNamespace
+
+    from dlightrag.application.answer_runs.service import AnswerService
+
+    identity, fence = await _interactive_terminal_child(store)
+    await store.continue_child_session(
+        **identity, content="operation A", submission_key="operation-a"
+    )
+    service: Any = object.__new__(AnswerService)
+    service._store = store
+    service._coordinator = SimpleNamespace(wake=lambda: None)
+    args = dict(**identity, action="cancel", idempotency_key="cancel-a")
+    first = await service.control_child(**args)
+    await _settle_interactive_child(store, identity, fence, "cancelled")
+    denied = await store.continue_child_session(
+        **identity,
+        content="not authorized",
+        submission_key="denied",
+        origin="parent",
+        reauthorize_user_cancelled=True,
+        **fence,
+    )
+    assert denied["outcome"] == "reauthorization_required"
+    continued = await service.control_child(
+        **identity,
+        action="continue",
+        content="operation B",
+        idempotency_key="operation-b",
+        reauthorize_user_cancelled=True,
+    )
+    assert continued.outcome == "accepted"
+    replay = await service.control_child(**args)
+    assert replay == first
+    child = await store.load_child_session(**identity)
+    assert child["cancel_requested_at"] is None
+    assert child["operation_id"] == continued.operation_id
+    assert child["cancellation_origin"] is None
+    # Same submission cannot become a steer with different intent.
+    conflict = await service.control_child(
+        **identity, action="steer", content="different", idempotency_key="cancel-a"
+    )
+    assert conflict.outcome == "idempotency_conflict"
+    await _settle_interactive_child(store, identity, fence, "succeeded")
+    assert (
+        await store.finish_success(
+            owner_id=_OWNER, run_id=identity["run_id"], **fence, result={"answer": "done"}
+        )
+    ).committed
+    assert await service.control_child(**args) == first
+
+
+@pytest.mark.parametrize("terminal_status", ["succeeded", "cancelled"])
+async def test_rejected_owner_cancel_receipt_cannot_target_later_continuation(
+    store: Any,
+    terminal_status: str,
+) -> None:
+    identity, fence = await _interactive_terminal_child(store)
+    if terminal_status == "cancelled":
+        await store.continue_child_session(**identity, content="initial", submission_key="initial")
+        await store.cancel_child_session_by_owner(**identity, submission_key="initial-cancel")
+        await _settle_interactive_child(store, identity, fence, "cancelled")
+    before = await store.load_child_session(**identity)
+    first = await store.cancel_child_session_by_owner(**identity, submission_key="terminal-cancel")
+    assert first["outcome"] == "terminal_child"
+    continued = await store.continue_child_session(
+        **identity,
+        content="authorized continuation",
+        submission_key="new-work",
+        reauthorize_user_cancelled=True,
+    )
+    assert continued["outcome"] == "accepted"
+    # Treat the first rejection response as lost; retransmit the exact submission.
+    replay = await store.cancel_child_session_by_owner(**identity, submission_key="terminal-cancel")
+    assert replay == first
+    assert replay["operation_id"] == before["operation_id"]
+    assert replay["status"] == terminal_status
+    child = await store.load_child_session(**identity)
+    assert child["cancel_requested_at"] is None
+    assert child["operation_id"] == continued["operation_id"]
+    controls = await store.list_child_controls(**identity)
+    assert all(row["kind"] != "cancel" for row in controls)
+    # A new submission is a new explicit intent and can cancel the current work.
+    current = await store.cancel_child_session_by_owner(**identity, submission_key="new-cancel")
+    assert current["operation_id"] == continued["operation_id"]
+    assert current["outcome"] == "cancellation_requested"

@@ -2211,3 +2211,93 @@ async def _retrieve_visual(query: str) -> RetrievalResult:
         },
         trace={"retrieval": "ok"},
     )
+
+
+class _AdoptThenParkProvider(_AsyncChildProvider):
+    def __init__(self):
+        super().__init__(child_evidence=True)
+        self.partial_adoption_settled = asyncio.Event()
+
+    async def __call__(self, **kwargs):
+        parent = "spawn_agent" in {tool.name for tool in kwargs.get("tools") or ()}
+        if parent and self.parent_calls == 2:
+            self.parent_calls += 1
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="parent-after-adoption",
+                        name="search_knowledge_base",
+                        arguments={"query": "cross check child evidence"},
+                    ),
+                ),
+                stop_reason="tool_use",
+            )
+        if parent and self.parent_calls == 3:
+            self.parent_calls += 1
+            self.partial_adoption_settled.set()
+            await asyncio.Event().wait()
+        return await super().__call__(**kwargs)
+
+
+@pytest.mark.parametrize("legacy_notification", [False, True])
+async def test_reclaim_after_child_notification_and_evidence_settlement(
+    store: FingerprintingRunStore,
+    legacy_notification: bool,
+) -> None:
+    provider = _AdoptThenParkProvider()
+    orchestrator = _async_child_orchestrator(provider)
+    if legacy_notification:
+        # Older accepted inputs could omit handles already merged by a sibling/status call.
+        host = orchestrator.subagent_host
+        assert host is not None
+        original = host.completed_dispatch_notifications
+
+        async def old_notifications(*, seen):
+            return tuple(
+                (
+                    key,
+                    "\n".join(
+                        line for line in text.splitlines() if not line.startswith("- merged ")
+                    ),
+                )
+                for key, text in await original(seen=seen)
+            )
+
+        host.completed_dispatch_notifications = old_notifications
+    plan = _async_child_plan(orchestrator)
+    application, coordinator = _answer_runtime(store=store, orchestrator=orchestrator)
+    owner = "owner-reclaim-after-adoption"
+    creation = await store.create_run(
+        owner_id=owner, request=_answer_run_request(mode="research", agent_run_plan=plan)
+    )
+    try:
+        await coordinator.start()
+        coordinator.wake()
+        await asyncio.wait_for(provider.parent_progressed.wait(), 10)
+        provider.release_children.set()
+        await asyncio.wait_for(provider.partial_adoption_settled.wait(), 10)
+    finally:
+        provider.release_children.set()
+        await coordinator.aclose()
+        await application.aclose()
+    resumed_provider = _AsyncChildProvider(resumed_parent=True)
+    resumed_orchestrator = _async_child_orchestrator(resumed_provider)
+    resumed_application, resumed = _answer_runtime(store=store, orchestrator=resumed_orchestrator)
+    try:
+        await resumed.start()
+        resumed.wake()
+        run = await _wait_for_status(
+            store, owner_id=owner, run_id=creation.run.run_id, status="succeeded", timeout=15
+        )
+    finally:
+        await resumed.aclose()
+        await resumed_application.aclose()
+    assert resumed_provider.child_calls == 0
+    assert resumed_provider.parent_calls == 1
+    assert len(run.result["contexts"]["chunks"]) == 1
+    assert run.result["usage"]["child_usage_details"] == {"input_tokens": 8, "output_tokens": 4}
+    assert [op["purpose"] for op in run.result["trace"]["agent_operations"]] == [
+        "research",
+        "child_result",
+    ]

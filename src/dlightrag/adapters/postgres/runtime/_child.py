@@ -432,11 +432,14 @@ WHERE owner_id = $1 AND run_id = $2 AND parent_session_id = $3
 ORDER BY created_at, request_id
 """
 
+# Host cancellation receipts are not model-consumed conversation controls.
+# Accepted cancellation is observable in Child status and the parent intervention.
 _SELECT_CHILD_CONTROLS = """
 SELECT control_sequence, kind, content, origin, consumed_at, created_at,
        target_operation_id
 FROM dlightrag_agent_controls
 WHERE owner_id = $1 AND run_id = $2 AND target_session_id = $3
+  AND kind <> 'cancel'
 ORDER BY control_sequence DESC
 LIMIT $4
 """
@@ -1300,6 +1303,7 @@ class ChildRunStoreMixin:
         owner_id: str,
         run_id: str,
         child_session_id: str,
+        submission_key: str,
         parent_session_id: str | None = None,
     ) -> dict[str, Any]:
         """Persist an owner cancellation without reviving terminal Child work."""
@@ -1309,6 +1313,13 @@ class ChildRunStoreMixin:
         parent_uuid = parse_run_id(parent_session_id) if parent_session_id is not None else None
         if run_uuid is None or child_uuid is None:
             raise ValueError("child cancellation ids must be canonical UUIDs")
+
+        if parent_session_id is not None and parent_uuid is None:
+            raise ValueError("parent session id must be a canonical UUID")
+        key = submission_key.strip()
+        if not key or len(key) > 200:
+            raise ValueError("submission_key must contain between 1 and 200 characters")
+        fingerprint = hashlib.sha256(f"cancel\0{child_session_id}\0user".encode()).hexdigest()
 
         async def _operation(conn: Any) -> dict[str, Any]:
             async with conn.transaction():
@@ -1320,18 +1331,69 @@ class ChildRunStoreMixin:
                     parent_uuid is not None and str(child["parent_session_id"]) != str(parent_uuid)
                 ):
                     return {"outcome": "unknown_child"}
-                if str(child["status"]) != "running":
-                    return {"outcome": "terminal_child", "status": str(child["status"])}
+                replay = await conn.fetchrow(
+                    _SELECT_CONTROL_BY_SUBMISSION,
+                    owner,
+                    run_uuid,
+                    child_uuid,
+                    key,
+                )
+                if replay is not None:
+                    if str(replay["request_fingerprint"]) != fingerprint:
+                        return {"outcome": "idempotency_conflict"}
+                    receipt = json.loads(str(replay["content"]))
+                    if not isinstance(receipt, dict) or receipt.get("operation_id") != str(
+                        replay["target_operation_id"]
+                    ):
+                        raise ValueError("Invalid persisted Child cancellation receipt")
+                    return receipt
+                operation_id = child["operation_id"]
+                if operation_id is None:
+                    return {"outcome": "unknown_outcome"}
+                outcome = (
+                    "run_terminal"
+                    if str(run["status"]) not in {"queued", "running"}
+                    else "terminal_child"
+                    if str(child["status"]) != "running"
+                    else "cancellation_requested"
+                )
+                sequence = int(await conn.fetchval(_NEXT_CONTROL_SEQUENCE, owner, run_uuid))
+                receipt = {
+                    "outcome": outcome,
+                    "operation_id": str(operation_id),
+                    "control_sequence": sequence,
+                    "status": str(child["status"]),
+                }
+                # A cancellation is handled by the host, not queued to the
+                # model. Its ControlMessage content is the immutable receipt,
+                # including a terminal rejection whose response may be lost.
+                await conn.execute(
+                    _INSERT_CONTROL,
+                    owner,
+                    run_uuid,
+                    sequence,
+                    "cancel",
+                    json.dumps(receipt),
+                    child_uuid,
+                    operation_id,
+                    "user",
+                    key,
+                    fingerprint,
+                )
+                await conn.execute(
+                    _CONSUME_CHILD_CONTROLS, owner, run_uuid, child_uuid, operation_id, [sequence]
+                )
+                if outcome != "cancellation_requested":
+                    return receipt
                 await conn.execute(_REQUEST_CHILD_CANCELLATION, owner, run_uuid, child_uuid)
-                if child["operation_id"] is not None:
-                    await conn.execute(
-                        _CANCEL_CHILD_OPERATION,
-                        owner,
-                        run_uuid,
-                        child_uuid,
-                        child["operation_id"],
-                        "user",
-                    )
+                await conn.execute(
+                    _CANCEL_CHILD_OPERATION,
+                    owner,
+                    run_uuid,
+                    child_uuid,
+                    operation_id,
+                    "user",
+                )
                 await conn.execute(_RETIRE_CHILD_GUIDANCE, owner, run_uuid, child_uuid)
                 await _mirror_child_intervention(
                     conn,
@@ -1339,17 +1401,14 @@ class ChildRunStoreMixin:
                     run_id=run_uuid,
                     action="cancelled",
                     identity=child_session_id,
-                    submission_key=str(child["operation_id"] or "initial"),
+                    submission_key=key,
                     content="cancellation requested",
                 )
                 await conn.execute(
                     "SELECT pg_notify('dlightrag_run_activity', $1)",
                     cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
                 )
-                return {
-                    "outcome": "cancellation_requested",
-                    "operation_id": str(child["operation_id"] or ""),
-                }
+                return receipt
 
         return await self._run_write(_operation)
 

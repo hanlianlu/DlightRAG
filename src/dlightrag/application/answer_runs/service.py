@@ -261,6 +261,7 @@ class ChildControlReceipt:
     operation_sequence: int | None = None
     control_sequence: int | None = None
     consumed_at: Any | None = None
+    status: str | None = None
 
     def payload(self) -> dict[str, Any]:
         """Return the transport-neutral control receipt document."""
@@ -283,6 +284,7 @@ def child_control_receipt_payload(receipt: Any) -> dict[str, Any]:
         "operation_sequence": getattr(receipt, "operation_sequence", None),
         "control_sequence": getattr(receipt, "control_sequence", None),
         "consumed_at": isoformat() if callable(isoformat) else consumed,
+        **({"status": receipt.status} if getattr(receipt, "status", None) is not None else {}),
     }
 
 
@@ -424,6 +426,7 @@ class _AnswerRunRepository(AnswerRunAcceptor[RuntimeRunCreation], Protocol):
         owner_id: str,
         run_id: str,
         child_session_id: str,
+        submission_key: str,
         parent_session_id: str | None = None,
     ) -> Mapping[str, Any]: ...
 
@@ -1051,23 +1054,22 @@ class AnswerService:
         if record is None:
             return None
         parent_session_id = str(record.request_input().get("agent_session_id") or "") or None
+        key = idempotency_key.strip()
+        if not key or len(key) > 200:
+            raise ValueError("Child control idempotency key must be between 1 and 200 characters")
         if action == "cancel":
             row = await self._store.cancel_child_session_by_owner(
                 owner_id=owner_id,
                 run_id=run_id,
                 child_session_id=child_session_id,
+                submission_key=key,
                 parent_session_id=parent_session_id,
             )
         else:
             text = content.strip()
-            key = idempotency_key.strip()
             if not text or len(text) > _AGENT_CONTROL_CONTENT_LIMIT:
                 raise ValueError(
                     "Child control content must be non-empty and at most 20000 characters"
-                )
-            if not key or len(key) > 200:
-                raise ValueError(
-                    "Child control idempotency key must be between 1 and 200 characters"
                 )
             if action == "steer":
                 row = await self._store.enqueue_child_control(
@@ -1103,6 +1105,7 @@ class AnswerService:
             run_id=run_id,
             action=action,
             outcome=outcome,
+            status=(str(row["status"]) if action == "cancel" and row.get("status") else None),
             child_session_id=child_session_id or None,
             operation_id=(str(row["operation_id"]) if row.get("operation_id") else None),
             operation_sequence=(

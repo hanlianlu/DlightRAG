@@ -250,7 +250,10 @@ class AnswerOrchestrator:
         runtime_context: RuntimeContext,
     ) -> None:
         """Capture the exact parent ancestry handed to a spawned Child."""
-        if self._subagent_host is None:
+        if (
+            self._subagent_host is None
+            or runtime_context.session_id != self._subagent_host.parent_session_id
+        ):
             return
         lane = runtime_context.snapshot.tree.lane(runtime_context.lane_id)
         parent_entry_id = lane.head_entry_id
@@ -697,13 +700,16 @@ class AnswerOrchestrator:
         if subagent_host is not None and not child:
 
             def merge_child(state: Any, child_id: str, call_id: str) -> tuple[str, ...]:
-                before = len(evidence.contexts["chunks"])
                 evidence.merge_child_state(
                     state,
                     child_session_id=child_id,
                     parent_call_id=call_id,
                 )
-                return tuple(evidence.citation_handles(after_chunk_count=before))
+                # Replay must describe all admitted outcome sources, not only
+                # the chunks newly added in this process.
+                return tuple(
+                    evidence.citation_handles(matching_chunks=state["contexts"].get("chunks", []))
+                )
 
             subagent_host.merge_evidence = merge_child
 
@@ -745,7 +751,11 @@ class AnswerOrchestrator:
         except DuplicateToolError as exc:
             raise InvalidToolConfigurationError(exc.names) from exc
         selected_names = tool_names
-        if child and selected_names is None:
+        if (
+            child
+            and selected_names is None
+            and (subagent_host is None or subagent_host.async_lifecycle)
+        ):
             # Independent deliberation is read-only by default. A parent can
             # explicitly request a narrower side-effecting subset, but resolve
             # still enforces the host-composed permission ceiling.

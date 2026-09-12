@@ -1043,8 +1043,7 @@ async def run_child_session(
         if is_detaching is not None and is_detaching():
             raise
         await runtime.cancel(session_id=child_id, operation_id=accepted.operation_id)
-        await runtime.close(session_id=child_id, operation_id=accepted.operation_id)
-        raise
+        operation = await runtime.close(session_id=child_id, operation_id=accepted.operation_id)
     except (RunCancellationObserved, AgentOperationCancelled) as exc:
         await runtime.cancel(session_id=child_id, operation_id=accepted.operation_id)
         await runtime.close(session_id=child_id, operation_id=accepted.operation_id)
@@ -1067,7 +1066,9 @@ async def run_child_session(
             "run_execution_failed",
             "Child Agent Runtime returned a non-terminal operation.",
         )
-    summary = _child_summary(prepared, status)
+    summary = (
+        _child_summary(prepared, status) if status == "succeeded" else f"Child session {status}."
+    )
     return ChildOutcome(
         status=status,
         summary=summary,
@@ -1142,18 +1143,22 @@ def _child_summary(prepared: Any, status: str) -> str:
 
 
 def _usage_from_operation(*, snapshot: Any, operation: Any) -> dict[str, int] | None:
-    """Attribute only Assistant usage belonging to one completed Operation."""
-    if not isinstance(operation, OperationCompleted):
-        return _usage_from_snapshot_entries(snapshot_entries=snapshot.entries)
+    """Attribute only settled Assistant turns of the current Child Operation.
+
+    Failed/cancelled states also pin their completed turn count. An immediate
+    rejection has zero turns, never the preceding Operation's Session usage.
+    """
+    if operation.turn_count < 1:
+        return None
     terminal_sequence = next(
         (
             entry.sequence
             for entry in snapshot.entries
-            if entry.entry_id == operation.assistant_entry_id
+            if entry.entry_id == getattr(operation, "assistant_entry_id", None)
         ),
-        None,
+        snapshot.last_entry_sequence if not isinstance(operation, OperationCompleted) else None,
     )
-    if terminal_sequence is None or operation.turn_count < 1:
+    if terminal_sequence is None:
         return None
     assistants = [
         entry

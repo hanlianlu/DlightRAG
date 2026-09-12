@@ -43,6 +43,7 @@ from dlightrag.engine.agent.session.registers import (
     HostTurnReservation,
     LaneHead,
     LaneState,
+    OperationMetaRegister,
     RegisterRef,
     SetRegister,
 )
@@ -1529,6 +1530,17 @@ class AnswerExecutor:
                         await session.reset_output()
                         prepared_early.streamed_terminal_text = None
                         await session.enter_phase("researching")
+                    if next_purpose == "child_result":
+                        next_input = (
+                            next_input[0],
+                            _accepted_child_notification_content(
+                                snapshot,
+                                session_id=session_id,
+                                lane_id=agent_lane_id,
+                                notification_id=next_input[0],
+                                content=next_input[1],
+                            ),
+                        )
                     accepted = await agent_runtime.accept(
                         session_id=session_id,
                         lane_id=agent_lane_id,
@@ -2560,3 +2572,44 @@ __all__ = [
     "ResolvedAnswerResources",
     "answer_trace_output",
 ]
+
+
+def _accepted_child_notification_content(
+    snapshot: Any,
+    *,
+    session_id: SessionId,
+    lane_id: LaneId,
+    notification_id: str,
+    content: str,
+) -> Any:
+    """Recover the immutable input of an already accepted host notification.
+
+    Earlier versions described only the newly merged Evidence delta. Recover
+    their exact UserMessage by the accepted digest, never by trusting a newly
+    rendered payload or relaxing Agent Operation idempotency/Plan validation.
+    """
+    operation_id = OperationId.deterministic(idempotency_key=notification_id)
+    for record in snapshot.registers:
+        if not isinstance(record.value, OperationMetaRegister):
+            continue
+        meta = record.value.meta
+        if meta.operation_id != operation_id:
+            continue
+        for entry in snapshot.tree.ancestry(lane_id):
+            if not isinstance(entry, UserMessageEntry):
+                continue
+            digest = hashlib.sha256(
+                canonical_json(
+                    {
+                        "session_id": session_id.value,
+                        "lane_id": lane_id.value,
+                        "idempotency_key": notification_id,
+                        "content": entry.content,
+                        "plan_digest": meta.plan_digest,
+                    }
+                ).encode("utf-8")
+            ).hexdigest()
+            if hmac.compare_digest(digest, meta.acceptance_digest):
+                return entry.content
+        raise RuntimeError("Accepted child notification lost its immutable input")
+    return content
