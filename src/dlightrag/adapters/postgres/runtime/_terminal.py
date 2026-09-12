@@ -133,6 +133,15 @@ async def finish_fenced_run(
     fenced primitive for the exact cancelled terminal.
     """
 
+    # READ COMMITTED snapshots are taken before a statement waits on a lock.
+    # Acquire the Run row first so the child predicate sees a continuation that
+    # committed while we waited. All callers own an enclosing transaction.
+    await conn.fetchval(
+        "SELECT 1 FROM dlightrag_runs WHERE owner_id = $1 AND run_id = $2 FOR UPDATE",
+        owner_id,
+        run_id,
+    )
+
     async def commit(
         terminal_status: TerminalStatus,
         *,

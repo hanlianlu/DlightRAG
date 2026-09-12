@@ -1603,6 +1603,7 @@ async def test_child_control_and_reply_use_typed_store_methods() -> None:
         run_id="run-1",
         child_session_id="child-1",
         action="cancel",
+        idempotency_key="cancel-1",
     )
     replied = await service.reply_to_child(
         owner_id=_OWNER,
@@ -1617,6 +1618,7 @@ async def test_child_control_and_reply_use_typed_store_methods() -> None:
     assert steered.request_id is None
     assert continued is not None and continued.outcome == "accepted"
     assert cancelled is not None and cancelled.outcome == "cancellation_requested"
+    assert store.controls[-2]["submission_key"] == "cancel-1"
     assert replied is not None and replied.outcome == "replied"
     assert replied.request_id == "req-1"
     assert replied.child_session_id == "child-1"

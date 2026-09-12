@@ -509,8 +509,10 @@ export class DlApp extends LightElement {
         {
           runId,
           observe: (childSessionId, signal) => chat.loadRunChild(runId, childSessionId, signal),
-          control: (childSessionId, action, content, reauthorize, signal) => (
-            chat.controlRunChild(runId, childSessionId, action, content, reauthorize, signal)
+          control: (childSessionId, action, content, reauthorize, operationId, signal) => (
+            chat.controlRunChild(
+              runId, childSessionId, action, content, reauthorize, operationId, signal,
+            )
           ),
           reply: (requestId, content, signal) => chat.replyRunChild(runId, requestId, content, signal),
         },

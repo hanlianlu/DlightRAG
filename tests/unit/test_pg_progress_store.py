@@ -10,6 +10,8 @@ from dlightrag.engine.agent.session.ids import StageIntentId
 from dlightrag.engine.runtime.progress import StageCommit, StageTerminalCommit
 from dlightrag.engine.runtime.settlements import OpaqueEvidenceWrite
 
+_TERMINAL_RUN_LOCK = "SELECT 1 FROM dlightrag_runs WHERE owner_id = $1 AND run_id = $2 FOR UPDATE"
+
 
 class _Context:
     def __init__(self, value: Any) -> None:
@@ -42,6 +44,8 @@ class _RecordingConnection:
     async def fetchval(self, query: str, *args: Any) -> Any:
         self.queries.append(("fetchval", query))
         self.query_args.append((query, args))
+        if query == _TERMINAL_RUN_LOCK:
+            return 1
         if "UPDATE dlightrag_runs" in query and "event_sequence" in query:
             return 7
         if "LEFT JOIN dlightrag_answer_evidence" in query:
@@ -97,14 +101,30 @@ def _evidence(count: int) -> tuple[OpaqueEvidenceWrite, ...]:
     )
 
 
-def _assert_single_run_lock_without_progress_reselect(
+def _assert_initial_progress_row_is_not_reselected(
     connection: _RecordingConnection,
+    *,
+    terminal_guard: bool = False,
 ) -> None:
     run_reads = [
         query
         for kind, query in connection.queries
         if kind in {"fetchrow", "fetchval"} and "FROM dlightrag_runs" in query
     ]
+    if terminal_guard:
+        assert run_reads[-1] == _TERMINAL_RUN_LOCK
+        run_reads = run_reads[:-1]
+        guard_index = connection.queries.index(("fetchval", _TERMINAL_RUN_LOCK))
+        terminal_index = next(
+            index
+            for index, (kind, query) in enumerate(connection.queries)
+            if kind == "fetchval" and "UPDATE dlightrag_runs" in query and "event_sequence" in query
+        )
+        assert guard_index < terminal_index
+        guard_args = next(
+            args for query, args in connection.query_args if query == _TERMINAL_RUN_LOCK
+        )
+        assert guard_args == connection.query_args[0][1][:2]
     assert len(run_reads) == 1
     assert "durable_progress_version" in run_reads[0]
     assert "cancel_requested_at" in run_reads[0]
@@ -123,7 +143,7 @@ async def test_settle_stage_uses_the_initial_fenced_row_for_progress() -> None:
     )
 
     assert isinstance(outcome, StageCommit)
-    _assert_single_run_lock_without_progress_reselect(connection)
+    _assert_initial_progress_row_is_not_reselected(connection)
 
 
 async def test_settle_stage_batches_evidence_in_two_ordered_array_statements() -> None:
@@ -162,7 +182,7 @@ async def test_settle_stage_batches_evidence_in_two_ordered_array_statements() -
     assert all(len(values) == 3 for values in probe_args[2:])
     assert len(insert_args) == 9
     assert len(probe_args) == 7
-    _assert_single_run_lock_without_progress_reselect(connection)
+    _assert_initial_progress_row_is_not_reselected(connection)
 
 
 async def test_settle_terminal_uses_the_initial_fenced_row_for_progress() -> None:
@@ -178,4 +198,4 @@ async def test_settle_terminal_uses_the_initial_fenced_row_for_progress() -> Non
     assert isinstance(outcome, StageTerminalCommit)
     assert outcome.status == "succeeded"
     assert outcome.terminal_event_sequence == 7
-    _assert_single_run_lock_without_progress_reselect(connection)
+    _assert_initial_progress_row_is_not_reselected(connection, terminal_guard=True)

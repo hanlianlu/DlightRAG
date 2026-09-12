@@ -5,6 +5,8 @@ import {html, type PropertyValues, type TemplateResult} from 'lit';
 import {waitFor} from 'xstate';
 import {BrowserAnswerSubmissionAdapter} from '../api/answer-submission.ts';
 import {
+  ChildControlRejectedError,
+  ConversationApiError,
   continueAnswerRun,
   controlAnswerChild,
   getAnswerRunChild,
@@ -15,6 +17,7 @@ import {
   type ConversationAttachmentReference,
   type ConversationTurn,
 } from '../api/conversations.ts';
+import {isAbortError} from '../lib/errors.ts';
 import {conversationRoute} from '../lib/router.ts';
 import {applyAnswerEvent} from '../lib/turn-projection.ts';
 import {
@@ -83,6 +86,18 @@ function isMemoryOperation(value: unknown): value is ChatMemoryOperationDetail {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function childCommandAmbiguous(error: unknown): boolean {
+  if (isAbortError(error)) return true;
+  if (error instanceof ChildControlRejectedError) return false;
+  if (error instanceof ConversationApiError) {
+    // A successful HTTP response with an unreadable receipt may already be committed.
+    if (error.status >= 200 && error.status < 300) return true;
+    if (error.status === 408 || error.status === 429 || error.status >= 500) return true;
+    return false;
+  }
+  return true;
+}
+
 function loginHref(): string {
   const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   return `/web/login?next=${encodeURIComponent(next)}`;
@@ -145,6 +160,7 @@ export class DlChatFeature extends LightElement {
   #scrollRequest = 0;
   #announcedActive = false;
   #announcedHasMessages: boolean | null = null;
+  #childSubmissions = new Map<string, {fingerprint: string; submissionId: string}>();
 
   constructor() {
     super();
@@ -218,17 +234,29 @@ export class DlChatFeature extends LightElement {
     action: 'steer' | 'continue' | 'cancel',
     content: string,
     reauthorizeUserCancelled = false,
+    operationId?: string | null,
     signal?: AbortSignal,
   ) {
-    return controlAnswerChild(
+    const slot = JSON.stringify({
+      kind: 'control',
+      runId,
+      childSessionId,
+      action,
+      operationId: operationId ?? '',
+    });
+    const fingerprint = JSON.stringify({
+      content,
+      reauthorize: Boolean(reauthorizeUserCancelled),
+    });
+    return this.#sendChildCommand(slot, fingerprint, (submissionId) => controlAnswerChild(
       runId,
       childSessionId,
       action,
       content,
-      crypto.randomUUID(),
+      submissionId,
       reauthorizeUserCancelled,
       signal,
-    );
+    ));
   }
 
   async replyRunChild(
@@ -237,7 +265,39 @@ export class DlChatFeature extends LightElement {
     content: string,
     signal?: AbortSignal,
   ) {
-    return replyAnswerChild(runId, requestId, content, crypto.randomUUID(), signal);
+    const slot = JSON.stringify({kind: 'reply', runId, requestId});
+    const fingerprint = JSON.stringify({content});
+    return this.#sendChildCommand(slot, fingerprint, (submissionId) => (
+      replyAnswerChild(runId, requestId, content, submissionId, signal)
+    ));
+  }
+
+  async #sendChildCommand<T>(
+    slot: string,
+    fingerprint: string,
+    send: (submissionId: string) => Promise<T>,
+  ): Promise<T> {
+    const current = this.#childSubmissions.get(slot);
+    const submissionId = current?.fingerprint === fingerprint
+      ? current.submissionId
+      : crypto.randomUUID();
+    this.#childSubmissions.set(slot, {fingerprint, submissionId});
+    try {
+      const result = await send(submissionId);
+      const retained = this.#childSubmissions.get(slot);
+      if (retained?.fingerprint === fingerprint && retained.submissionId === submissionId) {
+        this.#childSubmissions.delete(slot);
+      }
+      return result;
+    } catch (error) {
+      if (!childCommandAmbiguous(error)) {
+        const retained = this.#childSubmissions.get(slot);
+        if (retained?.fingerprint === fingerprint && retained.submissionId === submissionId) {
+          this.#childSubmissions.delete(slot);
+        }
+      }
+      throw error;
+    }
   }
 
   async continueRun(

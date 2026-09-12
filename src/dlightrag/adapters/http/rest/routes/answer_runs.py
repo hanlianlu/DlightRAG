@@ -12,10 +12,11 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -83,6 +84,12 @@ class _ChildControlBody(BaseModel):
     action: Literal["steer", "continue", "cancel"]
     content: str = Field(default="", max_length=20_000)
     reauthorize_user_cancelled: bool = False
+
+    @model_validator(mode="after")
+    def _require_control_content(self) -> _ChildControlBody:
+        if self.action != "cancel" and not self.content:
+            raise ValueError("Child control content must be non-empty")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -457,8 +464,8 @@ async def steer_answer_run(
 
 @router.post("/answer/{run_id}/children/{child_session_id}/control", status_code=202)
 async def control_answer_child(
-    run_id: str,
-    child_session_id: str,
+    run_id: UUID,
+    child_session_id: UUID,
     body: _ChildControlBody,
     request: Request,
     user: UserContext = Depends(get_current_user),
@@ -466,10 +473,14 @@ async def control_answer_child(
     submission_key = idempotency_key(request)
     if submission_key is None:
         raise HTTPException(status_code=400, detail="Idempotency-Key is required")
+    if len(submission_key.strip()) > 200:
+        raise HTTPException(
+            status_code=422, detail="Idempotency-Key must be at most 200 characters"
+        )
     receipt = await get_application(request).answers.control_child(
         owner_id=owner_id_from_user(user),
-        run_id=run_id,
-        child_session_id=child_session_id,
+        run_id=str(run_id),
+        child_session_id=str(child_session_id),
         action=body.action,
         content=body.content,
         idempotency_key=submission_key,
@@ -484,8 +495,8 @@ async def control_answer_child(
 
 @router.post("/answer/{run_id}/child-guidance/{request_id}/reply", status_code=202)
 async def reply_to_answer_child(
-    run_id: str,
-    request_id: str,
+    run_id: UUID,
+    request_id: UUID,
     body: _AgentControlBody,
     request: Request,
     user: UserContext = Depends(get_current_user),
@@ -493,10 +504,14 @@ async def reply_to_answer_child(
     submission_key = idempotency_key(request)
     if submission_key is None:
         raise HTTPException(status_code=400, detail="Idempotency-Key is required")
+    if len(submission_key.strip()) > 200:
+        raise HTTPException(
+            status_code=422, detail="Idempotency-Key must be at most 200 characters"
+        )
     receipt = await get_application(request).answers.reply_to_child(
         owner_id=owner_id_from_user(user),
-        run_id=run_id,
-        request_id=request_id,
+        run_id=str(run_id),
+        request_id=str(request_id),
         content=body.content,
         idempotency_key=submission_key,
     )

@@ -1,0 +1,452 @@
+{
+  "schema_version": 2,
+  "model_role": "query",
+  "context_policy_revision": "agent-v4-dynamic-context",
+  "model_identity": {
+    "role": "query",
+    "scope": "child"
+  },
+  "model_profile": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": null,
+    "max_output_tokens": 128000,
+    "reasoning": null,
+    "supports_images": true
+  },
+  "prompt_revision": "answer-prompts-v1",
+  "provider_attempt_limit": 2,
+  "compaction_attempt_limit": 3,
+  "max_pending_steers": 16,
+  "max_pending_follow_ups": 16,
+  "host_contract_version": 1,
+  "tools": [
+    {
+      "definition": {
+        "description": "Run a bash command in the workspace.",
+        "name": "bash",
+        "parameters": {
+          "properties": {
+            "command": {
+              "description": "Bash command to run.",
+              "title": "Command",
+              "type": "string"
+            },
+            "timeout_seconds": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 2147483.647,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional finite process timeout in seconds.",
+              "title": "Timeout Seconds"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "title": "BashArgs",
+          "type": "object"
+        }
+      },
+      "guidance": "bash: output streams live and stays bounded; timed-out or failing commands still return partial output as errors. Never leave symlinks, FIFOs, sockets, device files, or quota overflow behind: the workspace latches until external cleanup.",
+      "replay_policy": "never",
+      "contract_version": 3,
+      "input_schema_digest": "7fb5aea0399720e0f5f8b1232347cb5c4272409f06fb839084942493b76e71e1"
+    },
+    {
+      "definition": {
+        "description": "Replace exact text in a workspace file.",
+        "name": "edit",
+        "parameters": {
+          "$defs": {
+            "EditOperation": {
+              "additionalProperties": false,
+              "properties": {
+                "new_text": {
+                  "description": "Replacement text.",
+                  "title": "New Text",
+                  "type": "string"
+                },
+                "old_text": {
+                  "description": "Unique exact text in the original file.",
+                  "minLength": 1,
+                  "title": "Old Text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "old_text",
+                "new_text"
+              ],
+              "title": "EditOperation",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "edits": {
+              "description": "Non-overlapping replacements, all matched against the original file.",
+              "items": {
+                "$ref": "#/$defs/EditOperation"
+              },
+              "minItems": 1,
+              "title": "Edits",
+              "type": "array"
+            },
+            "path": {
+              "description": "Workspace-relative path to edit.",
+              "maxLength": 4096,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "edits"
+          ],
+          "title": "EditArgs",
+          "type": "object"
+        }
+      },
+      "guidance": "edit: every old_text must match exactly once in the current file; all edits apply atomically or none do. Read the file first when a match fails.",
+      "replay_policy": "never",
+      "contract_version": 3,
+      "input_schema_digest": "073cb48dbe3b31b34793bb82b03909bac6bc0fcfc57c89464a8ee36bb1aae972"
+    },
+    {
+      "definition": {
+        "description": "Find workspace paths recursively with fd glob semantics.",
+        "name": "find",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "default": 1000,
+              "description": "Maximum matches to return.",
+              "maximum": 100000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "path": {
+              "default": ".",
+              "description": "Workspace subtree to search.",
+              "maxLength": 4096,
+              "title": "Path",
+              "type": "string"
+            },
+            "pattern": {
+              "description": "Glob pattern to match.",
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Pattern",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "title": "FindArgs",
+          "type": "object"
+        }
+      },
+      "guidance": "find: fd --glob semantics relative to the requested search root; hidden paths are included, .git and active ignore rules are respected, and symlinks are not followed.",
+      "replay_policy": "replayable",
+      "contract_version": 2,
+      "input_schema_digest": "c7028af6909c713c46c3c8693c6c23b2bad33fce96d3b96cdc6e91d64277cfe9"
+    },
+    {
+      "definition": {
+        "description": "Search workspace files with ripgrep.",
+        "name": "grep",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Context lines shown around each match.",
+              "title": "Context"
+            },
+            "glob": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional glob filter.",
+              "title": "Glob"
+            },
+            "ignore_case": {
+              "default": false,
+              "description": "Case-insensitive matching.",
+              "title": "Ignore Case",
+              "type": "boolean"
+            },
+            "limit": {
+              "default": 100,
+              "description": "Maximum matching lines to return.",
+              "maximum": 100000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "literal": {
+              "default": false,
+              "description": "Treat pattern as a literal string, not a regex.",
+              "title": "Literal",
+              "type": "boolean"
+            },
+            "path": {
+              "default": ".",
+              "description": "Workspace path to search.",
+              "maxLength": 4096,
+              "title": "Path",
+              "type": "string"
+            },
+            "pattern": {
+              "description": "Regex (or literal with literal=true).",
+              "maxLength": 65536,
+              "minLength": 1,
+              "title": "Pattern",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "title": "GrepArgs",
+          "type": "object"
+        }
+      },
+      "guidance": "grep: regex by default (literal=true for plain text); limit caps matching lines, not context lines; hidden files are searched while ignore rules apply.",
+      "replay_policy": "replayable",
+      "contract_version": 3,
+      "input_schema_digest": "3245587d749c0b275a79f0d2feeb12aa5067bb71f2eb079d2148031721464a03"
+    },
+    {
+      "definition": {
+        "description": "List one workspace directory without following symlinks.",
+        "name": "ls",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Continuation cursor from a prior page.",
+              "title": "Cursor"
+            },
+            "limit": {
+              "default": 500,
+              "description": "Maximum entries to return.",
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            },
+            "path": {
+              "default": ".",
+              "description": "Workspace directory to list.",
+              "maxLength": 4096,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          "title": "LsArgs",
+          "type": "object"
+        }
+      },
+      "guidance": "ls: one sorted directory level, kind/size/name per entry; continue large listings with the opaque cursor. Symlinks are listed, never followed.",
+      "replay_policy": "replayable",
+      "contract_version": 2,
+      "input_schema_digest": "220bc491c41cf54f16a93e72eba483070a073276e4f2537f1d05f873bd41e42d"
+    },
+    {
+      "definition": {
+        "description": "Read one workspace path or Host-provided durable resource_id.",
+        "name": "read",
+        "parameters": {
+          "additionalProperties": false,
+          "description": "Read contract for Hosts that do not provide public-URL admission.",
+          "properties": {
+            "cursor": {
+              "anyOf": [
+                {
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Continuation cursor.",
+              "title": "Cursor"
+            },
+            "focus": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Optional relevance focus for a durable resource.",
+              "title": "Focus"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "maximum": 100000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Maximum lines to return.",
+              "title": "Limit"
+            },
+            "offset": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "1-based line offset.",
+              "title": "Offset"
+            },
+            "path": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Workspace-relative path to read.",
+              "title": "Path"
+            },
+            "resource_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Opaque durable resource id.",
+              "title": "Resource Id"
+            }
+          },
+          "title": "ReadWithoutUrlArgs",
+          "type": "object"
+        }
+      },
+      "guidance": "read: one of path or resource_id; files page by offset and directories/resources by opaque cursor. Follow the printed continuation.",
+      "replay_policy": "replayable",
+      "contract_version": 3,
+      "input_schema_digest": "33658fce830dc7d8bc68bce9233a40822f1c78b8f69c0d6281bda76ebbaa2d00"
+    },
+    {
+      "definition": {
+        "description": "Search the indexed knowledge base for one concrete unresolved fact.",
+        "name": "search_knowledge_base",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "query": {
+              "description": "One concrete unresolved question or fact to search for, in natural language. Search one angle per call rather than combining several.",
+              "minLength": 1,
+              "title": "Query",
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "title": "SearchInput",
+          "type": "object"
+        }
+      },
+      "guidance": "",
+      "replay_policy": "never",
+      "contract_version": 2,
+      "input_schema_digest": "9c2fe9762111c1e93a19017a10e9403fb537083419ba45c46312aafe8b95aaab"
+    },
+    {
+      "definition": {
+        "description": "Create or overwrite a UTF-8 workspace file.",
+        "name": "write",
+        "parameters": {
+          "properties": {
+            "content": {
+              "description": "Full UTF-8 file contents.",
+              "title": "Content",
+              "type": "string"
+            },
+            "path": {
+              "description": "Workspace-relative path to write.",
+              "maxLength": 4096,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ],
+          "title": "WriteArgs",
+          "type": "object"
+        }
+      },
+      "guidance": "write: replaces the whole file; the success line reports UTF-8 byte size.",
+      "replay_policy": "never",
+      "contract_version": 3,
+      "input_schema_digest": "f93d7d793f3018e39abc14d2efa48fbd1f23ed030a23a6fb43c30249d9d47afb"
+    }
+  ]
+}

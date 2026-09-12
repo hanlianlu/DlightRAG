@@ -142,7 +142,11 @@ def compose_research_tools(
     try:
         registry = ToolRegistry(tools)
         selected_names = tool_names
-        if child and selected_names is None:
+        if (
+            child
+            and selected_names is None
+            and (subagent_host is None or subagent_host.async_lifecycle)
+        ):
             read_only = {
                 "search_knowledge_base",
                 "search_web",

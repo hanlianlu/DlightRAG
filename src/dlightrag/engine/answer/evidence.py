@@ -82,11 +82,20 @@ class EvidenceLedger:
             "seen_rows": {key: sorted(values) for key, values in self._seen_rows.items()},
         }
 
-    def citation_handles(self, *, after_chunk_count: int = 0) -> list[str]:
+    def citation_handles(
+        self, *, after_chunk_count: int = 0, matching_chunks: list[ContextRow] | None = None
+    ) -> list[str]:
         """Parent-visible citation identities, newest-admitted first after a cursor."""
+        identities = (
+            {self._chunk_identity(row) for row in matching_chunks}
+            if matching_chunks is not None
+            else None
+        )
         seen: set[str] = set()
         handles: list[str] = []
         for row in self.contexts.get("chunks", [])[after_chunk_count:]:
+            if identities is not None and self._chunk_identity(row) not in identities:
+                continue
             reference_id = str(row.get("reference_id") or "")
             if not reference_id or reference_id in seen:
                 continue

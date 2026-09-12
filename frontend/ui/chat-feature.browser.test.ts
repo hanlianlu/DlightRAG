@@ -1732,3 +1732,162 @@ it('Composer completes skill directives with ghost preview, Tab, and shorthand',
   composer.remove();
   globalThis.fetch = originalFetch;
 });
+
+function childControlWire(action: string, outcome: string, extra: Record<string, unknown> = {}) {
+  return {
+    run_id: 'run-1',
+    child_session_id: 'child-1',
+    action,
+    outcome,
+    operation_id: 'op-1',
+    operation_sequence: 1,
+    control_sequence: 4,
+    consumed_at: null,
+    request_id: null,
+    ...extra,
+  };
+}
+
+function idempotencyKey(init?: RequestInit): string {
+  return String(new Headers(init?.headers).get('Idempotency-Key') || '');
+}
+
+it('reuses one child-control submission key across an ambiguous retry of the same intent', async () => {
+  const keys: string[] = [];
+  let attempts = 0;
+  window.fetch = async (_input, init) => {
+    keys.push(idempotencyKey(init));
+    attempts += 1;
+    if (attempts === 1) throw new TypeError('response lost AFTER server commit');
+    return new Response(JSON.stringify(childControlWire('steer', 'queued')), {
+      status: 202, headers: {'Content-Type': 'application/json'},
+    });
+  };
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  document.body.appendChild(feature);
+  try {
+    await feature.controlRunChild('run-1', 'child-1', 'steer', 'same draft', false, 'op-1');
+  } catch {
+    // First attempt is the lost response after server commit.
+  }
+  await feature.controlRunChild('run-1', 'child-1', 'steer', 'same draft', false, 'op-1');
+  expect(keys).to.have.length(2);
+  expect(keys[0]).to.equal(keys[1]);
+  expect(keys[0]).to.match(/^[0-9a-f-]{36}$/i);
+});
+
+it('starts a fresh child-control key after a definitive response or changed intent', async () => {
+  const keys: string[] = [];
+  window.fetch = async (_input, init) => {
+    keys.push(idempotencyKey(init));
+    return new Response(JSON.stringify(childControlWire('steer', 'queued')), {
+      status: 202, headers: {'Content-Type': 'application/json'},
+    });
+  };
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  document.body.appendChild(feature);
+
+  await feature.controlRunChild('run-1', 'child-1', 'steer', 'same draft', false, 'op-1');
+  await feature.controlRunChild('run-1', 'child-1', 'steer', 'same draft', false, 'op-1');
+  await feature.controlRunChild('run-1', 'child-1', 'steer', 'edited draft', false, 'op-1');
+  await feature.controlRunChild('run-1', 'child-1', 'steer', 'same draft', false, 'op-2');
+  await feature.controlRunChild('run-1', 'child-2', 'steer', 'same draft', false, 'op-1');
+
+  expect(keys).to.have.length(5);
+  expect(keys[1]).to.not.equal(keys[0]);
+  expect(keys[2]).to.not.equal(keys[0]);
+  expect(keys[3]).to.not.equal(keys[0]);
+  expect(keys[4]).to.not.equal(keys[0]);
+});
+
+it('reuses one guidance-reply key across an ambiguous retry and retires it after success', async () => {
+  const keys: string[] = [];
+  let attempts = 0;
+  window.fetch = async (_input, init) => {
+    keys.push(idempotencyKey(init));
+    attempts += 1;
+    if (attempts === 1) throw new TypeError('response lost AFTER server commit');
+    return new Response(JSON.stringify({
+      run_id: 'run-1', request_id: 'req-1', action: 'reply', outcome: 'replied',
+    }), {status: 202, headers: {'Content-Type': 'application/json'}});
+  };
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  document.body.appendChild(feature);
+  try {
+    await feature.replyRunChild('run-1', 'req-1', 'use the report');
+  } catch {
+    // Lost reply receipt.
+  }
+  await feature.replyRunChild('run-1', 'req-1', 'use the report');
+  await feature.replyRunChild('run-1', 'req-1', 'use the report');
+  await feature.replyRunChild('run-1', 'req-1', 'different reply');
+
+  expect(keys).to.have.length(4);
+  expect(keys[0]).to.equal(keys[1]);
+  expect(keys[2]).to.not.equal(keys[1]);
+  expect(keys[3]).to.not.equal(keys[1]);
+});
+
+for (const action of ['steer', 'continue', 'cancel', 'reply'] as const) {
+  for (const malformed of ['truncated', 'invalid', 'unreadable'] as const) {
+    it(`retains ${action} retry UUID after a ${malformed} successful receipt through Chat/API`, async () => {
+      const keys: string[] = [];
+      let mode: 'malformed' | 'success' | 'reject' = 'malformed';
+      window.fetch = async (_input, init) => {
+        keys.push(idempotencyKey(init));
+        if (mode === 'reject') return new Response('{truncated', {status: 409});
+        if (mode === 'success') return new Response(JSON.stringify(
+          action === 'reply'
+            ? {run_id: 'run-1', request_id: 'req-1', action, outcome: 'replied'}
+            : childControlWire(action, 'queued'),
+        ), {status: 202});
+        if (malformed === 'unreadable') {
+          return new Response(new ReadableStream({
+            start(controller) { controller.error(new TypeError('receipt stream lost')); },
+          }), {status: 202});
+        }
+        return new Response(malformed === 'truncated' ? '{truncated' : '{"outcome":42}', {status: 202});
+      };
+      const feature = document.createElement('dl-chat-feature');
+      const send = () => action === 'reply'
+        ? feature.replyRunChild('run-1', 'req-1', 'same draft')
+        : feature.controlRunChild('run-1', 'child-1', action, 'same draft', false, 'op-1');
+      let failed = false;
+      try { await send(); } catch { failed = true; }
+      expect(failed).to.equal(true);
+      mode = 'success';
+      await send();
+      expect(keys[0]).to.match(/^[0-9a-f-]{36}$/i);
+      expect(keys[1]).to.equal(keys[0]);
+      mode = 'reject';
+      try { await send(); } catch { /* Explicit rejection settles even with unreadable body. */ }
+      expect(keys[2]).to.not.equal(keys[1]);
+      mode = 'success';
+      await send();
+      expect(keys[3]).to.not.equal(keys[2]);
+    });
+  }
+}
+
+it('does not treat browser abort as settlement of an accepted child command', async () => {
+  const keys: string[] = [];
+  let attempts = 0;
+  window.fetch = async (_input, init) => {
+    keys.push(idempotencyKey(init));
+    attempts += 1;
+    if (attempts === 1) throw new DOMException('Aborted', 'AbortError');
+    return new Response(JSON.stringify(childControlWire('steer', 'queued')), {
+      status: 202, headers: {'Content-Type': 'application/json'},
+    });
+  };
+  const feature = document.createElement('dl-chat-feature') as DlChatFeature;
+  document.body.appendChild(feature);
+  try {
+    await feature.controlRunChild('run-1', 'child-1', 'steer', 'same draft', false, 'op-1');
+  } catch {
+    // Observer detach is not command cancellation.
+  }
+  await feature.controlRunChild('run-1', 'child-1', 'steer', 'same draft', false, 'op-1');
+  expect(keys).to.have.length(2);
+  expect(keys[0]).to.equal(keys[1]);
+});

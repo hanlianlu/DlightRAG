@@ -3,6 +3,8 @@
 
 import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
 import {html, nothing, type TemplateResult} from 'lit';
+import {keyed} from 'lit/directives/keyed.js';
+import {repeat} from 'lit/directives/repeat.js';
 import type {
   ChildControlReceipt,
   ChildObservation,
@@ -122,6 +124,7 @@ export interface ChildRosterActions {
     action: 'steer' | 'continue' | 'cancel',
     content: string,
     reauthorizeUserCancelled?: boolean,
+    operationId?: string | null,
     signal?: AbortSignal,
   ) => Promise<ChildControlReceipt>;
   reply?: (
@@ -147,6 +150,31 @@ function commandStatus(error: unknown): number | null {
   return null;
 }
 
+type ChildEditorKind = 'steer' | 'continue' | 'reply';
+type ChildCommandAction = 'steer' | 'continue' | 'cancel' | 'reply';
+
+interface ChildCommandIdentity {
+  dialogGeneration: number;
+  runId: string | undefined;
+  childSessionId: string;
+  action: ChildCommandAction;
+  requestId: string | null;
+  operationId: string | null;
+}
+
+interface ChildEditorDraft {
+  value: string;
+  reauthorize: boolean;
+  selectionStart: number;
+  selectionEnd: number;
+  element: HTMLTextAreaElement | null;
+}
+
+function editorKind(form: HTMLFormElement): ChildEditorKind | null {
+  const kind = form.dataset.editor;
+  return kind === 'steer' || kind === 'continue' || kind === 'reply' ? kind : null;
+}
+
 export class DlChildrenRoster extends LightElement {
   static override properties = {fetcher: {state: true}};
   declare fetcher: (() => Promise<ChildRosterEntry[]>) | null;
@@ -166,12 +194,18 @@ export class DlChildrenRoster extends LightElement {
   #controller: AbortController | null = null;
   #observeController: AbortController | null = null;
   #generation = 0;
+  #dialogGeneration = 0;
   #selectedId: string | null = null;
   #observation: ChildObservation | null = null;
   #observeFailed = false;
   #stale = false;
   #outcome = '';
-  #busy = false;
+  #outcomeIdentity: ChildCommandIdentity | null = null;
+  #commands = new Set<ChildCommandIdentity>();
+  #drafts = new Map<string, ChildEditorDraft>();
+  #focusKey: string | null = null;
+  #refreshing = false;
+  #refreshQueued = false;
   #pager = new KeysetPager<ChildRosterEntry>(
     (cursor, signal) => this.#pageFetcher!(cursor, signal).then((page) => ({items: page.children, nextCursor: page.nextCursor})),
     () => this.requestUpdate(),
@@ -182,6 +216,7 @@ export class DlChildrenRoster extends LightElement {
     pageFetcher?: ChildRosterPageFetcher,
     actions?: ChildRosterActions,
   ): void {
+    this.#dialogGeneration += 1;
     this.fetcher = fetcher;
     this.#pageFetcher = pageFetcher ?? null;
     this.#actions = actions ?? null;
@@ -195,19 +230,36 @@ export class DlChildrenRoster extends LightElement {
   refreshIfFollowing(runId: string): void {
     const dialog = this.querySelector<HTMLDialogElement>('dialog');
     if (!dialog?.open || this.#actions?.runId !== runId) return;
-    void this.refresh();
+    this.#refreshQueued = true;
+    void this.#flushRefresh();
+  }
+
+  async #flushRefresh(): Promise<void> {
+    if (this.#refreshing) return;
+    this.#refreshing = true;
+    try {
+      while (this.#refreshQueued) {
+        this.#refreshQueued = false;
+        await this.refresh();
+      }
+    } finally {
+      this.#refreshing = false;
+      if (this.#refreshQueued) void this.#flushRefresh();
+    }
   }
 
   async refresh(): Promise<void> {
     const selected = this.#selectedId;
-    this.#invalidate();
-    this.#entries = [];
-    this.#empty = true;
+    this.#controller?.abort();
+    this.#controller = null;
+    this.#generation += 1;
+    this.#announcement = '';
     this.#failed = false;
+    this.#pager.reset(null);
     this.#selectedId = selected;
     if (this.#pageFetcher) {
       await this.#loadFirstPage();
-      await this.#restoreSelection();
+      await this.#restoreSelection(true);
       return;
     }
     let children: ChildRosterEntry[] = [];
@@ -220,7 +272,7 @@ export class DlChildrenRoster extends LightElement {
     }
     this.#entries = children;
     this.#empty = children.length === 0;
-    await this.#restoreSelection();
+    await this.#restoreSelection(true);
     this.requestUpdate();
   }
 
@@ -278,15 +330,140 @@ export class DlChildrenRoster extends LightElement {
     this.#observeFailed = false;
     this.#stale = false;
     this.#outcome = '';
-    this.#busy = false;
+    this.#outcomeIdentity = null;
     this.#pager.reset(null);
+  }
+
+  #editorKey(
+    kind: ChildEditorKind,
+    requestId: string | null,
+    childSessionId = this.#selectedId,
+    operationId = this.#observation?.child.operationId ?? null,
+  ): string | null {
+    const runId = this.#actions?.runId;
+    if (!runId || !childSessionId) return null;
+    return JSON.stringify({
+      runId,
+      childSessionId,
+      kind,
+      requestId: requestId ?? '',
+      operationId: operationId ?? '',
+    });
+  }
+
+  #captureEditors(): void {
+    const panel = this.querySelector('.roster-observation');
+    if (!panel || !this.#selectedId) return;
+    const active = document.activeElement;
+    this.#focusKey = null;
+    for (const textarea of panel.querySelectorAll<HTMLTextAreaElement>('textarea')) {
+      const form = textarea.closest('form');
+      if (!form) continue;
+      const kind = editorKind(form);
+      if (!kind) continue;
+      const requestId = form.dataset.requestId || null;
+      const key = this.#editorKey(kind, requestId);
+      if (!key) continue;
+      const reauthorize = Boolean(
+        form.querySelector<HTMLInputElement>('[name="reauthorize"]')?.checked,
+      );
+      this.#drafts.set(key, {
+        value: textarea.value,
+        reauthorize,
+        selectionStart: textarea.selectionStart ?? textarea.value.length,
+        selectionEnd: textarea.selectionEnd ?? textarea.value.length,
+        element: textarea,
+      });
+      if (active === textarea) this.#focusKey = key;
+    }
+  }
+
+  #restoreEditors(): void {
+    const panel = this.querySelector('.roster-observation');
+    if (!panel || !this.#selectedId) return;
+    for (const textarea of panel.querySelectorAll<HTMLTextAreaElement>('textarea')) {
+      const form = textarea.closest('form');
+      if (!form) continue;
+      const kind = editorKind(form);
+      if (!kind) continue;
+      const requestId = form.dataset.requestId || null;
+      const key = this.#editorKey(kind, requestId);
+      if (!key) continue;
+      const draft = this.#drafts.get(key);
+      if (!draft) continue;
+      if (draft.element === textarea) continue;
+      textarea.value = draft.value;
+      const box = form.querySelector<HTMLInputElement>('[name="reauthorize"]');
+      if (box) box.checked = draft.reauthorize;
+      draft.element = textarea;
+      if (this.#focusKey === key) {
+        textarea.focus();
+        try {
+          textarea.setSelectionRange(draft.selectionStart, draft.selectionEnd);
+        } catch {
+          // Native range restore can reject if the control is not text-like.
+        }
+      }
+    }
+  }
+
+  #clearEditor(identity: ChildCommandIdentity): void {
+    const kind: ChildEditorKind | null = identity.action === 'steer' || identity.action === 'continue'
+      || identity.action === 'reply'
+      ? identity.action
+      : null;
+    if (!kind) return;
+    const key = this.#editorKey(
+      kind,
+      identity.requestId,
+      identity.childSessionId,
+      identity.operationId,
+    );
+    if (key) this.#drafts.delete(key);
+    if (key && this.#focusKey === key) this.#focusKey = null;
+    if (!this.#commandMatchesSelection(identity)) return;
+    for (const form of this.querySelectorAll<HTMLFormElement>('.roster-observation form')) {
+      if (editorKind(form) === kind
+        && this.#editorKey(kind, form.dataset.requestId || null) === key) form.reset();
+    }
+  }
+
+  #commandMatchesSelection(identity: ChildCommandIdentity, replied = false): boolean {
+    const dialog = this.querySelector<HTMLDialogElement>('dialog');
+    return identity.dialogGeneration === this.#dialogGeneration
+      && identity.runId === this.#actions?.runId
+      && identity.childSessionId === this.#selectedId
+      && identity.childSessionId === this.#observation?.child.childSessionId
+      && identity.operationId === (this.#observation?.child.operationId ?? null)
+      && (identity.requestId === null || Boolean(this.#observation?.questions.some(
+        (question) => question.requestId === identity.requestId
+          && (question.status === 'pending' || (replied && question.status === 'replied')),
+      )))
+      && Boolean(dialog?.open);
+  }
+
+  #formBusy(action: ChildCommandAction, requestId: string | null = null): boolean {
+    for (const command of this.#commands) {
+      if (!this.#commandMatchesSelection(command)) continue;
+      if (command.action !== action) continue;
+      if (command.requestId !== requestId) continue;
+      return true;
+    }
+    return false;
+  }
+
+  #visibleOutcome(): string {
+    if (!this.#outcome) return '';
+    if (this.#outcomeIdentity
+      && !this.#commandMatchesSelection(this.#outcomeIdentity, this.#outcome === 'replied')) return '';
+    return this.#outcome;
   }
 
   #loadOlder = (): void => {
     void this.loadOlderChildren();
   };
 
-  async #restoreSelection(): Promise<void> {
+  async #restoreSelection(inPlace = false): Promise<void> {
     const selected = this.#selectedId;
     if (!selected) return;
     const present = this.#entries.some((entry) => entry.childSessionId === selected);
@@ -300,33 +477,55 @@ export class DlChildrenRoster extends LightElement {
       this.requestUpdate();
       return;
     }
-    await this.#loadObservation(selected);
+    const sameChild = this.#observation?.child.childSessionId === selected;
+    await this.#loadObservation(selected, {inPlace: inPlace && sameChild});
   }
 
   #selectChild = (childSessionId: string): void => {
+    if (
+      this.#selectedId === childSessionId
+      && this.#observation?.child.childSessionId === childSessionId
+    ) {
+      return;
+    }
+    this.#captureEditors();
     this.#selectedId = childSessionId;
     this.#stale = false;
     this.#outcome = '';
+    this.#outcomeIdentity = null;
     void this.#loadObservation(childSessionId);
   };
 
-  async #loadObservation(childSessionId: string): Promise<void> {
+  async #loadObservation(
+    childSessionId: string,
+    options: {inPlace?: boolean} = {},
+  ): Promise<void> {
     const observe = this.#actions?.observe;
     if (!observe) return;
-    this.#observeController?.abort();
+    const inPlace = Boolean(options.inPlace);
+    const dialogGeneration = this.#dialogGeneration;
+    if (!inPlace) {
+      this.#observeController?.abort();
+      this.#observeFailed = false;
+      this.#observation = null;
+      this.requestUpdate();
+    }
     const controller = new AbortController();
     this.#observeController = controller;
-    this.#observeFailed = false;
-    this.#observation = null;
-    this.requestUpdate();
     try {
       const observation = await observe(childSessionId, controller.signal);
       if (controller !== this.#observeController || this.#selectedId !== childSessionId) return;
+      if (this.#dialogGeneration !== dialogGeneration) return;
+      if (inPlace) this.#captureEditors();
       this.#observation = observation;
       this.#stale = false;
+      this.#observeFailed = false;
       this.requestUpdate();
+      await this.updateComplete;
+      this.#restoreEditors();
     } catch (error) {
       if (controller !== this.#observeController || this.#selectedId !== childSessionId) return;
+      if (this.#dialogGeneration !== dialogGeneration) return;
       if (isAbortError(error)) return;
       if (commandStatus(error) === 404) {
         this.#stale = true;
@@ -346,7 +545,7 @@ export class DlChildrenRoster extends LightElement {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
     const instruction = String(new FormData(form).get('instruction') || '').trim();
-    void this.#runControl('steer', instruction, false, form);
+    void this.#runControl('steer', instruction, false);
   };
 
   #onContinue = (event: Event): void => {
@@ -355,7 +554,7 @@ export class DlChildrenRoster extends LightElement {
     const data = new FormData(form);
     const instruction = String(data.get('instruction') || '').trim();
     const reauthorize = data.get('reauthorize') === 'on';
-    void this.#runControl('continue', instruction, reauthorize, form);
+    void this.#runControl('continue', instruction, reauthorize);
   };
 
   #onCancel = (event: Event): void => {
@@ -368,49 +567,73 @@ export class DlChildrenRoster extends LightElement {
     const form = event.currentTarget as HTMLFormElement;
     const requestId = form.dataset.requestId || '';
     const content = String(new FormData(form).get('reply') || '').trim();
-    void this.#runReply(requestId, content, form);
+    void this.#runReply(requestId, content);
   };
 
   async #runControl(
     action: 'steer' | 'continue' | 'cancel',
     content: string,
     reauthorize: boolean,
-    form?: HTMLFormElement,
   ): Promise<void> {
     const control = this.#actions?.control;
     const childSessionId = this.#selectedId;
-    if (!control || !childSessionId || this.#busy) return;
+    if (!control || !childSessionId || this.#formBusy(action)) return;
     if (action !== 'cancel' && !content) return;
+    const operationId = this.#observation?.child.operationId ?? null;
+    const identity: ChildCommandIdentity = {
+      dialogGeneration: this.#dialogGeneration,
+      runId: this.#actions?.runId,
+      childSessionId,
+      action,
+      requestId: null,
+      operationId,
+    };
     await this.#runCommand(
-      () => control(childSessionId, action, content, reauthorize),
-      form,
+      () => control(childSessionId, action, content, reauthorize, operationId),
+      identity,
     );
   }
 
-  async #runReply(requestId: string, content: string, form: HTMLFormElement): Promise<void> {
+  async #runReply(requestId: string, content: string): Promise<void> {
     const reply = this.#actions?.reply;
-    if (!reply || !requestId || !content || this.#busy) return;
-    await this.#runCommand(() => reply(requestId, content), form);
+    if (!reply || !requestId || !content || this.#formBusy('reply', requestId)) return;
+    const childSessionId = this.#selectedId;
+    if (!childSessionId) return;
+    const identity: ChildCommandIdentity = {
+      dialogGeneration: this.#dialogGeneration,
+      runId: this.#actions?.runId,
+      childSessionId,
+      action: 'reply',
+      requestId,
+      operationId: this.#observation?.child.operationId ?? null,
+    };
+    await this.#runCommand(() => reply(requestId, content), identity);
   }
 
   async #runCommand(
     run: () => Promise<ChildControlReceipt>,
-    form?: HTMLFormElement,
+    identity: ChildCommandIdentity,
   ): Promise<void> {
-    this.#busy = true;
-    this.#outcome = '';
+    this.#commands.add(identity);
+    if (this.#commandMatchesSelection(identity)) this.#outcome = '';
     this.requestUpdate();
     try {
       const receipt = await run();
+      if (!this.#commandMatchesSelection(identity)) return;
+      this.#clearEditor(identity);
       this.#outcome = receipt.outcome;
-      form?.reset();
+      // An accepted continuation reports the new Operation it created.
+      this.#outcomeIdentity = identity.action === 'continue' && receipt.outcome === 'accepted'
+        && receipt.operationId ? {...identity, operationId: receipt.operationId} : identity;
       this.#announcement = this.#outcomeLabel(receipt.outcome);
-      if (this.#selectedId) await this.#loadObservation(this.#selectedId);
+      await this.#loadObservation(identity.childSessionId, {inPlace: true});
     } catch (error) {
+      if (!this.#commandMatchesSelection(identity)) return;
       if (isAbortError(error)) return;
       const outcome = commandOutcome(error);
       if (outcome) {
         this.#outcome = outcome;
+        this.#outcomeIdentity = identity;
         this.#announcement = this.#outcomeLabel(outcome);
       }
       if (commandStatus(error) === 404) {
@@ -420,12 +643,13 @@ export class DlChildrenRoster extends LightElement {
         });
       } else if (!outcome) {
         this.#outcome = 'failed';
+        this.#outcomeIdentity = identity;
         this.#announcement = msg('The child intervention could not be sent.', {
           id: 'runDialogs.interventionFailed',
         });
       }
     } finally {
-      this.#busy = false;
+      this.#commands.delete(identity);
       this.requestUpdate();
     }
   }
@@ -470,6 +694,9 @@ export class DlChildrenRoster extends LightElement {
 
   #close(): void {
     publishModalState(this);
+    this.#dialogGeneration += 1;
+    this.#drafts.clear();
+    this.#focusKey = null;
     this.#invalidate();
     this.#selectedId = null;
     this.#actions = null;
@@ -607,6 +834,10 @@ export class DlChildrenRoster extends LightElement {
     const running = status === 'running';
     const terminal = status === 'succeeded' || status === 'failed' || status === 'cancelled';
     const userCancelled = status === 'cancelled' && child.cancellationOrigin === 'user';
+    const outcome = this.#visibleOutcome();
+    const steerBusy = this.#formBusy('steer');
+    const continueBusy = this.#formBusy('continue');
+    const cancelBusy = this.#formBusy('cancel');
     return html`
       <section class="roster-observation" aria-labelledby="dl-child-observation-title">
         <h3 id="dl-child-observation-title">${msg('Selected child', {id: 'runDialogs.selectedChild'})}</h3>
@@ -624,7 +855,7 @@ export class DlChildrenRoster extends LightElement {
           <p>${msg('Evidence handles', {id: 'runDialogs.evidenceHandles'})}:
             ${observation.result.handles.join(', ')}</p>
         ` : nothing}
-        ${this.#outcome ? html`<p role="status">${this.#outcomeLabel(this.#outcome)}</p>` : nothing}
+        ${outcome ? html`<p role="status">${this.#outcomeLabel(outcome)}</p>` : nothing}
         <h4>${msg('Transcript', {id: 'runDialogs.transcript'})}</h4>
         <ol class="roster-lineage">
           ${observation.transcript.length === 0 ? html`
@@ -649,19 +880,22 @@ export class DlChildrenRoster extends LightElement {
         <h4>${msg('Questions', {id: 'runDialogs.questions'})}</h4>
         ${observation.questions.length === 0 ? html`
           <p>${msg('No questions from this child.', {id: 'runDialogs.noQuestions'})}</p>
-        ` : observation.questions.map((question) => html`
+        ` : repeat(observation.questions,
+          (question) => this.#editorKey('reply', question.requestId),
+          (question) => html`
           <p>${this.#questionStatusLabel(question.status)}: ${question.question}${question.reply ? html` → ${question.reply}` : nothing}</p>
           ${question.status === 'pending' && this.#actions?.reply ? html`
-            <form data-request-id=${question.requestId} @submit=${this.#onReply}>
+            <form data-editor="reply" data-request-id=${question.requestId} @submit=${this.#onReply}>
               <fieldset>
                 <legend>${msg('Reply to this question', {id: 'runDialogs.replyLegend'})}</legend>
                 <label>
                   <span class="sr-only">${msg('Reply', {id: 'runDialogs.replyLabel'})}</span>
                   <textarea class="dl-dialog-input" name="reply" rows="2" required
-                            ?disabled=${this.#busy}></textarea>
+                            ?disabled=${this.#formBusy('reply', question.requestId)}></textarea>
                 </label>
                 <div class="dl-dialog-actions">
-                  <button type="submit" class="dl-btn" ?disabled=${this.#busy}>
+                  <button type="submit" class="dl-btn"
+                          ?disabled=${this.#formBusy('reply', question.requestId)}>
                     ${msg('Reply', {id: 'runDialogs.replySubmit'})}
                   </button>
                 </div>
@@ -669,53 +903,53 @@ export class DlChildrenRoster extends LightElement {
             </form>
           ` : nothing}
         `)}
-        ${running && this.#actions?.control ? html`
-          <form @submit=${this.#onSteer}>
+        ${running && this.#actions?.control ? keyed(this.#editorKey('steer', null), html`
+          <form data-editor="steer" @submit=${this.#onSteer}>
             <fieldset>
               <legend>${msg('Steer this child', {id: 'runDialogs.steerLegend'})}</legend>
               <label>
                 <span class="sr-only">${msg('Steering instruction', {id: 'runDialogs.steerLabel'})}</span>
                 <textarea class="dl-dialog-input" name="instruction" rows="2" required
-                          ?disabled=${this.#busy}></textarea>
+                          ?disabled=${steerBusy}></textarea>
               </label>
               <div class="dl-dialog-actions">
-                <button type="submit" class="dl-btn" ?disabled=${this.#busy}>
+                <button type="submit" class="dl-btn" ?disabled=${steerBusy}>
                   ${msg('Steer', {id: 'runDialogs.steerSubmit'})}
                 </button>
               </div>
             </fieldset>
           </form>
-          <form @submit=${this.#onCancel}>
+          <form data-editor="cancel" @submit=${this.#onCancel}>
             <div class="dl-dialog-actions">
-              <button type="submit" class="dl-dialog-danger" ?disabled=${this.#busy}>
+              <button type="submit" class="dl-dialog-danger" ?disabled=${cancelBusy}>
                 ${msg('Cancel child', {id: 'runDialogs.cancelChild'})}
               </button>
             </div>
           </form>
-        ` : nothing}
-        ${terminal && this.#actions?.control ? html`
-          <form @submit=${this.#onContinue}>
+        `) : nothing}
+        ${terminal && this.#actions?.control ? keyed(this.#editorKey('continue', null), html`
+          <form data-editor="continue" @submit=${this.#onContinue}>
             <fieldset>
               <legend>${msg('Continue this child', {id: 'runDialogs.continueLegend'})}</legend>
               <label>
                 <span class="sr-only">${msg('Continuation instruction', {id: 'runDialogs.continueLabel'})}</span>
                 <textarea class="dl-dialog-input" name="instruction" rows="2" required
-                          ?disabled=${this.#busy}></textarea>
+                          ?disabled=${continueBusy}></textarea>
               </label>
               ${userCancelled ? html`
                 <label class="dl-dialog-checkbox">
-                  <input type="checkbox" name="reauthorize" ?disabled=${this.#busy}>
+                  <input type="checkbox" name="reauthorize" ?disabled=${continueBusy}>
                   ${msg('Reauthorize this user-cancelled work', {id: 'runDialogs.reauthorize'})}
                 </label>
               ` : nothing}
               <div class="dl-dialog-actions">
-                <button type="submit" class="dl-btn" ?disabled=${this.#busy}>
+                <button type="submit" class="dl-btn" ?disabled=${continueBusy}>
                   ${msg('Continue child', {id: 'runDialogs.continueChild'})}
                 </button>
               </div>
             </fieldset>
           </form>
-        ` : nothing}
+        `) : nothing}
       </section>
     `;
   }

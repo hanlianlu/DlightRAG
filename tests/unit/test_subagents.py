@@ -1449,20 +1449,20 @@ async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:
     parent_id = SessionId.new()
     child_id = SessionId.deterministic(run_id=str(parent_id.value), name="pending-cancel")
     repository = InMemoryAgentSessionRepository()
-    with pytest.raises(asyncio.CancelledError):
-        await run_child_session(
-            orchestrator=_child_orchestrator(model, retrieve_func=cancel_during_search),
-            repository=repository,  # type: ignore[arg-type]
-            session=_FakeSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
-            fetched_buffer=FetchedResourceBuffer(),
-            child_id=child_id,
-            request=ChildRequest(objective="cancel while searching"),
-            parent_call_id="call-pending",
-            parent_session_id=parent_id,
-            context_snapshot=_context_snapshot(parent_id),
-            persist_child_runtime=AsyncMock(),
-            claim_child=AsyncMock(return_value=1),
-        )
+    outcome = await run_child_session(
+        orchestrator=_child_orchestrator(model, retrieve_func=cancel_during_search),
+        repository=repository,  # type: ignore[arg-type]
+        session=_FakeSession(run_id=str(parent_id.value)),  # type: ignore[arg-type]
+        fetched_buffer=FetchedResourceBuffer(),
+        child_id=child_id,
+        request=ChildRequest(objective="cancel while searching"),
+        parent_call_id="call-pending",
+        parent_session_id=parent_id,
+        context_snapshot=_context_snapshot(parent_id),
+        persist_child_runtime=AsyncMock(),
+        claim_child=AsyncMock(return_value=1),
+    )
+    assert outcome.status == "cancelled"
 
     snapshot = await repository.load(child_id)
     result = next(entry for entry in snapshot.entries if isinstance(entry, ToolResultMessageEntry))

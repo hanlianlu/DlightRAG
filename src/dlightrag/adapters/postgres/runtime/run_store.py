@@ -695,7 +695,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_agent_controls (
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_runs (owner_id, run_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_agent_controls_sequence_check CHECK (control_sequence >= 1),
-    CONSTRAINT dlightrag_agent_controls_kind_check CHECK (kind IN ('steer', 'follow_up')),
+    CONSTRAINT dlightrag_agent_controls_kind_check CHECK (kind IN ('steer', 'follow_up', 'cancel')),
     CONSTRAINT dlightrag_agent_controls_content_check CHECK (char_length(content) BETWEEN 1 AND 20000),
     CONSTRAINT dlightrag_agent_controls_target_check CHECK (
         (target_session_id IS NULL AND target_operation_id IS NULL)
@@ -1060,6 +1060,16 @@ RUN_MIGRATIONS = (
             "WHERE target_session_id IS NULL AND submission_key IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_child_guidance_pending "
             "ON dlightrag_answer_child_guidance (owner_id, run_id, status, expires_at)",
+        ),
+    ),
+    Migration(
+        "child_cancel_submission_receipts",
+        "Retain consumed owner cancellation controls bound to their original Operation",
+        (
+            "ALTER TABLE dlightrag_agent_controls "
+            "DROP CONSTRAINT IF EXISTS dlightrag_agent_controls_kind_check, "
+            "ADD CONSTRAINT dlightrag_agent_controls_kind_check "
+            "CHECK (kind IN ('steer', 'follow_up', 'cancel'))",
         ),
     ),
 )
