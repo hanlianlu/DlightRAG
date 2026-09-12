@@ -1226,6 +1226,67 @@ async def test_async_children_run_while_parent_progresses_and_barrier_adopts_res
     assert run.result["trace"]["usage"]["inclusive_usage_details"]["input_tokens"] >= 16
 
 
+class _SiblingFailSucceedProvider(_AsyncChildProvider):
+    async def __call__(self, **kwargs: Any) -> AssistantTurn:
+        tools = kwargs.get("tools") or ()
+        names = {str(tool.name) for tool in tools}
+        if "spawn_agent" not in names:
+            self.child_calls += 1
+            self.children_started.set()
+            messages = kwargs.get("messages") or ()
+            content = " ".join(
+                str(message.get("content") or "")
+                for message in messages
+                if isinstance(message, dict)
+            )
+            if "investigation one" in content:
+                raise RuntimeError("controlled sibling failure")
+            await self.release_children.wait()
+            return AssistantTurn(
+                text="sibling survived",
+                tool_calls=(),
+                stop_reason="stop",
+                usage_details={"input_tokens": 2, "output_tokens": 1},
+            )
+        return await super().__call__(**kwargs)
+
+
+async def test_async_sibling_failure_does_not_fail_the_surviving_child(
+    store: FingerprintingRunStore,
+) -> None:
+    provider = _SiblingFailSucceedProvider()
+    orchestrator = _async_child_orchestrator(provider)
+    plan = _async_child_plan(orchestrator)
+    application, coordinator = _answer_runtime(store=store, orchestrator=orchestrator)
+    creation = await store.create_run(
+        owner_id="owner-sibling-fail",
+        request=_answer_run_request(mode="research", agent_run_plan=plan),
+    )
+    try:
+        await coordinator.start()
+        coordinator.wake()
+        await asyncio.wait_for(provider.children_started.wait(), timeout=10.0)
+        provider.release_children.set()
+        run = await _wait_for_status(
+            store,
+            owner_id="owner-sibling-fail",
+            run_id=creation.run.run_id,
+            status="succeeded",
+            timeout=15.0,
+        )
+    finally:
+        provider.release_children.set()
+        await coordinator.aclose()
+        await application.aclose()
+
+    children = await store.list_child_sessions(
+        owner_id="owner-sibling-fail", run_id=creation.run.run_id
+    )
+    assert {row["status"] for row in children} == {"failed", "succeeded"}
+    assert run.result is not None
+    assert run.result["answer"] == "parent synthesis after child settlement"
+
+
 async def test_async_child_dispatch_reconstructs_after_parent_worker_detach(
     store: FingerprintingRunStore,
 ) -> None:

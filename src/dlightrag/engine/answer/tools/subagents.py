@@ -168,6 +168,7 @@ class ChildOutcome:
     child_session_id: str = ""
     evidence_state: Mapping[str, Any] | None = None
     operation_id: str = ""
+    fencing_epoch: int | None = None
 
     def durable_payload(self) -> dict[str, Any]:
         """Return the exact parent-visible outcome needed for replay."""
@@ -380,18 +381,14 @@ class SubagentHost:
         if self.list_children is None:
             return
         rows = await self.list_children(owner_id=self.owner_id, run_id=self.run_id)
-        if any(
-            isinstance(row, Mapping) and str(row.get("status")) == "running" for row in rows or ()
-        ):
+        if any(_is_running_work(self, row) for row in rows or () if isinstance(row, Mapping)):
             raise RuntimeError("accepted Child dispatch lost its reconstructible envelope")
 
     async def has_running_children(self) -> bool:
         if self.list_children is None:
             return any(not task.done() for task in self.tasks.values())
         rows = await self.list_children(owner_id=self.owner_id, run_id=self.run_id)
-        return any(
-            isinstance(row, Mapping) and str(row.get("status")) == "running" for row in rows or ()
-        )
+        return any(_is_running_work(self, row) for row in rows or () if isinstance(row, Mapping))
 
     async def stop(self, *, cancel: bool) -> None:
         """Join local tasks, preserving durable work on process detach."""
@@ -692,13 +689,19 @@ def child_guidance_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
                 guidance = await host.load_guidance(
                     owner_id=host.owner_id, run_id=host.run_id, request_id=request_id
                 )
-            else:
-                guidance = await host.wait_guidance(
-                    owner_id=host.owner_id,
-                    run_id=host.run_id,
-                    request_id=request_id,
-                    timeout_seconds=remaining,
-                )
+                if not isinstance(guidance, Mapping):
+                    return ToolResult.text("Parent guidance request disappeared.", is_error=True)
+                if str(guidance.get("status") or "") == "pending":
+                    from dlightrag.engine.runtime.coordinator import LeaseLostError
+
+                    raise LeaseLostError
+                continue
+            guidance = await host.wait_guidance(
+                owner_id=host.owner_id,
+                run_id=host.run_id,
+                request_id=request_id,
+                timeout_seconds=remaining,
+            )
             if not isinstance(guidance, Mapping):
                 return ToolResult.text("Parent guidance request disappeared.", is_error=True)
 
@@ -887,6 +890,7 @@ async def _finish_outcome(
             summary=outcome.summary,
             usage=outcome.usage,
             outcome=outcome.durable_payload(),
+            child_fencing_epoch=outcome.fencing_epoch,
         )
         if committed is False:
             persisted = await _load_terminal_child(host, child_id)
@@ -939,6 +943,11 @@ def _dispatch_from_row(
     except KeyError, TypeError, ValueError:
         logger.warning("Accepted Child Session envelope is not reconstructible", exc_info=True)
         return None
+
+
+def _is_running_work(host: SubagentHost, row: Mapping[str, Any]) -> bool:
+    """Return whether one roster row is reconstructible running Child work."""
+    return str(row.get("status")) == "running" and _dispatch_from_row(host, row) is not None
 
 
 async def _check_cancelled(host: SubagentHost) -> None:

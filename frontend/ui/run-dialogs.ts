@@ -381,49 +381,29 @@ export class DlChildrenRoster extends LightElement {
     const childSessionId = this.#selectedId;
     if (!control || !childSessionId || this.#busy) return;
     if (action !== 'cancel' && !content) return;
-    this.#busy = true;
-    this.#outcome = '';
-    this.requestUpdate();
-    try {
-      const receipt = await control(childSessionId, action, content, reauthorize);
-      this.#outcome = receipt.outcome;
-      form?.reset();
-      this.#announcement = this.#outcomeLabel(receipt.outcome);
-      await this.#loadObservation(childSessionId);
-    } catch (error) {
-      if (isAbortError(error)) return;
-      const outcome = commandOutcome(error);
-      if (outcome) {
-        this.#outcome = outcome;
-        this.#announcement = this.#outcomeLabel(outcome);
-        if (outcome === 'terminal_child' || commandStatus(error) === 404) this.#stale = commandStatus(error) === 404;
-      } else if (commandStatus(error) === 404) {
-        this.#stale = true;
-        this.#announcement = msg('That child is no longer available.', {
-          id: 'runDialogs.staleChild',
-        });
-      } else {
-        this.#outcome = 'failed';
-        this.#announcement = msg('The child intervention could not be sent.', {
-          id: 'runDialogs.interventionFailed',
-        });
-      }
-    } finally {
-      this.#busy = false;
-      this.requestUpdate();
-    }
+    await this.#runCommand(
+      () => control(childSessionId, action, content, reauthorize),
+      form,
+    );
   }
 
   async #runReply(requestId: string, content: string, form: HTMLFormElement): Promise<void> {
     const reply = this.#actions?.reply;
     if (!reply || !requestId || !content || this.#busy) return;
+    await this.#runCommand(() => reply(requestId, content), form);
+  }
+
+  async #runCommand(
+    run: () => Promise<ChildControlReceipt>,
+    form?: HTMLFormElement,
+  ): Promise<void> {
     this.#busy = true;
     this.#outcome = '';
     this.requestUpdate();
     try {
-      const receipt = await reply(requestId, content);
+      const receipt = await run();
       this.#outcome = receipt.outcome;
-      form.reset();
+      form?.reset();
       this.#announcement = this.#outcomeLabel(receipt.outcome);
       if (this.#selectedId) await this.#loadObservation(this.#selectedId);
     } catch (error) {
@@ -432,12 +412,13 @@ export class DlChildrenRoster extends LightElement {
       if (outcome) {
         this.#outcome = outcome;
         this.#announcement = this.#outcomeLabel(outcome);
-      } else if (commandStatus(error) === 404) {
+      }
+      if (commandStatus(error) === 404) {
         this.#stale = true;
         this.#announcement = msg('That child is no longer available.', {
           id: 'runDialogs.staleChild',
         });
-      } else {
+      } else if (!outcome) {
         this.#outcome = 'failed';
         this.#announcement = msg('The child intervention could not be sent.', {
           id: 'runDialogs.interventionFailed',
@@ -504,6 +485,42 @@ export class DlChildrenRoster extends LightElement {
       succeeded: msg('succeeded', {id: 'runDialogs.childStatus.succeeded'}),
       failed: msg('failed', {id: 'runDialogs.childStatus.failed'}),
       cancelled: msg('cancelled', {id: 'runDialogs.childStatus.cancelled'}),
+    };
+    return labels[status] ?? status;
+  }
+
+  #cancellationOriginLabel(origin: string): string {
+    const labels: Record<string, string> = {
+      user: msg('user', {id: 'runDialogs.cancellationOrigin.user'}),
+      parent: msg('parent', {id: 'runDialogs.cancellationOrigin.parent'}),
+      run: msg('run', {id: 'runDialogs.cancellationOrigin.run'}),
+    };
+    return labels[origin] ?? origin;
+  }
+
+  #roleLabel(role: string): string {
+    const labels: Record<string, string> = {
+      user: msg('user', {id: 'runDialogs.role.user'}),
+      assistant: msg('assistant', {id: 'runDialogs.role.assistant'}),
+      tool: msg('tool', {id: 'runDialogs.role.tool'}),
+    };
+    return labels[role] ?? role;
+  }
+
+  #originLabel(origin: string): string {
+    const labels: Record<string, string> = {
+      user: msg('user', {id: 'runDialogs.origin.user'}),
+      parent: msg('parent', {id: 'runDialogs.origin.parent'}),
+    };
+    return labels[origin] ?? origin;
+  }
+
+  #questionStatusLabel(status: string): string {
+    const labels: Record<string, string> = {
+      pending: msg('pending', {id: 'runDialogs.questionStatus.pending'}),
+      replied: msg('replied', {id: 'runDialogs.questionStatus.replied'}),
+      expired: msg('expired', {id: 'runDialogs.questionStatus.expired'}),
+      cancelled: msg('cancelled', {id: 'runDialogs.questionStatus.cancelled'}),
     };
     return labels[status] ?? status;
   }
@@ -599,7 +616,7 @@ export class DlChildrenRoster extends LightElement {
             ? html` · ${msg('Operation', {id: 'runDialogs.operation'})}: ${this.#statusLabel(child.operationStatus)}`
             : nothing}
           ${child.cancellationOrigin
-            ? html` · ${msg('Cancellation', {id: 'runDialogs.cancellation'})}: ${child.cancellationOrigin}`
+            ? html` · ${msg('Cancellation', {id: 'runDialogs.cancellation'})}: ${this.#cancellationOriginLabel(child.cancellationOrigin)}`
             : nothing}
         </p>
         ${child.summary ? html`<p>${child.summary}</p>` : nothing}
@@ -613,7 +630,7 @@ export class DlChildrenRoster extends LightElement {
           ${observation.transcript.length === 0 ? html`
             <li>${msg('No transcript entries yet.', {id: 'runDialogs.noTranscript'})}</li>
           ` : observation.transcript.map((entry) => html`
-            <li>${entry.role}: ${entry.content || entry.name}</li>
+            <li>${this.#roleLabel(entry.role)}: ${entry.content || entry.name}</li>
           `)}
         </ol>
         <h4>${msg('Controls', {id: 'runDialogs.controls'})}</h4>
@@ -625,7 +642,7 @@ export class DlChildrenRoster extends LightElement {
               ${record.consumed
                 ? msg('Consumed', {id: 'runDialogs.controlConsumed'})
                 : msg('Queued', {id: 'runDialogs.controlQueued'})}
-              · ${record.origin}: ${record.content}
+              · ${this.#originLabel(record.origin)}: ${record.content}
             </li>
           `)}
         </ol>
@@ -633,7 +650,7 @@ export class DlChildrenRoster extends LightElement {
         ${observation.questions.length === 0 ? html`
           <p>${msg('No questions from this child.', {id: 'runDialogs.noQuestions'})}</p>
         ` : observation.questions.map((question) => html`
-          <p>${question.status}: ${question.question}${question.reply ? html` → ${question.reply}` : nothing}</p>
+          <p>${this.#questionStatusLabel(question.status)}: ${question.question}${question.reply ? html` → ${question.reply}` : nothing}</p>
           ${question.status === 'pending' && this.#actions?.reply ? html`
             <form data-request-id=${question.requestId} @submit=${this.#onReply}>
               <fieldset>

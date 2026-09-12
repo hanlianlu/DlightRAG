@@ -3388,6 +3388,293 @@ class TestAgentControlsAndChildren:
         )
         assert isinstance(stale, TransactionLeaseLost)
 
+    async def test_wait_for_child_guidance_does_not_hold_the_pool_during_listen(
+        self, store
+    ) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        run_id = creation.run.run_id
+        parent_id = str(uuid.uuid7())
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            parent_call_id="listen-pool",
+            parent_intent_id=str(uuid.uuid7()),
+            objective="wait without holding the pool",
+            context_mode="isolated",
+            model_role="query",
+            tools=("search_knowledge_base",),
+            depth=1,
+            context_snapshot={
+                "parent_session_id": parent_id,
+                "parent_entry_id": str(uuid.uuid7()),
+                "depth": 0,
+                "messages": [],
+                "evidence_state": {},
+            },
+            plan={"schema_version": 2, "tools": ["search_knowledge_base"]},
+            budget={"provider_attempt_limit": 2},
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child_epoch = await store.claim_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child = await store.load_child_session(
+            owner_id=_OWNER, run_id=run_id, child_session_id=child_id
+        )
+        assert child is not None and child_epoch == 1
+        request_id = str(uuid.uuid7())
+        assert await store.create_child_guidance(
+            owner_id=_OWNER,
+            run_id=run_id,
+            request_id=request_id,
+            child_session_id=child_id,
+            child_operation_id=child["operation_id"],
+            parent_session_id=parent_id,
+            question="Do not hold the domain pool",
+            expires_after_seconds=30,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            child_fencing_epoch=child_epoch,
+        )
+
+        class _CountingPool:
+            def __init__(self, inner: Any) -> None:
+                self._inner = inner
+                self.held = 0
+                self._connect_kwargs = getattr(inner, "_connect_kwargs", {})
+
+            def acquire(self) -> Any:
+                inner = self._inner
+                pool = self
+
+                class _Ctx:
+                    def __init__(self) -> None:
+                        self._cm = inner.acquire()
+
+                    async def __aenter__(self) -> Any:
+                        pool.held += 1
+                        return await self._cm.__aenter__()
+
+                    async def __aexit__(self, *args: Any) -> None:
+                        try:
+                            return await self._cm.__aexit__(*args)
+                        finally:
+                            pool.held -= 1
+
+                return _Ctx()
+
+        original_pool = store._operation_pool  # noqa: SLF001
+        counting = _CountingPool(original_pool)
+        store._operation_pool = counting  # noqa: SLF001
+        try:
+            waiter = asyncio.create_task(
+                store.wait_for_child_guidance(
+                    owner_id=_OWNER,
+                    run_id=run_id,
+                    request_id=request_id,
+                    timeout_seconds=5,
+                )
+            )
+            await asyncio.sleep(0.1)
+            assert counting.held == 0
+            assert (
+                await store.reply_child_guidance(
+                    owner_id=_OWNER,
+                    run_id=run_id,
+                    request_id=request_id,
+                    content="pool was free",
+                    submission_key="pool-free",
+                )
+            )["outcome"] == "replied"
+            woke = await asyncio.wait_for(waiter, timeout=2)
+        finally:
+            store._operation_pool = original_pool  # noqa: SLF001
+        assert woke is not None and woke["reply"] == "pool was free"
+
+    async def test_expire_child_guidance_false_after_reply_or_cancel_is_not_lease_loss(
+        self, store
+    ) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        run_id = creation.run.run_id
+        parent_id = str(uuid.uuid7())
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            parent_call_id="expiry-race",
+            parent_intent_id=str(uuid.uuid7()),
+            objective="race expire",
+            context_mode="isolated",
+            model_role="query",
+            tools=("search_knowledge_base",),
+            depth=1,
+            context_snapshot={
+                "parent_session_id": parent_id,
+                "parent_entry_id": str(uuid.uuid7()),
+                "depth": 0,
+                "messages": [],
+                "evidence_state": {},
+            },
+            plan={"schema_version": 2, "tools": ["search_knowledge_base"]},
+            budget={"provider_attempt_limit": 2},
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child_epoch = await store.claim_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child = await store.load_child_session(
+            owner_id=_OWNER, run_id=run_id, child_session_id=child_id
+        )
+        assert child is not None and child_epoch == 1
+        replied_id = str(uuid.uuid7())
+        cancelled_id = str(uuid.uuid7())
+        for request_id, question in (
+            (replied_id, "Reply before expire"),
+            (cancelled_id, "Cancel before expire"),
+        ):
+            assert await store.create_child_guidance(
+                owner_id=_OWNER,
+                run_id=run_id,
+                request_id=request_id,
+                child_session_id=child_id,
+                child_operation_id=child["operation_id"],
+                parent_session_id=parent_id,
+                question=question,
+                expires_after_seconds=30,
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+                child_fencing_epoch=child_epoch,
+            )
+        assert (
+            await store.reply_child_guidance(
+                owner_id=_OWNER,
+                run_id=run_id,
+                request_id=replied_id,
+                content="already answered",
+                submission_key="race-reply",
+            )
+        )["outcome"] == "replied"
+        assert (
+            await store.expire_child_guidance(
+                owner_id=_OWNER,
+                run_id=run_id,
+                request_id=replied_id,
+                child_session_id=child_id,
+                child_operation_id=child["operation_id"],
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+                child_fencing_epoch=child_epoch,
+            )
+            is False
+        )
+        replied = await store.load_child_guidance(
+            owner_id=_OWNER, run_id=run_id, request_id=replied_id
+        )
+        assert replied is not None and replied["status"] == "replied"
+        assert (
+            await store.cancel_child_session_by_owner(
+                owner_id=_OWNER,
+                run_id=run_id,
+                child_session_id=child_id,
+                parent_session_id=parent_id,
+            )
+        )["outcome"] == "cancellation_requested"
+        assert (
+            await store.expire_child_guidance(
+                owner_id=_OWNER,
+                run_id=run_id,
+                request_id=cancelled_id,
+                child_session_id=child_id,
+                child_operation_id=child["operation_id"],
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+                child_fencing_epoch=child_epoch,
+            )
+            is False
+        )
+        cancelled = await store.load_child_guidance(
+            owner_id=_OWNER, run_id=run_id, request_id=cancelled_id
+        )
+        assert cancelled is not None and cancelled["status"] == "cancelled"
+
+    async def test_finish_child_session_fences_the_child_epoch(self, store) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        run_id = creation.run.run_id
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=str(uuid.uuid7()),
+            parent_call_id="child-epoch",
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child_epoch = await store.claim_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        assert child_epoch == 1
+        outcome = {
+            "status": "succeeded",
+            "summary": "fenced",
+            "handles": [],
+            "usage": {},
+            "child_session_id": child_id,
+            "operation_id": str(uuid.uuid7()),
+            "evidence_state": None,
+        }
+        assert (
+            await store.finish_child_session(
+                owner_id=_OWNER,
+                run_id=run_id,
+                child_session_id=child_id,
+                status="succeeded",
+                summary="fenced",
+                outcome=outcome,
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+                child_fencing_epoch=child_epoch + 1,
+            )
+            is False
+        )
+        still_running = await store.load_child_session(
+            owner_id=_OWNER, run_id=run_id, child_session_id=child_id
+        )
+        assert still_running is not None and still_running["status"] == "running"
+        assert await store.finish_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            status="succeeded",
+            summary="fenced",
+            outcome=outcome,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            child_fencing_epoch=child_epoch,
+        )
+
     async def test_parent_success_is_blocked_until_children_settle(self, store) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
         claim = await _claimed(store)

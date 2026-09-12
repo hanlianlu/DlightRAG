@@ -116,13 +116,14 @@ _INPUT_REFERENCE_KINDS: tuple[ArtifactReferenceKind, ...] = (
     "history_attachment",
 )
 _AGENT_CONTROL_CONTENT_LIMIT = 20_000
+CHILD_CONTROL_SUCCESS_OUTCOMES: frozenset[str] = frozenset(
+    {"queued", "consumed", "accepted", "cancellation_requested"}
+)
 
 
-def _store_method(store: object, name: str) -> Callable[..., Awaitable[Mapping[str, Any]]]:
-    method = getattr(store, name)
-    if not callable(method):
-        raise RuntimeError(f"Answer run store method is unavailable: {name}")
-    return cast(Callable[..., Awaitable[Mapping[str, Any]]], method)
+def child_control_succeeded(outcome: str) -> bool:
+    """Return whether one owner Child control was durably applied."""
+    return outcome in CHILD_CONTROL_SUCCESS_OUTCOMES
 
 
 def _stamp(value: Any) -> str | None:
@@ -252,13 +253,37 @@ class ChildControlReceipt:
     """Durable result of one owner-scoped Child intervention."""
 
     run_id: str
-    child_session_id: str
     action: str
     outcome: str
+    child_session_id: str | None = None
+    request_id: str | None = None
     operation_id: str | None = None
     operation_sequence: int | None = None
     control_sequence: int | None = None
     consumed_at: Any | None = None
+
+    def payload(self) -> dict[str, Any]:
+        """Return the transport-neutral control receipt document."""
+        return child_control_receipt_payload(self)
+
+
+def child_control_receipt_payload(receipt: Any) -> dict[str, Any]:
+    """Project one Child control receipt for REST, MCP, and Web."""
+    consumed = getattr(receipt, "consumed_at", None)
+    isoformat = getattr(consumed, "isoformat", None)
+    child_session_id = getattr(receipt, "child_session_id", None)
+    operation_id = getattr(receipt, "operation_id", None)
+    return {
+        "run_id": receipt.run_id,
+        "child_session_id": child_session_id or None,
+        "request_id": getattr(receipt, "request_id", None),
+        "action": receipt.action,
+        "outcome": receipt.outcome,
+        "operation_id": operation_id or None,
+        "operation_sequence": getattr(receipt, "operation_sequence", None),
+        "control_sequence": getattr(receipt, "control_sequence", None),
+        "consumed_at": isoformat() if callable(isoformat) else consumed,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,6 +388,58 @@ class _AnswerRunRepository(AnswerRunAcceptor[RuntimeRunCreation], Protocol):
     async def list_child_guidance(
         self, *, owner_id: str, run_id: str, child_session_id: str, limit: int
     ) -> tuple[Mapping[str, Any], ...]: ...
+
+    async def enqueue_child_control(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        content: str,
+        submission_key: str,
+        origin: str = "user",
+        parent_session_id: str | None = None,
+        worker_id: str | None = None,
+        fencing_epoch: int | None = None,
+    ) -> Mapping[str, Any] | bool: ...
+
+    async def continue_child_session(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        content: str,
+        submission_key: str,
+        origin: str = "user",
+        parent_session_id: str | None = None,
+        reauthorize_user_cancelled: bool = False,
+        worker_id: str | None = None,
+        fencing_epoch: int | None = None,
+    ) -> Mapping[str, Any] | bool: ...
+
+    async def cancel_child_session_by_owner(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        parent_session_id: str | None = None,
+    ) -> Mapping[str, Any]: ...
+
+    async def reply_child_guidance(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        request_id: str,
+        content: str,
+        submission_key: str,
+        origin: str = "user",
+        parent_session_id: str | None = None,
+        worker_id: str | None = None,
+        fencing_epoch: int | None = None,
+    ) -> Mapping[str, Any] | bool: ...
 
     async def list_run_artifacts(
         self, *, owner_id: str, run_id: str
@@ -975,8 +1052,7 @@ class AnswerService:
             return None
         parent_session_id = str(record.request_input().get("agent_session_id") or "") or None
         if action == "cancel":
-            cancel_child = _store_method(self._store, "cancel_child_session_by_owner")
-            row = await cancel_child(
+            row = await self._store.cancel_child_session_by_owner(
                 owner_id=owner_id,
                 run_id=run_id,
                 child_session_id=child_session_id,
@@ -994,8 +1070,7 @@ class AnswerService:
                     "Child control idempotency key must be between 1 and 200 characters"
                 )
             if action == "steer":
-                enqueue_child = _store_method(self._store, "enqueue_child_control")
-                row = await enqueue_child(
+                row = await self._store.enqueue_child_control(
                     owner_id=owner_id,
                     run_id=run_id,
                     child_session_id=child_session_id,
@@ -1005,8 +1080,7 @@ class AnswerService:
                     origin="user",
                 )
             elif action == "continue":
-                continue_child = _store_method(self._store, "continue_child_session")
-                row = await continue_child(
+                row = await self._store.continue_child_session(
                     owner_id=owner_id,
                     run_id=run_id,
                     child_session_id=child_session_id,
@@ -1018,6 +1092,8 @@ class AnswerService:
                 )
             else:
                 raise ValueError("unknown Child control action")
+        if not isinstance(row, Mapping):
+            return None
         outcome = str(row.get("outcome") or "unknown_child")
         if outcome == "unknown_child":
             return None
@@ -1025,9 +1101,9 @@ class AnswerService:
             self._coordinator.wake()
         return ChildControlReceipt(
             run_id=run_id,
-            child_session_id=child_session_id,
             action=action,
             outcome=outcome,
+            child_session_id=child_session_id or None,
             operation_id=(str(row["operation_id"]) if row.get("operation_id") else None),
             operation_sequence=(
                 int(row["operation_sequence"])
@@ -1054,8 +1130,7 @@ class AnswerService:
         if record is None:
             return None
         parent_session_id = str(record.request_input().get("agent_session_id") or "") or None
-        reply_child = _store_method(self._store, "reply_child_guidance")
-        row = await reply_child(
+        row = await self._store.reply_child_guidance(
             owner_id=owner_id,
             run_id=run_id,
             request_id=request_id,
@@ -1064,17 +1139,20 @@ class AnswerService:
             submission_key=idempotency_key,
             origin="user",
         )
+        if not isinstance(row, Mapping):
+            return None
         outcome = str(row.get("outcome") or "unknown_request")
         if outcome == "unknown_request":
             return None
         if outcome == "replied":
             self._coordinator.wake()
+        child_id = str(row.get("child_session_id") or "") or None
         return ChildControlReceipt(
             run_id=run_id,
-            child_session_id="",
             action="reply",
             outcome=outcome,
-            operation_id=request_id,
+            child_session_id=child_id,
+            request_id=request_id,
         )
 
     async def children(

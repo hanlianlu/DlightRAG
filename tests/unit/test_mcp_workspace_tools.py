@@ -149,6 +149,8 @@ def mock_mcp_application(monkeypatch, test_config: DlightragConfig):
         transcript_tail=AsyncMock(return_value=None),
         children=AsyncMock(return_value=None),
         observe_child=AsyncMock(return_value=None),
+        control_child=AsyncMock(return_value=None),
+        reply_to_child=AsyncMock(return_value=None),
     )
     monkeypatch.setattr(mcp_server, "_ensure_application", AsyncMock(return_value=application))
     monkeypatch.setattr(mcp_server, "create_application", AsyncMock(return_value=application))

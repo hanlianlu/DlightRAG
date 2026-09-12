@@ -1077,6 +1077,7 @@ async def run_child_session(
         child_session_id=child_id.value,
         evidence_state=prepared.evidence.durable_state(),
         operation_id=accepted.operation_id.value,
+        fencing_epoch=child_epoch,
     )
 
 

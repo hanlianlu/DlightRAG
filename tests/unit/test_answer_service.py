@@ -255,6 +255,31 @@ class _Store:
             return ()
         return self.child_guidance_rows[:limit]
 
+    async def enqueue_child_control(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.controls.append({"method": "enqueue_child_control", **kwargs})
+        return {
+            "outcome": "queued",
+            "control_sequence": len(self.controls),
+            "operation_id": "op-1",
+            "consumed_at": None,
+        }
+
+    async def continue_child_session(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.controls.append({"method": "continue_child_session", **kwargs})
+        return {"outcome": "accepted", "operation_id": "op-2", "operation_sequence": 2}
+
+    async def cancel_child_session_by_owner(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.controls.append({"method": "cancel_child_session_by_owner", **kwargs})
+        return {"outcome": "cancellation_requested", "operation_id": "op-1"}
+
+    async def reply_child_guidance(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.controls.append({"method": "reply_child_guidance", **kwargs})
+        return {
+            "outcome": "replied",
+            "request_id": kwargs["request_id"],
+            "child_session_id": "child-1",
+        }
+
     async def list_run_artifacts(
         self, *, owner_id: str, run_id: str
     ) -> tuple[RunArtifactReference, ...]:
@@ -1542,6 +1567,66 @@ async def test_observe_child_projects_lineage_without_private_reasoning() -> Non
         await service.observe_child(owner_id=_OWNER, run_id="run-1", child_session_id="missing")
         is None
     )
+
+
+async def test_child_control_and_reply_use_typed_store_methods() -> None:
+    store = _Store(
+        run=_record(
+            status="running",
+            accepted_input={
+                "query": "q",
+                "workspaces": ["finance"],
+                "agent_session_id": "0199a0a0-0000-7000-8000-000000000099",
+            },
+        )
+    )
+    service = _service(store=store)
+
+    steered = await service.control_child(
+        owner_id=_OWNER,
+        run_id="run-1",
+        child_session_id="child-1",
+        action="steer",
+        content="focus",
+        idempotency_key="steer-1",
+    )
+    continued = await service.control_child(
+        owner_id=_OWNER,
+        run_id="run-1",
+        child_session_id="child-1",
+        action="continue",
+        content="next",
+        idempotency_key="continue-1",
+    )
+    cancelled = await service.control_child(
+        owner_id=_OWNER,
+        run_id="run-1",
+        child_session_id="child-1",
+        action="cancel",
+    )
+    replied = await service.reply_to_child(
+        owner_id=_OWNER,
+        run_id="run-1",
+        request_id="req-1",
+        content="use the report",
+        idempotency_key="reply-1",
+    )
+
+    assert steered is not None and steered.outcome == "queued"
+    assert steered.child_session_id == "child-1"
+    assert steered.request_id is None
+    assert continued is not None and continued.outcome == "accepted"
+    assert cancelled is not None and cancelled.outcome == "cancellation_requested"
+    assert replied is not None and replied.outcome == "replied"
+    assert replied.request_id == "req-1"
+    assert replied.child_session_id == "child-1"
+    assert replied.operation_id is None
+    assert [item["method"] for item in store.controls[-4:]] == [
+        "enqueue_child_control",
+        "continue_child_session",
+        "cancel_child_session_by_owner",
+        "reply_child_guidance",
+    ]
 
 
 async def test_continuation_content_limit_is_transport_neutral() -> None:

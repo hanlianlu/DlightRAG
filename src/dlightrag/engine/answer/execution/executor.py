@@ -1316,7 +1316,12 @@ class AnswerExecutor:
                     create_guidance=_fenced_child_writer(store, "create_child_guidance", session),
                     load_guidance=_async_store_method(store, "load_child_guidance"),
                     wait_guidance=_async_store_method(store, "wait_for_child_guidance"),
-                    expire_guidance=_fenced_child_writer(store, "expire_child_guidance", session),
+                    expire_guidance=_fenced_child_writer(
+                        store,
+                        "expire_child_guidance",
+                        session,
+                        false_is_lease_loss=False,
+                    ),
                     list_guidance=_async_store_method(store, "list_pending_child_guidance"),
                     prepare_dispatch=_bound_child_dispatch_preparer(run.orchestrator),
                     run_child=_bound_child_runner(

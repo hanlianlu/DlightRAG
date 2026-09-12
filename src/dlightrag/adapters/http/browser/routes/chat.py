@@ -53,6 +53,8 @@ from dlightrag.application.answer_runs import (
     AnswerRuntimeUnavailableError,
     ChildRosterCursorError,
     ChildRosterPageRequest,
+    child_control_receipt_payload,
+    child_control_succeeded,
 )
 from dlightrag.application.corpus_admin import normalize_workspace_ids
 from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
@@ -361,9 +363,9 @@ async def control_answer_child(
         raise HTTPException(status_code=422, detail=str(exc)) from None
     if receipt is None:
         raise HTTPException(status_code=404, detail="Answer child not found")
-    if receipt.outcome not in {"queued", "consumed", "accepted", "cancellation_requested"}:
+    if not child_control_succeeded(receipt.outcome):
         raise HTTPException(status_code=409, detail=receipt.outcome)
-    return _child_control_payload(receipt)
+    return child_control_receipt_payload(receipt)
 
 
 @router.post("/answer/{run_id}/child-guidance/{request_id}/reply", status_code=202)
@@ -392,27 +394,7 @@ async def reply_to_answer_child(
         raise HTTPException(status_code=404, detail="Child guidance request not found")
     if receipt.outcome != "replied":
         raise HTTPException(status_code=409, detail=receipt.outcome)
-    return {
-        "run_id": receipt.run_id,
-        "request_id": request_id,
-        "action": receipt.action,
-        "outcome": receipt.outcome,
-    }
-
-
-def _child_control_payload(receipt: Any) -> dict[str, Any]:
-    return {
-        "run_id": receipt.run_id,
-        "child_session_id": receipt.child_session_id,
-        "action": receipt.action,
-        "outcome": receipt.outcome,
-        "operation_id": receipt.operation_id,
-        "operation_sequence": receipt.operation_sequence,
-        "control_sequence": receipt.control_sequence,
-        "consumed_at": (
-            receipt.consumed_at.isoformat() if receipt.consumed_at is not None else None
-        ),
-    }
+    return child_control_receipt_payload(receipt)
 
 
 async def _continue_answer_run(

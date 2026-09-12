@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         ChildRosterRowPage,
     )
     from .service import (
+        CHILD_CONTROL_SUCCESS_OUTCOMES,
         AgentControlReceipt,
         AgentTranscriptTail,
         AnswerHistoryResource,
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
         AnswerService,
         ChildControlReceipt,
         ChildObservation,
+        child_control_receipt_payload,
+        child_control_succeeded,
     )
 
 _SERVICE_EXPORTS = {
@@ -42,8 +45,11 @@ _SERVICE_EXPORTS = {
     "AnswerRunAcceptor",
     "AnswerRuntimeUnavailableError",
     "AnswerService",
+    "CHILD_CONTROL_SUCCESS_OUTCOMES",
     "ChildControlReceipt",
     "ChildObservation",
+    "child_control_receipt_payload",
+    "child_control_succeeded",
 }
 
 _CONTRACT_EXPORTS = {
@@ -66,8 +72,11 @@ __all__ = [
     "AnswerRunAcceptor",
     "AnswerRuntimeUnavailableError",
     "AnswerService",
+    "CHILD_CONTROL_SUCCESS_OUTCOMES",
     "ChildControlReceipt",
     "ChildObservation",
+    "child_control_receipt_payload",
+    "child_control_succeeded",
     "CHILD_ROSTER_PAGE_DEFAULT_LIMIT",
     "CHILD_ROSTER_PAGE_MAX_LIMIT",
     "ChildRosterCursor",
@@ -104,6 +113,7 @@ def __getattr__(name: str) -> Any:
         }[name]
     if name in _SERVICE_EXPORTS:
         from .service import (
+            CHILD_CONTROL_SUCCESS_OUTCOMES,
             AgentControlReceipt,
             AgentTranscriptTail,
             AnswerHistoryResource,
@@ -114,6 +124,8 @@ def __getattr__(name: str) -> Any:
             AnswerService,
             ChildControlReceipt,
             ChildObservation,
+            child_control_receipt_payload,
+            child_control_succeeded,
         )
 
         return {
@@ -125,7 +137,10 @@ def __getattr__(name: str) -> Any:
             "AnswerRunAcceptor": AnswerRunAcceptor,
             "AnswerRuntimeUnavailableError": AnswerRuntimeUnavailableError,
             "AnswerService": AnswerService,
+            "CHILD_CONTROL_SUCCESS_OUTCOMES": CHILD_CONTROL_SUCCESS_OUTCOMES,
             "ChildControlReceipt": ChildControlReceipt,
             "ChildObservation": ChildObservation,
+            "child_control_receipt_payload": child_control_receipt_payload,
+            "child_control_succeeded": child_control_succeeded,
         }[name]
     raise AttributeError(name)

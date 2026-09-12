@@ -734,6 +734,7 @@ async def test_web_observes_and_controls_a_child(
     application_double.answers.control_child.return_value = SimpleNamespace(
         run_id=RUN_ID,
         child_session_id="child-1",
+        request_id=None,
         action="steer",
         outcome="queued",
         operation_id="op-1",
@@ -744,9 +745,10 @@ async def test_web_observes_and_controls_a_child(
     application_double.answers.reply_to_child.return_value = SimpleNamespace(
         run_id=RUN_ID,
         child_session_id="child-1",
+        request_id="req-1",
         action="reply",
         outcome="replied",
-        operation_id="req-1",
+        operation_id=None,
         operation_sequence=None,
         control_sequence=None,
         consumed_at=None,

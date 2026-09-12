@@ -26,6 +26,10 @@ from dlightrag.application.access import (
     current_request_scope,
 )
 from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
+from dlightrag.application.answer_runs import (
+    child_control_receipt_payload,
+    child_control_succeeded,
+)
 from dlightrag.application.retrieval import (
     MetadataFilter,
     RetrievalOptions,
@@ -302,20 +306,9 @@ async def control_answer_child_tool(
     )
     if receipt is None:
         raise ValueError("Answer child not found")
-    if receipt.outcome not in {"queued", "consumed", "accepted", "cancellation_requested"}:
+    if not child_control_succeeded(receipt.outcome):
         raise ValueError(f"Child control rejected: {receipt.outcome}")
-    return {
-        "run_id": receipt.run_id,
-        "child_session_id": receipt.child_session_id,
-        "action": receipt.action,
-        "outcome": receipt.outcome,
-        "operation_id": receipt.operation_id,
-        "operation_sequence": receipt.operation_sequence,
-        "control_sequence": receipt.control_sequence,
-        "consumed_at": (
-            receipt.consumed_at.isoformat() if receipt.consumed_at is not None else None
-        ),
-    }
+    return child_control_receipt_payload(receipt)
 
 
 @mcp_app.tool(
@@ -340,7 +333,7 @@ async def reply_answer_child_tool(
         raise ValueError("Child guidance request not found")
     if receipt.outcome != "replied":
         raise ValueError(f"Child guidance reply rejected: {receipt.outcome}")
-    return {"run_id": run_id, "request_id": request_id, "outcome": receipt.outcome}
+    return child_control_receipt_payload(receipt)
 
 
 async def _authorized_run(application: Any, run_id: str, *, cancel: bool) -> RunView:

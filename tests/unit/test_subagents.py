@@ -15,6 +15,7 @@ from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjec
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, OperationId, SessionId
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY
 from dlightrag.engine.ai.messages import AssistantTurn
+from dlightrag.engine.ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
@@ -37,7 +38,7 @@ from dlightrag.engine.answer.tools.subagents import (
     child_session_id,
     subagent_tools,
 )
-from dlightrag.engine.runtime.coordinator import RunCancellationObserved
+from dlightrag.engine.runtime.coordinator import LeaseLostError, RunCancellationObserved
 from tests.in_memory_session_repository import InMemoryAgentSessionRepository
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy, answer_model_profile
@@ -132,6 +133,203 @@ async def test_ask_parent_persists_correlates_and_waits_without_provider_polling
     assert stored["child_operation_id"] == operation_id
     assert stored["parent_session_id"] == parent_id.value
     assert stored["child_fencing_epoch"] == 7
+
+
+async def test_ask_parent_expiry_race_with_reply_does_not_treat_false_as_lease_loss() -> None:
+    parent_id = SessionId.new()
+    child_id = SessionId.new().value
+    operation_id = SessionId.new().value
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    async def load_child(**_kwargs: Any) -> dict[str, Any]:
+        return {"operation_id": operation_id, "fencing_epoch": 3}
+
+    async def create(**kwargs: Any) -> dict[str, Any]:
+        return {
+            **kwargs,
+            "status": "pending",
+            "expires_at": expired_at,
+        }
+
+    async def expire(**_kwargs: Any) -> bool:
+        return False
+
+    async def load_guidance(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "status": "replied",
+            "reply": "Use the report.",
+            "reply_origin": "user",
+            "expires_at": expired_at,
+        }
+
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        owner_id="owner",
+        run_id=SessionId.new().value,
+        load_child=load_child,
+        create_guidance=create,
+        wait_guidance=AsyncMock(side_effect=AssertionError("reply race must not wait")),
+        load_guidance=load_guidance,
+        expire_guidance=expire,
+    )
+    result = await child_guidance_tools(host=host)[0].execute(
+        AskParentInput(question="Which source?"),
+        tool_runtime(tool_name="ask_parent", execution_scope=child_id),
+    )
+
+    assert "Use the report" in result.text_content
+    assert result.is_error is False
+
+
+async def test_ask_parent_expiry_false_while_pending_is_lease_loss() -> None:
+    parent_id = SessionId.new()
+    child_id = SessionId.new().value
+    operation_id = SessionId.new().value
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    async def load_child(**_kwargs: Any) -> dict[str, Any]:
+        return {"operation_id": operation_id, "fencing_epoch": 3}
+
+    async def create(**kwargs: Any) -> dict[str, Any]:
+        return {**kwargs, "status": "pending", "expires_at": expired_at}
+
+    async def expire(**_kwargs: Any) -> bool:
+        return False
+
+    async def load_guidance(**kwargs: Any) -> dict[str, Any]:
+        return {
+            "request_id": kwargs["request_id"],
+            "status": "pending",
+            "expires_at": expired_at,
+        }
+
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        owner_id="owner",
+        run_id=SessionId.new().value,
+        load_child=load_child,
+        create_guidance=create,
+        wait_guidance=AsyncMock(side_effect=AssertionError("lost fence must not wait")),
+        load_guidance=load_guidance,
+        expire_guidance=expire,
+    )
+    with pytest.raises(LeaseLostError):
+        await child_guidance_tools(host=host)[0].execute(
+            AskParentInput(question="Which source?"),
+            tool_runtime(tool_name="ask_parent", execution_scope=child_id),
+        )
+
+
+async def test_ask_parent_wait_does_not_hold_model_scheduler_active() -> None:
+    scheduler = ModelScheduler(max_concurrency=1)
+    waiting = asyncio.Event()
+    release = asyncio.Event()
+    parent_id = SessionId.new()
+    child_id = SessionId.new().value
+    operation_id = SessionId.new().value
+
+    async def load_child(**_kwargs: Any) -> dict[str, Any]:
+        return {"operation_id": operation_id, "fencing_epoch": 1}
+
+    async def create(**kwargs: Any) -> dict[str, Any]:
+        return {
+            **kwargs,
+            "status": "pending",
+            "expires_at": datetime.now(UTC) + timedelta(seconds=30),
+        }
+
+    async def wait(**_kwargs: Any) -> dict[str, Any]:
+        waiting.set()
+        await release.wait()
+        return {
+            "status": "replied",
+            "reply": "ok",
+            "reply_origin": "parent",
+            "expires_at": datetime.now(UTC) + timedelta(seconds=30),
+        }
+
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        owner_id="owner",
+        run_id=SessionId.new().value,
+        load_child=load_child,
+        create_guidance=create,
+        wait_guidance=wait,
+        load_guidance=wait,
+        expire_guidance=AsyncMock(side_effect=AssertionError("wait path must not expire")),
+    )
+
+    async def _ask() -> Any:
+        return await child_guidance_tools(host=host)[0].execute(
+            AskParentInput(question="Which source?"),
+            tool_runtime(tool_name="ask_parent", execution_scope=child_id),
+        )
+
+    asked = asyncio.create_task(_ask())
+    await waiting.wait()
+    assert scheduler._active == 0
+
+    other_ran = asyncio.Event()
+
+    async def other() -> str:
+        other_ran.set()
+        return "ok"
+
+    with model_call_scope("other-run"):
+        assert await asyncio.wait_for(scheduler.run(other), timeout=1) == "ok"
+    assert other_ran.is_set()
+    release.set()
+    result = await asked
+    assert "ok" in result.text_content
+
+
+async def test_has_running_children_ignores_sparse_precreate_rows() -> None:
+    parent_id = SessionId.new()
+    sparse = {
+        "child_session_id": SessionId.new().value,
+        "status": "running",
+        "context_snapshot": {},
+        "parent_call_id": "sparse",
+        "objective": "not yet reconstructible",
+        "context": "isolated",
+        "model_role": "query",
+    }
+    full = {
+        "child_session_id": SessionId.new().value,
+        "status": "running",
+        "parent_call_id": "full",
+        "objective": "inspect",
+        "context": "isolated",
+        "model_role": "query",
+        "context_snapshot": {
+            "parent_session_id": parent_id.value,
+            "parent_entry_id": EntryId.new().value,
+            "depth": 0,
+            "messages": [],
+        },
+    }
+
+    async def list_sparse(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return (sparse,)
+
+    async def list_mixed(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        return (sparse, full)
+
+    sparse_host = SubagentHost(
+        parent_session_id=parent_id,
+        owner_id="owner",
+        run_id=SessionId.new().value,
+        list_children=list_sparse,
+    )
+    mixed_host = SubagentHost(
+        parent_session_id=parent_id,
+        owner_id="owner",
+        run_id=SessionId.new().value,
+        list_children=list_mixed,
+    )
+
+    assert await sparse_host.has_running_children() is False
+    assert await mixed_host.has_running_children() is True
 
 
 async def test_wait_subagent_wakes_on_pending_question_without_settling() -> None:

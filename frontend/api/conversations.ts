@@ -246,8 +246,8 @@ export type AgentChildStatus = v.InferOutput<typeof agentChildStatus>;
 const childControlReceipt = v.pipe(
   v.object({
     run_id: v.string(),
-    child_session_id: v.optional(v.string()),
-    request_id: v.optional(v.string()),
+    child_session_id: v.optional(v.nullable(v.string())),
+    request_id: v.optional(v.nullable(v.string())),
     action: v.string(),
     outcome: v.string(),
     operation_id: v.optional(v.nullable(v.string())),

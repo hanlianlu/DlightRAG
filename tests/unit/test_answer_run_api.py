@@ -190,6 +190,7 @@ class _RunApplication:
         return SimpleNamespace(
             run_id=kwargs["run_id"],
             child_session_id=kwargs["child_session_id"],
+            request_id=None,
             action=kwargs["action"],
             outcome=(self.child_control_outcome if kwargs["action"] == "steer" else "accepted"),
             operation_id="operation-1",
@@ -205,9 +206,10 @@ class _RunApplication:
         return SimpleNamespace(
             run_id=kwargs["run_id"],
             child_session_id="child-1",
+            request_id=kwargs["request_id"],
             action="reply",
             outcome="replied",
-            operation_id=kwargs["request_id"],
+            operation_id=None,
             operation_sequence=None,
             control_sequence=None,
             consumed_at=None,
@@ -1118,6 +1120,7 @@ class TestAgentControls:
         assert controlled.json() == {
             "run_id": _RUN_ID,
             "child_session_id": "child-1",
+            "request_id": None,
             "action": "steer",
             "outcome": "queued",
             "operation_id": "operation-1",
@@ -1127,6 +1130,8 @@ class TestAgentControls:
         }
         assert replied.status_code == 202
         assert replied.json()["request_id"] == "request-1"
+        assert replied.json()["child_session_id"] == "child-1"
+        assert replied.json()["operation_id"] is None
         assert run_application.controls[-2:] == [
             "child:steer:child-1",
             "reply:request-1",
