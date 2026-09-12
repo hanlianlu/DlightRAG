@@ -272,6 +272,77 @@ async def steer_answer_run_tool(
     }
 
 
+@mcp_app.tool(
+    name="control_answer_child",
+    description=(
+        "Steer, explicitly continue, or cancel one owned child Agent Session. "
+        "Steer targets only its current Operation; continue creates a new Operation "
+        "without changing the pinned model or tools."
+    ),
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
+)
+async def control_answer_child_tool(
+    run_id: Annotated[str, Field(description="Parent Answer run id")],
+    child_session_id: Annotated[str, Field(description="Child Session id")],
+    action: Annotated[Literal["steer", "continue", "cancel"], Field()],
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=200)],
+    content: Annotated[str, Field(max_length=20_000)] = "",
+    reauthorize_user_cancelled: bool = False,
+) -> dict[str, Any]:
+    if action != "cancel" and not idempotency_key:
+        raise ValueError("idempotency_key is required for steer and continue")
+    receipt = await (await mcp_server._ensure_application()).answers.control_child(
+        owner_id=mcp_server._owner_id(),
+        run_id=run_id,
+        child_session_id=child_session_id,
+        action=action,
+        content=content,
+        idempotency_key=idempotency_key,
+        reauthorize_user_cancelled=reauthorize_user_cancelled,
+    )
+    if receipt is None:
+        raise ValueError("Answer child not found")
+    if receipt.outcome not in {"queued", "consumed", "accepted", "cancellation_requested"}:
+        raise ValueError(f"Child control rejected: {receipt.outcome}")
+    return {
+        "run_id": receipt.run_id,
+        "child_session_id": receipt.child_session_id,
+        "action": receipt.action,
+        "outcome": receipt.outcome,
+        "operation_id": receipt.operation_id,
+        "operation_sequence": receipt.operation_sequence,
+        "control_sequence": receipt.control_sequence,
+        "consumed_at": (
+            receipt.consumed_at.isoformat() if receipt.consumed_at is not None else None
+        ),
+    }
+
+
+@mcp_app.tool(
+    name="reply_answer_child",
+    description="Reply to one correlated ask_parent request from an owned child.",
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
+)
+async def reply_answer_child_tool(
+    run_id: Annotated[str, Field(description="Parent Answer run id")],
+    request_id: Annotated[str, Field(description="ask_parent request id")],
+    content: Annotated[str, Field(min_length=1, max_length=20_000)],
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=200)],
+) -> dict[str, Any]:
+    receipt = await (await mcp_server._ensure_application()).answers.reply_to_child(
+        owner_id=mcp_server._owner_id(),
+        run_id=run_id,
+        request_id=request_id,
+        content=content,
+        idempotency_key=idempotency_key,
+    )
+    if receipt is None:
+        raise ValueError("Child guidance request not found")
+    if receipt.outcome != "replied":
+        raise ValueError(f"Child guidance reply rejected: {receipt.outcome}")
+    return {"run_id": run_id, "request_id": request_id, "outcome": receipt.outcome}
+
+
 async def _authorized_run(application: Any, run_id: str, *, cancel: bool) -> RunView:
     record = await application.runs.get_global(run_id=run_id)
     if record is None:

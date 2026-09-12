@@ -14,6 +14,7 @@ import hashlib
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -75,6 +76,24 @@ class ChildControlInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
     child_session_id: str = Field(min_length=1, description="Child session id from spawn_agent.")
+
+
+class ChildMessageInput(ChildControlInput):
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class GuidanceReplyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    request_id: str = Field(min_length=1, description="Correlated request id from ask_parent.")
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class AskParentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    question: str = Field(min_length=1, max_length=20_000)
+    expires_after_seconds: int | None = Field(default=None, ge=1, le=86_400)
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +221,7 @@ class SubagentHost:
     owner_id: str = ""
     max_concurrency: int = 4
     async_lifecycle: bool = True
+    interactive_controls: bool = True
     check_cancelled: Callable[[], Awaitable[None]] | None = None
     persist: Callable[..., Awaitable[Any]] | None = None
     load_child: Callable[..., Awaitable[Any]] | None = None
@@ -209,6 +229,15 @@ class SubagentHost:
     finish_child: Callable[..., Awaitable[Any]] | None = None
     request_cancel: Callable[..., Awaitable[Any]] | None = None
     release_children: Callable[..., Awaitable[Any]] | None = None
+    steer_child: Callable[..., Awaitable[Any]] | None = None
+    continue_child: Callable[..., Awaitable[Any]] | None = None
+    reply_guidance: Callable[..., Awaitable[Any]] | None = None
+    create_guidance: Callable[..., Awaitable[Any]] | None = None
+    load_guidance: Callable[..., Awaitable[Any]] | None = None
+    wait_guidance: Callable[..., Awaitable[Any]] | None = None
+    expire_guidance: Callable[..., Awaitable[Any]] | None = None
+    list_guidance: Callable[..., Awaitable[Any]] | None = None
+    guidance_timeout_seconds: int = 300
     prepare_dispatch: (
         Callable[[SessionId, ChildRequest, ChildContextSnapshot], Mapping[str, Any]] | None
     ) = None
@@ -261,6 +290,23 @@ class SubagentHost:
         """
         if not self.async_lifecycle or self.list_children is None:
             return ()
+        if self.list_guidance is not None and self.parent_session_id is not None:
+            questions = await self.list_guidance(
+                owner_id=self.owner_id,
+                run_id=self.run_id,
+                parent_session_id=self.parent_session_id.value,
+            )
+            for question in questions or ():
+                request_id = str(question.get("request_id") or "")
+                notification_id = f"child-guidance:{request_id}"
+                if request_id and notification_id not in seen:
+                    child_id = str(question.get("child_session_id") or "")
+                    content = (
+                        f"Child session {child_id} asks for guidance "
+                        f"(request_id={request_id}): {question.get('question') or ''}. "
+                        "Reply with reply_subagent using exactly this request_id."
+                    )
+                    return ((notification_id, content),)
         rows = await self.list_children(owner_id=self.owner_id, run_id=self.run_id)
         grouped: dict[str, list[Mapping[str, Any]]] = {}
         for row in rows or ():
@@ -398,17 +444,27 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     async def status(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
-        return _single_result(_adopt_outcome(host, await _status(host, args.child_session_id)))
+        return _result_with_guidance(
+            host,
+            await _status(host, args.child_session_id),
+            await _pending_guidance_for_child(host, args.child_session_id),
+        )
 
     async def wait(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
         await host.restore_pending()
-        task = host.tasks.get(args.child_session_id)
-        if task is not None and not task.done():
-            await host.wait_for_activity(child_id=args.child_session_id)
-        outcome = await _status(host, args.child_session_id)
-        return _single_result(_adopt_outcome(host, outcome))
+        pending = await _pending_guidance_for_child(host, args.child_session_id)
+        if not pending:
+            task = host.tasks.get(args.child_session_id)
+            if task is not None and not task.done():
+                await host.wait_for_activity(child_id=args.child_session_id)
+            pending = await _pending_guidance_for_child(host, args.child_session_id)
+        return _result_with_guidance(
+            host,
+            await _status(host, args.child_session_id),
+            pending,
+        )
 
     async def cancel(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
@@ -419,8 +475,65 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
         outcome = await _cancel_child(host, args.child_session_id)
         return _single_result(_adopt_outcome(host, outcome))
 
-    if host.async_lifecycle:
-        version = 3
+    async def steer(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(ChildMessageInput, raw)
+        if host.steer_child is None or host.parent_session_id is None:
+            return ToolResult.text("Child steer is unavailable.", is_error=True)
+        receipt = await host.steer_child(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            child_session_id=args.child_session_id,
+            parent_session_id=host.parent_session_id.value,
+            content=args.content,
+            submission_key=f"parent-steer:{runtime.intent_id.value}",
+            origin="parent",
+        )
+        return ToolResult.text(canonical_json(dict(receipt)))
+
+    async def continue_child(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(ChildMessageInput, raw)
+        if host.continue_child is None or host.parent_session_id is None:
+            return ToolResult.text("Child continuation is unavailable.", is_error=True)
+        receipt = await host.continue_child(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            child_session_id=args.child_session_id,
+            parent_session_id=host.parent_session_id.value,
+            content=args.content,
+            submission_key=f"parent-continuation:{runtime.intent_id.value}",
+            origin="parent",
+            reauthorize_user_cancelled=False,
+        )
+        if receipt.get("outcome") == "accepted":
+            await host.restore_pending()
+        return ToolResult.text(canonical_json(dict(receipt)))
+
+    async def reply(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(GuidanceReplyInput, raw)
+        if host.reply_guidance is None or host.parent_session_id is None:
+            return ToolResult.text("Child guidance reply is unavailable.", is_error=True)
+        receipt = await host.reply_guidance(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            request_id=args.request_id,
+            parent_session_id=host.parent_session_id.value,
+            content=args.content,
+            submission_key=f"parent-reply:{runtime.intent_id.value}",
+            origin="parent",
+        )
+        return ToolResult.text(canonical_json(dict(receipt)))
+
+    if not host.async_lifecycle:
+        # These strings and version are the exact baseline v2 accepted contract.
+        version = 2
+        descriptions = (
+            "Run one or many foreground child Agent Sessions and wait for all results.",
+            "Read one foreground or completed child session status.",
+            "Wait for one known foreground child session.",
+            "Cancel one known foreground child session.",
+        )
+    elif host.interactive_controls:
+        version = 4
         descriptions = (
             "Accept one or many asynchronous child Agent Sessions and return stable handles "
             "immediately. Children default to read-only tools; explicitly list a narrower "
@@ -430,13 +543,15 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             "Durably cancel one known child session without cancelling its siblings.",
         )
     else:
-        # These strings and version are the exact baseline v2 accepted contract.
-        version = 2
+        # Slice-1 async contract: same descriptions as v4 without control tools.
+        version = 3
         descriptions = (
-            "Run one or many foreground child Agent Sessions and wait for all results.",
-            "Read one foreground or completed child session status.",
-            "Wait for one known foreground child session.",
-            "Cancel one known foreground child session.",
+            "Accept one or many asynchronous child Agent Sessions and return stable handles "
+            "immediately. Children default to read-only tools; explicitly list a narrower "
+            "host-permitted set when side effects are required.",
+            "Read one accepted asynchronous or completed child session status.",
+            "Wait for one known asynchronous child session to settle.",
+            "Durably cancel one known child session without cancelling its siblings.",
         )
 
     return (
@@ -471,6 +586,130 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             cancel,
             replay_policy="never",
             contract_version=version,
+        ),
+        *(
+            (
+                AgentTool(
+                    "steer_subagent",
+                    "Queue guidance for only the current Operation of a running child.",
+                    ChildMessageInput,
+                    steer,
+                    replay_policy="replayable",
+                    contract_version=version,
+                ),
+                AgentTool(
+                    "continue_subagent",
+                    "Start an explicit new Operation in a settled child Session with its pinned model and tools.",
+                    ChildMessageInput,
+                    continue_child,
+                    replay_policy="replayable",
+                    contract_version=version,
+                ),
+                AgentTool(
+                    "reply_subagent",
+                    "Reply to one correlated ask_parent request from a child.",
+                    GuidanceReplyInput,
+                    reply,
+                    replay_policy="replayable",
+                    contract_version=version,
+                ),
+            )
+            if host.async_lifecycle and host.interactive_controls
+            else ()
+        ),
+    )
+
+
+def child_guidance_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
+    """Return the durable child-to-parent question tool."""
+
+    async def ask(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(AskParentInput, raw)
+        if (
+            host.create_guidance is None
+            or host.load_guidance is None
+            or host.wait_guidance is None
+            or host.expire_guidance is None
+            or host.load_child is None
+            or host.parent_session_id is None
+        ):
+            return ToolResult.text("Parent guidance is unavailable.", is_error=True)
+        child_id = runtime.execution_scope
+        child = await host.load_child(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            child_session_id=child_id,
+        )
+        if not isinstance(child, Mapping) or not child.get("operation_id"):
+            return ToolResult.text("Current Child Operation is unavailable.", is_error=True)
+        operation_id = str(child["operation_id"])
+        child_epoch = int(child.get("fencing_epoch") or 0)
+        request_id = runtime.intent_id.value
+        timeout = args.expires_after_seconds or host.guidance_timeout_seconds
+        guidance = await host.create_guidance(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            request_id=request_id,
+            child_session_id=child_id,
+            child_operation_id=operation_id,
+            parent_session_id=host.parent_session_id.value,
+            question=args.question,
+            expires_after_seconds=timeout,
+            child_fencing_epoch=child_epoch,
+        )
+        if guidance is None:
+            return ToolResult.text("Child guidance request lost its lease.", is_error=True)
+        if guidance.get("status") == "queue_full":
+            return ToolResult.text("Too many pending parent guidance requests.", is_error=True)
+        host.notify_parent()
+        await runtime.emit_update(
+            ToolResult.text(f"Waiting for parent reply (request_id={request_id}).")
+        )
+        while True:
+            status = str(guidance.get("status") or "")
+            if status == "replied":
+                origin = str(guidance.get("reply_origin") or "parent").capitalize()
+                return ToolResult.text(
+                    f"{origin} reply (request_id={request_id}): {guidance.get('reply') or ''}"
+                )
+            if status == "cancelled":
+                return ToolResult.text("Parent guidance request was cancelled.", is_error=True)
+            if status == "expired":
+                return ToolResult.text("Parent guidance request expired.", is_error=True)
+            expires_at = guidance.get("expires_at")
+            if expires_at is None:
+                return ToolResult.text("Parent guidance request is corrupt.", is_error=True)
+            remaining = max(0.0, (expires_at - datetime.now(UTC)).total_seconds())
+            if remaining <= 0:
+                await host.expire_guidance(
+                    owner_id=host.owner_id,
+                    run_id=host.run_id,
+                    request_id=request_id,
+                    child_session_id=child_id,
+                    child_operation_id=operation_id,
+                    child_fencing_epoch=child_epoch,
+                )
+                guidance = await host.load_guidance(
+                    owner_id=host.owner_id, run_id=host.run_id, request_id=request_id
+                )
+            else:
+                guidance = await host.wait_guidance(
+                    owner_id=host.owner_id,
+                    run_id=host.run_id,
+                    request_id=request_id,
+                    timeout_seconds=remaining,
+                )
+            if not isinstance(guidance, Mapping):
+                return ToolResult.text("Parent guidance request disappeared.", is_error=True)
+
+    return (
+        AgentTool(
+            "ask_parent",
+            "Ask the parent one correlated question and wait durably for its reply.",
+            AskParentInput,
+            ask,
+            replay_policy="replayable",
+            contract_version=4,
         ),
     )
 
@@ -560,8 +799,10 @@ def _start_child_task(
     context_snapshot: ChildContextSnapshot,
 ) -> asyncio.Task[ChildOutcome]:
     existing = host.tasks.get(child_id.value)
-    if existing is not None:
+    if existing is not None and not existing.done():
         return existing
+    if existing is not None:
+        host.tasks.pop(child_id.value, None)
     task = asyncio.create_task(
         _run_one(host, child_id, request, parent_call_id, context_snapshot),
         name=f"agent-child:{child_id.value}",
@@ -684,7 +925,7 @@ def _dispatch_from_row(
             raise ValueError("Child envelope parent identity changed")
         raw_tools = row.get("tools")
         request = ChildRequest(
-            objective=str(row["objective"]),
+            objective=str(row.get("operation_input") or row["objective"]),
             context=str(row["context"]),  # type: ignore[arg-type]
             model_role=str(row["model_role"]),  # type: ignore[arg-type]
             tools=(tuple(str(item) for item in raw_tools) if isinstance(raw_tools, list) else None),
@@ -872,6 +1113,50 @@ def child_session_id(
     )
 
 
+async def _pending_guidance_for_child(
+    host: SubagentHost,
+    child_id: str,
+) -> tuple[Mapping[str, Any], ...]:
+    if host.list_guidance is None or host.parent_session_id is None:
+        return ()
+    questions = await host.list_guidance(
+        owner_id=host.owner_id,
+        run_id=host.run_id,
+        parent_session_id=host.parent_session_id.value,
+    )
+    return tuple(
+        question
+        for question in questions or ()
+        if isinstance(question, Mapping) and str(question.get("child_session_id") or "") == child_id
+    )
+
+
+def _guidance_notice(questions: tuple[Mapping[str, Any], ...]) -> str:
+    lines: list[str] = []
+    for question in questions:
+        request_id = str(question.get("request_id") or "")
+        if not request_id:
+            continue
+        lines.append(
+            f"Child session {question.get('child_session_id') or ''} asks for guidance "
+            f"(request_id={request_id}): {question.get('question') or ''}. "
+            "Reply with reply_subagent using exactly this request_id."
+        )
+    return "\n".join(lines)
+
+
+def _result_with_guidance(
+    host: SubagentHost,
+    outcome: ChildOutcome,
+    questions: tuple[Mapping[str, Any], ...],
+) -> ToolResult:
+    result = _single_result(_adopt_outcome(host, outcome))
+    notice = _guidance_notice(questions)
+    if not notice:
+        return result
+    return ToolResult.text(f"{result.text_content}\n{notice}", details=result.details)
+
+
 def _single_result(outcome: ChildOutcome) -> ToolResult:
     return _many_result((outcome,))
 
@@ -905,6 +1190,7 @@ def _many_result(outcomes: tuple[ChildOutcome, ...]) -> ToolResult:
 
 
 __all__ = [
+    "AskParentInput",
     "ChildContextMode",
     "ChildContextSnapshot",
     "ChildControlInput",
@@ -914,6 +1200,7 @@ __all__ = [
     "ChildStatus",
     "SpawnAgentInput",
     "SubagentHost",
+    "child_guidance_tools",
     "child_session_id",
     "subagent_tools",
 ]

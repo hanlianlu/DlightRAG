@@ -381,6 +381,102 @@ class _CancelPendingChildProvider:
         raise AssertionError("blocked child retrieval should be cancelled")
 
 
+class _InteractiveGuidanceProvider:
+    """Parent wait_subagent wakes on a durable child question in real composition."""
+
+    def __init__(self) -> None:
+        self.parent_calls = 0
+        self.child_calls = 0
+        self.wait_text = ""
+
+    async def __call__(self, **kwargs: Any) -> AssistantTurn:
+        tools = kwargs.get("tools") or ()
+        names = {str(tool.name) for tool in tools}
+        messages = kwargs.get("messages") or ()
+        if "spawn_agent" not in names:
+            self.child_calls += 1
+            if "ask_parent" not in names:
+                raise AssertionError("interactive child lost ask_parent")
+            has_tool_result = any(
+                isinstance(message, dict) and message.get("role") == "tool" for message in messages
+            )
+            if not has_tool_result:
+                return AssistantTurn(
+                    text="",
+                    tool_calls=(
+                        ToolCall(
+                            id="ask-parent",
+                            name="ask_parent",
+                            arguments={"question": "Which source should I prioritize?"},
+                        ),
+                    ),
+                    stop_reason="tool_use",
+                    usage_details={"input_tokens": 2, "output_tokens": 1},
+                )
+            return AssistantTurn(
+                text="child used the official report",
+                tool_calls=(),
+                stop_reason="stop",
+                usage_details={"input_tokens": 2, "output_tokens": 1},
+            )
+
+        self.parent_calls += 1
+        if self.parent_calls == 1:
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="spawn-guidance-child",
+                        name="spawn_agent",
+                        arguments={"children": [{"objective": "investigate sources"}]},
+                    ),
+                ),
+                stop_reason="tool_use",
+                usage_details={"input_tokens": 3, "output_tokens": 1},
+            )
+        last_content = str(messages[-1].get("content", "")) if messages else ""
+        if self.parent_calls == 2:
+            child_id = next(
+                token.strip(".,;:()[]{}")
+                for token in last_content.split()
+                if len(token.strip(".,;:()[]{}")) == 36
+                and token.strip(".,;:()[]{}").count("-") == 4
+            )
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="wait-guidance-child",
+                        name="wait_subagent",
+                        arguments={"child_session_id": child_id},
+                    ),
+                ),
+                stop_reason="tool_use",
+                usage_details={"input_tokens": 3, "output_tokens": 1},
+            )
+        if "request_id=" in last_content and "reply_subagent" in names:
+            self.wait_text = last_content
+            request_id = last_content.split("request_id=", 1)[1].split(")", 1)[0].strip()
+            return AssistantTurn(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="reply-guidance-child",
+                        name="reply_subagent",
+                        arguments={"request_id": request_id, "content": "Use the official report."},
+                    ),
+                ),
+                stop_reason="tool_use",
+                usage_details={"input_tokens": 4, "output_tokens": 1},
+            )
+        return AssistantTurn(
+            text="parent synthesized after the child question",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"input_tokens": 5, "output_tokens": 2},
+        )
+
+
 def _async_child_orchestrator(
     provider: Any,
     *,
@@ -1509,6 +1605,45 @@ async def test_parent_cancellation_settles_active_children_before_terminal_run(
             if isinstance(record.value, OperationStateRegister)
         )
         assert isinstance(child_state, OperationCancelled)
+
+
+async def test_wait_subagent_wakes_on_ask_parent_and_parent_replies(
+    store: FingerprintingRunStore,
+) -> None:
+    provider = _InteractiveGuidanceProvider()
+    orchestrator = _async_child_orchestrator(provider)
+    plan = _async_child_plan(orchestrator)
+    application, coordinator = _answer_runtime(store=store, orchestrator=orchestrator)
+    creation = await store.create_run(
+        owner_id="owner-interactive-guidance",
+        request=_answer_run_request(mode="research", agent_run_plan=plan),
+    )
+    try:
+        await coordinator.start()
+        coordinator.wake()
+        run = await _wait_for_status(
+            store,
+            owner_id="owner-interactive-guidance",
+            run_id=creation.run.run_id,
+            status="succeeded",
+            timeout=20.0,
+        )
+    finally:
+        await coordinator.aclose()
+        await application.aclose()
+
+    children = await store.list_child_sessions(
+        owner_id="owner-interactive-guidance", run_id=creation.run.run_id
+    )
+    assert {row["status"] for row in children} == {"succeeded"}
+    assert provider.child_calls >= 2
+    assert provider.parent_calls >= 3
+    assert "request_id=" in provider.wait_text
+    assert "Which source should I prioritize?" in provider.wait_text
+    assert run.result is not None
+    assert run.result["answer"] == "parent synthesized after the child question"
+    purposes = [item["purpose"] for item in run.result["trace"]["agent_operations"]]
+    assert "research" in purposes
 
 
 async def test_publication_correction_is_one_linked_agent_operation(

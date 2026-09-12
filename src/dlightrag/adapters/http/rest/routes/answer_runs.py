@@ -11,7 +11,7 @@ each authenticated read projects fresh URLs from them.
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -73,6 +73,14 @@ class _AgentControlBody(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     content: str = Field(min_length=1, max_length=20_000)
+
+
+class _ChildControlBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    action: Literal["steer", "continue", "cancel"]
+    content: str = Field(default="", max_length=20_000)
+    reauthorize_user_cancelled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,6 +450,74 @@ async def steer_answer_run(
         "run_id": receipt.run_id,
         "control_sequence": receipt.control_sequence,
         "kind": receipt.kind,
+    }
+
+
+@router.post("/answer/{run_id}/children/{child_session_id}/control", status_code=202)
+async def control_answer_child(
+    run_id: str,
+    child_session_id: str,
+    body: _ChildControlBody,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    submission_key = idempotency_key(request)
+    if submission_key is None:
+        raise HTTPException(status_code=400, detail="Idempotency-Key is required")
+    receipt = await get_application(request).answers.control_child(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        child_session_id=child_session_id,
+        action=body.action,
+        content=body.content,
+        idempotency_key=submission_key,
+        reauthorize_user_cancelled=body.reauthorize_user_cancelled,
+    )
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="Answer child not found")
+    if receipt.outcome not in {"queued", "consumed", "accepted", "cancellation_requested"}:
+        raise HTTPException(status_code=409, detail=receipt.outcome)
+    return {
+        "run_id": receipt.run_id,
+        "child_session_id": receipt.child_session_id,
+        "action": receipt.action,
+        "outcome": receipt.outcome,
+        "operation_id": receipt.operation_id,
+        "operation_sequence": receipt.operation_sequence,
+        "control_sequence": receipt.control_sequence,
+        "consumed_at": (
+            receipt.consumed_at.isoformat() if receipt.consumed_at is not None else None
+        ),
+    }
+
+
+@router.post("/answer/{run_id}/child-guidance/{request_id}/reply", status_code=202)
+async def reply_to_answer_child(
+    run_id: str,
+    request_id: str,
+    body: _AgentControlBody,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    submission_key = idempotency_key(request)
+    if submission_key is None:
+        raise HTTPException(status_code=400, detail="Idempotency-Key is required")
+    receipt = await get_application(request).answers.reply_to_child(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        request_id=request_id,
+        content=body.content,
+        idempotency_key=submission_key,
+    )
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="Child guidance request not found")
+    if receipt.outcome != "replied":
+        raise HTTPException(status_code=409, detail=receipt.outcome)
+    return {
+        "run_id": receipt.run_id,
+        "request_id": request_id,
+        "action": receipt.action,
+        "outcome": receipt.outcome,
     }
 
 

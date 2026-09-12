@@ -6,15 +6,18 @@ from dlightrag.engine.answer.tools.composition import compose_research_tools
 from dlightrag.engine.answer.tools.memory import MemoryHost
 from dlightrag.engine.answer.tools.search import KnowledgeRetrieval, SearchInput, WebSearch
 from dlightrag.engine.answer.tools.subagents import (
+    AskParentInput,
     ChildOutcome,
     ChildRequest,
     SpawnAgentInput,
     SubagentHost,
+    child_guidance_tools,
     child_session_id,
     subagent_tools,
 )
 
 __all__ = [
+    "AskParentInput",
     "AttachArtifactArgs",
     "ChildOutcome",
     "ChildRequest",
@@ -25,6 +28,7 @@ __all__ = [
     "SubagentHost",
     "WebSearch",
     "attach_artifact_tool",
+    "child_guidance_tools",
     "child_session_id",
     "compose_research_tools",
     "subagent_tools",

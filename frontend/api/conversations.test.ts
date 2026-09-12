@@ -4,10 +4,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   continueAnswerRun,
+  controlAnswerChild,
   getAnswerRunChildren,
   getAnswerRunChildrenPage,
   getConversationHistory,
   listConversations,
+  replyAnswerChild,
   steerAnswerRun,
 } from './conversations.ts';
 
@@ -154,6 +156,41 @@ test('steer and child roster use their Answer-specific routes', async () => {
     '/web/api/answer/run-1/children',
   ]);
   assert.equal(children[0]?.status, 'running');
+});
+
+test('child controls and replies carry durable submission identity', async () => {
+  const requests: Request[] = [];
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(new URL(String(input), 'http://localhost'), init);
+    requests.push(request);
+    const reply = request.url.includes('child-guidance');
+    return new Response(JSON.stringify(reply ? {
+      run_id: 'run-1', request_id: 'request-1', action: 'reply', outcome: 'replied',
+    } : {
+      run_id: 'run-1', child_session_id: 'child/1', action: 'steer', outcome: 'queued',
+      operation_id: 'operation-1', operation_sequence: 1, control_sequence: 7,
+      consumed_at: null,
+    }), {status: 202, headers: {'Content-Type': 'application/json'}});
+  };
+
+  const control = await controlAnswerChild(
+    'run-1', 'child/1', 'steer', 'focus', 'submission-control', false,
+  );
+  const reply = await replyAnswerChild(
+    'run-1', 'request-1', 'use report', 'submission-reply',
+  );
+
+  assert.equal(requests[0]?.headers.get('Idempotency-Key'), 'submission-control');
+  assert.equal(requests[1]?.headers.get('Idempotency-Key'), 'submission-reply');
+  assert.equal(
+    new URL(requests[0]!.url).pathname,
+    '/web/api/answer/run-1/children/child%2F1/control',
+  );
+  assert.deepEqual(await requests[0]!.clone().json(), {
+    action: 'steer', content: 'focus', reauthorize_user_cancelled: false,
+  });
+  assert.equal(control.controlSequence, 7);
+  assert.equal(reply.requestId, 'request-1');
 });
 
 test('child roster pages encode the opaque cursor and normalize the continuation', async () => {

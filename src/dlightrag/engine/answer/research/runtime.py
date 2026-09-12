@@ -330,18 +330,26 @@ class AnswerRuntimeControls:
         *,
         reader: Callable[[], Awaitable[tuple[Mapping[str, Any], ...]]],
         acknowledge: Callable[[tuple[int, ...]], Awaitable[bool]],
+        check_cancelled: Callable[[], Awaitable[None]] | None = None,
+        expose_origin: bool = False,
     ) -> None:
         self._reader = reader
         self._acknowledge = acknowledge
+        self._check_cancelled = check_cancelled
+        self._expose_origin = expose_origin
         self._sequences: dict[str, int] = {}
 
     async def poll(self, context: RuntimeContext) -> tuple[Any, ...]:
         del context
+        if self._check_cancelled is not None:
+            await self._check_cancelled()
         commands: list[Any] = []
         for row in await self._reader():
             sequence = int(row.get("control_sequence") or 0)
             kind = str(row.get("kind") or "steer")
             content = str(row.get("content") or "")
+            if self._expose_origin:
+                content = f"{str(row.get('origin') or 'unknown').capitalize()} steer: {content}"
             command_id = f"answer-control:{sequence}"
             self._sequences[command_id] = sequence
             if kind == "follow_up":
@@ -784,6 +792,8 @@ def _bound_child_runner(
     claim_child: Callable[..., Awaitable[Any]],
     renew_child: Callable[..., Awaitable[Any]],
     load_child: Callable[..., Awaitable[Any]] | None = None,
+    control_reader: Callable[..., Awaitable[Any]] | None = None,
+    control_ack: Callable[..., Awaitable[Any]] | None = None,
     is_detaching: Callable[[], bool] | None = None,
 ) -> Callable[[SessionId, ChildRequest, str, ChildContextSnapshot], Awaitable[ChildOutcome]]:
     async def run_child(
@@ -806,6 +816,8 @@ def _bound_child_runner(
             claim_child=claim_child,
             renew_child=renew_child,
             load_child=load_child,
+            control_reader=control_reader,
+            control_ack=control_ack,
             is_detaching=is_detaching,
         )
 
@@ -827,6 +839,8 @@ async def run_child_session(
     claim_child: Callable[..., Awaitable[Any]],
     renew_child: Callable[..., Awaitable[Any]] | None = None,
     load_child: Callable[..., Awaitable[Any]] | None = None,
+    control_reader: Callable[..., Awaitable[Any]] | None = None,
+    control_ack: Callable[..., Awaitable[Any]] | None = None,
     is_detaching: Callable[[], bool] | None = None,
 ) -> ChildOutcome:
     """Run or restore one Child through the same deep AgentSessionRuntime."""
@@ -861,6 +875,8 @@ async def run_child_session(
         },
         host_state={"inherits_parent_evidence": bool(context_snapshot.evidence_state)},
     )
+    accepted_operation_key = f"child-session:{child_id.value}"
+    accepted_operation_id: str | None = None
     if load_child is not None:
         accepted_dispatch = await load_child(
             owner_id=session.owner_id,
@@ -870,7 +886,9 @@ async def run_child_session(
         persisted_plan_payload = (
             accepted_dispatch.get("plan") if accepted_dispatch is not None else None
         )
-        if not isinstance(persisted_plan_payload, Mapping):
+        if not isinstance(persisted_plan_payload, Mapping) or not isinstance(
+            accepted_dispatch, Mapping
+        ):
             raise IncompatibleActiveRunError(
                 "Accepted Child Session is missing its pinned Agent Plan"
             )
@@ -880,6 +898,10 @@ async def run_child_session(
                 "Child Session Agent Plan differs from its accepted tool contracts"
             )
         plan = persisted_plan
+        accepted_operation_key = str(
+            accepted_dispatch.get("operation_key") or accepted_operation_key
+        )
+        accepted_operation_id = str(accepted_dispatch.get("operation_id") or "") or None
     while True:
         child_epoch = await claim_child(
             owner_id=session.owner_id,
@@ -920,6 +942,10 @@ async def run_child_session(
             AgentSessionRepository[EffectHostUpdate],
             bind_child(child_id, fencing_epoch=child_epoch),
         )
+    existing_snapshot = await child_repository.load(child_id)
+    if existing_snapshot.commit_sequence > 0:
+        orchestrator.restore_runtime_snapshot(prepared, existing_snapshot)
+        await _restore_durable_evidence(prepared, child_repository, child_id)
     effects = ResearchRuntimeEffects(
         orchestrator=orchestrator,
         prepared=prepared,
@@ -928,6 +954,47 @@ async def run_child_session(
         fetched_buffer=fetched_buffer,
         persist_child_intent=None,
     )
+
+    async def check_child_cancelled() -> None:
+        if load_child is None:
+            return
+        current = await load_child(
+            owner_id=session.owner_id,
+            run_id=session.run_id,
+            child_session_id=child_id.value,
+        )
+        if current is None:
+            raise LeaseLostError
+        if current.get("cancel_requested_at") is not None:
+            raise asyncio.CancelledError
+
+    controls = None
+    if control_reader is not None and control_ack is not None:
+
+        async def read_child_controls() -> tuple[Mapping[str, Any], ...]:
+            rows = await control_reader(
+                target_session_id=child_id.value,
+                target_operation_id=accepted_operation_id,
+                child_fencing_epoch=child_epoch,
+            )
+            return tuple(rows)
+
+        async def acknowledge_child_controls(sequences: tuple[int, ...]) -> bool:
+            return bool(
+                await control_ack(
+                    sequences,
+                    target_session_id=child_id.value,
+                    target_operation_id=accepted_operation_id,
+                    child_fencing_epoch=child_epoch,
+                )
+            )
+
+        controls = AnswerRuntimeControls(
+            reader=read_child_controls,
+            acknowledge=acknowledge_child_controls,
+            check_cancelled=check_child_cancelled,
+            expose_origin=True,
+        )
     runtime = AgentSessionRuntime(
         repository=child_repository,
         effects=effects,
@@ -935,14 +1002,20 @@ async def run_child_session(
         fencing_epoch=child_epoch,
         provider_attempt_limit=plan.provider_attempt_limit,
         event_sink=_answer_runtime_event_sink(session),
+        controls=controls,
     )
     accepted = await runtime.accept(
         session_id=child_id,
         lane_id=LaneId.main(),
-        idempotency_key=f"child-session:{child_id.value}",
+        idempotency_key=accepted_operation_key,
         content=request.objective,
         plan=plan,
     )
+    if accepted_operation_id is not None and accepted.operation_id.value != accepted_operation_id:
+        raise IncompatibleActiveRunError(
+            "Child Operation identity differs from its durable dispatch envelope"
+        )
+    accepted_operation_id = accepted.operation_id.value
     try:
         cancellation_requested = False
         if load_child is not None:
@@ -1130,29 +1203,38 @@ async def _durable_child_usage(
     rows = await method(owner_id=owner_id, run_id=run_id)
     aggregate: dict[str, int] = {}
     for row in rows or ():
-        usage = row.get("usage") if isinstance(row, Mapping) else None
-        if not isinstance(usage, Mapping):
+        if not isinstance(row, Mapping):
             continue
-        for key, value in usage.items():
-            if isinstance(value, int):
-                name = str(key)
-                aggregate[name] = aggregate.get(name, 0) + value
+        operation_usage = row.get("operation_usage")
+        usages = (
+            operation_usage
+            if isinstance(operation_usage, list) and operation_usage
+            else [row.get("usage")]
+        )
+        for usage in usages:
+            if not isinstance(usage, Mapping):
+                continue
+            for key, value in usage.items():
+                if isinstance(value, int):
+                    name = str(key)
+                    aggregate[name] = aggregate.get(name, 0) + value
     return aggregate
 
 
 def _fenced_control_reader(
     store: object, session: RunSession
-) -> Callable[[], Awaitable[tuple[Mapping[str, Any], ...]]] | None:
+) -> Callable[..., Awaitable[tuple[Mapping[str, Any], ...]]] | None:
     method = _async_store_method(store, "load_pending_agent_controls")
     if method is None:
         return None
 
-    async def read() -> tuple[Mapping[str, Any], ...]:
+    async def read(**kwargs: Any) -> tuple[Mapping[str, Any], ...]:
         controls = await method(
             owner_id=session.owner_id,
             run_id=session.run_id,
             worker_id=session.worker_id,
             fencing_epoch=session.fencing_epoch,
+            **kwargs,
         )
         if controls is None:
             raise LeaseLostError
@@ -1163,18 +1245,19 @@ def _fenced_control_reader(
 
 def _fenced_control_ack(
     store: object, session: RunSession
-) -> Callable[[tuple[int, ...]], Awaitable[bool]] | None:
+) -> Callable[..., Awaitable[bool]] | None:
     method = _async_store_method(store, "acknowledge_agent_controls")
     if method is None:
         return None
 
-    async def acknowledge(sequences: tuple[int, ...]) -> bool:
+    async def acknowledge(sequences: tuple[int, ...], **kwargs: Any) -> bool:
         held = await method(
             owner_id=session.owner_id,
             run_id=session.run_id,
             control_sequences=sequences,
             worker_id=session.worker_id,
             fencing_epoch=session.fencing_epoch,
+            **kwargs,
         )
         return bool(held)
 

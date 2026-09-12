@@ -169,6 +169,7 @@ def answer_executor_settings(config: DlightragConfig) -> AnswerExecutorSettings:
         default_chunk_top_k=config.corpus.retrieval.chunk_top_k,
         semantic_highlights=semantic_highlight_settings(config),
         publication=PublicationLimits(**publication.model_dump()),
+        child_guidance_timeout_seconds=(config.answer.agent.child_guidance_timeout_seconds),
     )
 
 

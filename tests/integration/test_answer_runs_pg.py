@@ -568,7 +568,11 @@ class TestSchema:
             await conn.execute(
                 "DELETE FROM dlightrag_schema_migrations "
                 "WHERE scope = 'runs' AND version = ANY($1::text[])",
-                ["remove_run_active_permit", "interactive_child_async_lifecycle"],
+                [
+                    "remove_run_active_permit",
+                    "interactive_child_async_lifecycle",
+                    "interactive_child_controls",
+                ],
             )
 
         migrated = PGRunStore(pool=pool)
@@ -608,6 +612,8 @@ class TestSchema:
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",
             "dlightrag_answer_child_sessions",
+            "dlightrag_answer_child_operations",
+            "dlightrag_answer_child_guidance",
             "dlightrag_agent_controls",
             "dlightrag_answer_memory_settings",
             "dlightrag_corpus_mutation_windows",
@@ -2695,6 +2701,511 @@ class TestAgentControlsAndChildren:
             item["host_state"]["terminal_outcome"]["evidence_state"] == {"contexts": {}}
             for item in roster
         )
+
+    async def test_child_controls_continuation_and_correlated_guidance_are_durable(
+        self, store
+    ) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        run_id = creation.run.run_id
+        parent_id = str(uuid.uuid7())
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            parent_call_id="interactive-call",
+            parent_intent_id=str(uuid.uuid7()),
+            objective="initial objective",
+            context_mode="parent",
+            model_role="query",
+            tools=("search_knowledge_base",),
+            depth=1,
+            context_snapshot={
+                "parent_session_id": parent_id,
+                "parent_entry_id": str(uuid.uuid7()),
+                "depth": 0,
+                "messages": [{"role": "user", "content": "parent context"}],
+                "evidence_state": {},
+            },
+            plan={"schema_version": 2, "tools": ["search_knowledge_base"]},
+            budget={"provider_attempt_limit": 2},
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child_epoch = await store.claim_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child = await store.load_child_session(
+            owner_id=_OWNER, run_id=run_id, child_session_id=child_id
+        )
+        assert child_epoch == 1
+        assert child is not None
+        initial_operation_id = child["operation_id"]
+
+        stale_parent = await store.enqueue_child_control(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            content="stale parent",
+            submission_key="stale-parent",
+            origin="parent",
+            worker_id="stale-worker",
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        queued = await store.enqueue_child_control(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            content="focus on primary sources",
+            submission_key="steer-one",
+        )
+        duplicate = await store.enqueue_child_control(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            content="focus on primary sources",
+            submission_key="steer-one",
+        )
+        conflict = await store.enqueue_child_control(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            content="different",
+            submission_key="steer-one",
+        )
+        foreign = await store.enqueue_child_control(
+            owner_id="another-owner",
+            run_id=run_id,
+            child_session_id=child_id,
+            content="steal",
+            submission_key="foreign",
+        )
+        parent_controls = await store.load_pending_agent_controls(
+            owner_id=_OWNER,
+            run_id=run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child_controls = await store.load_pending_agent_controls(
+            owner_id=_OWNER,
+            run_id=run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            target_session_id=child_id,
+            target_operation_id=initial_operation_id,
+            child_fencing_epoch=child_epoch,
+        )
+        assert stale_parent is False
+        assert queued["outcome"] == duplicate["outcome"] == "queued"
+        assert queued["control_sequence"] == duplicate["control_sequence"]
+        assert conflict["outcome"] == "idempotency_conflict"
+        assert foreign["outcome"] == "unknown_child"
+        assert [row["content"] for row in child_controls or ()] == ["focus on primary sources"]
+        assert all(row["content"] != "focus on primary sources" for row in parent_controls or ())
+        assert await store.acknowledge_agent_controls(
+            owner_id=_OWNER,
+            run_id=run_id,
+            control_sequences=(queued["control_sequence"],),
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            target_session_id=child_id,
+            target_operation_id=initial_operation_id,
+            child_fencing_epoch=child_epoch,
+        )
+        consumed = await store.enqueue_child_control(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            content="focus on primary sources",
+            submission_key="steer-one",
+        )
+        assert consumed["outcome"] == "consumed"
+
+        assert await store.finish_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            status="succeeded",
+            summary="initial done",
+            usage={"input_tokens": 3},
+            outcome={
+                "status": "succeeded",
+                "summary": "initial done",
+                "handles": [],
+                "usage": {"input_tokens": 3},
+                "child_session_id": child_id,
+                "operation_id": initial_operation_id,
+                "evidence_state": {"contexts": {}},
+            },
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        late = await store.enqueue_child_control(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            content="too late",
+            submission_key="late",
+        )
+        assert late["outcome"] == "terminal_child"
+
+        continuation = await store.continue_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            content="follow up",
+            submission_key="continue-one",
+        )
+        replay = await store.continue_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            content="follow up",
+            submission_key="continue-one",
+        )
+        competing = await store.continue_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            content="competing",
+            submission_key="continue-two",
+        )
+        continued = await store.load_child_session(
+            owner_id=_OWNER, run_id=run_id, child_session_id=child_id
+        )
+        assert continuation["outcome"] == replay["outcome"] == "accepted"
+        assert continuation["operation_id"] == replay["operation_id"]
+        assert competing["outcome"] == "child_running"
+        assert continued is not None
+        assert continued["operation_sequence"] == 2
+        assert continued["operation_input"] == "follow up"
+        assert continued["plan"] == {"schema_version": 2, "tools": ["search_knowledge_base"]}
+        assert continued["tools"] == ["search_knowledge_base"]
+        assert continued["operation_usage"] == [{"input_tokens": 3}]
+
+        next_epoch = await store.claim_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        request_id = str(uuid.uuid7())
+        guidance = await store.create_child_guidance(
+            owner_id=_OWNER,
+            run_id=run_id,
+            request_id=request_id,
+            child_session_id=child_id,
+            child_operation_id=continuation["operation_id"],
+            parent_session_id=parent_id,
+            question="Which source should I prioritize?",
+            expires_after_seconds=30,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            child_fencing_epoch=next_epoch,
+        )
+        pending = await store.list_pending_child_guidance(
+            owner_id=_OWNER, run_id=run_id, parent_session_id=parent_id
+        )
+        reply = await store.reply_child_guidance(
+            owner_id=_OWNER,
+            run_id=run_id,
+            request_id=request_id,
+            parent_session_id=parent_id,
+            content="Use the official report.",
+            submission_key="reply-one",
+        )
+        replied = await store.load_child_guidance(
+            owner_id=_OWNER, run_id=run_id, request_id=request_id
+        )
+        assert guidance is not None and guidance["status"] == "pending"
+        assert [row["request_id"] for row in pending] == [request_id]
+        assert reply["outcome"] == "replied"
+        assert replied is not None and replied["reply"] == "Use the official report."
+
+        wake_request_id = str(uuid.uuid7())
+        assert await store.create_child_guidance(
+            owner_id=_OWNER,
+            run_id=run_id,
+            request_id=wake_request_id,
+            child_session_id=child_id,
+            child_operation_id=continuation["operation_id"],
+            parent_session_id=parent_id,
+            question="Wake me with a reply",
+            expires_after_seconds=30,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            child_fencing_epoch=next_epoch,
+        )
+        waiter = asyncio.create_task(
+            store.wait_for_child_guidance(
+                owner_id=_OWNER,
+                run_id=run_id,
+                request_id=wake_request_id,
+                timeout_seconds=5,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert (
+            await store.reply_child_guidance(
+                owner_id=_OWNER,
+                run_id=run_id,
+                request_id=wake_request_id,
+                content="wake now",
+                submission_key="reply-wake",
+            )
+        )["outcome"] == "replied"
+        woke = await asyncio.wait_for(waiter, timeout=2)
+        assert woke is not None and woke["reply"] == "wake now"
+
+        retiring_request_id = str(uuid.uuid7())
+        assert await store.create_child_guidance(
+            owner_id=_OWNER,
+            run_id=run_id,
+            request_id=retiring_request_id,
+            child_session_id=child_id,
+            child_operation_id=continuation["operation_id"],
+            parent_session_id=parent_id,
+            question="This request will be retired",
+            expires_after_seconds=30,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            child_fencing_epoch=next_epoch,
+        )
+        cancelled = await store.cancel_child_session_by_owner(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+        )
+        assert cancelled["outcome"] == "cancellation_requested"
+        retired = await store.load_child_guidance(
+            owner_id=_OWNER, run_id=run_id, request_id=retiring_request_id
+        )
+        assert retired is not None and retired["status"] == "cancelled"
+        assert await store.finish_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            status="cancelled",
+            summary="cancelled",
+            outcome={
+                "status": "cancelled",
+                "summary": "cancelled",
+                "handles": [],
+                "usage": {},
+                "child_session_id": child_id,
+                "operation_id": continuation["operation_id"],
+                "evidence_state": None,
+            },
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        denied = await store.continue_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            content="revive without permission",
+            submission_key="continue-three",
+        )
+        parent_denied = await store.continue_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            content="parent cannot bypass cancellation",
+            submission_key="continue-parent",
+            origin="parent",
+            reauthorize_user_cancelled=True,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        allowed = await store.continue_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            content="explicitly authorized",
+            submission_key="continue-four",
+            reauthorize_user_cancelled=True,
+        )
+        assert denied["outcome"] == "reauthorization_required"
+        assert parent_denied["outcome"] == "reauthorization_required"
+        assert allowed["outcome"] == "accepted"
+
+    async def test_child_control_lease_expiry_and_terminal_run_races(self, store) -> None:
+        creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
+        claim = await _claimed(store)
+        run_id = creation.run.run_id
+        parent_id = str(uuid.uuid7())
+        child_id = str(uuid.uuid7())
+        assert await store.upsert_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            parent_session_id=parent_id,
+            parent_call_id="race-call",
+            parent_intent_id=str(uuid.uuid7()),
+            objective="race objective",
+            context_mode="isolated",
+            model_role="query",
+            tools=("search_knowledge_base",),
+            depth=1,
+            context_snapshot={
+                "parent_session_id": parent_id,
+                "parent_entry_id": str(uuid.uuid7()),
+                "depth": 0,
+                "messages": [],
+                "evidence_state": {},
+            },
+            plan={"schema_version": 2, "tools": ["search_knowledge_base"]},
+            budget={"provider_attempt_limit": 2},
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child_epoch = await store.claim_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        child = await store.load_child_session(
+            owner_id=_OWNER, run_id=run_id, child_session_id=child_id
+        )
+        assert child is not None and child_epoch == 1
+        queued = await store.enqueue_child_control(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            content="keep the primary sources",
+            submission_key="lease-steer",
+        )
+        lost_load = await store.load_pending_agent_controls(
+            owner_id=_OWNER,
+            run_id=run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            target_session_id=child_id,
+            target_operation_id=child["operation_id"],
+            child_fencing_epoch=child_epoch + 1,
+        )
+        lost_ack = await store.acknowledge_agent_controls(
+            owner_id=_OWNER,
+            run_id=run_id,
+            control_sequences=(queued["control_sequence"],),
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            target_session_id=child_id,
+            target_operation_id=child["operation_id"],
+            child_fencing_epoch=0,
+        )
+        held = await store.load_pending_agent_controls(
+            owner_id=_OWNER,
+            run_id=run_id,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            target_session_id=child_id,
+            target_operation_id=child["operation_id"],
+            child_fencing_epoch=child_epoch,
+        )
+        assert queued["outcome"] == "queued"
+        assert lost_load is None
+        assert lost_ack is False
+        assert [row["content"] for row in held or ()] == ["keep the primary sources"]
+
+        request_id = str(uuid.uuid7())
+        created = await store.create_child_guidance(
+            owner_id=_OWNER,
+            run_id=run_id,
+            request_id=request_id,
+            child_session_id=child_id,
+            child_operation_id=child["operation_id"],
+            parent_session_id=parent_id,
+            question="Expire this question",
+            expires_after_seconds=1,
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            child_fencing_epoch=child_epoch,
+        )
+        assert created is not None and created["status"] == "pending"
+        await asyncio.sleep(1.05)
+        assert await store.expire_child_guidance(
+            owner_id=_OWNER,
+            run_id=run_id,
+            request_id=request_id,
+            child_session_id=child_id,
+            child_operation_id=child["operation_id"],
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+            child_fencing_epoch=child_epoch,
+        )
+        expired = await store.load_child_guidance(
+            owner_id=_OWNER, run_id=run_id, request_id=request_id
+        )
+        late_reply = await store.reply_child_guidance(
+            owner_id=_OWNER,
+            run_id=run_id,
+            request_id=request_id,
+            content="too late",
+            submission_key="expired-reply",
+        )
+        assert expired is not None and expired["status"] == "expired"
+        assert late_reply["outcome"] == "expired"
+
+        assert await store.finish_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            status="succeeded",
+            summary="settled",
+            usage={"input_tokens": 1},
+            outcome={
+                "status": "succeeded",
+                "summary": "settled",
+                "handles": [],
+                "usage": {"input_tokens": 1},
+                "child_session_id": child_id,
+                "operation_id": child["operation_id"],
+                "evidence_state": {"contexts": {}},
+            },
+            worker_id=_WORKER,
+            fencing_epoch=claim.run.fencing_epoch,
+        )
+        assert (
+            await store.finish_success(
+                owner_id=_OWNER,
+                run_id=run_id,
+                worker_id=_WORKER,
+                fencing_epoch=claim.run.fencing_epoch,
+                result={"answer": "parent done"},
+            )
+        ).committed is True
+        late_continue = await store.continue_child_session(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            content="revive after parent terminal",
+            submission_key="late-continue",
+        )
+        late_steer = await store.enqueue_child_control(
+            owner_id=_OWNER,
+            run_id=run_id,
+            child_session_id=child_id,
+            content="steer after parent terminal",
+            submission_key="late-steer",
+        )
+        assert late_continue["outcome"] == "run_terminal"
+        assert late_steer["outcome"] == "terminal_child"
 
     async def test_sparse_precreate_promotes_to_full_reconstructible_child_envelope(
         self, store

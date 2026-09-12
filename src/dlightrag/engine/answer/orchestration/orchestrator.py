@@ -209,6 +209,14 @@ class AnswerOrchestrator:
         finish_child: Any = None,
         request_cancel: Any = None,
         release_children: Any = None,
+        steer_child: Any = None,
+        continue_child: Any = None,
+        reply_guidance: Any = None,
+        create_guidance: Any = None,
+        load_guidance: Any = None,
+        wait_guidance: Any = None,
+        expire_guidance: Any = None,
+        list_guidance: Any = None,
         prepare_dispatch: Any = None,
         run_child: Any = None,
         check_cancelled: Any = None,
@@ -224,6 +232,14 @@ class AnswerOrchestrator:
         self._subagent_host.finish_child = finish_child
         self._subagent_host.request_cancel = request_cancel
         self._subagent_host.release_children = release_children
+        self._subagent_host.steer_child = steer_child
+        self._subagent_host.continue_child = continue_child
+        self._subagent_host.reply_guidance = reply_guidance
+        self._subagent_host.create_guidance = create_guidance
+        self._subagent_host.load_guidance = load_guidance
+        self._subagent_host.wait_guidance = wait_guidance
+        self._subagent_host.expire_guidance = expire_guidance
+        self._subagent_host.list_guidance = list_guidance
         self._subagent_host.prepare_dispatch = prepare_dispatch
         self._subagent_host.run_child = run_child
         self._subagent_host.check_cancelled = check_cancelled
@@ -743,8 +759,17 @@ class AnswerOrchestrator:
                 "ls",
                 "recall_memory",
                 "load_skill",
+                "ask_parent",
             }
             selected_names = tuple(tool.name for tool in composed if tool.name in read_only)
+        elif (
+            child
+            and selected_names is not None
+            and any(tool.name == "ask_parent" for tool in composed)
+        ):
+            # Supervision is part of every hosted Child contract, independent
+            # of the narrower task-tool subset selected by its parent.
+            selected_names = tuple(dict.fromkeys((*selected_names, "ask_parent")))
         return list(
             registry.resolve(
                 selected_names,
@@ -753,6 +778,9 @@ class AnswerOrchestrator:
                     "subagent_status",
                     "wait_subagent",
                     "cancel_subagent",
+                    "steer_subagent",
+                    "continue_subagent",
+                    "reply_subagent",
                 }
                 if child
                 else (),

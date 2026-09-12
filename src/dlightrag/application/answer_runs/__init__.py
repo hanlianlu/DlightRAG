@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         AnswerRunAcceptor,
         AnswerRuntimeUnavailableError,
         AnswerService,
+        ChildControlReceipt,
     )
 
 _SERVICE_EXPORTS = {
@@ -40,6 +41,7 @@ _SERVICE_EXPORTS = {
     "AnswerRunAcceptor",
     "AnswerRuntimeUnavailableError",
     "AnswerService",
+    "ChildControlReceipt",
 }
 
 _CONTRACT_EXPORTS = {
@@ -62,6 +64,7 @@ __all__ = [
     "AnswerRunAcceptor",
     "AnswerRuntimeUnavailableError",
     "AnswerService",
+    "ChildControlReceipt",
     "CHILD_ROSTER_PAGE_DEFAULT_LIMIT",
     "CHILD_ROSTER_PAGE_MAX_LIMIT",
     "ChildRosterCursor",
@@ -106,6 +109,7 @@ def __getattr__(name: str) -> Any:
             AnswerRunAcceptor,
             AnswerRuntimeUnavailableError,
             AnswerService,
+            ChildControlReceipt,
         )
 
         return {
@@ -117,5 +121,6 @@ def __getattr__(name: str) -> Any:
             "AnswerRunAcceptor": AnswerRunAcceptor,
             "AnswerRuntimeUnavailableError": AnswerRuntimeUnavailableError,
             "AnswerService": AnswerService,
+            "ChildControlReceipt": ChildControlReceipt,
         }[name]
     raise AttributeError(name)

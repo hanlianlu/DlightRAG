@@ -116,6 +116,13 @@ _INPUT_REFERENCE_KINDS: tuple[ArtifactReferenceKind, ...] = (
 _AGENT_CONTROL_CONTENT_LIMIT = 20_000
 
 
+def _store_method(store: object, name: str) -> Callable[..., Awaitable[Mapping[str, Any]]]:
+    method = getattr(store, name)
+    if not callable(method):
+        raise RuntimeError(f"Answer run store method is unavailable: {name}")
+    return cast(Callable[..., Awaitable[Mapping[str, Any]]], method)
+
+
 @dataclass(frozen=True, slots=True)
 class AnswerHistoryResource:
     """One accepted upload carried from an owned prior run into this request."""
@@ -175,6 +182,20 @@ class AgentControlReceipt:
     run_id: str
     control_sequence: int
     kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChildControlReceipt:
+    """Durable result of one owner-scoped Child intervention."""
+
+    run_id: str
+    child_session_id: str
+    action: str
+    outcome: str
+    operation_id: str | None = None
+    operation_sequence: int | None = None
+    control_sequence: int | None = None
+    consumed_at: Any | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -832,10 +853,130 @@ class AnswerService:
         )
         if row is None:
             return None
+        self._coordinator.wake()
         return AgentControlReceipt(
             run_id=run_id,
             control_sequence=int(row["control_sequence"]),
             kind=str(row["kind"]),
+        )
+
+    async def control_child(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        action: str,
+        content: str = "",
+        idempotency_key: str = "",
+        reauthorize_user_cancelled: bool = False,
+    ) -> ChildControlReceipt | None:
+        """Apply one owner-scoped durable steer, continuation, or cancellation."""
+        record = await self._get_answer_run(owner_id=owner_id, run_id=run_id)
+        if record is None:
+            return None
+        parent_session_id = str(record.request_input().get("agent_session_id") or "") or None
+        if action == "cancel":
+            cancel_child = _store_method(self._store, "cancel_child_session_by_owner")
+            row = await cancel_child(
+                owner_id=owner_id,
+                run_id=run_id,
+                child_session_id=child_session_id,
+                parent_session_id=parent_session_id,
+            )
+        else:
+            text = content.strip()
+            key = idempotency_key.strip()
+            if not text or len(text) > _AGENT_CONTROL_CONTENT_LIMIT:
+                raise ValueError(
+                    "Child control content must be non-empty and at most 20000 characters"
+                )
+            if not key or len(key) > 200:
+                raise ValueError(
+                    "Child control idempotency key must be between 1 and 200 characters"
+                )
+            if action == "steer":
+                enqueue_child = _store_method(self._store, "enqueue_child_control")
+                row = await enqueue_child(
+                    owner_id=owner_id,
+                    run_id=run_id,
+                    child_session_id=child_session_id,
+                    parent_session_id=parent_session_id,
+                    content=text,
+                    submission_key=key,
+                    origin="user",
+                )
+            elif action == "continue":
+                continue_child = _store_method(self._store, "continue_child_session")
+                row = await continue_child(
+                    owner_id=owner_id,
+                    run_id=run_id,
+                    child_session_id=child_session_id,
+                    parent_session_id=parent_session_id,
+                    content=text,
+                    submission_key=key,
+                    origin="user",
+                    reauthorize_user_cancelled=reauthorize_user_cancelled,
+                )
+            else:
+                raise ValueError("unknown Child control action")
+        outcome = str(row.get("outcome") or "unknown_child")
+        if outcome == "unknown_child":
+            return None
+        if outcome in {"queued", "accepted", "cancellation_requested"}:
+            self._coordinator.wake()
+        return ChildControlReceipt(
+            run_id=run_id,
+            child_session_id=child_session_id,
+            action=action,
+            outcome=outcome,
+            operation_id=(str(row["operation_id"]) if row.get("operation_id") else None),
+            operation_sequence=(
+                int(row["operation_sequence"])
+                if row.get("operation_sequence") is not None
+                else None
+            ),
+            control_sequence=(
+                int(row["control_sequence"]) if row.get("control_sequence") is not None else None
+            ),
+            consumed_at=row.get("consumed_at"),
+        )
+
+    async def reply_to_child(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        request_id: str,
+        content: str,
+        idempotency_key: str,
+    ) -> ChildControlReceipt | None:
+        """Reply to one owned correlated Child guidance request."""
+        record = await self._get_answer_run(owner_id=owner_id, run_id=run_id)
+        if record is None:
+            return None
+        parent_session_id = str(record.request_input().get("agent_session_id") or "") or None
+        reply_child = _store_method(self._store, "reply_child_guidance")
+        row = await reply_child(
+            owner_id=owner_id,
+            run_id=run_id,
+            request_id=request_id,
+            parent_session_id=parent_session_id,
+            content=content,
+            submission_key=idempotency_key,
+            origin="user",
+        )
+        outcome = str(row.get("outcome") or "unknown_request")
+        if outcome == "unknown_request":
+            return None
+        if outcome == "replied":
+            self._coordinator.wake()
+        return ChildControlReceipt(
+            run_id=run_id,
+            child_session_id="",
+            action="reply",
+            outcome=outcome,
+            operation_id=request_id,
         )
 
     async def children(

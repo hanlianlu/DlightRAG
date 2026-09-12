@@ -3,6 +3,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -11,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from dlightrag.engine.agent.session.fold import PriorTurns, WorkingContextProjection
-from dlightrag.engine.agent.session.ids import EntryId, IntentId, SessionId
+from dlightrag.engine.agent.session.ids import EntryId, IntentId, OperationId, SessionId
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY
 from dlightrag.engine.ai.messages import AssistantTurn
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
@@ -25,12 +26,14 @@ from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools.composition import compose_research_tools
 from dlightrag.engine.answer.tools.subagents import (
+    AskParentInput,
     ChildContextSnapshot,
     ChildControlInput,
     ChildOutcome,
     ChildRequest,
     SpawnAgentInput,
     SubagentHost,
+    child_guidance_tools,
     child_session_id,
     subagent_tools,
 )
@@ -83,6 +86,147 @@ def test_child_identity_uses_durable_intent_not_provider_call_id() -> None:
         parent_intent_id=IntentId.new(),
     )
     assert first != second
+
+
+async def test_ask_parent_persists_correlates_and_waits_without_provider_polling() -> None:
+    parent_id = SessionId.new()
+    child_id = SessionId.new().value
+    operation_id = SessionId.new().value
+    stored: dict[str, Any] = {}
+
+    async def load_child(**_kwargs: Any) -> dict[str, Any]:
+        return {"operation_id": operation_id, "fencing_epoch": 7}
+
+    async def create(**kwargs: Any) -> dict[str, Any]:
+        stored.update(kwargs)
+        return {
+            **kwargs,
+            "status": "pending",
+            "expires_at": datetime.now(UTC) + timedelta(seconds=30),
+        }
+
+    async def wait(**_kwargs: Any) -> dict[str, Any]:
+        return {**stored, "status": "replied", "reply": "Prioritize the official report."}
+
+    async def expire(**_kwargs: Any) -> bool:
+        raise AssertionError("a prompt reply must not expire")
+
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        owner_id="owner",
+        run_id=SessionId.new().value,
+        load_child=load_child,
+        create_guidance=create,
+        wait_guidance=wait,
+        load_guidance=lambda **_kwargs: wait(),
+        expire_guidance=expire,
+    )
+    tool = child_guidance_tools(host=host)[0]
+    result = await tool.execute(
+        AskParentInput(question="Which source?"),
+        tool_runtime(tool_name="ask_parent", execution_scope=child_id),
+    )
+
+    assert "Prioritize the official report" in result.text_content
+    assert stored["child_session_id"] == child_id
+    assert stored["child_operation_id"] == operation_id
+    assert stored["parent_session_id"] == parent_id.value
+    assert stored["child_fencing_epoch"] == 7
+
+
+async def test_wait_subagent_wakes_on_pending_question_without_settling() -> None:
+    parent_id = SessionId.new()
+    request_id = SessionId.new().value
+    parked = asyncio.Event()
+    asked = asyncio.Event()
+    known_child: dict[str, str] = {}
+
+    async def run_child(
+        restored_id: SessionId,
+        _request: ChildRequest,
+        _call_id: str,
+        _snapshot: ChildContextSnapshot,
+    ) -> ChildOutcome:
+        parked.set()
+        await asyncio.Event().wait()
+        return ChildOutcome(
+            status="succeeded", summary="unused", child_session_id=restored_id.value
+        )
+
+    async def list_guidance(**_kwargs: Any) -> tuple[dict[str, Any], ...]:
+        child_id = known_child.get("id")
+        if not asked.is_set() or child_id is None:
+            return ()
+        return (
+            {
+                "request_id": request_id,
+                "child_session_id": child_id,
+                "question": "Which source?",
+            },
+        )
+
+    host = SubagentHost(
+        parent_session_id=parent_id,
+        run_id=SessionId.new().value,
+        owner_id="owner",
+        persist=AsyncMock(return_value=True),
+        prepare_dispatch=_durable_dispatch,
+        run_child=run_child,
+        list_guidance=list_guidance,
+        context_snapshot=_context_snapshot(parent_id),
+    )
+    tools = {tool.name: tool for tool in subagent_tools(host=host)}
+    spawned = await tools["spawn_agent"].execute(
+        _spawn_input("investigate"),
+        tool_runtime(call_id="wait-wake", tool_name="spawn_agent"),
+    )
+    assert spawned.details is not None
+    spawned_id = str(spawned.details["children"][0]["child_session_id"])
+    known_child["id"] = spawned_id
+    await parked.wait()
+
+    async def wait_for_child() -> Any:
+        return await tools["wait_subagent"].execute(
+            ChildControlInput(child_session_id=spawned_id),
+            tool_runtime(tool_name="wait_subagent"),
+        )
+
+    waiter = asyncio.create_task(wait_for_child())
+    await asyncio.sleep(0.01)
+    assert not waiter.done()
+    asked.set()
+    host.notify_parent()
+    waited = await asyncio.wait_for(waiter, timeout=2)
+
+    assert "running" in waited.text_content.lower()
+    assert request_id in waited.text_content
+    assert "Which source?" in waited.text_content
+    assert not host.tasks[spawned_id].done()
+    await host.stop(cancel=False)
+
+
+async def test_continue_subagent_cannot_reauthorize_cancelled_children() -> None:
+    captured: dict[str, Any] = {}
+
+    async def continue_child(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"outcome": "reauthorization_required"}
+
+    host = SubagentHost(
+        parent_session_id=SessionId.new(),
+        run_id=SessionId.new().value,
+        owner_id="owner",
+        continue_child=continue_child,
+    )
+    tool = next(item for item in subagent_tools(host=host) if item.name == "continue_subagent")
+    result = await tool.execute(
+        tool.input_model(child_session_id=SessionId.new().value, content="retry cancelled work"),
+        tool_runtime(tool_name="continue_subagent"),
+    )
+
+    assert captured["reauthorize_user_cancelled"] is False
+    assert captured["origin"] == "parent"
+    assert "reauthorization_required" in result.text_content
 
 
 def test_subagent_cancel_is_never_replayed_without_durable_reconciliation() -> None:
@@ -192,9 +336,16 @@ def test_parent_tools_include_spawn_and_child_omits_it() -> None:
         subagent_host=host,
         child=True,
     )
-    controls = {"subagent_status", "wait_subagent", "cancel_subagent"}
+    controls = {
+        "subagent_status",
+        "wait_subagent",
+        "cancel_subagent",
+        "steer_subagent",
+        "continue_subagent",
+        "reply_subagent",
+    }
     assert {"spawn_agent", *controls} <= {tool.name for tool in parent}
-    assert {"search_knowledge_base"} == {tool.name for tool in child}
+    assert {"search_knowledge_base", "ask_parent"} == {tool.name for tool in child}
     assert not ({"spawn_agent"} | controls) & {tool.name for tool in child}
 
 
@@ -441,6 +592,12 @@ async def test_process_detach_does_not_terminalize_child_as_cancelled() -> None:
 
 def test_legacy_foreground_tool_contract_is_exactly_preserved() -> None:
     legacy = {tool.name: tool for tool in subagent_tools(host=SubagentHost(async_lifecycle=False))}
+    slice1 = {
+        tool.name: tool
+        for tool in subagent_tools(
+            host=SubagentHost(async_lifecycle=True, interactive_controls=False)
+        )
+    }
     current = {tool.name: tool for tool in subagent_tools(host=SubagentHost())}
 
     assert legacy["spawn_agent"].contract_version == 2
@@ -450,7 +607,22 @@ def test_legacy_foreground_tool_contract_is_exactly_preserved() -> None:
     assert legacy["spawn_agent"].description == (
         "Run one or many foreground child Agent Sessions and wait for all results."
     )
-    assert current["spawn_agent"].contract_version == 3
+    assert slice1["spawn_agent"].contract_version == 3
+    assert slice1["spawn_agent"].description == current["spawn_agent"].description
+    assert (
+        not {
+            "steer_subagent",
+            "continue_subagent",
+            "reply_subagent",
+        }
+        & slice1.keys()
+    )
+    assert current["spawn_agent"].contract_version == 4
+    assert {
+        "steer_subagent",
+        "continue_subagent",
+        "reply_subagent",
+    } <= current.keys()
     assert current["spawn_agent"].input_schema_digest == legacy["spawn_agent"].input_schema_digest
 
 
@@ -836,6 +1008,79 @@ async def test_child_session_persists_and_replays_without_rerun() -> None:
     assert calls["n"] == 1
 
 
+async def test_child_continuation_accepts_a_new_operation_in_the_same_session() -> None:
+    calls = {"n": 0}
+
+    async def model(**_kwargs: object) -> AssistantTurn:
+        calls["n"] += 1
+        return AssistantTurn(text=f"answer {calls['n']}", tool_calls=(), stop_reason="stop")
+
+    orchestrator = _child_orchestrator(model)
+    repository = InMemoryAgentSessionRepository()
+    parent_id = SessionId.new()
+    child_id = SessionId.deterministic(run_id=parent_id.value, name="child:continuation")
+    snapshot = _context_snapshot(parent_id)
+    row: dict[str, Any] = {}
+
+    async def persist(**kwargs: Any) -> bool:
+        row.setdefault("plan", kwargs["plan"])
+        return True
+
+    async def load(**_kwargs: Any) -> dict[str, Any]:
+        return dict(row)
+
+    initial_key = f"child-session:{child_id.value}"
+    row.update(
+        operation_key=initial_key,
+        operation_id=OperationId.deterministic(idempotency_key=initial_key).value,
+    )
+    first = await run_child_session(
+        orchestrator=orchestrator,
+        repository=repository,  # type: ignore[arg-type]
+        session=_FakeSession(run_id=parent_id.value),  # type: ignore[arg-type]
+        fetched_buffer=FetchedResourceBuffer(),
+        child_id=child_id,
+        request=ChildRequest(objective="initial objective"),
+        parent_call_id="call-1",
+        parent_session_id=parent_id,
+        context_snapshot=snapshot,
+        persist_child_runtime=persist,
+        claim_child=AsyncMock(return_value=1),
+        load_child=load,
+    )
+
+    continuation_key = "continuation-one"
+    row.update(
+        operation_key=continuation_key,
+        operation_id=OperationId.deterministic(idempotency_key=continuation_key).value,
+    )
+    second = await run_child_session(
+        orchestrator=orchestrator,
+        repository=repository,  # type: ignore[arg-type]
+        session=_FakeSession(run_id=parent_id.value),  # type: ignore[arg-type]
+        fetched_buffer=FetchedResourceBuffer(),
+        child_id=child_id,
+        request=ChildRequest(objective="follow-up objective"),
+        parent_call_id="call-1",
+        parent_session_id=parent_id,
+        context_snapshot=snapshot,
+        persist_child_runtime=persist,
+        claim_child=AsyncMock(return_value=1),
+        load_child=load,
+    )
+
+    current = await repository.load(child_id)
+    assert first.operation_id != second.operation_id
+    assert second.operation_id == row["operation_id"]
+    assert calls["n"] == 2
+    assert [
+        getattr(entry, "content", None)
+        for entry in current.entries
+        if entry.entry_type == "user_message"
+    ] == ["initial objective", "follow-up objective"]
+    assert row["plan"]
+
+
 async def test_child_renews_its_lease_while_a_provider_call_is_in_flight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -912,7 +1157,7 @@ async def test_child_selects_parent_context_and_an_inherited_tool_subset() -> No
         tool_schema_tokens=0,
     )
 
-    assert [tool.name for tool in child.tools] == ["search_knowledge_base"]
+    assert [tool.name for tool in child.tools] == ["search_knowledge_base", "ask_parent"]
     assert any(message.get("content") == "older answer" for message in messages)
     assert any(message.get("content") == "parent question" for message in messages)
 
@@ -949,6 +1194,36 @@ def test_child_can_explicitly_narrow_to_host_permitted_side_effect_tools() -> No
     )
 
     assert {tool.name for tool in child} == {"read", "write"}
+
+
+def test_interactive_child_keeps_ask_parent_on_an_explicit_tool_subset() -> None:
+    host = SubagentHost()
+    child = compose_research_tools(
+        evidence=EvidenceLedger(),
+        trace={},
+        retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
+        search_web=None,
+        resource_tools=[],
+        register_web_source=None,
+        environment=MagicMock(),
+        artifacts_root=Path("/unused/artifacts"),
+        subagent_host=host,
+        child=True,
+        tool_names=("read", "write"),
+    )
+    slice1 = compose_research_tools(
+        evidence=EvidenceLedger(),
+        trace={},
+        retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
+        search_web=None,
+        resource_tools=[],
+        register_web_source=None,
+        subagent_host=SubagentHost(async_lifecycle=True, interactive_controls=False),
+        child=True,
+    )
+
+    assert {tool.name for tool in child} == {"read", "write", "ask_parent"}
+    assert "ask_parent" not in {tool.name for tool in slice1}
 
 
 async def test_cancelled_child_closes_pending_intent_before_terminal() -> None:

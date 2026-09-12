@@ -333,6 +333,12 @@ class AgentExecutionConfig(BaseModel):
             "requires an installed adapter and never downgrades."
         ),
     )
+    child_guidance_timeout_seconds: int = Field(
+        default=300,
+        ge=1,
+        le=86_400,
+        description="Default expiry for a durable ask_parent request.",
+    )
     workspace_root: str | None = Field(
         default=None,
         description=(

@@ -220,6 +220,10 @@ const agentChildStatus = v.pipe(
     objective: v.optional(v.string()),
     model_role: v.optional(v.string()),
     usage: v.optional(v.nullable(v.record(v.string(), v.number()))),
+    operation_id: v.optional(v.nullable(v.string())),
+    operation_sequence: v.optional(v.nullable(v.number())),
+    operation_status: v.optional(v.nullable(v.string())),
+    cancellation_origin: v.optional(v.nullable(v.string())),
   }),
   v.transform((w) => ({
     childSessionId: w.child_session_id,
@@ -227,9 +231,39 @@ const agentChildStatus = v.pipe(
     objective: w.objective,
     modelRole: w.model_role,
     usage: w.usage ?? null,
+    operationId: w.operation_id ?? null,
+    operationSequence: w.operation_sequence ?? null,
+    operationStatus: w.operation_status ?? null,
+    cancellationOrigin: w.cancellation_origin ?? null,
   })),
 );
 export type AgentChildStatus = v.InferOutput<typeof agentChildStatus>;
+
+const childControlReceipt = v.pipe(
+  v.object({
+    run_id: v.string(),
+    child_session_id: v.optional(v.string()),
+    request_id: v.optional(v.string()),
+    action: v.string(),
+    outcome: v.string(),
+    operation_id: v.optional(v.nullable(v.string())),
+    operation_sequence: v.optional(v.nullable(v.number())),
+    control_sequence: v.optional(v.nullable(v.number())),
+    consumed_at: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({
+    runId: w.run_id,
+    childSessionId: w.child_session_id ?? null,
+    requestId: w.request_id ?? null,
+    action: w.action,
+    outcome: w.outcome,
+    operationId: w.operation_id ?? null,
+    operationSequence: w.operation_sequence ?? null,
+    controlSequence: w.control_sequence ?? null,
+    consumedAt: w.consumed_at ?? null,
+  })),
+);
+export type ChildControlReceipt = v.InferOutput<typeof childControlReceipt>;
 
 const conversationTurn = v.pipe(
   v.object({
@@ -450,6 +484,48 @@ export async function getAnswerRunChildrenPage(
   const suffix = query.size > 0 ? `?${query.toString()}` : '';
   const response = await fetch(`/web/api/answer/${id}/children${suffix}`, {signal});
   return parseWire(response, agentChildRosterPage, makeError, 'Failed to load child agents');
+}
+
+export async function controlAnswerChild(
+  runId: string,
+  childSessionId: string,
+  action: 'steer' | 'continue' | 'cancel',
+  content: string,
+  submissionId: string,
+  reauthorizeUserCancelled = false,
+  signal?: AbortSignal,
+): Promise<ChildControlReceipt> {
+  const run = encodeURIComponent(runId);
+  const child = encodeURIComponent(childSessionId);
+  const response = await fetch(`/web/api/answer/${run}/children/${child}/control`, {
+    method: 'POST',
+    headers: {...csrfHeaders('application/json'), 'Idempotency-Key': submissionId},
+    body: JSON.stringify({
+      action,
+      content,
+      reauthorize_user_cancelled: reauthorizeUserCancelled,
+    }),
+    signal,
+  });
+  return parseWire(response, childControlReceipt, makeError, 'Failed to control child agent');
+}
+
+export async function replyAnswerChild(
+  runId: string,
+  requestId: string,
+  content: string,
+  submissionId: string,
+  signal?: AbortSignal,
+): Promise<ChildControlReceipt> {
+  const run = encodeURIComponent(runId);
+  const guidance = encodeURIComponent(requestId);
+  const response = await fetch(`/web/api/answer/${run}/child-guidance/${guidance}/reply`, {
+    method: 'POST',
+    headers: {...csrfHeaders('application/json'), 'Idempotency-Key': submissionId},
+    body: JSON.stringify({content}),
+    signal,
+  });
+  return parseWire(response, childControlReceipt, makeError, 'Failed to reply to child agent');
 }
 
 export async function continueAnswerRun(

@@ -196,12 +196,13 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
         "normalize_run_event_constraints",
         "remove_run_active_permit",
         "interactive_child_async_lifecycle",
+        "interactive_child_controls",
     )
     assert tuple(migration.version for migration in RUN_MIGRATIONS) == expected_versions
     assert all(
         "dlightrag_enforce_run_event_constraints" not in statement
         and "trg_dlightrag_run_events_enforce" not in statement
-        for migration in RUN_MIGRATIONS[:-3]
+        for migration in RUN_MIGRATIONS[:-4]
         for statement in migration.statements
     )
 
@@ -209,7 +210,7 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
     await apply_migrations(
         conn,
         scope=RUN_MIGRATION_SCOPE,
-        migrations=RUN_MIGRATIONS[:-3],
+        migrations=RUN_MIGRATIONS[:-4],
     )
     executed_before_append = len(conn.executed)
     await apply_migrations(conn, scope=RUN_MIGRATION_SCOPE, migrations=RUN_MIGRATIONS)
@@ -222,9 +223,9 @@ async def test_run_schema_changes_are_append_only_and_applied_once_in_order() ->
         and args[0] == RUN_MIGRATION_SCOPE
     ]
     assert recorded_versions == list(expected_versions)
-    guard_statements = RUN_MIGRATIONS[-3].statements
-    drop_statements = RUN_MIGRATIONS[-2].statements
-    child_statements = RUN_MIGRATIONS[-1].statements
+    guard_statements = RUN_MIGRATIONS[-4].statements
+    drop_statements = RUN_MIGRATIONS[-3].statements
+    child_statements = RUN_MIGRATIONS[-2].statements
     assert len(guard_statements) == 2
     assert len(drop_statements) == 1
     active_permit_statements = [

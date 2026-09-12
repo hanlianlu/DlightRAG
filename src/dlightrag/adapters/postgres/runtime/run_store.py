@@ -9,9 +9,12 @@ one universal operational-storage interface.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 import asyncpg
@@ -40,7 +43,7 @@ from dlightrag.application.answer_runs import (
     ChildRosterPageRequest,
     ChildRosterRowPage,
 )
-from dlightrag.engine.agent.session.ids import SessionId
+from dlightrag.engine.agent.session.ids import OperationId, SessionId
 from dlightrag.engine.agent.tool_content import decode_tool_content, tool_content_message_fields
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.engine.runtime.cancellation import (
@@ -84,6 +87,9 @@ from dlightrag.engine.runtime.records import (
 from dlightrag.engine.runtime.settlements import ArtifactAttachmentUpdate
 
 RUN_MIGRATION_SCOPE = "runs"
+_RUN_ACTIVITY_CHANNEL = "dlightrag_run_activity"
+_MAX_PENDING_CHILD_CONTROLS = 100
+_MAX_PENDING_CHILD_GUIDANCE = 8
 
 _ABANDONED_ERROR_MESSAGE = "Run exceeded its reclaim-without-progress bound."
 _BATCH_LIMIT = 200
@@ -671,19 +677,98 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_child_sessions (
 
 _CREATE_AGENT_CONTROLS = """
 CREATE TABLE IF NOT EXISTS dlightrag_agent_controls (
-    owner_id         TEXT        NOT NULL,
-    run_id           UUID        NOT NULL,
-    control_sequence BIGINT      NOT NULL,
-    kind             TEXT        NOT NULL,
-    content          TEXT        NOT NULL,
-    consumed_at      TIMESTAMPTZ,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    owner_id           TEXT        NOT NULL,
+    run_id             UUID        NOT NULL,
+    control_sequence   BIGINT      NOT NULL,
+    kind               TEXT        NOT NULL,
+    content            TEXT        NOT NULL,
+    target_session_id  UUID,
+    target_operation_id UUID,
+    origin             TEXT        NOT NULL DEFAULT 'user',
+    submission_key     TEXT,
+    request_fingerprint TEXT,
+    consumed_at        TIMESTAMPTZ,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (owner_id, run_id, control_sequence),
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_runs (owner_id, run_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_agent_controls_sequence_check CHECK (control_sequence >= 1),
     CONSTRAINT dlightrag_agent_controls_kind_check CHECK (kind IN ('steer', 'follow_up')),
-    CONSTRAINT dlightrag_agent_controls_content_check CHECK (char_length(content) BETWEEN 1 AND 20000)
+    CONSTRAINT dlightrag_agent_controls_content_check CHECK (char_length(content) BETWEEN 1 AND 20000),
+    CONSTRAINT dlightrag_agent_controls_target_check CHECK (
+        (target_session_id IS NULL AND target_operation_id IS NULL)
+        OR (target_session_id IS NOT NULL AND target_operation_id IS NOT NULL)
+    ),
+    CONSTRAINT dlightrag_agent_controls_origin_check CHECK (origin IN ('user', 'parent'))
+)
+"""
+
+_CREATE_CHILD_OPERATIONS = """
+CREATE TABLE IF NOT EXISTS dlightrag_answer_child_operations (
+    owner_id           TEXT        NOT NULL,
+    run_id             UUID        NOT NULL,
+    child_session_id   UUID        NOT NULL,
+    operation_sequence BIGINT      NOT NULL,
+    operation_id       UUID        NOT NULL,
+    idempotency_key    TEXT        NOT NULL,
+    request_fingerprint TEXT       NOT NULL,
+    content            TEXT        NOT NULL,
+    origin             TEXT        NOT NULL,
+    status             TEXT        NOT NULL,
+    cancellation_origin TEXT,
+    summary            TEXT,
+    usage_json         JSONB,
+    outcome_json       JSONB,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id, run_id, child_session_id, operation_sequence),
+    UNIQUE (owner_id, run_id, child_session_id, operation_id),
+    UNIQUE (owner_id, run_id, child_session_id, idempotency_key),
+    FOREIGN KEY (owner_id, run_id, child_session_id)
+        REFERENCES dlightrag_answer_child_sessions (owner_id, run_id, child_session_id)
+        ON DELETE CASCADE,
+    CONSTRAINT dlightrag_answer_child_operations_sequence_check CHECK (operation_sequence >= 1),
+    CONSTRAINT dlightrag_answer_child_operations_status_check
+        CHECK (status IN ('running', 'succeeded', 'failed', 'cancelled')),
+    CONSTRAINT dlightrag_answer_child_operations_origin_check CHECK (origin IN ('parent', 'user')),
+    CONSTRAINT dlightrag_answer_child_operations_cancellation_origin_check CHECK (
+        cancellation_origin IS NULL OR cancellation_origin IN ('parent', 'user', 'run')
+    ),
+    CONSTRAINT dlightrag_answer_child_operations_content_check
+        CHECK (char_length(content) BETWEEN 1 AND 20000)
+)
+"""
+
+_CREATE_CHILD_GUIDANCE = """
+CREATE TABLE IF NOT EXISTS dlightrag_answer_child_guidance (
+    owner_id           TEXT        NOT NULL,
+    run_id             UUID        NOT NULL,
+    request_id         UUID        NOT NULL,
+    child_session_id   UUID        NOT NULL,
+    child_operation_id UUID        NOT NULL,
+    parent_session_id  UUID        NOT NULL,
+    question           TEXT        NOT NULL,
+    status             TEXT        NOT NULL DEFAULT 'pending',
+    reply              TEXT,
+    reply_origin       TEXT,
+    reply_submission_key TEXT,
+    reply_fingerprint  TEXT,
+    expires_at         TIMESTAMPTZ NOT NULL,
+    replied_at         TIMESTAMPTZ,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id, run_id, request_id),
+    FOREIGN KEY (owner_id, run_id, child_session_id)
+        REFERENCES dlightrag_answer_child_sessions (owner_id, run_id, child_session_id)
+        ON DELETE CASCADE,
+    CONSTRAINT dlightrag_answer_child_guidance_status_check
+        CHECK (status IN ('pending', 'replied', 'expired', 'cancelled')),
+    CONSTRAINT dlightrag_answer_child_guidance_question_check
+        CHECK (char_length(question) BETWEEN 1 AND 20000),
+    CONSTRAINT dlightrag_answer_child_guidance_reply_check
+        CHECK (reply IS NULL OR char_length(reply) BETWEEN 1 AND 20000),
+    CONSTRAINT dlightrag_answer_child_guidance_reply_origin_check
+        CHECK (reply_origin IS NULL OR reply_origin IN ('parent', 'user'))
 )
 """
 
@@ -720,6 +805,16 @@ _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_answer_child_sessions_roster "
     "ON dlightrag_answer_child_sessions "
     "(owner_id, run_id, created_at DESC, child_session_id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_answer_child_operations_status "
+    "ON dlightrag_answer_child_operations (owner_id, run_id, child_session_id, status)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_controls_submission "
+    "ON dlightrag_agent_controls (owner_id, run_id, target_session_id, submission_key) "
+    "WHERE target_session_id IS NOT NULL AND submission_key IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_parent_controls_submission "
+    "ON dlightrag_agent_controls (owner_id, run_id, submission_key) "
+    "WHERE target_session_id IS NULL AND submission_key IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_child_guidance_pending "
+    "ON dlightrag_answer_child_guidance (owner_id, run_id, status, expires_at)",
 )
 
 _CREATE_WORKSPACE_INVENTORY = """
@@ -831,6 +926,8 @@ RUN_MIGRATIONS = (
             _CREATE_ROUTING,
             _CREATE_CHILD_SESSIONS,
             _CREATE_AGENT_CONTROLS,
+            _CREATE_CHILD_OPERATIONS,
+            _CREATE_CHILD_GUIDANCE,
             *_CREATE_INDEXES,
             _CREATE_WORKSPACE_INVENTORY,
             _CREATE_ARTIFACT_ATTACHMENT_ORDER,
@@ -927,6 +1024,40 @@ RUN_MIGRATIONS = (
         (
             "ALTER TABLE dlightrag_answer_child_sessions "
             "ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ",
+        ),
+    ),
+    Migration(
+        "interactive_child_controls",
+        "Address Child controls and persist same-Session Operations and guidance",
+        (
+            "ALTER TABLE dlightrag_agent_controls "
+            "ADD COLUMN IF NOT EXISTS target_session_id UUID, "
+            "ADD COLUMN IF NOT EXISTS target_operation_id UUID, "
+            "ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'user', "
+            "ADD COLUMN IF NOT EXISTS submission_key TEXT, "
+            "ADD COLUMN IF NOT EXISTS request_fingerprint TEXT",
+            "ALTER TABLE dlightrag_agent_controls "
+            "DROP CONSTRAINT IF EXISTS dlightrag_agent_controls_target_check, "
+            "ADD CONSTRAINT dlightrag_agent_controls_target_check CHECK ("
+            "(target_session_id IS NULL AND target_operation_id IS NULL) OR "
+            "(target_session_id IS NOT NULL AND target_operation_id IS NOT NULL))",
+            "ALTER TABLE dlightrag_agent_controls "
+            "DROP CONSTRAINT IF EXISTS dlightrag_agent_controls_origin_check, "
+            "ADD CONSTRAINT dlightrag_agent_controls_origin_check "
+            "CHECK (origin IN ('user', 'parent'))",
+            _CREATE_CHILD_OPERATIONS,
+            _CREATE_CHILD_GUIDANCE,
+            "CREATE INDEX IF NOT EXISTS idx_answer_child_operations_status "
+            "ON dlightrag_answer_child_operations "
+            "(owner_id, run_id, child_session_id, status)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_controls_submission "
+            "ON dlightrag_agent_controls (owner_id, run_id, target_session_id, submission_key) "
+            "WHERE target_session_id IS NOT NULL AND submission_key IS NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_parent_controls_submission "
+            "ON dlightrag_agent_controls (owner_id, run_id, submission_key) "
+            "WHERE target_session_id IS NULL AND submission_key IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS idx_child_guidance_pending "
+            "ON dlightrag_answer_child_guidance (owner_id, run_id, status, expires_at)",
         ),
     ),
 )
@@ -1335,6 +1466,11 @@ RUN_SCHEMA_TABLES = (
             "control_sequence",
             "kind",
             "content",
+            "target_session_id",
+            "target_operation_id",
+            "origin",
+            "submission_key",
+            "request_fingerprint",
             "consumed_at",
             "created_at",
         ),
@@ -1346,6 +1482,83 @@ RUN_SCHEMA_TABLES = (
             "dlightrag_agent_controls_sequence_check",
             "dlightrag_agent_controls_kind_check",
             "dlightrag_agent_controls_content_check",
+            "dlightrag_agent_controls_target_check",
+            "dlightrag_agent_controls_origin_check",
+        ),
+        indexes=(
+            "idx_agent_controls_submission",
+            "idx_agent_parent_controls_submission",
+        ),
+    ),
+    TableRequirement(
+        name="dlightrag_answer_child_operations",
+        columns=(
+            "owner_id",
+            "run_id",
+            "child_session_id",
+            "operation_sequence",
+            "operation_id",
+            "idempotency_key",
+            "request_fingerprint",
+            "content",
+            "origin",
+            "status",
+            "cancellation_origin",
+            "summary",
+            "usage_json",
+            "outcome_json",
+            "created_at",
+            "updated_at",
+        ),
+        primary_key=("owner_id", "run_id", "child_session_id", "operation_sequence"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id", "child_session_id"),
+                references="dlightrag_answer_child_sessions",
+            ),
+        ),
+        indexes=("idx_answer_child_operations_status",),
+        checks=(
+            "dlightrag_answer_child_operations_sequence_check",
+            "dlightrag_answer_child_operations_status_check",
+            "dlightrag_answer_child_operations_origin_check",
+            "dlightrag_answer_child_operations_cancellation_origin_check",
+            "dlightrag_answer_child_operations_content_check",
+        ),
+    ),
+    TableRequirement(
+        name="dlightrag_answer_child_guidance",
+        columns=(
+            "owner_id",
+            "run_id",
+            "request_id",
+            "child_session_id",
+            "child_operation_id",
+            "parent_session_id",
+            "question",
+            "status",
+            "reply",
+            "reply_origin",
+            "reply_submission_key",
+            "reply_fingerprint",
+            "expires_at",
+            "replied_at",
+            "created_at",
+            "updated_at",
+        ),
+        primary_key=("owner_id", "run_id", "request_id"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id", "child_session_id"),
+                references="dlightrag_answer_child_sessions",
+            ),
+        ),
+        indexes=("idx_child_guidance_pending",),
+        checks=(
+            "dlightrag_answer_child_guidance_status_check",
+            "dlightrag_answer_child_guidance_question_check",
+            "dlightrag_answer_child_guidance_reply_check",
+            "dlightrag_answer_child_guidance_reply_origin_check",
         ),
     ),
     MEMORY_SETTINGS_SCHEMA_TABLE,
@@ -1708,6 +1921,66 @@ WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
 RETURNING 1
 """
 
+_LOCK_CHILD_SESSION = """
+SELECT child.*, operation.operation_sequence, operation.operation_id,
+       operation.idempotency_key AS operation_key,
+       operation.content AS operation_content,
+       operation.origin AS operation_origin,
+       operation.status AS operation_status,
+       operation.cancellation_origin
+FROM dlightrag_answer_child_sessions AS child
+LEFT JOIN LATERAL (
+    SELECT *
+    FROM dlightrag_answer_child_operations AS operation
+    WHERE operation.owner_id = child.owner_id
+      AND operation.run_id = child.run_id
+      AND operation.child_session_id = child.child_session_id
+    ORDER BY operation.operation_sequence DESC
+    LIMIT 1
+) AS operation ON TRUE
+WHERE child.owner_id = $1 AND child.run_id = $2 AND child.child_session_id = $3
+FOR UPDATE OF child
+"""
+
+_SELECT_CHILD_OPERATION_BY_KEY = """
+SELECT operation_sequence, operation_id, idempotency_key, request_fingerprint,
+       content, origin, status, cancellation_origin, summary, usage_json,
+       outcome_json, created_at, updated_at
+FROM dlightrag_answer_child_operations
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND idempotency_key = $4
+"""
+
+_INSERT_CHILD_OPERATION = """
+INSERT INTO dlightrag_answer_child_operations (
+    owner_id, run_id, child_session_id, operation_sequence, operation_id,
+    idempotency_key, request_fingerprint, content, origin, status
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running')
+ON CONFLICT (owner_id, run_id, child_session_id, idempotency_key) DO NOTHING
+"""
+
+_ACTIVATE_CHILD_OPERATION = """
+UPDATE dlightrag_answer_child_sessions
+SET status = 'running', cancel_requested_at = NULL, summary = NULL,
+    lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+"""
+
+_CANCEL_CHILD_OPERATION = """
+UPDATE dlightrag_answer_child_operations
+SET cancellation_origin = COALESCE(cancellation_origin, $5), updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND operation_id = $4 AND status = 'running'
+"""
+
+_RETIRE_CHILD_GUIDANCE = """
+UPDATE dlightrag_answer_child_guidance
+SET status = 'cancelled', updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND status = 'pending'
+"""
+
 _RELEASE_CHILD_SESSION_LEASES = """
 UPDATE dlightrag_answer_child_sessions
 SET lease_owner = NULL,
@@ -1728,22 +2001,60 @@ RETURNING 1
 """
 
 _SELECT_CHILD_SESSION = """
-SELECT child_session_id, status, cancel_requested_at, summary, parent_intent_id,
-       objective, context_mode, model_role, tools_json, usage_json,
-       depth, context_snapshot_json, plan_json, budget_json, host_state_json,
-       lease_owner, lease_expires_at, fencing_epoch
-FROM dlightrag_answer_child_sessions
-WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+SELECT child.child_session_id, child.parent_session_id, child.parent_call_id,
+       child.status, child.cancel_requested_at, child.summary, child.parent_intent_id,
+       child.objective, child.context_mode, child.model_role, child.tools_json, child.usage_json,
+       child.depth, child.context_snapshot_json, child.plan_json, child.budget_json,
+       child.host_state_json, child.lease_owner, child.lease_expires_at,
+       child.fencing_epoch, child.created_at, child.updated_at,
+       operation.operation_sequence, operation.operation_id,
+       operation.idempotency_key AS operation_key,
+       operation.content AS operation_content,
+       operation.origin AS operation_origin,
+       operation.status AS operation_status,
+       operation.cancellation_origin,
+       (SELECT jsonb_agg(history.usage_json ORDER BY history.operation_sequence)
+        FROM dlightrag_answer_child_operations AS history
+        WHERE history.owner_id = child.owner_id AND history.run_id = child.run_id
+          AND history.child_session_id = child.child_session_id
+          AND history.usage_json IS NOT NULL) AS operation_usage_jsons
+FROM dlightrag_answer_child_sessions AS child
+LEFT JOIN LATERAL (
+    SELECT * FROM dlightrag_answer_child_operations AS operation
+    WHERE operation.owner_id = child.owner_id AND operation.run_id = child.run_id
+      AND operation.child_session_id = child.child_session_id
+    ORDER BY operation.operation_sequence DESC LIMIT 1
+) AS operation ON TRUE
+WHERE child.owner_id = $1 AND child.run_id = $2 AND child.child_session_id = $3
 """
 
 _SELECT_CHILD_SESSIONS = """
-SELECT child_session_id, parent_session_id, parent_call_id, parent_intent_id,
-       status, cancel_requested_at, summary, objective, context_mode, model_role, tools_json, usage_json,
-       depth, context_snapshot_json, plan_json, budget_json, host_state_json,
-       lease_owner, lease_expires_at, fencing_epoch, created_at, updated_at
-FROM dlightrag_answer_child_sessions
-WHERE owner_id = $1 AND run_id = $2
-ORDER BY created_at, child_session_id
+SELECT child.child_session_id, child.parent_session_id, child.parent_call_id,
+       child.parent_intent_id, child.status, child.cancel_requested_at, child.summary,
+       child.objective, child.context_mode, child.model_role, child.tools_json, child.usage_json,
+       child.depth, child.context_snapshot_json, child.plan_json, child.budget_json,
+       child.host_state_json, child.lease_owner, child.lease_expires_at,
+       child.fencing_epoch, child.created_at, child.updated_at,
+       operation.operation_sequence, operation.operation_id,
+       operation.idempotency_key AS operation_key,
+       operation.content AS operation_content,
+       operation.origin AS operation_origin,
+       operation.status AS operation_status,
+       operation.cancellation_origin,
+       (SELECT jsonb_agg(history.usage_json ORDER BY history.operation_sequence)
+        FROM dlightrag_answer_child_operations AS history
+        WHERE history.owner_id = child.owner_id AND history.run_id = child.run_id
+          AND history.child_session_id = child.child_session_id
+          AND history.usage_json IS NOT NULL) AS operation_usage_jsons
+FROM dlightrag_answer_child_sessions AS child
+LEFT JOIN LATERAL (
+    SELECT * FROM dlightrag_answer_child_operations AS operation
+    WHERE operation.owner_id = child.owner_id AND operation.run_id = child.run_id
+      AND operation.child_session_id = child.child_session_id
+    ORDER BY operation.operation_sequence DESC LIMIT 1
+) AS operation ON TRUE
+WHERE child.owner_id = $1 AND child.run_id = $2
+ORDER BY child.created_at, child.child_session_id
 """
 
 _CHILD_ROSTER_COLUMNS = """
@@ -1754,21 +2065,47 @@ lease_owner, lease_expires_at, fencing_epoch, created_at, updated_at
 """
 
 _SELECT_CHILD_SESSIONS_FIRST_PAGE = f"""
-SELECT {_CHILD_ROSTER_COLUMNS}
-FROM dlightrag_answer_child_sessions
-WHERE owner_id = $1 AND run_id = $2
-ORDER BY created_at DESC, child_session_id DESC
-LIMIT $3
+SELECT child.*, operation.operation_sequence, operation.operation_id,
+       operation.idempotency_key AS operation_key,
+       operation.content AS operation_content, operation.origin AS operation_origin,
+       operation.status AS operation_status, operation.cancellation_origin
+FROM (
+    SELECT {_CHILD_ROSTER_COLUMNS}
+    FROM dlightrag_answer_child_sessions
+    WHERE owner_id = $1 AND run_id = $2
+    ORDER BY created_at DESC, child_session_id DESC
+    LIMIT $3
+) AS child
+LEFT JOIN LATERAL (
+    SELECT * FROM dlightrag_answer_child_operations AS operation
+    WHERE operation.owner_id = $1 AND operation.run_id = $2
+      AND operation.child_session_id = child.child_session_id
+    ORDER BY operation.operation_sequence DESC LIMIT 1
+) AS operation ON TRUE
+ORDER BY child.created_at DESC, child.child_session_id DESC
 """  # noqa: S608 - interpolates only the trusted column constant
 
 _SELECT_CHILD_SESSIONS_AFTER = f"""
-SELECT {_CHILD_ROSTER_COLUMNS}
-FROM dlightrag_answer_child_sessions
-WHERE owner_id = $1 AND run_id = $2
-  AND (created_at < $3::timestamptz
-       OR (created_at = $3::timestamptz AND child_session_id < $4::uuid))
-ORDER BY created_at DESC, child_session_id DESC
-LIMIT $5
+SELECT child.*, operation.operation_sequence, operation.operation_id,
+       operation.idempotency_key AS operation_key,
+       operation.content AS operation_content, operation.origin AS operation_origin,
+       operation.status AS operation_status, operation.cancellation_origin
+FROM (
+    SELECT {_CHILD_ROSTER_COLUMNS}
+    FROM dlightrag_answer_child_sessions
+    WHERE owner_id = $1 AND run_id = $2
+      AND (created_at < $3::timestamptz
+           OR (created_at = $3::timestamptz AND child_session_id < $4::uuid))
+    ORDER BY created_at DESC, child_session_id DESC
+    LIMIT $5
+) AS child
+LEFT JOIN LATERAL (
+    SELECT * FROM dlightrag_answer_child_operations AS operation
+    WHERE operation.owner_id = $1 AND operation.run_id = $2
+      AND operation.child_session_id = child.child_session_id
+    ORDER BY operation.operation_sequence DESC LIMIT 1
+) AS operation ON TRUE
+ORDER BY child.created_at DESC, child.child_session_id DESC
 """  # noqa: S608 - interpolates only the trusted column constant
 
 _SELECT_AGENT_TRANSCRIPT = """
@@ -1800,7 +2137,8 @@ LIMIT $4
 """
 
 _LOCK_CONTROL_RUN = """
-SELECT r.status, rt.requested_mode, rt.resolved_mode
+SELECT r.status, r.lease_owner, r.lease_expires_at, r.fencing_epoch,
+       rt.requested_mode, rt.resolved_mode
 FROM dlightrag_runs AS r
 JOIN dlightrag_answer_run_routing AS rt
   ON rt.owner_id = r.owner_id AND rt.run_id = r.run_id
@@ -1816,24 +2154,118 @@ WHERE owner_id = $1 AND run_id = $2
 
 _INSERT_CONTROL = """
 INSERT INTO dlightrag_agent_controls (
-    owner_id, run_id, control_sequence, kind, content
+    owner_id, run_id, control_sequence, kind, content, target_session_id,
+    target_operation_id, origin, submission_key, request_fingerprint
 )
-VALUES ($1, $2, $3, $4, $5)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT DO NOTHING
 """
 
-_SELECT_PENDING_CONTROLS = """
-SELECT control_sequence, kind, content, created_at
+_SELECT_CONTROL_BY_SUBMISSION = """
+SELECT control_sequence, kind, content, target_session_id, target_operation_id,
+       origin, submission_key, request_fingerprint, consumed_at, created_at
 FROM dlightrag_agent_controls
-WHERE owner_id = $1 AND run_id = $2 AND consumed_at IS NULL
+WHERE owner_id = $1 AND run_id = $2 AND target_session_id = $3
+  AND submission_key = $4
+"""
+
+_SELECT_PENDING_PARENT_CONTROLS = """
+SELECT control_sequence, kind, content, origin, created_at
+FROM dlightrag_agent_controls
+WHERE owner_id = $1 AND run_id = $2 AND target_session_id IS NULL
+  AND consumed_at IS NULL
 ORDER BY control_sequence
 FOR UPDATE
 """
 
-_CONSUME_CONTROLS = """
+_SELECT_PENDING_CHILD_CONTROLS = """
+SELECT control_sequence, kind, content, origin, created_at
+FROM dlightrag_agent_controls
+WHERE owner_id = $1 AND run_id = $2 AND target_session_id = $3
+  AND target_operation_id = $4 AND consumed_at IS NULL
+ORDER BY control_sequence
+FOR UPDATE
+"""
+
+_CONSUME_PARENT_CONTROLS = """
 UPDATE dlightrag_agent_controls
 SET consumed_at = NOW()
-WHERE owner_id = $1 AND run_id = $2
+WHERE owner_id = $1 AND run_id = $2 AND target_session_id IS NULL
   AND control_sequence = ANY($3::bigint[]) AND consumed_at IS NULL
+"""
+
+_CONSUME_CHILD_CONTROLS = """
+UPDATE dlightrag_agent_controls
+SET consumed_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND target_session_id = $3
+  AND target_operation_id = $4
+  AND control_sequence = ANY($5::bigint[]) AND consumed_at IS NULL
+"""
+
+_COUNT_PENDING_CHILD_CONTROLS = """
+SELECT count(*)::int
+FROM dlightrag_agent_controls
+WHERE owner_id = $1 AND run_id = $2 AND target_session_id = $3
+  AND target_operation_id = $4 AND consumed_at IS NULL
+"""
+
+_COUNT_PENDING_CHILD_GUIDANCE = """
+SELECT count(*)::int
+FROM dlightrag_answer_child_guidance
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND child_operation_id = $4 AND status = 'pending' AND expires_at > NOW()
+"""
+
+_SELECT_OPERATION_STATE = """
+SELECT payload_json->>'state_type'
+FROM dlightrag_agent_session_registers
+WHERE owner_id = $1 AND session_id = $2 AND register_kind = 'operation_state'
+  AND register_key = $3
+"""
+
+_INSERT_GUIDANCE = """
+INSERT INTO dlightrag_answer_child_guidance (
+    owner_id, run_id, request_id, child_session_id, child_operation_id,
+    parent_session_id, question, expires_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + ($8 * INTERVAL '1 second'))
+ON CONFLICT (owner_id, run_id, request_id) DO NOTHING
+"""
+
+_SELECT_GUIDANCE = """
+SELECT request_id, child_session_id, child_operation_id, parent_session_id,
+       question, status, reply, reply_origin, reply_submission_key,
+       reply_fingerprint, expires_at, replied_at, created_at, updated_at
+FROM dlightrag_answer_child_guidance
+WHERE owner_id = $1 AND run_id = $2 AND request_id = $3
+"""
+
+_SELECT_PENDING_GUIDANCE = """
+SELECT request_id, child_session_id, child_operation_id, parent_session_id,
+       question, status, expires_at, created_at
+FROM dlightrag_answer_child_guidance
+WHERE owner_id = $1 AND run_id = $2 AND parent_session_id = $3
+  AND status = 'pending' AND expires_at > NOW()
+ORDER BY created_at, request_id
+"""
+
+_EXPIRE_GUIDANCE = """
+UPDATE dlightrag_answer_child_guidance
+SET status = 'expired', updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND request_id = $3
+  AND child_session_id = $4 AND child_operation_id = $5
+  AND status = 'pending' AND expires_at <= NOW()
+RETURNING 1
+"""
+
+_REPLY_GUIDANCE = """
+UPDATE dlightrag_answer_child_guidance
+SET status = 'replied', reply = $4, reply_origin = $5,
+    reply_submission_key = $6, reply_fingerprint = $7,
+    replied_at = NOW(), updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND request_id = $3
+  AND status = 'pending' AND expires_at > NOW()
+RETURNING 1
 """
 
 _BIND_CHILD_PARENT_INTENT = """
@@ -1849,9 +2281,10 @@ SET status = $4,
     summary = $5,
     usage_json = $6,
     host_state_json = jsonb_set(
-        host_state_json,
-        '{terminal_outcome}',
-        $7::jsonb,
+        jsonb_set(host_state_json, '{terminal_outcome}', $7::jsonb, true),
+        '{operation_outcomes}',
+        COALESCE(host_state_json->'operation_outcomes', '{}'::jsonb)
+            || jsonb_build_object($8::text, $7::jsonb),
         true
     ),
     lease_owner = NULL,
@@ -1859,6 +2292,14 @@ SET status = $4,
     updated_at = NOW()
 WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
   AND status = 'running'
+"""
+
+_FINISH_CHILD_OPERATION = """
+UPDATE dlightrag_answer_child_operations
+SET status = $5, summary = $6, usage_json = $7, outcome_json = $8::jsonb,
+    updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND operation_id = $4 AND status = 'running'
 """
 
 _CLAIM_RUN = f"""
@@ -1973,7 +2414,15 @@ WITH bumped AS (
                 'handles', jsonb_build_array(),
                 'usage', jsonb_build_object(),
                 'child_session_id', child.child_session_id::text,
-                'operation_id', '',
+                'operation_id', COALESCE((
+                    SELECT operation.operation_id::text
+                    FROM dlightrag_answer_child_operations AS operation
+                    WHERE operation.owner_id = child.owner_id
+                      AND operation.run_id = child.run_id
+                      AND operation.child_session_id = child.child_session_id
+                    ORDER BY operation.operation_sequence DESC
+                    LIMIT 1
+                ), ''),
                 'evidence_state', NULL
             ),
             true
@@ -1985,7 +2434,23 @@ WITH bumped AS (
         SELECT owner_id, run_id FROM bumped
     )
       AND child.status = 'running'
-    RETURNING child.child_session_id
+    RETURNING child.owner_id, child.run_id, child.child_session_id
+), cancelled_operations AS (
+    UPDATE dlightrag_answer_child_operations AS operation
+    SET status = 'cancelled', cancellation_origin = 'run', updated_at = NOW()
+    WHERE (operation.owner_id, operation.run_id, operation.child_session_id) IN (
+        SELECT owner_id, run_id, child_session_id FROM cancelled_children
+    )
+      AND operation.status = 'running'
+    RETURNING operation.child_session_id
+), retired_guidance AS (
+    UPDATE dlightrag_answer_child_guidance AS guidance
+    SET status = 'cancelled', updated_at = NOW()
+    WHERE (guidance.owner_id, guidance.run_id) IN (
+        SELECT owner_id, run_id FROM bumped
+    )
+      AND guidance.status = 'pending'
+    RETURNING guidance.request_id
 ), inserted AS (
     INSERT INTO dlightrag_run_events (
         owner_id, run_id, event_sequence, event_type, payload
@@ -2268,6 +2733,36 @@ WHERE (owner_id, run_id) IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
 """
 
 
+async def _mirror_child_intervention(
+    conn: Any,
+    *,
+    owner_id: str,
+    run_id: uuid.UUID,
+    action: str,
+    identity: str,
+    submission_key: str,
+    content: str,
+) -> None:
+    """Mirror one accepted user intervention into the parent-only inbox."""
+    mirror_key = f"child-intervention:{action}:{identity}:{submission_key}"
+    sequence = int(await conn.fetchval(_NEXT_CONTROL_SEQUENCE, owner_id, run_id))
+    text = f"User {action} for child {identity}: {content}".strip()
+    fingerprint = hashlib.sha256(text.encode()).hexdigest()
+    await conn.execute(
+        _INSERT_CONTROL,
+        owner_id,
+        run_id,
+        sequence,
+        "steer",
+        text[:20_000],
+        None,
+        None,
+        "user",
+        mirror_key[:200],
+        fingerprint,
+    )
+
+
 def _digest_pairs(rows: Sequence[Any]) -> tuple[list[str], list[str]]:
     """Split reference rows into parallel owner and digest lists."""
     owners: list[str] = []
@@ -2326,6 +2821,24 @@ async def _delete_unreferenced(conn: Any, owners: Sequence[str], digests: Sequen
     return survivors
 
 
+def _parent_origin_holds_run(
+    row: Mapping[str, Any] | Any,
+    *,
+    worker_id: str | None,
+    fencing_epoch: int | None,
+) -> bool:
+    lease_expires_at = row["lease_expires_at"]
+    return bool(
+        worker_id
+        and fencing_epoch is not None
+        and str(row["status"]) == "running"
+        and str(row["lease_owner"] or "") == worker_id
+        and int(row["fencing_epoch"]) == fencing_epoch
+        and lease_expires_at is not None
+        and lease_expires_at > datetime.now(UTC)
+    )
+
+
 def _require_owner(owner_id: str) -> str:
     owner = str(owner_id).strip()
     if not owner:
@@ -2370,6 +2883,23 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+def _guidance_row(row: Any) -> dict[str, Any]:
+    return {
+        "request_id": str(row["request_id"]),
+        "child_session_id": str(row["child_session_id"]),
+        "child_operation_id": str(row["child_operation_id"]),
+        "parent_session_id": str(row["parent_session_id"]),
+        "question": str(row["question"]),
+        "status": str(row["status"]),
+        "reply": row["reply"] if "reply" in row else None,
+        "reply_origin": row["reply_origin"] if "reply_origin" in row else None,
+        "expires_at": row["expires_at"],
+        "replied_at": row["replied_at"] if "replied_at" in row else None,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"] if "updated_at" in row else row["created_at"],
+    }
+
+
 def _child_roster_row(row: Any) -> dict[str, Any]:
     return {
         "child_session_id": str(row["child_session_id"]),
@@ -2392,6 +2922,24 @@ def _child_roster_row(row: Any) -> dict[str, Any]:
         "budget": _json_value(row["budget_json"]),
         "host_state": _json_value(row["host_state_json"]),
         "fencing_epoch": int(row["fencing_epoch"]),
+        **(
+            {
+                "operation_sequence": int(row["operation_sequence"]),
+                "operation_id": str(row["operation_id"]),
+                "operation_key": row["operation_key"],
+                "operation_input": row["operation_content"],
+                "operation_origin": row["operation_origin"],
+                "operation_status": row["operation_status"],
+                "cancellation_origin": row["cancellation_origin"],
+                **(
+                    {"operation_usage": _json_value(row["operation_usage_jsons"] or [])}
+                    if "operation_usage_jsons" in row
+                    else {}
+                ),
+            }
+            if "operation_sequence" in row and row["operation_sequence"] is not None
+            else {}
+        ),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -3038,6 +3586,30 @@ class PGRunStore(PostgresOperationRunner):
                     json.dumps(dict(budget), ensure_ascii=False) if budget is not None else None,
                     json.dumps(dict(host_state or {}), ensure_ascii=False),
                 )
+                if (
+                    objective
+                    and plan is not None
+                    and (context_snapshot or {}).get("parent_entry_id")
+                ):
+                    operation_key = f"child-session:{child_session_id}"
+                    operation_id = uuid.UUID(
+                        OperationId.deterministic(idempotency_key=operation_key).value
+                    )
+                    fingerprint = hashlib.sha256(
+                        f"{operation_key}\0{objective}".encode()
+                    ).hexdigest()
+                    await conn.execute(
+                        _INSERT_CHILD_OPERATION,
+                        owner,
+                        run_uuid,
+                        child_uuid,
+                        1,
+                        operation_id,
+                        operation_key,
+                        fingerprint,
+                        objective,
+                        "parent",
+                    )
                 return True
 
         return await self._run_write(_operation)
@@ -3085,6 +3657,7 @@ class PGRunStore(PostgresOperationRunner):
         child_session_id: str,
         worker_id: str,
         fencing_epoch: int,
+        cancellation_origin: str = "parent",
     ) -> bool:
         """Persist cancellation before the active Child writer closes its Operation."""
         owner = _require_owner(owner_id)
@@ -3092,6 +3665,8 @@ class PGRunStore(PostgresOperationRunner):
         child_uuid = parse_run_id(child_session_id)
         if run_uuid is None or child_uuid is None:
             raise ValueError("child session ids must be canonical UUIDs")
+        if cancellation_origin not in {"parent", "user", "run"}:
+            raise ValueError("invalid Child cancellation origin")
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
@@ -3100,11 +3675,29 @@ class PGRunStore(PostgresOperationRunner):
                 )
                 if held is None:
                     return False
+                child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
+                if child is None or str(child["status"]) != "running":
+                    return False
                 requested = await conn.fetchval(
                     _REQUEST_CHILD_CANCELLATION,
                     owner,
                     run_uuid,
                     child_uuid,
+                )
+                operation_id = child["operation_id"]
+                if operation_id is not None:
+                    await conn.execute(
+                        _CANCEL_CHILD_OPERATION,
+                        owner,
+                        run_uuid,
+                        child_uuid,
+                        operation_id,
+                        cancellation_origin,
+                    )
+                await conn.execute(_RETIRE_CHILD_GUIDANCE, owner, run_uuid, child_uuid)
+                await conn.execute(
+                    "SELECT pg_notify('dlightrag_run_activity', $1)",
+                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
                 )
                 return requested is not None
 
@@ -3210,6 +3803,20 @@ class PGRunStore(PostgresOperationRunner):
                 "budget": _json_value(row["budget_json"]),
                 "host_state": _json_value(row["host_state_json"]),
                 "fencing_epoch": int(row["fencing_epoch"]),
+                "operation_sequence": (
+                    int(row["operation_sequence"])
+                    if row["operation_sequence"] is not None
+                    else None
+                ),
+                "operation_id": (
+                    str(row["operation_id"]) if row["operation_id"] is not None else None
+                ),
+                "operation_key": row["operation_key"],
+                "operation_input": row["operation_content"],
+                "operation_origin": row["operation_origin"],
+                "operation_status": row["operation_status"],
+                "cancellation_origin": row["cancellation_origin"],
+                "operation_usage": _json_value(row["operation_usage_jsons"] or []),
             }
 
         return await self._run_read(_operation)
@@ -3350,7 +3957,19 @@ class PGRunStore(PostgresOperationRunner):
                 if resolved != "research" and not (not resolved and requested == "research"):
                     return None
                 sequence = int(await conn.fetchval(_NEXT_CONTROL_SEQUENCE, owner, run_uuid) or 1)
-                await conn.execute(_INSERT_CONTROL, owner, run_uuid, sequence, kind, text)
+                await conn.execute(
+                    _INSERT_CONTROL,
+                    owner,
+                    run_uuid,
+                    sequence,
+                    kind,
+                    text,
+                    None,
+                    None,
+                    "user",
+                    None,
+                    None,
+                )
                 return {
                     "run_id": run_id,
                     "control_sequence": sequence,
@@ -3360,6 +3979,622 @@ class PGRunStore(PostgresOperationRunner):
 
         return await self._run_write(_operation)
 
+    async def enqueue_child_control(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        content: str,
+        submission_key: str,
+        origin: str = "user",
+        parent_session_id: str | None = None,
+        worker_id: str | None = None,
+        fencing_epoch: int | None = None,
+    ) -> dict[str, Any] | bool:
+        """Queue an idempotent steer for only the Child's current Operation."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        parent_uuid = parse_run_id(parent_session_id) if parent_session_id is not None else None
+        text = content.strip()
+        key = submission_key.strip()
+        if run_uuid is None or child_uuid is None:
+            raise ValueError("child control ids must be canonical UUIDs")
+        if parent_session_id is not None and parent_uuid is None:
+            raise ValueError("parent session id must be a canonical UUID")
+        if not key or len(key) > 200:
+            raise ValueError("submission_key must contain between 1 and 200 characters")
+        if not text or len(text) > 20_000:
+            raise ValueError("control content must contain between 1 and 20000 characters")
+        if origin not in {"user", "parent"}:
+            raise ValueError("invalid Child control origin")
+        fingerprint = hashlib.sha256(
+            f"steer\0{child_session_id}\0{text}\0{origin}".encode()
+        ).hexdigest()
+
+        async def _operation(conn: Any) -> dict[str, Any] | bool:
+            async with conn.transaction():
+                run = await conn.fetchrow(_LOCK_CONTROL_RUN, owner, run_uuid)
+                if run is None:
+                    return {"outcome": "unknown_child"}
+                if origin == "parent" and not _parent_origin_holds_run(
+                    run, worker_id=worker_id, fencing_epoch=fencing_epoch
+                ):
+                    return False
+                child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
+                if child is None or (
+                    parent_uuid is not None and str(child["parent_session_id"]) != str(parent_uuid)
+                ):
+                    return {"outcome": "unknown_child"}
+                replay = await conn.fetchrow(
+                    _SELECT_CONTROL_BY_SUBMISSION,
+                    owner,
+                    run_uuid,
+                    child_uuid,
+                    key,
+                )
+                if replay is not None:
+                    if str(replay["request_fingerprint"]) != fingerprint:
+                        return {"outcome": "idempotency_conflict"}
+                    return {
+                        "outcome": "consumed" if replay["consumed_at"] else "queued",
+                        "control_sequence": int(replay["control_sequence"]),
+                        "operation_id": str(replay["target_operation_id"]),
+                        "consumed_at": replay["consumed_at"],
+                    }
+                if (
+                    str(run["status"]) not in {"queued", "running"}
+                    or str(child["status"]) != "running"
+                    or str(child["operation_status"] or "") != "running"
+                    or child["operation_id"] is None
+                ):
+                    return {"outcome": "terminal_child"}
+                operation_state = await conn.fetchval(
+                    _SELECT_OPERATION_STATE,
+                    owner,
+                    child_uuid,
+                    str(child["operation_id"]),
+                )
+                if operation_state in {"completed", "failed", "cancelled"}:
+                    return {"outcome": "terminal_child"}
+                pending = int(
+                    await conn.fetchval(
+                        _COUNT_PENDING_CHILD_CONTROLS,
+                        owner,
+                        run_uuid,
+                        child_uuid,
+                        child["operation_id"],
+                    )
+                )
+                if pending >= _MAX_PENDING_CHILD_CONTROLS:
+                    return {"outcome": "queue_full"}
+                sequence = int(await conn.fetchval(_NEXT_CONTROL_SEQUENCE, owner, run_uuid))
+                await conn.execute(
+                    _INSERT_CONTROL,
+                    owner,
+                    run_uuid,
+                    sequence,
+                    "steer",
+                    text,
+                    child_uuid,
+                    child["operation_id"],
+                    origin,
+                    key,
+                    fingerprint,
+                )
+                if origin == "user":
+                    await _mirror_child_intervention(
+                        conn,
+                        owner_id=owner,
+                        run_id=run_uuid,
+                        action="steered",
+                        identity=child_session_id,
+                        submission_key=key,
+                        content=text,
+                    )
+                await conn.execute(
+                    "SELECT pg_notify('dlightrag_run_activity', $1)",
+                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
+                )
+                return {
+                    "outcome": "queued",
+                    "control_sequence": sequence,
+                    "operation_id": str(child["operation_id"]),
+                    "consumed_at": None,
+                }
+
+        return await self._run_write(_operation)
+
+    async def continue_child_session(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        content: str,
+        submission_key: str,
+        origin: str = "user",
+        parent_session_id: str | None = None,
+        reauthorize_user_cancelled: bool = False,
+        worker_id: str | None = None,
+        fencing_epoch: int | None = None,
+    ) -> dict[str, Any] | bool:
+        """Accept one explicit new Operation without changing the Child's pinned plan."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        parent_uuid = parse_run_id(parent_session_id) if parent_session_id is not None else None
+        text = content.strip()
+        key = submission_key.strip()
+        if run_uuid is None or child_uuid is None:
+            raise ValueError("child continuation ids must be canonical UUIDs")
+        if parent_session_id is not None and parent_uuid is None:
+            raise ValueError("parent session id must be a canonical UUID")
+        if not key or len(key) > 200:
+            raise ValueError("submission_key must contain between 1 and 200 characters")
+        if not text or len(text) > 20_000:
+            raise ValueError("continuation content must contain between 1 and 20000 characters")
+        if origin not in {"user", "parent"}:
+            raise ValueError("invalid Child continuation origin")
+        fingerprint = hashlib.sha256(
+            f"continue\0{child_session_id}\0{text}\0{origin}".encode()
+        ).hexdigest()
+        operation_id = uuid.UUID(OperationId.deterministic(idempotency_key=key).value)
+
+        async def _operation(conn: Any) -> dict[str, Any] | bool:
+            async with conn.transaction():
+                run = await conn.fetchrow(_LOCK_CONTROL_RUN, owner, run_uuid)
+                if run is None:
+                    return {"outcome": "unknown_child"}
+                if origin == "parent" and not _parent_origin_holds_run(
+                    run, worker_id=worker_id, fencing_epoch=fencing_epoch
+                ):
+                    return False
+                child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
+                if child is None or (
+                    parent_uuid is not None and str(child["parent_session_id"]) != str(parent_uuid)
+                ):
+                    return {"outcome": "unknown_child"}
+                replay = await conn.fetchrow(
+                    _SELECT_CHILD_OPERATION_BY_KEY,
+                    owner,
+                    run_uuid,
+                    child_uuid,
+                    key,
+                )
+                if replay is not None:
+                    if str(replay["request_fingerprint"]) != fingerprint:
+                        return {"outcome": "idempotency_conflict"}
+                    return {
+                        "outcome": "accepted",
+                        "operation_id": str(replay["operation_id"]),
+                        "operation_sequence": int(replay["operation_sequence"]),
+                        "status": str(replay["status"]),
+                    }
+                if str(run["status"]) not in {"queued", "running"}:
+                    return {"outcome": "run_terminal"}
+                if str(child["status"]) == "running":
+                    return {"outcome": "child_running"}
+                if str(child["cancellation_origin"] or "") == "user" and not (
+                    origin == "user" and reauthorize_user_cancelled
+                ):
+                    return {"outcome": "reauthorization_required"}
+                if str(child["status"]) not in {"succeeded", "failed", "cancelled"}:
+                    return {"outcome": "unknown_outcome"}
+                sequence = int(child["operation_sequence"] or 0) + 1
+                await conn.execute(
+                    _INSERT_CHILD_OPERATION,
+                    owner,
+                    run_uuid,
+                    child_uuid,
+                    sequence,
+                    operation_id,
+                    key,
+                    fingerprint,
+                    text,
+                    origin,
+                )
+                await conn.execute(_ACTIVATE_CHILD_OPERATION, owner, run_uuid, child_uuid)
+                if origin == "user":
+                    await _mirror_child_intervention(
+                        conn,
+                        owner_id=owner,
+                        run_id=run_uuid,
+                        action="continued",
+                        identity=child_session_id,
+                        submission_key=key,
+                        content=text,
+                    )
+                await conn.execute(
+                    "SELECT pg_notify('dlightrag_run_activity', $1)",
+                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
+                )
+                return {
+                    "outcome": "accepted",
+                    "operation_id": str(operation_id),
+                    "operation_sequence": sequence,
+                    "status": "running",
+                }
+
+        return await self._run_write(_operation)
+
+    async def cancel_child_session_by_owner(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        parent_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist an owner cancellation without reviving terminal Child work."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        parent_uuid = parse_run_id(parent_session_id) if parent_session_id is not None else None
+        if run_uuid is None or child_uuid is None:
+            raise ValueError("child cancellation ids must be canonical UUIDs")
+
+        async def _operation(conn: Any) -> dict[str, Any]:
+            async with conn.transaction():
+                run = await conn.fetchrow(_LOCK_CONTROL_RUN, owner, run_uuid)
+                if run is None:
+                    return {"outcome": "unknown_child"}
+                child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
+                if child is None or (
+                    parent_uuid is not None and str(child["parent_session_id"]) != str(parent_uuid)
+                ):
+                    return {"outcome": "unknown_child"}
+                if str(child["status"]) != "running":
+                    return {"outcome": "terminal_child", "status": str(child["status"])}
+                await conn.execute(_REQUEST_CHILD_CANCELLATION, owner, run_uuid, child_uuid)
+                if child["operation_id"] is not None:
+                    await conn.execute(
+                        _CANCEL_CHILD_OPERATION,
+                        owner,
+                        run_uuid,
+                        child_uuid,
+                        child["operation_id"],
+                        "user",
+                    )
+                await conn.execute(_RETIRE_CHILD_GUIDANCE, owner, run_uuid, child_uuid)
+                await _mirror_child_intervention(
+                    conn,
+                    owner_id=owner,
+                    run_id=run_uuid,
+                    action="cancelled",
+                    identity=child_session_id,
+                    submission_key=str(child["operation_id"] or "initial"),
+                    content="cancellation requested",
+                )
+                await conn.execute(
+                    "SELECT pg_notify('dlightrag_run_activity', $1)",
+                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
+                )
+                return {
+                    "outcome": "cancellation_requested",
+                    "operation_id": str(child["operation_id"] or ""),
+                }
+
+        return await self._run_write(_operation)
+
+    async def reply_child_guidance(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        request_id: str,
+        content: str,
+        submission_key: str,
+        origin: str = "user",
+        parent_session_id: str | None = None,
+        worker_id: str | None = None,
+        fencing_epoch: int | None = None,
+    ) -> dict[str, Any] | bool:
+        """Correlate one idempotent parent/user reply with a pending Child ask."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        request_uuid = parse_run_id(request_id)
+        parent_uuid = parse_run_id(parent_session_id) if parent_session_id is not None else None
+        text = content.strip()
+        key = submission_key.strip()
+        if run_uuid is None or request_uuid is None:
+            raise ValueError("guidance ids must be canonical UUIDs")
+        if not key or len(key) > 200 or not text or len(text) > 20_000:
+            raise ValueError("reply and submission key must be non-empty and bounded")
+        if origin not in {"user", "parent"}:
+            raise ValueError("invalid guidance reply origin")
+        fingerprint = hashlib.sha256(f"reply\0{request_id}\0{text}\0{origin}".encode()).hexdigest()
+
+        async def _operation(conn: Any) -> dict[str, Any] | bool:
+            async with conn.transaction():
+                run = await conn.fetchrow(_LOCK_CONTROL_RUN, owner, run_uuid)
+                if run is None:
+                    return {"outcome": "unknown_request"}
+                if origin == "parent" and not _parent_origin_holds_run(
+                    run, worker_id=worker_id, fencing_epoch=fencing_epoch
+                ):
+                    return False
+                guidance = await conn.fetchrow(
+                    _SELECT_GUIDANCE + " FOR UPDATE", owner, run_uuid, request_uuid
+                )
+                if guidance is None or (
+                    parent_uuid is not None
+                    and str(guidance["parent_session_id"]) != str(parent_uuid)
+                ):
+                    return {"outcome": "unknown_request"}
+                if str(guidance["status"]) == "replied":
+                    if (
+                        str(guidance["reply_submission_key"] or "") == key
+                        and str(guidance["reply_fingerprint"] or "") == fingerprint
+                    ):
+                        return {"outcome": "replied", "request_id": request_id}
+                    return {"outcome": "already_replied"}
+                if str(guidance["status"]) != "pending":
+                    return {"outcome": str(guidance["status"])}
+                updated = await conn.fetchval(
+                    _REPLY_GUIDANCE,
+                    owner,
+                    run_uuid,
+                    request_uuid,
+                    text,
+                    origin,
+                    key,
+                    fingerprint,
+                )
+                if updated is None:
+                    await conn.execute(
+                        "UPDATE dlightrag_answer_child_guidance SET status = 'expired', "
+                        "updated_at = NOW() WHERE owner_id = $1 AND run_id = $2 "
+                        "AND request_id = $3 AND status = 'pending'",
+                        owner,
+                        run_uuid,
+                        request_uuid,
+                    )
+                    return {"outcome": "expired"}
+                if origin == "user":
+                    await _mirror_child_intervention(
+                        conn,
+                        owner_id=owner,
+                        run_id=run_uuid,
+                        action="replied",
+                        identity=str(guidance["child_session_id"]),
+                        submission_key=key,
+                        content=f"request {request_id}: {text}",
+                    )
+                await conn.execute(
+                    "SELECT pg_notify('dlightrag_run_activity', $1)",
+                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
+                )
+                return {"outcome": "replied", "request_id": request_id}
+
+        return await self._run_write(_operation)
+
+    async def create_child_guidance(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        request_id: str,
+        child_session_id: str,
+        child_operation_id: str,
+        parent_session_id: str,
+        question: str,
+        expires_after_seconds: int,
+        worker_id: str,
+        fencing_epoch: int,
+        child_fencing_epoch: int,
+    ) -> dict[str, Any] | None:
+        """Persist one fenced Child ask before the Child parks."""
+        owner = _require_owner(owner_id)
+        ids = tuple(
+            parse_run_id(value)
+            for value in (
+                run_id,
+                request_id,
+                child_session_id,
+                child_operation_id,
+                parent_session_id,
+            )
+        )
+        if any(value is None for value in ids):
+            raise ValueError("guidance ids must be canonical UUIDs")
+        run_uuid, request_uuid, child_uuid, operation_uuid, parent_uuid = ids
+        text = question.strip()
+        if not text or len(text) > 20_000:
+            raise ValueError("guidance question must contain between 1 and 20000 characters")
+        if not 1 <= expires_after_seconds <= 86_400:
+            raise ValueError("guidance expiry must be between 1 and 86400 seconds")
+
+        async def _operation(conn: Any) -> dict[str, Any] | None:
+            async with conn.transaction():
+                held = await conn.fetchval(
+                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
+                )
+                if held is None:
+                    return None
+                child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
+                if (
+                    child is None
+                    or str(child["lease_owner"] or "") != worker_id
+                    or int(child["fencing_epoch"]) != child_fencing_epoch
+                    or str(child["operation_id"] or "") != str(operation_uuid)
+                    or str(child["parent_session_id"]) != str(parent_uuid)
+                    or str(child["status"]) != "running"
+                ):
+                    return None
+                pending = int(
+                    await conn.fetchval(
+                        _COUNT_PENDING_CHILD_GUIDANCE,
+                        owner,
+                        run_uuid,
+                        child_uuid,
+                        operation_uuid,
+                    )
+                )
+                if pending >= _MAX_PENDING_CHILD_GUIDANCE:
+                    return {
+                        "request_id": request_id,
+                        "child_session_id": child_session_id,
+                        "child_operation_id": child_operation_id,
+                        "parent_session_id": parent_session_id,
+                        "question": text,
+                        "status": "queue_full",
+                    }
+                await conn.execute(
+                    _INSERT_GUIDANCE,
+                    owner,
+                    run_uuid,
+                    request_uuid,
+                    child_uuid,
+                    operation_uuid,
+                    parent_uuid,
+                    text,
+                    expires_after_seconds,
+                )
+                stored = await conn.fetchrow(_SELECT_GUIDANCE, owner, run_uuid, request_uuid)
+                if stored is None or (
+                    str(stored["child_session_id"]) != str(child_uuid)
+                    or str(stored["child_operation_id"]) != str(operation_uuid)
+                    or str(stored["question"]) != text
+                ):
+                    raise ValueError("guidance request id was reused with different input")
+                await conn.execute(
+                    "SELECT pg_notify('dlightrag_run_activity', $1)",
+                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
+                )
+                return _guidance_row(stored)
+
+        return await self._run_write(_operation)
+
+    async def load_child_guidance(
+        self, *, owner_id: str, run_id: str, request_id: str
+    ) -> dict[str, Any] | None:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        request_uuid = parse_run_id(request_id)
+        if run_uuid is None or request_uuid is None:
+            return None
+
+        async def _operation(conn: Any) -> dict[str, Any] | None:
+            row = await conn.fetchrow(_SELECT_GUIDANCE, owner, run_uuid, request_uuid)
+            return _guidance_row(row) if row is not None else None
+
+        return await self._run_read(_operation)
+
+    async def wait_for_child_guidance(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        request_id: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any] | None:
+        """Wait on a PostgreSQL wake hint, then re-read authoritative guidance."""
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        request_uuid = parse_run_id(request_id)
+        if run_uuid is None or request_uuid is None:
+            return None
+        wake_key = cancellation_notify_key(owner_id=owner, run_id=str(run_uuid))
+        bounded_timeout = max(0.0, min(float(timeout_seconds), 86_400.0))
+
+        async def _operation(conn: Any) -> dict[str, Any] | None:
+            queue: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
+
+            def _notified(_conn: object, _pid: object, channel: str, payload: str) -> None:
+                if channel == _RUN_ACTIVITY_CHANNEL and payload == wake_key and queue.empty():
+                    queue.put_nowait(None)
+
+            await conn.add_listener(_RUN_ACTIVITY_CHANNEL, _notified)
+            try:
+                row = await conn.fetchrow(_SELECT_GUIDANCE, owner, run_uuid, request_uuid)
+                if row is None or str(row["status"]) != "pending":
+                    return _guidance_row(row) if row is not None else None
+                remaining = max(
+                    0.0,
+                    (row["expires_at"] - datetime.now(UTC)).total_seconds(),
+                )
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=min(bounded_timeout, remaining))
+                except TimeoutError:
+                    pass
+                current = await conn.fetchrow(_SELECT_GUIDANCE, owner, run_uuid, request_uuid)
+                return _guidance_row(current) if current is not None else None
+            finally:
+                await conn.remove_listener(_RUN_ACTIVITY_CHANNEL, _notified)
+
+        return await self._run_read(_operation)
+
+    async def expire_child_guidance(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        request_id: str,
+        child_session_id: str,
+        child_operation_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        child_fencing_epoch: int,
+    ) -> bool:
+        owner = _require_owner(owner_id)
+        ids = tuple(
+            parse_run_id(value)
+            for value in (run_id, request_id, child_session_id, child_operation_id)
+        )
+        if any(value is None for value in ids):
+            return False
+        run_uuid, request_uuid, child_uuid, operation_uuid = ids
+
+        async def _operation(conn: Any) -> bool:
+            async with conn.transaction():
+                held = await conn.fetchval(
+                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
+                )
+                if held is None:
+                    return False
+                child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
+                if (
+                    child is None
+                    or str(child["lease_owner"] or "") != worker_id
+                    or int(child["fencing_epoch"]) != child_fencing_epoch
+                    or str(child["operation_id"] or "") != str(operation_uuid)
+                ):
+                    return False
+                return (
+                    await conn.fetchval(
+                        _EXPIRE_GUIDANCE,
+                        owner,
+                        run_uuid,
+                        request_uuid,
+                        child_uuid,
+                        operation_uuid,
+                    )
+                    is not None
+                )
+
+        return await self._run_write(_operation)
+
+    async def list_pending_child_guidance(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        parent_session_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        parent_uuid = parse_run_id(parent_session_id)
+        if run_uuid is None or parent_uuid is None:
+            return ()
+
+        async def _operation(conn: Any) -> tuple[dict[str, Any], ...]:
+            rows = await conn.fetch(_SELECT_PENDING_GUIDANCE, owner, run_uuid, parent_uuid)
+            return tuple(_guidance_row(row) for row in rows)
+
+        return await self._run_read(_operation)
+
     async def load_pending_agent_controls(
         self,
         *,
@@ -3367,10 +4602,17 @@ class PGRunStore(PostgresOperationRunner):
         run_id: str,
         worker_id: str,
         fencing_epoch: int,
+        target_session_id: str | None = None,
+        target_operation_id: str | None = None,
+        child_fencing_epoch: int | None = None,
     ) -> tuple[dict[str, Any], ...] | None:
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
-        if run_uuid is None:
+        target_uuid = parse_run_id(target_session_id) if target_session_id is not None else None
+        operation_uuid = (
+            parse_run_id(target_operation_id) if target_operation_id is not None else None
+        )
+        if run_uuid is None or (target_uuid is None) != (operation_uuid is None):
             return None
 
         async def _operation(conn: Any) -> tuple[dict[str, Any], ...] | None:
@@ -3380,12 +4622,31 @@ class PGRunStore(PostgresOperationRunner):
                 )
                 if held is None:
                     return None
-                rows = await conn.fetch(_SELECT_PENDING_CONTROLS, owner, run_uuid)
+                if target_uuid is None:
+                    rows = await conn.fetch(_SELECT_PENDING_PARENT_CONTROLS, owner, run_uuid)
+                else:
+                    child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, target_uuid)
+                    if (
+                        child is None
+                        or child_fencing_epoch is None
+                        or str(child["lease_owner"] or "") != worker_id
+                        or int(child["fencing_epoch"]) != child_fencing_epoch
+                        or str(child["operation_id"] or "") != str(operation_uuid)
+                    ):
+                        return None
+                    rows = await conn.fetch(
+                        _SELECT_PENDING_CHILD_CONTROLS,
+                        owner,
+                        run_uuid,
+                        target_uuid,
+                        operation_uuid,
+                    )
                 return tuple(
                     {
                         "control_sequence": int(row["control_sequence"]),
                         "kind": str(row["kind"]),
                         "content": str(row["content"]),
+                        "origin": str(row["origin"]),
                         "created_at": row["created_at"],
                     }
                     for row in rows
@@ -3401,10 +4662,17 @@ class PGRunStore(PostgresOperationRunner):
         control_sequences: Sequence[int],
         worker_id: str,
         fencing_epoch: int,
+        target_session_id: str | None = None,
+        target_operation_id: str | None = None,
+        child_fencing_epoch: int | None = None,
     ) -> bool:
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
-        if run_uuid is None:
+        target_uuid = parse_run_id(target_session_id) if target_session_id is not None else None
+        operation_uuid = (
+            parse_run_id(target_operation_id) if target_operation_id is not None else None
+        )
+        if run_uuid is None or (target_uuid is None) != (operation_uuid is None):
             return False
 
         async def _operation(conn: Any) -> bool:
@@ -3414,12 +4682,28 @@ class PGRunStore(PostgresOperationRunner):
                 )
                 if held is None:
                     return False
-                if control_sequences:
+                values = [int(value) for value in control_sequences]
+                if target_uuid is None:
+                    if values:
+                        await conn.execute(_CONSUME_PARENT_CONTROLS, owner, run_uuid, values)
+                    return True
+                child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, target_uuid)
+                if (
+                    child is None
+                    or child_fencing_epoch is None
+                    or str(child["lease_owner"] or "") != worker_id
+                    or int(child["fencing_epoch"]) != child_fencing_epoch
+                    or str(child["operation_id"] or "") != str(operation_uuid)
+                ):
+                    return False
+                if values:
                     await conn.execute(
-                        _CONSUME_CONTROLS,
+                        _CONSUME_CHILD_CONTROLS,
                         owner,
                         run_uuid,
-                        [int(value) for value in control_sequences],
+                        target_uuid,
+                        operation_uuid,
+                        values,
                     )
                 return True
 
@@ -3451,6 +4735,28 @@ class PGRunStore(PostgresOperationRunner):
                 )
                 if held is None:
                     return False
+                child = await conn.fetchrow(_LOCK_CHILD_SESSION, owner, run_uuid, child_uuid)
+                if child is None or str(child["status"]) != "running":
+                    return False
+                outcome_payload = dict(outcome)
+                operation_id = child["operation_id"] or parse_run_id(
+                    str(outcome_payload.get("operation_id") or "")
+                )
+                if operation_id is None:
+                    operation_id = uuid.UUID(
+                        OperationId.deterministic(
+                            idempotency_key=f"legacy-child:{child_session_id}"
+                        ).value
+                    )
+                supplied_operation_id = str(outcome_payload.get("operation_id") or "")
+                if (
+                    child["operation_id"] is not None
+                    and supplied_operation_id
+                    and supplied_operation_id != str(child["operation_id"])
+                ):
+                    return False
+                outcome_payload["operation_id"] = str(operation_id)
+                outcome_json = json.dumps(outcome_payload, ensure_ascii=False, sort_keys=True)
                 tag = await conn.execute(
                     _FINISH_CHILD_SESSION,
                     owner,
@@ -3459,9 +4765,29 @@ class PGRunStore(PostgresOperationRunner):
                     status,
                     summary,
                     json.dumps(dict(usage)) if usage is not None else None,
-                    json.dumps(dict(outcome), ensure_ascii=False, sort_keys=True),
+                    outcome_json,
+                    str(operation_id),
                 )
-                return not str(tag).endswith(" 0")
+                if str(tag).endswith(" 0"):
+                    return False
+                if child["operation_id"] is not None:
+                    await conn.execute(
+                        _FINISH_CHILD_OPERATION,
+                        owner,
+                        run_uuid,
+                        child_uuid,
+                        operation_id,
+                        status,
+                        summary,
+                        json.dumps(dict(usage)) if usage is not None else None,
+                        outcome_json,
+                    )
+                await conn.execute(_RETIRE_CHILD_GUIDANCE, owner, run_uuid, child_uuid)
+                await conn.execute(
+                    "SELECT pg_notify('dlightrag_run_activity', $1)",
+                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
+                )
+                return True
 
         return await self._run_write(_operation)
 

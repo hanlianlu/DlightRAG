@@ -396,6 +396,8 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "get_model_catalogue",
         "set_memory_enabled",
         "clear_memory",
+        "control_answer_child",
+        "reply_answer_child",
         "follow_up_answer_run",
         "fork_answer_run",
         "get_answer_transcript",

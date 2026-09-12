@@ -203,18 +203,25 @@ _DEPENDENCY_DEFER_MAX_SECONDS = 60
 type DependencyStateCallback = Callable[[DependencyComponent], None]
 
 
-def _async_subagents_for_plan(plan: AgentRunPlan | None) -> bool:
-    """Select the exact accepted child lifecycle contract without plan rewriting."""
+def _child_lifecycle_for_plan(plan: AgentRunPlan | None) -> tuple[bool, bool]:
+    """Return ``(async_lifecycle, interactive_controls)`` from the pinned spawn contract."""
     if plan is None:
         raise IncompatibleActiveRunError("Research answer run is missing its accepted Agent Plan")
     spawn = next((tool for tool in plan.tools if tool.name == "spawn_agent"), None)
     if spawn is None:
-        return False
+        return False, False
     if spawn.contract_version == 2:
-        return False
+        return False, False
     if spawn.contract_version == 3:
-        return True
+        return True, False
+    if spawn.contract_version == 4:
+        return True, True
     raise IncompatibleActiveRunError("Research answer run uses an unsupported child lifecycle")
+
+
+def _async_subagents_for_plan(plan: AgentRunPlan | None) -> bool:
+    """Select the exact accepted child lifecycle contract without plan rewriting."""
+    return _child_lifecycle_for_plan(plan)[0]
 
 
 def _scoped_secret(secret: bytes | None, scope: str | None) -> bytes | None:
@@ -288,6 +295,7 @@ class AnswerExecutorSettings:
     default_chunk_top_k: int
     semantic_highlights: SemanticHighlightSettings
     publication: PublicationLimits = PublicationLimits()
+    child_guidance_timeout_seconds: int = 300
 
 
 @dataclass
@@ -1166,6 +1174,11 @@ class AnswerExecutor:
         agent_operations: list[dict[str, Any]] = []
 
         fetched_buffer = FetchedResourceBuffer()
+        async_subagents, interactive_controls = (
+            _child_lifecycle_for_plan(request.agent_run_plan)
+            if resolved_mode == "research"
+            else (True, True)
+        )
 
         run = await self.prepare_orchestrated_run(
             query=request.query,
@@ -1179,11 +1192,8 @@ class AnswerExecutor:
             pinned_image_descriptions=request.image_descriptions,
             projected_history=projected_history,
             model_profiles=model_profiles,
-            async_subagents=(
-                _async_subagents_for_plan(request.agent_run_plan)
-                if resolved_mode == "research"
-                else True
-            ),
+            async_subagents=async_subagents,
+            interactive_controls=interactive_controls,
             skills=(
                 self._skills_bundle_factory(session.owner_id, request.requested_skill)
                 if self._skills_bundle_factory is not None
@@ -1300,6 +1310,14 @@ class AnswerExecutor:
                         store, "request_child_cancellation", session
                     ),
                     release_children=_fenced_child_writer(store, "release_child_sessions", session),
+                    steer_child=_fenced_child_writer(store, "enqueue_child_control", session),
+                    continue_child=_fenced_child_writer(store, "continue_child_session", session),
+                    reply_guidance=_fenced_child_writer(store, "reply_child_guidance", session),
+                    create_guidance=_fenced_child_writer(store, "create_child_guidance", session),
+                    load_guidance=_async_store_method(store, "load_child_guidance"),
+                    wait_guidance=_async_store_method(store, "wait_for_child_guidance"),
+                    expire_guidance=_fenced_child_writer(store, "expire_child_guidance", session),
+                    list_guidance=_async_store_method(store, "list_pending_child_guidance"),
                     prepare_dispatch=_bound_child_dispatch_preparer(run.orchestrator),
                     run_child=_bound_child_runner(
                         orchestrator=run.orchestrator,
@@ -1311,6 +1329,8 @@ class AnswerExecutor:
                         claim_child=claim_child,
                         renew_child=renew_child,
                         load_child=_async_store_method(store, "load_child_session"),
+                        control_reader=_fenced_control_reader(store, session),
+                        control_ack=_fenced_control_ack(store, session),
                         is_detaching=(
                             (lambda: subagent_host.detaching) if subagent_host is not None else None
                         ),
@@ -1875,6 +1895,7 @@ class AnswerExecutor:
         resource_scope: str,
         skills: SkillsBundle | None = None,
         async_subagents: bool = True,
+        interactive_controls: bool = True,
     ) -> OrchestratorRun:
         history = projected_history
         models = self._capabilities.request_model_context(model_profiles)
@@ -1992,7 +2013,11 @@ class AnswerExecutor:
                 search_toolchain=self._search_toolchain,
                 resolved_mode=resolved_mode,
                 subagent_host=(
-                    SubagentHost(async_lifecycle=async_subagents)
+                    SubagentHost(
+                        async_lifecycle=async_subagents,
+                        interactive_controls=interactive_controls,
+                        guidance_timeout_seconds=self._settings.child_guidance_timeout_seconds,
+                    )
                     if resolved_mode == "research"
                     else None
                 ),
