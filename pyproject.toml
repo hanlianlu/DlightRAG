@@ -15,7 +15,7 @@ dependencies = [
     # Built-in model providers (batteries included)
     "openai>=3.3.0",
     "anthropic>=1.5.0",
-    "google-genai>=2.22.0",
+    "google-genai>=2.23.0",
     "json-repair>=0.63.4",
     # Built-in RAG and source capabilities
     "lightrag-hku>=1.5.7",
@@ -43,7 +43,7 @@ dependencies = [
     # MCP server
     "mcp>=2.2.0",
     # REST API server
-    "PyJWT>=2.8.0",
+    "PyJWT>=2.14.0",
     "fastapi>=0.141.1",
     "uvicorn[standard]>=0.52.1",
     "python-multipart>=0.0.22",

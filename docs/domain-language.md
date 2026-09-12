@@ -319,6 +319,36 @@ _Avoid_: workflow engine, max-agent-turn policy, READY protocol, Fast Answer
 
 ## Execution And Workspace
 
+### Approved personal Connections target (not implemented)
+
+The terms in this subsection describe the accepted target in [ADR 0012](adr/0012-personal-connections-and-hot-plug.md), not the current shipped deployment-declared Outbound MCP behavior below.
+
+**Connection**:
+An owner's logical relationship to one remote MCP endpoint and external account context. Enabling a Connection authorizes all of its current and future discovered tools for that owner's future Research Runs.
+_Avoid_: Server configuration, plugin, per-tool integration
+
+**Credential Grant**:
+An owner's authorization to one external account and resource audience for a Connection. Refresh can preserve a Grant; credential/account replacement or consented scope expansion creates another Grant.
+_Avoid_: DlightRAG identity, bearer field, permission proof
+
+**Capability Catalogue**:
+The complete validated set of remote tool definitions observed for one Connection at publication time. It is untrusted remote description data, not a tool-by-tool authorization list.
+_Avoid_: Allowlist, marketplace, global registry
+
+**Connection Generation**:
+An immutable published version of a Connection's endpoint, Credential Grant identity, and Capability Catalogue. It fixes local definitions only, not remote code, data, availability, or side effects.
+_Avoid_: Live MCP session, mutable connection record
+
+**Run Connection Binding**:
+An owner-scoped association between an accepted Research Run and one Connection Generation at a specific Connection Activation Epoch. It preserves the Run's selected definitions without overriding a later disable or Grant revocation.
+_Avoid_: Per-conversation selection, invocation permit, current Connection lookup
+
+**Connection Activation Epoch**:
+The identity of one continuous enabled period of a Connection. A later re-enable has a different epoch and cannot revive an older Run Connection Binding.
+_Avoid_: Connection Generation, Fencing Epoch
+
+### Current execution and workspace concepts
+
 **Execution Environment**:
 The adapter behind exactly three modes: `disabled`, host-trusted `trust`, and `sandbox`. Trust grants the Agent the host user's process and network authority, so evidence-tool guidance cannot enforce network egress. Sandbox is the only seam that may enforce egress policy and has an explicit unavailable failure unless trusted host code supplies a backend.
 _Avoid_: implicit downgrade, permission catalog, approval prompt, shell-command filtering as a security boundary
@@ -328,8 +358,8 @@ A progressively disclosed `SKILL.md` package discovered from packaged built-ins,
 _Avoid_: owner Profile Memory, marketplace plugin, arbitrary extension
 
 **Outbound MCP Tool**:
-A deployment-declared and allowlisted remote tool invoked through a foreground stdio or streamable-HTTP MCP session.
-_Avoid_: MCP registry, marketplace, OAuth platform
+In the current shipped implementation, a deployment-declared and allowlisted remote tool invoked through a foreground stdio or Streamable-HTTP MCP session. It is distinct from the approved, unimplemented owner Connection target above.
+_Avoid_: Personal Connection, MCP registry, marketplace, OAuth platform
 
 **Agent Workspace**:
 The model-visible filesystem rooted at the active Workspace Epoch's workspace directory.

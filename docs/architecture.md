@@ -214,7 +214,9 @@ materially improve an answer. Explicit user selection is optional convenience,
 not a permission gate; user veto wins. Research parent runs additionally
 hold `publish_skill` and `delete_skill`, the validated owner-only publication
 channel; built-in and global Skills stay read-only to the application. Outbound
-MCP tools come only from deployment allowlists.
+MCP tools come only from deployment allowlists. This remains the shipped baseline; the
+[accepted, unimplemented personal MCP Connections design](personal-mcp-connections.md)
+and [ADR 0012](adr/0012-personal-connections-and-hot-plug.md) describe its intended replacement.
 
 ## Durable Execution
 
