@@ -106,9 +106,32 @@ answer:
     workspace_root: null
     # Hide named packaged skills only; operator-global and owner overrides remain visible.
     disabled_builtin_skills: []
-    # Explicit remote tools only; [] disables outbound MCP. See
-    # docs/configuration.md for endpoint examples.
-    outbound_mcp: []
+    # Personal Settings Connections (Streamable HTTP only). Policy only narrows
+    # owner grants; keys belong exclusively in the existing secret source.
+    connections:
+      # Set the exact public callback URL to enable SDK OAuth authorization.
+      # oauth_callback_url: https://app.example/web/oauth/connections/mcp/callback
+      oauth_timeout: 300
+      require_https: true
+      allow_private_hosts: []
+      max_connections: 20
+      max_enabled_tools: 256
+      max_tools: 128
+      max_pages: 16
+      max_schema_bytes: 32768
+      max_description_bytes: 8192
+      max_catalogue_bytes: 524288
+      discovery_concurrency: 4
+      refresh_seconds: 300
+      discovery_timeout: 30
+      call_timeout: 60
+      call_concurrency: 8
+      max_call_argument_bytes: 65536
+      max_result_bytes: 262144
+      max_result_parts: 32
+      connect_timeout: 10
+      idle_timeout: 15
+      max_response_bytes: 1048576
 
 access:
   # Product security policy belongs here. Compose only carries the explicit

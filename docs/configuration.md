@@ -661,7 +661,6 @@ answer:
     skills_root: null              # absolute path; null → ~/.dlightrag/skills
     owner_skills_root: null        # absolute path; null → ~/.dlightrag/owner_skills
     disabled_builtin_skills: []    # packaged Skill names only
-    outbound_mcp: []
     publication:
       max_artifacts: 20
       max_file_bytes: 31457280
@@ -689,22 +688,8 @@ Published artifacts fail whole when over budget; they are not truncated.
 Interactive HTML is separately opt-in and isolated by the Web artifact boundary.
 See [Security](security.md#answer-artifact-browser-boundary).
 
-Outbound MCP endpoints are deployment-allowlisted. Each entry has `name`,
-`transport`, and a nonempty unique `tools` list. `stdio` requires `command` and
-optional `args`; `streamable-http` requires `url`. The other endpoint kind is
-forbidden in each mode.
+Outbound Research tools now come only from the eligible owner's **Settings → Connections → MCP** catalogues. Deployment `outbound_mcp` declarations and stdio are rejected. Enabled Connections automatically bind future Research Runs; Fast has no external tools. Calls use bounded Streamable HTTP with static bearer, no authentication, or an unexpired SDK-authorized OAuth access token and are never automatically replayed after a possibly dispatched effect. Settings OAuth authorization and expired-token refresh use the locked SDK. Refresh is a leased, fenced token-only preflight before the final effect gate, never an effect replay; rejected refresh or expanded scopes requires Settings authorization. Retention and writer keyring maintenance are implemented; final independent validation/review remain pending in the [implementation contract](personal-mcp-connections.md). Only non-secret network/quota policy belongs under `answer.agent.connections`.
 
-```yaml
-answer:
-  agent:
-    outbound_mcp:
-      - name: analytics
-        transport: streamable-http
-        url: https://mcp.example.com/mcp
-        tools: [lookup_metric]
-```
-
-There is no endpoint discovery, marketplace, OAuth service, or plugin runtime.
 Research discovers Skill metadata from three tiers and loads content on demand:
 packaged built-ins, operator-global skills, then owner skills. A same-named
 higher tier shadows lower tiers. The standard
@@ -869,3 +854,46 @@ those combinations fail deterministically.
 An empty `kg_entity_types` uses LightRAG's general taxonomy. For stronger domain
 control, set `corpus.extraction.entity_type_prompt_file` to a file under
 `prompts/entity_type/`.
+
+For personal OAuth, set the non-secret `answer.agent.connections.oauth_callback_url` to the exact public URL ending in `/web/oauth/connections/mcp/callback` (for example `https://app.example/web/oauth/connections/mcp/callback`). It is never derived from a request Host header. The default is unset, so OAuth begin fails closed until configured. `oauth_timeout` defaults to 300 seconds (30–600). The existing credential secret keyring is required on every worker. Settings starts provider consent explicitly; authenticated endpoint edits use a fresh bearer or OAuth candidate, keeping the enabled old head and Grant until successful candidate discovery and revision CAS.
+
+This intermediate implementation requires SDK-compatible authorization-code/PKCE discovery and registration. Expired/rejected OAuth tokens become `needs-auth`; there is no background redirect or automatic refresh/replay yet. The initiating worker must remain alive; a callback on another worker deposits an encrypted, once-only inbox result, but cannot resume a dead initiator. Restart authorization in Settings after failure/expiry. Final lifecycle work must add the Grant refresh lease/fenced CAS before enabling automatic refresh.
+
+
+### Personal Connection credential rotation
+
+The secret-only `DLIGHTRAG_ANSWER__AGENT__CONNECTIONS__CREDENTIAL_SECRET_KEYRING`
+uses the existing process environment / explicitly selected `.env` configuration source,
+never YAML. Missing/invalid keys fail credential storage/use closed. An unreadable
+existing envelope is deployment misconfiguration, not permission to replace/reset data.
+
+1. Generate a fresh 32-byte CSPRNG key locally. Add its unique ID to the injected ring
+   on **all** workers while retaining the old key IDs.
+2. Switch `active` to the new ID on all workers; finish the rollout so no old-active
+   worker can re-encrypt back to the old key. Writer maintenance starts automatically
+   and runs bounded batches at most 60 seconds apart. Trusted writer hosts can also
+   `await app.connections.maintain()` for one batch; the result is counts, not secrets.
+3. Wait for old-key Grant counts to reach zero and for short-lived authorization
+   inboxes to finish/expire (at most `oauth_timeout`, up to 600 seconds, plus cleanup).
+   On the intended deployment database, an authorized operator can verify **counts
+   only**; do not select or export encrypted envelopes:
+
+   ```sql
+   SELECT key_id, count(*) FROM dlightrag_connection_grants
+   WHERE encrypted_envelope IS NOT NULL GROUP BY key_id;
+   SELECT envelope::jsonb->>'key_id' AS key_id, count(*)
+   FROM dlightrag_connection_oauth_flows f
+   CROSS JOIN LATERAL (VALUES (f.encrypted_result), (f.encrypted_credentials)) v(envelope)
+   WHERE envelope IS NOT NULL GROUP BY 1;
+   ```
+
+4. Only after both counts show no old-key ciphertext may old IDs be removed from the
+   live worker ring. Keep backup/key retention coordinated separately: deleting live
+   ciphertext or removing a live key does **not** promise backup cryptographic erasure.
+
+Reader startup verifies current migrations but does not run writer maintenance.
+Old `answer.agent.outbound_mcp`/stdio declarations are configuration errors: remove
+those declarations and authorize owner Connections in Settings. No compatibility
+adapter, migration of old Answer inputs, automatic data deletion or reset is provided.
+Incompatible retained Answer inputs fail that Run before model/tool effects; a user
+may start a new current-contract Run without deleting existing history.

@@ -21,6 +21,7 @@ from dlightrag.application.answer_runs import (
 from dlightrag.application.runs import RunView
 from dlightrag.engine.agent.session.fold import PriorTurns
 from dlightrag.engine.ai.media import thumbnail_bytes
+from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.execution.input import AnswerRunRequest
 from dlightrag.engine.answer.history import (
     HistoryProjectionTarget,
@@ -152,6 +153,7 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> WebAnswerSubmission | None:
         creation = await self.store.create_answer_turn(
             principal_id=envelope.submitted_by,
@@ -163,6 +165,7 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
             references=references,
             title_hint=self.title_hint,
             routing=routing,
+            connection_bindings=connection_bindings,
             create_conversation=self.create_conversation,
             forked_from_conversation_id=self.forked_from_conversation_id,
         )

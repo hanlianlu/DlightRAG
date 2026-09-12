@@ -319,9 +319,9 @@ _Avoid_: workflow engine, max-agent-turn policy, READY protocol, Fast Answer
 
 ## Execution And Workspace
 
-### Approved personal Connections target (not implemented)
+### Personal Connections
 
-The terms in this subsection describe the accepted target in [ADR 0012](adr/0012-personal-connections-and-hot-plug.md), not the current shipped deployment-declared Outbound MCP behavior below.
+The terms in this subsection describe the owner-bound implementation in [ADR 0012](adr/0012-personal-connections-and-hot-plug.md), including OAuth refresh and retention. Final independent validation/review of the combined implementation remains pending.
 
 **Connection**:
 An owner's logical relationship to one remote MCP endpoint and external account context. Enabling a Connection authorizes all of its current and future discovered tools for that owner's future Research Runs.
@@ -358,7 +358,7 @@ A progressively disclosed `SKILL.md` package discovered from packaged built-ins,
 _Avoid_: owner Profile Memory, marketplace plugin, arbitrary extension
 
 **Outbound MCP Tool**:
-In the current shipped implementation, a deployment-declared and allowlisted remote tool invoked through a foreground stdio or Streamable-HTTP MCP session. It is distinct from the approved, unimplemented owner Connection target above.
+An owner-bound remote tool invoked through a bounded foreground Streamable-HTTP MCP session after the Run/Child pending-effect gate. Deployment-global tool declarations and stdio are no longer accepted.
 _Avoid_: Personal Connection, MCP registry, marketplace, OAuth platform
 
 **Agent Workspace**:

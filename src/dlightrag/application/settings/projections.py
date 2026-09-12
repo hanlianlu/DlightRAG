@@ -15,7 +15,7 @@ from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_fingerprint
 from dlightrag.engine.ai.reasoning import resolve_reasoning
-from dlightrag.engine.ai.settings import ModelRole, ModelSettings
+from dlightrag.engine.ai.settings import ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilitySettings,
     AnswerImagePolicySettings,
@@ -197,7 +197,7 @@ def corpus_admin_settings(config: DlightragConfig) -> CorpusAdminSettings:
     )
 
 
-def model_settings_for_role(config: DlightragConfig, role: ModelRole) -> ModelSettings:
+def model_settings_for_role(config: DlightragConfig, role: ChatModelSelector) -> ModelSettings:
     """Resolve one complete role override, otherwise snapshot the default model."""
     return config.models.chat.resolve(role)
 
@@ -214,7 +214,7 @@ def model_profile_for_settings(
     return profile
 
 
-def model_profile_for_role(config: DlightragConfig, role: ModelRole) -> ModelProfile:
+def model_profile_for_role(config: DlightragConfig, role: ChatModelSelector) -> ModelProfile:
     """Resolve one role's model settings and independent capacity profile."""
     return model_profile_for_settings(config, model_settings_for_role(config, role))
 

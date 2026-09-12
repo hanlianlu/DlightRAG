@@ -686,7 +686,8 @@ class TestWebBootstrap:
 
         assert response.status_code == 200
         assert response.json() == {
-            "contract_version": 1,
+            "contract_version": 2,
+            "personal_mcp_connections": True,
             "workspaces": [
                 {
                     "workspace": "default",

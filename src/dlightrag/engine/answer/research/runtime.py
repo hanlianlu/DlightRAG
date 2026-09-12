@@ -384,11 +384,15 @@ class ResearchRuntimeEffects:
         persist_child_intent: Callable[..., Awaitable[Any]] | None,
         validate_pins: Callable[[], None] | None = None,
         publish_provider_text: bool = False,
+        session_fencing_epoch: int | None = None,
     ) -> None:
         self._orchestrator = orchestrator
         self._prepared = prepared
         self._session = session
         self._session_id = session_id
+        self._session_fencing_epoch = (
+            session.fencing_epoch if session_fencing_epoch is None else session_fencing_epoch
+        )
         self._fetched_buffer = fetched_buffer
         self._persist_child_intent = persist_child_intent
         self._validate_pins = validate_pins
@@ -448,6 +452,7 @@ class ResearchRuntimeEffects:
             assistant = await self._orchestrator.call_runtime_provider(
                 request,
                 model_profile=self._prepared.model_profile,
+                model_func=self._prepared.model_func,
                 emit_text=emit_text if self._publish_provider_text else None,
             )
         except asyncio.CancelledError:
@@ -563,6 +568,7 @@ class ResearchRuntimeEffects:
             tool_name=item.tool_name,
             intent_id=item.intent_id,
             execution_scope=self._session_id.value,
+            fencing_epoch=self._session_fencing_epoch,
             _update_sink=update,
         )
         result = await tool.execute(validated, runtime)
@@ -747,7 +753,7 @@ def _child_agent_plan(prepared: Any, request: ChildRequest) -> AgentRunPlan:
         prepared.tools,
         model_role=request.model_role,
         context_policy_revision=CONTEXT_POLICY_REVISION,
-        model_identity={"role": request.model_role, "scope": "child"},
+        model_identity=prepared.model_identity or {"role": request.model_role, "scope": "child"},
         model_profile=asdict(prepared.model_profile),
     )
 
@@ -951,6 +957,7 @@ async def run_child_session(
         prepared=prepared,
         session=session,
         session_id=child_id,
+        session_fencing_epoch=child_epoch,
         fetched_buffer=fetched_buffer,
         persist_child_intent=None,
     )

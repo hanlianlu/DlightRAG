@@ -231,6 +231,34 @@ Operation on the existing Child Session. The built-in `council` Skill is a
 parent recipe for independent first-pass investigations and at most one curated
 cross-examination; it adds no tools and is not a permission gate.
 
+Child `model_role` selects a configured model, not a task category or permission.
+The objective remains arbitrary free text; omitting the selector chooses `query`.
+
+| Selector | Recommended use |
+| --- | --- |
+| `query` | Preferred strongest reasoning tier: hardest research, complex planning, evidence adjudication, final review |
+| `default` | General-purpose tier below query: ordinary analysis, synthesis, drafting, routine review |
+| `extract` | Routine extraction, normalization, structured work |
+| `keyword` | Lightweight keywords, labels, query rewriting |
+| `vlm` | Visual evidence, images, charts, document pages; not inherently cheap or fast |
+
+`default` resolves `models.chat.default` itself, independently of the `query`
+override. Other selectors use complete authenticated role overrides or the
+existing default fallback. These recommendations do not guarantee relative model
+strength. The spawn tool describes the accepted effective model/profile and
+agentic reasoning request (including ordinary-reasoning inheritance); `max` is a
+configured request level, not a universal capability guarantee. Image support
+comes from the effective profile, never the selector name. Incompatible image
+inputs and unsupported provider tool calling fail explicitly, without switching
+models or silently dropping images.
+
+Acceptance pins all five identities, profiles and effective reasoning settings.
+Each Child Session pins its selected identity/profile and tools through
+continuation and same-version restart recovery. Incompatible endpoint or reasoning
+drift is rejected before child provider effects. Development upgrades do not adapt
+old two-selector/four-pin records: incompatible Runs fail explicitly and the user
+starts a new Run; no automatic reset, cancellation or deletion is performed.
+
 Tool errors return to the model for correction; they do not terminate research.
 A no-tool assistant turn ends the run, and that text is the answer. The parent
 Research Session authorizes a root Workspace file for publication only through

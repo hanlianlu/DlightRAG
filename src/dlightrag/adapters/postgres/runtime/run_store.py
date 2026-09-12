@@ -25,6 +25,7 @@ from dlightrag.adapters.postgres.answer.session_repository import (
     PGProgressStore,
 )
 from dlightrag.adapters.postgres.answer.workspace import PGWorkspaceStore
+from dlightrag.adapters.postgres.connections import PGConnectionPinWriter
 from dlightrag.adapters.postgres.core._migrations import (
     ForeignKeyRequirement,
     Migration,
@@ -50,6 +51,7 @@ from dlightrag.adapters.postgres.runtime._terminal import TerminalStatus, finish
 from dlightrag.adapters.postgres.runtime.run_blob_store import BlobSizeConflict, write_blob_content
 from dlightrag.engine.agent.session.ids import SessionId
 from dlightrag.engine.agent.tool_content import decode_tool_content, tool_content_message_fields
+from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.engine.runtime.cancellation import (
     RunCancellationListener,
@@ -2572,6 +2574,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> RunCreation:
         """Accept one purpose-built Answer envelope on the generic runtime."""
         return await self.accept_run(
@@ -2581,6 +2584,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             blobs=artifacts,
             references=references,
             routing=routing,
+            connection_bindings=connection_bindings,
         )
 
     async def accept_run(
@@ -2592,6 +2596,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         blobs: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> RunCreation:
         """Atomically accept one operation input and its generic run row."""
         if envelope.run_kind in {"answer", "retrieval"} and envelope.lane != "query":
@@ -2609,7 +2614,9 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         )
         if envelope.supersedes_run_id is not None and superseded_uuid is None:
             raise ValueError("supersedes_run_id is invalid")
-        if envelope.run_kind != "answer" and (resources or blobs or references or routing):
+        if envelope.run_kind != "answer" and (
+            resources or blobs or references or routing or connection_bindings
+        ):
             raise ValueError("non-Answer runs cannot carry Answer-owned projections")
         if any(reference.reference_kind == "fetched_resource" for reference in references):
             raise ValueError("fetched_resource references cannot be run creation inputs")
@@ -2669,6 +2676,10 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 if nonterminal >= max_nonterminal:
                     raise RunAdmissionLimitExceededError(
                         "Deployment-wide nonterminal admission limit reached"
+                    )
+                if envelope.run_kind == "answer":
+                    await PGConnectionPinWriter.validate_in(
+                        conn, owner_id=owner, payload=envelope.payload, bindings=connection_bindings
                     )
                 await self._write_blobs(conn, owner, blobs)
                 row = await conn.fetchrow(
@@ -2733,6 +2744,9 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                         json.dumps(dict(reference.transform_locator), ensure_ascii=False),
                     )
                 if envelope.run_kind == "answer":
+                    await PGConnectionPinWriter.insert_in(
+                        conn, owner_id=owner, run_id=run_uuid, bindings=connection_bindings
+                    )
                     await self._insert_routing(
                         conn, owner, run_uuid, routing, prepared_input=envelope.payload
                     )
@@ -2815,6 +2829,7 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> RunCreation:
         """Create or replay one run inside a transaction the caller already owns.
 
@@ -2870,6 +2885,9 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             raise RunAdmissionLimitExceededError(
                 "Deployment-wide nonterminal admission limit reached"
             )
+        await PGConnectionPinWriter.validate_in(
+            conn, owner_id=owner, payload=envelope.payload, bindings=connection_bindings
+        )
         await self._write_blobs(conn, owner, artifacts)
         row = await conn.fetchrow(
             _INSERT_RUN,
@@ -2912,6 +2930,9 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
                 reference.mime_type,
                 json.dumps(dict(reference.transform_locator), ensure_ascii=False),
             )
+        await PGConnectionPinWriter.insert_in(
+            conn, owner_id=owner, run_id=run_uuid, bindings=connection_bindings
+        )
         await self._insert_routing(conn, owner, run_uuid, routing, prepared_input=envelope.payload)
         return RunCreation(run=run_record(row), replayed=False)
 

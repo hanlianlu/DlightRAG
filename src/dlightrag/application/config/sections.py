@@ -27,6 +27,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SecretStr,
     field_serializer,
     field_validator,
     model_validator,
@@ -34,6 +35,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from dlightrag.application.config.yaml_source import Yaml12ConfigSettingsSource
+from dlightrag.application.connections.policy import ConnectionPolicy
 from dlightrag.engine.ai.settings import (
     FrozenSettings,
     ModelsSettings,
@@ -253,27 +255,10 @@ class RuntimeConfig(BaseModel):
     )
 
 
-class OutboundMcpServerConfig(BaseModel):
-    """One thin deployment-configured outbound MCP endpoint."""
+class ConnectionsSettings(ConnectionPolicy):
+    """Non-secret network ceilings plus an excluded, injected deployment secret."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    name: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
-    transport: Literal["stdio", "streamable-http"]
-    tools: tuple[str, ...] = Field(min_length=1)
-    command: str | None = None
-    args: tuple[str, ...] = ()
-    url: str | None = None
-
-    @model_validator(mode="after")
-    def _validate_endpoint(self) -> OutboundMcpServerConfig:
-        if self.transport == "stdio" and (not self.command or self.url):
-            raise ValueError("stdio outbound MCP requires command and forbids url")
-        if self.transport == "streamable-http" and (not self.url or self.command):
-            raise ValueError("streamable-http outbound MCP requires url and forbids command")
-        if len(set(self.tools)) != len(self.tools):
-            raise ValueError("outbound MCP tool names must be unique")
-        return self
+    credential_secret_keyring: SecretStr | None = Field(default=None, exclude=True, repr=False)
 
 
 class ArtifactPublicationConfig(BaseModel):
@@ -391,7 +376,7 @@ class AgentExecutionConfig(BaseModel):
         ),
     )
     publication: ArtifactPublicationConfig = Field(default_factory=ArtifactPublicationConfig)
-    outbound_mcp: tuple[OutboundMcpServerConfig, ...] = ()
+    connections: ConnectionsSettings = Field(default_factory=ConnectionsSettings)
 
 
 class WebConversationsConfig(BaseModel):

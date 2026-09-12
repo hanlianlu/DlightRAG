@@ -9,6 +9,7 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
+from pydantic import SecretStr
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
@@ -222,7 +223,12 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         self._config_getter = config_getter
 
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+        path = request.scope["path"]
+        if path == "/web/oauth/connections/mcp/callback":
+            request.state.connection_oauth_query = SecretStr(
+                request.scope.get("query_string", b"").decode("utf-8", errors="replace")
+            )
+            request.scope["query_string"] = b""
         if not path.startswith("/web"):
             return await call_next(request)
         if path in _PUBLIC_WEB_PATHS:
@@ -236,6 +242,10 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         cfg = self._config_getter()
         if cfg.access.auth_mode == "none":
             request.state.user_context = UserContext(user_id="anonymous", auth_mode="none")
+            if path.startswith("/web/api/connections/mcp"):
+                if _reject_web_mutation(request):
+                    return PlainTextResponse("Cross-origin request rejected", status_code=403)
+                return await self._finish_web_response(request, call_next)
             return await call_next(request)
 
         if cfg.access.web_identity.edge is not None:

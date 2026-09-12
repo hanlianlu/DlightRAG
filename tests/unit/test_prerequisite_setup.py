@@ -375,8 +375,12 @@ def test_write_config_preserves_comments_and_updates(wiz, tmp_path):
     assert data["answer"]["agent"] == {
         "execution_environment": "trust",
         "workspace_root": None,
-        "outbound_mcp": [],
     }
+    from dlightrag.application.config import DlightragConfig
+
+    generated = DlightragConfig.model_validate(data)
+    assert generated.answer.agent.connections.call_timeout == 60
+    assert "outbound_mcp" not in generated.answer.agent.model_dump()
 
 
 def test_write_config_replaces_stale_role_blocks_when_roles_are_explicit(wiz, tmp_path):

@@ -337,7 +337,6 @@ def write_config_yaml(
     agent = answer.setdefault("agent", {})
     agent.setdefault("execution_environment", "trust")
     agent.setdefault("workspace_root", None)
-    agent.setdefault("outbound_mcp", [])
     if web_sources is not None:
         node = answer.setdefault("web_sources", {})
         node.clear()

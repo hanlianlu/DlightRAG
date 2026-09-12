@@ -16,8 +16,17 @@ from dlightrag.engine.agent.session.plan import AgentRunPlan
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
-from dlightrag.engine.ai.reasoning import REASONING_LEVELS, ReasoningLevels, ReasoningProfile
-from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.ai.reasoning import (
+    REASONING_LEVELS,
+    ReasoningLevels,
+    ReasoningProfile,
+    resolve_reasoning,
+)
+from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
+from dlightrag.engine.answer.execution.connection_binding import (
+    RunConnectionBinding,
+    decode_connection_bindings,
+)
 from dlightrag.engine.answer.mode import canonical_answer_mode
 from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.rag.retrieval import RetrievalOptions
@@ -126,10 +135,16 @@ class PinnedModelProfile:
     role: str
     fingerprint: ModelFingerprint
     profile: ModelProfile
+    reasoning_settings: Mapping[str, Any] | None = None
 
     def as_json(self) -> dict[str, Any]:
         return {
             "role": self.role,
+            **(
+                {"reasoning_settings": dict(self.reasoning_settings)}
+                if self.reasoning_settings is not None
+                else {}
+            ),
             "fingerprint": {
                 "provider": self.fingerprint.provider,
                 "model": self.fingerprint.model,
@@ -161,6 +176,7 @@ class PinnedModelProfile:
             raise ValueError("pinned model profile requires explicit reasoning facts")
         return cls(
             role=str(value.get("role") or ""),
+            reasoning_settings=_pinned_reasoning_settings(value.get("reasoning_settings")),
             fingerprint=ModelFingerprint(
                 provider=str(fingerprint.get("provider") or ""),
                 model=str(fingerprint.get("model") or ""),
@@ -275,6 +291,7 @@ class AnswerRunInput:
     model_catalog_revision: str
     idempotency_fingerprint: str
     agent_run_plan: AgentRunPlan | None = None
+    run_connection_bindings: tuple[RunConnectionBinding, ...] = ()
     workspaces: tuple[str, ...] = ()
     history: tuple[Mapping[str, Any], ...] = ()
     episodic_summary: str = ""
@@ -315,6 +332,9 @@ class AnswerRunInput:
             "context_policy_revision": self.context_policy_revision,
             "model_catalog_revision": self.model_catalog_revision,
             "idempotency_fingerprint": self.idempotency_fingerprint,
+            "run_connection_bindings": [
+                binding.as_json() for binding in self.run_connection_bindings
+            ],
             "agent_run_plan": (
                 self.agent_run_plan.canonical_payload() if self.agent_run_plan is not None else None
             ),
@@ -360,6 +380,9 @@ class AnswerRunInput:
             model_catalog_revision=model_catalog_revision,
             idempotency_fingerprint=idempotency_fingerprint,
             agent_run_plan=agent_run_plan,
+            run_connection_bindings=decode_connection_bindings(
+                request.get("run_connection_bindings", [])
+            ),
             workspaces=tuple(str(value) for value in request.get("workspaces") or ()),
             history=tuple(dict(message) for message in request.get("history") or ()),
             episodic_summary=str(request.get("episodic_summary") or ""),
@@ -399,10 +422,64 @@ class AnswerRunInput:
         return cls.from_request(prepared)
 
 
+def model_reasoning_settings(settings: ModelSettings) -> dict[str, Any]:
+    """Secret-free request levels, including auth-aware complete-role inheritance."""
+    return {"ordinary": settings.reasoning, "agentic": settings.effective_agentic_reasoning}
+
+
+def _pinned_reasoning_settings(value: Any) -> Mapping[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"ordinary", "agentic"}:
+        raise ValueError("invalid pinned reasoning settings")
+    settings = ModelSettings(
+        model="pinned", reasoning=value["ordinary"], agentic_reasoning=value["agentic"]
+    )
+    return model_reasoning_settings(settings)
+
+
+def pinned_model_selectors(pins: tuple[PinnedModelProfile, ...]) -> tuple[ChatModelSelector, ...]:
+    roles = {item.role for item in pins}
+    selectors = CHAT_MODEL_SELECTORS
+    if len(pins) != len(selectors) or roles != set(selectors):
+        raise IncompatibleActiveRunError(
+            "answer run does not contain the complete pinned model role set"
+        )
+    if any(item.reasoning_settings is None for item in pins):
+        raise IncompatibleActiveRunError("answer run is missing pinned model reasoning settings")
+    return selectors
+
+
+def child_model_guidance(pins: tuple[PinnedModelProfile, ...]) -> str:
+    """Describe accepted endpoint facts, never a live catalogue on recovery."""
+    intents = {
+        "query": "preferred strongest reasoning tier: hardest research, planning, evidence adjudication and final review",
+        "default": "general-purpose tier below query: ordinary analysis, synthesis, drafting and routine review",
+        "extract": "routine extraction, normalization and structured work",
+        "keyword": "lightweight keywords, labels and query rewriting",
+        "vlm": "visual evidence, images, charts and document pages; not inherently cheap or fast",
+    }
+    lines = [
+        "Model selectors are recommendations, not task categories or permissions; objectives are unrestricted. query is the default selector. Effective configured capabilities follow (tiers are intent, not guarantees):"
+    ]
+    for pin in pins:
+        profile = pin.profile
+        reasoning = (pin.reasoning_settings or {}).get("agentic")
+        resolved = resolve_reasoning(profile.reasoning, reasoning)
+        lines.append(
+            f"{pin.role}: {intents[pin.role]}; model={pin.fingerprint.model}; images={profile.supports_images}; context_tokens={profile.context_window_tokens}; agentic_reasoning_request={reasoning or 'provider default'}; agentic_reasoning_effective={resolved.effective if resolved else 'provider default'}; reasoning_profile={profile.reasoning.as_dict() if profile.reasoning else 'none'}."
+        )
+    lines.append(
+        "Reasoning max is a configured request level, not a universal capability guarantee. Image support follows the effective profile, not the vlm label. All selectors use the supported tool-calling wrapper; provider rejection is explicit."
+    )
+    return "\n".join(lines)
+
+
 def validate_active_answer_input(
     prepared: Mapping[str, Any],
     *,
-    model_fingerprint_for_role: Callable[[ModelRole], ModelFingerprint],
+    model_fingerprint_for_role: Callable[[ChatModelSelector], ModelFingerprint],
+    model_settings_for_role: Callable[[ChatModelSelector], ModelSettings] | None = None,
 ) -> None:
     """Require one active Answer input to remain executable by this deployment."""
     try:
@@ -410,32 +487,31 @@ def validate_active_answer_input(
     except (AttributeError, KeyError, TypeError, ValueError, RunExecutionError) as exc:
         raise IncompatibleActiveRunError(
             "active answer runs use an incompatible durable input schema; "
-            "drain or owner-cancel them before deployment"
+            "start a new Run with the current configuration"
         ) from exc
     pinned = {item.role: item for item in run_input.pinned_models}
-    if len(run_input.pinned_models) != len(MODEL_ROLE_NAMES) or set(pinned) != set(
-        MODEL_ROLE_NAMES
+    selectors = pinned_model_selectors(run_input.pinned_models)
+    if model_settings_for_role is None or any(
+        pinned[role].reasoning_settings != model_reasoning_settings(model_settings_for_role(role))
+        for role in selectors
     ):
         raise IncompatibleActiveRunError(
-            "active answer runs do not contain the required model role set; "
-            "drain or owner-cancel them before deployment"
+            "active answer runs target another model reasoning configuration"
         )
     if run_input.context_policy_revision != CONTEXT_POLICY_REVISION:
         raise IncompatibleActiveRunError(
             "active answer runs use another context policy revision; "
-            "drain or owner-cancel them before deployment"
+            "start a new Run with the current configuration"
         )
     if run_input.model_catalog_revision != current_model_catalog_revision():
         raise IncompatibleActiveRunError(
             "active answer runs use another model catalog revision; "
-            "drain or owner-cancel them before deployment"
+            "start a new Run with the current configuration"
         )
-    if any(
-        pinned[role].fingerprint != model_fingerprint_for_role(role) for role in MODEL_ROLE_NAMES
-    ):
+    if any(pinned[role].fingerprint != model_fingerprint_for_role(role) for role in selectors):
         raise IncompatibleActiveRunError(
             "active answer runs target another model endpoint configuration; "
-            "drain or owner-cancel them before deployment"
+            "start a new Run with the current configuration"
         )
 
 

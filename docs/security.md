@@ -351,9 +351,11 @@ Execution modes:
 - `sandbox`: fails because this distribution ships no backend; it never
   downgrades to trust.
 
-Root checks are not a shell sandbox. Outbound MCP endpoints/tools are deployment
-allowlists; there is no discovery, OAuth brokerage, or management plane. Protect
-tool credentials and egress at deployment level. Public Web Search and Extract
+Root checks are not a shell sandbox. Outbound MCP tools now belong to owner-scoped
+Connections, with immutable Run pins and a pending-effect/Run/Child lease gate.
+Revoke-first blocks new dispatch; already in-flight writes can only be best-effort
+cancelled, never rolled back or automatically retried. Static bearer/no-auth and SDK-authorized OAuth calls are available. Expired OAuth tokens refresh under an expiring Grant lease and fenced secret-version CAS before a complete effect re-gate; rejected effects never refresh-and-replay. Network policy
+can deny access but cannot grant external account authority. Public Web Search and Extract
 exist only for explicitly configured Exa/Tavily provider chains; provider failures
 may fail over, while successful empty results do not.
 
@@ -396,3 +398,9 @@ Public MCP requires non-loopback bind, authentication, and explicit
 `interfaces.mcp.allowed_hosts`/`allowed_origins`; browser clients also need
 `access.cors_allow_origins`. Host/Origin DNS-rebinding protection remains active
 even with bearer auth.
+
+### Personal Connection authorization callback
+
+Settings OAuth uses SDK 2.2.0 PKCE/state, resource/issuer validation and TokenStorage. New consent/replacement creates a separate Grant; no old token is sent to a candidate audience. Callback deposit requires the authenticated eligible owner and SDK state, a live initiating lease, and single-use PostgreSQL inbox CAS. Codes/client state/tokens are encrypted with the deployment keyring; pending PKCE remains process-local. Expired or dead-worker flows cannot be resumed by another worker.
+
+Web middleware removes callback query data before downstream application/access logging; callback responses are no-store/no-referrer and redirect only to fixed Settings navigation without codes/state. Operators must also suppress/redact callback query strings in upstream proxies and external tracing, which are outside this application. OAuth metadata/token and same-origin redirect requests are network-admitted and IP-pinned with original Host/SNI; cookies and unrelated headers are stripped. SDK diagnostics are suppressed within these sessions, and remote catalogue echoes of known credentials are redacted. Foreground effects never negotiate OAuth or resend after rejection. Refresh preflight sends only SDK-generated requests to the persisted token origin and admitted same-origin redirects. It never sends the original MCP request or enters background consent. Grant/epoch/secret-version CAS discards stale refresh results. Writer maintenance re-encrypts live Grants and collects expired inboxes/unpinned generations; retained Run pins preserve local definitions, not live credentials. Removing live ciphertext does not erase backups. Final independent validation/review of the combined implementation remains pending.

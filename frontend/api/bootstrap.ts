@@ -31,7 +31,8 @@ export type AnswerAttachmentBootstrap = v.InferOutput<typeof answerAttachmentBoo
 
 const webBootstrap = v.pipe(
   v.object({
-    contract_version: v.literal(1),
+    contract_version: v.literal(2),
+    personal_mcp_connections: v.boolean(),
     workspaces: v.array(workspacePageItem),
     workspaces_next_cursor: v.optional(v.nullable(v.string())),
     primary_workspace: v.string(),
@@ -42,6 +43,7 @@ const webBootstrap = v.pipe(
   }),
   v.transform((w) => ({
     contractVersion: w.contract_version,
+    personalMcpConnections: w.personal_mcp_connections,
     workspaces: w.workspaces,
     workspacesNextCursor: w.workspaces_next_cursor ?? null,
     primaryWorkspace: w.primary_workspace,

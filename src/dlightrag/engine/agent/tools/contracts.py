@@ -146,6 +146,7 @@ class ToolRuntime:
     intent_id: IntentId
     execution_scope: str
     _update_sink: ToolUpdateSink
+    fencing_epoch: int = 0
 
     async def emit_update(self, result: ToolResult) -> None:
         """Publish one transient result snapshot without settling the effect."""

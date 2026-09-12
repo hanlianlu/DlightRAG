@@ -21,6 +21,7 @@ from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.reasoning import best_effort_reasoning_profile
 from dlightrag.engine.ai.scheduler import ModelScheduler
+from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilities,
@@ -91,7 +92,7 @@ def _fingerprint(role: str) -> ModelFingerprint:
 
 
 def _executor() -> AnswerExecutor:
-    return AnswerExecutor(
+    executor = AnswerExecutor(
         store=MagicMock(),
         blob_store=MagicMock(),
         pool=MagicMock(),
@@ -116,6 +117,10 @@ def _executor() -> AnswerExecutor:
         telemetry=NOOP_TELEMETRY,
         model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
     )
+
+    # These unit doubles replace execution; dedicated model-contract tests exercise preflight.
+    executor.validate_active_prepared_input = Mock()
+    return executor
 
 
 def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) -> None:
@@ -182,16 +187,7 @@ def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) ->
 
 
 def test_acceptance_research_tools_include_every_configured_non_resource_surface() -> None:
-    from pydantic import BaseModel
-
     from dlightrag.engine.agent.skills import SkillsBundle
-    from dlightrag.engine.agent.tools import AgentTool, ToolResult
-
-    class Args(BaseModel):
-        value: str
-
-    async def external(_args: BaseModel, _runtime: object) -> ToolResult:
-        return ToolResult.text("unused")
 
     executor = AnswerExecutor(
         store=MagicMock(),
@@ -208,7 +204,6 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         model_fingerprint_for_role=_fingerprint,  # type: ignore[arg-type]
         execution_environment="trust",
         memory_store=MagicMock(),
-        external_tools=(AgentTool("remote_lookup", "Remote lookup.", Args, external),),
         skills_bundle_factory=lambda owner_id, requested_skill=None: SkillsBundle(
             global_root=Path("/nonexistent-global-skills"),
         ),
@@ -234,11 +229,10 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         "forget",
         "recall_memory",
         "load_skill",
-        "remote_lookup",
     } <= names
 
 
-def test_pinned_child_lifecycle_keeps_v2_v3_and_accepts_v4() -> None:
+def test_pinned_child_lifecycle_requires_current_contract() -> None:
     from pydantic import BaseModel
 
     from dlightrag.engine.agent.tools import AgentTool, ToolResult
@@ -274,10 +268,11 @@ def test_pinned_child_lifecycle_keeps_v2_v3_and_accepts_v4() -> None:
         replay_policy=supported.replay_policy,
         contract_version=9,
     )
-    assert _child_lifecycle_for_plan(_plan(_spawn(async_lifecycle=False))) == (False, False)
-    assert _child_lifecycle_for_plan(
-        _plan(_spawn(async_lifecycle=True, interactive_controls=False))
-    ) == (True, False)
+    from dataclasses import replace
+
+    for version in (2, 3, 4):
+        with pytest.raises(IncompatibleActiveRunError):
+            _child_lifecycle_for_plan(_plan(replace(supported, contract_version=version)))
     assert _child_lifecycle_for_plan(_plan(supported)) == (True, True)
     with pytest.raises(IncompatibleActiveRunError):
         _child_lifecycle_for_plan(_plan(unsupported))
@@ -401,8 +396,9 @@ def test_execution_rejects_changed_context_or_model_pins() -> None:
             role=role,
             fingerprint=_fingerprint(role),
             profile=ModelProfile(context_window_tokens=10_000),
+            reasoning_settings={"ordinary": None, "agentic": None},
         )
-        for role in ("extract", "keyword", "query", "vlm")
+        for role in ("extract", "keyword", "query", "vlm", "default")
     )
     executor = _executor()
     request = MagicMock(
@@ -410,6 +406,7 @@ def test_execution_rejects_changed_context_or_model_pins() -> None:
         context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision=current_model_catalog_revision(),
     )
+    executor._models.model_settings = lambda role: ModelSettings(model="test")
     executor.validate_pinned_model_profiles(request)
 
     request.model_catalog_revision = "stale-catalog"
@@ -423,6 +420,7 @@ def test_execution_rejects_changed_context_or_model_pins() -> None:
 
     request.context_policy_revision = CONTEXT_POLICY_REVISION
     mismatched = _executor()
+    mismatched._models.model_settings = lambda role: ModelSettings(model="test")
     mismatched._model_fingerprint_for_role = lambda role: ModelFingerprint(
         "other", f"test-{role}", None
     )

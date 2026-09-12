@@ -1,0 +1,52 @@
+/* Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0 */
+@layer features {
+  .root {
+    display: grid;
+    gap: var(--space-section);
+    min-width: 0;
+  }
+
+  .card {
+    display: grid;
+    gap: var(--space-tight);
+    padding-block: var(--space-section);
+    border-bottom: 1px solid var(--color-border-strong);
+    min-width: 0;
+  }
+
+  .card label {
+    display: grid;
+    gap: var(--space-inline);
+  }
+
+  .card input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    font: inherit;
+    color: inherit;
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-control);
+    padding: var(--space-tight);
+  }
+
+  .card pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 16rem;
+    overflow: auto;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+  }
+
+  .warning {
+    padding: var(--space-tight);
+    border: 1px solid currentcolor;
+    border-radius: var(--radius-control);
+  }
+}

@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
 from typing import Any
 
-from dlightrag.engine.ai.capacity import ModelProfile
+from dlightrag.engine.ai.capacity import ModelCapabilityError, ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_fingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolChoice, ToolDefinition
@@ -102,6 +102,7 @@ class ToolModel:
         model_profile: ModelProfile | None,
         emit_text: Callable[[str], Awaitable[None]] | None = None,
     ) -> AssistantTurn:
+        self._validate_image_inputs(messages, model_profile)
         resolved = self._resolve_reasoning(
             self.settings.effective_agentic_reasoning,
             model_profile,
@@ -203,6 +204,7 @@ class ToolModel:
             reasoning=reasoning,
             model_profile=model_profile,
         )
+        self._validate_image_inputs(messages, model_profile)
         prepared_messages = messages_for_model(messages, self.fingerprint)
         async with self._telemetry.observe(
             "agent_final_answer",
@@ -292,6 +294,7 @@ class ToolModel:
             reasoning=None,
             model_profile=model_profile,
         )
+        self._validate_image_inputs(messages, model_profile)
         prepared_messages = messages_for_model(messages, self.fingerprint)
         async with self._telemetry.observe(
             "agent_final_answer",
@@ -367,6 +370,22 @@ class ToolModel:
             (merge_reasoning_kwargs(self._agentic_model_kwargs, agentic), agentic),
             (merge_reasoning_kwargs(self._ordinary_model_kwargs, ordinary), ordinary),
         )
+
+    def _validate_image_inputs(
+        self, messages: list[dict[str, Any]], profile: ModelProfile | None
+    ) -> None:
+        if (
+            profile is not None
+            and not profile.supports_images
+            and any(
+                isinstance(block, dict) and block.get("type") == "image_url"
+                for message in messages
+                for block in (
+                    message["content"] if isinstance(message.get("content"), list) else []
+                )
+            )
+        ):
+            raise ModelCapabilityError(role=self.settings.model, capability="image inputs")
 
     def _resolve_reasoning(
         self,

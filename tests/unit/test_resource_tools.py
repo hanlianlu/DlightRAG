@@ -193,7 +193,7 @@ async def test_read_url_registers_handle_applies_representation_headers_and_retu
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "dlightrag.engine.public_http.socket.getaddrinfo",
+        "dlightrag.engine.network_admission.socket.getaddrinfo",
         lambda host, port, *args, **kwargs: [
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
         ],

@@ -18,6 +18,7 @@ from dlightrag.engine.ai.settings import (
     ModelRoleSettings,
     ModelSettings,
 )
+from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.runtime.policy import DEFAULT_RUN_RETENTION_SECONDS
@@ -48,6 +49,7 @@ class FingerprintingRunStore(PGRunStore):
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> RunCreation:
         if envelope is not None:
             if run_id is None:
@@ -59,6 +61,7 @@ class FingerprintingRunStore(PGRunStore):
                 artifacts=artifacts,
                 references=references,
                 routing=routing,
+                connection_bindings=connection_bindings,
             )
         if owner_id is None:
             raise ValueError("owner_id is required for raw test acceptance")
@@ -78,6 +81,7 @@ class FingerprintingRunStore(PGRunStore):
                 idempotency_key=idempotency_key,
                 artifacts=artifacts,
                 references=references,
+                connection_bindings=connection_bindings,
             )
         request = request or {}
         prepared: dict[str, Any] = {
@@ -92,6 +96,7 @@ class FingerprintingRunStore(PGRunStore):
             idempotency_key=idempotency_key,
             artifacts=artifacts,
             references=references,
+            connection_bindings=connection_bindings,
         )
 
     async def _create_answer_run(
@@ -103,6 +108,7 @@ class FingerprintingRunStore(PGRunStore):
         idempotency_key: str | None,
         artifacts: Sequence[PendingArtifact],
         references: Sequence[PendingArtifactReference],
+        connection_bindings: tuple[RunConnectionBinding, ...],
     ) -> RunCreation:
         run_id = str(uuid7())
         return await super().create_run(
@@ -115,6 +121,7 @@ class FingerprintingRunStore(PGRunStore):
             run_id=run_id,
             artifacts=artifacts,
             references=references,
+            connection_bindings=connection_bindings,
         )
 
     async def create_run_in(
@@ -130,6 +137,7 @@ class FingerprintingRunStore(PGRunStore):
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> RunCreation:
         if envelope is not None:
             if run_id is None:
@@ -141,6 +149,7 @@ class FingerprintingRunStore(PGRunStore):
                 artifacts=artifacts,
                 references=references,
                 routing=routing,
+                connection_bindings=connection_bindings,
             )
         if owner_id is None:
             raise ValueError("owner_id is required for raw test acceptance")
@@ -166,6 +175,7 @@ class FingerprintingRunStore(PGRunStore):
             artifacts=artifacts,
             references=references,
             routing=routing,
+            connection_bindings=connection_bindings,
         )
 
 

@@ -137,7 +137,7 @@ create a nested Retrieval Run:
   publication.
 - **Research** drives product-neutral `AgentSessionRuntime` on one Lane with a
   closed run-local tool registry. Tools may read attachments, search the corpus
-  or Web, use rooted files/Bash when enabled, call allowlisted MCP endpoints,
+  or Web, use rooted files/Bash when enabled, call owner-authorized MCP Connections,
   use Profile Memory, load Skills, and run bounded Child Sessions.
 
 Research parents admit Child Sessions asynchronously: `spawn_agent` returns
@@ -214,9 +214,16 @@ materially improve an answer. Explicit user selection is optional convenience,
 not a permission gate; user veto wins. Research parent runs additionally
 hold `publish_skill` and `delete_skill`, the validated owner-only publication
 channel; built-in and global Skills stay read-only to the application. Outbound
-MCP tools come only from deployment allowlists. This remains the shipped baseline; the
-[accepted, unimplemented personal MCP Connections design](personal-mcp-connections.md)
-and [ADR 0012](adr/0012-personal-connections-and-hot-plug.md) describe its intended replacement.
+MCP tools come from the eligible owner's enabled personal Connections, managed in
+Settings, and automatically bind future Research Runs across every Answer interface.
+Application Connections owns immutable catalogues, encrypted Grants, SDK OAuth,
+refresh/rotation and retention. Actual accepting PostgreSQL transactions write normalized
+owner/Run/generation pins; Engine restores them through a neutral injected resolver.
+The existing pending-effect/Run/Child gate checks revocation and cancellation before
+one foreground call. Fast has no external tools. No deployment-global tool tuple or
+Web-managed stdio remains. See the [implementation contract](personal-mcp-connections.md)
+and [ADR 0012](adr/0012-personal-connections-and-hot-plug.md), including pending final
+independent validation/review and the limits of external-account isolation.
 
 ## Durable Execution
 

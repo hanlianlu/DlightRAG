@@ -54,6 +54,7 @@ from dlightrag.application.web_conversations import (
     WebConversationSchemaError,
     WebConversationUnavailableError,
 )
+from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.runtime.errors import RunSchemaError
@@ -1094,6 +1095,7 @@ class PGWebConversationStore(PostgresOperationRunner):
         references: Sequence[PendingArtifactReference] = (),
         title_hint: str | None,
         routing: RoutingAcceptance | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
         create_conversation: bool = False,
         forked_from_conversation_id: str | None = None,
     ) -> AnswerTurnCreation | None:
@@ -1195,6 +1197,7 @@ class PGWebConversationStore(PostgresOperationRunner):
                         artifacts=artifacts,
                         references=references,
                         routing=accepted_routing,
+                        connection_bindings=connection_bindings,
                     )
                 except IdempotencyKeyConflict as exc:
                     accepted = await conn.fetchrow(

@@ -3,8 +3,7 @@
 
 Accepted child envelopes live in the roster before ``spawn_agent`` returns.
 Process-local tasks only accelerate that durable work; parent reclaim rebuilds
-running children from their stored envelope. An explicit legacy composition
-keeps already-accepted version-2 foreground tool plans executable unchanged.
+running children from their stored envelope under the current contract.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from dlightrag.engine.runtime.errors import RunCancelledError
 
 type ChildStatus = Literal["running", "succeeded", "failed", "cancelled"]
 type ChildContextMode = Literal["isolated", "parent"]
-type ChildModelRole = Literal["query", "extract"]
+type ChildModelRole = Literal["query", "extract", "keyword", "vlm", "default"]
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +238,7 @@ class SubagentHost:
     expire_guidance: Callable[..., Awaitable[Any]] | None = None
     list_guidance: Callable[..., Awaitable[Any]] | None = None
     guidance_timeout_seconds: int = 300
+    model_guidance: str | None = None
     prepare_dispatch: (
         Callable[[SessionId, ChildRequest, ChildContextSnapshot], Mapping[str, Any]] | None
     ) = None
@@ -526,8 +526,6 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
         return ToolResult.text(canonical_json(dict(receipt)))
 
     if not host.async_lifecycle:
-        # These strings and version are the exact baseline v2 accepted contract.
-        version = 2
         descriptions = (
             "Run one or many foreground child Agent Sessions and wait for all results.",
             "Read one foreground or completed child session status.",
@@ -535,7 +533,6 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             "Cancel one known foreground child session.",
         )
     elif host.interactive_controls:
-        version = 4
         descriptions = (
             "Accept one or many asynchronous child Agent Sessions and return stable handles "
             "immediately. Children default to read-only tools; explicitly list a narrower "
@@ -545,8 +542,6 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             "Durably cancel one known child session without cancelling its siblings.",
         )
     else:
-        # Slice-1 async contract: same descriptions as v4 without control tools.
-        version = 3
         descriptions = (
             "Accept one or many asynchronous child Agent Sessions and return stable handles "
             "immediately. Children default to read-only tools; explicitly list a narrower "
@@ -556,10 +551,12 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
             "Durably cancel one known child session without cancelling its siblings.",
         )
 
+    five_models = host.model_guidance is not None
+    version = 5
     return (
         AgentTool(
             "spawn_agent",
-            descriptions[0],
+            descriptions[0] + ("\n" + (host.model_guidance or "") if five_models else ""),
             SpawnAgentInput,
             spawn,
             replay_policy="replayable",
@@ -746,7 +743,7 @@ async def _spawn(
     )
 
     # Every reconstructible async envelope commits before any handle becomes
-    # visible. Legacy foreground replay keeps its v2 terminal short-circuit.
+    # visible. Foreground replay can return an already settled outcome.
     for child_id, request in zip(child_ids, args.children, strict=True):
         terminal = (
             await _load_terminal_child(host, child_id.value) if not host.async_lifecycle else None

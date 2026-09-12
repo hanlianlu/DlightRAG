@@ -71,8 +71,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag_memory.postgres import PostgresMemoryStore
     from PIL import Image
 
+    from dlightrag.adapters.mcp.oauth import PersonalOAuthClient
+    from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
     from dlightrag.adapters.observability import LangfuseTelemetry
     from dlightrag.adapters.postgres.answer.memory_settings import PGMemorySettingsStore
+    from dlightrag.adapters.postgres.connections import PGConnectionsStore
     from dlightrag.adapters.postgres.corpus.corpus import PGReadinessProbe, build_pg_corpus_backend
     from dlightrag.adapters.postgres.corpus.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.corpus.pg_metadata_index import PGMetadataIndex
@@ -81,6 +84,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.runtime import PGRunBlobStore, PGRunStore
     from dlightrag.adapters.postgres.web.web_conversations import PGWebConversationStore
     from dlightrag.application.answer_runs import AnswerService
+    from dlightrag.application.connections import Connections
+    from dlightrag.application.connections.credentials import CredentialCipher
     from dlightrag.application.corpus_admin import (
         CorpusAdmin,
         CorpusMutationExecutor,
@@ -319,21 +324,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         # carry no authorization state and expire on credential rotation.
         memory_list_cursor_secret=cursor_secrets.derive("dlightrag-memory-list-cursor"),
     )
-    from dlightrag.adapters.mcp.outbound import OutboundMcpServer, outbound_mcp_tools
-
-    outbound_tools = outbound_mcp_tools(
-        tuple(
-            OutboundMcpServer(
-                name=server.name,
-                transport=server.transport,
-                tools=server.tools,
-                command=server.command,
-                args=server.args,
-                url=server.url,
-            )
-            for server in config.answer.agent.outbound_mcp
-        )
-    )
     agent_config = config.answer.agent
     search_toolchain = SearchToolchain(
         fd=agent_config.fd_path,
@@ -345,6 +335,14 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         ),
         auto_install=agent_config.search_tool_auto_install,
     )
+    connections = Connections(
+        store=PGConnectionsStore(),
+        mcp=PersonalMcpClient(),
+        oauth=PersonalOAuthClient(),
+        policy=config.answer.agent.connections,
+        cipher=CredentialCipher(config.answer.agent.connections.credential_secret_keyring),
+    )
+
     answer_executor = AnswerExecutor(
         store=run_store,
         blob_store=run_blob_store,
@@ -367,7 +365,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         memory_store=memory_store,
         memory_recall_enabled=memory.recall_enabled,
         memory_capability_current=memory.capability_current,
-        external_tools=outbound_tools,
+        connection_tool_resolver=connections.restore_research,
         skills_bundle_factory=skills_bundle_factory(config, ensure_dirs=True),
         on_dependency_unavailable=health.mark_component_degraded,
         on_dependency_recovered=health.mark_component_healthy,
@@ -416,6 +414,10 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
                 else:
                     raise ValueError("unsupported active run kind")
             except IncompatibleActiveRunError:
+                if kind == "answer":
+                    # The Answer executor settles this Run without external effects;
+                    # one obsolete accepted contract must not prevent new admission.
+                    continue
                 raise
             except (AttributeError, KeyError, TypeError, ValueError, RunExecutionError) as exc:
                 raise IncompatibleActiveRunError(
@@ -460,6 +462,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         ),
         research_tool_supplements=answer_executor.acceptance_research_tools,
         memory_capability=memory.execution_capability,
+        bind_research=connections.bind_research,
         # Stable across workers sharing the operational database. Cursors
         # carry no authorization state and expire on credential rotation.
         child_roster_cursor_secret=cursor_secrets.derive("dlightrag-child-roster-cursor"),
@@ -475,7 +478,9 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         cursor_secret=cursor_secrets.derive("dlightrag-web-conversation-cursor"),
     )
     MODEL_CATALOGUE.replace_startup(startup_catalogue)
+
     return _ApplicationComponents(
+        connections=connections,
         health=health,
         capabilities=capabilities,
         model_catalogue=model_catalogue,

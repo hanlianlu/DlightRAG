@@ -788,7 +788,7 @@ async def test_process_detach_does_not_terminalize_child_as_cancelled() -> None:
     finish.assert_not_awaited()
 
 
-def test_legacy_foreground_tool_contract_is_exactly_preserved() -> None:
+def test_existing_lifecycle_composition_with_five_selector_schema() -> None:
     legacy = {tool.name: tool for tool in subagent_tools(host=SubagentHost(async_lifecycle=False))}
     slice1 = {
         tool.name: tool
@@ -798,14 +798,14 @@ def test_legacy_foreground_tool_contract_is_exactly_preserved() -> None:
     }
     current = {tool.name: tool for tool in subagent_tools(host=SubagentHost())}
 
-    assert legacy["spawn_agent"].contract_version == 2
+    assert legacy["spawn_agent"].contract_version == 5
     assert legacy["spawn_agent"].input_schema_digest == (
-        "758524c627795a4fdaa920302a8f58163e85641632d85d27880fc831bf26c13e"
+        "ea2283b72d9dce2e740dcc58abbb136c041256381956de11f00cd6aff1b65ccd"
     )
     assert legacy["spawn_agent"].description == (
         "Run one or many foreground child Agent Sessions and wait for all results."
     )
-    assert slice1["spawn_agent"].contract_version == 3
+    assert slice1["spawn_agent"].contract_version == 5
     assert slice1["spawn_agent"].description == current["spawn_agent"].description
     assert (
         not {
@@ -815,7 +815,7 @@ def test_legacy_foreground_tool_contract_is_exactly_preserved() -> None:
         }
         & slice1.keys()
     )
-    assert current["spawn_agent"].contract_version == 4
+    assert current["spawn_agent"].contract_version == 5
     assert {
         "steer_subagent",
         "continue_subagent",
@@ -1101,6 +1101,7 @@ async def test_failed_child_is_recorded_failed() -> None:
 
 @dataclass
 class _FakeSession:
+    fencing_epoch = 1
     run_id: str
     owner_id: str = "owner"
     execution: Any = field(default_factory=lambda: SimpleNamespace(fencing_epoch=1))

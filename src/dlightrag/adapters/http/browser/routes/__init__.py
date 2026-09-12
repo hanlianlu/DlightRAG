@@ -8,6 +8,8 @@ from dlightrag.adapters.http.browser.auth import router as auth_router
 from .bootstrap import router as bootstrap_router
 from .chat import page_router as chat_page_router
 from .chat import router as chat_api_router
+from .connections import callback_router as connections_callback_router
+from .connections import router as connections_router
 from .conversations import router as conversations_router
 from .corpus_runs import router as corpus_runs_router
 from .files import router as files_router
@@ -19,6 +21,7 @@ from .workspaces import router as workspaces_router
 
 router = APIRouter(prefix="/web", tags=["web"])
 router.include_router(auth_router)
+router.include_router(connections_callback_router)
 router.include_router(chat_page_router)
 
 api_router = APIRouter(prefix="/api")
@@ -29,6 +32,7 @@ api_router.include_router(corpus_runs_router)
 api_router.include_router(images_router)
 api_router.include_router(files_router)
 api_router.include_router(memory_router)
+api_router.include_router(connections_router)
 api_router.include_router(workspaces_router)
 api_router.include_router(model_catalogue_router)
 api_router.include_router(skills_router)

@@ -89,32 +89,13 @@ def test_workspace_root_must_not_overlap_working_dir(tmp_path: Path) -> None:
         )
 
 
-def test_outbound_mcp_requires_explicit_transport_shape() -> None:
-    config = AgentExecutionConfig.model_validate(
-        {
-            "outbound_mcp": [
-                {
-                    "name": "docs",
-                    "transport": "streamable-http",
-                    "url": "https://mcp.example.test",
-                    "tools": ["search"],
-                }
-            ]
-        }
-    )
-    assert config.outbound_mcp[0].tools == ("search",)
-    with pytest.raises(ValidationError, match="requires url"):
-        AgentExecutionConfig.model_validate(
-            {
-                "outbound_mcp": [
-                    {
-                        "name": "docs",
-                        "transport": "streamable-http",
-                        "tools": ["search"],
-                    }
-                ]
-            }
-        )
+@pytest.mark.parametrize(
+    "servers",
+    [[], [{"name": "docs", "transport": "stdio", "command": "unused", "tools": ["read"]}]],
+)
+def test_deployment_outbound_mcp_key_is_rejected(servers) -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentExecutionConfig.model_validate({"outbound_mcp": servers})
 
 
 def test_unknown_agent_key_is_rejected() -> None:

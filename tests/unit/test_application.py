@@ -28,9 +28,13 @@ from dlightrag.application.web_conversations import (
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint, model_fingerprint
-from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES
+from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS
 from dlightrag.engine.answer.capabilities import AnswerCapabilityCoordinator
-from dlightrag.engine.answer.execution.input import validate_active_answer_input
+from dlightrag.engine.answer.execution.input import (
+    PinnedModelProfile,
+    model_reasoning_settings,
+    validate_active_answer_input,
+)
 from dlightrag.engine.answer.model_runtime import AnswerModelRuntime
 from dlightrag.engine.rag.workspace.pool import WorkspaceUnavailableError
 from dlightrag.engine.rag.workspace.ports import CorpusSchemaError
@@ -303,6 +307,8 @@ class _Parts:
             return model_fingerprint(model_settings_for_role(config, cast(Any, role)))
 
         async def validate_active_runs() -> None:
+            # Deliberately strict injected validator: Application propagates its failures.
+            # Production composition's per-Answer isolation is exercised by the PG tests.
             async for requirement in self.run_store.iter_active_run_requirements():
                 kind = requirement.get("run_kind")
                 prepared = requirement.get("prepared_input")
@@ -312,6 +318,7 @@ class _Parts:
                     validate_active_answer_input(
                         prepared,
                         model_fingerprint_for_role=cast(Any, current_fingerprint),
+                        model_settings_for_role=config.models.chat.resolve,
                     )
                 elif kind == "retrieval":
                     validate_active_retrieval_input(
@@ -348,24 +355,6 @@ class _Parts:
         )
 
 
-def _pinned(fingerprint: ModelFingerprint, role: str) -> dict[str, Any]:
-    return {
-        "role": role,
-        "fingerprint": {
-            "provider": fingerprint.provider,
-            "model": fingerprint.model,
-            "endpoint_fingerprint": fingerprint.endpoint_fingerprint,
-        },
-        "profile": {
-            "context_window_tokens": 200_000,
-            "max_input_tokens": None,
-            "max_output_tokens": 32_000,
-            "supports_images": False,
-            "reasoning": None,
-        },
-    }
-
-
 def _requirement(
     config: DlightragConfig, *, run_kind: str = "answer", **overrides: Any
 ) -> dict[str, Any]:
@@ -377,8 +366,13 @@ def _requirement(
         "model_catalog_revision": current_model_catalog_revision(),
         "idempotency_fingerprint": "test-fingerprint",
         "pinned_models": [
-            _pinned(model_fingerprint(model_settings_for_role(config, role)), role)
-            for role in MODEL_ROLE_NAMES
+            PinnedModelProfile(
+                role=role,
+                fingerprint=model_fingerprint(config.models.chat.resolve(role)),
+                profile=ModelProfile(context_window_tokens=200_000, max_output_tokens=32_000),
+                reasoning_settings=model_reasoning_settings(config.models.chat.resolve(role)),
+            ).as_json()
+            for role in CHAT_MODEL_SELECTORS
         ],
         **overrides,
     }
@@ -659,7 +653,7 @@ async def test_irrelevant_retrieval_capability_drift_does_not_block_startup(
         pytest.param({"pinned_models": []}, "durable input schema", id="roles"),
     ],
 )
-async def test_an_incompatible_active_run_fails_startup_and_closes(
+async def test_an_injected_answer_validation_failure_closes_startup(
     test_config: DlightragConfig, override: dict[str, Any], detail: str
 ) -> None:
     parts = _Parts()
@@ -708,7 +702,7 @@ async def test_an_active_retrieval_on_another_model_endpoint_fails_startup(
         await parts.application(test_config).astart()
 
 
-async def test_an_active_run_on_another_model_endpoint_fails_startup(
+async def test_an_injected_answer_endpoint_validation_failure_closes_startup(
     test_config: DlightragConfig,
 ) -> None:
     requirement = _requirement(test_config)

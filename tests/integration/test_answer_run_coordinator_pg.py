@@ -55,6 +55,7 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
+from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS
 from dlightrag.engine.ai.telemetry import NOOP_TELEMETRY
 from dlightrag.engine.answer.citations.streaming import AnswerStream
 from dlightrag.engine.answer.execution import (
@@ -63,7 +64,11 @@ from dlightrag.engine.answer.execution import (
     OrchestratorRun,
 )
 from dlightrag.engine.answer.execution import executor as answer_executor_module
-from dlightrag.engine.answer.execution.input import AnswerRunInput, PinnedModelProfile
+from dlightrag.engine.answer.execution.input import (
+    AnswerRunInput,
+    PinnedModelProfile,
+    model_reasoning_settings,
+)
 from dlightrag.engine.answer.fast import FastRunBoundaries
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.publication import ArtifactIssue, PublicationPlan
@@ -106,6 +111,7 @@ def _episode() -> _RunWorking:
 
 
 def _answer_run_input() -> AnswerRunInput:
+    config = DlightragConfig()
     return AnswerRunInput(
         query="why",
         workspaces=("default",),
@@ -114,8 +120,9 @@ def _answer_run_input() -> AnswerRunInput:
                 role=role,
                 fingerprint=ModelFingerprint("openai", f"test-{role}-model", None),
                 profile=ModelProfile(context_window_tokens=1_000_000),
+                reasoning_settings=model_reasoning_settings(config.models.chat.resolve(role)),
             )
-            for role in ("extract", "keyword", "query", "vlm")
+            for role in CHAT_MODEL_SELECTORS
         ),
         context_policy_revision=CONTEXT_POLICY_REVISION,
         model_catalog_revision=current_model_catalog_revision(),

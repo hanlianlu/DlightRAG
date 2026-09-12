@@ -1,8 +1,8 @@
 # Personal MCP Connections
 
-**Status: ACCEPTED DESIGN / NOT IMPLEMENTED**
+**Status: IMPLEMENTED IN THE CURRENT WORKTREE / FINAL VALIDATION AND REVIEW PENDING**
 
-**Code baseline:** `main@a724e8a22c24d73318f0b679a7be8b2388e80d1b`. The baseline still composes deployment-declared outbound MCP tools once at process startup. Nothing in this plan is a claim that personal Connections, OAuth, automatic discovery, or hot-plug behavior currently ships.
+**Implementation baseline:** `main@be16218297601e2c965d596b762d49358a389e3b` plus the owned, uncommitted implementation. Owner management, all three authentication modes, automatic discovery/refresh, atomic Research binding and effect fencing, retention/GC, and keyring maintenance are implemented. This document records the current contract, not a released-version or full-CI acceptance claim.
 
 This plan is the implementation authority for the accepted target. It is governed by [ADR 0012](adr/0012-personal-connections-and-hot-plug.md) and uses the canonical [Domain Language](domain-language.md). It supersedes the earlier local research proposals, not their historical baseline evidence. The optional gitignored research is not required to understand or implement this tracked design.
 
@@ -24,7 +24,7 @@ This plan is the implementation authority for the accepted target. It is governe
 
 ## Scope and non-goals
 
-The first release is complete only when CRUD, enable/disable, all three authentication choices, automatic catalogue refresh, atomic Run binding, recovery, effect-time revocation, retention/GC, and Settings status are present together.
+The implementation includes CRUD, enable/disable, all three authentication choices, automatic catalogue refresh, atomic Run binding, recovery, effect-time revocation, retention/GC, and Settings status together. Independent full validation and review remain release gates.
 
 It does not add a marketplace, public Connection-management REST API, inbound-MCP management tools, arbitrary request headers, MCP resources/prompts/apps, a protocol registry, a universal `PluginManager`, a second `RunRuntime`, or a durable invocation-permit ledger. It does not merge Connections with models, Skills, Profile Memory, or Web resources.
 
@@ -100,7 +100,7 @@ The private composition root injects `Connections.restore_research` behind the E
 | `src/dlightrag/application/web_conversations/service.py` | Forward bindings through `_WebAnswerAcceptor` rather than creating a Web-only binding path |
 | `src/dlightrag/application/web_conversations/models.py` | Extend the atomic Web-turn store contract with bindings |
 | `src/dlightrag/adapters/postgres/web/web_conversations.py` | Forward bindings to `create_run_in` inside the existing Conversation/turn/Run transaction |
-| `src/dlightrag/adapters/mcp/outbound.py` | Replace deployment specs/stdio with bounded Streamable-HTTP discover/call behavior over a supplied SDK HTTP client |
+| `src/dlightrag/adapters/mcp/personal_http.py` | Bounded Streamable-HTTP discover/call behavior over a supplied SDK HTTP client; obsolete `outbound.py` deployment/re-export path removed |
 | `src/dlightrag/engine/public_http.py` | Consume `network_admission` without turning its GET helper into MCP transport |
 | `src/dlightrag/application/application.py` | Expose/start/stop Connections in dependency order; stop refresh before shutdown and close it after Run workers drain |
 | `src/dlightrag/_compose.py` | Construct the private credential cipher from the resolved secret-only settings field; inject it, Postgres, MCP/OAuth, acceptance binder, and execution resolver; remove the config-built global tuple |
@@ -186,7 +186,7 @@ The transaction commits before session creation and returns a one-shot in-memory
 - revoke commits first: the gate rejects and the MCP adapter receives zero calls;
 - gate commits first: the operation is considered in flight, even if socket output follows the revoke.
 
-No database transaction is held over network I/O. NOTIFY and a process-local task index provide best-effort cancellation of in-flight sessions, but no rollback promise. Lease loss, cancellation, timeout, disconnect, or crash after possible dispatch settles as failed/unknown and never causes an automatic retry.
+No database transaction is held over network I/O. The in-flight watch tracks the exact owner/Connection activation, active Grant, and parent/Child execution authority, not routine secret-version changes from same-Grant refresh or ciphertext re-encryption. Credential replacement and revocation still retire the old Grant. NOTIFY and a process-local task index provide best-effort cancellation of in-flight sessions, but no rollback promise. Lease loss, cancellation, timeout, disconnect, or crash after possible dispatch settles as failed/unknown and never causes an automatic retry.
 
 Connection, session, DNS, and credential caches include at least `(owner_id, endpoint_digest, grant_id, secret_version)`; unauthenticated keys still include owner and endpoint. First release uses one foreground SDK session per call and does not build a universal connection-sharing platform.
 
@@ -204,7 +204,7 @@ DlightRAG supplies only product integration:
 
 The SDK's pending PKCE verifier/state remains process memory. If the flow owner dies or its lease expires, no other worker resumes the exchange: the flow expires, any callback becomes unusable, and Settings asks the user to authorize again.
 
-OAuth use acquires an expiring grant-scoped refresh lease, without holding a database transaction, around the SDK-authenticated foreground session. TokenStorage writes with fenced CAS on `(grant_id, status, refresh_epoch, expected_secret_version)`. Thus only one refresh sequence runs per Grant, and a stale refresh cannot overwrite token rotation, credential replacement, or revocation. CAS failure discards returned tokens.
+OAuth uses an expiring Grant-scoped refresh lease without a database transaction over remote I/O. As an approved safety refinement, refresh preflight is separate from the effect session: the locked SDK constructs refresh requests and safe same-origin token redirects, and its generator is closed before its original MCP request can be sent. Failed refresh never enters discovery, registration or consent. Foreground preflight first checks the trusted pending effect, owner, Grant, Run/Child fence and cancellation; after a successful TokenStorage CAS, the complete effect gate runs again before one token-only MCP call. TokenStorage CAS requires `(grant_id, active status, lease owner, live refresh epoch, expected secret version)`. Only one refresh sequence runs per Grant; expiry permits takeover but stale saves/releases cannot overwrite expired-lease re-encryption, replacement or revocation. Cosmetic re-encryption skips live refresh leases both at candidate selection and at its actual CAS, preserving externally rotated refresh tokens. CAS failure discards returned tokens. No 401/403 after an effect causes refresh-and-replay.
 
 A provider-requested scope outside `consented_scopes` never expands authority in a worker. It marks `needs_auth`; Settings performs a new consent flow and publishes a new Grant/generation. Expired credentials refresh automatically only within already consented scope. Missing refresh capability, rejected refresh, or nonstandard provider requirements become `needs_auth`, not a spontaneous worker redirect. SDK support does not imply universal provider compatibility.
 
@@ -279,11 +279,11 @@ Tests: deterministic barriers prove revoke-first causes zero fake HTTP calls and
 
 Land SDK provider/storage adapter, Settings start/callback, expiring single-use inbox, encrypted client/token state, grant replacement, needs-auth, and refresh lease/CAS.
 
-Tests use local in-process fake AS/MCP adapters only: state/PKCE/resource/audience behavior, callback on worker B waking worker A, duplicate/expired callback rejection, worker-A death requiring reauthorization, concurrent refresh serialization, stale refresh losing CAS to revoke/rotation, and no transaction held during remote refresh.
+Tests use local in-process fake AS/MCP adapters only: state/PKCE/resource/audience behavior, callback on worker B waking worker A, duplicate/expired callback rejection, worker-A death requiring reauthorization, concurrent refresh serialization, stale refresh losing CAS to revoke/replacement/expired-lease rotation, live refresh surviving cosmetic rotation attempts, gate-first calls surviving routine secret-version changes, and no transaction held during remote refresh.
 
 ### Slice 6 — Retention, hardening, and close-out
 
-Land GC, key-rotation operation support, quotas/metrics, docs/current-state cutover, and remove deployment `OutboundMcpServerConfig`/stdio compatibility paths.
+Land GC, key-rotation operation support, quotas/metrics, and docs/current-state cutover. Deployment `OutboundMcpServerConfig`/stdio paths and their re-export shim are removed. OAuth preflight, GC and writer keyring maintenance are implemented; final independent full validation/review remain pending.
 
 Tests: pinned generations survive until retained Run deletion; cascade releases pins; retired secrets are removed from the live store; cache keys cannot cross owner/grant/version; fault matrix covers auth, DNS, protocol, timeout, unknown side effect, catalogue drift, shutdown, and listener reconnect; `uv run lint-imports` proves no reverse import.
 
@@ -295,5 +295,16 @@ Each slice adds unit and Postgres integration coverage at the deep module interf
 - A local Credential Grant is not proof of external tenant/user isolation; it may intentionally authorize a shared external workspace.
 - Gate commit to socket I/O has an acknowledged interval classified as in flight.
 - Closing a request or MCP session does not roll back a remote side effect.
-- OAuth works only where the provider interoperates with the locked SDK flow; unsupported extensions remain unsupported.
+- OAuth works only where the provider interoperates with the locked SDK flow; unsupported extensions remain unsupported. Providers omitting `expires_in` have no known expiry to trigger automatic refresh. A later authentication rejection requires explicit reauthorization; no invented TTL, forced refresh on 401, or effect replay compensates for missing expiry metadata.
 - Automatic polling has bounded, nonzero catalogue staleness; current Runs intentionally remain on their accepted generation.
+
+## Current operational lifecycle
+
+- Writer startup applies the single current Connections migrations; readers verify the schema without creating or adapting old tables. Reader processes may perform their normal owner operational commands/discovery but do not run writer keyring/GC maintenance. Incompatible schemas produce configuration/storage errors, never a destructive reset.
+- Writer maintenance performs bounded batches (100 grants/generations, 100 expired inboxes), at startup and at most every 60 seconds. `Application.connections.maintain()` permits one trusted in-process writer pass. It returns only re-encryption/collection counts. No extra CLI, service, environment loader or general scheduler exists.
+- Grant ciphertext re-encryption uses the injected active key and secret-version CAS. Live refresh leases are skipped at selection and CAS; a later bounded maintenance pass revisits them after release/expiry. A zero re-encryption count during a live lease is not completed key inventory and does not authorize old-key removal. Concurrent refresh and rotation cannot overwrite each other. Retired credentials lose live ciphertext immediately; secret-free metadata follows retained Run pins. Run deletion cascades pins; only unpinned non-head generations are collected. Tombstones are removed only after all pins and short-lived flows end. Live discovery/Grant leases prevent collection.
+- OAuth flows are once-only and expire within the configured 30–600 seconds. Each worker admits at most four authorization tasks; PostgreSQL bounds each owner's active flows to four and recent retained flows to 128. Catalogue, endpoint, transport, tool and call limits remain in `ConnectionPolicy`.
+- Notifications are hints with polling/reconnect startup scans. Shutdown cancels discovery/maintenance and pending authorizations before Run drain, then closes outstanding MCP tasks. A possibly sent effect is never replayed.
+- See [credential rotation operations](configuration.md#personal-connection-credential-rotation) for deployment order, verification and backup limits.
+
+Focused fake-SDK, actual PostgreSQL multi-worker, browser, accessibility and i18n regressions cover these paths. Dedicated full CI and independent reviewers must still validate the combined owned worktree. Tests use no real model, MCP or OAuth provider; dead-worker refresh takeover is modeled by durable lease expiry, not an OS process kill. Unknown in-flight external effects cannot be rolled back.

@@ -2,7 +2,8 @@
 /** Settings Dialog Feature: memory state, conversation commands, and dialog lifecycle. */
 
 import {msg, updateWhenLocaleChanges, str} from '@lit/localize';
-import {html, type TemplateResult} from 'lit';
+import {html, nothing, type TemplateResult} from 'lit';
+import './settings-connections.ts';
 import {
   currentLanguagePreference,
   setLanguagePreference,
@@ -58,6 +59,9 @@ function memorySummary(event: ChatMemoryOperationDetail): string {
 /** Owns Settings state, asynchronous mutations, focus, and native Dialog semantics. */
 export class DlSettingsDialog extends LightElement {
   static properties = {
+    connectionAuthorizationFailed: {state: true},
+    personalMcpConnections: {attribute: false},
+    showConnections: {state: true},
     handles: {attribute: false},
     deleteAllConversations: {attribute: false},
     memory: {state: true},
@@ -66,6 +70,9 @@ export class DlSettingsDialog extends LightElement {
     language: {state: true},
   };
 
+  declare connectionAuthorizationFailed: boolean;
+  declare personalMcpConnections: boolean;
+  declare showConnections: boolean;
   declare handles: AppHandles;
   declare deleteAllConversations: (returnFocus?: HTMLElement | null) => Promise<boolean>;
   declare memory: MemorySettings | null;
@@ -81,6 +88,9 @@ export class DlSettingsDialog extends LightElement {
   constructor() {
     super();
     updateWhenLocaleChanges(this);
+    this.connectionAuthorizationFailed = false;
+    this.personalMcpConnections = false;
+    this.showConnections = false;
     this.handles = productionHandles();
     this.deleteAllConversations = async () => false;
     this.memory = null;
@@ -172,13 +182,18 @@ export class DlSettingsDialog extends LightElement {
     return html`
       <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title"
               @click=${this.#scrimClick} @close=${this.#closed}>
-        <form method="dialog">
+        <form method="dialog" novalidate>
           <div class="settings-drawer-body">
             <div class="settings-header">
               <h2 id="settings-title">${msg('Settings', {id: 'settings.title'})}</h2>
               <button class="panel-close settings-close" type="submit" value="close-settings"
                       aria-label=${msg('Close settings', {id: 'settings.close'})}>${icon('close', {size: 'sm'})}</button>
             </div>
+            ${this.personalMcpConnections ? html`<section class="settings-section">
+              <button type="button" class="dl-btn" aria-expanded=${this.showConnections} @click=${() => {this.showConnections = !this.showConnections;}}>${msg('Connections', {id: 'settings.connections'})}</button>
+              ${this.connectionAuthorizationFailed ? html`<p role="alert">${msg('Authorization failed or expired. Restart authorization.', {id: 'connections.oauthFailed'})}</p>` : nothing}
+              ${this.showConnections ? html`<dl-settings-connections></dl-settings-connections>` : nothing}
+            </section>` : nothing}
             <section class="settings-section">
               <h3 id="settings-memory">${msg('Profile Memory', {id: 'settings.profileMemory'})}</h3>
               <label class="dl-dialog-checkbox">
@@ -240,7 +255,7 @@ export class DlSettingsDialog extends LightElement {
         </form>
       </dialog>
       <dialog id="clear-memory-dialog" class="confirm-dialog" aria-labelledby="clear-memory-title">
-        <form method="dialog">
+        <form method="dialog" novalidate>
           <h2 id="clear-memory-title">${msg('Clear Profile memory?', {id: 'settings.clearMemoryTitle'})}</h2>
           <p>${msg('Remembered preferences and facts will be forgotten. Conversations are not affected.', {
             id: 'settings.clearMemoryBody',
@@ -264,6 +279,7 @@ export class DlSettingsDialog extends LightElement {
   };
 
   #closed = (): void => {
+    this.showConnections = false;
     publishModalState(this);
     document.body.classList.remove('settings-open');
     const returnFocus = this.#returnFocus;

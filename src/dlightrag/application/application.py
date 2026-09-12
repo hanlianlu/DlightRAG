@@ -14,6 +14,7 @@ from dlightrag.application.errors import ApplicationClosedError
 
 if TYPE_CHECKING:
     from dlightrag.application.answer_runs import AnswerService
+    from dlightrag.application.connections import Connections
     from dlightrag.application.corpus_admin import CorpusAdmin, CorpusMutationService
     from dlightrag.application.health import ApplicationHealth
     from dlightrag.application.memory import MemoryService
@@ -60,6 +61,7 @@ class _ApplicationComponents:
     memory_store: Any
     memory_embedder: Any
     web_conversations: WebConversationService
+    connections: Connections | None = None
     search_toolchain: Any | None = None
     model_catalogue: ModelCatalogueAdmin | None = None
     corpus_mutations: CorpusMutationService | None = None
@@ -104,6 +106,13 @@ class Application:
     def runs(self) -> RunService:
         """The common owner-scoped durable lifecycle service."""
         return self._open().runs
+
+    @property
+    def connections(self) -> Connections:
+        service = self._open().connections
+        if service is None:
+            raise RuntimeError("Personal Connections are unavailable")
+        return service
 
     @property
     def memory(self) -> MemoryService:
@@ -169,6 +178,8 @@ class Application:
             catalogue_ready = await self._initialize_model_catalogue()
             components.capabilities.resolve_profiles()
             await self._initialize_run_stores()
+            if components.connections is not None:
+                await components.connections.start(validate_only=self._config.is_reader)
             await self._validate_active_runs()
             corpora_ready = await self._initialize_corpora()
             # Bind the retrieval-planner LLM; this does not make a model call.
@@ -445,10 +456,22 @@ class Application:
         components = self._components
         cancellation: asyncio.CancelledError | None = None
         for label, close in (
+            (
+                "Connection refresh",
+                components.connections.stop_refresh
+                if components.connections is not None
+                else _noop_close_process,
+            ),
             ("memory janitor", self._stop_memory_janitor),
             ("corpus admin promotion worker", components.corpora.aclose),
             ("the durable run coordinator", components.coordinator.aclose),
             ("Agent execution", components.close_agent_execution),
+            (
+                "Connections",
+                components.connections.aclose
+                if components.connections is not None
+                else _noop_close_process,
+            ),
             ("the cancellation listener", components.cancellation_listener.aclose),
             ("Web conversation retention", components.web_conversations.aclose),
             ("the Retrieval service", components.retrieval.aclose),

@@ -37,9 +37,9 @@ from dlightrag.application.runs import RunService
 from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.settings import (
-    MODEL_ROLE_NAMES,
+    CHAT_MODEL_SELECTORS,
+    ChatModelSelector,
     EmbeddingSettings,
-    ModelRole,
     ModelRoleSettings,
     ModelSettings,
 )
@@ -171,11 +171,11 @@ class _Capabilities:
     async def refresh_vlm(self) -> AnswerCapabilities:
         return AnswerCapabilities(answer=None, vlm_status="unknown")
 
-    def current_profiles(self) -> dict[ModelRole, ModelProfile]:
-        return {role: _PROFILE for role in MODEL_ROLE_NAMES}
+    def current_profiles(self) -> dict[ChatModelSelector, ModelProfile]:
+        return {role: _PROFILE for role in CHAT_MODEL_SELECTORS}
 
     def request_model_context(
-        self, profiles: dict[ModelRole, ModelProfile] | None, /
+        self, profiles: dict[ChatModelSelector, ModelProfile] | None, /
     ) -> RequestModelContext:
         selected = profiles or self.current_profiles()
         return RequestModelContext(
@@ -213,14 +213,16 @@ class _CapabilityView:
         return AnswerCapabilities(answer=None, vlm_status="unknown")
 
 
-def _fingerprint(role: ModelRole) -> ModelFingerprint:
+def _fingerprint(role: ChatModelSelector) -> ModelFingerprint:
     return ModelFingerprint(provider="test", model=f"model-{role}", endpoint_fingerprint=None)
 
 
 class _StoreBackedApplication:
     """Application shell with a real AnswerService wired to the real store."""
 
-    def __init__(self, store: PGRunStore, config: DlightragConfig) -> None:
+    def __init__(
+        self, store: PGRunStore, config: DlightragConfig, *, bind_research: Any = None
+    ) -> None:
         self._store = store
         self.config = config
         self.corpora = SimpleNamespace(
@@ -235,9 +237,16 @@ class _StoreBackedApplication:
             retrieval=cast(Any, _Retrieval()),
             capabilities=cast(Any, _Capabilities()),
             capability_view=cast(Any, _CapabilityView()),
-            models=cast(Any, SimpleNamespace(query_image_describer=lambda: MagicMock())),
+            models=cast(
+                Any,
+                SimpleNamespace(
+                    query_image_describer=lambda: MagicMock(),
+                    model_settings=lambda role: ModelSettings(model="test"),
+                ),
+            ),
             resources=cast(Any, _Resources()),
             model_fingerprint_for_role=_fingerprint,
+            bind_research=bind_research,
             child_roster_cursor_secret=b"answer-run-api-child-roster-test",
         )
 

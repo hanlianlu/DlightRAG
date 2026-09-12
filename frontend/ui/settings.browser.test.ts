@@ -191,3 +191,18 @@ it('rejects a delayed memory read after a newer toggle mutation settles', async 
   expect(toggle.checked).to.equal(false);
   expect(settings.textContent).not.to.contain('9 stored items');
 });
+
+it('hides personal Connections without capability and tears down credential forms on close', async () => {
+  window.fetch = async (url) => Response.json(String(url).includes('connections')
+    ? {revision: '0', single_user: true, connections: []}
+    : {enabled: false, active_count: 0});
+  const settings = mount();
+  await settings.open();
+  expect(buttonNamed(settings, 'Connections')).to.equal(null);
+  settings.personalMcpConnections = true;
+  await settings.updateComplete;
+  buttonNamed(settings, 'Connections')!.click();
+  await waitFor(() => Boolean(settings.querySelector('dl-settings-connections input')));
+  settings.querySelector<HTMLDialogElement>('#settings-dialog')!.close();
+  await waitFor(() => settings.querySelector('dl-settings-connections') === null);
+});

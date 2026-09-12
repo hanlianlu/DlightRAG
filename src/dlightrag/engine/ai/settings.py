@@ -28,6 +28,9 @@ from dlightrag.engine.ai.reasoning import (
 
 type ModelRole = Literal["extract", "keyword", "query", "vlm"]
 MODEL_ROLE_NAMES: tuple[ModelRole, ...] = ("extract", "keyword", "query", "vlm")
+# A selector includes the default endpoint, without making it a corpus role override.
+type ChatModelSelector = ModelRole | Literal["default"]
+CHAT_MODEL_SELECTORS: tuple[ChatModelSelector, ...] = (*MODEL_ROLE_NAMES, "default")
 type RerankStrategy = Literal[
     "chat_llm_reranker",
     "jina_reranker",
@@ -289,7 +292,11 @@ class ModelRoleSettings(FrozenSettings):
             }
         )
 
-    def resolve(self, role: ModelRole) -> ModelSettings:
+    def resolve(self, role: ChatModelSelector) -> ModelSettings:
+        if role == "default":
+            return self.default
+        if role not in MODEL_ROLE_NAMES:
+            raise ValueError(f"unknown chat model selector: {role}")
         return self.overrides.get(role, self.default)
 
 

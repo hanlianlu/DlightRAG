@@ -65,6 +65,7 @@ from tests.unit.conftest import answer_model_profile
 
 
 class _Session:
+    fencing_epoch = 1
     owner_id = "owner"
     run_id = "run"
     execution = SimpleNamespace(fencing_epoch=1)
@@ -99,8 +100,11 @@ class _EmptyToolInput(BaseModel):
 async def _settle_bounded_research_tool(
     profile: ModelProfile,
     text: str,
+    *,
+    session_fencing_epoch: int | None = None,
 ) -> tuple[Any, Any]:
     async def execute(_input: BaseModel, _runtime: Any) -> ToolResult:
+        assert _runtime.fencing_epoch == (session_fencing_epoch or 1)
         return ToolResult.text(text)
 
     tool = AgentTool("bounded", "Return bounded text.", _EmptyToolInput, execute)
@@ -117,6 +121,7 @@ async def _settle_bounded_research_tool(
         session_id=SessionId.new(),
         fetched_buffer=FetchedResourceBuffer(),
         persist_child_intent=None,
+        session_fencing_epoch=session_fencing_epoch,
     )
     item = ToolBatchItem(
         source_index=0,
@@ -187,6 +192,8 @@ async def test_provider_text_streams_optimistically_for_a_terminal_turn() -> Non
         tools=(),
         model_profile=answer_model_profile(),
         streamed_terminal_text=None,
+        model_func=None,
+        stream_model_func=None,
     )
 
     class _Orchestrator:
@@ -237,6 +244,8 @@ async def test_cancellation_during_a_provider_delta_cancels_without_retry() -> N
         tools=(),
         model_profile=answer_model_profile(),
         streamed_terminal_text=None,
+        model_func=None,
+        stream_model_func=None,
     )
 
     class _Orchestrator:
@@ -278,6 +287,7 @@ async def test_provider_draft_is_reset_when_the_turn_contains_tool_calls() -> No
         tools=(),
         model_profile=answer_model_profile(),
         streamed_terminal_text="older",
+        model_func=None,
     )
 
     class _Orchestrator:
@@ -839,3 +849,8 @@ async def test_provider_overflow_compacts_shrinks_and_retries_through_host_effec
     assert prepared.trace["compactions"][-1]["tail_target_tokens"] == (
         CONTEXT_POLICY.retained_tail_target(profile) // 4
     )
+
+
+@pytest.mark.asyncio
+async def test_research_child_tool_receives_child_session_fence_not_parent_fence():
+    await _settle_bounded_research_tool(answer_model_profile(), "child", session_fencing_epoch=7)

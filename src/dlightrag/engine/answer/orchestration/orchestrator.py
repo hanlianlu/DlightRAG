@@ -131,6 +131,7 @@ class PreparedRun:
     attachment_snapshots: dict[str, bytes] = field(default_factory=dict)
     attachment_admissions: dict[str, int] = field(default_factory=dict)
     model_role: str = "query"
+    model_identity: Mapping[str, Any] | None = None
     agent_turn_count: int = 0
     stop_reason: str = "model_stop"
     last_turn: ExecutedTurn | None = None
@@ -167,6 +168,7 @@ class AnswerOrchestrator:
         skills: SkillsBundle | None = None,
         child_model_resolver: Callable[[str], tuple[ToolModelFunc, StreamModel, ModelProfile]]
         | None = None,
+        child_model_identities: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self._synthesizer = synthesizer
         self._retrieve_knowledge_base = retrieve_knowledge_base
@@ -194,6 +196,7 @@ class AnswerOrchestrator:
         self._parent_history = PriorTurns()
         self._skills = skills
         self._child_model_resolver = child_model_resolver
+        self._child_model_identities = child_model_identities
         self._access = AccessScheduler()
         self._compaction: dict[str, CompactionCoordinator] = {}
 
@@ -449,6 +452,7 @@ class AnswerOrchestrator:
         request: RequestSnapshot,
         *,
         model_profile: ModelProfile | None = None,
+        model_func: ToolModelFunc | None = None,
         emit_text: ProviderTextSink | None = None,
     ) -> AssistantTurn:
         """Execute one already-persisted exact provider Request Snapshot."""
@@ -461,11 +465,12 @@ class AnswerOrchestrator:
         if request.max_tokens is not None:
             kwargs["max_tokens"] = request.max_tokens
         kwargs["model_profile"] = model_profile or self._model_profile
-        stream_turn = getattr(self._model_func, "stream_turn", None)
+        selected_model = model_func if model_func is not None else self._model_func
+        stream_turn = getattr(selected_model, "stream_turn", None)
         if emit_text is not None and callable(stream_turn):
             kwargs["emit_text"] = emit_text
             return await cast(Callable[..., Awaitable[AssistantTurn]], stream_turn)(**kwargs)
-        return await cast(ToolModelFunc, self._model_func)(**kwargs)
+        return await cast(ToolModelFunc, selected_model)(**kwargs)
 
     async def compact_runtime_context(
         self,
@@ -608,6 +613,17 @@ class AnswerOrchestrator:
             child_model, child_stream, child_profile = self._child_model_resolver(
                 request.model_role
             )
+        if request.context == "parent" and not child_profile.supports_images:
+            if any(
+                isinstance(block, dict) and block.get("type") == "image_url"
+                for message in context_snapshot.messages
+                for block in (
+                    message["content"] if isinstance(message.get("content"), list) else []
+                )
+            ):
+                raise ValueError(
+                    f"child model {request.model_role} does not support inherited images"
+                )
         evidence = EvidenceLedger(image_budget=self._image_budget)
         if request.context == "parent" and context_snapshot.evidence_state:
             evidence.restore_ledger_state(context_snapshot.evidence_state)
@@ -650,6 +666,11 @@ class AnswerOrchestrator:
             stream_model_func=child_stream,
             model_profile=child_profile,
             model_role=request.model_role,
+            model_identity=(
+                self._child_model_identities[request.model_role]
+                if self._child_model_identities is not None
+                else None
+            ),
         )
 
     def _record_working_fold(self, run: PreparedRun, snapshot: Any) -> None:

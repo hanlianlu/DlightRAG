@@ -10,7 +10,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from dlightrag_memory import Memory, MemoryStore
 
@@ -69,7 +69,7 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.scheduler import model_call_scope
-from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector
 from dlightrag.engine.ai.telemetry import Telemetry, safe_log_text
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilityCoordinator,
@@ -86,12 +86,20 @@ from dlightrag.engine.answer.errors import (
     InvalidToolConfigurationError,
     classify_answer_error,
 )
+from dlightrag.engine.answer.execution.connection_binding import (
+    ResearchConnectionToolResolver,
+    ResearchToolClaim,
+)
 from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
     AnswerRunRequest,
     AttachmentReference,
     LinkReference,
+    PinnedModelProfile,
     build_current_answer_resources,
+    child_model_guidance,
+    model_reasoning_settings,
+    pinned_model_selectors,
     validate_active_answer_input,
 )
 from dlightrag.engine.answer.fast import FastRunBoundaries, FastSessionHost, ensure_session_lane
@@ -211,11 +219,7 @@ def _child_lifecycle_for_plan(plan: AgentRunPlan | None) -> tuple[bool, bool]:
     spawn = next((tool for tool in plan.tools if tool.name == "spawn_agent"), None)
     if spawn is None:
         return False, False
-    if spawn.contract_version == 2:
-        return False, False
-    if spawn.contract_version == 3:
-        return True, False
-    if spawn.contract_version == 4:
+    if spawn.contract_version == 5:
         return True, True
     raise IncompatibleActiveRunError("Research answer run uses an unsupported child lifecycle")
 
@@ -731,7 +735,7 @@ class AnswerExecutor:
         resources: AnswerResourceResolver,
         settings: AnswerExecutorSettings,
         telemetry: Telemetry,
-        model_fingerprint_for_role: Callable[[ModelRole], ModelFingerprint],
+        model_fingerprint_for_role: Callable[[ChatModelSelector], ModelFingerprint],
         execution_environment: str = "trust",
         workspace_root: str | None = None,
         search_toolchain: SearchToolchain | None = None,
@@ -739,7 +743,7 @@ class AnswerExecutor:
         memory_store: MemoryStore | None = None,
         memory_recall_enabled: Callable[..., Awaitable[bool]] | None = None,
         memory_capability_current: Callable[..., Awaitable[bool]] | None = None,
-        external_tools: tuple[AgentTool, ...] = (),
+        connection_tool_resolver: ResearchConnectionToolResolver | None = None,
         skills_bundle_factory: SkillsBundleFactory | None = None,
         now: Callable[[], datetime.datetime] | None = None,
         on_dependency_unavailable: DependencyStateCallback | None = None,
@@ -765,7 +769,7 @@ class AnswerExecutor:
         self._memory = Memory(memory_store) if memory_store is not None else None
         self._memory_recall_enabled = memory_recall_enabled
         self._memory_capability_current = memory_capability_current
-        self._external_tools = external_tools
+        self._connection_tool_resolver = connection_tool_resolver
         self._skills_bundle_factory = skills_bundle_factory
         self._now = now or (lambda: datetime.datetime.now(datetime.UTC))
         self._on_dependency_unavailable = on_dependency_unavailable
@@ -786,6 +790,7 @@ class AnswerExecutor:
         validate_active_answer_input(
             prepared,
             model_fingerprint_for_role=self._model_fingerprint_for_role,
+            model_settings_for_role=self._models.model_settings,
         )
 
     def acceptance_research_tools(self) -> tuple[AgentTool, ...]:
@@ -815,7 +820,6 @@ class AnswerExecutor:
         # and later resource cursors have one stable accepted contract.
         tools: list[AgentTool] = [
             read_tool(None, access, resource_reader=unused_resource_reader),
-            *self._external_tools,
         ]
         if self._execution_adapter is not None:
             tools.extend(
@@ -849,7 +853,14 @@ class AnswerExecutor:
     async def execute(self, session: RunSession) -> RunExecutionOutcome:
         with model_call_scope((session.owner_id, session.run_id)):
             try:
+                if session.prepared_input is not None:
+                    self.validate_active_prepared_input(session.prepared_input)
                 outcome = await self._execute(session)
+            except IncompatibleActiveRunError as exc:
+                raise RunExecutionError(
+                    "incompatible_answer_run",
+                    "This Answer Run uses an incompatible model or execution contract. Start a new Run.",
+                ) from exc
             except (
                 asyncio.CancelledError,
                 RunCancellationObserved,
@@ -1181,6 +1192,25 @@ class AnswerExecutor:
             else (True, True)
         )
 
+        connection_tools: tuple[AgentTool, ...] = ()
+        if resolved_mode == "research" and request.run_connection_bindings:
+            if self._connection_tool_resolver is None:
+                raise IncompatibleActiveRunError("Research Connection resolver unavailable")
+            if any(
+                binding.owner_id != session.owner_id for binding in request.run_connection_bindings
+            ):
+                raise IncompatibleActiveRunError("Research Connection owner mismatch")
+            connection_tools = await self._connection_tool_resolver(
+                bindings=request.run_connection_bindings,
+                claim=ResearchToolClaim(
+                    owner_id=session.owner_id,
+                    run_id=session.run_id,
+                    worker_id=session.worker_id,
+                    fencing_epoch=session.fencing_epoch,
+                    check_cancelled=session.check_cancelled,
+                ),
+            )
+
         run = await self.prepare_orchestrated_run(
             query=request.query,
             workspaces=list(request.workspaces),
@@ -1195,6 +1225,8 @@ class AnswerExecutor:
             model_profiles=model_profiles,
             async_subagents=async_subagents,
             interactive_controls=interactive_controls,
+            pinned_models=request.pinned_models,
+            connection_tools=connection_tools,
             skills=(
                 self._skills_bundle_factory(session.owner_id, request.requested_skill)
                 if self._skills_bundle_factory is not None
@@ -1906,14 +1938,18 @@ class AnswerExecutor:
         fetched_bytes_sink: FetchedBytesSink | None = None,
         pinned_image_descriptions: tuple[str, ...],
         projected_history: PriorTurns,
-        model_profiles: Mapping[ModelRole, ModelProfile],
+        model_profiles: Mapping[ChatModelSelector, ModelProfile],
         environment: ExecutionEnvironment | None = None,
         resolved_mode: ResolvedMode,
         resource_scope: str,
         skills: SkillsBundle | None = None,
         async_subagents: bool = True,
         interactive_controls: bool = True,
+        pinned_models: tuple[PinnedModelProfile, ...],
+        connection_tools: tuple[AgentTool, ...] = (),
     ) -> OrchestratorRun:
+        pinned_model_selectors(pinned_models)
+        child_pins = {pin.role: pin for pin in pinned_models}
         history = projected_history
         models = self._capabilities.request_model_context(model_profiles)
         query_profile = models.query
@@ -1996,11 +2032,17 @@ class AnswerExecutor:
             def resolve_child_model(
                 role: str,
             ) -> tuple[Callable[..., Any], Callable[..., AsyncIterator[str]], ModelProfile]:
-                if role not in {"query", "extract"}:
+                if role not in CHAT_MODEL_SELECTORS:
                     raise ValueError(f"unknown child model role: {role}")
-                selected_role: ModelRole = role  # type: ignore[assignment]
-                profile = models.query if role == "query" else models.extract
+                selected_role = cast(ChatModelSelector, role)
+                pin = child_pins[role]
+                profile = pin.profile
                 selected = self._models.tool_model(selected_role)
+                if (
+                    selected.fingerprint != pin.fingerprint
+                    or model_reasoning_settings(selected.settings) != pin.reasoning_settings
+                ):
+                    raise IncompatibleActiveRunError("child model binding changed after acceptance")
                 return selected, selected.stream_text, profile
 
             orchestrator = AnswerOrchestrator(
@@ -2013,7 +2055,11 @@ class AnswerExecutor:
                 ),
                 model_func=model_func,
                 stream_model_func=stream_model_func,
-                resource_tools=[*resolved.resource_tools, *self._external_tools],
+                resource_tools=(
+                    [*resolved.resource_tools, *connection_tools]
+                    if resolved_mode == "research"
+                    else []
+                ),
                 resource_manifest=resolved.resource_manifest,
                 register_web_source=(
                     resolved.registry.register_discovered_link
@@ -2034,6 +2080,7 @@ class AnswerExecutor:
                         async_lifecycle=async_subagents,
                         interactive_controls=interactive_controls,
                         guidance_timeout_seconds=self._settings.child_guidance_timeout_seconds,
+                        model_guidance=child_model_guidance(pinned_models),
                     )
                     if resolved_mode == "research"
                     else None
@@ -2049,6 +2096,13 @@ class AnswerExecutor:
                     else None
                 ),
                 child_model_resolver=resolve_child_model,
+                child_model_identities={
+                    pin.role: {
+                        **pin.as_json()["fingerprint"],
+                        "reasoning_settings": pin.reasoning_settings,
+                    }
+                    for pin in pinned_models
+                },
                 skills=skills,
             )
             orchestrated_run = OrchestratorRun(
@@ -2218,29 +2272,31 @@ class AnswerExecutor:
     def validate_pinned_model_profiles(
         self,
         request: AnswerRunInput,
-    ) -> dict[ModelRole, ModelProfile]:
+    ) -> dict[ChatModelSelector, ModelProfile]:
         # Capacity is recalculated from the pinned model facts for each segment.
         # A global arithmetic revision is not a reason to strand an otherwise
         # replayable run.
         pinned = {item.role: item for item in request.pinned_models}
-        if len(request.pinned_models) != len(MODEL_ROLE_NAMES) or set(pinned) != set(
-            MODEL_ROLE_NAMES
+        selectors = pinned_model_selectors(request.pinned_models)
+        if any(
+            pinned[role].reasoning_settings
+            != model_reasoning_settings(self._models.model_settings(role))
+            for role in selectors
         ):
             raise IncompatibleActiveRunError(
-                "answer run does not contain the complete pinned model role set"
+                "answer run targets another model reasoning configuration"
             )
         if request.context_policy_revision != CONTEXT_POLICY_REVISION:
             raise IncompatibleActiveRunError("answer run uses another context policy revision")
         if request.model_catalog_revision != current_model_catalog_revision():
             raise IncompatibleActiveRunError("answer run uses another model catalog revision")
         if any(
-            pinned[role].fingerprint != self._model_fingerprint_for_role(role)
-            for role in MODEL_ROLE_NAMES
+            pinned[role].fingerprint != self._model_fingerprint_for_role(role) for role in selectors
         ):
             raise IncompatibleActiveRunError(
                 "answer run targets another model endpoint configuration"
             )
-        return {role: pinned[role].profile for role in MODEL_ROLE_NAMES}
+        return {role: pinned[role].profile for role in selectors}
 
 
 def _measure_fast_history_targets(

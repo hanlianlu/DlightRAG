@@ -10,7 +10,7 @@ from typing import Any
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag.engine.ai.completion import CompletionModel
 from dlightrag.engine.ai.scheduler import ModelScheduler
-from dlightrag.engine.ai.settings import ModelRole, ModelRoleSettings
+from dlightrag.engine.ai.settings import ChatModelSelector, ModelRoleSettings, ModelSettings
 from dlightrag.engine.ai.telemetry import Telemetry
 from dlightrag.engine.ai.tool_model import ToolModel
 from dlightrag.engine.answer.images import AnswerImagePolicy
@@ -64,7 +64,7 @@ class AnswerModelRuntime:
         self._vlm_profile = vlm_profile
         self._answer_synthesizers: dict[ModelProfile, AnswerSynthesizer] = {}
         self._answer_model: CompletionModel | None = None
-        self._tool_models: dict[ModelRole, ToolModel] = {}
+        self._tool_models: dict[ChatModelSelector, ToolModel] = {}
         self._vlm_model: CompletionModel | None = None
         self._web_sources: WebSourceService | None = None
         self._closed = False
@@ -90,7 +90,10 @@ class AnswerModelRuntime:
         self._answer_synthesizers[profile] = synthesizer
         return synthesizer
 
-    def tool_model(self, role: ModelRole) -> ToolModel:
+    def model_settings(self, role: ChatModelSelector) -> ModelSettings:
+        return self._settings.model_roles.resolve(role)
+
+    def tool_model(self, role: ChatModelSelector) -> ToolModel:
         """Return the configured tool wrapper for a selected child/model role."""
         self._ensure_open()
         if role not in self._tool_models:

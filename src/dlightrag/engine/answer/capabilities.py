@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 from dlightrag.engine.ai.capacity import ModelProfile
-from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole, ModelSettings
+from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.ai.vision import (
     ImageCapabilityStatus,
     ImageProbeOutcome,
@@ -72,8 +72,8 @@ class AnswerCapabilityCoordinator:
         self,
         *,
         settings: AnswerCapabilitySettings,
-        profile_for_role: Callable[[ModelRole], ModelProfile],
-        model_settings_for_role: Callable[[ModelRole], ModelSettings],
+        profile_for_role: Callable[[ChatModelSelector], ModelProfile],
+        model_settings_for_role: Callable[[ChatModelSelector], ModelSettings],
         rerank_model_settings: Callable[[], ModelSettings],
         image_capabilities: ModelImageCapabilities,
         on_answer_capability: Callable[[dict[str, object]], None],
@@ -84,8 +84,8 @@ class AnswerCapabilityCoordinator:
         self._rerank_model_settings = rerank_model_settings
         self._image_capabilities = image_capabilities
         self._on_answer_capability = on_answer_capability
-        self._catalogue_profiles: dict[ModelRole, ModelProfile] = {}
-        self._profiles: dict[ModelRole, ModelProfile] = {}
+        self._catalogue_profiles: dict[ChatModelSelector, ModelProfile] = {}
+        self._profiles: dict[ChatModelSelector, ModelProfile] = {}
         self._answer_image_capability: AnswerImageCapability | None = None
         self._vlm_image_status: ImageCapabilityStatus = "unknown"
         self._rerank_supports_vision: bool | None = None
@@ -107,7 +107,9 @@ class AnswerCapabilityCoordinator:
         return self._rerank_supports_vision
 
     def resolve_profiles(self) -> None:
-        self._catalogue_profiles = {role: self._profile_for_role(role) for role in MODEL_ROLE_NAMES}
+        self._catalogue_profiles = {
+            role: self._profile_for_role(role) for role in CHAT_MODEL_SELECTORS
+        }
         self._profiles = dict(self._catalogue_profiles)
 
     def invalidate_model_catalogue(self) -> None:
@@ -120,7 +122,7 @@ class AnswerCapabilityCoordinator:
         self._rerank_supports_vision = None
         self._image_capabilities.clear()
 
-    def catalogue_profile(self, role: ModelRole) -> ModelProfile:
+    def catalogue_profile(self, role: ChatModelSelector) -> ModelProfile:
         profile = self._catalogue_profiles.get(role)
         if profile is None:
             profile = self._profile_for_role(role)
@@ -128,19 +130,19 @@ class AnswerCapabilityCoordinator:
             self._profiles.setdefault(role, profile)
         return profile
 
-    def model_profile(self, role: ModelRole) -> ModelProfile:
+    def model_profile(self, role: ChatModelSelector) -> ModelProfile:
         profile = self._profiles.get(role)
         if profile is None:
             profile = self.catalogue_profile(role)
             self._profiles[role] = profile
         return profile
 
-    def current_profiles(self) -> dict[ModelRole, ModelProfile]:
-        return {role: self.model_profile(role) for role in MODEL_ROLE_NAMES}
+    def current_profiles(self) -> dict[ChatModelSelector, ModelProfile]:
+        return {role: self.model_profile(role) for role in CHAT_MODEL_SELECTORS}
 
     def request_model_context(
         self,
-        pinned: Mapping[ModelRole, ModelProfile] | None,
+        pinned: Mapping[ChatModelSelector, ModelProfile] | None,
     ) -> RequestModelContext:
         if pinned is not None:
             return RequestModelContext(
@@ -156,7 +158,7 @@ class AnswerCapabilityCoordinator:
 
     def narrow_role_image_profile(
         self,
-        role: ModelRole,
+        role: ChatModelSelector,
         status: ImageCapabilityStatus,
     ) -> None:
         declared = self.catalogue_profile(role)

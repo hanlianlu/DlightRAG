@@ -37,6 +37,11 @@ def _load_yaml12_mapping(
         return {}
     if not isinstance(loaded, dict):
         raise TypeError(f'YAML configuration in "{file_path}" must be a mapping')
+    current = loaded
+    for part in ("answer", "agent", "connections"):
+        current = current.get(part, {}) if isinstance(current, dict) else {}
+    if isinstance(current, dict) and "credential_secret_keyring" in current:
+        raise ValueError("Connection credential keyring requires a secret source, not YAML")
     return loaded
 
 

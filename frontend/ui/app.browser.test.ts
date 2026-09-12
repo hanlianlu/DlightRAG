@@ -20,7 +20,8 @@ import type {DlSettingsDialog} from './settings.ts';
 import type {DlToastRegion, ToastRequestDetail} from './toast.ts';
 
 const bootstrap = {
-  contract_version: 1,
+  contract_version: 2,
+  personal_mcp_connections: true,
   workspaces: [
     {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test'},
   ],
@@ -129,7 +130,8 @@ it('renders the application shell from the typed bootstrap before resolving read
   const loaded = await app.ready;
 
   expect(loaded).to.deep.equal({
-    contractVersion: 1,
+    contractVersion: 2,
+  personalMcpConnections: true,
     workspaces: [{workspace: 'default', displayName: 'Default', embeddingModel: 'embed-test'}],
     workspacesNextCursor: null,
     primaryWorkspace: 'default',
@@ -622,4 +624,26 @@ it('fails closed and resolves the same ready promise after an explicit retry', a
   await app.ready;
   expect(attempts).to.equal(2);
   expect(app.bootState).to.equal('ready');
+});
+
+it('opens Connections after the fixed OAuth return without starting authorization', async () => {
+  const previous = window.location.href;
+  const writes: string[] = [];
+  window.history.replaceState(null, '', '?settings=connections&authorization=restart');
+  window.fetch = async (input, init) => {
+    if (init?.method && init.method !== 'GET') writes.push(String(input));
+    if (String(input) === '/web/api/connections/mcp') return response({revision: '0', single_user: false, connections: []});
+    return bootstrapResponse(input);
+  };
+  try {
+    const app = document.createElement('dl-app') as DlApp;
+    document.body.append(app);
+    await app.ready;
+    await waitFor(() => Boolean(app.querySelector('dl-settings-connections')));
+    expect(app.querySelector<DlSettingsDialog>('dl-settings-dialog')!.showConnections).to.equal(true);
+    expect(app.textContent).to.contain('Authorization failed or expired');
+    expect(writes).to.deep.equal([]);
+    expect(window.location.search).not.to.contain('settings=');
+    expect(window.location.search).not.to.contain('authorization=');
+  } finally {window.history.replaceState(null, '', previous);}
 });

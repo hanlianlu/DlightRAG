@@ -2,11 +2,12 @@
 """Durable answer runs over already-authorized canonical workspaces."""
 
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, aclosing
-from dataclasses import asdict, dataclass
+from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Protocol, cast
 from uuid import UUID, uuid7
 
+from dlightrag.application.connections import BoundResearchConnections, ConnectionsError
 from dlightrag.application.runs import (
     IdempotencyKeyConflict,
     RunAdmissionLimitExceededError,
@@ -28,7 +29,7 @@ from dlightrag.engine.ai.capacity import (
 )
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
-from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
@@ -40,6 +41,10 @@ from dlightrag.engine.answer.execution import (
     ResolvedAnswerResources,
     research_history_input_measure,
 )
+from dlightrag.engine.answer.execution.connection_binding import (
+    RunConnectionBinding,
+    StaleConnectionBindingError,
+)
 from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
     AnswerRunRequest,
@@ -47,7 +52,9 @@ from dlightrag.engine.answer.execution.input import (
     LinkReference,
     PinnedModelProfile,
     build_current_answer_resources,
+    child_model_guidance,
     in_memory_attachment_loader,
+    model_reasoning_settings,
 )
 from dlightrag.engine.answer.history import (
     HistoryProjectionOverflowError,
@@ -74,6 +81,7 @@ from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.tools import compose_research_tools
+from dlightrag.engine.answer.tools.subagents import SubagentHost, subagent_tools
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 from dlightrag.engine.rag.retrieval import MetadataFilter, RetrievalOptions, RetrievalResult
 from dlightrag.engine.rag.retrieval.planner import RetrievalPlanner
@@ -342,6 +350,7 @@ class AnswerRunAcceptor[T](Protocol):
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: RoutingAcceptance | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> T | None: ...
 
     async def replay_run(
@@ -502,10 +511,10 @@ class _AnswerCapabilityPlanner(Protocol):
 
     async def refresh_vlm(self) -> AnswerCapabilities: ...
 
-    def current_profiles(self) -> dict[ModelRole, ModelProfile]: ...
+    def current_profiles(self) -> dict[ChatModelSelector, ModelProfile]: ...
 
     def request_model_context(
-        self, pinned: Mapping[ModelRole, ModelProfile] | None, /
+        self, pinned: Mapping[ChatModelSelector, ModelProfile] | None, /
     ) -> RequestModelContext: ...
 
     def answer_image_policy(self, profile: ModelProfile, /) -> AnswerImagePolicy: ...
@@ -519,6 +528,8 @@ class _QueryImageRuntime(Protocol):
     """The model runtime acceptance describes current-turn images with."""
 
     def query_image_describer(self) -> QueryImageDescriber: ...
+
+    def model_settings(self, role: ChatModelSelector) -> ModelSettings: ...
 
 
 class _AnswerResourcePreparer(Protocol):
@@ -693,9 +704,10 @@ class AnswerService:
         capability_view: _AnswerCapabilityReader,
         models: _QueryImageRuntime,
         resources: _AnswerResourcePreparer,
-        model_fingerprint_for_role: Callable[[ModelRole], ModelFingerprint],
+        model_fingerprint_for_role: Callable[[ChatModelSelector], ModelFingerprint],
         child_roster_cursor_secret: bytes,
         research_tool_supplements: Callable[[], Sequence[AgentTool]] | None = None,
+        bind_research: Callable[..., Awaitable[BoundResearchConnections]] | None = None,
         memory_capability: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
         run_retention_seconds: int = 365 * 24 * 3600,
     ) -> None:
@@ -709,6 +721,7 @@ class AnswerService:
         self._resources = resources
         self._model_fingerprint_for_role = model_fingerprint_for_role
         self._research_tool_supplements = research_tool_supplements or (lambda: ())
+        self._bind_research = bind_research
         self._memory_capability = memory_capability
         self._run_retention_seconds = int(run_retention_seconds)
         self._child_roster_codec = ChildRosterCursorCodec(child_roster_cursor_secret)
@@ -829,7 +842,7 @@ class AnswerService:
         memory_epoch = 0
         if memory_enabled and self._memory_capability is not None:
             memory_enabled, memory_epoch = await self._memory_capability(owner_id=owner_id)
-        run_input, allowed_modes = await self._prepare_input(
+        async with self._prepare_input(
             run_request,
             resources=acceptance_resources or None,
             idempotency_fingerprint=fingerprint,
@@ -838,56 +851,86 @@ class AnswerService:
             auth_mode=auth_mode,
             memory_enabled=memory_enabled,
             history_resolver=history_resolver,
-        )
-        prepared_input = _prepared_input_payload(
-            run_input, requested_mode=requested_mode, auth_mode=auth_mode
-        )
-        prepared_input["profile_memory_enabled"] = memory_enabled
-        prepared_input["profile_memory_epoch"] = memory_epoch
-        require_prepared_input_bounds(prepared_input)
-        resources_payload = _accepted_resource_payloads(
-            run_input, attachment_bytes=attachment_bytes
-        )
-        async with self._coordinator.admission() as runtime_available:
-            if not runtime_available:
-                raise AnswerRuntimeUnavailableError("Answer runtime is unavailable")
-            run_id = str(uuid7())
-            accepted = await acceptor.create_run(
-                envelope=PreparedRunEnvelope(
-                    run_kind="answer",
-                    lane="query",
-                    submitted_by=owner_id,
-                    access_scope=RunAccessScope(kind="owner", scope_id=owner_id),
-                    submission_key=idempotency_key or run_id,
-                    request_fingerprint=fingerprint,
-                    payload=prepared_input,
-                    accepted_input=accepted_input_envelope(prepared_input),
-                    retention_seconds=self._run_retention_seconds,
-                ),
-                run_id=run_id,
-                resources=resources_payload,
-                artifacts=[PendingArtifact(content=content) for content in attachment_bytes],
-                references=_artifact_references(run_input),
-                routing=RoutingAcceptance(
-                    requested_mode=requested_mode,
-                    valid_modes=tuple(sorted(allowed_modes)),
-                    context_policy_revision=CONTEXT_POLICY_REVISION,
-                    model_fingerprints={
-                        item.role: {
-                            "provider": item.fingerprint.provider,
-                            "model": item.fingerprint.model,
-                            "endpoint_fingerprint": item.fingerprint.endpoint_fingerprint,
-                        }
-                        for item in run_input.pinned_models
-                    },
-                    agent_session_id=run_input.agent_session_id,
-                    agent_lane_id=run_input.agent_lane_id,
-                    source_lane_id=run_input.source_lane_id,
-                ),
-            )
-            if accepted is not None:
-                self._coordinator.wake()
-        return accepted
+        ) as prepare:
+            for attempt in range(2):
+                bound = (
+                    await self._bind_research(owner_id=owner_id, auth_mode=auth_mode)
+                    if self._bind_research is not None
+                    and requested_mode != "fast"
+                    and "research" in allowed_modes
+                    else BoundResearchConnections()
+                )
+                run_input, effective_modes = await prepare(bound.tools)
+                run_input = replace(run_input, run_connection_bindings=bound.bindings)
+                prepared_input = _prepared_input_payload(
+                    run_input, requested_mode=requested_mode, auth_mode=auth_mode
+                )
+                prepared_input["profile_memory_enabled"] = memory_enabled
+                prepared_input["profile_memory_epoch"] = memory_epoch
+                require_prepared_input_bounds(prepared_input)
+                resources_payload = _accepted_resource_payloads(
+                    run_input, attachment_bytes=attachment_bytes
+                )
+                try:
+                    async with self._coordinator.admission() as runtime_available:
+                        if not runtime_available:
+                            raise AnswerRuntimeUnavailableError("Answer runtime is unavailable")
+                        run_id = str(uuid7())
+                        accepted = await acceptor.create_run(
+                            envelope=PreparedRunEnvelope(
+                                run_kind="answer",
+                                lane="query",
+                                submitted_by=owner_id,
+                                access_scope=RunAccessScope(kind="owner", scope_id=owner_id),
+                                submission_key=idempotency_key or run_id,
+                                request_fingerprint=fingerprint,
+                                payload=prepared_input,
+                                accepted_input=accepted_input_envelope(prepared_input),
+                                retention_seconds=self._run_retention_seconds,
+                            ),
+                            run_id=run_id,
+                            resources=resources_payload,
+                            artifacts=[
+                                PendingArtifact(content=content) for content in attachment_bytes
+                            ],
+                            references=_artifact_references(run_input),
+                            connection_bindings=bound.bindings,
+                            routing=RoutingAcceptance(
+                                requested_mode=requested_mode,
+                                valid_modes=tuple(sorted(effective_modes)),
+                                context_policy_revision=CONTEXT_POLICY_REVISION,
+                                model_fingerprints={
+                                    item.role: {
+                                        "provider": item.fingerprint.provider,
+                                        "model": item.fingerprint.model,
+                                        "endpoint_fingerprint": item.fingerprint.endpoint_fingerprint,
+                                    }
+                                    for item in run_input.pinned_models
+                                },
+                                agent_session_id=run_input.agent_session_id,
+                                agent_lane_id=run_input.agent_lane_id,
+                                source_lane_id=run_input.source_lane_id,
+                            ),
+                        )
+                        if accepted is not None:
+                            self._coordinator.wake()
+                except StaleConnectionBindingError as exc:
+                    if idempotency_key is not None:
+                        replay = await acceptor.replay_run(
+                            owner_id=owner_id,
+                            idempotency_key=idempotency_key,
+                            idempotency_fingerprint=fingerprint,
+                            run_kind="answer",
+                        )
+                        if replay is not None:
+                            return replay
+                    if attempt == 1:
+                        raise ConnectionsError(
+                            "Connections changed repeatedly; submit the Answer again"
+                        ) from exc
+                    continue
+                return accepted
+        raise RuntimeError("Answer acceptance exhausted its bounded attempts")
 
     def _reject_unsupported_mode(
         self, request: AnswerRunRequest
@@ -1567,6 +1610,7 @@ class AnswerService:
             content=content,
         )
 
+    @asynccontextmanager
     async def _prepare_input(
         self,
         request: AnswerRunRequest,
@@ -1578,9 +1622,11 @@ class AnswerService:
         auth_mode: str = "none",
         memory_enabled: bool = True,
         history_resolver: HistoryResolver | None = None,
-    ) -> tuple[AnswerRunInput, frozenset[ResolvedMode]]:
+    ) -> AsyncIterator[
+        Callable[[Sequence[AgentTool]], Awaitable[tuple[AnswerRunInput, frozenset[ResolvedMode]]]]
+    ]:
         """Resolve one normalized request and its capacity-narrowed mode set."""
-        projection = await self._project_acceptance(
+        async with self._project_acceptance(
             request,
             resources=resources,
             requested_mode=requested_mode,
@@ -1588,31 +1634,39 @@ class AnswerService:
             auth_mode=auth_mode,
             memory_enabled=memory_enabled,
             history_resolver=history_resolver,
-        )
-        return AnswerRunInput(
-            query=request.query,
-            workspaces=request.workspaces,
-            history=projection.history,
-            episodic_summary=projection.episodic_summary,
-            retrieval=request.retrieval,
-            filters=request.filters,
-            semantic_highlights=request.semantic_highlights,
-            links=request.links,
-            attachments=request.attachments,
-            history_attachments=request.history_attachments,
-            pinned_models=projection.pinned_models,
-            context_policy_revision=CONTEXT_POLICY_REVISION,
-            model_catalog_revision=current_model_catalog_revision(),
-            idempotency_fingerprint=idempotency_fingerprint,
-            agent_run_plan=projection.agent_run_plan,
-            image_descriptions=projection.image_descriptions,
-            parent_run_id=request.parent_run_id,
-            continuation_kind=request.continuation_kind,
-            agent_session_id=request.agent_session_id or SessionId.new().value,
-            agent_lane_id=request.agent_lane_id,
-            source_lane_id=request.source_lane_id,
-        ), projection.valid_modes
+        ) as project:
 
+            async def prepare(
+                connection_tools: Sequence[AgentTool],
+            ) -> tuple[AnswerRunInput, frozenset[ResolvedMode]]:
+                projection = await project(connection_tools)
+                return AnswerRunInput(
+                    query=request.query,
+                    workspaces=request.workspaces,
+                    history=projection.history,
+                    episodic_summary=projection.episodic_summary,
+                    retrieval=request.retrieval,
+                    filters=request.filters,
+                    semantic_highlights=request.semantic_highlights,
+                    links=request.links,
+                    attachments=request.attachments,
+                    history_attachments=request.history_attachments,
+                    pinned_models=projection.pinned_models,
+                    context_policy_revision=CONTEXT_POLICY_REVISION,
+                    model_catalog_revision=current_model_catalog_revision(),
+                    idempotency_fingerprint=idempotency_fingerprint,
+                    agent_run_plan=projection.agent_run_plan,
+                    image_descriptions=projection.image_descriptions,
+                    parent_run_id=request.parent_run_id,
+                    continuation_kind=request.continuation_kind,
+                    agent_session_id=request.agent_session_id or SessionId.new().value,
+                    agent_lane_id=request.agent_lane_id,
+                    source_lane_id=request.source_lane_id,
+                ), projection.valid_modes
+
+            yield prepare
+
+    @asynccontextmanager
     async def _project_acceptance(
         self,
         request: AnswerRunRequest,
@@ -1623,7 +1677,7 @@ class AnswerService:
         auth_mode: str = "none",
         memory_enabled: bool = True,
         history_resolver: HistoryResolver | None = None,
-    ) -> _AcceptanceProjection:
+    ) -> AsyncIterator[Callable[[Sequence[AgentTool]], Awaitable[_AcceptanceProjection]]]:
         """Resolve the exact shared-history envelopes without building the run rig."""
         model_profiles = self._capabilities.current_profiles()
         models = self._capabilities.request_model_context(model_profiles)
@@ -1636,7 +1690,6 @@ class AnswerService:
             confirm_image_context=self._capabilities.confirmed_live_answer_context,
             resolved_mode=("research" if "research" in allowed_modes else "fast"),
         )
-        agent_run_plan: AgentRunPlan | None = None
         try:
             workspaces = list(request.workspaces)
             self._retrieval.warm(workspaces)
@@ -1653,205 +1706,230 @@ class AnswerService:
                 else ()
             )
             schema = await self._retrieval.schema_for(workspaces)
-            memory_text = standing_memory_for_acceptance(auth_mode) if memory_enabled else ""
-            effective_modes = allowed_modes
-            fast_targets: list[HistoryProjectionTarget] = []
-            if "fast" in effective_modes:
-                fast_targets.append(
-                    HistoryProjectionTarget(
-                        "fast_planner",
-                        models.extract,
-                        planner.history_input_measure(
+
+            async def project(connection_tools: Sequence[AgentTool]) -> _AcceptanceProjection:
+                agent_run_plan: AgentRunPlan | None = None
+                memory_text = standing_memory_for_acceptance(auth_mode) if memory_enabled else ""
+                effective_modes = allowed_modes
+                fast_targets: list[HistoryProjectionTarget] = []
+                if "fast" in effective_modes:
+                    fast_targets.append(
+                        HistoryProjectionTarget(
+                            "fast_planner",
+                            models.extract,
+                            planner.history_input_measure(
+                                request.query,
+                                schema=schema,
+                                current_image_descriptions=list(image_descriptions) or None,
+                                preserve_query=None,
+                            ),
+                            proactive_compaction=True,
+                            require_full_dynamic_reserve=True,
+                        )
+                    )
+                    synthesizer = AnswerSynthesizer(
+                        image_policy=self._capabilities.answer_image_policy(models.query),
+                        model_profile=models.query,
+                        context_policy=CONTEXT_POLICY,
+                        model_func=None,
+                    )
+                    fast_generation_measure = (
+                        synthesizer.history_input_measure(
                             request.query,
-                            schema=schema,
-                            current_image_descriptions=list(image_descriptions) or None,
-                            preserve_query=None,
-                        ),
-                        proactive_compaction=True,
-                        require_full_dynamic_reserve=True,
-                    )
-                )
-                synthesizer = AnswerSynthesizer(
-                    image_policy=self._capabilities.answer_image_policy(models.query),
-                    model_profile=models.query,
-                    context_policy=CONTEXT_POLICY,
-                    model_func=None,
-                )
-                fast_generation_measure = (
-                    synthesizer.history_input_measure(
-                        request.query,
-                        memory_text="",
-                        episodic_summary=request.episodic_summary,
-                        current_images=resolved.current_images,
-                    )
-                    if resolved.current_images
-                    else synthesizer.history_input_measure(
-                        request.query,
-                        memory_text="",
-                        episodic_summary=request.episodic_summary,
-                    )
-                )
-                fast_targets.append(
-                    HistoryProjectionTarget(
-                        "fast_generation",
-                        models.query,
-                        fast_generation_measure,
-                        proactive_compaction=True,
-                        require_full_dynamic_reserve=True,
-                    )
-                )
-                try:
-                    project_history([], targets=fast_targets)
-                except HistoryProjectionOverflowError as exc:
-                    if requested_mode == "fast":
-                        raise AnswerInputOverflowError(str(exc)) from exc
-                    effective_modes = cast(
-                        frozenset[ResolvedMode],
-                        frozenset(mode for mode in effective_modes if mode != "fast"),
-                    )
-                    if not effective_modes:
-                        raise UnsupportedAnswerModeError(requested_mode) from exc
-
-            targets: list[HistoryProjectionTarget] = []
-            if "research" in effective_modes:
-                targets.append(
-                    HistoryProjectionTarget(
-                        "research_planner",
-                        models.extract,
-                        planner.history_input_measure(
+                            memory_text="",
+                            episodic_summary=request.episodic_summary,
+                            current_images=resolved.current_images,
+                        )
+                        if resolved.current_images
+                        else synthesizer.history_input_measure(
                             request.query,
-                            schema=schema,
-                            current_image_descriptions=list(image_descriptions) or None,
-                            preserve_query=True,
+                            memory_text="",
+                            episodic_summary=request.episodic_summary,
+                        )
+                    )
+                    fast_targets.append(
+                        HistoryProjectionTarget(
+                            "fast_generation",
+                            models.query,
+                            fast_generation_measure,
+                            proactive_compaction=True,
+                            require_full_dynamic_reserve=True,
+                        )
+                    )
+                    try:
+                        project_history([], targets=fast_targets)
+                    except HistoryProjectionOverflowError as exc:
+                        if requested_mode == "fast":
+                            raise AnswerInputOverflowError(str(exc)) from exc
+                        effective_modes = cast(
+                            frozenset[ResolvedMode],
+                            frozenset(mode for mode in effective_modes if mode != "fast"),
+                        )
+                        if not effective_modes:
+                            raise UnsupportedAnswerModeError(requested_mode) from exc
+
+                pinned_models = self._pin_model_profiles(model_profiles)
+                targets: list[HistoryProjectionTarget] = []
+                if "research" in effective_modes:
+                    targets.append(
+                        HistoryProjectionTarget(
+                            "research_planner",
+                            models.extract,
+                            planner.history_input_measure(
+                                request.query,
+                                schema=schema,
+                                current_image_descriptions=list(image_descriptions) or None,
+                                preserve_query=True,
+                            ),
+                        )
+                    )
+                    evidence = EvidenceLedger(image_budget=resolved.image_budget)
+
+                    async def unused_retrieve(_query: str) -> RetrievalResult:
+                        raise RuntimeError("acceptance tool definitions are never executed")
+
+                    tools = compose_research_tools(
+                        evidence=evidence,
+                        trace={},
+                        retrieve_knowledge_base=unused_retrieve,
+                        search_web=(
+                            resolved.web_sources.search
+                            if resolved.web_sources is not None
+                            and resolved.web_sources.search_enabled
+                            else None
+                        ),
+                        resource_tools=resolved.resource_tools,
+                        register_web_source=(
+                            resolved.registry.register_discovered_link
+                            if resolved.registry is not None and resolved.web_sources is not None
+                            else None
                         ),
                     )
-                )
-                evidence = EvidenceLedger(image_budget=resolved.image_budget)
-
-                async def unused_retrieve(_query: str) -> RetrievalResult:
-                    raise RuntimeError("acceptance tool definitions are never executed")
-
-                tools = compose_research_tools(
-                    evidence=evidence,
-                    trace={},
-                    retrieve_knowledge_base=unused_retrieve,
-                    search_web=(
-                        resolved.web_sources.search
-                        if resolved.web_sources is not None and resolved.web_sources.search_enabled
-                        else None
-                    ),
-                    resource_tools=resolved.resource_tools,
-                    register_web_source=(
-                        resolved.registry.register_discovered_link
-                        if resolved.registry is not None and resolved.web_sources is not None
-                        else None
-                    ),
-                )
-                supplements = list(self._research_tool_supplements())
-                if not memory_enabled:
+                    supplements = [*self._research_tool_supplements(), *connection_tools]
+                    child_definitions = {
+                        tool.name: tool
+                        for tool in subagent_tools(
+                            host=SubagentHost(model_guidance=child_model_guidance(pinned_models))
+                        )
+                    }
                     supplements = [
-                        tool
+                        replace(
+                            tool,
+                            description=child_definitions[tool.name].description,
+                            input_model=child_definitions[tool.name].input_model,
+                            contract_version=child_definitions[tool.name].contract_version,
+                        )
+                        if tool.name in child_definitions
+                        else tool
                         for tool in supplements
-                        if tool.name not in {"remember", "forget", "recall_memory"}
                     ]
+                    if not memory_enabled:
+                        supplements = [
+                            tool
+                            for tool in supplements
+                            if tool.name not in {"remember", "forget", "recall_memory"}
+                        ]
+                    try:
+                        tools = list(ToolRegistry([*tools, *supplements]).resolve())
+                    except DuplicateToolError as exc:
+                        raise InvalidToolConfigurationError(exc.names) from exc
+                    agent_run_plan = AgentRunPlan.from_tools(
+                        tools,
+                        model_role="query",
+                        context_policy_revision=CONTEXT_POLICY_REVISION,
+                        model_identity=asdict(self._model_fingerprint_for_role("query")),
+                        model_profile=asdict(models.query),
+                    )
+                    measure = research_history_input_measure(
+                        model_profile=models.query,
+                        context_policy=CONTEXT_POLICY,
+                        query=request.query,
+                        query_images=resolved.query_images,
+                        resource_manifest=resolved.resource_manifest,
+                        image_budget=resolved.image_budget,
+                        tools=tools,
+                        retained_tail_tokens=CONTEXT_POLICY.retained_tail_target(models.query),
+                        memory_text=memory_text,
+                        episodic_summary=request.episodic_summary,
+                    )
+                    targets.append(
+                        HistoryProjectionTarget(
+                            "research_seed",
+                            models.query,
+                            measure,
+                            proactive_compaction=True,
+                        )
+                    )
+                if "fast" in effective_modes:
+                    targets.extend(fast_targets)
+                if requested_mode == "auto" and effective_modes >= {"fast", "research"}:
+                    from dlightrag.engine.answer.router import AnswerModeRouter
+
+                    async def _unused_router(**_kwargs: Any) -> str:
+                        raise RuntimeError("acceptance router measure never calls the model")
+
+                    router = AnswerModeRouter(_unused_router)
+                    mode_resources = tuple(
+                        ModeResource(
+                            role=resource_role(filename=item.filename, mime_type=item.mime_type)
+                        )
+                        for item in (*request.attachments, *request.history_attachments)
+                    )
+                    targets.append(
+                        HistoryProjectionTarget(
+                            "router",
+                            models.query,
+                            router.history_input_measure(
+                                request.query,
+                                resources=mode_resources,
+                                valid_modes=tuple(sorted(effective_modes)),
+                            ),
+                        )
+                    )
                 try:
-                    tools = list(ToolRegistry([*tools, *supplements]).resolve())
-                except DuplicateToolError as exc:
-                    raise InvalidToolConfigurationError(exc.names) from exc
-                agent_run_plan = AgentRunPlan.from_tools(
-                    tools,
-                    model_role="query",
-                    context_policy_revision=CONTEXT_POLICY_REVISION,
-                    model_identity=asdict(self._model_fingerprint_for_role("query")),
-                    model_profile=asdict(models.query),
-                )
-                measure = research_history_input_measure(
-                    model_profile=models.query,
-                    context_policy=CONTEXT_POLICY,
-                    query=request.query,
-                    query_images=resolved.query_images,
-                    resource_manifest=resolved.resource_manifest,
-                    image_budget=resolved.image_budget,
-                    tools=tools,
-                    retained_tail_tokens=CONTEXT_POLICY.retained_tail_target(models.query),
-                    memory_text=memory_text,
-                    episodic_summary=request.episodic_summary,
-                )
-                targets.append(
-                    HistoryProjectionTarget(
-                        "research_seed",
-                        models.query,
-                        measure,
-                        proactive_compaction=True,
+                    history = (
+                        await history_resolver(targets)
+                        if history_resolver is not None
+                        else project_history(
+                            [dict(message) for message in request.history],
+                            targets=targets,
+                        )
                     )
+                except HistoryProjectionOverflowError as exc:
+                    if exc.target == "router":
+                        raise UnsupportedAnswerModeError("auto") from exc
+                    raise AnswerInputOverflowError(str(exc)) from exc
+                episodic_parts = [
+                    item.strip()
+                    for item in (request.episodic_summary, history.episodic_summary)
+                    if item.strip()
+                ]
+                return _AcceptanceProjection(
+                    history=tuple(dict(message) for message in history.messages),
+                    episodic_summary="\n\n".join(dict.fromkeys(episodic_parts)),
+                    image_descriptions=image_descriptions,
+                    pinned_models=pinned_models,
+                    agent_run_plan=agent_run_plan,
+                    valid_modes=effective_modes,
                 )
-            if "fast" in effective_modes:
-                targets.extend(fast_targets)
-            if requested_mode == "auto" and effective_modes >= {"fast", "research"}:
-                from dlightrag.engine.answer.router import AnswerModeRouter
 
-                async def _unused_router(**_kwargs: Any) -> str:
-                    raise RuntimeError("acceptance router measure never calls the model")
-
-                router = AnswerModeRouter(_unused_router)
-                mode_resources = tuple(
-                    ModeResource(
-                        role=resource_role(filename=item.filename, mime_type=item.mime_type)
-                    )
-                    for item in (*request.attachments, *request.history_attachments)
-                )
-                targets.append(
-                    HistoryProjectionTarget(
-                        "router",
-                        models.query,
-                        router.history_input_measure(
-                            request.query,
-                            resources=mode_resources,
-                            valid_modes=tuple(sorted(effective_modes)),
-                        ),
-                    )
-                )
-            try:
-                history = (
-                    await history_resolver(targets)
-                    if history_resolver is not None
-                    else project_history(
-                        [dict(message) for message in request.history],
-                        targets=targets,
-                    )
-                )
-            except HistoryProjectionOverflowError as exc:
-                if exc.target == "router":
-                    raise UnsupportedAnswerModeError("auto") from exc
-                raise AnswerInputOverflowError(str(exc)) from exc
-            episodic_parts = [
-                item.strip()
-                for item in (request.episodic_summary, history.episodic_summary)
-                if item.strip()
-            ]
-            return _AcceptanceProjection(
-                history=tuple(dict(message) for message in history.messages),
-                episodic_summary="\n\n".join(dict.fromkeys(episodic_parts)),
-                image_descriptions=image_descriptions,
-                pinned_models=self._pin_model_profiles(model_profiles),
-                agent_run_plan=agent_run_plan,
-                valid_modes=effective_modes,
-            )
+            yield project
         finally:
             if resolved.registry is not None:
                 await resolved.registry.aclose()
 
     def _pin_model_profiles(
         self,
-        profiles: Mapping[ModelRole, ModelProfile],
+        profiles: Mapping[ChatModelSelector, ModelProfile],
     ) -> tuple[PinnedModelProfile, ...]:
         return tuple(
             PinnedModelProfile(
                 role=role,
                 fingerprint=self._model_fingerprint_for_role(role),
                 profile=profiles[role],
+                reasoning_settings=model_reasoning_settings(self._models.model_settings(role)),
             )
-            for role in MODEL_ROLE_NAMES
+            for role in CHAT_MODEL_SELECTORS
         )
 
 

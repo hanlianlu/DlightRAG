@@ -97,3 +97,22 @@ it('inspector has no new serious axe violations when closed', async () => {
   await inspector.updateComplete;
   expect(await seriousIds(inspector)).to.deep.equal([]);
 });
+
+it('Settings MCP consent and credential forms have no serious accessible-name or contrast violations', async () => {
+  await import('./settings-connections.ts');
+  const originalFetch = window.fetch;
+  window.fetch = async () => Response.json({revision: '1', single_user: true, connections: [{
+    connection_id: 'a', label: 'Personal tools', endpoint: 'https://fixture.example/mcp',
+    enabled: false, activation_epoch: 1, generation: 1, authentication: 'oauth', status: 'needs-auth', authorization_status: 'failed',
+    last_error_kind: 'authentication', catalogue_created_at: '2026-09-01T00:00:00Z', tools: [],
+  }]});
+  try {
+    const feature = document.createElement('dl-settings-connections');
+    document.body.append(feature);
+    for (let attempt = 0; attempt < 50 && !feature.view; attempt++) await new Promise((resolve) => setTimeout(resolve, 0));
+    await feature.updateComplete;
+    feature.querySelector<HTMLButtonElement>('[data-enable]')!.click();
+    await feature.updateComplete;
+    expect(await seriousIds(feature)).to.deep.equal([]);
+  } finally {window.fetch = originalFetch;}
+});

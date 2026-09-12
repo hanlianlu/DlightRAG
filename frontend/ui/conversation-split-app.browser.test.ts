@@ -9,7 +9,8 @@ import {initializeBrowserAdapters} from './browser-adapters.ts';
 defineDesignSystemElements();
 
 const bootstrap = {
-  contract_version: 1,
+  contract_version: 2,
+  personal_mcp_connections: true,
   workspaces: [
     {workspace: 'default', display_name: 'Default', embedding_model: 'embed-test'},
   ],

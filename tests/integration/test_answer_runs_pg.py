@@ -2573,7 +2573,8 @@ class TestAgentControlsAndChildren:
         assert [item["content"] for item in controls or ()] == ["first", "second"]
         assert replay == ()
 
-    async def test_one_spawn_call_persists_multiple_child_lineages(self, store) -> None:
+    @pytest.mark.parametrize("model_role", ["query", "extract", "keyword", "vlm", "default"])
+    async def test_one_spawn_call_persists_multiple_child_lineages(self, store, model_role) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request(mode="research"))
         claim = await _claimed(store)
         parent_id = str(uuid.uuid7())
@@ -2593,7 +2594,7 @@ class TestAgentControlsAndChildren:
                 parent_intent_id=parent_intent_id,
                 objective=f"child {position}",
                 context_mode="parent",
-                model_role="extract",
+                model_role=model_role,
                 tools=("search_knowledge_base",),
                 depth=1,
                 context_snapshot={
@@ -2603,7 +2604,13 @@ class TestAgentControlsAndChildren:
                     "messages": [{"role": "user", "content": "parent"}],
                     "evidence_state": {},
                 },
-                plan={"schema_version": 1, "tools": ["search_knowledge_base"]},
+                plan={
+                    "schema_version": 1,
+                    "tools": ["search_knowledge_base"],
+                    "model_role": model_role,
+                    "model_identity": {"model": f"selected-{model_role}"},
+                    "model_profile": {"supports_images": model_role == "vlm"},
+                },
                 budget={"provider_attempt_limit": 2},
                 host_state={"evidence": {}},
             )
@@ -2693,6 +2700,14 @@ class TestAgentControlsAndChildren:
         assert [item["depth"] for item in roster] == [1, 1]
         assert all(item["context_snapshot"]["messages"] for item in roster)
         assert all(item["plan"]["tools"] == ["search_knowledge_base"] for item in roster)
+        assert all(item["model_role"] == model_role for item in roster)
+        assert all(
+            item["plan"]["model_identity"] == {"model": f"selected-{model_role}"} for item in roster
+        )
+        assert all(
+            item["plan"]["model_profile"]["supports_images"] == (model_role == "vlm")
+            for item in roster
+        )
         assert all(item["budget"]["provider_attempt_limit"] == 2 for item in roster)
         assert [item["host_state"]["terminal_outcome"]["status"] for item in roster] == [
             "succeeded",

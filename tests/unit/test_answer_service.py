@@ -29,7 +29,7 @@ from dlightrag.application.runs import (
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
-from dlightrag.engine.ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector, ModelSettings
 from dlightrag.engine.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
@@ -37,6 +37,7 @@ from dlightrag.engine.answer.errors import (
     UnsupportedAnswerModeError,
 )
 from dlightrag.engine.answer.execution import AnswerResourceResolver, AnswerResourceSettings
+from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.execution.input import AnswerRunInput, AnswerRunRequest
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.resources.models import ResourceInput
@@ -141,6 +142,7 @@ class _Store:
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         routing: object | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
     ) -> RunCreation:
         self.created.append(
             {
@@ -154,6 +156,7 @@ class _Store:
                 "artifacts": [artifact.content for artifact in artifacts],
                 "references": list(references),
                 "routing": routing,
+                "connection_bindings": connection_bindings,
             }
         )
         return RunCreation(run=self._run, replayed=False)
@@ -360,11 +363,11 @@ class _Capabilities:
         self.vlm_refreshes += 1
         return AnswerCapabilities(answer=None, vlm_status="unknown")
 
-    def current_profiles(self) -> dict[ModelRole, ModelProfile]:
-        return {role: _PROFILE for role in MODEL_ROLE_NAMES}
+    def current_profiles(self) -> dict[ChatModelSelector, ModelProfile]:
+        return {role: _PROFILE for role in CHAT_MODEL_SELECTORS}
 
     def request_model_context(
-        self, pinned: Mapping[ModelRole, ModelProfile] | None, /
+        self, pinned: Mapping[ChatModelSelector, ModelProfile] | None, /
     ) -> RequestModelContext:
         profiles = pinned or self.current_profiles()
         return RequestModelContext(
@@ -403,7 +406,7 @@ class _TextQueryInspectCapabilities(_Capabilities):
         self.vlm_refreshes += 1
         return AnswerCapabilities(answer=self._answer, vlm_status="supported")
 
-    def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+    def current_profiles(self) -> dict[ChatModelSelector, ModelProfile]:
         profiles = super().current_profiles()
         profiles["query"] = ModelProfile(
             context_window_tokens=_PROFILE.context_window_tokens,
@@ -436,17 +439,17 @@ class _TextQueryInspectCapabilities(_Capabilities):
 class _SmallProfileCapabilities(_Capabilities):
     """A profile whose physical input cannot preserve Fast's full 40K reserve."""
 
-    def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+    def current_profiles(self) -> dict[ChatModelSelector, ModelProfile]:
         profile = ModelProfile(context_window_tokens=30_000)
-        return {role: profile for role in MODEL_ROLE_NAMES}
+        return {role: profile for role in CHAT_MODEL_SELECTORS}
 
 
 class _FastMemoryBoundaryCapabilities(_Capabilities):
     """A profile with exactly 100 tokens before Fast's full dynamic reserve."""
 
-    def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+    def current_profiles(self) -> dict[ChatModelSelector, ModelProfile]:
         profile = ModelProfile(context_window_tokens=57_508)
-        return {role: profile for role in MODEL_ROLE_NAMES}
+        return {role: profile for role in CHAT_MODEL_SELECTORS}
 
 
 class _Registry:
@@ -530,7 +533,7 @@ class _CapabilityView:
         return self._snapshot
 
 
-def _fingerprint(role: ModelRole) -> ModelFingerprint:
+def _fingerprint(role: ChatModelSelector) -> ModelFingerprint:
     return ModelFingerprint(provider="test", model=f"model-{role}", endpoint_fingerprint=None)
 
 
@@ -543,6 +546,7 @@ def _service(
     capability_view: Any = None,
     resources: Any = None,
     memory_capability: Any = None,
+    bind_research: Any = None,
 ) -> AnswerService:
     selected_store = store or _Store()
     return AnswerService(
@@ -552,10 +556,14 @@ def _service(
         retrieval=retrieval or _Retrieval(),
         capabilities=capabilities or _Capabilities(),
         capability_view=capability_view or _CapabilityView(AnswerCapabilities(None, "unknown")),
-        models=MagicMock(query_image_describer=MagicMock(return_value=MagicMock())),
+        models=MagicMock(
+            query_image_describer=MagicMock(return_value=MagicMock()),
+            model_settings=MagicMock(return_value=ModelSettings(model="test")),
+        ),
         resources=resources or _Resources(),
         model_fingerprint_for_role=_fingerprint,
         memory_capability=memory_capability,
+        bind_research=bind_research,
         child_roster_cursor_secret=b"answer-service-child-roster-test",
     )
 
@@ -661,7 +669,7 @@ async def test_capability_recovered_while_pinning_is_not_rejected_early(mode: st
             super().__init__()
             self.recovered = False
 
-        def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+        def current_profiles(self) -> dict[ChatModelSelector, ModelProfile]:
             profiles = super().current_profiles()
             profiles["query"] = ModelProfile(
                 context_window_tokens=_PROFILE.context_window_tokens,
@@ -714,7 +722,7 @@ async def test_capability_narrowed_while_pinning_recomputes_valid_modes(mode: st
             super().__init__()
             self.query_narrowed = False
 
-        def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+        def current_profiles(self) -> dict[ChatModelSelector, ModelProfile]:
             profiles = super().current_profiles()
             profiles["query"] = ModelProfile(
                 context_window_tokens=_PROFILE.context_window_tokens,
@@ -1042,7 +1050,7 @@ async def test_carried_history_resource_loads_from_the_run_that_accepted_it() ->
     assert run_input.workspaces == ("finance",)
     assert run_input.context_policy_revision == CONTEXT_POLICY_REVISION
     assert run_input.model_catalog_revision == MODEL_CATALOG_REVISION
-    assert {pinned.role for pinned in run_input.pinned_models} == set(MODEL_ROLE_NAMES)
+    assert {pinned.role for pinned in run_input.pinned_models} == set(CHAT_MODEL_SELECTORS)
     assert run_input.agent_run_plan is not None
     assert run_input.agent_run_plan.context_policy_revision == CONTEXT_POLICY_REVISION
     assert run_input.agent_run_plan.digest

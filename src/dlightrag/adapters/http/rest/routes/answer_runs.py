@@ -44,6 +44,7 @@ from dlightrag.application.answer_runs import (
 )
 from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
 from dlightrag.application.config import AnswerConfig
+from dlightrag.application.connections import ConnectionsError
 from dlightrag.application.corpus_admin import safe_source_filename
 from dlightrag.application.retrieval import RetrievalOptions
 from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
@@ -433,6 +434,10 @@ async def create_answer_run(
             status_code=409,
             detail="Idempotency-Key was reused with a different answer request",
         ) from None
+    except ConnectionsError:
+        raise HTTPException(
+            status_code=409, detail="Connections changed; submit the Answer again"
+        ) from None
     except RunAdmissionLimitExceededError:
         raise HTTPException(
             status_code=503,
@@ -556,6 +561,10 @@ async def _continue_answer_run(
         raise HTTPException(
             status_code=409,
             detail="Idempotency-Key was reused with a different continuation",
+        ) from None
+    except ConnectionsError:
+        raise HTTPException(
+            status_code=409, detail="Connections changed; submit the Answer again"
         ) from None
     except RunAdmissionLimitExceededError:
         raise HTTPException(

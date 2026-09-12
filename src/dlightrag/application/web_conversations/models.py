@@ -9,6 +9,7 @@ from uuid import UUID
 
 from dlightrag.application.opaque_cursor import OpaqueCursorEnvelope
 from dlightrag.application.runs import RunView
+from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
 from dlightrag.engine.runtime.records import (
     PendingArtifact,
@@ -401,6 +402,7 @@ class WebConversationStore(Protocol):
         references: Sequence[PendingArtifactReference],
         title_hint: str | None,
         routing: RoutingAcceptance | None = None,
+        connection_bindings: tuple[RunConnectionBinding, ...] = (),
         create_conversation: bool = False,
         forked_from_conversation_id: str | None = None,
     ) -> AnswerTurnCreation | None: ...

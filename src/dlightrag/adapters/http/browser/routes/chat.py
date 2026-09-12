@@ -56,6 +56,7 @@ from dlightrag.application.answer_runs import (
     child_control_receipt_payload,
     child_control_succeeded,
 )
+from dlightrag.application.connections import ConnectionsError
 from dlightrag.application.corpus_admin import normalize_workspace_ids
 from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
 from dlightrag.application.web_conversations import (
@@ -195,6 +196,10 @@ async def start_answer_run(
             409,
             "submission_conflict",
             "This submission id was already used for a different request",
+        ) from None
+    except ConnectionsError:
+        raise _command_error(
+            409, "submission_conflict", "Connections changed; submit the Answer again"
         ) from None
     except RunAdmissionLimitExceededError:
         raise _command_error(
@@ -428,6 +433,10 @@ async def _continue_answer_run(
             409,
             "submission_conflict",
             "This submission id was already used for a different continuation",
+        ) from None
+    except ConnectionsError:
+        raise _command_error(
+            409, "submission_conflict", "Connections changed; submit the Answer again"
         ) from None
     except RunAdmissionLimitExceededError:
         raise _command_error(

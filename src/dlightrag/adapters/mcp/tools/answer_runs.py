@@ -30,6 +30,7 @@ from dlightrag.application.answer_runs import (
     child_control_receipt_payload,
     child_control_succeeded,
 )
+from dlightrag.application.connections import ConnectionsError
 from dlightrag.application.retrieval import (
     MetadataFilter,
     RetrievalOptions,
@@ -130,6 +131,8 @@ async def answer_tool(
         raise ValueError(
             "idempotency_key was already used for a different answer request"
         ) from None
+    except ConnectionsError:
+        raise ValueError("Connections changed; submit the Answer again") from None
     except RunAdmissionLimitExceededError:
         raise ValueError("Deployment-wide nonterminal admission limit reached") from None
     return mcp_server._run_descriptor(creation.run)
@@ -385,6 +388,8 @@ async def _mcp_continuation(
         )
     except IdempotencyKeyConflict:
         raise ValueError("idempotency_key was already used for a different continuation") from None
+    except ConnectionsError:
+        raise ValueError("Connections changed; submit the Answer again") from None
     except RunAdmissionLimitExceededError:
         raise ValueError("Deployment-wide nonterminal admission limit reached") from None
     if creation is None:

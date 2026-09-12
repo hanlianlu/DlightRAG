@@ -2,16 +2,25 @@
 """The peer tools one research run offers, composed per run and never globally."""
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
 from dlightrag.engine.agent.environment import AccessScheduler
+from dlightrag.engine.agent.environment.errors import FullOutputUnavailable
 from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
+from dlightrag.engine.agent.tool_content import ToolTextPart, tool_content_attachments
 from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
-from dlightrag.engine.agent.tools.files import ImagePreparer, path_tools, read_tool
+from dlightrag.engine.agent.tools.files import (
+    ImagePreparer,
+    SpillWriter,
+    path_tools,
+    preview_or_spill,
+    read_tool,
+)
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.engine.answer.errors import InvalidToolConfigurationError
 from dlightrag.engine.answer.evidence import EvidenceLedger
@@ -99,7 +108,11 @@ def compose_research_tools(
     tools.extend(
         _ledger_backed(tool, evidence) for tool in resource_tools if tool.name == "inspect"
     )
-    tools.extend(tool for tool in resource_tools if tool.name not in {"read", "inspect"})
+    tools.extend(
+        _bounded_injected_result(tool, spill)
+        for tool in resource_tools
+        if tool.name not in {"read", "inspect"}
+    )
     if environment is not None:
         path = path_tools(
             environment,
@@ -182,6 +195,40 @@ def compose_research_tools(
         )
     except DuplicateToolError as exc:
         raise InvalidToolConfigurationError(exc.names) from exc
+
+
+def _bounded_injected_result(tool: AgentTool, spill: SpillWriter | None) -> AgentTool:
+    async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        result = await tool.execute(raw, runtime)
+        # Existing cursor/spill results already own their continuation. Runtime
+        # fitting retains protected text and attachments without duplicating it.
+        if result.protected_text or result.effects.committed_outputs:
+            return result
+        try:
+            text, receipt = await preview_or_spill(result.text_content, spill=spill, tool=tool.name)
+        except FullOutputUnavailable, OSError:
+            return replace(
+                result,
+                parts=(
+                    ToolTextPart(
+                        f"Tool {tool.name} completed but its full output is unavailable. Do not retry automatically; identify the unavailable part in the final Answer."
+                    ),
+                    *tool_content_attachments(result.parts),
+                ),
+                is_error=True,
+            )
+        if receipt is None:
+            return result
+        return replace(
+            result,
+            parts=(ToolTextPart(text), *tool_content_attachments(result.parts)),
+            protected_text=f"Full output: read(resource_id={receipt.resource_id!r}, cursor=...)",
+            effects=replace(
+                result.effects, committed_outputs=(*result.effects.committed_outputs, receipt)
+            ),
+        )
+
+    return replace(tool, execute=execute)
 
 
 def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger) -> AgentTool:

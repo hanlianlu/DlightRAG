@@ -254,7 +254,9 @@ def test_manifest_reports_link_without_size_until_read() -> None:
 
 
 async def test_url_fetch_is_lazy(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     client = _LinkClient(content=b"remote body")
     registry = ResourceRegistry(url_client=client)
     resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
@@ -269,7 +271,9 @@ async def test_url_fetch_is_lazy(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_discovered_link_has_only_per_operation_not_cumulative_web_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     client = _LinkClient(content=b"12345")
     registry = ResourceRegistry(
         max_attachment_bytes=10,
@@ -297,7 +301,7 @@ async def test_successful_url_read_keeps_one_fixed_snapshot_without_new_dns(
         calls += 1
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
 
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", resolver)
+    monkeypatch.setattr("dlightrag.engine.network_admission.socket.getaddrinfo", resolver)
     client = _LinkClient(content=b"safe")
     registry = ResourceRegistry(url_client=client)
     resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
@@ -549,7 +553,9 @@ async def test_ensure_path_materializes_temp_and_aclose_cleans_up() -> None:
 async def test_cancellation_during_fetch_propagates_and_cleans_up(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     client = _LinkClient(fail=asyncio.CancelledError)
     registry = ResourceRegistry(url_client=client)
     resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
@@ -662,7 +668,9 @@ class _CountingFallback:
 async def test_redirect_final_url_becomes_citable_identity_and_alias(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     responses = iter(
         (
             _StreamResponse(
@@ -735,7 +743,9 @@ async def test_redirect_final_url_becomes_citable_identity_and_alias(
 async def test_redirect_recovery_preserves_final_provenance_without_predeclared_final(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     responses = iter(
         (
             _StreamResponse(
@@ -785,7 +795,9 @@ async def test_redirect_recovery_preserves_final_provenance_without_predeclared_
 async def test_failed_agent_read_can_retry_with_new_presentation_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     client = _LinkClient(fail=RuntimeError)
     registry = ResourceRegistry(url_client=client)
     resource_id = registry.register_agent_url(
@@ -813,7 +825,9 @@ async def test_failed_agent_read_can_retry_with_new_presentation_headers(
 async def test_direct_success_skips_url_text_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     fallback = _CountingFallback("EXTRACTED TEXT")
     registry = ResourceRegistry(
         url_client=_LinkClient(content=b"good body"),
@@ -832,7 +846,9 @@ async def test_direct_success_skips_url_text_fallback(
 async def test_direct_decode_failure_uses_one_extract_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     fallback = _CountingFallback("recovered text\nsecond line", provider="tavily")
     registry = ResourceRegistry(
         url_client=_LinkClient(content=b"\x00\x01\x02\x03binary\x00\x00"),
@@ -852,7 +868,9 @@ async def test_direct_decode_failure_uses_one_extract_fallback(
 async def test_binary_direct_snapshot_is_retained_without_hosted_substitution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     admitted = []
 
     async def persist(fetched, _owner) -> None:
@@ -879,7 +897,9 @@ async def test_binary_direct_snapshot_is_retained_without_hosted_substitution(
 async def test_shared_extract_snapshot_is_admitted_for_each_effect_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     owners = []
 
     async def persist(_fetched, owner) -> None:
@@ -907,7 +927,9 @@ async def test_shared_extract_snapshot_is_admitted_for_each_effect_owner(
 async def test_extract_fallback_persists_only_the_admitted_text_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     admitted = []
 
     async def persist(fetched, _owner) -> None:
@@ -945,7 +967,9 @@ async def test_extract_fallback_persists_only_the_admitted_text_snapshot(
 async def test_direct_empty_triggers_extract_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     fallback = _CountingFallback("provider body text")
     registry = ResourceRegistry(
         url_client=_LinkClient(content=b""),
@@ -963,7 +987,7 @@ async def test_invalid_private_url_never_calls_extract_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "dlightrag.engine.public_http.socket.getaddrinfo",
+        "dlightrag.engine.network_admission.socket.getaddrinfo",
         lambda host, port, *args, **kwargs: [
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port))
         ],
@@ -983,7 +1007,9 @@ async def test_invalid_private_url_never_calls_extract_provider(
 async def test_exhausted_extract_returns_no_evidence_and_does_not_pin_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     fallback = _CountingFallback(None)
     client = _LinkClient(content=b"\x00\x01\x02\x03binary\x00\x00")
     registry = ResourceRegistry(
@@ -1006,7 +1032,9 @@ async def test_exhausted_extract_returns_no_evidence_and_does_not_pin_failure(
 async def test_fallback_text_windows_are_cursor_paginated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     big = "\n".join(f"line {index} " + "x" * 30 for index in range(2000))
     fallback = _CountingFallback(big)
     registry = ResourceRegistry(
@@ -1028,7 +1056,9 @@ async def test_fallback_text_windows_are_cursor_paginated(
 async def test_web_reads_do_not_consume_attachment_cumulative_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     registry = ResourceRegistry(
         max_attachment_bytes=100,
         max_total_attachment_bytes=8,
@@ -1061,7 +1091,9 @@ async def test_loader_bytes_still_use_attachment_cumulative_budget() -> None:
 async def test_concurrent_reads_same_link_share_one_fixed_fetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.engine.public_http.socket.getaddrinfo", _public_getaddrinfo)
+    monkeypatch.setattr(
+        "dlightrag.engine.network_admission.socket.getaddrinfo", _public_getaddrinfo
+    )
     client = _LinkClient(content=b"0123456789")
     registry = ResourceRegistry(url_client=client)
     resource_id = registry.register_agent_url("https://data.example.com/report.txt")
