@@ -23,6 +23,7 @@ import './conversation-sidebar.ts';
 import type {AnswerSourceOpenDetail} from './answer-presentation.ts';
 import type {ComposerWorkspaceDropDetail} from './chat-composer.ts';
 import type {
+  ChatChildActivityDetail,
   ChatContentChangeDetail,
   ChatMemoryOperationDetail,
   ChatRunActionDetail,
@@ -277,7 +278,8 @@ export class DlApp extends LightElement {
                   ?inert=${blockingShellModal || this.canvasWide}
                   @dl-chat-content-change=${this.#chatContentChanged}
                   @dl-chat-background-click=${this.#chatBackgroundClick}
-                  @dl-chat-run-action=${this.#chatRunAction}></dl-chat-feature>
+                  @dl-chat-run-action=${this.#chatRunAction}
+                  @dl-child-activity=${this.#childActivity}></dl-chat-feature>
               </div>
             </div>
             <dl-artifact-canvas id="artifact-canvas" class="panel" slot="end"
@@ -504,12 +506,25 @@ export class DlApp extends LightElement {
       this.querySelector<DlChildrenRoster>('dl-children-roster')?.open(
         () => chat.loadRunChildren(runId),
         (cursor, signal) => chat.loadRunChildrenPage(runId, cursor, signal),
+        {
+          runId,
+          observe: (childSessionId, signal) => chat.loadRunChild(runId, childSessionId, signal),
+          control: (childSessionId, action, content, reauthorize, signal) => (
+            chat.controlRunChild(runId, childSessionId, action, content, reauthorize, signal)
+          ),
+          reply: (requestId, content, signal) => chat.replyRunChild(runId, requestId, content, signal),
+        },
       );
       return;
     }
     this.#pendingContinuation = {kind: event.detail.action, runId: event.detail.runId};
     this.querySelector<DlContinuationDialog>('dl-continuation-dialog')
       ?.open(event.detail.action);
+  }
+
+  #childActivity(event: CustomEvent<ChatChildActivityDetail>): void {
+    this.querySelector<DlChildrenRoster>('dl-children-roster')
+      ?.refreshIfFollowing(event.detail.runId);
   }
 
   #continuationResult(event: CustomEvent<ContinuationResult>): void {

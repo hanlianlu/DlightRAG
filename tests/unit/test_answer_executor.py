@@ -37,6 +37,7 @@ from dlightrag.engine.answer.execution import (
     AnswerResourceSettings,
 )
 from dlightrag.engine.answer.execution.executor import (
+    _child_lifecycle_for_plan,
     _close_execution_resources,
     _memory_recall_allowed,
     _stage_publications,
@@ -226,12 +227,60 @@ def test_acceptance_research_tools_include_every_configured_non_resource_surface
         "subagent_status",
         "wait_subagent",
         "cancel_subagent",
+        "steer_subagent",
+        "continue_subagent",
+        "reply_subagent",
         "remember",
         "forget",
         "recall_memory",
         "load_skill",
         "remote_lookup",
     } <= names
+
+
+def test_pinned_child_lifecycle_keeps_v2_v3_and_accepts_v4() -> None:
+    from pydantic import BaseModel
+
+    from dlightrag.engine.agent.tools import AgentTool, ToolResult
+    from dlightrag.engine.answer.tools.subagents import SubagentHost, subagent_tools
+    from dlightrag.engine.runtime.errors import IncompatibleActiveRunError
+
+    async def execute(_args: BaseModel, _runtime: object) -> ToolResult:
+        return ToolResult.text("unused")
+
+    def _plan(*tools: AgentTool) -> AgentRunPlan:
+        return AgentRunPlan.from_tools(
+            tools, model_role="query", context_policy_revision="policy-1"
+        )
+
+    def _spawn(*, async_lifecycle: bool, interactive_controls: bool = True) -> AgentTool:
+        return next(
+            tool
+            for tool in subagent_tools(
+                host=SubagentHost(
+                    async_lifecycle=async_lifecycle,
+                    interactive_controls=interactive_controls,
+                )
+            )
+            if tool.name == "spawn_agent"
+        )
+
+    supported = _spawn(async_lifecycle=True)
+    unsupported = AgentTool(
+        supported.name,
+        supported.description,
+        supported.input_model,
+        execute,
+        replay_policy=supported.replay_policy,
+        contract_version=9,
+    )
+    assert _child_lifecycle_for_plan(_plan(_spawn(async_lifecycle=False))) == (False, False)
+    assert _child_lifecycle_for_plan(
+        _plan(_spawn(async_lifecycle=True, interactive_controls=False))
+    ) == (True, False)
+    assert _child_lifecycle_for_plan(_plan(supported)) == (True, True)
+    with pytest.raises(IncompatibleActiveRunError):
+        _child_lifecycle_for_plan(_plan(unsupported))
 
 
 def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> None:

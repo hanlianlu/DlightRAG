@@ -11,7 +11,7 @@ each authenticated read projects fresh URLs from them.
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -38,6 +38,8 @@ from dlightrag.application.answer_runs import (
     CHILD_ROSTER_PAGE_MAX_LIMIT,
     ChildRosterCursorError,
     ChildRosterPageRequest,
+    child_control_receipt_payload,
+    child_control_succeeded,
 )
 from dlightrag.application.answer_runs import AnswerRequest as ServiceAnswerRequest
 from dlightrag.application.config import AnswerConfig
@@ -73,6 +75,14 @@ class _AgentControlBody(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     content: str = Field(min_length=1, max_length=20_000)
+
+
+class _ChildControlBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    action: Literal["steer", "continue", "cancel"]
+    content: str = Field(default="", max_length=20_000)
+    reauthorize_user_cancelled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,6 +455,58 @@ async def steer_answer_run(
     }
 
 
+@router.post("/answer/{run_id}/children/{child_session_id}/control", status_code=202)
+async def control_answer_child(
+    run_id: str,
+    child_session_id: str,
+    body: _ChildControlBody,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    submission_key = idempotency_key(request)
+    if submission_key is None:
+        raise HTTPException(status_code=400, detail="Idempotency-Key is required")
+    receipt = await get_application(request).answers.control_child(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        child_session_id=child_session_id,
+        action=body.action,
+        content=body.content,
+        idempotency_key=submission_key,
+        reauthorize_user_cancelled=body.reauthorize_user_cancelled,
+    )
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="Answer child not found")
+    if not child_control_succeeded(receipt.outcome):
+        raise HTTPException(status_code=409, detail=receipt.outcome)
+    return child_control_receipt_payload(receipt)
+
+
+@router.post("/answer/{run_id}/child-guidance/{request_id}/reply", status_code=202)
+async def reply_to_answer_child(
+    run_id: str,
+    request_id: str,
+    body: _AgentControlBody,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    submission_key = idempotency_key(request)
+    if submission_key is None:
+        raise HTTPException(status_code=400, detail="Idempotency-Key is required")
+    receipt = await get_application(request).answers.reply_to_child(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        request_id=request_id,
+        content=body.content,
+        idempotency_key=submission_key,
+    )
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="Child guidance request not found")
+    if receipt.outcome != "replied":
+        raise HTTPException(status_code=409, detail=receipt.outcome)
+    return child_control_receipt_payload(receipt)
+
+
 async def _continue_answer_run(
     *,
     operation: str,
@@ -568,6 +630,25 @@ async def answer_run_children(
             else None
         ),
     }
+
+
+@router.get("/answer/{run_id}/children/{child_session_id}")
+async def observe_answer_child(
+    run_id: str,
+    child_session_id: str,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> dict[str, Any]:
+    observation = await get_application(request).answers.observe_child(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        child_session_id=child_session_id,
+        limit=limit,
+    )
+    if observation is None:
+        raise HTTPException(status_code=404, detail="Answer child not found")
+    return observation.payload()
 
 
 __all__ = ["router"]

@@ -102,6 +102,7 @@ class _RunApplication:
         self.artifact_bytes: bytes | None = None
         self.controls: list[str] = []
         self.continuations: list[dict[str, Any]] = []
+        self.child_control_outcome = "queued"
 
     async def list_artifacts(self, *, owner_id: str, run_id: str) -> tuple[Any, ...] | None:
         del owner_id, run_id
@@ -182,6 +183,38 @@ class _RunApplication:
         self.controls.append(instruction)
         return SimpleNamespace(run_id=run_id, control_sequence=len(self.controls), kind="steer")
 
+    async def control_child(self, **kwargs: Any) -> Any:
+        if self.record is None or self.record.run_kind != "answer":
+            return None
+        self.controls.append(f"child:{kwargs['action']}:{kwargs['child_session_id']}")
+        return SimpleNamespace(
+            run_id=kwargs["run_id"],
+            child_session_id=kwargs["child_session_id"],
+            request_id=None,
+            action=kwargs["action"],
+            outcome=(self.child_control_outcome if kwargs["action"] == "steer" else "accepted"),
+            operation_id="operation-1",
+            operation_sequence=2,
+            control_sequence=3,
+            consumed_at=None,
+        )
+
+    async def reply_to_child(self, **kwargs: Any) -> Any:
+        if self.record is None or self.record.run_kind != "answer":
+            return None
+        self.controls.append(f"reply:{kwargs['request_id']}")
+        return SimpleNamespace(
+            run_id=kwargs["run_id"],
+            child_session_id="child-1",
+            request_id=kwargs["request_id"],
+            action="reply",
+            outcome="replied",
+            operation_id=None,
+            operation_sequence=None,
+            control_sequence=None,
+            consumed_at=None,
+        )
+
     async def continuation_workspaces(
         self, *, owner_id: str, run_id: str
     ) -> tuple[str, ...] | None:
@@ -228,6 +261,20 @@ class _RunApplication:
             children=(({"child_session_id": "child-1", "status": "running"},)),
             next_cursor=None,
             fetched_rows=1,
+        )
+
+    async def observe_child(self, **kwargs: Any) -> Any:
+        if self.record is None or self.record.run_kind != "answer":
+            return None
+        return SimpleNamespace(
+            payload=lambda: {
+                "run_id": kwargs["run_id"],
+                "child": {"child_session_id": kwargs["child_session_id"], "status": "running"},
+                "transcript": [{"role": "user", "content": "inspect"}],
+                "controls": [],
+                "questions": [],
+                "result": None,
+            }
         )
 
     async def resume(self, *, owner_id: str, run_id: str) -> RunRecord | None:
@@ -1049,6 +1096,69 @@ class TestAgentControls:
         assert transcript.json()["messages"] == [{"role": "user", "content": "hi"}]
         assert children.json()["children"][0]["child_session_id"] == "child-1"
         assert run_application.controls == ["focus", "follow:next", "fork:branch"]
+
+    async def test_rest_child_control_and_guidance_reply_require_idempotency(
+        self, client: AsyncClient, run_application: _RunApplication
+    ) -> None:
+        missing = await client.post(
+            f"/answer/{_RUN_ID}/children/child-1/control",
+            json={"action": "steer", "content": "focus"},
+        )
+        controlled = await client.post(
+            f"/answer/{_RUN_ID}/children/child-1/control",
+            headers={"Idempotency-Key": "child-steer-1"},
+            json={"action": "steer", "content": "focus"},
+        )
+        replied = await client.post(
+            f"/answer/{_RUN_ID}/child-guidance/request-1/reply",
+            headers={"Idempotency-Key": "child-reply-1"},
+            json={"content": "use the report"},
+        )
+
+        assert missing.status_code == 400
+        assert controlled.status_code == 202
+        assert controlled.json() == {
+            "run_id": _RUN_ID,
+            "child_session_id": "child-1",
+            "request_id": None,
+            "action": "steer",
+            "outcome": "queued",
+            "operation_id": "operation-1",
+            "operation_sequence": 2,
+            "control_sequence": 3,
+            "consumed_at": None,
+        }
+        assert replied.status_code == 202
+        assert replied.json()["request_id"] == "request-1"
+        assert replied.json()["child_session_id"] == "child-1"
+        assert replied.json()["operation_id"] is None
+        assert run_application.controls[-2:] == [
+            "child:steer:child-1",
+            "reply:request-1",
+        ]
+
+    async def test_rest_observes_one_child(
+        self, client: AsyncClient, run_application: _RunApplication
+    ) -> None:
+        observed = await client.get(f"/answer/{_RUN_ID}/children/child-1")
+
+        assert observed.status_code == 200
+        assert observed.json()["child"]["child_session_id"] == "child-1"
+        assert observed.json()["transcript"][0]["content"] == "inspect"
+
+    async def test_rest_child_control_terminal_is_conflict(
+        self, client: AsyncClient, run_application: _RunApplication
+    ) -> None:
+        run_application.child_control_outcome = "terminal_child"
+
+        response = await client.post(
+            f"/answer/{_RUN_ID}/children/child-1/control",
+            headers={"Idempotency-Key": "child-steer-terminal"},
+            json={"action": "steer", "content": "too late"},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == "terminal_child"
 
     async def test_continuation_rechecks_current_workspace_authorization(
         self,

@@ -217,19 +217,158 @@ const agentChildStatus = v.pipe(
   v.object({
     child_session_id: v.optional(v.string()),
     status: v.string(),
-    objective: v.optional(v.string()),
-    model_role: v.optional(v.string()),
+    objective: v.optional(v.nullable(v.string())),
+    model_role: v.optional(v.nullable(v.string())),
     usage: v.optional(v.nullable(v.record(v.string(), v.number()))),
+    operation_id: v.optional(v.nullable(v.string())),
+    operation_sequence: v.optional(v.nullable(v.number())),
+    operation_status: v.optional(v.nullable(v.string())),
+    cancellation_origin: v.optional(v.nullable(v.string())),
+    summary: v.optional(v.nullable(v.string())),
+    result_handles: v.optional(v.array(v.string())),
   }),
   v.transform((w) => ({
     childSessionId: w.child_session_id,
     status: w.status,
-    objective: w.objective,
-    modelRole: w.model_role,
+    objective: w.objective ?? undefined,
+    modelRole: w.model_role ?? undefined,
     usage: w.usage ?? null,
+    operationId: w.operation_id ?? null,
+    operationSequence: w.operation_sequence ?? null,
+    operationStatus: w.operation_status ?? null,
+    cancellationOrigin: w.cancellation_origin ?? null,
+    summary: w.summary ?? null,
+    resultHandles: w.result_handles ?? [],
   })),
 );
 export type AgentChildStatus = v.InferOutput<typeof agentChildStatus>;
+
+const childControlReceipt = v.pipe(
+  v.object({
+    run_id: v.string(),
+    child_session_id: v.optional(v.nullable(v.string())),
+    request_id: v.optional(v.nullable(v.string())),
+    action: v.string(),
+    outcome: v.string(),
+    operation_id: v.optional(v.nullable(v.string())),
+    operation_sequence: v.optional(v.nullable(v.number())),
+    control_sequence: v.optional(v.nullable(v.number())),
+    consumed_at: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({
+    runId: w.run_id,
+    childSessionId: w.child_session_id ?? null,
+    requestId: w.request_id ?? null,
+    action: w.action,
+    outcome: w.outcome,
+    operationId: w.operation_id ?? null,
+    operationSequence: w.operation_sequence ?? null,
+    controlSequence: w.control_sequence ?? null,
+    consumedAt: w.consumed_at ?? null,
+  })),
+);
+export type ChildControlReceipt = v.InferOutput<typeof childControlReceipt>;
+
+const childTranscriptMessage = v.pipe(
+  v.object({
+    role: v.string(),
+    content: v.optional(v.unknown()),
+    tool_calls: v.optional(v.array(v.unknown())),
+    tool_call_id: v.optional(v.string()),
+    name: v.optional(v.string()),
+    is_error: v.optional(v.boolean()),
+  }),
+  v.transform((w) => ({
+    role: w.role,
+    content: typeof w.content === 'string' ? w.content : '',
+    toolCalls: w.tool_calls ?? [],
+    toolCallId: w.tool_call_id ?? '',
+    name: w.name ?? '',
+    isError: w.is_error ?? false,
+  })),
+);
+export type ChildTranscriptMessage = v.InferOutput<typeof childTranscriptMessage>;
+
+const childControlRecord = v.pipe(
+  v.object({
+    control_sequence: v.number(),
+    kind: v.string(),
+    content: v.string(),
+    origin: v.string(),
+    consumed: v.boolean(),
+    consumed_at: v.optional(v.nullable(v.string())),
+    created_at: v.optional(v.nullable(v.string())),
+    operation_id: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({
+    controlSequence: w.control_sequence,
+    kind: w.kind,
+    content: w.content,
+    origin: w.origin,
+    consumed: w.consumed,
+    consumedAt: w.consumed_at ?? null,
+    createdAt: w.created_at ?? null,
+    operationId: w.operation_id ?? null,
+  })),
+);
+export type ChildControlRecord = v.InferOutput<typeof childControlRecord>;
+
+const childQuestion = v.pipe(
+  v.object({
+    request_id: v.string(),
+    question: v.string(),
+    status: v.string(),
+    reply: v.optional(v.nullable(v.string())),
+    reply_origin: v.optional(v.nullable(v.string())),
+    expires_at: v.optional(v.nullable(v.string())),
+    created_at: v.optional(v.nullable(v.string())),
+  }),
+  v.transform((w) => ({
+    requestId: w.request_id,
+    question: w.question,
+    status: w.status,
+    reply: w.reply ?? null,
+    replyOrigin: w.reply_origin ?? null,
+    expiresAt: w.expires_at ?? null,
+    createdAt: w.created_at ?? null,
+  })),
+);
+export type ChildQuestion = v.InferOutput<typeof childQuestion>;
+
+const childResultLineage = v.pipe(
+  v.nullable(v.object({
+    status: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    handles: v.optional(v.array(v.string())),
+    operation_id: v.optional(v.nullable(v.string())),
+  })),
+  v.transform((w) => w === null ? null : {
+    status: w.status ?? '',
+    summary: w.summary ?? '',
+    handles: w.handles ?? [],
+    operationId: w.operation_id ?? null,
+  }),
+);
+
+const childObservation = v.pipe(
+  v.object({
+    run_id: v.string(),
+    child: agentChildStatus,
+    transcript: v.array(childTranscriptMessage),
+    controls: v.array(childControlRecord),
+    questions: v.array(childQuestion),
+    result: v.optional(childResultLineage),
+  }),
+  v.transform((w) => ({
+    runId: w.run_id,
+    child: w.child,
+    transcript: w.transcript,
+    controls: w.controls,
+    questions: w.questions,
+    result: w.result ?? null,
+  })),
+);
+export type ChildObservation = v.InferOutput<typeof childObservation>;
 
 const conversationTurn = v.pipe(
   v.object({
@@ -310,6 +449,16 @@ export class ConversationApiError extends Error {
     super(message);
     this.name = 'ConversationApiError';
     this.status = status;
+  }
+}
+
+export class ChildControlRejectedError extends ConversationApiError {
+  readonly outcome: string;
+
+  constructor(status: number, outcome: string) {
+    super(status, outcome);
+    this.name = 'ChildControlRejectedError';
+    this.outcome = outcome;
   }
 }
 
@@ -450,6 +599,84 @@ export async function getAnswerRunChildrenPage(
   const suffix = query.size > 0 ? `?${query.toString()}` : '';
   const response = await fetch(`/web/api/answer/${id}/children${suffix}`, {signal});
   return parseWire(response, agentChildRosterPage, makeError, 'Failed to load child agents');
+}
+
+export async function getAnswerRunChild(
+  runId: string,
+  childSessionId: string,
+  signal?: AbortSignal,
+): Promise<ChildObservation> {
+  const run = encodeURIComponent(runId);
+  const child = encodeURIComponent(childSessionId);
+  const response = await fetch(`/web/api/answer/${run}/children/${child}`, {signal});
+  return parseWire(response, childObservation, makeError, 'Failed to load child agent');
+}
+
+async function parseChildCommand(
+  response: Response,
+  fallback: string,
+): Promise<ChildControlReceipt> {
+  if (response.status === 409) {
+    let outcome = 'rejected';
+    try {
+      const body: unknown = await response.json();
+      if (
+        body !== null
+        && typeof body === 'object'
+        && 'detail' in body
+        && typeof body.detail === 'string'
+        && body.detail.trim()
+      ) {
+        outcome = body.detail;
+      }
+    } catch {
+      // Keep the generic rejected outcome when the 409 body is unreadable.
+    }
+    throw new ChildControlRejectedError(409, outcome);
+  }
+  return parseWire(response, childControlReceipt, makeError, fallback);
+}
+
+export async function controlAnswerChild(
+  runId: string,
+  childSessionId: string,
+  action: 'steer' | 'continue' | 'cancel',
+  content: string,
+  submissionId: string,
+  reauthorizeUserCancelled = false,
+  signal?: AbortSignal,
+): Promise<ChildControlReceipt> {
+  const run = encodeURIComponent(runId);
+  const child = encodeURIComponent(childSessionId);
+  const response = await fetch(`/web/api/answer/${run}/children/${child}/control`, {
+    method: 'POST',
+    headers: {...csrfHeaders('application/json'), 'Idempotency-Key': submissionId},
+    body: JSON.stringify({
+      action,
+      content,
+      reauthorize_user_cancelled: reauthorizeUserCancelled,
+    }),
+    signal,
+  });
+  return parseChildCommand(response, 'Failed to control child agent');
+}
+
+export async function replyAnswerChild(
+  runId: string,
+  requestId: string,
+  content: string,
+  submissionId: string,
+  signal?: AbortSignal,
+): Promise<ChildControlReceipt> {
+  const run = encodeURIComponent(runId);
+  const guidance = encodeURIComponent(requestId);
+  const response = await fetch(`/web/api/answer/${run}/child-guidance/${guidance}/reply`, {
+    method: 'POST',
+    headers: {...csrfHeaders('application/json'), 'Idempotency-Key': submissionId},
+    body: JSON.stringify({content}),
+    signal,
+  });
+  return parseChildCommand(response, 'Failed to reply to child agent');
 }
 
 export async function continueAnswerRun(

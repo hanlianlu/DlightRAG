@@ -5,10 +5,10 @@ import logging
 from collections.abc import Mapping
 from dataclasses import replace
 from functools import partial
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,6 +53,8 @@ from dlightrag.application.answer_runs import (
     AnswerRuntimeUnavailableError,
     ChildRosterCursorError,
     ChildRosterPageRequest,
+    child_control_receipt_payload,
+    child_control_succeeded,
 )
 from dlightrag.application.corpus_admin import normalize_workspace_ids
 from dlightrag.application.runs import IdempotencyKeyConflict, RunAdmissionLimitExceededError
@@ -83,6 +85,17 @@ class _WebAgentControl(BaseModel):
 
 class _WebContinuation(_WebAgentControl):
     submission_id: UUID
+
+
+class _WebChildControl(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    action: Literal["steer", "continue", "cancel"]
+    content: str = Field(default="", max_length=20_000)
+    reauthorize_user_cancelled: bool = False
+
+
+IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
 
 
 @page_router.get("/", response_class=FileResponse)
@@ -300,6 +313,88 @@ async def answer_run_children(
             else None
         ),
     }
+
+
+@router.get("/answer/{run_id}/children/{child_session_id}")
+async def observe_answer_child(
+    run_id: str,
+    child_session_id: str,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> dict[str, Any]:
+    user = getattr(request.state, "user_context", None)
+    if await conversation_service.turn_for_run(user, run_id) is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    observation = await get_application(request).answers.observe_child(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        child_session_id=child_session_id,
+        limit=limit,
+    )
+    if observation is None:
+        raise HTTPException(status_code=404, detail="Answer child not found")
+    return observation.payload()
+
+
+@router.post("/answer/{run_id}/children/{child_session_id}/control", status_code=202)
+async def control_answer_child(
+    run_id: str,
+    child_session_id: str,
+    body: _WebChildControl,
+    request: Request,
+    idempotency_key: IdempotencyKey,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> dict[str, Any]:
+    user = getattr(request.state, "user_context", None)
+    if await conversation_service.turn_for_run(user, run_id) is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    try:
+        receipt = await get_application(request).answers.control_child(
+            owner_id=owner_id_from_user(user),
+            run_id=run_id,
+            child_session_id=child_session_id,
+            action=body.action,
+            content=body.content,
+            idempotency_key=idempotency_key,
+            reauthorize_user_cancelled=body.reauthorize_user_cancelled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="Answer child not found")
+    if not child_control_succeeded(receipt.outcome):
+        raise HTTPException(status_code=409, detail=receipt.outcome)
+    return child_control_receipt_payload(receipt)
+
+
+@router.post("/answer/{run_id}/child-guidance/{request_id}/reply", status_code=202)
+async def reply_to_answer_child(
+    run_id: str,
+    request_id: str,
+    body: _WebAgentControl,
+    request: Request,
+    idempotency_key: IdempotencyKey,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> dict[str, Any]:
+    user = getattr(request.state, "user_context", None)
+    if await conversation_service.turn_for_run(user, run_id) is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    try:
+        receipt = await get_application(request).answers.reply_to_child(
+            owner_id=owner_id_from_user(user),
+            run_id=run_id,
+            request_id=request_id,
+            content=body.content,
+            idempotency_key=idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="Child guidance request not found")
+    if receipt.outcome != "replied":
+        raise HTTPException(status_code=409, detail=receipt.outcome)
+    return child_control_receipt_payload(receipt)
 
 
 async def _continue_answer_run(

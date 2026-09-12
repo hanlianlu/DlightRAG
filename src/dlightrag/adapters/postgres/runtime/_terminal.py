@@ -31,7 +31,66 @@ WITH bumped AS (
       AND lease_owner = $3 AND fencing_epoch = $4
       AND status = 'running' AND lease_expires_at > NOW()
       AND (NOT $12::boolean OR cancel_requested_at IS NULL)
+      AND (
+          $5::text <> 'succeeded'
+          OR NOT EXISTS (
+              SELECT 1
+              FROM dlightrag_answer_child_sessions AS child
+              WHERE child.owner_id = $1 AND child.run_id = $2
+                AND child.status = 'running'
+          )
+      )
     RETURNING next_event_sequence - 1 AS event_sequence
+), cancelled_children AS (
+    UPDATE dlightrag_answer_child_sessions AS child
+    SET status = 'cancelled',
+        cancel_requested_at = COALESCE(child.cancel_requested_at, NOW()),
+        summary = 'Child session cancelled because its parent Run terminated.',
+        usage_json = NULL,
+        host_state_json = jsonb_set(
+            child.host_state_json,
+            '{terminal_outcome}',
+            jsonb_build_object(
+                'status', 'cancelled',
+                'summary', 'Child session cancelled because its parent Run terminated.',
+                'handles', jsonb_build_array(),
+                'usage', jsonb_build_object(),
+                'child_session_id', child.child_session_id::text,
+                'operation_id', COALESCE((
+                    SELECT operation.operation_id::text
+                    FROM dlightrag_answer_child_operations AS operation
+                    WHERE operation.owner_id = child.owner_id
+                      AND operation.run_id = child.run_id
+                      AND operation.child_session_id = child.child_session_id
+                    ORDER BY operation.operation_sequence DESC
+                    LIMIT 1
+                ), ''),
+                'evidence_state', NULL
+            ),
+            true
+        ),
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        updated_at = NOW()
+    WHERE child.owner_id = $1 AND child.run_id = $2
+      AND child.status = 'running'
+      AND EXISTS (SELECT 1 FROM bumped)
+    RETURNING child.owner_id, child.run_id, child.child_session_id
+), cancelled_operations AS (
+    UPDATE dlightrag_answer_child_operations AS operation
+    SET status = 'cancelled', cancellation_origin = 'run', updated_at = NOW()
+    WHERE (operation.owner_id, operation.run_id, operation.child_session_id) IN (
+        SELECT owner_id, run_id, child_session_id FROM cancelled_children
+    )
+      AND operation.status = 'running'
+    RETURNING operation.child_session_id
+), retired_guidance AS (
+    UPDATE dlightrag_answer_child_guidance AS guidance
+    SET status = 'cancelled', updated_at = NOW()
+    WHERE guidance.owner_id = $1 AND guidance.run_id = $2
+      AND guidance.status = 'pending'
+      AND EXISTS (SELECT 1 FROM bumped)
+    RETURNING guidance.request_id
 ), inserted AS (
     INSERT INTO dlightrag_run_events (
         owner_id, run_id, event_sequence, event_type, payload

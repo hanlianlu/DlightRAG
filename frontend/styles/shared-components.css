@@ -18,6 +18,13 @@ dl-icon-button.panel-close {
 
 
 /* Child-agent roster list inside a confirm dialog. */
+.confirm-dialog.roster-dialog {
+    max-height: 80dvh;
+    max-width: min(var(--layout-chat-min-width), calc(100vw - var(--space-layout)));
+    overflow: auto;
+    width: min(var(--layout-chat-min-width), calc(100vw - var(--space-layout)));
+}
+
 .roster-list {
     list-style: none;
     margin: var(--space-component) 0;
@@ -29,6 +36,54 @@ dl-icon-button.panel-close {
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1.5;
     padding-block: var(--space-inline);
+}
+
+.roster-child-select {
+    background: none;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    padding: 0;
+    text-align: start;
+}
+
+.roster-child-select[aria-current='true'] {
+    color: var(--color-text-primary);
+    font-weight: 600;
+}
+
+.roster-observation {
+    border-top: 1px solid var(--color-border-subtle);
+    margin-top: var(--space-component);
+    padding-top: var(--space-component);
+}
+
+.roster-observation h3,
+.roster-observation h4 {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+    margin: var(--space-tight) 0;
+}
+
+.roster-lineage {
+    margin: 0 0 var(--space-component);
+    padding-inline-start: var(--space-related);
+}
+
+.roster-observation fieldset {
+    border: 0;
+    margin: 0 0 var(--space-component);
+    min-inline-size: 0;
+    padding: 0;
+}
+
+.roster-observation legend {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+    padding: 0;
 }
 
 /* === Settings Drawer === */

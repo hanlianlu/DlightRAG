@@ -227,7 +227,12 @@ routing, Session, control, child, and blob-reference state:
 | `dlightrag_agent_session_registers` | `(owner_id, session_id, kind, key)` | exact-CAS Lane heads/state, total OperationState, Plan metadata, request/tool snapshots, bounded inputs and Fast reservation |
 | `dlightrag_answer_evidence` / resource tables | run/session/intent/result identity | atomic durable Evidence, fetched resources, workspace inventory, spills, and blobs |
 | `dlightrag_answer_child_sessions` | parent run + child Session id | parent/call/intent lineage, ContextSnapshot, depth, independent lease/epoch, pinned plan/budget/tools/Host state, status and usage |
-| `dlightrag_agent_controls` | run + control sequence | ordered steer inbox and append-before-ack state |
+| `dlightrag_answer_child_operations` | parent run + child Session + operation sequence | same-Session continuation Operations, idempotency, origin, status, cancellation origin, usage/outcome |
+| `dlightrag_answer_child_guidance` | parent run + request id | correlated `ask_parent` questions, expiry, reply origin, and status `pending` / `replied` / `expired` / `cancelled` |
+| `dlightrag_agent_controls` | run + control sequence | ordered steer inbox for the parent Run or a targeted child Session/Operation; origin `user` or `parent`; append-before-ack |
+
+Independent critique reuses those Child Session, Operation, control, and
+guidance rows. There is no council, supervisor, or budget table.
 
 `run_id` is a UUIDv7. A partial unique index makes one idempotency key unique per
 owner, and a second one allows exactly one terminal event per run. The

@@ -175,7 +175,7 @@ For a local stdio client:
 ```
 
 The Compose stack also exposes streamable HTTP on port 8101. MCP supports
-durable Retrieval and Answer Runs, steering, follow-up/fork, child status,
+durable Retrieval and Answer Runs, steering, follow-up/fork, child observation and controls,
 corpus administration, and capability discovery. The authoritative tool list
 is in [Interfaces](docs/interfaces.md#mcp-server).
 

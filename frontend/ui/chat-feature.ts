@@ -6,8 +6,11 @@ import {waitFor} from 'xstate';
 import {BrowserAnswerSubmissionAdapter} from '../api/answer-submission.ts';
 import {
   continueAnswerRun,
+  controlAnswerChild,
+  getAnswerRunChild,
   getAnswerRunChildren,
   getAnswerRunChildrenPage,
+  replyAnswerChild,
   steerAnswerRun,
   type ConversationAttachmentReference,
   type ConversationTurn,
@@ -61,6 +64,10 @@ export interface ChatRunningChangeDetail {
 
 export interface ChatContentChangeDetail {
   hasMessages: boolean;
+}
+
+export interface ChatChildActivityDetail {
+  runId: string;
 }
 
 export interface ChatMemoryOperationDetail {
@@ -199,6 +206,38 @@ export class DlChatFeature extends LightElement {
 
   async loadRunChildrenPage(runId: string, cursor: string | null, signal?: AbortSignal) {
     return getAnswerRunChildrenPage(runId, cursor, signal);
+  }
+
+  async loadRunChild(runId: string, childSessionId: string, signal?: AbortSignal) {
+    return getAnswerRunChild(runId, childSessionId, signal);
+  }
+
+  async controlRunChild(
+    runId: string,
+    childSessionId: string,
+    action: 'steer' | 'continue' | 'cancel',
+    content: string,
+    reauthorizeUserCancelled = false,
+    signal?: AbortSignal,
+  ) {
+    return controlAnswerChild(
+      runId,
+      childSessionId,
+      action,
+      content,
+      crypto.randomUUID(),
+      reauthorizeUserCancelled,
+      signal,
+    );
+  }
+
+  async replyRunChild(
+    runId: string,
+    requestId: string,
+    content: string,
+    signal?: AbortSignal,
+  ) {
+    return replyAnswerChild(runId, requestId, content, crypto.randomUUID(), signal);
   }
 
   async continueRun(
@@ -702,6 +741,13 @@ export class DlChatFeature extends LightElement {
     const nextTurns = [...this.turns];
     nextTurns[turnIndex] = projected;
     this.turns = nextTurns;
+    if (projected.sawChildren && projected.runId) {
+      this.dispatchEvent(new CustomEvent<ChatChildActivityDetail>('dl-child-activity', {
+        bubbles: true,
+        composed: true,
+        detail: {runId: projected.runId},
+      }));
+    }
   }
 
   #replaceStoredTurn(turnId: string, stored: ConversationTurn): void {

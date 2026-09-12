@@ -134,6 +134,7 @@ def _write_workspace_artifacts(
     root_include_legal: bool = True,
     root_include_model_catalog: bool = True,
     root_include_builtin_skill_creator: bool = True,
+    root_include_builtin_skill_council: bool = True,
     root_include_frontend: bool = True,
     root_extras: tuple[str, ...] = ("milvus",),
     memory_source: str = "",
@@ -146,6 +147,10 @@ def _write_workspace_artifacts(
     if root_include_builtin_skill_creator:
         root_sources["engine/agent/builtin_skills/skill-creator/SKILL.md"] = (
             "---\nname: skill-creator\ndescription: Create skills.\n---\n# Skill Creator"
+        )
+    if root_include_builtin_skill_council:
+        root_sources["engine/agent/builtin_skills/council/SKILL.md"] = (
+            "---\nname: council\ndescription: Independent critique.\n---\n# Council"
         )
     _write_wheel(
         tmp_path,
@@ -408,6 +413,15 @@ def test_workspace_wheel_verifier_requires_builtin_skill_creator(tmp_path: Path)
 
     assert completed.returncode == 1
     assert "built-in skill-creator SKILL.md" in completed.stderr
+
+
+def test_workspace_wheel_verifier_requires_builtin_skill_council(tmp_path: Path) -> None:
+    _write_workspace_artifacts(tmp_path, root_include_builtin_skill_council=False)
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 1
+    assert "built-in council SKILL.md" in completed.stderr
 
 
 def test_workspace_wheel_verifier_rejects_unexpected_root_extras(tmp_path: Path) -> None:

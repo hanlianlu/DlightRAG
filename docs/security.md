@@ -321,7 +321,15 @@ MarkItDown runs without plugins/network. OOXML files pass central-directory
 zip-bomb checks before conversion. Full bytes never enter model context—only
 bounded text windows, safe observations, and budgeted images. Only Evidence
 ledger entries become citable; Profile Memory, Skills metadata, and incidental
-child summaries do not.
+child summaries do not. Public Child Session observation projects attributable
+status, a bounded transcript, queued versus consumed controls, questions, and
+Evidence handles. It strips host_state, pinned plan/budget, context snapshots,
+fencing, and provider-private reasoning. Skill text is untrusted reference
+context: loading `council` or any Skill cannot widen host-permitted child tools.
+Capability inheritance may narrow, never expand; independent deliberation
+defaults to read-only. User-cancelled child work cannot resume without an
+explicit authorized override. Whole-Run user cancellation cascades to children;
+browser/SSE disconnect only detaches the observer.
 
 Admitted bytes are content-addressed within one owner. A fetched resource is
 stored only after validation and is linked atomically before its effect settles,

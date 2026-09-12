@@ -30,7 +30,11 @@ from dlightrag.engine.answer.tools.search import (
     knowledge_base_search_tool,
     web_search_tool,
 )
-from dlightrag.engine.answer.tools.subagents import SubagentHost, subagent_tools
+from dlightrag.engine.answer.tools.subagents import (
+    SubagentHost,
+    child_guidance_tools,
+    subagent_tools,
+)
 
 
 def compose_research_tools(
@@ -117,7 +121,11 @@ def compose_research_tools(
                 )
             )
     if subagent_host is not None:
-        tools.extend(subagent_tools(host=subagent_host))
+        if child:
+            if subagent_host.async_lifecycle and subagent_host.interactive_controls:
+                tools.extend(child_guidance_tools(host=subagent_host))
+        else:
+            tools.extend(subagent_tools(host=subagent_host))
     if memory_host is not None:
         tools.extend(
             (
@@ -133,14 +141,34 @@ def compose_research_tools(
         tools.extend(skill_tools)
     try:
         registry = ToolRegistry(tools)
+        selected_names = tool_names
+        if child and selected_names is None:
+            read_only = {
+                "search_knowledge_base",
+                "search_web",
+                "read",
+                "inspect",
+                "grep",
+                "find",
+                "ls",
+                "recall_memory",
+                "load_skill",
+                "ask_parent",
+            }
+            selected_names = tuple(tool.name for tool in tools if tool.name in read_only)
+        elif child and any(tool.name == "ask_parent" for tool in tools):
+            selected_names = tuple(dict.fromkeys((*(selected_names or ()), "ask_parent")))
         return list(
             registry.resolve(
-                tool_names,
+                selected_names,
                 exclude={
                     "spawn_agent",
                     "subagent_status",
                     "wait_subagent",
                     "cancel_subagent",
+                    "steer_subagent",
+                    "continue_subagent",
+                    "reply_subagent",
                     "remember",
                     "forget",
                 }

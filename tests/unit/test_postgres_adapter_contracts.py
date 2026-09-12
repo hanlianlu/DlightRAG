@@ -95,10 +95,10 @@ def test_metadata_search_page_sql_matches_the_doc_id_keyset_contract() -> None:
 
 
 def test_child_roster_page_queries_match_the_exact_roster_index_contract() -> None:
-    from dlightrag.adapters.postgres.runtime import run_store
+    from dlightrag.adapters.postgres.runtime import _child, run_store
 
-    first = " ".join(run_store._SELECT_CHILD_SESSIONS_FIRST_PAGE.split())
-    after = " ".join(run_store._SELECT_CHILD_SESSIONS_AFTER.split())
+    first = " ".join(_child._SELECT_CHILD_SESSIONS_FIRST_PAGE.split())
+    after = " ".join(_child._SELECT_CHILD_SESSIONS_AFTER.split())
     index_statements = [
         " ".join(statement.split())
         for statement in run_store._CREATE_INDEXES

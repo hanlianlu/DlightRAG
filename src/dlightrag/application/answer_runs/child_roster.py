@@ -2,7 +2,7 @@
 """Bounded child-roster pages and opaque continuation cursors."""
 
 import datetime
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -127,6 +127,62 @@ def _canonical_timestamp(value: datetime.datetime) -> str:
     return value.astimezone(datetime.UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
+def child_result_lineage(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Project attributable result/evidence handles without private host state."""
+    host_state = row.get("host_state")
+    payload = host_state.get("terminal_outcome") if isinstance(host_state, Mapping) else None
+    if not isinstance(payload, Mapping):
+        summary = row.get("summary")
+        handles = row.get("result_handles")
+        if summary in {None, ""} and not handles:
+            return None
+        return {
+            "status": str(row.get("status") or ""),
+            "summary": str(summary or ""),
+            "handles": _string_handles(handles),
+            "operation_id": (str(row["operation_id"]) if row.get("operation_id") else None),
+        }
+    return {
+        "status": str(payload.get("status") or row.get("status") or ""),
+        "summary": str(payload.get("summary") or row.get("summary") or ""),
+        "handles": _string_handles(payload.get("handles")),
+        "operation_id": (
+            str(payload["operation_id"])
+            if payload.get("operation_id")
+            else (str(row["operation_id"]) if row.get("operation_id") else None)
+        ),
+    }
+
+
+def public_child_status(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the Web/REST/MCP child projection without private runtime envelopes."""
+    lineage = child_result_lineage(row)
+    usage = row.get("usage")
+    return {
+        "child_session_id": str(row.get("child_session_id") or ""),
+        "status": str(row.get("status") or ""),
+        "objective": row.get("objective"),
+        "model_role": row.get("model_role"),
+        "usage": dict(usage) if isinstance(usage, Mapping) else None,
+        "operation_id": row.get("operation_id"),
+        "operation_sequence": row.get("operation_sequence"),
+        "operation_status": row.get("operation_status"),
+        "cancellation_origin": row.get("cancellation_origin"),
+        "summary": (
+            row.get("summary")
+            if row.get("summary") not in {None, ""}
+            else (None if lineage is None else lineage.get("summary") or None)
+        ),
+        "result_handles": list(lineage["handles"]) if lineage is not None else [],
+    }
+
+
+def _string_handles(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
+
+
 __all__ = [
     "CHILD_ROSTER_PAGE_DEFAULT_LIMIT",
     "CHILD_ROSTER_PAGE_MAX_LIMIT",
@@ -136,4 +192,6 @@ __all__ = [
     "ChildRosterPage",
     "ChildRosterPageRequest",
     "ChildRosterRowPage",
+    "child_result_lineage",
+    "public_child_status",
 ]

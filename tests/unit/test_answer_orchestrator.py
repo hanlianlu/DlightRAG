@@ -202,4 +202,15 @@ def test_child_preparation_excludes_every_parent_subagent_control() -> None:
         ),
     )
     names = {tool.name for tool in child.tools}
-    assert names.isdisjoint({"spawn_agent", "subagent_status", "wait_subagent", "cancel_subagent"})
+    assert "ask_parent" in names
+    assert names.isdisjoint(
+        {
+            "spawn_agent",
+            "subagent_status",
+            "wait_subagent",
+            "cancel_subagent",
+            "steer_subagent",
+            "continue_subagent",
+            "reply_subagent",
+        }
+    )

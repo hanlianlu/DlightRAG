@@ -3,11 +3,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  ChildControlRejectedError,
   continueAnswerRun,
+  controlAnswerChild,
+  getAnswerRunChild,
   getAnswerRunChildren,
   getAnswerRunChildrenPage,
   getConversationHistory,
   listConversations,
+  replyAnswerChild,
   steerAnswerRun,
 } from './conversations.ts';
 
@@ -156,6 +160,41 @@ test('steer and child roster use their Answer-specific routes', async () => {
   assert.equal(children[0]?.status, 'running');
 });
 
+test('child controls and replies carry durable submission identity', async () => {
+  const requests: Request[] = [];
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(new URL(String(input), 'http://localhost'), init);
+    requests.push(request);
+    const reply = request.url.includes('child-guidance');
+    return new Response(JSON.stringify(reply ? {
+      run_id: 'run-1', request_id: 'request-1', action: 'reply', outcome: 'replied',
+    } : {
+      run_id: 'run-1', child_session_id: 'child/1', action: 'steer', outcome: 'queued',
+      operation_id: 'operation-1', operation_sequence: 1, control_sequence: 7,
+      consumed_at: null,
+    }), {status: 202, headers: {'Content-Type': 'application/json'}});
+  };
+
+  const control = await controlAnswerChild(
+    'run-1', 'child/1', 'steer', 'focus', 'submission-control', false,
+  );
+  const reply = await replyAnswerChild(
+    'run-1', 'request-1', 'use report', 'submission-reply',
+  );
+
+  assert.equal(requests[0]?.headers.get('Idempotency-Key'), 'submission-control');
+  assert.equal(requests[1]?.headers.get('Idempotency-Key'), 'submission-reply');
+  assert.equal(
+    new URL(requests[0]!.url).pathname,
+    '/web/api/answer/run-1/children/child%2F1/control',
+  );
+  assert.deepEqual(await requests[0]!.clone().json(), {
+    action: 'steer', content: 'focus', reauthorize_user_cancelled: false,
+  });
+  assert.equal(control.controlSequence, 7);
+  assert.equal(reply.requestId, 'request-1');
+});
+
 test('child roster pages encode the opaque cursor and normalize the continuation', async () => {
   const requests: string[] = [];
   globalThis.fetch = async (input) => {
@@ -183,5 +222,45 @@ test('child roster pages encode the opaque cursor and normalize the continuation
   assert.equal(
     requests[1],
     'http://localhost/web/api/answer/run-1/children?cursor=opaque-token',
+  );
+});
+
+test('child observation normalizes transcript, controls, and questions', async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    run_id: 'run-1',
+    child: {child_session_id: 'child-1', status: 'running', result_handles: ['ev-1']},
+    transcript: [{role: 'user', content: 'inspect'}],
+    controls: [{
+      control_sequence: 3, kind: 'steer', content: 'focus', origin: 'user',
+      consumed: false, consumed_at: null,
+    }],
+    questions: [{request_id: 'req-1', question: 'Which source?', status: 'pending'}],
+    result: {status: 'running', summary: 'working', handles: ['ev-1']},
+  }));
+
+  const observation = await getAnswerRunChild('run-1', 'child/1');
+
+  assert.equal(observation.child.childSessionId, 'child-1');
+  assert.deepEqual(observation.child.resultHandles, ['ev-1']);
+  assert.equal(observation.transcript[0]?.content, 'inspect');
+  assert.equal(observation.controls[0]?.consumed, false);
+  assert.equal(observation.questions[0]?.requestId, 'req-1');
+  assert.deepEqual(observation.result?.handles, ['ev-1']);
+});
+
+test('child control 409 surfaces the explicit terminal outcome', async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({detail: 'terminal_child'}), {
+    status: 409,
+    headers: {'Content-Type': 'application/json'},
+  });
+
+  await assert.rejects(
+    () => controlAnswerChild('run-1', 'child-1', 'steer', 'focus', 'submission-late'),
+    (error: unknown) => {
+      assert.ok(error instanceof ChildControlRejectedError);
+      assert.equal(error.outcome, 'terminal_child');
+      assert.equal(error.status, 409);
+      return true;
+    },
   );
 });

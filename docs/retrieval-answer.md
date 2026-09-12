@@ -218,8 +218,18 @@ run-local registry may include:
 - Profile Memory tools for the parent (children recall only);
 - progressive `load_skill`;
 - allowlisted outbound MCP tools; and
-- bounded foreground child Sessions with explicit snapshots and Evidence
+- bounded asynchronous Child Sessions with explicit snapshots and Evidence
   return.
+
+`spawn_agent` admits up to eight children per call and returns durable handles
+immediately. Children default to read-only tools (`search_knowledge_base`,
+`search_web`, `read`, `inspect`, `grep`, `find`, `ls`, `recall_memory`,
+`load_skill`, `ask_parent`); the parent may list a narrower host-permitted
+subset, including side-effecting tools only when the host already allows them.
+Children cannot spawn grandchildren. Same-Session continuation creates a new
+Operation on the existing Child Session. The built-in `council` Skill is a
+parent recipe for independent first-pass investigations and at most one curated
+cross-examination; it adds no tools and is not a permission gate.
 
 Tool errors return to the model for correction; they do not terminate research.
 A no-tool assistant turn ends the run, and that text is the answer. The parent

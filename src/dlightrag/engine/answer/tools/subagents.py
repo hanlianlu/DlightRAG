@@ -1,17 +1,20 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""First-class foreground child Agent tools.
+"""Durable asynchronous child Agent tools owned by one parent Answer Run.
 
-A spawn call may launch one or many ordinary child Agent Sessions in parallel,
-but it does not return until every child has settled. There is no detached
-scheduler: host task references exist only so concurrent status/wait/cancel
-calls can address foreground work in the same parent run.
+Accepted child envelopes live in the roster before ``spawn_agent`` returns.
+Process-local tasks only accelerate that durable work; parent reclaim rebuilds
+running children from their stored envelope. An explicit legacy composition
+keeps already-accepted version-2 foreground tool plans executable unchanged.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -26,6 +29,8 @@ from dlightrag.engine.runtime.errors import RunCancelledError
 type ChildStatus = Literal["running", "succeeded", "failed", "cancelled"]
 type ChildContextMode = Literal["isolated", "parent"]
 type ChildModelRole = Literal["query", "extract"]
+
+logger = logging.getLogger(__name__)
 
 
 class _ParentRunCancelled(asyncio.CancelledError):
@@ -71,6 +76,24 @@ class ChildControlInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
 
     child_session_id: str = Field(min_length=1, description="Child session id from spawn_agent.")
+
+
+class ChildMessageInput(ChildControlInput):
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class GuidanceReplyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    request_id: str = Field(min_length=1, description="Correlated request id from ask_parent.")
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class AskParentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    question: str = Field(min_length=1, max_length=20_000)
+    expires_after_seconds: int | None = Field(default=None, ge=1, le=86_400)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +167,8 @@ class ChildOutcome:
     delta: EvidenceDelta | None = None
     child_session_id: str = ""
     evidence_state: Mapping[str, Any] | None = None
+    operation_id: str = ""
+    fencing_epoch: int | None = None
 
     def durable_payload(self) -> dict[str, Any]:
         """Return the exact parent-visible outcome needed for replay."""
@@ -153,6 +178,7 @@ class ChildOutcome:
             "handles": list(self.handles),
             "usage": dict(self.usage or {}),
             "child_session_id": self.child_session_id,
+            "operation_id": self.operation_id,
             "evidence_state": (
                 dict(self.evidence_state) if self.evidence_state is not None else None
             ),
@@ -183,21 +209,39 @@ class ChildOutcome:
             usage={str(key): int(value) for key, value in usage.items()},
             child_session_id=str(payload.get("child_session_id") or ""),
             evidence_state=(dict(evidence_state) if isinstance(evidence_state, Mapping) else None),
+            operation_id=str(payload.get("operation_id") or ""),
         )
 
 
 @dataclass
 class SubagentHost:
-    """Late-bound lineage, persistence, and foreground-task state."""
+    """Late-bound durable child scheduler for one parent execution owner."""
 
     parent_session_id: SessionId | None = None
     run_id: str = ""
     owner_id: str = ""
     max_concurrency: int = 4
+    async_lifecycle: bool = True
+    interactive_controls: bool = True
     check_cancelled: Callable[[], Awaitable[None]] | None = None
     persist: Callable[..., Awaitable[Any]] | None = None
     load_child: Callable[..., Awaitable[Any]] | None = None
+    list_children: Callable[..., Awaitable[Any]] | None = None
     finish_child: Callable[..., Awaitable[Any]] | None = None
+    request_cancel: Callable[..., Awaitable[Any]] | None = None
+    release_children: Callable[..., Awaitable[Any]] | None = None
+    steer_child: Callable[..., Awaitable[Any]] | None = None
+    continue_child: Callable[..., Awaitable[Any]] | None = None
+    reply_guidance: Callable[..., Awaitable[Any]] | None = None
+    create_guidance: Callable[..., Awaitable[Any]] | None = None
+    load_guidance: Callable[..., Awaitable[Any]] | None = None
+    wait_guidance: Callable[..., Awaitable[Any]] | None = None
+    expire_guidance: Callable[..., Awaitable[Any]] | None = None
+    list_guidance: Callable[..., Awaitable[Any]] | None = None
+    guidance_timeout_seconds: int = 300
+    prepare_dispatch: (
+        Callable[[SessionId, ChildRequest, ChildContextSnapshot], Mapping[str, Any]] | None
+    ) = None
     run_child: (
         Callable[[SessionId, ChildRequest, str, ChildContextSnapshot], Awaitable[ChildOutcome]]
         | None
@@ -208,10 +252,187 @@ class SubagentHost:
     record_usage: Callable[[Mapping[str, int]], None] | None = None
     tasks: dict[str, asyncio.Task[ChildOutcome]] = field(default_factory=dict)
     outcomes: dict[str, ChildOutcome] = field(default_factory=dict)
+    _semaphore: asyncio.Semaphore | None = field(default=None, init=False, repr=False)
+    _detaching: bool = field(default=False, init=False, repr=False)
+    _cancel_requested: set[str] = field(default_factory=set, init=False, repr=False)
+    _parent_wake: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
+
+    @property
+    def detaching(self) -> bool:
+        return self._detaching
+
+    def semaphore(self) -> asyncio.Semaphore:
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(max(1, self.max_concurrency))
+        return self._semaphore
+
+    async def restore_pending(self) -> None:
+        """Rebuild runnable process tasks from durable accepted envelopes."""
+        if not self.async_lifecycle or self.list_children is None:
+            return
+        rows = await self.list_children(owner_id=self.owner_id, run_id=self.run_id)
+        for row in rows or ():
+            if not isinstance(row, Mapping) or str(row.get("status")) != "running":
+                continue
+            dispatch = _dispatch_from_row(self, row)
+            if dispatch is not None:
+                _start_child_task(self, *dispatch)
+
+    async def completed_dispatch_notifications(
+        self,
+        *,
+        seen: set[str],
+    ) -> tuple[tuple[str, str], ...]:
+        """Return complete durable dispatch outcomes not driven in this execution.
+
+        Notification identity includes each Child Operation identity. Slice 2 can
+        therefore expose later Operations in the same Child Session without
+        deduplicating the Session forever.
+        """
+        if not self.async_lifecycle or self.list_children is None:
+            return ()
+        if self.list_guidance is not None and self.parent_session_id is not None:
+            questions = await self.list_guidance(
+                owner_id=self.owner_id,
+                run_id=self.run_id,
+                parent_session_id=self.parent_session_id.value,
+            )
+            for question in questions or ():
+                request_id = str(question.get("request_id") or "")
+                notification_id = f"child-guidance:{request_id}"
+                if request_id and notification_id not in seen:
+                    child_id = str(question.get("child_session_id") or "")
+                    content = (
+                        f"Child session {child_id} asks for guidance "
+                        f"(request_id={request_id}): {question.get('question') or ''}. "
+                        "Reply with reply_subagent using exactly this request_id."
+                    )
+                    return ((notification_id, content),)
+        rows = await self.list_children(owner_id=self.owner_id, run_id=self.run_id)
+        grouped: dict[str, list[Mapping[str, Any]]] = {}
+        for row in rows or ():
+            if not isinstance(row, Mapping):
+                continue
+            parent_intent_id = str(row.get("parent_intent_id") or "")
+            if parent_intent_id:
+                grouped.setdefault(parent_intent_id, []).append(row)
+        notifications: list[tuple[str, str]] = []
+        for parent_intent_id, dispatch_rows in grouped.items():
+            if any(str(row.get("status")) == "running" for row in dispatch_rows):
+                continue
+            outcomes = tuple(
+                _adopt_outcome(
+                    self,
+                    _terminal_outcome_from_row(row, str(row.get("child_session_id") or "")),
+                    parent_call_id=str(row.get("parent_call_id") or ""),
+                )
+                for row in dispatch_rows
+            )
+            identities = sorted(
+                f"{outcome.child_session_id}:{outcome.operation_id or 'initial'}"
+                for outcome in outcomes
+            )
+            digest = hashlib.sha256("\0".join(identities).encode("utf-8")).hexdigest()[:24]
+            notification_id = f"child-results:{parent_intent_id}:{digest}"
+            if notification_id in seen:
+                continue
+            notifications.append((notification_id, _many_result(outcomes).text_content))
+        return tuple(notifications)
+
+    def notify_parent(self) -> None:
+        """Wake the parent barrier after a durable result or future question write."""
+        self._parent_wake.set()
+
+    async def wait_for_activity(self, *, child_id: str | None = None) -> None:
+        """Park until durable child work changes; never poll a provider in a loop.
+
+        This is intentionally an activity barrier rather than ``gather(all)``.
+        Slice-2 question delivery can become another durable parent notification
+        and wake the same loop while a Child is parked awaiting its parent.
+        """
+        await self.restore_pending()
+        selected = (
+            [self.tasks[child_id]]
+            if child_id is not None and child_id in self.tasks
+            else list(self.tasks.values())
+        )
+        finished = [task for task in selected if task.done()]
+        for task in finished:
+            await task
+        active = [task for task in selected if not task.done()]
+        if self._parent_wake.is_set():
+            self._parent_wake.clear()
+            return
+        if active:
+            wake = asyncio.create_task(self._parent_wake.wait())
+            done, _pending = await asyncio.wait(
+                (*active, wake),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if wake in done:
+                self._parent_wake.clear()
+            else:
+                wake.cancel()
+                await asyncio.gather(wake, return_exceptions=True)
+            for task in done:
+                if task is not wake:
+                    await task
+            return
+        if self.list_children is None:
+            return
+        rows = await self.list_children(owner_id=self.owner_id, run_id=self.run_id)
+        if any(_is_running_work(self, row) for row in rows or () if isinstance(row, Mapping)):
+            raise RuntimeError("accepted Child dispatch lost its reconstructible envelope")
+
+    async def has_running_children(self) -> bool:
+        if self.list_children is None:
+            return any(not task.done() for task in self.tasks.values())
+        rows = await self.list_children(owner_id=self.owner_id, run_id=self.run_id)
+        return any(_is_running_work(self, row) for row in rows or () if isinstance(row, Mapping))
+
+    async def stop(self, *, cancel: bool) -> None:
+        """Join local tasks, preserving durable work on process detach."""
+        child_ids = set(self.tasks)
+        if self.list_children is not None:
+            rows = await self.list_children(owner_id=self.owner_id, run_id=self.run_id)
+            child_ids.update(
+                str(row.get("child_session_id") or "")
+                for row in rows or ()
+                if isinstance(row, Mapping) and str(row.get("status")) == "running"
+            )
+        if cancel:
+            for child_id in sorted(child_ids - {""}):
+                await _request_child_cancel(self, child_id)
+        else:
+            self._detaching = True
+        tasks = tuple(task for task in self.tasks.values() if not task.done())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
+                    raise result
+        if cancel and await self.has_running_children():
+            # A task cancelled before entering its coroutine did not get a
+            # chance to close the durable Agent Operation. Reconstruct it with
+            # the persisted cancellation request and drive that closure now.
+            self.tasks.clear()
+            await self.restore_pending()
+            closing = tuple(task for task in self.tasks.values() if not task.done())
+            if closing:
+                await asyncio.gather(*closing)
+            if await self.has_running_children():
+                raise RuntimeError("cancelled Child Session did not settle")
+        if not cancel and self.release_children is not None:
+            await self.release_children(owner_id=self.owner_id, run_id=self.run_id)
+        self.tasks.clear()
 
 
 def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
-    """Return spawn/status/wait/cancel tools over one foreground roster."""
+    """Return versioned spawn/status/wait/cancel tools over one durable roster."""
 
     async def spawn(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         args = cast(SpawnAgentInput, raw)
@@ -220,64 +441,278 @@ def subagent_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
     async def status(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
-        outcome = await _status(host, args.child_session_id)
-        return _single_result(outcome)
+        return _result_with_guidance(
+            host,
+            await _status(host, args.child_session_id),
+            await _pending_guidance_for_child(host, args.child_session_id),
+        )
 
     async def wait(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
-        task = host.tasks.get(args.child_session_id)
-        if task is not None:
-            outcome = await asyncio.shield(task)
-        else:
-            outcome = await _status(host, args.child_session_id)
-        return _single_result(outcome)
+        await host.restore_pending()
+        pending = await _pending_guidance_for_child(host, args.child_session_id)
+        if not pending:
+            task = host.tasks.get(args.child_session_id)
+            if task is not None and not task.done():
+                await host.wait_for_activity(child_id=args.child_session_id)
+            pending = await _pending_guidance_for_child(host, args.child_session_id)
+        return _result_with_guidance(
+            host,
+            await _status(host, args.child_session_id),
+            pending,
+        )
 
     async def cancel(raw: BaseModel, _runtime: ToolRuntime) -> ToolResult:
         args = cast(ChildControlInput, raw)
         await _check_cancelled(host)
-        task = host.tasks.get(args.child_session_id)
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            outcome = ChildOutcome(
-                status="cancelled",
-                summary="Child session cancelled.",
-                child_session_id=args.child_session_id,
-            )
-            host.outcomes[args.child_session_id] = outcome
-        else:
-            outcome = await _status(host, args.child_session_id)
-        return _single_result(outcome)
+        current = await _status(host, args.child_session_id)
+        if current.status != "running":
+            return _single_result(_adopt_outcome(host, current))
+        outcome = await _cancel_child(host, args.child_session_id)
+        return _single_result(_adopt_outcome(host, outcome))
+
+    async def steer(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(ChildMessageInput, raw)
+        if host.steer_child is None or host.parent_session_id is None:
+            return ToolResult.text("Child steer is unavailable.", is_error=True)
+        receipt = await host.steer_child(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            child_session_id=args.child_session_id,
+            parent_session_id=host.parent_session_id.value,
+            content=args.content,
+            submission_key=f"parent-steer:{runtime.intent_id.value}",
+            origin="parent",
+        )
+        return ToolResult.text(canonical_json(dict(receipt)))
+
+    async def continue_child(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(ChildMessageInput, raw)
+        if host.continue_child is None or host.parent_session_id is None:
+            return ToolResult.text("Child continuation is unavailable.", is_error=True)
+        receipt = await host.continue_child(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            child_session_id=args.child_session_id,
+            parent_session_id=host.parent_session_id.value,
+            content=args.content,
+            submission_key=f"parent-continuation:{runtime.intent_id.value}",
+            origin="parent",
+            reauthorize_user_cancelled=False,
+        )
+        if receipt.get("outcome") == "accepted":
+            await host.restore_pending()
+        return ToolResult.text(canonical_json(dict(receipt)))
+
+    async def reply(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(GuidanceReplyInput, raw)
+        if host.reply_guidance is None or host.parent_session_id is None:
+            return ToolResult.text("Child guidance reply is unavailable.", is_error=True)
+        receipt = await host.reply_guidance(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            request_id=args.request_id,
+            parent_session_id=host.parent_session_id.value,
+            content=args.content,
+            submission_key=f"parent-reply:{runtime.intent_id.value}",
+            origin="parent",
+        )
+        return ToolResult.text(canonical_json(dict(receipt)))
+
+    if not host.async_lifecycle:
+        # These strings and version are the exact baseline v2 accepted contract.
+        version = 2
+        descriptions = (
+            "Run one or many foreground child Agent Sessions and wait for all results.",
+            "Read one foreground or completed child session status.",
+            "Wait for one known foreground child session.",
+            "Cancel one known foreground child session.",
+        )
+    elif host.interactive_controls:
+        version = 4
+        descriptions = (
+            "Accept one or many asynchronous child Agent Sessions and return stable handles "
+            "immediately. Children default to read-only tools; explicitly list a narrower "
+            "host-permitted set when side effects are required.",
+            "Read one accepted asynchronous or completed child session status.",
+            "Wait for one known asynchronous child session to settle.",
+            "Durably cancel one known child session without cancelling its siblings.",
+        )
+    else:
+        # Slice-1 async contract: same descriptions as v4 without control tools.
+        version = 3
+        descriptions = (
+            "Accept one or many asynchronous child Agent Sessions and return stable handles "
+            "immediately. Children default to read-only tools; explicitly list a narrower "
+            "host-permitted set when side effects are required.",
+            "Read one accepted asynchronous or completed child session status.",
+            "Wait for one known asynchronous child session to settle.",
+            "Durably cancel one known child session without cancelling its siblings.",
+        )
 
     return (
         AgentTool(
             "spawn_agent",
-            "Run one or many foreground child Agent Sessions and wait for all results.",
+            descriptions[0],
             SpawnAgentInput,
             spawn,
             replay_policy="replayable",
+            contract_version=version,
         ),
         AgentTool(
             "subagent_status",
-            "Read one foreground or completed child session status.",
+            descriptions[1],
             ChildControlInput,
             status,
             replay_policy="replayable",
+            contract_version=version,
         ),
         AgentTool(
             "wait_subagent",
-            "Wait for one known foreground child session.",
+            descriptions[2],
             ChildControlInput,
             wait,
             replay_policy="replayable",
+            contract_version=version,
         ),
         AgentTool(
             "cancel_subagent",
-            "Cancel one known foreground child session.",
+            descriptions[3],
             ChildControlInput,
             cancel,
             replay_policy="never",
+            contract_version=version,
+        ),
+        *(
+            (
+                AgentTool(
+                    "steer_subagent",
+                    "Queue guidance for only the current Operation of a running child.",
+                    ChildMessageInput,
+                    steer,
+                    replay_policy="replayable",
+                    contract_version=version,
+                ),
+                AgentTool(
+                    "continue_subagent",
+                    "Start an explicit new Operation in a settled child Session with its pinned model and tools.",
+                    ChildMessageInput,
+                    continue_child,
+                    replay_policy="replayable",
+                    contract_version=version,
+                ),
+                AgentTool(
+                    "reply_subagent",
+                    "Reply to one correlated ask_parent request from a child.",
+                    GuidanceReplyInput,
+                    reply,
+                    replay_policy="replayable",
+                    contract_version=version,
+                ),
+            )
+            if host.async_lifecycle and host.interactive_controls
+            else ()
+        ),
+    )
+
+
+def child_guidance_tools(*, host: SubagentHost) -> tuple[AgentTool, ...]:
+    """Return the durable child-to-parent question tool."""
+
+    async def ask(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(AskParentInput, raw)
+        if (
+            host.create_guidance is None
+            or host.load_guidance is None
+            or host.wait_guidance is None
+            or host.expire_guidance is None
+            or host.load_child is None
+            or host.parent_session_id is None
+        ):
+            return ToolResult.text("Parent guidance is unavailable.", is_error=True)
+        child_id = runtime.execution_scope
+        child = await host.load_child(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            child_session_id=child_id,
+        )
+        if not isinstance(child, Mapping) or not child.get("operation_id"):
+            return ToolResult.text("Current Child Operation is unavailable.", is_error=True)
+        operation_id = str(child["operation_id"])
+        child_epoch = int(child.get("fencing_epoch") or 0)
+        request_id = runtime.intent_id.value
+        timeout = args.expires_after_seconds or host.guidance_timeout_seconds
+        guidance = await host.create_guidance(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            request_id=request_id,
+            child_session_id=child_id,
+            child_operation_id=operation_id,
+            parent_session_id=host.parent_session_id.value,
+            question=args.question,
+            expires_after_seconds=timeout,
+            child_fencing_epoch=child_epoch,
+        )
+        if guidance is None:
+            return ToolResult.text("Child guidance request lost its lease.", is_error=True)
+        if guidance.get("status") == "queue_full":
+            return ToolResult.text("Too many pending parent guidance requests.", is_error=True)
+        host.notify_parent()
+        await runtime.emit_update(
+            ToolResult.text(f"Waiting for parent reply (request_id={request_id}).")
+        )
+        while True:
+            status = str(guidance.get("status") or "")
+            if status == "replied":
+                origin = str(guidance.get("reply_origin") or "parent").capitalize()
+                return ToolResult.text(
+                    f"{origin} reply (request_id={request_id}): {guidance.get('reply') or ''}"
+                )
+            if status == "cancelled":
+                return ToolResult.text("Parent guidance request was cancelled.", is_error=True)
+            if status == "expired":
+                return ToolResult.text("Parent guidance request expired.", is_error=True)
+            expires_at = guidance.get("expires_at")
+            if expires_at is None:
+                return ToolResult.text("Parent guidance request is corrupt.", is_error=True)
+            remaining = max(0.0, (expires_at - datetime.now(UTC)).total_seconds())
+            if remaining <= 0:
+                await host.expire_guidance(
+                    owner_id=host.owner_id,
+                    run_id=host.run_id,
+                    request_id=request_id,
+                    child_session_id=child_id,
+                    child_operation_id=operation_id,
+                    child_fencing_epoch=child_epoch,
+                )
+                guidance = await host.load_guidance(
+                    owner_id=host.owner_id, run_id=host.run_id, request_id=request_id
+                )
+                if not isinstance(guidance, Mapping):
+                    return ToolResult.text("Parent guidance request disappeared.", is_error=True)
+                if str(guidance.get("status") or "") == "pending":
+                    from dlightrag.engine.runtime.coordinator import LeaseLostError
+
+                    raise LeaseLostError
+                continue
+            guidance = await host.wait_guidance(
+                owner_id=host.owner_id,
+                run_id=host.run_id,
+                request_id=request_id,
+                timeout_seconds=remaining,
+            )
+            if not isinstance(guidance, Mapping):
+                return ToolResult.text("Parent guidance request disappeared.", is_error=True)
+
+    return (
+        AgentTool(
+            "ask_parent",
+            "Ask the parent one correlated question and wait durably for its reply.",
+            AskParentInput,
+            ask,
+            replay_policy="replayable",
+            contract_version=4,
         ),
     )
 
@@ -292,98 +727,227 @@ async def _spawn(
     if host.run_child is None:
         raise RuntimeError("spawn_agent has no child runner")
     await _check_cancelled(host)
-    parent_session_id = host.parent_session_id
-    run_child = host.run_child
-    call_id = runtime.call_id
     context_snapshot = host.context_snapshot
     if context_snapshot is None:
         raise RuntimeError("spawn_agent has no explicit parent ContextSnapshot")
-    semaphore = asyncio.Semaphore(max(1, host.max_concurrency))
-    child_ids = [
+    child_ids = tuple(
         child_session_id(
             run_id=host.run_id,
-            parent_session_id=parent_session_id,
+            parent_session_id=host.parent_session_id,
             parent_intent_id=runtime.intent_id,
             position=position,
         )
         for position in range(len(args.children))
-    ]
+    )
 
-    async def run_one(child_id: SessionId, request: ChildRequest) -> ChildOutcome:
-        await _check_cancelled(host)
-        persisted = await _load_terminal_child(host, child_id.value)
-        if persisted is not None:
-            if persisted.evidence_state is not None and host.merge_evidence is not None:
-                host.merge_evidence(persisted.evidence_state, child_id.value, call_id)
-            if persisted.usage is not None and host.record_usage is not None:
-                host.record_usage(persisted.usage)
-            host.outcomes[child_id.value] = persisted
-            return persisted
-        if host.persist is not None:
+    # Every reconstructible async envelope commits before any handle becomes
+    # visible. Legacy foreground replay keeps its v2 terminal short-circuit.
+    for child_id, request in zip(child_ids, args.children, strict=True):
+        terminal = (
+            await _load_terminal_child(host, child_id.value) if not host.async_lifecycle else None
+        )
+        envelope: Mapping[str, Any] = {}
+        if host.async_lifecycle and host.persist is not None:
+            if host.prepare_dispatch is None:
+                raise RuntimeError("spawn_agent has no durable dispatch envelope builder")
+            envelope = host.prepare_dispatch(child_id, request, context_snapshot)
+        if terminal is None and host.persist is not None:
             await host.persist(
                 owner_id=host.owner_id,
                 run_id=host.run_id,
                 child_session_id=child_id.value,
-                parent_session_id=parent_session_id.value,
-                parent_call_id=call_id,
+                parent_session_id=host.parent_session_id.value,
+                parent_call_id=runtime.call_id,
+                parent_intent_id=runtime.intent_id.value,
                 objective=request.objective,
                 context_mode=request.context,
                 model_role=request.model_role,
                 tools=request.tools,
                 depth=context_snapshot.depth + 1,
                 context_snapshot=context_snapshot.canonical_payload(),
+                **envelope,
             )
-        try:
-            async with semaphore:
-                await _check_cancelled(host)
-                outcome = await run_child(child_id, request, call_id, context_snapshot)
-        except (RunCancellationObserved, RunCancelledError) as exc:
-            await _finish_cancelled_child(host, child_id.value)
-            raise _ParentRunCancelled from exc
-        except _ParentRunCancelled:
-            await _finish_cancelled_child(host, child_id.value)
-            raise
-        except asyncio.CancelledError:
-            return await _finish_cancelled_child(host, child_id.value)
-        if outcome.evidence_state is not None and host.merge_evidence is not None:
-            outcome = replace(
-                outcome,
-                handles=host.merge_evidence(outcome.evidence_state, child_id.value, call_id),
-            )
-        if outcome.usage is not None and host.record_usage is not None:
-            host.record_usage(outcome.usage)
-        if host.finish_child is not None:
-            await host.finish_child(
-                owner_id=host.owner_id,
-                run_id=host.run_id,
-                child_session_id=child_id.value,
-                status=outcome.status,
-                summary=outcome.summary,
-                usage=outcome.usage,
-                outcome=outcome.durable_payload(),
-            )
-        host.outcomes[child_id.value] = outcome
-        return outcome
 
-    tasks = [
-        asyncio.create_task(
-            run_one(child_id, request),
-            name=f"agent-child:{child_id.value}",
-        )
+    tasks = tuple(
+        _start_child_task(host, child_id, request, runtime.call_id, context_snapshot)
         for child_id, request in zip(child_ids, args.children, strict=True)
-    ]
-    host.tasks.update(
-        (child_id.value, task) for child_id, task in zip(child_ids, tasks, strict=True)
     )
+    if host.async_lifecycle:
+        return _many_result(
+            tuple(
+                ChildOutcome(
+                    status="running",
+                    summary="Child session accepted; use status, wait, or cancel with this handle.",
+                    child_session_id=child_id.value,
+                )
+                for child_id in child_ids
+            )
+        )
     try:
         outcomes = await asyncio.gather(*tasks)
+        return _many_result(tuple(outcomes))
     finally:
         for child_id in child_ids:
             task = host.tasks.pop(child_id.value, None)
             if task is not None and not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-    return _many_result(tuple(outcomes))
+
+
+def _start_child_task(
+    host: SubagentHost,
+    child_id: SessionId,
+    request: ChildRequest,
+    parent_call_id: str,
+    context_snapshot: ChildContextSnapshot,
+) -> asyncio.Task[ChildOutcome]:
+    existing = host.tasks.get(child_id.value)
+    if existing is not None and not existing.done():
+        return existing
+    if existing is not None:
+        host.tasks.pop(child_id.value, None)
+    task = asyncio.create_task(
+        _run_one(host, child_id, request, parent_call_id, context_snapshot),
+        name=f"agent-child:{child_id.value}",
+    )
+    host.tasks[child_id.value] = task
+    task.add_done_callback(lambda _task: host.notify_parent())
+    return task
+
+
+async def _run_one(
+    host: SubagentHost,
+    child_id: SessionId,
+    request: ChildRequest,
+    parent_call_id: str,
+    context_snapshot: ChildContextSnapshot,
+) -> ChildOutcome:
+    persisted = await _load_terminal_child(host, child_id.value)
+    if persisted is not None:
+        if not host.async_lifecycle:
+            if persisted.evidence_state is not None and host.merge_evidence is not None:
+                host.merge_evidence(persisted.evidence_state, child_id.value, parent_call_id)
+            if persisted.usage is not None and host.record_usage is not None:
+                host.record_usage(persisted.usage)
+        host.outcomes[child_id.value] = persisted
+        return persisted
+    if host.run_child is None:
+        raise RuntimeError("spawn_agent has no child runner")
+    try:
+        async with host.semaphore():
+            await _check_cancelled(host)
+            outcome = await host.run_child(
+                child_id,
+                request,
+                parent_call_id,
+                context_snapshot,
+            )
+    except (RunCancellationObserved, RunCancelledError) as exc:
+        await _finish_cancelled_child(host, child_id.value)
+        raise _ParentRunCancelled from exc
+    except _ParentRunCancelled:
+        await _finish_cancelled_child(host, child_id.value)
+        raise
+    except asyncio.CancelledError:
+        if host._detaching:
+            raise
+        return await _finish_cancelled_child(host, child_id.value)
+    except Exception as exc:
+        # Lease/fencing failures must trigger parent reclaim, never false failure.
+        from dlightrag.engine.runtime.coordinator import LeaseLostError
+        from dlightrag.engine.runtime.errors import IncompatibleActiveRunError
+
+        if isinstance(exc, (LeaseLostError, IncompatibleActiveRunError)):
+            raise
+        logger.warning(
+            "Child Session %s failed before returning an outcome",
+            child_id.value,
+            exc_info=True,
+        )
+        outcome = ChildOutcome(
+            status="failed",
+            summary="Child session failed before producing a result.",
+            child_session_id=child_id.value,
+        )
+    if not host.async_lifecycle:
+        outcome = _adopt_outcome(host, outcome, parent_call_id=parent_call_id)
+        if outcome.usage is not None and host.record_usage is not None:
+            host.record_usage(outcome.usage)
+    return await _finish_outcome(host, child_id.value, outcome)
+
+
+async def _finish_outcome(
+    host: SubagentHost,
+    child_id: str,
+    outcome: ChildOutcome,
+) -> ChildOutcome:
+    if host.finish_child is not None:
+        committed = await host.finish_child(
+            owner_id=host.owner_id,
+            run_id=host.run_id,
+            child_session_id=child_id,
+            status=outcome.status,
+            summary=outcome.summary,
+            usage=outcome.usage,
+            outcome=outcome.durable_payload(),
+            child_fencing_epoch=outcome.fencing_epoch,
+        )
+        if committed is False:
+            persisted = await _load_terminal_child(host, child_id)
+            if persisted is None:
+                from dlightrag.engine.runtime.coordinator import LeaseLostError
+
+                raise LeaseLostError
+            outcome = persisted
+    host.outcomes[child_id] = outcome
+    return outcome
+
+
+def _dispatch_from_row(
+    host: SubagentHost,
+    row: Mapping[str, Any],
+) -> tuple[SessionId, ChildRequest, str, ChildContextSnapshot] | None:
+    """Decode only complete accepted envelopes; sparse precreation is not work."""
+    if host.parent_session_id is None:
+        return None
+    raw_snapshot = row.get("context_snapshot")
+    if not isinstance(raw_snapshot, Mapping) or not raw_snapshot.get("parent_entry_id"):
+        return None
+    try:
+        snapshot = ChildContextSnapshot.from_values(
+            parent_session_id=SessionId(str(raw_snapshot["parent_session_id"])),
+            parent_entry_id=EntryId(str(raw_snapshot["parent_entry_id"])),
+            depth=int(raw_snapshot.get("depth") or 0),
+            messages=list(raw_snapshot.get("messages") or ()),
+            evidence_state=(
+                dict(raw_snapshot.get("evidence_state") or {})
+                if isinstance(raw_snapshot.get("evidence_state"), Mapping)
+                else {}
+            ),
+        )
+        if snapshot.parent_session_id != host.parent_session_id:
+            raise ValueError("Child envelope parent identity changed")
+        raw_tools = row.get("tools")
+        request = ChildRequest(
+            objective=str(row.get("operation_input") or row["objective"]),
+            context=str(row["context"]),  # type: ignore[arg-type]
+            model_role=str(row["model_role"]),  # type: ignore[arg-type]
+            tools=(tuple(str(item) for item in raw_tools) if isinstance(raw_tools, list) else None),
+        )
+        return (
+            SessionId(str(row["child_session_id"])),
+            request,
+            str(row["parent_call_id"]),
+            snapshot,
+        )
+    except KeyError, TypeError, ValueError:
+        logger.warning("Accepted Child Session envelope is not reconstructible", exc_info=True)
+        return None
+
+
+def _is_running_work(host: SubagentHost, row: Mapping[str, Any]) -> bool:
+    """Return whether one roster row is reconstructible running Child work."""
+    return str(row.get("status")) == "running" and _dispatch_from_row(host, row) is not None
 
 
 async def _check_cancelled(host: SubagentHost) -> None:
@@ -395,15 +959,57 @@ async def _check_cancelled(host: SubagentHost) -> None:
         raise _ParentRunCancelled from exc
 
 
+async def _request_child_cancel(host: SubagentHost, child_id: str) -> None:
+    """Persist cancellation intent without revoking the active Child writer."""
+    host._cancel_requested.add(child_id)
+    if host.request_cancel is None:
+        return
+    requested = await host.request_cancel(
+        owner_id=host.owner_id,
+        run_id=host.run_id,
+        child_session_id=child_id,
+    )
+    if requested is False:
+        persisted = await _load_terminal_child(host, child_id)
+        if persisted is None:
+            from dlightrag.engine.runtime.coordinator import LeaseLostError
+
+            raise LeaseLostError
+
+
+async def _cancel_child(host: SubagentHost, child_id: str) -> ChildOutcome:
+    await _request_child_cancel(host, child_id)
+    task = host.tasks.get(child_id)
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            return await task
+        except asyncio.CancelledError:
+            # Cancellation before coroutine entry leaves the durable request for
+            # the reconstructed closure path below.
+            pass
+    if host.request_cancel is None:
+        return await _finish_cancelled_child(host, child_id)
+    host.tasks.pop(child_id, None)
+    await host.restore_pending()
+    task = host.tasks.get(child_id)
+    if task is not None and not task.done():
+        return await task
+    outcome = await _status(host, child_id)
+    if outcome.status == "running":
+        raise RuntimeError("cancelled Child Session did not close its Agent Operation")
+    return outcome
+
+
 async def _finish_cancelled_child(host: SubagentHost, child_id: str) -> ChildOutcome:
+    host._cancel_requested.add(child_id)
     cancelled = ChildOutcome(
         status="cancelled",
         summary="Child session cancelled.",
         child_session_id=child_id,
     )
-    host.outcomes[child_id] = cancelled
     if host.finish_child is not None:
-        await host.finish_child(
+        committed = await host.finish_child(
             owner_id=host.owner_id,
             run_id=host.run_id,
             child_session_id=child_id,
@@ -412,6 +1018,15 @@ async def _finish_cancelled_child(host: SubagentHost, child_id: str) -> ChildOut
             usage=None,
             outcome=cancelled.durable_payload(),
         )
+        if committed is False:
+            persisted = await _load_terminal_child(host, child_id)
+            if persisted is not None:
+                host.outcomes[child_id] = persisted
+                return persisted
+            from dlightrag.engine.runtime.coordinator import LeaseLostError
+
+            raise LeaseLostError
+    host.outcomes[child_id] = cancelled
     return cancelled
 
 
@@ -473,6 +1088,25 @@ def _terminal_outcome_from_row(row: Mapping[str, Any], child_id: str) -> ChildOu
     return outcome
 
 
+def _adopt_outcome(
+    host: SubagentHost,
+    outcome: ChildOutcome,
+    *,
+    parent_call_id: str = "",
+) -> ChildOutcome:
+    """Idempotently admit one durable outcome into the live parent materializer."""
+    if outcome.evidence_state is None or host.merge_evidence is None:
+        return outcome
+    return replace(
+        outcome,
+        handles=host.merge_evidence(
+            outcome.evidence_state,
+            outcome.child_session_id,
+            parent_call_id,
+        ),
+    )
+
+
 def child_session_id(
     *,
     run_id: str,
@@ -486,6 +1120,50 @@ def child_session_id(
         run_id=run_id,
         name=f"child:{parent_session_id.value}:{parent_intent_id.value}{suffix}",
     )
+
+
+async def _pending_guidance_for_child(
+    host: SubagentHost,
+    child_id: str,
+) -> tuple[Mapping[str, Any], ...]:
+    if host.list_guidance is None or host.parent_session_id is None:
+        return ()
+    questions = await host.list_guidance(
+        owner_id=host.owner_id,
+        run_id=host.run_id,
+        parent_session_id=host.parent_session_id.value,
+    )
+    return tuple(
+        question
+        for question in questions or ()
+        if isinstance(question, Mapping) and str(question.get("child_session_id") or "") == child_id
+    )
+
+
+def _guidance_notice(questions: tuple[Mapping[str, Any], ...]) -> str:
+    lines: list[str] = []
+    for question in questions:
+        request_id = str(question.get("request_id") or "")
+        if not request_id:
+            continue
+        lines.append(
+            f"Child session {question.get('child_session_id') or ''} asks for guidance "
+            f"(request_id={request_id}): {question.get('question') or ''}. "
+            "Reply with reply_subagent using exactly this request_id."
+        )
+    return "\n".join(lines)
+
+
+def _result_with_guidance(
+    host: SubagentHost,
+    outcome: ChildOutcome,
+    questions: tuple[Mapping[str, Any], ...],
+) -> ToolResult:
+    result = _single_result(_adopt_outcome(host, outcome))
+    notice = _guidance_notice(questions)
+    if not notice:
+        return result
+    return ToolResult.text(f"{result.text_content}\n{notice}", details=result.details)
 
 
 def _single_result(outcome: ChildOutcome) -> ToolResult:
@@ -521,6 +1199,7 @@ def _many_result(outcomes: tuple[ChildOutcome, ...]) -> ToolResult:
 
 
 __all__ = [
+    "AskParentInput",
     "ChildContextMode",
     "ChildContextSnapshot",
     "ChildControlInput",
@@ -530,6 +1209,7 @@ __all__ = [
     "ChildStatus",
     "SpawnAgentInput",
     "SubagentHost",
+    "child_guidance_tools",
     "child_session_id",
     "subagent_tools",
 ]

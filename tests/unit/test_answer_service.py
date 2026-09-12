@@ -128,6 +128,9 @@ class _Store:
         self.child_page_rows: tuple[Mapping[str, Any], ...] = ()
         self.child_page_has_more = False
         self.transcript_rows: tuple[Mapping[str, Any], ...] = ()
+        self.child_session_rows: dict[str, Mapping[str, Any]] = {}
+        self.child_control_rows: tuple[Mapping[str, Any], ...] = ()
+        self.child_guidance_rows: tuple[Mapping[str, Any], ...] = ()
 
     async def create_run(
         self,
@@ -228,6 +231,54 @@ class _Store:
         if owner_id != _OWNER or run_id != self._run.run_id:
             return ()
         return self.transcript_rows[-limit:]
+
+    async def load_child_session(
+        self, *, owner_id: str, run_id: str, child_session_id: str
+    ) -> Mapping[str, Any] | None:
+        if owner_id != _OWNER or run_id != self._run.run_id:
+            return None
+        return self.child_session_rows.get(child_session_id)
+
+    async def list_child_controls(
+        self, *, owner_id: str, run_id: str, child_session_id: str, limit: int
+    ) -> tuple[Mapping[str, Any], ...]:
+        del child_session_id
+        if owner_id != _OWNER or run_id != self._run.run_id:
+            return ()
+        return self.child_control_rows[:limit]
+
+    async def list_child_guidance(
+        self, *, owner_id: str, run_id: str, child_session_id: str, limit: int
+    ) -> tuple[Mapping[str, Any], ...]:
+        del child_session_id
+        if owner_id != _OWNER or run_id != self._run.run_id:
+            return ()
+        return self.child_guidance_rows[:limit]
+
+    async def enqueue_child_control(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.controls.append({"method": "enqueue_child_control", **kwargs})
+        return {
+            "outcome": "queued",
+            "control_sequence": len(self.controls),
+            "operation_id": "op-1",
+            "consumed_at": None,
+        }
+
+    async def continue_child_session(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.controls.append({"method": "continue_child_session", **kwargs})
+        return {"outcome": "accepted", "operation_id": "op-2", "operation_sequence": 2}
+
+    async def cancel_child_session_by_owner(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.controls.append({"method": "cancel_child_session_by_owner", **kwargs})
+        return {"outcome": "cancellation_requested", "operation_id": "op-1"}
+
+    async def reply_child_guidance(self, **kwargs: Any) -> Mapping[str, Any]:
+        self.controls.append({"method": "reply_child_guidance", **kwargs})
+        return {
+            "outcome": "replied",
+            "request_id": kwargs["request_id"],
+            "child_session_id": "child-1",
+        }
 
     async def list_run_artifacts(
         self, *, owner_id: str, run_id: str
@@ -1379,7 +1430,10 @@ async def test_transcript_and_child_roster_are_owner_scoped() -> None:
     assert transcript is not None
     assert transcript.messages == store.transcript_rows
     assert children is not None
-    assert children.children == store.child_rows
+    assert children.children[0]["child_session_id"] == "child-1"
+    assert children.children[0]["status"] == "succeeded"
+    assert "host_state" not in children.children[0]
+    assert "plan" not in children.children[0]
     assert children.next_cursor is None
     assert await service.children(owner_id="other", run_id="run-1") is None
 
@@ -1442,6 +1496,137 @@ async def test_child_roster_empty_page_has_no_continuation() -> None:
     assert page is not None
     assert page.children == ()
     assert page.next_cursor is None
+
+
+async def test_observe_child_projects_lineage_without_private_reasoning() -> None:
+    store = _Store(run=_record(status="running"))
+    store.child_session_rows["child-1"] = {
+        "child_session_id": "child-1",
+        "status": "running",
+        "objective": "inspect sources",
+        "host_state": {
+            "terminal_outcome": {
+                "status": "running",
+                "summary": "still working",
+                "handles": ["ev-1"],
+                "operation_id": "op-1",
+            }
+        },
+        "plan": {"secret": True},
+    }
+    store.transcript_rows = (
+        {"role": "user", "content": "look at the report", "reasoning": "hidden"},
+        {
+            "role": "assistant",
+            "content": "checking",
+            "thinking": "private",
+            "tool_calls": [{"id": "c1", "name": "read", "thoughts": "skip"}],
+        },
+    )
+    store.child_control_rows = (
+        {
+            "control_sequence": 3,
+            "kind": "steer",
+            "content": "focus",
+            "origin": "user",
+            "consumed": False,
+            "consumed_at": None,
+            "created_at": _NOW,
+            "operation_id": "op-1",
+        },
+    )
+    store.child_guidance_rows = (
+        {
+            "request_id": "req-1",
+            "question": "Which source?",
+            "status": "pending",
+            "reply": None,
+            "reply_origin": None,
+            "expires_at": _NOW,
+            "created_at": _NOW,
+        },
+    )
+    service = _service(store=store)
+
+    observation = await service.observe_child(
+        owner_id=_OWNER, run_id="run-1", child_session_id="child-1"
+    )
+
+    assert observation is not None
+    payload = observation.payload()
+    assert payload["child"]["objective"] == "inspect sources"
+    assert payload["child"]["result_handles"] == ["ev-1"]
+    assert "plan" not in payload["child"]
+    assert payload["transcript"][0] == {"role": "user", "content": "look at the report"}
+    assert payload["transcript"][1]["content"] == "checking"
+    assert "thinking" not in payload["transcript"][1]
+    assert payload["controls"][0]["consumed"] is False
+    assert payload["questions"][0]["request_id"] == "req-1"
+    assert payload["result"]["handles"] == ["ev-1"]
+    assert (
+        await service.observe_child(owner_id=_OWNER, run_id="run-1", child_session_id="missing")
+        is None
+    )
+
+
+async def test_child_control_and_reply_use_typed_store_methods() -> None:
+    store = _Store(
+        run=_record(
+            status="running",
+            accepted_input={
+                "query": "q",
+                "workspaces": ["finance"],
+                "agent_session_id": "0199a0a0-0000-7000-8000-000000000099",
+            },
+        )
+    )
+    service = _service(store=store)
+
+    steered = await service.control_child(
+        owner_id=_OWNER,
+        run_id="run-1",
+        child_session_id="child-1",
+        action="steer",
+        content="focus",
+        idempotency_key="steer-1",
+    )
+    continued = await service.control_child(
+        owner_id=_OWNER,
+        run_id="run-1",
+        child_session_id="child-1",
+        action="continue",
+        content="next",
+        idempotency_key="continue-1",
+    )
+    cancelled = await service.control_child(
+        owner_id=_OWNER,
+        run_id="run-1",
+        child_session_id="child-1",
+        action="cancel",
+    )
+    replied = await service.reply_to_child(
+        owner_id=_OWNER,
+        run_id="run-1",
+        request_id="req-1",
+        content="use the report",
+        idempotency_key="reply-1",
+    )
+
+    assert steered is not None and steered.outcome == "queued"
+    assert steered.child_session_id == "child-1"
+    assert steered.request_id is None
+    assert continued is not None and continued.outcome == "accepted"
+    assert cancelled is not None and cancelled.outcome == "cancellation_requested"
+    assert replied is not None and replied.outcome == "replied"
+    assert replied.request_id == "req-1"
+    assert replied.child_session_id == "child-1"
+    assert replied.operation_id is None
+    assert [item["method"] for item in store.controls[-4:]] == [
+        "enqueue_child_control",
+        "continue_child_session",
+        "cancel_child_session_by_owner",
+        "reply_child_guidance",
+    ]
 
 
 async def test_continuation_content_limit_is_transport_neutral() -> None:

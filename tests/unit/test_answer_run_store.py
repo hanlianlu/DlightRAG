@@ -57,6 +57,8 @@ class TestMigrationDeclaration:
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",
             "dlightrag_answer_child_sessions",
+            "dlightrag_answer_child_operations",
+            "dlightrag_answer_child_guidance",
             "dlightrag_agent_controls",
             "dlightrag_answer_memory_settings",
             "dlightrag_corpus_mutation_windows",

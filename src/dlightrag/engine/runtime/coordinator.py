@@ -564,8 +564,14 @@ class RunCoordinator:
         if (
             task is not None
             and not task.done()
-            and not (session is not None and session.handoff_started)
+            and session is not None
+            and session.owner_id == owner_id
+            and not session.handoff_started
         ):
+            # The cancellation store write precedes this callback. Mark the
+            # live session before interrupting execution so operation-owned
+            # cleanup can distinguish user cancellation from process detach.
+            session.observe_cancellation()
             task.cancel()
 
     def wake(self) -> None:

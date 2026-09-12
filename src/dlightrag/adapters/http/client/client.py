@@ -691,6 +691,60 @@ class AnswerRunClient:
             "next_cursor": payload.get("next_cursor") or None,
         }
 
+    async def child(self, run_id: str, child_session_id: str, *, limit: int = 20) -> dict[str, Any]:
+        """Return one bounded child observation for an owned run."""
+        response = await self._client.get(
+            self._url(f"/answer/{run_id}/children/{child_session_id}"),
+            params={"limit": limit},
+            headers=self._headers,
+        )
+        response.raise_for_status()
+        return dict(response.json())
+
+    async def control_child(
+        self,
+        run_id: str,
+        child_session_id: str,
+        action: Literal["steer", "continue", "cancel"],
+        *,
+        content: str = "",
+        idempotency_key: str,
+        reauthorize_user_cancelled: bool = False,
+    ) -> dict[str, Any]:
+        """Steer, continue, or cancel one owned child Agent Session."""
+        headers = dict(self._headers)
+        headers["Idempotency-Key"] = idempotency_key
+        response = await self._client.post(
+            self._url(f"/answer/{run_id}/children/{child_session_id}/control"),
+            json={
+                "action": action,
+                "content": content,
+                "reauthorize_user_cancelled": reauthorize_user_cancelled,
+            },
+            headers=headers,
+        )
+        response.raise_for_status()
+        return dict(response.json())
+
+    async def reply_child(
+        self,
+        run_id: str,
+        request_id: str,
+        content: str,
+        *,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Reply to one correlated child ask_parent request."""
+        headers = dict(self._headers)
+        headers["Idempotency-Key"] = idempotency_key
+        response = await self._client.post(
+            self._url(f"/answer/{run_id}/child-guidance/{request_id}/reply"),
+            json={"content": content},
+            headers=headers,
+        )
+        response.raise_for_status()
+        return dict(response.json())
+
     async def cancel(self, run_id: str) -> dict[str, Any]:
         """Request cancellation; repeating it on a terminal run is a no-op."""
         response = await self._client.request(
