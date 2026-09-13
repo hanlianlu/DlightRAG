@@ -157,7 +157,8 @@ async def _settle_bounded_research_tool(
 
 @pytest.mark.asyncio
 async def test_research_tool_settlement_uses_small_profile_dynamic_residual() -> None:
-    profile = ModelProfile(context_window_tokens=18_484)
+    # 17_460 keeps the 52-token dynamic residual this scenario pins.
+    profile = ModelProfile(context_window_tokens=17_460)
 
     settled, prepared = await _settle_bounded_research_tool(profile, "x" * 400)
 
@@ -179,7 +180,8 @@ async def test_research_tool_settlement_preserves_40k_on_large_profile() -> None
 
 @pytest.mark.asyncio
 async def test_research_tool_settlement_rejects_nonempty_result_with_zero_residual() -> None:
-    profile = ModelProfile(context_window_tokens=18_432)
+    # 17_408 is the window where the dynamic residual is exactly zero.
+    profile = ModelProfile(context_window_tokens=17_408)
     assert CONTEXT_POLICY.hard_input_limit(profile) == CONTEXT_POLICY.compaction_trigger(profile)
 
     with pytest.raises(ToolResultCapacityError, match="no residual"):

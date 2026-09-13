@@ -26,10 +26,12 @@ def _measure(fixed: int, *, pinned_summary: str = ""):
     return measure
 
 
+# These budgets pin hard_input_limit=85 and compaction_trigger=72; the 15 the
+# removed safety margin used to subtract now rides the output reserve so the
+# projection scenarios stay byte-identical.
 _POLICY = ContextPolicy(
-    requested_output_reserve_tokens=0,
+    requested_output_reserve_tokens=15,
     dynamic_context_reserve_tokens=13,
-    safety_reserve_tokens=15,
     minimum_input_tokens=0,
 )
 

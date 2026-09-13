@@ -7,6 +7,7 @@ import pytest
 
 from dlightrag.engine.ai.capacity import (
     CONTEXT_POLICY,
+    CONTEXT_POLICY_REVISION,
     ContextPolicy,
     ModelInputOverflowError,
     ModelProfile,
@@ -34,7 +35,7 @@ def test_context_policy_applies_explicit_model_aware_reserves() -> None:
     )
     policy = ContextPolicy()
 
-    assert policy.revision == "agent-v4-dynamic-context"
+    assert policy.revision == "agent-v5-absolute-reserves"
     assert policy.dynamic_context_reserve_tokens == 40_000
     assert not hasattr(policy, "observation_reserve_tokens")
     assert policy.hard_input_limit(profile) == 180_000
@@ -155,7 +156,6 @@ def test_fast_full_dynamic_reserve_is_not_clamped_on_small_profiles() -> None:
     policy = ContextPolicy(
         requested_output_reserve_tokens=0,
         dynamic_context_reserve_tokens=40_000,
-        safety_reserve_tokens=0,
         minimum_input_tokens=1_024,
     )
 
@@ -172,7 +172,6 @@ def test_policy_classifies_overflow_and_caps_required_output_to_physical_remaind
     policy = ContextPolicy(
         requested_output_reserve_tokens=0,
         dynamic_context_reserve_tokens=0,
-        safety_reserve_tokens=0,
         minimum_input_tokens=0,
     )
 
@@ -191,7 +190,7 @@ def test_policy_classifies_overflow_and_caps_required_output_to_physical_remaind
 def test_unknown_output_profile_still_reserves_and_caps_requested_output() -> None:
     profile = ModelProfile(context_window_tokens=100_000, max_input_tokens=95_000)
 
-    assert CONTEXT_POLICY.hard_input_limit(profile) == 82_592
+    assert CONTEXT_POLICY.hard_input_limit(profile) == 83_616
     assert CONTEXT_POLICY.output_allowance(profile, input_tokens=80_000) == 16_384
 
 
@@ -258,3 +257,37 @@ def test_operator_overlay_cannot_declare_reasoning_without_an_output_cap() -> No
                 },
             }
         )
+
+
+def test_input_ceiling_carries_no_estimator_safety_margin() -> None:
+    """Pin the post-removal arithmetic so a safety margin cannot creep back.
+
+    The deleted ``safety_reserve_tokens`` was 1024 tokens against an estimator
+    that undercounts real content by a median of 8%, so it never absorbed the
+    error it was named for. Its absence is load-bearing: these numbers are the
+    input ceilings the compaction trigger and the output allowance derive from.
+    """
+    policy = ContextPolicy()
+
+    assert not hasattr(policy, "safety_reserve_tokens")
+    assert CONTEXT_POLICY_REVISION == "agent-v5-absolute-reserves"
+
+    # 1024-window edge: the floor keeps a usable ceiling instead of 1 token.
+    assert (
+        policy.hard_input_limit(ModelProfile(context_window_tokens=10_000, max_output_tokens=8_000))
+        == 2_000
+    )
+    # Unknown output cap falls back to the absolute output reserve, nothing more.
+    assert (
+        policy.hard_input_limit(
+            ModelProfile(context_window_tokens=100_000, max_input_tokens=95_000)
+        )
+        == 83_616
+    )
+    # A large window keeps only the 16k output reserve.
+    assert (
+        policy.hard_input_limit(
+            ModelProfile(context_window_tokens=1_048_576, max_output_tokens=262_144)
+        )
+        == 1_032_192
+    )

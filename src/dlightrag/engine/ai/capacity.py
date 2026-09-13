@@ -6,7 +6,7 @@ from typing import Literal
 
 from dlightrag.engine.ai.reasoning import ReasoningProfile
 
-CONTEXT_POLICY_REVISION = "agent-v4-dynamic-context"
+CONTEXT_POLICY_REVISION = "agent-v5-absolute-reserves"
 type ModelInputOverflowKind = Literal[
     "hard_input_limit_exceeded",
     "context_exhausted",
@@ -82,11 +82,20 @@ class ContextPolicy:
     product request instead of multiplying opaque percentages. Research may
     clamp the dynamic reserve on small profiles; Fast explicitly requests the
     full reserve and is rejected when the resolved profile cannot preserve it.
+
+    There is deliberately no estimator-safety margin. The removed
+    ``safety_reserve_tokens`` was 1024 tokens against a character-heuristic
+    estimator that undercounts recorded session content by a median of 8% and
+    up to 46%, so it could never absorb the error it was named for. The boundary
+    is covered instead by the provider's own rejection followed by compaction
+    and a retry of the same turn; a rejection whose wording escapes the overflow
+    matcher stays an explicit, diagnosable failure. The real fix would be to
+    anchor input measurement on the provider's reported usage, and that is
+    deliberately not done here.
     """
 
     requested_output_reserve_tokens: int = 16_384
     dynamic_context_reserve_tokens: int = 40_000
-    safety_reserve_tokens: int = 1_024
     retained_tail_tokens: int = 20_000
     episodic_summary_tokens: int = 8_000
     minimum_input_tokens: int = 1_024
@@ -96,7 +105,6 @@ class ContextPolicy:
         for name in (
             "requested_output_reserve_tokens",
             "dynamic_context_reserve_tokens",
-            "safety_reserve_tokens",
             "retained_tail_tokens",
             "episodic_summary_tokens",
             "minimum_input_tokens",
@@ -110,16 +118,12 @@ class ContextPolicy:
         return min(profile.max_output_tokens, self.requested_output_reserve_tokens)
 
     def hard_input_limit(self, profile: ModelProfile) -> int:
-        """Return provider input capacity after explicit output and safety reserves."""
+        """Return provider input capacity after the explicit output reserve."""
         provider_limit = profile.max_input_tokens or profile.context_window_tokens
         context = profile.context_window_tokens
         floor = min(self.minimum_input_tokens, provider_limit, context)
         output = min(self._reserved_output(profile), max(0, context - floor))
-        safety = min(
-            self.safety_reserve_tokens,
-            max(0, context - output - floor),
-        )
-        context_input_limit = max(1, context - output - safety)
+        context_input_limit = max(1, context - output)
         return min(provider_limit, context_input_limit)
 
     def compaction_trigger(

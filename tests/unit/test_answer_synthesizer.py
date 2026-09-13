@@ -10,7 +10,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from dlightrag.engine.agent.session.fold import PriorTurns
-from dlightrag.engine.ai.capacity import ContextPolicy, ModelProfile
+from dlightrag.engine.ai.capacity import (
+    CONTEXT_POLICY_REVISION,
+    ContextPolicy,
+    ModelProfile,
+)
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.answer.citations.finalization import finalize_answer
 from dlightrag.engine.answer.citations.streaming import AnswerStream
@@ -174,7 +178,6 @@ def _capacity_synthesizer() -> AnswerSynthesizer:
         context_policy=ContextPolicy(
             requested_output_reserve_tokens=0,
             dynamic_context_reserve_tokens=40,
-            safety_reserve_tokens=0,
             minimum_input_tokens=0,
         ),
     )
@@ -605,9 +608,9 @@ class TestAnswerSynthesizerCapacity:
             "question", _text_contexts(), conversation_history=PriorTurns()
         )
 
-        assert prepared.trace["answer_input_limit_tokens"] == 7_976
-        assert prepared.trace["context_policy_revision"] == "agent-v4-dynamic-context"
-        assert prepared.trace["answer_evidence_capacity_tokens"] == 7_976 - (
+        assert prepared.trace["answer_input_limit_tokens"] == 9_000
+        assert prepared.trace["context_policy_revision"] == CONTEXT_POLICY_REVISION
+        assert prepared.trace["answer_evidence_capacity_tokens"] == 9_000 - (
             prepared.trace["answer_input_tokens"] - prepared.trace["answer_evidence_tokens"]
         )
         assert prepared.trace["answer_evidence_capacity_tokens"] > 6_000
@@ -720,7 +723,6 @@ class TestAnswerSynthesizerCapacity:
         policy = ContextPolicy(
             requested_output_reserve_tokens=0,
             dynamic_context_reserve_tokens=0,
-            safety_reserve_tokens=0,
             minimum_input_tokens=0,
         )
         plain_contexts = _text_contexts()
