@@ -38,11 +38,8 @@ DEMO_STRUCTURED_OUTPUT = StructuredOutput(name="demo_plan", schema=DemoPlan)
 
 
 class CapturingProvider:
-    supports_native_json_schema: bool = False
-
-    def __init__(self, seen: dict[str, Any], *, supports_native_json_schema: bool = False) -> None:
+    def __init__(self, seen: dict[str, Any]) -> None:
         self.seen = seen
-        self.supports_native_json_schema = supports_native_json_schema
 
     async def complete(self, **kwargs: Any) -> str:
         self.seen.update(kwargs)
@@ -55,18 +52,11 @@ class CapturingProvider:
         return None
 
 
-def _capture_provider(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    supports_native_json_schema: bool = False,
-) -> dict[str, Any]:
+def _capture_provider(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     seen: dict[str, Any] = {}
     monkeypatch.setattr(
         "dlightrag.engine.ai.completion.get_provider",
-        lambda *_args, **_kwargs: CapturingProvider(
-            seen,
-            supports_native_json_schema=supports_native_json_schema,
-        ),
+        lambda *_args, **_kwargs: CapturingProvider(seen),
     )
     return seen
 
@@ -409,7 +399,7 @@ async def test_native_provider_auto_uses_json_schema(
     provider,
     model_name,
 ) -> None:
-    seen = _capture_provider(monkeypatch, supports_native_json_schema=True)
+    seen = _capture_provider(monkeypatch)
     model = CompletionModel(
         ModelSettings(provider=provider, model=model_name, api_key="sk-test"),
         scheduler=ModelScheduler(max_concurrency=1),
@@ -431,8 +421,6 @@ async def test_openai_strict_schema_failure_retries_json_object(monkeypatch) -> 
     ordinary_started = asyncio.Event()
 
     class Provider:
-        supports_native_json_schema = False
-
         async def complete(self, **kwargs: Any) -> str:
             seen.append(kwargs)
             response_format = kwargs["response_format"]

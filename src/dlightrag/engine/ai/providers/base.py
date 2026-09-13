@@ -187,14 +187,6 @@ class CompletionProvider(ABC):
     connections.
     """
 
-    supports_native_json_schema: bool = False
-    """Whether this provider natively supports JSON schema structured output.
-
-    Set to ``True`` on providers whose SDK accepts a JSON Schema directly
-    (Anthropic, Gemini).  Providers without native support fall back to
-    ``json_object`` mode or a strict-mode json_schema via the OpenAI API.
-    """
-
     def __init__(
         self,
         *,

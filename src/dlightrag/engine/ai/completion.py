@@ -12,7 +12,6 @@ from dlightrag.engine.ai.capacity import ModelProfile
 from dlightrag.engine.ai.catalog import resolve_model_profile
 from dlightrag.engine.ai.fingerprints import model_fingerprint
 from dlightrag.engine.ai.providers import get_provider
-from dlightrag.engine.ai.providers.base import CompletionProvider
 from dlightrag.engine.ai.reasoning import (
     REASONING_LEVELS,
     ResolvedReasoning,
@@ -81,20 +80,16 @@ def _messages_for_json_object(
 def structured_response_format(
     structured_output: StructuredOutput,
     settings: ModelSettings,
-    *,
-    provider: CompletionProvider | None = None,
 ) -> dict[str, Any]:
-    """Resolve the configured structured-output transport."""
-    mode = settings.structured_output
-    if mode == "json_object":
+    """Resolve the configured structured-output transport.
+
+    ``StructuredOutput.response_format_for_provider`` owns the protocol-to-transport
+    decision; this only applies the operator's explicit opt-out. Every protocol in
+    ``ChatProvider`` serves a strict schema, so ``auto`` and ``json_schema`` agree.
+    """
+    if settings.structured_output == "json_object":
         return {"type": "json_object"}
-    if mode == "json_schema":
-        return structured_output.response_format_for_provider(settings.provider)
-    if settings.provider == "openai":
-        return structured_output.response_format_for_provider("openai")
-    if provider is not None and provider.supports_native_json_schema:
-        return structured_output.response_format_for_provider(settings.provider)
-    return {"type": "json_object"}
+    return structured_output.response_format_for_provider(settings.provider)
 
 
 class CompletionModel:
@@ -198,7 +193,6 @@ class CompletionModel:
             response_format = response_format or structured_response_format(
                 structured_output,
                 self.settings,
-                provider=self._provider,
             )
             if (
                 isinstance(response_format, dict)

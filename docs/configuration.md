@@ -359,10 +359,11 @@ translation. `agentic_model_kwargs` is a shallow overlay for Research calls.
 
 ### Structured Output
 
-`structured_output` defaults to `auto`: strict schema output where supported,
-with an OpenAI-compatible fallback to `json_object`. Set `json_object` only for
-an endpoint known not to support strict schemas. Anthropic native supports
-`auto`/`json_schema`, not the lower-confidence `json_object` mode.
+`structured_output` defaults to `auto`, which asks for a strict JSON schema. All
+three chat protocols (`openai`, `anthropic`, `gemini`) serve one, so `auto` and
+`json_schema` resolve identically; the decision that changes anything is the
+`json_object` opt-out for an endpoint known to reject the `json_schema`
+`response_format` type. Anthropic native rejects `json_object` outright.
 
 A compatible endpoint that rejects the `json_schema` transport type is learned
 once per process: the request retries with `json_object`, and later requests to

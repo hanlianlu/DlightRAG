@@ -208,8 +208,6 @@ class AnthropicProvider(CompletionProvider):
     JSON schema response_format routed to ``output_config.format``.
     """
 
-    supports_native_json_schema: bool = True
-
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._client: Any = None
