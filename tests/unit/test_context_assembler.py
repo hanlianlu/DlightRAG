@@ -163,7 +163,7 @@ async def test_control_evidence_and_tool_schemas_stop_at_compaction_threshold() 
     assert CONTEXT_POLICY.hard_input_limit(profile) - used > 0
 
 
-def test_control_output_allowance_preserves_tool_observation_headroom() -> None:
+def test_control_output_is_the_model_output_allowance_not_the_accumulation_gap() -> None:
     profile = ModelProfile(
         context_window_tokens=100_000,
         max_output_tokens=80_000,
@@ -178,18 +178,21 @@ def test_control_output_allowance_preserves_tool_observation_headroom() -> None:
     tool_schema_tokens = 2_000
     messages = [{"role": "user", "content": "question"}]
 
-    allowance = assembler.control_output_allowance(
+    allowance = assembler.output_allowance(
         messages,
-        tool_schema_tokens=tool_schema_tokens,
+        additional_input_tokens=tool_schema_tokens,
     )
 
+    # A turn that thinks is bounded by what the model can emit, never by how
+    # much input room the compaction threshold has left over.  Reasoning shares
+    # this cap, so a context-accounting number truncates the turn mid-thought.
+    assert allowance is not None
+    assert allowance == profile.max_output_tokens
     gap = CONTEXT_POLICY.hard_input_limit(profile) - CONTEXT_POLICY.compaction_trigger(profile)
-    assert allowance == gap - tool_schema_tokens
-    assert profile.max_output_tokens is not None
-    assert allowance < profile.max_output_tokens
+    assert allowance > gap
 
 
-def test_control_output_rejects_tool_schemas_that_consume_the_accumulation_gap() -> None:
+def test_control_output_rejects_input_that_exceeds_the_model_limit() -> None:
     profile = ModelProfile(context_window_tokens=10_000, max_output_tokens=8_000)
     assembler = ContextAssembler(
         model_profile=profile,
@@ -198,12 +201,12 @@ def test_control_output_rejects_tool_schemas_that_consume_the_accumulation_gap()
         query_images=None,
         resource_manifest=(),
     )
-    gap = CONTEXT_POLICY.hard_input_limit(profile) - CONTEXT_POLICY.compaction_trigger(profile)
+    hard_limit = CONTEXT_POLICY.hard_input_limit(profile)
 
-    with pytest.raises(AnswerInputOverflowError, match="no model residual"):
-        assembler.control_output_allowance(
-            [{"role": "user", "content": "question"}],
-            tool_schema_tokens=gap,
+    with pytest.raises(AnswerInputOverflowError, match="input limit"):
+        assembler.output_allowance(
+            [{"role": "user", "content": "x"}],
+            additional_input_tokens=hard_limit,
         )
 
 

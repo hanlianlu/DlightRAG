@@ -948,6 +948,19 @@ class AgentSessionRuntime[HostDeltaT]:
                 batch=batch,
                 steers=state.steers,
             )
+        elif assistant.stop_reason == "length" and not assistant.text.strip():
+            # The provider cut this turn off before the model emitted any text or
+            # tool call, so it is neither an answer nor a finished operation.
+            # Recover the way an input overflow does: compact, then ask for the
+            # same turn again, bounded by the pinned compaction attempt limit.
+            plan = AgentRunPlan.from_payload(_json_object(view.context.meta.plan_json))
+            next_state = CompactionPending(
+                view.context.operation_id,
+                turn_count=state.turn_number - 1,
+                attempt=1,
+                max_attempts=plan.compaction_attempt_limit,
+                steers=state.steers,
+            )
         else:
             next_state = CompletionReady(
                 view.context.operation_id,

@@ -475,9 +475,9 @@ class AnswerOrchestrator:
             working=run.working,
             tool_schema_tokens=tool_schema_tokens,
         )
-        max_tokens = run.context.control_output_allowance(
+        max_tokens = run.context.output_allowance(
             messages,
-            tool_schema_tokens=tool_schema_tokens,
+            additional_input_tokens=tool_schema_tokens,
         )
         return RequestSnapshot.from_values(
             operation_id=runtime_context.operation_id,

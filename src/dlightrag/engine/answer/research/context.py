@@ -115,29 +115,6 @@ class ContextAssembler:
             input_tokens=input_tokens,
         )
 
-    def control_output_allowance(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        tool_schema_tokens: int,
-    ) -> int:
-        """Bound control output while preserving dynamic space for tool results."""
-        provider_allowance = self.output_allowance(
-            messages,
-            additional_input_tokens=tool_schema_tokens,
-        )
-        accumulation_gap = self._input_limit - self._control_target
-        control_allowance = accumulation_gap - tool_schema_tokens
-        if control_allowance <= 0:
-            raise AnswerInputOverflowError(
-                "Research tool schemas leave no model residual for a control completion"
-            )
-        return (
-            control_allowance
-            if provider_allowance is None
-            else min(provider_allowance, control_allowance)
-        )
-
     def _build_control_turn(
         self,
         evidence: EvidenceLedger,
@@ -145,8 +122,8 @@ class ContextAssembler:
         tool_schema_tokens: int,
     ) -> list[dict[str, Any]]:
         # The orchestrator owns the proactive H trigger and compacts before
-        # composing; this assembler enforces only the hard L limit later via
-        # ``output_allowance`` / ``control_output_allowance``.
+        # composing; this assembler enforces only the hard L limit later, in
+        # ``output_allowance``.
         return self._compose_control_turn(
             evidence,
             working,

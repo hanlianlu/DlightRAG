@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from dlightrag.engine.agent.session.effects import ToolResultEntry
 from dlightrag.engine.agent.session.entries import (
     AssistantMessageEntry,
+    CompactionEntry,
     ControlMessageEntry,
     ToolResultMessageEntry,
     UserMessageEntry,
@@ -1461,3 +1462,34 @@ async def test_concurrent_controls_are_serialized_without_cache_regression() -> 
     }
     assert view.context.snapshot.commit_sequence == authoritative.commit_sequence
     assert view.context.snapshot.registers == authoritative.registers
+
+
+@pytest.mark.asyncio
+async def test_truncated_empty_turn_recovers_instead_of_completing_with_nothing() -> None:
+    """A turn cut off before any text or tool call is not an answer."""
+    tool = _agent_tool()
+    effects = _Effects([_assistant(text="", stop="length"), _assistant(text="done")])
+    store = MemoryAgentSessionRepository[dict[str, Any]]()
+    runtime = _runtime(store, effects, tool)
+    session_id = SessionId.new()
+    accepted = await runtime.accept(
+        session_id=session_id,
+        lane_id=LaneId.main(),
+        idempotency_key="truncated-empty",
+        content="question",
+        plan=_plan(tool),
+    )
+
+    final = await runtime.drive(session_id=session_id, operation_id=accepted.operation_id)
+
+    assert isinstance(final.state, OperationCompleted)
+    snapshot = await store.load(session_id)
+    # The truncated turn stays in the transcript, recovery is recorded, and the
+    # operation completes on the re-asked turn rather than on nothing.
+    assert [type(entry) for entry in snapshot.tree.ancestry()] == [
+        UserMessageEntry,
+        AssistantMessageEntry,
+        CompactionEntry,
+        AssistantMessageEntry,
+    ]
+    assert snapshot.tree.ancestry()[-1].content == "done"  # type: ignore[union-attr]
