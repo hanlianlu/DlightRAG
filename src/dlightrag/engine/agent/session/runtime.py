@@ -906,11 +906,11 @@ class AgentSessionRuntime[HostDeltaT]:
                 detail=exc.detail,
             )
             return
-        except Exception:
+        except Exception as exc:
             await self._fail(
                 refreshed,
                 kind="provider_unavailable",
-                detail="Model provider request failed",
+                detail=f"Model provider request failed: {type(exc).__name__}",
             )
             return
         await self._commit_assistant(refreshed, assistant)

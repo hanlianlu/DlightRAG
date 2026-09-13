@@ -64,6 +64,27 @@ def is_provider_context_overflow(exc: BaseException) -> bool:
     return False
 
 
+def provider_status_code(exc: BaseException) -> int | None:
+    """Return the HTTP status a provider rejected with, when the chain carries one.
+
+    Status codes are the one part of a provider failure that is safe to record:
+    they classify the failure without persisting prompt content.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        status = getattr(current, "status_code", None)
+        if isinstance(status, int) and 400 <= status <= 599:
+            return status
+        response = getattr(current, "response", None)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int) and 400 <= status <= 599:
+            return status
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _overflow_status_message(message: str) -> bool:
     lowered = message.lower()
     markers = ("token", "context", "prompt", "input")
@@ -304,6 +325,7 @@ __all__ = [
     "CompletionProvider",
     "capture_stream_usage",
     "is_provider_context_overflow",
+    "provider_status_code",
     "usage_mapping",
     "usage_to_dict",
 ]

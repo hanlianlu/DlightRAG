@@ -37,7 +37,10 @@ from dlightrag.engine.agent.tool_content import tool_content_attachments
 from dlightrag.engine.agent.tools import ToolEffects, ToolResult, ToolRuntime, fit_tool_result
 from dlightrag.engine.ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.messages import AssistantTurn
-from dlightrag.engine.ai.providers.base import is_provider_context_overflow
+from dlightrag.engine.ai.providers.base import (
+    is_provider_context_overflow,
+    provider_status_code,
+)
 from dlightrag.engine.answer.errors import AnswerInputError
 from dlightrag.engine.answer.evidence import EvidenceDelta
 from dlightrag.engine.answer.orchestration import AnswerOrchestrator
@@ -79,6 +82,27 @@ from dlightrag.engine.runtime.settlements import (
 
 logger = logging.getLogger(__name__)
 _CHILD_LEASE_HEARTBEAT_SECONDS = RUN_LEASE_SECONDS / 3
+
+
+def _http_suffix(exc: BaseException) -> str:
+    """Name a provider failure by HTTP status when it carries one.
+
+    A status classifies the failure (bad request, rate limit, upstream error)
+    without persisting provider or prompt text, so it is the one part of a
+    rejection that belongs in a durable error message.
+    """
+    status = provider_status_code(exc)
+    return f" (HTTP {status})" if status is not None else ""
+
+
+def provider_attempt_detail(exc: BaseException, *, retryable: bool) -> str:
+    """Store safe provider-failure detail: a verdict plus an HTTP status."""
+    label = (
+        "Model provider is temporarily unavailable"
+        if retryable
+        else "Model provider rejected the request"
+    )
+    return f"{label}{_http_suffix(exc)}"
 
 
 def _research_dynamic_context_reserve(profile: ModelProfile) -> int:
@@ -475,9 +499,7 @@ class ResearchRuntimeEffects:
                 classify_transient_dependency(exc, component_hint="providers") == "providers"
             )
             raise ProviderAttemptFailed(
-                "Model provider is temporarily unavailable"
-                if retryable
-                else "Model provider rejected the request",
+                provider_attempt_detail(exc, retryable=retryable),
                 retryable=retryable,
             ) from exc
 

@@ -51,6 +51,7 @@ from dlightrag.engine.answer.research.runtime import (
     FetchedResourceBuffer,
     ResearchRuntimeEffects,
     _build_effect_host_update,
+    provider_attempt_detail,
 )
 from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.resources.registry import (
@@ -852,3 +853,26 @@ async def test_provider_overflow_compacts_shrinks_and_retries_through_host_effec
 @pytest.mark.asyncio
 async def test_research_child_tool_receives_child_session_fence_not_parent_fence():
     await _settle_bounded_research_tool(answer_model_profile(), "child", session_fencing_epoch=7)
+
+
+def test_provider_failure_detail_names_the_http_status_without_provider_text() -> None:
+    """A durable provider error classifies the failure and stores no prompt text."""
+
+    class Rejected(Exception):
+        def __init__(self) -> None:
+            super().__init__("max_tokens is too large: 384000 > 65536 for prompt 'secret'")
+            self.status_code = 400
+
+    detail = provider_attempt_detail(Rejected(), retryable=False)
+
+    assert detail == "Model provider rejected the request (HTTP 400)"
+    assert "secret" not in detail
+    assert "max_tokens" not in detail
+
+    assert provider_attempt_detail(Rejected(), retryable=True) == (
+        "Model provider is temporarily unavailable (HTTP 400)"
+    )
+    # Without a status there is nothing safe to add beyond the verdict.
+    assert provider_attempt_detail(ValueError("no status"), retryable=False) == (
+        "Model provider rejected the request"
+    )

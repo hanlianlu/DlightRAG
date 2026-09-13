@@ -10,7 +10,11 @@ import pytest
 
 from dlightrag.engine.ai.messages import ToolDefinition
 from dlightrag.engine.ai.providers import get_provider
-from dlightrag.engine.ai.providers.base import CompletionOutput, CompletionProvider
+from dlightrag.engine.ai.providers.base import (
+    CompletionOutput,
+    CompletionProvider,
+    provider_status_code,
+)
 from dlightrag.engine.ai.providers.openai_compatible import (
     OpenAICompatibleProvider,
     _openai_tool_messages,
@@ -1645,3 +1649,45 @@ async def test_empty_tool_calls_arrays_are_stripped_for_strict_endpoints():
 
     assert "tool_calls" not in converted[0]
     assert converted[1]["tool_calls"] == messages[1]["tool_calls"]
+
+
+def test_provider_status_code_reads_the_rejection_without_prompt_text() -> None:
+    """A status code classifies a rejection and carries no prompt content."""
+
+    class BadRequest(Exception):
+        def __init__(self, message: str) -> None:
+            super().__init__(message)
+            self.status_code = 400
+
+    assert provider_status_code(BadRequest("max_tokens is too large")) == 400
+
+    # SDK wrappers hide the status behind a cause, and httpx behind a response.
+    try:
+        raise ValueError("wrapped") from BadRequest("max_tokens is too large")
+    except ValueError as wrapped:
+        assert provider_status_code(wrapped) == 400
+
+    response = SimpleNamespace(status_code=429)
+
+    class RateLimited(Exception):
+        def __init__(self) -> None:
+            super().__init__("slow down")
+            self.response = response
+
+    assert provider_status_code(RateLimited()) == 429
+
+    # Absent, non-HTTP, and non-error statuses classify nothing.
+    assert provider_status_code(ValueError("just bad")) is None
+
+    class Ok(Exception):
+        def __init__(self) -> None:
+            super().__init__("fine")
+            self.status_code = 200
+
+    class Misdeclared(Exception):
+        def __init__(self) -> None:
+            super().__init__("fine")
+            self.status_code = "400"
+
+    assert provider_status_code(Ok()) is None
+    assert provider_status_code(Misdeclared()) is None
