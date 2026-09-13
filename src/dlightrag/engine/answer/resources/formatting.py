@@ -10,7 +10,12 @@ from dlightrag.engine.answer.resources.models import (
 
 def format_resource_read(result: ResourceReadResult) -> str:
     locator = f" | {_describe_text_locator(result.locator)}" if result.locator is not None else ""
-    parts = [f"[resource: {result.resource_id}{locator}]", result.content]
+    parts = [
+        f"[resource: {result.resource_id}{locator} | extraction_status={result.extraction_status}]",
+        result.content,
+    ]
+    if result.extraction_status == "no_extracted_text":
+        parts.append("No extracted text is not proof that the document is blank.")
     if result.note:
         parts.append(f"[{result.note}]")
     if result.visual_handles:
@@ -21,9 +26,12 @@ def format_resource_read(result: ResourceReadResult) -> str:
 
 
 def resource_read_continuation(result: ResourceReadResult) -> str:
+    instructions = []
     if result.has_more and result.next_cursor:
-        return f"[more; cursor={result.next_cursor}]"
-    return ""
+        instructions.append(f"[more; cursor={result.next_cursor}]")
+    if result.note and "more: read(" in result.note:
+        instructions.append(result.note[result.note.index("more: read(") :])
+    return "\n".join(instructions)
 
 
 def _describe_text_locator(locator: TextWindowLocator) -> str:

@@ -14,7 +14,7 @@ from dlightrag.engine.answer.orchestration import AnswerOrchestrator
 from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.answer.synthesizer import AnswerSynthesizer
 from dlightrag.engine.answer.workspace import RunWorkspace
-from tests.unit.conftest import answer_model_profile
+from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
 def _orchestrator(*, mode: str, model=None, retrieve=None, synthesizer=None, environment=None):
@@ -214,3 +214,72 @@ def test_child_preparation_excludes_every_parent_subagent_control() -> None:
             "reply_subagent",
         }
     )
+
+
+def test_child_admission_record_is_shared_and_idempotent_across_retry() -> None:
+    import hashlib
+
+    from dlightrag.engine.agent.session.ids import EntryId, SessionId
+    from dlightrag.engine.agent.tool_content import (
+        ToolResourceAttachmentPart,
+        VisualSource,
+        tool_content_message_fields,
+    )
+    from dlightrag.engine.answer.attachment_replay import AttachmentOccurrence
+    from dlightrag.engine.answer.tools.subagents import ChildContextSnapshot, ChildRequest
+    from tests.unit.test_resource_tools import png as png_bytes
+
+    async def model(**_kwargs):
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    payload = png_bytes()
+    part = ToolResourceAttachmentPart(
+        resource_id="res-1",
+        safe_name="page-1.png",
+        media_type="image/png",
+        content_digest=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        data=b"",
+        source=VisualSource(resource_id="res-1", kind="pdf_page", page=1),
+    )
+    message = {
+        "role": "tool",
+        "tool_call_id": "call-1",
+        "name": "view",
+        "is_error": False,
+        **tool_content_message_fields((part,)),
+    }
+    orchestrator = _orchestrator(mode="research", model=model)
+    orchestrator._image_budget = answer_image_policy(max_images=4).new_budget()
+    orchestrator.restore_child_attachment_snapshots({"res-1": payload})
+    context = ChildContextSnapshot.from_values(
+        parent_session_id=SessionId.new(),
+        parent_entry_id=EntryId.new(),
+        depth=0,
+        messages=[{"role": "user", "content": "inspect"}, message],
+        attachment_occurrences=(
+            AttachmentOccurrence(entry_id="e-1", part_index=0, attachment=part),
+        ),
+    )
+    child_id = SessionId.new()
+    first = orchestrator.prepare_child_session(
+        ChildRequest(objective="inspect", context="parent"),
+        context_snapshot=context,
+        child_session_id=child_id.value,
+    )
+    assert first.attachment_admissions == {"res-1": 1}
+    assert first.inherited_attachment_admissions == {"res-1": 1}
+    assert orchestrator._image_budget is not None
+    assert orchestrator._image_budget.count == 1
+
+    second = orchestrator.prepare_child_session(
+        ChildRequest(objective="continue", context="parent"),
+        context_snapshot=context,
+        child_session_id=child_id.value,
+    )
+    # One per-child record hands back the same mutable dicts on retry, so the
+    # already-admitted occurrence is neither reserved nor rehydrated twice.
+    assert second.attachment_admissions is first.attachment_admissions
+    assert second.inherited_attachment_admissions is first.inherited_attachment_admissions
+    assert second.attachment_admissions == {"res-1": 1}
+    assert orchestrator._image_budget.count == 1

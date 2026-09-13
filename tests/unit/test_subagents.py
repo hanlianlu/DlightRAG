@@ -520,7 +520,7 @@ def test_parent_tools_include_spawn_and_child_omits_it() -> None:
         trace={},
         retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
+        injected_tools=[],
         register_web_source=None,
         subagent_host=host,
     )
@@ -529,7 +529,7 @@ def test_parent_tools_include_spawn_and_child_omits_it() -> None:
         trace={},
         retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
+        injected_tools=[],
         register_web_source=None,
         subagent_host=host,
         child=True,
@@ -1367,7 +1367,7 @@ def test_child_defaults_to_read_only_parent_tools() -> None:
         trace={},
         retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
+        injected_tools=[],
         register_web_source=None,
         environment=MagicMock(),
         artifacts_root=Path("/unused/artifacts"),
@@ -1384,7 +1384,7 @@ def test_child_can_explicitly_narrow_to_host_permitted_side_effect_tools() -> No
         trace={},
         retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
+        injected_tools=[],
         register_web_source=None,
         environment=MagicMock(),
         artifacts_root=Path("/unused/artifacts"),
@@ -1402,7 +1402,7 @@ def test_interactive_child_keeps_ask_parent_on_an_explicit_tool_subset() -> None
         trace={},
         retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
+        injected_tools=[],
         register_web_source=None,
         environment=MagicMock(),
         artifacts_root=Path("/unused/artifacts"),
@@ -1415,7 +1415,7 @@ def test_interactive_child_keeps_ask_parent_on_an_explicit_tool_subset() -> None
         trace={},
         retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
+        injected_tools=[],
         register_web_source=None,
         subagent_host=SubagentHost(async_lifecycle=True, interactive_controls=False),
         child=True,

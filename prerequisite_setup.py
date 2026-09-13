@@ -1266,7 +1266,6 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             "name": "Docling",
             "detail": sidecars.docling.endpoint if sidecars.docling is not None else "?",
         }
-    inspection_settings = role_settings.get("vlm", default_settings)
     return {
         "llm_default": default,
         "llm_roles": roles,
@@ -1291,11 +1290,6 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             "max_attachment_bytes": answer.max_attachment_bytes,
             "max_total_attachment_bytes": answer.max_total_attachment_bytes,
             "max_images": answer.max_images,
-        },
-        "visual_inspection": {
-            "role": "vlm" if "vlm" in role_settings else "default",
-            "provider": inspection_settings.provider,
-            "model": inspection_settings.model,
         },
         "parser": parser,
         "web_research": {
@@ -1358,11 +1352,6 @@ def render_summary(console, summary: dict) -> None:
     table.add_row(
         "Answer images",
         f"{answer['max_images']} max",
-    )
-    inspection = summary["visual_inspection"]
-    table.add_row(
-        "Visual inspection",
-        f"{inspection['role']} · {inspection['provider']} · {inspection['model']}",
     )
     table.add_row("Workspace", summary["workspace"])
     table.add_row(

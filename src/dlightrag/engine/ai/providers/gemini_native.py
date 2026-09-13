@@ -46,32 +46,36 @@ def _gemini_usage(response: Any) -> dict[str, int] | None:
     return {key.replace("_token_count", "_tokens"): value for key, value in raw.items()}
 
 
-def _convert_content(content: str | list[Any]) -> str | list[Any]:
-    """Convert OpenAI content blocks to Gemini Part-compatible dicts."""
+def _gemini_text_part(text: str) -> dict[str, str]:
+    return {"text": text}
+
+
+def _gemini_inline_part(mime_type: str, data: bytes) -> dict[str, Any]:
+    return {"inline_data": {"mime_type": mime_type, "data": data}}
+
+
+def _convert_content(content: str | list[Any]) -> list[dict[str, Any]]:
+    """Convert OpenAI content blocks to Gemini Part dictionaries."""
     if isinstance(content, str):
-        return content
-    parts: list[Any] = []
+        return [_gemini_text_part(content)] if content else []
+    parts: list[dict[str, Any]] = []
     for block in content:
         if isinstance(block, str):
-            parts.append(block)
+            if block:
+                parts.append(_gemini_text_part(block))
         elif block.get("type") == "text":
-            parts.append(block["text"])
+            text = block.get("text")
+            if text:
+                parts.append(_gemini_text_part(str(text)))
         elif block.get("type") == "image_url":
             url = (
                 block["image_url"]["url"]
                 if isinstance(block["image_url"], dict)
                 else block["image_url"]
             )
-            m = _DATA_URI_RE.match(url)
-            if m:
-                parts.append(
-                    {
-                        "inline_data": {
-                            "mime_type": m.group(1),
-                            "data": base64.b64decode(m.group(2)),
-                        },
-                    }
-                )
+            match = _DATA_URI_RE.match(str(url))
+            if match:
+                parts.append(_gemini_inline_part(match.group(1), base64.b64decode(match.group(2))))
             else:
                 parts.append({"file_data": {"file_uri": url}})
         else:
@@ -81,23 +85,14 @@ def _convert_content(content: str | list[Any]) -> str | list[Any]:
 
 def _attachment_inline_parts(message: dict[str, Any]) -> list[dict[str, Any]]:
     """Inline attached tool images as their own user-turn parts."""
-    import re
-
     parts: list[dict[str, Any]] = []
     for attachment in message.get("attachments") or ():
         if not (isinstance(attachment, dict) and attachment.get("data_url")):
             continue
-        match = re.match(r"^data:([\w./+-]+);base64,(.*)$", str(attachment["data_url"]), re.S)
+        match = _DATA_URI_RE.match(str(attachment["data_url"]))
         if match is None:
             continue
-        parts.append(
-            {
-                "inline_data": {
-                    "mime_type": match.group(1),
-                    "data": match.group(2),
-                }
-            }
-        )
+        parts.append(_gemini_inline_part(match.group(1), base64.b64decode(match.group(2))))
     return parts
 
 
@@ -106,13 +101,7 @@ def _gemini_tool_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]
     for message in messages:
         role = message.get("role")
         if role == "assistant":
-            parts: list[Any] = []
-            converted = _convert_content(message.get("content", ""))
-            if isinstance(converted, str):
-                if converted:
-                    parts.append(converted)
-            else:
-                parts.extend(converted)
+            parts: list[dict[str, Any]] = list(_convert_content(message.get("content", "")))
             for call in message.get("tool_calls") or ():
                 function = call.get("function") or {}
                 try:
@@ -203,15 +192,14 @@ class GeminiProvider(CompletionProvider):
     ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
         # Extract system messages
         system_parts: list[str] = []
-        non_system: list[dict[str, Any]] = []
         for msg in messages:
             if msg.get("role") == "system":
                 c = msg.get("content", "")
                 if isinstance(c, str):
                     system_parts.append(c)
-            else:
-                role = _ROLE_MAP.get(msg["role"], msg["role"])
-                non_system.append({"role": role, "parts": _convert_content(msg.get("content", ""))})
+        # One projection for every entrypoint: tool attachments, assistant tool
+        # calls and ordinary content blocks share this same request contract.
+        non_system = _gemini_tool_contents([msg for msg in messages if msg.get("role") != "system"])
 
         config: dict[str, Any] = {}
         if system_parts:
@@ -287,9 +275,6 @@ class GeminiProvider(CompletionProvider):
             response_format=None,
             model_kwargs=model_kwargs,
         )
-        contents = _gemini_tool_contents(
-            [message for message in messages if message.get("role") != "system"]
-        )
         if tools:
             config["tools"] = [
                 {
@@ -356,16 +341,13 @@ class GeminiProvider(CompletionProvider):
         max_tokens: int | None = None,
         model_kwargs: dict[str, Any] | None = None,
     ) -> AssistantTurn:
-        model_id, _, config = self._build_args(
+        model_id, contents, config = self._build_args(
             messages,
             model,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=None,
             model_kwargs=model_kwargs,
-        )
-        contents = _gemini_tool_contents(
-            [message for message in messages if message.get("role") != "system"]
         )
         if tools:
             config["tools"] = [
@@ -474,16 +456,13 @@ class GeminiProvider(CompletionProvider):
         model_kwargs: dict[str, Any] | None = None,
         usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore[override]
-        model_id, _, config = self._build_args(
+        model_id, contents, config = self._build_args(
             messages,
             model,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=None,
             model_kwargs=model_kwargs,
-        )
-        contents = _gemini_tool_contents(
-            [message for message in messages if message.get("role") != "system"]
         )
         async for token in self._stream_generated(
             model_id,

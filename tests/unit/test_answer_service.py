@@ -35,6 +35,7 @@ from dlightrag.engine.answer.errors import (
     AnswerInputOverflowError,
     CurrentImagePayloadError,
     UnsupportedAnswerModeError,
+    UnsupportedResourceCapabilityError,
 )
 from dlightrag.engine.answer.execution import AnswerResourceResolver, AnswerResourceSettings
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
@@ -386,7 +387,7 @@ class _Capabilities:
         return models, None
 
 
-class _TextQueryInspectCapabilities(_Capabilities):
+class _TextOnlyQueryCapabilities(_Capabilities):
     def __init__(self, *, configured_ceiling: int = 3, query_status: str = "unsupported") -> None:
         super().__init__()
         self._answer = AnswerImageCapability(
@@ -481,17 +482,15 @@ class _Resources:
         /,
         *,
         models: RequestModelContext,
-        text_window_budget: Any,
         confirm_image_context: Any,
         resolved_mode: str = "fast",
     ) -> Any:
-        del resources, text_window_budget, confirm_image_context, resolved_mode
+        del resources, confirm_image_context, resolved_mode
         self.calls.append("resolve")
         return MagicMock(
             models=models,
             registry=self._registry,
             current_images=[],
-            resource_tools=[],
             resource_manifest=(),
             web_sources=None,
             image_budget=None,
@@ -615,11 +614,11 @@ async def test_explicit_fast_with_text_query_and_current_image_creates_no_run() 
     resources = _Resources()
     service = _service(
         store=store,
-        capabilities=_TextQueryInspectCapabilities(),
+        capabilities=_TextOnlyQueryCapabilities(),
         resources=resources,
     )
 
-    with pytest.raises(UnsupportedAnswerModeError):
+    with pytest.raises(UnsupportedResourceCapabilityError):
         await service.create(
             request=_request(
                 mode="fast",
@@ -638,28 +637,29 @@ async def test_explicit_fast_with_text_query_and_current_image_creates_no_run() 
     assert resources.calls == ["pin_current_image_links"]
 
 
-async def test_auto_text_query_with_inspect_persists_research_only() -> None:
+async def test_auto_text_only_query_rejects_visual_fallback() -> None:
     store = _Store()
     service = _service(
         store=store,
-        capabilities=_TextQueryInspectCapabilities(),
+        capabilities=_TextOnlyQueryCapabilities(),
     )
 
-    await service.create(
-        request=_request(
-            mode="auto",
-            resources=(
-                ResourceInput(
-                    filename="chart.png",
-                    content=b"image",
-                    declared_mime="image/png",
+    with pytest.raises(UnsupportedResourceCapabilityError):
+        await service.create(
+            request=_request(
+                mode="auto",
+                resources=(
+                    ResourceInput(
+                        filename="chart.png",
+                        content=b"image",
+                        declared_mime="image/png",
+                    ),
                 ),
             ),
-        ),
-        owner_id=_OWNER,
-    )
+            owner_id=_OWNER,
+        )
 
-    assert store.created[0]["routing"].valid_modes == ("research",)
+    assert store.created == []
 
 
 @pytest.mark.parametrize("mode", ["auto", "fast"])
@@ -759,21 +759,17 @@ async def test_capability_narrowed_while_pinning_recomputes_valid_modes(mode: st
         ),
     )
 
-    if mode == "fast":
-        with pytest.raises(UnsupportedAnswerModeError):
-            await service.create(request=request, owner_id=_OWNER)
-        assert store.created == []
-    else:
+    with pytest.raises(UnsupportedResourceCapabilityError):
         await service.create(request=request, owner_id=_OWNER)
-        assert store.created[0]["routing"].valid_modes == ("research",)
+    assert store.created == []
 
     assert resources.calls[0] == "pin_current_image_links"
     assert capabilities.vlm_refreshes == 1
 
 
-async def test_service_enforces_image_ceiling_on_text_query_inspect_path() -> None:
+async def test_service_enforces_image_ceiling_before_query_capability() -> None:
     store = _Store()
-    capabilities = _TextQueryInspectCapabilities(configured_ceiling=1)
+    capabilities = _TextOnlyQueryCapabilities(configured_ceiling=1)
     runtime_models = MagicMock()
     resolver = AnswerResourceResolver(
         settings=AnswerResourceSettings(
@@ -948,7 +944,7 @@ async def test_idempotent_replay_precedes_live_multimodal_capability_validation(
     resources = _Resources()
     service = _service(
         store=store,
-        capabilities=_TextQueryInspectCapabilities(),
+        capabilities=_TextOnlyQueryCapabilities(),
         resources=resources,
     )
 

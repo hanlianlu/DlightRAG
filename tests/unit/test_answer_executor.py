@@ -56,7 +56,6 @@ from dlightrag.engine.answer.highlights import SemanticHighlightSettings
 from dlightrag.engine.answer.image_capability import AnswerImageCapability
 from dlightrag.engine.answer.publication import prepare_artifact_attachment, validate_publication
 from dlightrag.engine.answer.resources import ResourceInput
-from dlightrag.engine.answer.resources.models import TextWindowBudget
 from dlightrag.engine.dependencies import ProviderUnavailableError
 from dlightrag.engine.runtime.coordinator import RunSession
 from dlightrag.engine.runtime.errors import RunExecutionError
@@ -308,11 +307,11 @@ def test_acceptance_plan_matches_runtime_tool_composition(tmp_path: Path) -> Non
         raise RuntimeError("tool definitions are never executed")
 
     runtime_tools = compose_research_tools(
+        injected_tools=[],
         evidence=EvidenceLedger(),
         trace={},
         retrieve_knowledge_base=retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
         register_web_source=None,
         resource_reader=read_resource,
         environment=LocalExecutionEnvironment(tmp_path),
@@ -462,24 +461,17 @@ def _resource_resolver() -> AnswerResourceResolver:
 def test_resource_identity_is_stable_within_run_and_isolated_across_runs() -> None:
     resolver = _resource_resolver()
     resources = [ResourceInput(url="https://example.com/report")]
-    profile = ModelProfile(context_window_tokens=10_000, supports_images=False)
 
-    first, _ = resolver.build_resource_context(
+    first = resolver.build_resource_context(
         resources,
-        text_window_budget=TextWindowBudget(tokens=100),
-        vlm_profile=profile,
         resource_scope="owner-a\0run-1",
     )
-    again, _ = resolver.build_resource_context(
+    again = resolver.build_resource_context(
         resources,
-        text_window_budget=TextWindowBudget(tokens=100),
-        vlm_profile=profile,
         resource_scope="owner-a\0run-1",
     )
-    other, _ = resolver.build_resource_context(
+    other = resolver.build_resource_context(
         resources,
-        text_window_budget=TextWindowBudget(tokens=100),
-        vlm_profile=profile,
         resource_scope="owner-a\0run-2",
     )
 
@@ -737,7 +729,6 @@ async def test_research_multimodal_query_gets_all_raw_images_and_resource_handle
     resolved = await resolver.resolve(
         resources,
         models=models,
-        text_window_budget=TextWindowBudget(10_000),
         confirm_image_context=AsyncMock(return_value=(models, capability)),
         resolved_mode="research",
     )
@@ -759,7 +750,7 @@ async def test_research_multimodal_query_gets_all_raw_images_and_resource_handle
 
 
 @pytest.mark.parametrize("query_status", ["unsupported", "unknown"])
-async def test_research_text_query_with_inspect_gets_zero_raw_and_all_handles(
+async def test_research_text_only_query_rejects_images_without_visual_fallback(
     query_status: str,
 ) -> None:
     capability = _image_capability(query_status, configured_ceiling=2)
@@ -770,24 +761,18 @@ async def test_research_text_query_with_inspect_gets_zero_raw_and_all_handles(
         ResourceInput(filename="black.png", content=_png_bytes("black"), declared_mime="image/png"),
     ]
 
-    resolved = await resolver.resolve(
-        resources,
-        models=models,
-        text_window_budget=TextWindowBudget(10_000),
-        confirm_image_context=AsyncMock(return_value=(models, capability)),
-        resolved_mode="research",
-    )
+    from dlightrag.engine.answer.errors import AnswerImageError
 
-    try:
-        assert resolved.query_images is None
-        assert len(resolved.resource_manifest) == 2
-        assert "inspect" in {tool.name for tool in resolved.resource_tools}
-    finally:
-        assert resolved.registry is not None
-        await resolved.registry.aclose()
+    with pytest.raises(AnswerImageError):
+        await resolver.resolve(
+            resources,
+            models=models,
+            confirm_image_context=AsyncMock(return_value=(models, capability)),
+            resolved_mode="research",
+        )
 
 
-async def test_research_inspect_still_enforces_configured_image_count() -> None:
+async def test_research_image_admission_enforces_configured_count() -> None:
     capability = _image_capability("unsupported", configured_ceiling=1)
     resolver = _multimodal_resolver(capability)
     models = _request_models(query_images=False, vlm_images=True)
@@ -807,7 +792,6 @@ async def test_research_inspect_still_enforces_configured_image_count() -> None:
                 ),
             ],
             models=models,
-            text_window_budget=TextWindowBudget(10_000),
             confirm_image_context=AsyncMock(return_value=(models, capability)),
             resolved_mode="research",
         )
@@ -836,7 +820,6 @@ async def test_research_current_image_budget_is_all_or_error() -> None:
                 ),
             ],
             models=models,
-            text_window_budget=TextWindowBudget(10_000),
             confirm_image_context=AsyncMock(return_value=(models, capability)),
             resolved_mode="research",
         )

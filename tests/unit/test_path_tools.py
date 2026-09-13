@@ -22,6 +22,7 @@ from dlightrag.engine.agent.tools.files import (
     GrepArgs,
     LsArgs,
     ReadArgs,
+    ViewArgs,
     WriteArgs,
     bash_tool,
     edit_tool,
@@ -31,6 +32,7 @@ from dlightrag.engine.agent.tools.files import (
     path_tools,
     preview_or_spill,
     read_tool,
+    view_tool,
     write_tool,
 )
 from tests.tool_helpers import tool_runtime
@@ -221,7 +223,7 @@ async def test_read_missing_file_is_a_true_error(tmp_path: Path) -> None:
     assert "file not found" in result.text_content
 
 
-async def test_read_image_path_attaches_the_original_snapshot(tmp_path: Path) -> None:
+async def test_view_image_path_attaches_the_original_snapshot(tmp_path: Path) -> None:
     import io
 
     from PIL import Image
@@ -232,7 +234,7 @@ async def test_read_image_path_attaches_the_original_snapshot(tmp_path: Path) ->
     png = buffer.getvalue()
     (tmp_path / "chart.png").write_bytes(png)
 
-    result = await read_tool(env, scheduler).execute(ReadArgs(path="chart.png"), tool_runtime())
+    result = await view_tool(env, scheduler).execute(ViewArgs(path="chart.png"), tool_runtime())
 
     assert result.is_error is False
     from dlightrag.engine.agent.tool_content import tool_content_attachments
@@ -259,7 +261,7 @@ async def test_read_corrupt_image_falls_back_to_text_decoding(tmp_path: Path) ->
     assert tool_content_attachments(result.parts) == ()
 
 
-async def test_read_large_image_keeps_source_and_attaches_bounded_derivative(
+async def test_view_large_image_keeps_source_and_attaches_bounded_derivative(
     tmp_path: Path,
 ) -> None:
     import io
@@ -272,7 +274,7 @@ async def test_read_large_image_keeps_source_and_attaches_bounded_derivative(
     source = buffer.getvalue()
     (tmp_path / "large.png").write_bytes(source)
 
-    result = await read_tool(env, scheduler).execute(ReadArgs(path="large.png"), tool_runtime())
+    result = await view_tool(env, scheduler).execute(ViewArgs(path="large.png"), tool_runtime())
 
     from dlightrag.engine.agent.tool_content import tool_content_attachments
 
@@ -325,6 +327,7 @@ async def test_path_tool_order_and_hardened_contract_versions(tmp_path: Path) ->
 
     assert [tool.name for tool in tools] == [
         "read",
+        "view",
         "bash",
         "edit",
         "write",
@@ -335,6 +338,7 @@ async def test_path_tool_order_and_hardened_contract_versions(tmp_path: Path) ->
     versions = {tool.name: tool.contract_version for tool in tools}
     assert versions == {
         "read": 3,
+        "view": 2,
         "bash": 3,
         "edit": 3,
         "write": 3,

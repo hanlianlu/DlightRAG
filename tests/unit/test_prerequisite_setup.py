@@ -1550,40 +1550,7 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "max_total_attachment_bytes": 134217728,
         "max_images": 12,
     }
-    # No dedicated VLM role: the default LLM performs answer visual inspection.
-    assert s["visual_inspection"] == {
-        "role": "default",
-        "provider": "openai",
-        "model": "gpt-x",
-    }
-
-
-def test_read_config_summary_reports_vlm_role_visual_inspection(wiz, tmp_path):
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text(
-        "models:\n"
-        "  chat:\n"
-        "    default:\n      provider: openai\n      model: gpt-x\n"
-        "    roles:\n      vlm:\n        provider: gemini\n        model: gemini-vision\n"
-        "  embedding:\n    provider: voyage\n    model: voyage-x\n    dim: 1024\n"
-        "  rerank:\n    enabled: false\n    strategy: chat_llm_reranker\n"
-        "corpus:\n  sidecars:\n    mineru:\n      api_mode: local\n"
-        "deployment:\n  workspace: default\n",
-        encoding="utf-8",
-    )
-    env = tmp_path / ".env"
-    env.write_text(
-        "DLIGHTRAG_MODELS__CHAT__DEFAULT__API_KEY=sk-a\n"
-        "DLIGHTRAG_MODELS__CHAT__ROLES__VLM__API_KEY=sk-vlm\n",
-        encoding="utf-8",
-    )
-    s = wiz.read_config_summary(cfg, env)
-    # A complete explicit vlm role owns answer visual inspection.
-    assert s["visual_inspection"] == {
-        "role": "vlm",
-        "provider": "gemini",
-        "model": "gemini-vision",
-    }
+    assert "visual_inspection" not in s
 
 
 def test_read_config_summary_uses_answer_defaults_when_absent(wiz, tmp_path):
@@ -1633,7 +1600,7 @@ def test_render_summary_shows_context_and_attachment_settings(wiz, tmp_path):
     assert "fallback · C 1,048,576 · I = C · O 262,144" in text
     assert "7 max" in text
     assert "3 MiB each" in text
-    assert "visual inspection" in text.lower()
+    assert "visual inspection" not in text.lower()
 
 
 def test_home_start_brings_up_stack(wiz, monkeypatch):

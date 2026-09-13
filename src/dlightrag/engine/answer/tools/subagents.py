@@ -20,7 +20,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dlightrag.engine.agent.session.effects import canonical_json
 from dlightrag.engine.agent.session.ids import EntryId, IntentId, SessionId
+from dlightrag.engine.agent.tool_content import tool_content_message_fields
 from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
+from dlightrag.engine.answer.attachment_replay import AttachmentOccurrence
 from dlightrag.engine.answer.evidence import EvidenceDelta
 from dlightrag.engine.runtime.coordinator import RunCancellationObserved
 from dlightrag.engine.runtime.errors import RunCancelledError
@@ -104,6 +106,7 @@ class ChildContextSnapshot:
     depth: int
     messages_json: str
     evidence_state_json: str = "{}"
+    attachment_occurrences: tuple[AttachmentOccurrence, ...] = ()
 
     def __post_init__(self) -> None:
         import json
@@ -114,6 +117,20 @@ class ChildContextSnapshot:
             raise ValueError("Child context messages must be an array")
         if not isinstance(json.loads(self.evidence_state_json), dict):
             raise ValueError("Child context evidence state must be an object")
+        expected = [
+            tool_content_message_fields((occurrence.attachment,))["attachments"][0]
+            for occurrence in self.attachment_occurrences
+        ]
+        actual = [
+            attachment for message in self.messages for attachment in message.get("attachments", [])
+        ]
+        if actual != expected or any(
+            occurrence.attachment.data for occurrence in self.attachment_occurrences
+        ):
+            raise ValueError("Child tool attachments require exact byte-free occurrence pins")
+        references = [item.reference_id for item in self.attachment_occurrences]
+        if len(set(references)) != len(references):
+            raise ValueError("duplicate Child attachment occurrence pin")
 
     @classmethod
     def from_values(
@@ -124,13 +141,29 @@ class ChildContextSnapshot:
         depth: int,
         messages: list[dict[str, Any]],
         evidence_state: Mapping[str, Any] | None = None,
+        attachment_occurrences: tuple[AttachmentOccurrence, ...] = (),
     ) -> ChildContextSnapshot:
+        # TOOL pixels are transport-private. User image blocks keep their existing
+        # input contract; only tool attachments are replaced by occurrence pins.
+        messages = [
+            {
+                **message,
+                "attachments": [
+                    {key: value for key, value in attachment.items() if key != "data_url"}
+                    for attachment in message["attachments"]
+                ],
+            }
+            if message.get("role") == "tool" and "attachments" in message
+            else message
+            for message in messages
+        ]
         return cls(
             parent_session_id=parent_session_id,
             parent_entry_id=parent_entry_id,
             depth=depth,
             messages_json=canonical_json(messages),
             evidence_state_json=canonical_json(dict(evidence_state or {})),
+            attachment_occurrences=attachment_occurrences,
         )
 
     @property
@@ -152,6 +185,9 @@ class ChildContextSnapshot:
             "depth": self.depth,
             "messages": self.messages,
             "evidence_state": self.evidence_state,
+            "attachment_occurrences": [
+                item.canonical_payload() for item in self.attachment_occurrences
+            ],
         }
 
 
@@ -921,6 +957,10 @@ def _dispatch_from_row(
             parent_entry_id=EntryId(str(raw_snapshot["parent_entry_id"])),
             depth=int(raw_snapshot.get("depth") or 0),
             messages=list(raw_snapshot.get("messages") or ()),
+            attachment_occurrences=tuple(
+                AttachmentOccurrence.from_payload(item)
+                for item in raw_snapshot.get("attachment_occurrences", [])
+            ),
             evidence_state=(
                 dict(raw_snapshot.get("evidence_state") or {})
                 if isinstance(raw_snapshot.get("evidence_state"), Mapping)

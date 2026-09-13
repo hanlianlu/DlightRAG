@@ -53,12 +53,11 @@ def test_explicit_fast_with_pdf_is_unsupported_answer_mode() -> None:
     assert caught.value.error_kind == "unsupported_answer_mode"
 
 
-def test_image_without_vision_or_inspect_is_unsupported_resource_capability() -> None:
+def test_image_without_query_vision_is_unsupported_resource_capability() -> None:
     valid = valid_modes(
         resources=(ModeResource(role="image"),),
         capability=ModeCapability(
             query_supports_images=False,
-            inspect_available=False,
         ),
     )
     assert valid == frozenset()
@@ -72,7 +71,6 @@ def test_web_search_does_not_remove_fast_from_a_text_only_request() -> None:
         resources=(),
         capability=ModeCapability(
             query_supports_images=False,
-            inspect_available=False,
             web_search_available=True,
         ),
     )

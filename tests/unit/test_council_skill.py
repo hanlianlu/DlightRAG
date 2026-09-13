@@ -51,6 +51,7 @@ def test_council_skill_body_is_a_bounded_read_only_recipe() -> None:
     assert "spawn_agent" in text
     assert "continue_subagent" in text
     assert "read-only" in lowered
+    assert "`view`" in text and "`inspect`" not in text
     assert "user veto" in lowered
     assert "dissent" in lowered
     assert "loading it grants no tools" in lowered
@@ -68,7 +69,7 @@ def test_council_catalog_presence_does_not_widen_child_tools() -> None:
         trace={},
         retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
+        injected_tools=[],
         register_web_source=None,
         environment=MagicMock(),
         artifacts_root=Path("/unused/artifacts"),
@@ -79,7 +80,7 @@ def test_council_catalog_presence_does_not_widen_child_tools() -> None:
         trace={},
         retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
+        injected_tools=[],
         register_web_source=None,
         environment=MagicMock(),
         artifacts_root=Path("/unused/artifacts"),

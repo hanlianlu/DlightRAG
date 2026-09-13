@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 
@@ -15,6 +15,37 @@ class ToolTextPart:
 
     text: str
     type: Literal["text"] = "text"
+
+
+@dataclass(frozen=True, slots=True)
+class VisualSource:
+    """Exact source occurrence, not a byte-deduplication identity."""
+
+    resource_id: str
+    kind: Literal["image", "pdf_page", "embedded_image", "workspace_image"]
+    page: int | None = None
+    handle_id: str | None = None
+    anchor: str | None = None
+    path: str | None = None
+    overview: bool = False
+    origin_part: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.resource_id:
+            raise ValueError("visual source requires a parent resource")
+        if self.kind == "pdf_page":
+            if self.page is None or self.page < 1:
+                raise ValueError("PDF visual source requires a physical page")
+        elif self.page is not None or self.overview:
+            raise ValueError("only PDF sources have physical pages or overviews")
+        if (self.kind == "embedded_image") != (self.handle_id is not None):
+            raise ValueError("embedded visual source requires its occurrence handle")
+        if (self.kind == "workspace_image") != (self.path is not None):
+            raise ValueError("workspace visual source requires its authorized path")
+        if self.origin_part is not None and self.kind != "embedded_image":
+            raise ValueError("only embedded images have package-part provenance")
+        if self.kind not in {"image", "pdf_page", "embedded_image", "workspace_image"}:
+            raise ValueError("unknown visual source kind")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +67,7 @@ class ToolResourceAttachmentPart:
     type: Literal["resource_attachment"] = "resource_attachment"
     #: Transport-private original bytes; excluded from every durable encoding.
     data: bytes = b""
+    source: VisualSource | None = None
 
     def __post_init__(self) -> None:
         if not self.resource_id.strip():
@@ -78,6 +110,8 @@ def tool_content_message_fields(parts: ToolContent) -> dict[str, Any]:
                 "content_digest": attachment.content_digest,
                 "size_bytes": attachment.size_bytes,
             }
+            if attachment.source is not None:
+                item["source"] = asdict(attachment.source)
             if attachment.data:
                 item["data_url"] = (
                     f"data:{attachment.media_type};base64,"
@@ -103,6 +137,7 @@ def encode_tool_content(parts: ToolContent) -> list[dict[str, Any]]:
                     "media_type": part.media_type,
                     "content_digest": part.content_digest,
                     "size_bytes": part.size_bytes,
+                    "source": asdict(part.source) if part.source is not None else None,
                 }
             )
     return encoded
@@ -127,6 +162,7 @@ def decode_tool_content(value: object) -> ToolContent:
                     media_type=str(raw.get("media_type") or ""),
                     content_digest=str(raw.get("content_digest") or ""),
                     size_bytes=int(raw.get("size_bytes") or 0),
+                    source=VisualSource(**raw["source"]) if raw.get("source") else None,
                 )
             )
         else:

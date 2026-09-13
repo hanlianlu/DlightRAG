@@ -930,3 +930,28 @@ class TestBuildExcerptBlocks:
 
     def test_empty_chunks_returns_empty_blocks(self) -> None:
         assert AnswerSynthesizer._build_excerpt_blocks({"chunks": []}) == []
+
+
+def test_fast_packing_keeps_current_and_historical_admissions_in_chunk_budget():
+    policy = answer_image_policy(max_images=2)
+    budget = policy.new_budget()
+    current = budget.add_user_image(_image_block(), label="current")
+    historical = budget.add_user_image(_image_block(), label="retained")
+    assert current is not None and historical is not None and budget.count == 2
+    synthesizer = AnswerSynthesizer(image_policy=policy, model_profile=answer_model_profile())
+    prepared = synthesizer._prepare_model_call(
+        "Compare images",
+        _image_contexts(),
+        conversation_history=PriorTurns([{"role": "user", "content": [historical]}]),
+        current_images=[current],
+        image_budget=budget,
+    )
+    blocks = [
+        block
+        for message in prepared.messages
+        for block in (message["content"] if isinstance(message.get("content"), list) else ())
+        if block.get("type") == "image_url"
+    ]
+    assert len(blocks) == 2  # No third slot for a corpus image; text remains usable.
+    assert budget.count == 2  # Packing does not readmit the same current/history images.
+    assert "Chart showing growth" in str(prepared.messages)

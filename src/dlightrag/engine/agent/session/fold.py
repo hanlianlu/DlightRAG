@@ -20,7 +20,7 @@ from dlightrag.engine.agent.session.entries import (
     UserMessageEntry,
 )
 from dlightrag.engine.agent.session.ids import EntryId
-from dlightrag.engine.agent.session.projection import render_compaction_summary
+from dlightrag.engine.agent.session.projection import ContextProjection, render_compaction_summary
 from dlightrag.engine.agent.tool_content import tool_content_message_fields
 from dlightrag.engine.ai.messages import tool_call_message as fold_tool_call
 from dlightrag.engine.ai.tokens import estimate_messages_tokens
@@ -125,11 +125,25 @@ def project_session_messages(
     included_incomplete_host_user_entry_id: EntryId | None = None,
 ) -> list[dict[str, Any]]:
     """Materialize one active summary before its retained non-compaction suffix."""
-    if projection is None:
-        return fold_entries(
-            entries,
+    retained = retained_session_entries(entries, projection)
+    messages: list[dict[str, Any]] = []
+    if isinstance(projection, ContextProjection) and projection.summary is not None:
+        messages.append({"role": "user", "content": render_compaction_summary(projection.summary)})
+    messages.extend(
+        fold_entries(
+            retained,
             included_incomplete_host_user_entry_id=included_incomplete_host_user_entry_id,
         )
+    )
+    return messages
+
+
+def retained_session_entries(
+    entries: Sequence[SessionEntry], projection: object | None
+) -> Sequence[SessionEntry]:
+    """Select the exact immutable suffix used by the model-facing projection."""
+    if projection is None:
+        return entries
     from dlightrag.engine.agent.session.projection import (
         ContextProjection,
         projection_source_digest,
@@ -174,21 +188,7 @@ def project_session_messages(
             for entry in branch_entries
             if entry.sequence >= projection.first_retained_sequence
         ]
-    messages: list[dict[str, Any]] = []
-    if projection.summary is not None:
-        messages.append(
-            {
-                "role": "user",
-                "content": render_compaction_summary(projection.summary),
-            }
-        )
-    messages.extend(
-        fold_entries(
-            retained,
-            included_incomplete_host_user_entry_id=included_incomplete_host_user_entry_id,
-        )
-    )
-    return messages
+    return retained
 
 
 def exchange_starts(entries: Sequence[SessionEntry]) -> tuple[int, ...]:

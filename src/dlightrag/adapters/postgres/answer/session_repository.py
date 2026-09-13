@@ -690,6 +690,19 @@ class PGAgentSessionRepository:
                                 ensure_ascii=False,
                             ),
                         )
+                from dlightrag.adapters.postgres.answer.attachment_replay import (
+                    write_attachment_occurrences,
+                )
+
+                await write_attachment_occurrences(
+                    conn,
+                    owner_id=self._owner_id,
+                    run_id=self._run_id,
+                    entries=transaction.entries,
+                    update=(
+                        transaction.host_delta.value if transaction.host_delta is not None else None
+                    ),
+                )
                 await self._insert_entries(conn, session_id, transaction.entries, entry_sequences)
                 await self._write_registers(
                     conn,

@@ -574,7 +574,7 @@ def test_web_image_effect_deduplicates_its_tool_attachment_settlement() -> None:
     assert update.fetched[0].resource.capabilities["resource_kind"] == "web"
 
 
-def test_recovery_rebuilds_image_budget_once_and_omits_excess_attachments() -> None:
+def test_recovery_fails_honestly_on_excess_visual_evidence() -> None:
     image = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
     )
@@ -605,14 +605,12 @@ def test_recovery_rebuilds_image_budget_once_and_omits_excess_attachments() -> N
     )
     snapshots = {"first": image, "second": image}
 
-    admissions = _admit_durable_attachment_messages(messages, snapshots, budget)
-    _hydrate_attachment_messages(messages, snapshots, admissions=admissions)
+    from dlightrag.engine.answer.errors import AnswerInputOverflowError
 
-    assert admissions == {"first": 1}
+    with pytest.raises(AnswerInputOverflowError, match="image budget"):
+        _admit_durable_attachment_messages(messages, snapshots, budget)
     assert budget.count == 1
     assert budget.used_bytes == len(image)
-    assert "data_url" in messages[0]["attachments"][0]
-    assert "data_url" not in messages[0]["attachments"][1]
 
 
 def test_durable_tool_attachment_is_hydrated_for_provider_projection() -> None:

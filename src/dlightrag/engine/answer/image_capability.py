@@ -3,7 +3,7 @@
 
 The startup probe records whether the *query-role* answer model accepts
 ``image_url`` blocks as a genuine tri-state. The configured ceiling remains a
-request-ingress fact even when Research routes images through inspect instead;
+request-ingress fact for both Fast and Research;
 raw query-model transport additionally requires confirmed query-role support.
 Capability is re-validated every process start rather than cached in any store.
 """

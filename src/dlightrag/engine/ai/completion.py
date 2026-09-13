@@ -19,6 +19,7 @@ from dlightrag.engine.ai.reasoning import (
     merge_reasoning_kwargs,
     resolve_reasoning,
 )
+from dlightrag.engine.ai.replay import messages_for_model
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.structured import StructuredOutput
@@ -220,7 +221,11 @@ class CompletionModel:
             f"llm_{self.settings.model}",
             **observation_kwargs,
         ) as observation:
-            outbound = _messages_for_json_object(messages, response_format)
+            prepared = messages_for_model(messages, self.fingerprint)
+            outbound = _messages_for_json_object(
+                prepared,
+                response_format,
+            )
             try:
                 result = await self._provider.complete(
                     messages=outbound,
@@ -245,7 +250,10 @@ class CompletionModel:
                     json_object = {"type": "json_object"}
                     try:
                         result = await self._provider.complete(
-                            messages=_messages_for_json_object(messages, json_object),
+                            messages=_messages_for_json_object(
+                                prepared,
+                                json_object,
+                            ),
                             model=self.settings.model,
                             temperature=self.settings.temperature,
                             max_tokens=max_tokens,
@@ -298,8 +306,12 @@ class CompletionModel:
             **observation_kwargs,
         ) as observation:
             try:
+                prepared = messages_for_model(messages, self.fingerprint)
                 stream = self._provider.stream(
-                    messages=_messages_for_json_object(messages, response_format),
+                    messages=_messages_for_json_object(
+                        prepared,
+                        response_format,
+                    ),
                     model=self.settings.model,
                     temperature=self.settings.temperature,
                     max_tokens=max_tokens,

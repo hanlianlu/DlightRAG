@@ -268,7 +268,12 @@ def _build_effect_host_update(
                     ordinal=0,
                     safe_name=attached.filename,
                     media_type=attached.mime_type,
-                    capabilities={"resource_kind": "tool_attachment"},
+                    capabilities={
+                        "resource_kind": attached.resource_kind,
+                        "visual_source": asdict(attached.source)
+                        if attached.source is not None
+                        else None,
+                    },
                     blob_digest=digest,
                     source_locator_digest=blob_digest(attached.source_locator.encode("utf-8")),
                     source_locator=attached.source_locator.encode("utf-8"),
@@ -772,6 +777,8 @@ def _bound_child_dispatch_preparer(
             request,
             context_snapshot=context_snapshot,
             child_session_id=child_id.value,
+            # Planning must not reserve image budget; execution admits once.
+            admit_images=False,
         )
         plan = _child_agent_plan(prepared, request)
         return {
@@ -798,6 +805,10 @@ def _bound_child_runner(
     claim_child: Callable[..., Awaitable[Any]],
     renew_child: Callable[..., Awaitable[Any]],
     load_child: Callable[..., Awaitable[Any]] | None = None,
+    restore_child_attachments: Callable[
+        [SessionId, ChildContextSnapshot], Awaitable[Mapping[str, bytes]]
+    ]
+    | None = None,
     control_reader: Callable[..., Awaitable[Any]] | None = None,
     control_ack: Callable[..., Awaitable[Any]] | None = None,
     is_detaching: Callable[[], bool] | None = None,
@@ -822,6 +833,7 @@ def _bound_child_runner(
             claim_child=claim_child,
             renew_child=renew_child,
             load_child=load_child,
+            restore_child_attachments=restore_child_attachments,
             control_reader=control_reader,
             control_ack=control_ack,
             is_detaching=is_detaching,
@@ -845,6 +857,10 @@ async def run_child_session(
     claim_child: Callable[..., Awaitable[Any]],
     renew_child: Callable[..., Awaitable[Any]] | None = None,
     load_child: Callable[..., Awaitable[Any]] | None = None,
+    restore_child_attachments: Callable[
+        [SessionId, ChildContextSnapshot], Awaitable[Mapping[str, bytes]]
+    ]
+    | None = None,
     control_reader: Callable[..., Awaitable[Any]] | None = None,
     control_ack: Callable[..., Awaitable[Any]] | None = None,
     is_detaching: Callable[[], bool] | None = None,
@@ -854,6 +870,12 @@ async def run_child_session(
         raise RunExecutionError(
             "run_execution_failed",
             "Child ContextSnapshot parent identity changed.",
+        )
+    if request.context == "parent" and context_snapshot.attachment_occurrences:
+        if restore_child_attachments is None:
+            raise ValueError("Child attachment recovery requires the accepted occurrence pins")
+        orchestrator.restore_child_attachment_snapshots(
+            await restore_child_attachments(child_id, context_snapshot)
         )
     prepared = orchestrator.prepare_child_session(
         request,
@@ -950,6 +972,12 @@ async def run_child_session(
         )
     existing_snapshot = await child_repository.load(child_id)
     if existing_snapshot.commit_sequence > 0:
+        from dlightrag.engine.agent.session.fold import project_session_messages
+
+        messages = project_session_messages(
+            existing_snapshot.graph.ancestry(), existing_snapshot.active_projection
+        )
+        orchestrator.admit_child_history(prepared, messages)
         orchestrator.restore_runtime_snapshot(prepared, existing_snapshot)
         await _restore_durable_evidence(prepared, child_repository, child_id)
     effects = ResearchRuntimeEffects(

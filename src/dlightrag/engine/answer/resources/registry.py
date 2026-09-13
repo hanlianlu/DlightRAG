@@ -21,15 +21,20 @@ import secrets
 import struct
 import tempfile
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Literal
 
 from dlightrag.engine.agent.session.ids import IntentId
+from dlightrag.engine.agent.tools import ResourceAttachmentBytes
 from dlightrag.engine.ai.media import verify_web_image_bytes
 from dlightrag.engine.ai.tokens import estimate_tokens
 from dlightrag.engine.answer.resources.converters import (
+    ConversionLimitError,
     ExtractedVisual,
+    ResourceConversionError,
+    UnsafeArchiveError,
     convert_resource,
     is_convertible,
 )
@@ -46,7 +51,9 @@ from dlightrag.engine.answer.resources.models import (
     TextWindowLocator,
     VisualHandle,
 )
+from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.resources.text import build_text_windows, decode_text
+from dlightrag.engine.answer.resources.visual import ResourceViewError, pdf_page_count
 from dlightrag.engine.answer.web_sources import WebExtractResult
 from dlightrag.engine.public_http import (
     PublicHttpPolicyError,
@@ -105,8 +112,8 @@ FetchedBytesSink = Callable[
 
 
 @dataclass(frozen=True)
-class InspectionTarget:
-    """Materialized bytes plus the visual class of one inspectable resource."""
+class VisualTarget:
+    """Materialized bytes plus the visual class of one viewable resource."""
 
     resource_id: str
     kind: Literal["image", "pdf", "document", "opaque"]
@@ -188,7 +195,11 @@ class ResourceRegistry:
         self._cursor_plans: dict[tuple[str, str | None, int], tuple[tuple[int, int], ...]] = {}
         self._paths: dict[str, Path] = {}
         self._converted: dict[str, _ConvertedResource] = {}
-        self._visual_assets: dict[str, ExtractedVisual] = {}
+        self._visual_assets: dict[tuple[str, str], ExtractedVisual] = {}
+        self._snapshots: dict[str, ConversionSnapshot] = {}
+        self._pdf_counts: dict[str, int | None] = {}
+        self._refused: dict[str, BaseException] = {}
+        self._conversion_tasks: dict[str, asyncio.Task[_ConvertedResource]] = {}
         self._tempdir: tempfile.TemporaryDirectory[str] | None = None
         self._total_bytes = 0
         self._closed = False
@@ -264,7 +275,7 @@ class ResourceRegistry:
         caller = admission_origin == "caller"
         if resource.loader is not None:
             # Durable server-owned bytes stay lazy: no eager fetch, no byte-size
-            # admission until the model actually reads/inspects the resource.
+            # admission until the model actually reads/views the resource.
             loader_ordinal = self._next_loader_ordinal
             self._next_loader_ordinal += 1
             loader_identity = (
@@ -277,7 +288,7 @@ class ResourceRegistry:
         elif resource.url is not None:
             # Cheap scheme/credential check now; full DNS/redirect happens on read.
             validate_public_http_url(resource.url)
-            filename = _link_filename(resource.url, filename)
+            filename = safe_source_filename(filename or resource.url)
             dedup_key = (
                 "link",
                 normalize_public_http_url_identity(resource.url).encode("utf-8"),
@@ -291,7 +302,14 @@ class ResourceRegistry:
                 raise ResourceAdmissionError("resource requires content bytes")
             if len(content) > self._max_attachment_bytes:
                 raise ResourceAdmissionError("attachment exceeds per-attachment byte limit")
-            dedup_key = ("bytes", hashlib.sha256(content).digest())
+            dedup_key = (
+                "bytes",
+                (resource.filename or "").encode()
+                + b"\0"
+                + (resource.declared_mime or "").encode()
+                + b"\0"
+                + hashlib.sha256(content).digest(),
+            )
             source = "bytes"
             byte_size = len(content)
 
@@ -301,6 +319,12 @@ class ResourceRegistry:
         if existing is not None:
             existing = self._canonical_resource_id(existing)
             registered = self._resources[existing]
+            if any(
+                (presentation.user_agent, presentation.accept, presentation.accept_language)
+            ) and (existing in self._fetched or existing in self._text_views):
+                raise ResourceAdmissionError(
+                    "HTTP presentation cannot replace an admitted snapshot"
+                )
             if admission_origin == "agent" and existing not in self._fetched:
                 registered.presentation = presentation
             if caller:
@@ -552,6 +576,28 @@ class ResourceRegistry:
         resource_id = resource.resource_id
         effective_focus = focus
         cursor_state: _CursorState | None = None
+        if cursor is not None and cursor.startswith("visual."):
+            if focus is not None:
+                raise ResourceCursorError("visual inventory cursor does not accept focus")
+            start = self.resolve_visual_cursor(cursor, resource_id, "visual")
+            view = await self._read_text_view(resource, effect_owner=effect_owner)
+            handles, note = self._discovery(resource, view, max_window_tokens, start=start)
+            result = ResourceReadResult(
+                resource_id,
+                None,
+                "Visual inventory (not text evidence).",
+                view.extraction_status,
+                False,
+                None,
+                handles,
+                False,
+                note,
+            )
+            if estimate_tokens(format_resource_read(result)) > max_window_tokens:
+                raise ResourceAdmissionError(
+                    "visual inventory envelope exceeds residual model capacity"
+                )
+            return result
         if cursor is not None:
             cursor_state = self._resolve_cursor(cursor, resource_id=resource_id)
             if focus is not None:
@@ -561,7 +607,18 @@ class ResourceRegistry:
         view = await self._read_text_view(resource, effect_owner=effect_owner)
         resource_id = self._canonical_resource_id(resource_id)
         text = view.text
-        resource_handles = view.handles
+        resource = self._require(resource_id)
+        if (
+            _is_pdf(resource.filename, resource.declared_mime)
+            and resource_id not in self._pdf_counts
+        ):
+            content = await self._materialize_bytes(resource, effect_owner=effect_owner)
+            try:
+                self._pdf_counts[resource_id] = await asyncio.to_thread(pdf_page_count, content)
+            except ResourceViewError:
+                self._pdf_counts[resource_id] = None
+        resource_handles, discovery = self._discovery(resource, view, max_window_tokens)
+        view = replace(view, note=discovery)
         if not text:
             result = ResourceReadResult(
                 resource_id=resource_id,
@@ -644,6 +701,18 @@ class ResourceRegistry:
         *,
         effect_owner: ResourceEffectOwner | None,
     ) -> _ConvertedResource:
+        if resource.resource_id in self._refused:
+            # A cancelled read can finish native conversion after its own Tool
+            # intent has stopped. Rebind the already-fetched source to the next
+            # observing intent so its refusal terminal cannot settle alone.
+            content = self._fetched.get(resource.resource_id)
+            if content is not None:
+                await self._persist_fetched(
+                    resource.resource_id,
+                    content,
+                    effect_owner=effect_owner,
+                )
+            raise ResourceAdmissionError("resource refused by safety/resource limits")
         if resource.url is not None:
             return await self._read_link_text_view(resource, effect_owner=effect_owner)
         cached = self._text_views.get(resource.resource_id)
@@ -657,7 +726,19 @@ class ResourceRegistry:
         resource: _Registered,
         content: bytes,
     ) -> _ConvertedResource:
-        if resource.acquisition in {"exa_extract", "tavily_extract"}:
+        try:
+            image_media = verify_web_image_bytes(content)
+        except ValueError:
+            image_media = None
+        if image_media is not None:
+            view = _ConvertedResource(
+                text="",
+                handles=(),
+                evidence_available=False,
+                extraction_status="image",
+                note=f"Image ({image_media}, {len(content)} bytes). Use view(resource_id={resource.resource_id!r}).",
+            )
+        elif resource.acquisition in {"exa_extract", "tavily_extract"}:
             view = _ConvertedResource(text=content.decode("utf-8"), handles=())
         elif is_convertible(resource.filename, resource.declared_mime):
             view = await self._ensure_converted(resource, content)
@@ -668,7 +749,7 @@ class ResourceRegistry:
                 declared_charset=_charset_of(resource.declared_mime),
             )
             view = _ConvertedResource(text=text, handles=())
-        if view.text:
+        if view.text or not (resource.url and _is_textual_web_resource(resource)):
             self._text_views[resource.resource_id] = view
         return view
 
@@ -710,7 +791,7 @@ class ResourceRegistry:
                 self._require(alias.resource_id),
                 effect_owner=effect_owner,
             )
-        except PublicHttpPolicyError:
+        except PublicHttpPolicyError, ResourceAdmissionError:
             # Never send a URL rejected by the local public/anonymous policy to
             # an external extraction provider.
             raise
@@ -724,6 +805,11 @@ class ResourceRegistry:
             )
         try:
             view = await self._text_view_from_content(resource, content)
+        except ResourceAdmissionError, UnsafeArchiveError, ConversionLimitError, MemoryError:
+            # Acquisition admitted these bytes. Terminal conversion snapshots must
+            # settle with their source even though it is not extracted evidence.
+            await self._persist_fetched(resource.resource_id, content, effect_owner=effect_owner)
+            raise
         except Exception:
             if _is_textual_web_resource(resource):
                 self._fetched.pop(resource.resource_id, None)
@@ -739,7 +825,7 @@ class ResourceRegistry:
                 effect_owner=effect_owner,
             )
             raise
-        if not view.text:
+        if not view.text and view.extraction_status != "image":
             if _is_textual_web_resource(resource):
                 self._fetched.pop(resource.resource_id, None)
                 self._converted.pop(resource.resource_id, None)
@@ -753,7 +839,7 @@ class ResourceRegistry:
                 content,
                 effect_owner=effect_owner,
             )
-            return _unavailable_web_view()
+            return view
         try:
             await self._persist_fetched(
                 resource.resource_id,
@@ -774,24 +860,184 @@ class ResourceRegistry:
         *,
         effect_owner: ResourceEffectOwner | None = None,
     ) -> _ConvertedResource:
+        if resource.resource_id in self._refused:
+            raise ResourceAdmissionError("resource refused by safety/resource limits")
         cached = self._converted.get(resource.resource_id)
         if cached is not None:
             return cached
         if content is None:
             content = await self._materialize_bytes(resource, effect_owner=effect_owner)
-        converted = await convert_resource(
-            content, filename=resource.filename, declared_mime=resource.declared_mime
+        task = self._conversion_tasks.get(resource.resource_id)
+        if task is None:
+            task = asyncio.create_task(self._convert_and_adopt(resource, content))
+            self._conversion_tasks[resource.resource_id] = task
+        # Signal cancellation to the conversion budget without losing the worker
+        # join or single-flight. A cancelled read cannot start a late fallback.
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not task.cancelling():
+                task.cancel()
+            raise
+
+    async def _convert_and_adopt(self, resource: _Registered, content: bytes) -> _ConvertedResource:
+        try:
+            converted = await convert_resource(
+                content, filename=resource.filename, declared_mime=resource.declared_mime
+            )
+        except (
+            UnsafeArchiveError,
+            ConversionLimitError,
+            ResourceAdmissionError,
+            MemoryError,
+        ) as exc:
+            self.adopt_conversion_snapshot(
+                _failure_snapshot(resource.resource_id, content, exc, safety_refused=True)
+            )
+            raise
+        except ResourceConversionError as exc:
+            if resource.url and _is_textual_web_resource(resource):
+                raise
+            self.adopt_conversion_snapshot(
+                _failure_snapshot(resource.resource_id, content, exc, safety_refused=False)
+            )
+            return self._converted[resource.resource_id]
+        text = converted.text
+        visuals = []
+        for index, visual in enumerate(converted.visuals):
+            handle = (
+                "vis-"
+                + hmac.new(
+                    self._secret, f"{resource.resource_id}:{index}".encode(), hashlib.sha256
+                ).hexdigest()[:24]
+            )
+            text = text.replace(f"visual://{visual.handle_id}", f"visual://{handle}", 1)
+            visuals.append(replace(visual, handle_id=handle))
+        if not text and resource.url and _is_textual_web_resource(resource):
+            return _ConvertedResource(
+                text="", handles=(), evidence_available=False, extraction_status="no_extracted_text"
+            )
+        snapshot = ConversionSnapshot(
+            resource_id=resource.resource_id,
+            input_digest=hashlib.sha256(content).hexdigest(),
+            text=text,
+            visuals=tuple(visuals),
+            extraction_status=converted.extraction_status,
+            converter=converted.converter,
+            converter_version=converted.converter_version,
+            fallback_reason=converted.fallback_reason,
+            known_ocr_pages=converted.known_ocr_pages,
+            known_page_count=converted.known_page_count,
+            note=converted.note,
         )
-        handles: list[VisualHandle] = []
-        for visual in converted.visuals:
-            self._visual_assets[visual.handle_id] = visual
-            handles.append(VisualHandle(handle_id=visual.handle_id, label=visual.anchor))
+        self.adopt_conversion_snapshot(snapshot)
+        return self._converted[resource.resource_id]
+
+    def adopt_conversion_snapshot(self, snapshot: ConversionSnapshot) -> None:
+        resource = self._require(snapshot.resource_id)
+        content = resource.content or self._fetched.get(resource.resource_id)
+        if content is not None and hashlib.sha256(content).hexdigest() != snapshot.input_digest:
+            raise ResourceStateMismatchError("conversion snapshot input digest mismatch")
+        previous = self._snapshots.get(resource.resource_id)
+        if previous is not None and previous != snapshot:
+            raise ResourceStateMismatchError("conversion snapshot is already adopted")
+        self._snapshots[resource.resource_id] = snapshot
+        if snapshot.extraction_status == "safety_refused":
+            self._refused[resource.resource_id] = ResourceAdmissionError(
+                "resource refused by safety/resource limits"
+            )
+        for visual in snapshot.visuals:
+            self._visual_assets[(resource.resource_id, visual.handle_id)] = visual
         entry = _ConvertedResource(
-            text=converted.text,
-            handles=tuple(handles),
+            text=snapshot.text,
+            handles=tuple(
+                VisualHandle(
+                    v.handle_id,
+                    f"package part {v.origin_part}; location unknown"
+                    if v.origin_part
+                    else v.anchor,
+                )
+                for v in snapshot.visuals
+            ),
+            evidence_available=bool(snapshot.text.strip()),
+            extraction_status=snapshot.extraction_status,
+            note=" ".join(
+                filter(
+                    None,
+                    (
+                        snapshot.note,
+                        f"Known OCR pages: {list(snapshot.known_ocr_pages)} of {snapshot.known_page_count}."
+                        if snapshot.known_ocr_pages
+                        else None,
+                    ),
+                )
+            )
+            or None,
         )
         self._converted[resource.resource_id] = entry
-        return entry
+        self._text_views[resource.resource_id] = entry
+
+    def conversion_effects(self, resource_id: str) -> tuple[ResourceAttachmentBytes, ...]:
+        snapshot = self._snapshots.get(self._canonical_resource_id(resource_id))
+        return snapshot.effects() if snapshot is not None else ()
+
+    def visual_cursor(self, resource_id: str, start: int, kind: str) -> str:
+        payload = struct.pack(">I", start)
+        return (
+            kind
+            + "."
+            + self._encode_cursor_payload(
+                payload, binding=f"{kind}:{resource_id}:".encode(), signature_bytes=16
+            )
+        )
+
+    def resolve_visual_cursor(self, cursor: str, resource_id: str, kind: str) -> int:
+        try:
+            prefix, encoded = cursor.split(".", 1)
+            if prefix != kind:
+                raise ValueError
+            payload = self._decode_cursor_payload(
+                encoded,
+                binding=f"{kind}:{resource_id}:".encode(),
+                signature_bytes=16,
+                payload_bytes=4,
+            )
+            return struct.unpack(">I", payload)[0]
+        except (ValueError, UnicodeError, struct.error) as exc:
+            raise ResourceCursorError("invalid visual continuation cursor") from exc
+
+    def _discovery(
+        self, resource: _Registered, view: _ConvertedResource, budget: int, *, start: int = 0
+    ) -> tuple[tuple[VisualHandle, ...], str | None]:
+        notes = [view.note] if view.note else []
+        if _is_pdf(resource.filename, resource.declared_mime):
+            count = self._pdf_counts.get(resource.resource_id)
+            if count is not None:
+                notes.append(f"Physical PDF page count: {count}.")
+            notes.append(
+                f"Extracted text view; physical pages are not mapped to text lines. Use view(resource_id={resource.resource_id!r}) for a bounded page overview, or locator='1' for page detail."
+            )
+        elif is_convertible(resource.filename, resource.declared_mime):
+            notes.append(
+                f"Extracted text view; coverage is unverified. Use view(resource_id={resource.resource_id!r}, locator=<handle>) for an embedded image, not a whole-page screenshot."
+            )
+        if start > len(view.handles):
+            raise ResourceCursorError("visual inventory cursor is out of range")
+        # Keep discovery within a fraction of the current text allowance.
+        selected: list[VisualHandle] = []
+        for handle in view.handles[start : start + 8]:
+            if estimate_tokens(str(selected) + str(handle)) > max(32, budget // 4):
+                break
+            selected.append(handle)
+        end = start + len(selected)
+        if end < len(view.handles):
+            if not selected:
+                raise ResourceAdmissionError("visual inventory has no residual model capacity")
+            cursor = self.visual_cursor(resource.resource_id, end, "visual")
+            notes.append(
+                f"Visuals {start + 1}-{end} of {len(view.handles)}; more: read(resource_id={resource.resource_id!r}, cursor={cursor!r})."
+            )
+        return tuple(selected), " ".join(notes) or None
 
     def is_declared_image(self, resource_id: str) -> bool:
         resource = self._require(resource_id)
@@ -809,28 +1055,32 @@ class ResourceRegistry:
             ".webp",
         }
 
-    async def inspection_target(
+    async def visual_target(
         self,
         resource_id: str,
         *,
         effect_owner: ResourceEffectOwner | None = None,
-    ) -> InspectionTarget:
-        """Materialize a resource and classify how it can be visually inspected."""
+    ) -> VisualTarget:
+        """Materialize a resource and classify its supported visual representation."""
         resource = self._require(resource_id)
+        if resource.resource_id in self._refused:
+            raise ResourceAdmissionError("resource previously refused by safety/resource limits")
         content = await self._materialize_bytes(resource, effect_owner=effect_owner)
         resource = self._require(resource_id)
         resource_id = resource.resource_id
-        if _is_pdf(resource.filename, resource.declared_mime):
-            return InspectionTarget(resource_id, "pdf", content, _PDF_MIME)
-        if is_convertible(resource.filename, resource.declared_mime):
-            return InspectionTarget(resource_id, "document", content, resource.declared_mime)
+        if resource.acquisition in {"exa_extract", "tavily_extract"}:
+            return VisualTarget(resource_id, "opaque", content, resource.declared_mime)
         try:
             media = verify_web_image_bytes(content)
         except ValueError:
             media = None
         if media is not None:
-            return InspectionTarget(resource_id, "image", content, media)
-        return InspectionTarget(resource_id, "opaque", content, resource.declared_mime)
+            return VisualTarget(resource_id, "image", content, media)
+        if _is_pdf(resource.filename, resource.declared_mime):
+            return VisualTarget(resource_id, "pdf", content, _PDF_MIME)
+        if is_convertible(resource.filename, resource.declared_mime):
+            return VisualTarget(resource_id, "document", content, resource.declared_mime)
+        return VisualTarget(resource_id, "opaque", content, resource.declared_mime)
 
     async def visual_asset(
         self,
@@ -843,7 +1093,7 @@ class ResourceRegistry:
         resource = self._require(resource_id)
         if is_convertible(resource.filename, resource.declared_mime):
             await self._ensure_converted(resource, effect_owner=effect_owner)
-        asset = self._visual_assets.get(handle_id)
+        asset = self._visual_assets.get((resource.resource_id, handle_id))
         if asset is None:
             raise ResourceNotFoundError(f"unknown visual handle: {handle_id}")
         return asset
@@ -860,6 +1110,14 @@ class ResourceRegistry:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        # Native conversion may still be running after its caller was cancelled.
+        # Join it before releasing adopted views and storage; never launch fallback.
+        if self._conversion_tasks:
+            await asyncio.gather(*self._conversion_tasks.values(), return_exceptions=True)
+        self._conversion_tasks.clear()
+        self._snapshots.clear()
+        self._pdf_counts.clear()
+        self._refused.clear()
         if self._tempdir is not None:
             self._tempdir.cleanup()
             self._tempdir = None
@@ -1230,6 +1488,28 @@ class ResourceRegistry:
         self._cursor_plans[key] = plan
         return plan
 
+    def _encode_cursor_payload(
+        self, payload: bytes, *, binding: bytes, signature_bytes: int
+    ) -> str:
+        signature = hmac.new(self._cursor_secret, binding + payload, hashlib.sha256).digest()[
+            :signature_bytes
+        ]
+        return base64.urlsafe_b64encode(payload + signature).rstrip(b"=").decode("ascii")
+
+    def _decode_cursor_payload(
+        self, encoded: str, *, binding: bytes, signature_bytes: int, payload_bytes: int
+    ) -> bytes:
+        raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        if len(raw) != payload_bytes + signature_bytes:
+            raise ValueError("invalid cursor length")
+        payload = raw[:payload_bytes]
+        expected = self._encode_cursor_payload(
+            payload, binding=binding, signature_bytes=signature_bytes
+        )
+        if not hmac.compare_digest(encoded, expected):
+            raise ValueError("invalid cursor signature or encoding")
+        return payload
+
     def _mint_cursor(self, state: _CursorState) -> str:
         payload = struct.pack(
             ">BIIII",
@@ -1239,26 +1519,20 @@ class ResourceRegistry:
             state.char_offset,
             state.anchor_offset,
         )
-        signature = hmac.new(
-            self._cursor_secret,
-            state.resource_id.encode("utf-8") + b"|" + payload,
-            hashlib.sha256,
-        ).digest()[:_CURSOR_SIGNATURE_BYTES]
-        return base64.urlsafe_b64encode(payload + signature).rstrip(b"=").decode("ascii")
+        return self._encode_cursor_payload(
+            payload,
+            binding=state.resource_id.encode("utf-8") + b"|",
+            signature_bytes=_CURSOR_SIGNATURE_BYTES,
+        )
 
     def _resolve_cursor(self, cursor: str, *, resource_id: str) -> _CursorState:
         try:
-            raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
-            payload, signature = raw[:-_CURSOR_SIGNATURE_BYTES], raw[-_CURSOR_SIGNATURE_BYTES:]
-            expected = hmac.new(
-                self._cursor_secret,
-                resource_id.encode("utf-8") + b"|" + payload,
-                hashlib.sha256,
-            ).digest()[:_CURSOR_SIGNATURE_BYTES]
-            if not hmac.compare_digest(signature, expected):
-                raise ValueError
-            if len(payload) != struct.calcsize(">BIIII"):
-                raise ValueError
+            payload = self._decode_cursor_payload(
+                cursor,
+                binding=resource_id.encode("utf-8") + b"|",
+                signature_bytes=_CURSOR_SIGNATURE_BYTES,
+                payload_bytes=struct.calcsize(">BIIII"),
+            )
             version, window, position, offset, anchor_offset = struct.unpack(">BIIII", payload)
             if version != _CURSOR_VERSION:
                 raise ValueError
@@ -1275,6 +1549,31 @@ class ResourceRegistry:
     def _ensure_open(self) -> None:
         if self._closed:
             raise ResourceRegistryClosedError("resource registry is closed")
+
+
+def _failure_snapshot(
+    resource_id: str,
+    content: bytes,
+    error: Exception,
+    *,
+    safety_refused: bool,
+) -> ConversionSnapshot:
+    conversion_error = error if isinstance(error, ResourceConversionError) else None
+    return ConversionSnapshot(
+        resource_id=resource_id,
+        input_digest=hashlib.sha256(content).hexdigest(),
+        text="",
+        visuals=(),
+        extraction_status="safety_refused" if safety_refused else "conversion_failed",
+        converter=conversion_error.converter if conversion_error else "resource-host",
+        converter_version=conversion_error.converter_version
+        if conversion_error
+        else version("dlightrag"),
+        fallback_reason=conversion_error.fallback_reason
+        if conversion_error and not safety_refused
+        else None,
+        note=None if safety_refused else "Text conversion failed; no text evidence was extracted.",
+    )
 
 
 def _unavailable_web_view() -> _ConvertedResource:
@@ -1297,11 +1596,6 @@ class ResourceRegistryClosedError(RuntimeError):
 
 class ResourceStateMismatchError(RuntimeError):
     """Raised when a settled catalog cannot describe the replayed request."""
-
-
-def _link_filename(url: str, explicit: str | None) -> str:
-    filename = safe_source_filename(explicit or url)
-    return filename if Path(filename).suffix else f"{filename}.html"
 
 
 def _is_textual_web_resource(resource: _Registered) -> bool:
@@ -1501,7 +1795,7 @@ def _charset_of(declared_mime: str | None) -> str | None:
 __all__ = [
     "FetchedBytesSink",
     "FetchedResourceBytes",
-    "InspectionTarget",
+    "VisualTarget",
     "ResourceEffectOwner",
     "ResourceRegistry",
     "ResourceRegistryClosedError",

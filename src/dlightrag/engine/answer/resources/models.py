@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Run-scoped Resource inputs, manifest entries, locators, and results.
 
-Full resource bytes never enter model context; only bounded read/inspection
+Full resource bytes never enter model context; only bounded read/view
 results derived from these types are exposed to the model.
 """
 
@@ -57,7 +57,7 @@ class ResourceInput:
     Links stay inert until an explicit read materializes them under full SSRF
     revalidation. ``loader`` is an authorized, execution-local async callable used
     for durable server-owned bytes (e.g. prior Web attachments) that must stay
-    lazy: the registry invokes it only when the model reads or inspects the
+    lazy: the registry invokes it only when the model reads or views the
     resource, so no path or provider locator is ever exposed.
     """
 
@@ -99,7 +99,7 @@ class TextWindowLocator:
 
 @dataclass(frozen=True)
 class VisualHandle:
-    """Opaque, run-scoped reference to an inspectable visual region."""
+    """Opaque, run-scoped reference to an viewable visual region."""
 
     handle_id: str
     label: str | None = None

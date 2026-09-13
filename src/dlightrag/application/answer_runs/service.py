@@ -75,7 +75,7 @@ from dlightrag.engine.answer.mode import (
     valid_modes,
 )
 from dlightrag.engine.answer.resources.images import QueryImageDescriber, prepare_query_images
-from dlightrag.engine.answer.resources.models import ResourceInput, TextWindowBudget
+from dlightrag.engine.answer.resources.models import ResourceInput
 from dlightrag.engine.answer.results import AnswerResult, restore_answer_result
 from dlightrag.engine.answer.runs.envelope import accepted_input_envelope
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance
@@ -545,7 +545,6 @@ class _AnswerResourcePreparer(Protocol):
         /,
         *,
         models: RequestModelContext,
-        text_window_budget: TextWindowBudget,
         confirm_image_context: Callable[
             [RequestModelContext],
             Awaitable[tuple[RequestModelContext, AnswerImageCapability | None]],
@@ -820,7 +819,7 @@ class AnswerService:
         if run_request.links or run_request.attachments or run_request.history_attachments:
             await self._capabilities.refresh_vlm()
         # Pinning may narrow the live query profile, and the VLM refresh may
-        # remove inspect. This is the authoritative Valid Mode Set persisted
+        # remove resource viewing. This is the authoritative Valid Mode Set persisted
         # with the run; the earlier check only avoids needless acceptance I/O.
         requested_mode, allowed_modes = self._reject_unsupported_mode(run_request)
         acceptance_resources = await build_current_answer_resources(
@@ -938,7 +937,6 @@ class AnswerService:
         """Fail closed before a run row exists when the requested mode cannot resolve."""
         profiles = self._capabilities.current_profiles()
         query = profiles["query"]
-        vlm = profiles["vlm"]
         resources: list[ModeResource] = []
         for attachment in (*request.attachments, *request.history_attachments):
             resources.append(
@@ -955,7 +953,6 @@ class AnswerService:
             resources=tuple(resources),
             capability=ModeCapability(
                 query_supports_images=query.supports_images,
-                inspect_available=vlm.supports_images,
             ),
         )
         requested = require_supported_mode(requested=request.mode, valid=allowed)
@@ -1682,11 +1679,9 @@ class AnswerService:
         model_profiles = self._capabilities.current_profiles()
         models = self._capabilities.request_model_context(model_profiles)
         planner = self._retrieval.planner_for(models.extract)
-        text_window_budget = TextWindowBudget(CONTEXT_POLICY.hard_input_limit(models.query))
         resolved = await self._resources.resolve(
             resources,
             models=models,
-            text_window_budget=text_window_budget,
             confirm_image_context=self._capabilities.confirmed_live_answer_context,
             resolved_mode=("research" if "research" in allowed_modes else "fast"),
         )
@@ -1798,7 +1793,7 @@ class AnswerService:
                             and resolved.web_sources.search_enabled
                             else None
                         ),
-                        resource_tools=resolved.resource_tools,
+                        injected_tools=[],
                         register_web_source=(
                             resolved.registry.register_discovered_link
                             if resolved.registry is not None and resolved.web_sources is not None

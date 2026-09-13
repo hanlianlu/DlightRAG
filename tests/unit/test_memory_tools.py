@@ -40,7 +40,7 @@ def test_child_can_recall_but_cannot_mutate_profile() -> None:
         trace={},
         retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
+        injected_tools=[],
         register_web_source=None,
         memory_host=host,
     )
@@ -49,7 +49,7 @@ def test_child_can_recall_but_cannot_mutate_profile() -> None:
         trace={},
         retrieve_knowledge_base=_retrieve,  # type: ignore[arg-type]
         search_web=None,
-        resource_tools=[],
+        injected_tools=[],
         register_web_source=None,
         memory_host=host,
         child=True,

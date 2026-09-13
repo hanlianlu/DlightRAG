@@ -150,16 +150,14 @@ class _Resources:
         /,
         *,
         models: RequestModelContext,
-        text_window_budget: Any,
         confirm_image_context: Any,
         resolved_mode: str,
     ) -> Any:
-        del text_window_budget, confirm_image_context, resolved_mode
+        del confirm_image_context, resolved_mode
         return SimpleNamespace(
             models=models,
             registry=None,
             current_images=(),
-            resource_tools=(),
             resource_manifest=(),
             web_sources=None,
             image_budget=None,

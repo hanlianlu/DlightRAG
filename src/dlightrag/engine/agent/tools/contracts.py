@@ -14,7 +14,12 @@ from dlightrag.engine.agent.session.effects import (
     schema_digest,
 )
 from dlightrag.engine.agent.session.ids import IntentId
-from dlightrag.engine.agent.tool_content import ToolContent, ToolTextPart, tool_content_text
+from dlightrag.engine.agent.tool_content import (
+    ToolContent,
+    ToolTextPart,
+    VisualSource,
+    tool_content_text,
+)
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall, ToolChoice, ToolDefinition
 
 
@@ -84,6 +89,8 @@ class ResourceAttachmentBytes:
     mime_type: str
     source_locator: str
     content: bytes
+    resource_kind: str = "tool_attachment"
+    source: VisualSource | None = None
 
 
 @dataclass(frozen=True, slots=True)

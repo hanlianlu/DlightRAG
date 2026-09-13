@@ -223,7 +223,7 @@ run-local registry may include:
 
 `spawn_agent` admits up to eight children per call and returns durable handles
 immediately. Children default to read-only tools (`search_knowledge_base`,
-`search_web`, `read`, `inspect`, `grep`, `find`, `ls`, `recall_memory`,
+`search_web`, `read`, `view`, `grep`, `find`, `ls`, `recall_memory`,
 `load_skill`, `ask_parent`); the parent may list a narrower host-permitted
 subset, including side-effecting tools only when the host already allows them.
 Children cannot spawn grandchildren. Same-Session continuation creates a new
@@ -349,8 +349,9 @@ query model's remaining input capacity and image budget.
 
 Images already within JPEG/PNG/WebP limits pass through unchanged. Recompression
 honors configured quality and geometry floors; images that still do not fit are
-skipped rather than degraded further. Focused VLM inspection is a separate call
-with per-call limits and does not consume the final answer image budget.
+skipped rather than degraded further. Tool and replay images share the aggregate
+answer image budget; exhausted visual capacity fails explicitly rather than
+starting a fresh per-tool allowance. `view` invokes no separate model.
 
 DlightRAG uses LightRAG `aquery_data()` as the context/reference seed rather than
 `aquery_llm()`, because final evidence may include BM25, direct visual, federated,
@@ -385,7 +386,7 @@ or failure leaves original sources unchanged.
 
 Attachments are run-scoped Resources, never workspace data. `ResourceRegistry`
 owns inline bytes or lazy public HTTP(S) references for one answer. Research may
-also admit a public URL through `read(url=...)`; only `User-Agent`, `Accept`, and
+also admit a public URL through `read(url=...)` or `view(url=...)`; only `User-Agent`, `Accept`, and
 `Accept-Language` are configurable. The shared public-HTTP boundary validates
 scheme, credentials, every redirect, resolved addresses, HTTPS downgrade, byte
 limits, and pixel limits. Validated DNS targets are pinned for the connection.
@@ -394,18 +395,91 @@ storage after recovery rather than making a second network request.
 
 `read` is deterministic:
 
-- UTF-8 and CSV decode directly;
-- HTML, PDF, DOCX, PPTX, and XLSX use selected offline MarkItDown converters;
+- UTF-8 decodes directly;
+- DOCX uses `firecrawl-anydoc==0.2.4` for text plus independent typed image assets, with local OCR rejection and no image/no-image engine selector;
+- PDF text uses AnyDoc with typed incomplete/OCR terminals; physical PDF viewing remains independent;
+- XLSX uses AnyDoc text plus independent openpyxl embedded images with Sheet!Cell anchors, without formula recalculation or external-link fetching;
+- HTML, CSV and PPTX retain direct offline MarkItDown routes for the per-format reasons below;
 - OOXML archives pass zip-bomb preflight;
 - each acquired URL is one fixed snapshot for the run; and
 - opaque signed cursors continue bounded text without exposing offsets or
   provider locators. A focused first window starts near the best match, then
   continuation rotates through the entire document without skipping content.
 
-`inspect` sends a bounded image or PDF page to the VLM role (default model as
-fallback) and marks output `derived_by_vlm` with its exact locator. It does not
-accept arbitrary bounding boxes; page and embedded-visual handles provide
-structural narrowing.
+`read` identifies extracted text as coverage-unverified, or explicitly reports no
+extracted text/conversion failure. Nonempty text does not prove completeness, and
+no extracted text does not prove a blank document. PDFs expose physical page count
+when available without inventing a text-line/page mapping. Long embedded-image
+inventories paginate independently through signed `read` cursors.
+
+`view` returns typed, source-located pixel tool-result attachments to the actual
+calling Agent/Child Session model, using that consuming model’s image capability
+and aggregate budget. Child pixels are not automatically forwarded to the parent. It accepts one registered resource, admitted public URL, or rooted workspace
+image path. PDF without a locator returns at most eight low-resolution physical
+pages (fewer if the aggregate budget is exhausted), exact actual coverage and a
+signed continuation. Select `locator="2"` for physical page detail. Office handles
+refer to exact embedded occurrences, not whole-page/slide screenshots. Identical
+image bytes at distinct occurrences retain separate source identities. Text-only
+answering models no longer receive an inspect-based fallback.
+
+DOCX image handles come from typed Document occurrences, not invented Markdown
+placement. Exact admitted package bytes and media are verified; repeated images
+retain distinct handles even when Blob bytes deduplicate. Package-part provenance
+is labeled separately from unknown physical location. A source-reference audit
+reports known incomplete extraction for external, unavailable or unmapped visuals
+(including source images omitted by the structured parser); it never fetches them
+or chooses another engine. Unsupported or mismatched pixels fail verification.
+
+An ordinary AnyDoc parsing/import failure may use MarkItDown once, only after
+native work ends and within the same remaining conversion budget. Fallback assets
+also require source membership and honest coverage. Empty output is not a rescue
+trigger. Known omissions/OCR, resource/admission refusal, OOM, configuration or
+programming failure, and exhausted/cancelled work do not launch fallback. Native
+threads cannot be killed by cancelling an await: cancelled callers return while
+the Registry retains and joins outstanding work, and no late output is adopted.
+The 120-second shared conversion deadline bounds new work/adoption, not native
+execution time or process memory.
+
+Text, assets, status, converter/version, fallback reason, known OCR pages and
+input/output digests settle as one adopted Resource view. Same-Run reads, cursors
+and recovery reuse it without reparsing. Selected-lineage follow-up/fork retention
+and pinned Child Session hydration preserve original occurrence identity and
+charge the actual consuming model; they do not grant historical resource handles.
+
+The post-pilot assessment approved PDF and XLSX alongside unified DOCX:
+
+- PDF multipage/non-Latin text facts passed. Scanned pages return truthful known
+  OCR pages; Unsupported returns known-incomplete without inventing page metadata
+  or parsing exception prose. A tested text-plus-raster page is refused despite
+  having text; the incumbent also omits its raster facts. Use the independent
+  physical-page inventory/overview when the desired page is unknown, not fallback
+  to turn a known omission into an apparently complete result.
+- XLSX candidate display text passed percent/date/merged/empty and sampled
+  currency/custom-format gold. Authored formula caches are read; an uncached
+  formula cell stays empty. Existing openpyxl extraction preserves repeated image
+  occurrences across cells/sheets. Arbitrary Excel display/drawing coverage is
+  not established by those fixtures.
+- PPTX stays MarkItDown: candidate normal slides/notes/tables passed, but missing
+  or shape-less slide parts silently drop content. Candidate adoption needs
+  separately qualified secure OPC completeness checks and typed asset binding,
+  including absent usable Markdown image links; no regex prototype is deployed.
+- CSV stays MarkItDown provisionally: candidate silently mojibakes Shift-JIS,
+  whereas incumbent handles that encoding but truncates over-wide rows and has
+  BOM/multiline Markdown-table defects. Adoption requires a uniform validated
+  host decoding/normalization policy; neither engine has complete fidelity.
+- HTML stays MarkItDown because AnyDoc 0.2.4 has no HTML support, not because a
+  quality comparison declared it inferior.
+
+These are bounded evidence-based decisions, not permanent format bans. PDFium
+rendering and corpus ingestion are unchanged. Actual adapter/tool/snapshot and
+Host/PG replay tests are separate evidence from the historical direct-call pilot.
+`scripts/docx_integration_bench.py` includes the second DOCX structured parse and
+asset audit; `scripts/format_route_bench.py` measures the unmodified PDF/XLSX
+conversion and Registry/effect/recovery paths. These offline small-sample costs
+are not live service, Host/PG latency or platform-wide promises. Non-Latin font
+qualification is optional local-only evidence; no proprietary font/PDF is bundled.
+See [the approved contract](resource-reading.md); whole-contract acceptance still
+requires independent review.
 
 When Exa or Tavily is configured, Research can search Web passages as peer
 evidence through one provider-neutral tool. Search and Extract use independently

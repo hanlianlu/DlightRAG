@@ -10,6 +10,10 @@ from dlightrag.engine.ai.providers.openai_compatible import _openai_tool_message
 
 _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
 DATA_URL = f"data:image/png;base64,{_PNG}"
+_PAGE_ONE = b"\x89PNG\r\n\x1a\npage-one"
+_PAGE_TWO = b"\x89PNG\r\n\x1a\npage-two"
+_PAGE_ONE_URL = f"data:image/png;base64,{base64.b64encode(_PAGE_ONE).decode()}"
+_PAGE_TWO_URL = f"data:image/png;base64,{base64.b64encode(_PAGE_TWO).decode()}"
 
 
 def _tool_message() -> dict[str, object]:
@@ -48,14 +52,65 @@ def test_anthropic_inlines_the_attachment_in_the_tool_result() -> None:
     }
 
 
+def test_anthropic_serializes_every_attachment_in_declared_order() -> None:
+    message = _tool_message()
+    message["attachments"] = [
+        {
+            "resource_id": "att_1",
+            "safe_name": "page-1.png",
+            "media_type": "image/png",
+            "content_digest": "a" * 64,
+            "size_bytes": len(_PAGE_ONE),
+            "data_url": _PAGE_ONE_URL,
+        },
+        {
+            "resource_id": "att_2",
+            "safe_name": "page-2.png",
+            "media_type": "image/png",
+            "content_digest": "b" * 64,
+            "size_bytes": len(_PAGE_TWO),
+            "data_url": _PAGE_TWO_URL,
+        },
+    ]
+    converted = _anthropic_tool_messages([{"role": "user", "content": "look"}, message])
+
+    (block,) = converted[-1]["content"]
+    content = block["content"]
+    assert content[0] == {"type": "text", "text": "image attachment: chart.png"}
+    assert content[1:] == [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": base64.b64encode(_PAGE_ONE).decode(),
+            },
+        },
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": base64.b64encode(_PAGE_TWO).decode(),
+            },
+        },
+    ]
+
+
 def test_gemini_puts_the_image_in_the_same_user_turn() -> None:
     contents = _gemini_tool_contents([{"role": "user", "content": "look"}, _tool_message()])
 
+    assert contents[0] == {"role": "user", "parts": [{"text": "look"}]}
     assert contents[-1]["role"] == "user"
     parts = contents[-1]["parts"]
     assert parts[0]["function_response"]["name"] == "read"
     assert parts[0]["function_response"]["response"]["output"] == "image attachment: chart.png"
-    assert parts[1] == {"inline_data": {"mime_type": "image/png", "data": _PNG}}
+    assert parts[1] == {
+        "inline_data": {
+            "mime_type": "image/png",
+            "data": base64.b64decode(_PNG),
+        }
+    }
 
 
 def test_openai_compatible_appends_untrusted_multimodal_user_message() -> None:
@@ -65,7 +120,7 @@ def test_openai_compatible_appends_untrusted_multimodal_user_message() -> None:
     assert "attachments" not in converted[1]
     follow_up = converted[2]
     assert follow_up["role"] == "user"
-    assert follow_up["untrusted_tool_data"] is True
+    assert "untrusted_tool_data" not in follow_up
     parts = follow_up["content"]
     assert parts[0] == {"type": "text", "text": "image attachment: chart.png"}
     assert parts[1] == {"type": "image_url", "image_url": {"url": DATA_URL}}

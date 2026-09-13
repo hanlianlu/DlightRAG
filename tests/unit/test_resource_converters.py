@@ -137,7 +137,9 @@ async def test_docx_image_becomes_visual_handle_without_base64() -> None:
     visual = result.visuals[0]
     assert visual.media_type == "image/png"
     assert visual.data.startswith(b"\x89PNG")
-    assert visual.handle_id in result.text
+    assert visual.handle_id not in result.text  # No invented inline placement.
+    assert visual.origin_part == "word/media/image1.png"
+    assert visual.anchor is None
 
 
 async def test_pptx_image_becomes_visual_handle() -> None:
@@ -305,7 +307,8 @@ async def test_registry_read_routes_docx_to_visual_handle() -> None:
     assert "Total liability" in result.content
     assert "data:image" not in result.content
     assert len(result.visual_handles) == 1
-    assert result.visual_handles[0].handle_id in result.content
+    assert result.visual_handles[0].handle_id not in result.content
+    assert "package part word/media/image1.png" in (result.visual_handles[0].label or "")
 
 
 async def test_registry_read_surfaces_xlsx_cell_anchor_label() -> None:

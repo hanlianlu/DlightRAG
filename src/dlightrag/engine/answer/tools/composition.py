@@ -2,7 +2,7 @@
 """The peer tools one research run offers, composed per run and never globally."""
 
 import hashlib
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +16,12 @@ from dlightrag.engine.agent.tool_content import ToolTextPart, tool_content_attac
 from dlightrag.engine.agent.tools import AgentTool, ToolResult, ToolRuntime
 from dlightrag.engine.agent.tools.files import (
     ImagePreparer,
+    ResourceViewer,
     SpillWriter,
     path_tools,
     preview_or_spill,
     read_tool,
+    view_tool,
 )
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.engine.answer.errors import InvalidToolConfigurationError
@@ -52,9 +54,10 @@ def compose_research_tools(
     trace: dict[str, Any],
     retrieve_knowledge_base: KnowledgeRetrieval,
     search_web: WebSearch | None,
-    resource_tools: list[AgentTool],
+    injected_tools: list[AgentTool],
     register_web_source: RegisterWebSource | None,
     resource_reader: Any | None = None,
+    resource_viewer: ResourceViewer | None = None,
     environment: ExecutionEnvironment | None = None,
     scheduler: AccessScheduler | None = None,
     spill: Any | None = None,
@@ -101,18 +104,19 @@ def compose_research_tools(
                 evidence,
             )
         )
-    else:
-        tools.extend(
-            _ledger_backed(tool, evidence) for tool in resource_tools if tool.name == "read"
+    if resource_viewer is not None or environment is not None:
+        tools.append(
+            _ledger_backed(
+                view_tool(
+                    environment,
+                    access,
+                    resource_viewer=resource_viewer,
+                    image_preparer=image_preparer,
+                ),
+                evidence,
+            )
         )
-    tools.extend(
-        _ledger_backed(tool, evidence) for tool in resource_tools if tool.name == "inspect"
-    )
-    tools.extend(
-        _bounded_injected_result(tool, spill)
-        for tool in resource_tools
-        if tool.name not in {"read", "inspect"}
-    )
+    tools.extend(_bounded_injected_result(tool, spill) for tool in injected_tools)
     if environment is not None:
         path = path_tools(
             environment,
@@ -164,7 +168,7 @@ def compose_research_tools(
                 "search_knowledge_base",
                 "search_web",
                 "read",
-                "inspect",
+                "view",
                 "grep",
                 "find",
                 "ls",
@@ -234,9 +238,9 @@ def _bounded_injected_result(tool: AgentTool, spill: SpillWriter | None) -> Agen
 def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger) -> AgentTool:
     async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
         result = await tool.execute(raw, runtime)
-        row = _resource_row(tool.name, result)
-        if row is not None:
-            evidence.add_rows([row])
+        rows = _resource_rows(tool.name, result)
+        if rows:
+            evidence.add_rows(rows)
             await evidence.aflush_images()
         return result
 
@@ -251,9 +255,9 @@ def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger) -> AgentTool:
     )
 
 
-def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
+def _resource_rows(tool_name: str, result: ToolResult) -> list[dict[str, Any]]:
     if not result.effects.evidence_sources or not result.text_content.strip():
-        return None
+        return []
     source = result.effects.evidence_sources[0]
     resource_id = source.resource_id
     source_type = source.source_type
@@ -271,7 +275,7 @@ def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
         if marker and cursor.endswith("]"):
             evidence_key = content
     identity = hashlib.sha256(f"{tool_name}\0{evidence_key}".encode()).hexdigest()[:16]
-    return {
+    row = {
         "chunk_id": f"{resource_id}::{tool_name}::{identity}",
         "reference_id": resource_id,
         "full_doc_id": resource_id,
@@ -282,6 +286,28 @@ def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
         "_evidence_key": f"{tool_name}:{identity}",
         "metadata": metadata,
     }
+    if tool_name != "view":
+        return [row]
+    rows = []
+    for attachment in tool_content_attachments(result.parts):
+        source = attachment.source
+        if source is None:
+            raise ValueError("visual evidence requires exact source provenance")
+        rows.append(
+            {
+                **row,
+                "chunk_id": f"{source.resource_id}::view::{attachment.resource_id}",
+                "_evidence_key": attachment.resource_id,
+                "content": f"Viewed pixels: {attachment.safe_name}",
+                "page_number": source.page,
+                "metadata": {
+                    **metadata,
+                    "visual_source": asdict(source),
+                    "content_digest": attachment.content_digest,
+                },
+            }
+        )
+    return rows
 
 
 __all__ = ["compose_research_tools"]

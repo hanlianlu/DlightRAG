@@ -20,7 +20,7 @@ profile and the current immutable context policy.
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 from dlightrag.engine.agent.context import ContextContribution, ContextProjector
@@ -151,6 +151,7 @@ class AnswerSynthesizer:
         conversation_history: PriorTurns | None = None,
         memory_text: str = "",
         current_images: list[dict[str, Any]] | None = None,
+        image_budget: AnswerImageBudget | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming final answer generation.
 
@@ -169,6 +170,7 @@ class AnswerSynthesizer:
             conversation_history=conversation_history,
             memory_text=memory_text,
             current_images=current_images,
+            image_budget=image_budget,
         )
 
         logger.info(
@@ -213,6 +215,7 @@ class AnswerSynthesizer:
         conversation_history: PriorTurns | None = None,
         memory_text: str = "",
         current_images: list[dict[str, Any]] | None = None,
+        image_budget: AnswerImageBudget | None = None,
     ) -> _PreparedModelCall:
         prior_turns = conversation_history or PriorTurns()
         original_history = list(prior_turns.messages)
@@ -221,10 +224,18 @@ class AnswerSynthesizer:
             history: list[dict[str, Any]],
             candidate_contexts: RetrievalContexts,
         ) -> tuple[_PreparedModelCall, int, int]:
-            budget = self._image_policy.new_budget()
-            current_image_blocks = self._prepare_current_image_blocks(
-                current_images,
-                image_budget=budget,
+            # The executor has already admitted current and retained images to
+            # the Fast Run budget. Packing trials start at that same ceiling;
+            # neither recharge those occurrences nor grant chunks a fresh budget.
+            budget = (
+                replace(image_budget)
+                if image_budget is not None
+                else self._image_policy.new_budget()
+            )
+            current_image_blocks = (
+                list(current_images or ())
+                if image_budget is not None
+                else self._prepare_current_image_blocks(current_images, image_budget=budget)
             )
             prepared = self._prepare_prompt_context(
                 query,

@@ -646,7 +646,7 @@ answer:
 ```
 
 Attachments are run-scoped Resources. Full bytes do not enter model context;
-text is decoded/converted and figures are inspected on demand. `query_images`
+text is decoded/converted by `read` and image pixels are attached by `view` on demand. `query_images`
 is a separate retrieve-only path limited to three current images. The final
 answer image count is clamped to the query model's discovered capability.
 

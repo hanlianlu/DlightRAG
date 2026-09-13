@@ -1828,13 +1828,32 @@ async def test_postgres_and_service_transcript_project_typed_tool_result_parts(p
             ),
         ),
     )
+    fetched = FetchedResourceSettlementUpdate(
+        resource=OpaqueFetchedResourceWrite(
+            resource_id="resource-1",
+            ordinal=0,
+            safe_name="report.txt",
+            media_type="text/plain",
+            capabilities={"resource_kind": "tool_attachment"},
+            blob_digest=digest,
+            source_locator_digest=hashlib.sha256(b"resource-1").hexdigest(),
+            source_locator=b"resource-1",
+            session_id=session_id.value,
+            intent_id=intent_id.value,
+        ),
+        complete_blob=CompleteBlobDescriptor(
+            digest=digest,
+            total_bytes=8,
+            chunks=(b"resource",),
+        ),
+    )
     result_commit = await _append_transaction_entry(
         store,
         session_id,
         result,
         fencing_epoch=epoch,
         intent_id=intent_id,
-        host_delta=EffectHostUpdate(),
+        host_delta=EffectHostUpdate(fetched=(fetched,)),
     )
     assert isinstance(result_commit, TransactionCommit)
 

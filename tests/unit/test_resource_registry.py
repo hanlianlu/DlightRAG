@@ -118,13 +118,13 @@ def test_register_returns_stable_opaque_id() -> None:
     assert len(registry.manifest()) == 1
 
 
-def test_duplicate_content_deduplicated_across_filenames() -> None:
+def test_duplicate_bytes_preserve_distinct_source_filenames() -> None:
     registry = ResourceRegistry()
     first = registry.register(ResourceInput(filename="a.txt", content=b"payload"))
     second = registry.register(ResourceInput(filename="b.txt", content=b"payload"))
 
-    assert first == second
-    assert len(registry.manifest()) == 1
+    assert first != second
+    assert len(registry.manifest()) == 2
 
 
 def test_request_isolation_uses_distinct_ids() -> None:

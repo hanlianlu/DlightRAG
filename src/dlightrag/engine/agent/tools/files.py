@@ -38,10 +38,15 @@ from dlightrag.engine.agent.environment.execution import ExecutionEnvironment
 from dlightrag.engine.agent.environment.local import ProcessChunk
 from dlightrag.engine.agent.environment.text import decode_workspace_text, encode_workspace_text
 from dlightrag.engine.agent.environment.toolchain import SearchToolchain
-from dlightrag.engine.agent.tool_content import ToolResourceAttachmentPart, ToolTextPart
+from dlightrag.engine.agent.tool_content import (
+    ToolResourceAttachmentPart,
+    ToolTextPart,
+    VisualSource,
+)
 from dlightrag.engine.agent.tools.contracts import (
     AgentTool,
     CommittedOutput,
+    EvidenceSourceFact,
     ResourceAttachmentBytes,
     ToolEffects,
     ToolResult,
@@ -348,6 +353,7 @@ def path_tools(
             spill=spill,
             image_preparer=image_preparer,
         ),
+        view_tool(environment, scheduler, image_preparer=image_preparer),
         bash_tool(environment, scheduler, output_stage_factory=output_stage_factory),
         edit_tool(environment, scheduler, spill=spill),
         write_tool(environment, scheduler),
@@ -428,18 +434,9 @@ def read_tool(
             raw = environment.read_bytes(path)
             media_type = _sniff_image_media_type(raw)
             if media_type is not None:
-                prepare = image_preparer or _default_image_preparer
-                prepared = prepare(raw, canonical_path)
-                if prepared is None:
-                    return ToolResult.text(
-                        f"image cannot fit the model payload budget: {_escape_path(args.path)}",
-                        is_error=True,
-                    )
-                return _image_attachment_result(
-                    raw,
-                    source_media_type=media_type,
-                    prepared=prepared,
-                    path=canonical_path,
+                return ToolResult.text(
+                    f"Image: {_escape_path(canonical_path)} ({media_type}, {len(raw)} bytes). "
+                    f"Use view(path={canonical_path!r}) to see pixels; read returns text only."
                 )
             try:
                 decoded = decode_workspace_text(raw)
@@ -467,7 +464,7 @@ def read_tool(
 
     url_enabled = resource_reader is not None
     description = (
-        "Read exactly one target: a workspace path, a durable resource_id, or an "
+        "Read bounded text only (use view for image pixels). Exactly one target: a workspace path, a durable resource_id, or an "
         "anonymous public HTTP(S) url. URL reads accept only optional http.user_agent, "
         "http.accept, and http.accept_language representation preferences; continue "
         "with the returned resource_id and cursor."
@@ -492,6 +489,92 @@ def read_tool(
         replay_policy="replayable",
         contract_version=4 if url_enabled else 3,
         guidance=guidance,
+    )
+
+
+class ViewArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    path: str | None = Field(default=None, min_length=1, max_length=_PATH_MAX_CHARS)
+    resource_id: str | None = Field(default=None, min_length=1, max_length=256)
+    url: str | None = Field(default=None, min_length=1, max_length=8192)
+    http: HttpReadOptions | None = None
+    locator: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=256,
+        description="1-based physical PDF page number or embedded-image handle from read.",
+    )
+    cursor: str | None = Field(default=None, min_length=1, max_length=_CURSOR_MAX_CHARS)
+
+    @model_validator(mode="after")
+    def _target(self) -> ViewArgs:
+        if sum(value is not None for value in (self.path, self.resource_id, self.url)) != 1:
+            raise ValueError("view requires exactly one of path, resource_id, or url")
+        if self.locator is not None and self.cursor is not None:
+            raise ValueError("locator and cursor are mutually exclusive")
+        if self.path is not None and (self.locator is not None or self.cursor is not None):
+            raise ValueError("workspace view supports standalone images only")
+        if self.url is not None and self.cursor is not None:
+            raise ValueError("continue a URL view with its returned resource_id")
+        if self.url is None and self.http is not None:
+            raise ValueError("view http options are available only for url")
+        return self
+
+
+type ResourceViewer = Callable[[ViewArgs, ToolRuntime, ImagePreparer], Awaitable[ToolResult]]
+
+
+def view_tool(
+    environment: ExecutionEnvironment | None,
+    scheduler: AccessScheduler,
+    *,
+    resource_viewer: ResourceViewer | None = None,
+    image_preparer: ImagePreparer | None = None,
+) -> AgentTool:
+    async def execute(raw: BaseModel, runtime: ToolRuntime) -> ToolResult:
+        args = cast(ViewArgs, raw)
+        prepare = image_preparer or _default_image_preparer
+        if args.path is None:
+            if resource_viewer is None:
+                return ToolResult.text("resource view is unavailable", is_error=True)
+            return await resource_viewer(args, runtime, prepare)
+        if environment is None:
+            return ToolResult.text("path view requires an execution environment", is_error=True)
+        if blocked := _integrity_blocked(environment):
+            return blocked
+        try:
+            path = environment.resolve(args.path)
+            canonical = _workspace_relative_path(environment.root, path)
+            async with scheduler.hold(PathAccess(path=str(path), kind="read")):
+                if blocked := _integrity_blocked(environment):
+                    return blocked
+                if environment.stat_kind(path) != "file":
+                    return ToolResult.text("view requires a regular image file", is_error=True)
+                content = environment.read_bytes(path)
+                media = _sniff_image_media_type(content)
+                if media is None:
+                    return ToolResult.text(
+                        "view(path) supports verified standalone images only", is_error=True
+                    )
+                prepared = await asyncio.to_thread(prepare, content, canonical)
+                if prepared is None:
+                    return ToolResult.text(
+                        "image cannot fit the remaining model image budget", is_error=True
+                    )
+                return _image_attachment_result(
+                    content, source_media_type=media, prepared=prepared, path=canonical
+                )
+        except PathRejected as exc:
+            return ToolResult.text(str(exc), is_error=True)
+
+    return AgentTool(
+        name="view",
+        description="View pixels from exactly one registered resource, anonymous public URL, or workspace image path. PDF without locator returns a bounded overview; select a physical page for detail. No separate model is called.",
+        input_model=ViewArgs,
+        execute=execute,
+        replay_policy="replayable",
+        guidance="view: use PDF overviews to find physical pages, not to transcribe small text. Follow the printed continuation. Paths support standalone images only.",
     )
 
 
@@ -909,10 +992,14 @@ def _image_attachment_result(
     """Persist the source snapshot but expose only its provider-bounded derivative."""
     source_digest = hashlib.sha256(data).hexdigest()
     prepared_digest = hashlib.sha256(prepared.data).hexdigest()
-    source_resource_id = f"att_{source_digest[:32]}"
+    occurrence = hashlib.sha256(f"{path}\0{source_digest}".encode()).hexdigest()
+    source_resource_id = f"att_{occurrence[:32]}"
     model_resource_id = (
-        f"att_model_{prepared_digest[:32]}" if prepared.transformed else source_resource_id
+        f"att_model_{hashlib.sha256(f'{occurrence}:{prepared_digest}'.encode()).hexdigest()[:32]}"
+        if prepared.transformed
+        else source_resource_id
     )
+    source = VisualSource(resource_id=source_resource_id, kind="workspace_image", path=path)
     safe_name = path.rsplit("/", 1)[-1] or "image"
     attachment = ToolResourceAttachmentPart(
         resource_id=model_resource_id,
@@ -921,6 +1008,7 @@ def _image_attachment_result(
         content_digest=prepared_digest,
         size_bytes=len(prepared.data),
         data=prepared.data,
+        source=source,
     )
     durable_resources = [
         ResourceAttachmentBytes(
@@ -929,6 +1017,7 @@ def _image_attachment_result(
             mime_type=source_media_type,
             source_locator=path,
             content=data,
+            source=source,
         )
     ]
     if prepared.transformed:
@@ -939,6 +1028,7 @@ def _image_attachment_result(
                 mime_type=prepared.media_type,
                 source_locator=f"{path}#model-derivative",
                 content=prepared.data,
+                source=source,
             )
         )
     transformation = "resized/re-encoded derivative" if prepared.transformed else "bounded original"
@@ -951,7 +1041,18 @@ def _image_attachment_result(
             ),
             attachment,
         ),
-        effects=ToolEffects(attached_resources=tuple(durable_resources)),
+        effects=ToolEffects(
+            attached_resources=tuple(durable_resources),
+            evidence_sources=(
+                EvidenceSourceFact(
+                    resource_id=source_resource_id,
+                    source_type="web_attachment",
+                    source_uri=source_resource_id,
+                    title=safe_name,
+                    attributes=(("resource_kind", "workspace_image"),),
+                ),
+            ),
+        ),
     )
 
 

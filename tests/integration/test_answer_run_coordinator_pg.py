@@ -2184,8 +2184,9 @@ class _CitingSynthesizer:
         conversation_history: PriorTurns | None = None,
         memory_text: str = "",
         current_images: list[dict[str, Any]] | None = None,
+        image_budget: Any = None,
     ) -> tuple[Any, AsyncIterator[str]]:
-        del current_images, memory_text
+        del current_images, memory_text, image_budget
 
         async def _stream() -> AsyncIterator[str]:
             yield "the drawing shows it [1]"

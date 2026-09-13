@@ -51,6 +51,7 @@ from dlightrag.adapters.postgres.runtime._terminal import TerminalStatus, finish
 from dlightrag.adapters.postgres.runtime.run_blob_store import BlobSizeConflict, write_blob_content
 from dlightrag.engine.agent.session.ids import SessionId
 from dlightrag.engine.agent.tool_content import decode_tool_content, tool_content_message_fields
+from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.execution.connection_binding import RunConnectionBinding
 from dlightrag.engine.answer.runs.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.engine.runtime.cancellation import (
@@ -1072,6 +1073,15 @@ RUN_MIGRATIONS = (
             "DROP CONSTRAINT IF EXISTS dlightrag_agent_controls_kind_check, "
             "ADD CONSTRAINT dlightrag_agent_controls_kind_check "
             "CHECK (kind IN ('steer', 'follow_up', 'cancel'))",
+        ),
+    ),
+    Migration(
+        "attachment_occurrence_reference_index",
+        "Find retained exact Entry occurrences without scanning an owner's Run catalogue",
+        (
+            "CREATE INDEX IF NOT EXISTS idx_answer_attachment_occurrence "
+            "ON dlightrag_answer_resources (owner_id, resource_id) "
+            "WHERE kind='fetched_blob' AND capabilities->>'resource_kind'='attachment_occurrence'",
         ),
     ),
 )
@@ -2178,7 +2188,9 @@ _SELECT_RUN_FETCHED_RESOURCES = """
 SELECT resource_id, ordinal, blob_digest, safe_name, media_type, source_locator, capabilities
 FROM dlightrag_answer_resources
 WHERE owner_id = $1 AND run_id = $2 AND kind = 'fetched_blob'
-  AND capabilities->>'resource_kind' IN ('web', 'tool_attachment')
+  AND capabilities->>'resource_kind' IN (
+      'web', 'tool_attachment', 'conversion_snapshot', 'conversion_asset'
+  )
   AND ordinal IS NOT NULL AND source_locator IS NOT NULL
 ORDER BY ordinal, resource_id
 """
@@ -3389,6 +3401,69 @@ class PGRunStore(ChildRunStoreMixin, PostgresOperationRunner):
             )
 
         return await self._run_read(_operation)
+
+    async def load_child_attachment_occurrences(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        child_session_id: str,
+        context_snapshot: dict[str, Any],
+    ) -> tuple[RunFetchedResource, ...]:
+        from dlightrag.adapters.postgres.answer.attachment_replay import (
+            load_child_attachment_occurrences,
+        )
+
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        if run_uuid is None or child_uuid is None:
+            raise ValueError("invalid Child attachment replay identity")
+
+        async def operation(conn: Any) -> tuple[RunFetchedResource, ...]:
+            return await load_child_attachment_occurrences(
+                conn,
+                owner_id=owner,
+                run_id=run_uuid,
+                worker_id=worker_id,
+                fencing_epoch=fencing_epoch,
+                child_session_id=child_uuid,
+                context_snapshot=context_snapshot,
+            )
+
+        return await self._run_read(operation)
+
+    async def retain_attachment_occurrences(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        selection: AttachmentReplaySelection,
+    ) -> tuple[RunFetchedResource, ...]:
+        from dlightrag.adapters.postgres.answer.attachment_replay import (
+            retain_attachment_occurrences,
+        )
+
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            raise ValueError("invalid attachment replay Run")
+
+        async def operation(conn: Any) -> tuple[RunFetchedResource, ...]:
+            return await retain_attachment_occurrences(
+                conn,
+                owner_id=owner,
+                run_id=run_uuid,
+                worker_id=worker_id,
+                fencing_epoch=fencing_epoch,
+                selection=selection,
+            )
+
+        return await self._run_write(operation)
 
     async def list_artifact_attachments(
         self, *, owner_id: str, run_id: str

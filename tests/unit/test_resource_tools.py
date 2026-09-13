@@ -1,333 +1,273 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for the read / inspect peer tools."""
+"""Public read/view seams: text, pixels, inventories, identity, and budgets."""
 
-from __future__ import annotations
-
+import base64
 import io
-import socket
-from typing import Any
-from unittest.mock import AsyncMock
 
-import httpx
 import pytest
+from docx import Document
 from PIL import Image
 from pydantic import ValidationError
 
 from dlightrag.engine.agent.environment import AccessScheduler
-from dlightrag.engine.agent.tools import AgentTool
-from dlightrag.engine.agent.tools.files import read_tool
-from dlightrag.engine.ai.tokens import estimate_tokens
+from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
+from dlightrag.engine.agent.tool_content import (
+    decode_tool_content,
+    encode_tool_content,
+    tool_content_attachments,
+)
+from dlightrag.engine.agent.tools.files import (
+    PreparedImageAttachment,
+    ViewArgs,
+    read_tool,
+    view_tool,
+)
+from dlightrag.engine.ai.media import decode_image_base64
+from dlightrag.engine.answer.resources.converters import ResourceConversionError
 from dlightrag.engine.answer.resources.models import (
-    EXTRACTION_TEXT,
     ResourceInput,
-    ResourceReadResult,
     ResourceRegistryError,
     TextWindowBudget,
 )
 from dlightrag.engine.answer.resources.registry import ResourceRegistry
-from dlightrag.engine.answer.resources.visual import ResourceInspectionError, ResourceInspector
-from dlightrag.engine.answer.tools.resources import (
-    build_resource_tools as _build_resource_tools,
-)
-from dlightrag.engine.answer.tools.resources import make_resource_reader
+from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
+from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from tests.tool_helpers import tool_runtime
 from tests.unit.conftest import answer_image_policy
+from tests.unit.test_resource_visual import pdf_bytes
 
 
-def _inspector(registry: ResourceRegistry, vlm: Any) -> ResourceInspector:
-    return ResourceInspector(registry, vlm_func=vlm, image_policy=answer_image_policy(max_images=8))
-
-
-class _RecordingVLM:
-    def __init__(self, reply: str = "A chart of quarterly revenue.") -> None:
-        self.reply = reply
-
-    async def __call__(self, *, messages: list[dict], **_kwargs) -> str:
-        return self.reply
-
-
-class _FailingVLM:
-    async def __call__(self, *, messages: list[dict], **_kwargs) -> str:
-        raise RuntimeError("vlm upstream 503")
-
-
-def _png(color: tuple[int, int, int]) -> bytes:
+def png():
     buffer = io.BytesIO()
-    Image.new("RGB", (24, 24), color).save(buffer, "PNG")
+    Image.new("RGB", (24, 24), (20, 10, 0)).save(buffer, "PNG")
     return buffer.getvalue()
 
 
-def _tools_by_name(tools: list[AgentTool]) -> dict[str, AgentTool]:
-    return {tool.name: tool for tool in tools}
+def preparer(max_images=8):
+    budget = answer_image_policy(max_images=max_images).new_budget()
+
+    def prepare(data, label):
+        block = budget.add_base64(base64.b64encode(data).decode(), label=label)
+        if block is None:
+            return None
+        content, media = decode_image_base64(block["image_url"]["url"])
+        return PreparedImageAttachment(content, media or "image/png", content != data)
+
+    return prepare
 
 
-def build_resource_tools(
-    registry: ResourceRegistry,
-    *,
-    text_window_budget: TextWindowBudget | None = None,
-    inspector: ResourceInspector | None = None,
-    visual_supported: bool = False,
-) -> list[AgentTool]:
-    budget = text_window_budget or TextWindowBudget(tokens=100)
-    return [
+def tools(registry, *, max_images=8, environment=None):
+    access = AccessScheduler()
+    return (
         read_tool(
-            None,
-            AccessScheduler(),
-            resource_reader=make_resource_reader(registry, budget),
-        )
-    ] + _build_resource_tools(
-        registry,
-        text_window_budget=budget,
-        inspector=inspector,
-        visual_supported=visual_supported,
+            environment,
+            access,
+            resource_reader=make_resource_reader(registry, TextWindowBudget(1000)),
+        ),
+        view_tool(
+            environment,
+            access,
+            resource_viewer=make_resource_viewer(registry),
+            image_preparer=preparer(max_images),
+        ),
     )
 
 
-def test_read_registered_without_inspector() -> None:
-    registry = ResourceRegistry()
-    names = {tool.name for tool in build_resource_tools(registry)}
-    assert names == {"read"}
-
-
-def test_inspect_absent_when_capability_unverified() -> None:
-    registry = ResourceRegistry()
-    inspector = _inspector(registry, _RecordingVLM())
-    names = {
-        tool.name
-        for tool in build_resource_tools(registry, inspector=inspector, visual_supported=False)
-    }
-    assert names == {"read"}
-
-
-def test_inspect_registered_only_for_verified_capability() -> None:
-    registry = ResourceRegistry()
-    inspector = _inspector(registry, _RecordingVLM())
-    names = {
-        tool.name
-        for tool in build_resource_tools(registry, inspector=inspector, visual_supported=True)
-    }
-    assert names == {"read", "inspect"}
-
-
-def test_read_tool_schema_is_exact() -> None:
-    registry = ResourceRegistry()
-    (read_tool,) = build_resource_tools(registry)
-    fields = read_tool.input_model.model_fields
-    assert set(fields) == {
-        "path",
-        "resource_id",
-        "url",
-        "http",
-        "offset",
-        "limit",
-        "focus",
-        "cursor",
-    }
-    assert not fields["resource_id"].is_required()
-    assert not fields["focus"].is_required()
-    assert not fields["cursor"].is_required()
-    assert read_tool.input_model.model_json_schema()["additionalProperties"] is False
-    parsed = read_tool.input_model.model_validate(
-        {"resource_id": "  res-1  ", "focus": "  revenue  "}
+async def call(tool, **args):
+    return await tool.execute(
+        tool.input_model.model_validate(args), tool_runtime(tool_name=tool.name)
     )
-    assert parsed.model_dump()["resource_id"] == "res-1"
-    assert parsed.model_dump()["focus"] == "revenue"
-    url_read = read_tool.input_model.model_validate(
-        {
-            "url": "https://example.com/article?id=7",
-            "focus": "revenue",
-            "http": {
-                "user_agent": "DlightRAG research",
-                "accept": "text/html",
-                "accept_language": "zh-TW,en;q=0.8",
-            },
-        }
-    )
-    assert url_read.model_dump()["url"] == "https://example.com/article?id=7"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {},
+        {"path": "a", "url": "https://example.com"},
+        {"path": "a", "locator": "1"},
+        {"resource_id": "res-a", "focus": "x"},
+        {"url": "https://example.com", "cursor": "x"},
+        {"resource_id": "res-a", "http": {}},
+        {"resource_id": "res-a", "locator": "1", "cursor": "x"},
+    ],
+)
+def test_view_rejects_ambiguous_or_legacy_arguments(args):
     with pytest.raises(ValidationError):
-        read_tool.input_model.model_validate({"resource_id": "res-1", "url": "https://x"})
-    with pytest.raises(ValidationError):
-        read_tool.input_model.model_validate(
-            {"url": "https://example.com", "http": {"authorization": "secret"}}
-        )
-    with pytest.raises(ValidationError):
-        read_tool.input_model.model_validate(
-            {"url": "https://example.com", "http": {"accept": "text/html\r\nX-Evil: 1"}}
-        )
+        ViewArgs.model_validate(args)
 
 
-def test_inspect_tool_schema_is_exact() -> None:
-    registry = ResourceRegistry()
-    inspector = _inspector(registry, _RecordingVLM())
-    tools = _tools_by_name(
-        build_resource_tools(registry, inspector=inspector, visual_supported=True)
-    )
-    fields = tools["inspect"].input_model.model_fields
-    assert set(fields) == {"resource_id", "focus", "locator", "cursor"}
-    assert fields["resource_id"].is_required()
-    assert fields["focus"].is_required()
-    assert not fields["locator"].is_required()
-    assert not fields["cursor"].is_required()
-    assert tools["inspect"].input_model.model_json_schema()["additionalProperties"] is False
-    assert "res-" in tools["inspect"].description
-    assert "local://" in tools["inspect"].description
-
-
-async def test_read_tool_returns_text_and_handles() -> None:
+async def test_read_image_returns_guidance_only_and_view_attaches_located_pixels():
     async with ResourceRegistry() as registry:
-        resource_id = registry.register(
-            ResourceInput(filename="notes.txt", content=b"alpha\nbeta\ngamma")
-        )
-        (read_tool,) = build_resource_tools(registry)
-        args = read_tool.input_model.model_validate({"resource_id": resource_id})
-
-        result = await read_tool.execute(args, tool_runtime())
-
-    assert "alpha" in result.text_content
-    assert "gamma" in result.text_content
-    assert result.effects.evidence_sources
-    assert result.effects.evidence_sources[0].source_type == "web_attachment"
-
-
-async def test_read_url_registers_handle_applies_representation_headers_and_returns_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "dlightrag.engine.network_admission.socket.getaddrinfo",
-        lambda host, port, *args, **kwargs: [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
-        ],
-    )
-    requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(200, content=b"public body", headers={"content-type": "text/plain"})
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    async with ResourceRegistry(url_client=client) as registry:
-        (tool,) = build_resource_tools(registry)
-        args = tool.input_model.model_validate(
-            {
-                "url": "https://example.com/article?id=7",
-                "http": {
-                    "user_agent": "ResearchBot/1",
-                    "accept": "text/plain",
-                    "accept_language": "zh-TW",
-                },
-            }
-        )
-        result = await tool.execute(args, tool_runtime())
-    await client.aclose()
-
-    assert "public body" in result.text_content
-    assert "[resource: res-" in result.text_content
-    assert requests[0].url.host == "93.184.216.34"
-    assert requests[0].headers["host"] == "example.com"
-    assert requests[0].headers["user-agent"] == "ResearchBot/1"
-    source = result.effects.evidence_sources[0]
-    assert source.source_uri == "https://example.com/article?id=7"
-    assert dict(source.attributes) == {
-        "resource_kind": "web",
-        "admission_origin": "agent",
-        "acquisition": "direct_http",
-    }
+        resource = registry.register(ResourceInput(filename="plot.png", content=png()))
+        read, view = tools(registry)
+        text = await call(read, resource_id=resource)
+        assert not tool_content_attachments(text.parts)
+        assert "view(resource_id=" in text.text_content
+        pixels = await call(view, resource_id=resource)
+        (attachment,) = tool_content_attachments(pixels.parts)
+        assert attachment.data == png()
+        assert attachment.source is not None
+        assert attachment.source.resource_id == resource
+        assert attachment.source is not None
+        assert attachment.source.kind == "image"
+        restored = decode_tool_content(encode_tool_content(pixels.parts))
+        (restored_attachment,) = tool_content_attachments(restored)
+        assert restored_attachment.source == attachment.source
+        assert not restored_attachment.data
 
 
-async def test_read_uses_the_current_turn_window_budget() -> None:
-    registry = ResourceRegistry()
-    resource_id = registry.register(ResourceInput(filename="notes.txt", content=b"text"))
-    registry.read = AsyncMock(  # type: ignore[method-assign]
-        return_value=ResourceReadResult(
-            resource_id=resource_id,
-            locator=None,
-            content="text",
-            extraction_status=EXTRACTION_TEXT,
-            has_more=False,
-            next_cursor=None,
-        )
-    )
-    budget = TextWindowBudget(tokens=10)
-    (read_tool,) = build_resource_tools(registry, text_window_budget=budget)
-    args = read_tool.input_model.model_validate({"resource_id": resource_id})
-
-    await read_tool.execute(args, tool_runtime())
-    budget.update(3)
-    await read_tool.execute(args, tool_runtime())
-
-    assert [call.kwargs["max_window_tokens"] for call in registry.read.await_args_list] == [10, 3]
-
-
-async def test_read_formats_within_the_current_turn_budget() -> None:
-    registry = ResourceRegistry()
-    text = "".join(f"line {index} " + "x" * 30 + "\n" for index in range(400))
-    resource_id = registry.register(ResourceInput(filename="notes.txt", content=text.encode()))
-    budget = TextWindowBudget(tokens=200)
-    (read_tool,) = build_resource_tools(registry, text_window_budget=budget)
-    args = read_tool.input_model.model_validate({"resource_id": resource_id})
-
-    result = await read_tool.execute(args, tool_runtime())
-
-    assert estimate_tokens(result.text_content) <= budget.tokens
-    assert "tool result truncated" not in result.text_content
-    assert result.protected_text
-
-
-async def test_read_tool_redacts_unexpected_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registry = ResourceRegistry()
-    resource_id = registry.register(ResourceInput(filename="notes.txt", content=b"text"))
-
-    async def fail(*_args, **_kwargs):
-        raise RuntimeError("https://example.com/?token=secret")
-
-    monkeypatch.setattr(registry, "inspection_target", fail)
-    monkeypatch.setattr(registry, "read", fail)
-    (read_tool,) = build_resource_tools(registry)
-    args = read_tool.input_model.model_validate({"resource_id": resource_id})
-
-    with pytest.raises(ResourceRegistryError, match="resource read failed") as failure:
-        await read_tool.execute(args, tool_runtime())
-
-    assert "secret" not in str(failure.value)
-
-
-async def test_inspect_tool_returns_derived_evidence() -> None:
+async def test_workspace_read_image_is_text_and_view_rejects_escape_and_documents(tmp_path):
+    (tmp_path / "a.png").write_bytes(png())
+    (tmp_path / "doc.pdf").write_bytes(pdf_bytes())
     async with ResourceRegistry() as registry:
-        resource_id = registry.register(
-            ResourceInput(
-                filename="chart.png", content=_png((200, 30, 30)), declared_mime="image/png"
-            )
-        )
-        inspector = _inspector(registry, _RecordingVLM("Ascending bars."))
-        tools = _tools_by_name(
-            build_resource_tools(registry, inspector=inspector, visual_supported=True)
-        )
-        inspect_tool = tools["inspect"]
-        args = inspect_tool.input_model.model_validate(
-            {"resource_id": resource_id, "focus": "describe"}
-        )
-
-        result = await inspect_tool.execute(args, tool_runtime())
-
-    assert "Ascending bars." in result.text_content
-    assert "derived_by_vlm" in result.text_content
+        read, view = tools(registry, environment=LocalExecutionEnvironment(tmp_path))
+        assert not tool_content_attachments((await call(read, path="a.png")).parts)
+        assert tool_content_attachments((await call(view, path="a.png")).parts)
+        assert (await call(view, path="../escape.png")).is_error
+        assert (await call(view, path="doc.pdf")).is_error
 
 
-async def test_inspect_tool_propagates_vlm_failure() -> None:
+async def test_pdf_view_bypasses_failed_text_extraction(monkeypatch):
+    async def fail(*args, **kwargs):
+        raise ResourceConversionError("ordinary parser failure")
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.convert_resource", fail)
     async with ResourceRegistry() as registry:
-        resource_id = registry.register(
-            ResourceInput(filename="chart.png", content=_png((1, 2, 3)), declared_mime="image/png")
-        )
-        inspector = _inspector(registry, _FailingVLM())
-        tools = _tools_by_name(
-            build_resource_tools(registry, inspector=inspector, visual_supported=True)
-        )
-        inspect_tool = tools["inspect"]
-        args = inspect_tool.input_model.model_validate(
-            {"resource_id": resource_id, "focus": "describe"}
-        )
+        resource = registry.register(ResourceInput(filename="paper.pdf", content=pdf_bytes()))
+        read, view = tools(registry)
+        text = await call(read, resource_id=resource)
+        assert "conversion_failed" in text.text_content
+        assert "Physical PDF page count: 3" in text.text_content
+        result = await call(view, resource_id=resource, locator="2")
+        (attachment,) = tool_content_attachments(result.parts)
+        assert attachment.source is not None
+        assert attachment.source.page == 2
+        assert attachment.source is not None
+        assert not attachment.source.overview
 
-        with pytest.raises(ResourceInspectionError):
-            await inspect_tool.execute(args, tool_runtime())
+
+async def test_pdf_overview_actual_coverage_aggregate_budget_and_signed_recovery_cursor():
+    data = pdf_bytes(3)
+    async with ResourceRegistry(resource_secret=b"r", cursor_secret=b"c") as registry:
+        resource = registry.register(ResourceInput(filename="paper.pdf", content=data))
+        _, view = tools(registry, max_images=1)
+        result = await call(view, resource_id=resource)
+        assert "physical pages 1-1 of 3 only" in result.text_content
+        cursor = result.protected_text.split("cursor='")[1].split("'")[0]
+        with pytest.raises(ResourceRegistryError, match="remaining model image budget"):
+            await call(view, resource_id=resource, cursor=cursor)
+    async with ResourceRegistry(resource_secret=b"r", cursor_secret=b"c") as recovered:
+        assert recovered.register(ResourceInput(filename="paper.pdf", content=data)) == resource
+        _, view = tools(recovered, max_images=1)
+        second = await call(view, resource_id=resource, cursor=cursor)
+        (attachment,) = tool_content_attachments(second.parts)
+        assert attachment.source is not None
+        assert attachment.source.page == 2
+        with pytest.raises(ResourceRegistryError):
+            await call(view, resource_id=resource, cursor=cursor + "x")
+
+
+def docx_images(count):
+    doc = Document()
+    doc.add_paragraph("Revenue was 123.")
+    for _ in range(count):
+        doc.add_picture(io.BytesIO(png()))
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
+async def test_duplicate_occurrences_membership_inventory_and_snapshot_reuse(monkeypatch):
+    data = docx_images(12)
+    async with ResourceRegistry(resource_secret=b"r", cursor_secret=b"c") as registry:
+        resource = registry.register(ResourceInput(filename="a.docx", content=data))
+        other = registry.register(ResourceInput(filename="b.docx", content=docx_images(1)))
+        read, view = tools(registry)
+        result = await call(read, resource_id=resource)
+        assert "more: read(" in result.text_content
+        assets = [
+            a for a in result.effects.attached_resources if a.resource_kind == "conversion_asset"
+        ]
+        assert len(assets) == 12
+        assert len({a.resource_id for a in assets}) == 12
+        assert len({a.content for a in assets}) == 1
+        with pytest.raises(ResourceRegistryError, match="unknown visual handle"):
+            await call(view, resource_id=other, locator=assets[0].resource_id)
+        cursor = result.text_content.split("more: read(")[1].split("cursor='")[1].split("'")[0]
+        page = await call(read, resource_id=resource, cursor=cursor)
+        assert "Visual inventory" in page.text_content
+        stored = {a.resource_id: a.content for a in result.effects.attached_resources}
+        snapshot = ConversionSnapshot.restore(stored[f"{resource}-conversion"], stored)
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("adopted snapshots never reparse")
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.convert_resource", forbidden)
+    async with ResourceRegistry(resource_secret=b"r", cursor_secret=b"c") as registry:
+        assert registry.register(ResourceInput(filename="a.docx", content=data)) == resource
+        registry.adopt_conversion_snapshot(snapshot)
+        read, view = tools(registry)
+        assert "Revenue was 123" in (await call(read, resource_id=resource)).text_content
+        pixels = await call(view, resource_id=resource, locator=assets[-1].resource_id)
+        source = tool_content_attachments(pixels.parts)[0].source
+        assert source is not None
+        assert source.handle_id == assets[-1].resource_id
+
+
+async def test_extensionless_url_image_is_classified_after_acquisition_and_reuses_snapshot(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    calls = []
+
+    async def fetch(url, **kwargs):
+        calls.append(url)
+        return SimpleNamespace(content=png(), media_type="image/png", final_url=url)
+
+    monkeypatch.setattr("dlightrag.engine.answer.resources.registry.fetch_public_http", fetch)
+    async with ResourceRegistry() as registry:
+        read, view = tools(registry)
+        result = await call(view, url="https://example.com/asset")
+        (attachment,) = tool_content_attachments(result.parts)
+        assert attachment.source is not None
+        resource = attachment.source.resource_id
+        assert attachment.source is not None
+        assert attachment.source.kind == "image"
+        assert not tool_content_attachments((await call(read, resource_id=resource)).parts)
+        await call(view, resource_id=resource)
+        with pytest.raises(ResourceRegistryError, match="cannot replace"):
+            await call(view, url="https://example.com/asset", http={"accept": "image/webp"})
+        assert len(calls) == 1
+
+
+async def test_conversion_cancellation_does_not_overlap_native_work_or_cleanup(monkeypatch):
+    import asyncio
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def native(*args, **kwargs):
+        calls.append(1)
+        started.set()
+        assert release.wait(5)
+        return "adopted"
+
+    monkeypatch.setattr("anydoc.to_markdown_bytes", native)
+    registry = ResourceRegistry()
+    resource = registry.register(ResourceInput(filename="a.pdf", content=pdf_bytes(1)))
+    first = asyncio.create_task(registry.read(resource, max_window_tokens=1000))
+    assert await asyncio.to_thread(started.wait, 5)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    second = asyncio.create_task(registry.read(resource, max_window_tokens=1000))
+    await asyncio.sleep(0)
+    release.set()
+    from dlightrag.engine.answer.resources.converters import ConversionLimitError
+
+    with pytest.raises(ConversionLimitError):
+        await second
+    assert len(calls) == 1
+    await registry.aclose()

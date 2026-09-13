@@ -32,7 +32,6 @@ class ModeCapability:
     """Pinned model/tool facts that decide which modes can run."""
 
     query_supports_images: bool
-    inspect_available: bool = False
     web_search_available: bool = False
 
 
@@ -103,9 +102,7 @@ def _research_can_represent(
     resources: tuple[ModeResource, ...], capability: ModeCapability
 ) -> bool:
     for resource in resources:
-        if resource.role == "image" and not (
-            capability.query_supports_images or capability.inspect_available
-        ):
+        if resource.role == "image" and not (capability.query_supports_images):
             return False
     return True
 

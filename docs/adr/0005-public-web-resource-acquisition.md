@@ -6,6 +6,14 @@ Research admits a known public HTTP(S) URL through `read`, not through a separat
 
 Accepted and implemented. Current-state architecture, security, retrieval, and configuration documentation describe the landed vertical slice.
 
+## Read/view refinement
+
+The approved [Resource Reading contract](../resource-reading.md) adds `view(url)`
+through this same admission and settled byte-snapshot path, without requiring
+successful text conversion. Image pixels go directly to the answering model;
+there is no separate inspect/VLM tool. Textual hosted extraction remains a read
+fallback, never an original-image or PDF representation.
+
 ## Context
 
 Research already has two partial paths to public Web content. Exa Web Search discovers sources and can provide hosted content fallback, while `ResourceRegistry` directly fetches caller URL attachments through HTTP machinery owned by RAG corpus ingestion. A trusted Agent can also run `curl` through Bash, but Bash records process output and workspace effects rather than a Host-attested binding between a public locator, admitted content, and Evidence identity.

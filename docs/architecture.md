@@ -185,16 +185,21 @@ Detailed filtering, reranking, multimodal, and packing behavior lives in
 ```text
 query + attachments
   -> run-scoped ResourceRegistry
-  -> deterministic read or focused VLM inspect
+  -> bounded text read or direct pixel view
   -> bounded text/image evidence
   -> Fast or Research context
 ```
 
-Full resource bytes never enter model context. `read` handles UTF-8/CSV directly
-and converts HTML, PDF, DOCX, PPTX, and XLSX through selected offline
-converters; OOXML passes a zip-bomb preflight. `inspect` performs focused VLM
-inspection and records exact source/page/sheet/cell provenance. Current images
-may also feed retrieval and final generation within separate budgets.
+`read` returns bounded text, extraction status and visual discovery, never pixels.
+UTF-8 decodes directly; PDF, DOCX and XLSX text use offline AnyDoc 0.2.4 with a
+qualified one-shot MarkItDown fallback. DOCX typed assets and openpyxl XLSX assets
+are adapted independently of text; HTML, CSV and PPTX retain direct MarkItDown
+routes for the [per-format reasons](resource-reading.md#approved-bounded-route-decision-after-per-format-reassessment).
+OOXML archive preflight precedes either parser. `view` attaches verified
+images, bounded physical PDF page renders, or resource-owned embedded images to
+the answering model directly, without a separate VLM call. Workspace paths support
+standalone images only. Page rendering is independent of text extraction.
+Current images may still feed unrelated retrieval-planning VLM descriptions.
 
 Resources are scoped to one Answer Run. Accepted uploads and settled Web
 fetches use owner-scoped content-addressed blobs so recovery does not re-fetch

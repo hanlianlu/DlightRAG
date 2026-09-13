@@ -35,7 +35,7 @@ def prepared_tools(tmp_path, result, *, child=False, workspace=True):
         synthesizer=MagicMock(),
         retrieve_knowledge_base=AsyncMock(),
         model_func=AsyncMock(),
-        resource_tools=[injected],
+        injected_tools=[injected],
         model_profile=profile,
         text_window_budget=TextWindowBudget(profile.context_window_tokens),
         telemetry=NOOP_TELEMETRY,

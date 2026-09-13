@@ -5,7 +5,8 @@ import base64
 import ipaddress
 import logging
 import socket
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
@@ -138,6 +139,7 @@ class AnswerImageBudget:
     min_quality: int
     count: int = 0
     used_bytes: int = 0
+    _lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
 
     def add_base64(self, value: str, *, label: str) -> dict[str, Any] | None:
         """Add a raw base64/data URI image if it fits the remaining budget."""
@@ -148,7 +150,11 @@ class AnswerImageBudget:
         return {"type": "image_url", "image_url": {"url": uri}}
 
     def _bound_base64(self, value: str, *, label: str) -> tuple[str, int] | None:
-        """Bound a raw base64/data URI image and record consumed bytes."""
+        """Bound a raw base64/data URI image and atomically record consumed bytes."""
+        with self._lock:
+            return self._bound_base64_locked(value, label=label)
+
+    def _bound_base64_locked(self, value: str, *, label: str) -> tuple[str, int] | None:
         budget = ImagePayloadBudget(
             max_images=self.max_images,
             max_total_bytes=self.max_total_bytes,
@@ -169,6 +175,10 @@ class AnswerImageBudget:
         return bounded
 
     def reserve_prepared(self, data: bytes, *, label: str) -> bool:
+        with self._lock:
+            return self._reserve_prepared_locked(data, label=label)
+
+    def _reserve_prepared_locked(self, data: bytes, *, label: str) -> bool:
         """Reserve an already-persisted derivative without changing its bytes.
 
         Recovery may run under a stricter policy than the execution that wrote
@@ -202,6 +212,12 @@ class AnswerImageBudget:
         return True
 
     def add_user_image(self, value: str | dict[str, Any], *, label: str) -> dict[str, Any] | None:
+        with self._lock:
+            return self._add_user_image_locked(value, label=label)
+
+    def _add_user_image_locked(
+        self, value: str | dict[str, Any], *, label: str
+    ) -> dict[str, Any] | None:
         """Add a user image after validating its source URL.
 
         ``data:`` URIs and bare base64 strings are decoded, resized, and

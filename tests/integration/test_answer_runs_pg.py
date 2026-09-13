@@ -573,6 +573,7 @@ class TestSchema:
                     "interactive_child_async_lifecycle",
                     "interactive_child_controls",
                     "child_cancel_submission_receipts",
+                    "attachment_occurrence_reference_index",
                 ],
             )
 

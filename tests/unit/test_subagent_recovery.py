@@ -7,7 +7,6 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import BaseModel
 
 from dlightrag.engine.agent.session.ids import (
     AttemptId,
@@ -20,7 +19,7 @@ from dlightrag.engine.agent.session.ids import (
 from dlightrag.engine.agent.session.memory import MemoryAgentSessionRepository
 from dlightrag.engine.agent.session.operation import ToolBatchItem
 from dlightrag.engine.agent.session.runtime import AgentSessionRuntime, OperationIdempotencyConflict
-from dlightrag.engine.agent.tools import AgentTool, ToolResult
+from dlightrag.engine.agent.tools import ToolResult
 from dlightrag.engine.ai.messages import AssistantTurn, ToolCall
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.research.runtime import (
@@ -55,7 +54,11 @@ async def test_child_continuation_terminal_usage_is_operation_local(
         if len(calls) == 2 and settled_tool_turn:
             return AssistantTurn(
                 text="",
-                tool_calls=(ToolCall(id="read-current", name="read", arguments={}),),
+                tool_calls=(
+                    ToolCall(
+                        id="read-current", name="read", arguments={"resource_id": "generated"}
+                    ),
+                ),
                 stop_reason="tool_use",
                 usage_details={"input_tokens": 5, "output_tokens": 2},
             )
@@ -82,7 +85,7 @@ async def test_child_continuation_terminal_usage_is_operation_local(
     async def read(_raw, _runtime):
         return ToolResult.text("read complete")
 
-    orchestrator._resource_tools = [AgentTool("read", "read", ReadInput, read)]
+    orchestrator._resource_reader = read
     parent = SessionId.new()
     child = SessionId.new()
     row = {}
@@ -142,11 +145,7 @@ async def test_child_continuation_terminal_usage_is_operation_local(
 
 
 @pytest.mark.asyncio
-async def test_v2_reconstruction_preserves_actual_pinned_tools():
-    import json
-    from pathlib import Path
-
-    from dlightrag.engine.agent.session.plan import AgentRunPlan
+async def test_recovery_preserves_current_pinned_tools():
 
     async def model(**kw):
         return AssistantTurn(text="recovered v2", tool_calls=(), stop_reason="stop")
@@ -160,10 +159,9 @@ async def test_v2_reconstruction_preserves_actual_pinned_tools():
     child = SessionId.new()
     context = _context_snapshot(parent)
     prepared = orchestrator.prepare_child_session(request, context_snapshot=context)
-    # Frozen from baseline a724e8a's real default composition (trusted environment).
-    oldplan = AgentRunPlan.from_payload(
-        json.loads((Path(__file__).parents[1] / "fixtures/legacy_v2_child_plan.json").read_text())
-    )
+    from dlightrag.engine.answer.research.runtime import _child_agent_plan
+
+    oldplan = _child_agent_plan(prepared, request)
     oldnames = {tool.name for tool in oldplan.tools}
     assert {"write", "edit", "bash"} <= oldnames
     # Reconstruct an actually accepted, not-yet-driven v2 Operation.
@@ -273,10 +271,6 @@ async def test_notification_input_is_immutable_after_evidence_restore():
         )
 
 
-class ReadInput(BaseModel):
-    pass
-
-
 def _batch(name):
     return ToolBatchItem(
         source_index=0,
@@ -301,7 +295,7 @@ async def test_concurrent_child_tool_cannot_overwrite_parent_dispatch_context():
         return ToolResult.text("read complete")
 
     orchestrator = _child_orchestrator(model)
-    orchestrator._resource_tools = [AgentTool("read", "fake read", ReadInput, read)]
+    orchestrator._resource_reader = read
     host = orchestrator.subagent_host
     assert host is not None
     parent = SessionId.new()
@@ -370,7 +364,9 @@ async def test_concurrent_child_tool_cannot_overwrite_parent_dispatch_context():
         parent_effects.execute_tool(pc, _batch("spawn_agent"), args, AttemptId.new(), AsyncMock())
     )
     await reached.wait()
-    await child_effects.execute_tool(cc, _batch("read"), {}, AttemptId.new(), AsyncMock())
+    await child_effects.execute_tool(
+        cc, _batch("read"), {"resource_id": "generated"}, AttemptId.new(), AsyncMock()
+    )
     release.set()
     await task
     await asyncio.gather(*host.tasks.values())

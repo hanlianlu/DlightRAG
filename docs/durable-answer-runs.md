@@ -306,8 +306,15 @@ serializes against blob deletion.
 
 Deleting a run removes only its references. Blob deletion occurs in one
 transaction only when no references survive; the foreign key protects a
-concurrent reuse. Deterministic conversion is recomputed from stored bytes.
-VLM inspection prose remains run Evidence rather than a cross-run cache.
+concurrent reuse. Adopted conversion text/status, MarkItDown version and input/output
+digests, embedded occurrences, and returned view derivatives use the existing
+resource/blob Effect Settlement path; same-Run recovery reuses the adopted view
+instead of reparsing. Raw image bytes remain separate from typed Session parts.
+New follow-up/fork Runs atomically retain exact selected-lineage attachment
+references under the consuming Run fence before hydration. Missing, mismatched,
+or unauthorized replay bytes fail explicitly; historical source handles do not
+become new-Run capabilities. See [Resource Reading](resource-reading.md) for the
+retention contract and independent-review requirements.
 
 ### `dlightrag_answer_artifact_attachments`
 
@@ -347,9 +354,10 @@ bytes and produces authority through settlement. Its model-visible `ToolResult`
 and `ArtifactAttachmentUpdate` commit atomically; a crash cannot commit one
 without the other.
 
-Image state stores resource/corpus identities, never data URIs. A missing corpus
-visual drops only its image while preserving text/citation; a missing attachment
-blob fails the run.
+Durable tool image state stores resource/corpus identities, never data URIs. A
+missing corpus visual drops only its image while preserving text/citation; a
+missing attachment blob fails the run. User image input keeps its existing
+bounded input representation.
 
 `spawn_agent` is replayable because child IDs derive from parent effect intent
 and accepted roster rows persist before handles become visible. Replay
@@ -359,6 +367,17 @@ children from their stored envelope. Same-Session continuation is a new
 Operation on the existing Child Session; recovery resumes that Operation rather
 than inventing a follow-up. Targeted controls and `ask_parent` requests are
 PostgreSQL-owned; missed notifications do not lose accepted work.
+
+A Child's pinned parent context stores byte-free tool attachment descriptors and
+exact immutable Entry/part/source/digest occurrences. If parent compaction later
+omits those messages, recovery hydrates only the accepted Child pin's already
+retained references in the current Run, under its owner and lease fence. The same
+closed occurrence binding checks apply as for selected-lineage adoption; missing
+or mismatched pins, references, or bytes fail explicitly. This read neither
+adopts another Run's references nor registers historical resource handles or
+cursors. Prior-Run occurrences must first pass selected-ancestry fenced adoption.
+Recovered pixels preserve original/derivative provenance and consume the image
+budget, with capability and context checks against the actual Child model.
 
 ### Fast Recovery
 

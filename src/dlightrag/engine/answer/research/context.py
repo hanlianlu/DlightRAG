@@ -12,7 +12,9 @@ from dlightrag.engine.answer.citations.indexer import CitationIndexer
 from dlightrag.engine.answer.errors import AnswerInputOverflowError
 from dlightrag.engine.answer.evidence import EvidenceLedger
 from dlightrag.engine.answer.memory import standing_memory_message
+from dlightrag.engine.answer.mode import resource_role
 from dlightrag.engine.answer.prompts import agent_control_prompt, control_turn_instruction
+from dlightrag.engine.answer.resources.converters import conversion_format
 from dlightrag.engine.answer.resources.models import ResourceManifestEntry
 from dlightrag.engine.rag.corpus.sources.source_contract import safe_source_filename
 
@@ -341,9 +343,18 @@ def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> s
     lines = ["## Registered run-scoped Resources"]
     for entry in manifest:
         filename = safe_source_filename(entry.filename or "resource")
-        kind = "image" if (entry.declared_mime or "").lower().startswith("image/") else "resource"
+        mime = (entry.declared_mime or "").split(";", 1)[0].lower()
+        format_name = conversion_format(filename, entry.declared_mime)
+        if resource_role(filename=filename, mime_type=entry.declared_mime) == "image":
+            kind = "image; view"
+        elif format_name == "pdf":
+            kind = "PDF; read text or view physical pages"
+        elif format_name in {"docx", "pptx", "xlsx"}:
+            kind = f"{format_name.upper()}; read extracted text and embedded-image inventory"
+        else:
+            kind = mime or "resource; type verified on acquisition"
         lines.append(f"- [resource: {entry.resource_id}] {filename} ({kind})")
-    lines.append("Use only these opaque resource ids with read or inspect.")
+    lines.append("Use these opaque resource ids with read for text or view for pixels.")
     return "\n".join(lines)
 
 

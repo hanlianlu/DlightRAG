@@ -5,8 +5,7 @@ import asyncio
 import base64
 import dataclasses
 import io
-from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -626,53 +625,18 @@ def _role_config(**roles: ModelSettings) -> DlightragConfig:
     )
 
 
-async def test_inspect_follows_vlm_capability_not_answer_capability() -> None:
-    from dlightrag.engine.answer.resources import ResourceInput
-    from dlightrag.engine.answer.resources.models import TextWindowBudget
-
+async def test_resource_composition_never_constructs_a_visual_model() -> None:
     config = _role_config()
     capabilities, _ = _coordinator(config)
     capabilities.resolve_profiles()
-    capabilities.narrow_role_image_profile("vlm", "supported")
+    models = MagicMock()
     resolver = AnswerResourceResolver(
-        settings=answer_resource_settings(config),
-        models=cast(Any, SimpleNamespace(vlm_func=MagicMock(return_value=AsyncMock()))),
-        capabilities=capabilities,
+        settings=answer_resource_settings(config), models=models, capabilities=capabilities
     )
-
-    _registry, tools = resolver.build_resource_context(
-        [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")],
-        text_window_budget=TextWindowBudget(tokens=1_000),
-        vlm_profile=capabilities.model_profile("vlm"),
-    )
-
-    assert [tool.name for tool in tools] == ["inspect"]
-
-
-async def test_inspect_is_withheld_when_only_the_answer_model_sees_images() -> None:
-    from dlightrag.engine.answer.resources import ResourceInput
-    from dlightrag.engine.answer.resources.models import TextWindowBudget
-
-    config = _role_config()
-    capabilities, _ = _coordinator(config)
-    capabilities.resolve_profiles()
-    capabilities.narrow_role_image_profile("vlm", "unsupported")
-    resolver = AnswerResourceResolver(
-        settings=answer_resource_settings(config),
-        models=cast(Any, SimpleNamespace(vlm_func=MagicMock(return_value=AsyncMock()))),
-        capabilities=capabilities,
-    )
-
-    _registry, tools = resolver.build_resource_context(
-        [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")],
-        text_window_budget=TextWindowBudget(tokens=1_000),
-        vlm_profile=dataclasses.replace(
-            capabilities.model_profile("vlm"),
-            supports_images=False,
-        ),
-    )
-
-    assert [tool.name for tool in tools] == []
+    registry = resolver.build_resource_context([])
+    assert registry is not None
+    models.vlm_func.assert_not_called()
+    await registry.aclose()
 
 
 async def test_zero_configured_ceiling_disables_answer_images_without_a_model_call(

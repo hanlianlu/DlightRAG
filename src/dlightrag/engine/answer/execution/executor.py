@@ -71,6 +71,7 @@ from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.scheduler import model_call_scope
 from dlightrag.engine.ai.settings import CHAT_MODEL_SELECTORS, ChatModelSelector
 from dlightrag.engine.ai.telemetry import Telemetry, safe_log_text
+from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
 from dlightrag.engine.answer.capabilities import (
     AnswerCapabilityCoordinator,
     RequestModelContext,
@@ -150,13 +151,14 @@ from dlightrag.engine.answer.resources.models import (
 from dlightrag.engine.answer.resources.registry import (
     FetchedBytesSink,
 )
-from dlightrag.engine.answer.resources.visual import ResourceInspector
+from dlightrag.engine.answer.resources.snapshots import ConversionSnapshot
 from dlightrag.engine.answer.results import store_answer_result
 from dlightrag.engine.answer.router import AnswerModeRouter
 from dlightrag.engine.answer.runs.routing import AnswerRoutingStore, decide_resolved_mode
 from dlightrag.engine.answer.tools.memory import MemoryHost
-from dlightrag.engine.answer.tools.resources import build_resource_tools, make_resource_reader
+from dlightrag.engine.answer.tools.resources import make_resource_reader, make_resource_viewer
 from dlightrag.engine.answer.tools.subagents import (
+    ChildContextSnapshot,
     SubagentHost,
 )
 from dlightrag.engine.answer.web_sources import WebSourceService
@@ -261,7 +263,28 @@ class ArtifactReader(Protocol):
 
 
 class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, Protocol):
-    """Executor store: artifacts plus the lease-fenced Routing Record."""
+    """Executor store: artifacts, selected attachment retention and fenced routing."""
+
+    async def load_child_attachment_occurrences(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        child_session_id: str,
+        context_snapshot: dict[str, Any],
+    ) -> tuple[RunFetchedResource, ...]: ...
+
+    async def retain_attachment_occurrences(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        selection: AttachmentReplaySelection,
+    ) -> tuple[RunFetchedResource, ...]: ...
 
 
 type PlannerHistoryInputMeasureFactory = Callable[..., Awaitable[HistoryInputMeasure]]
@@ -322,7 +345,6 @@ class ResolvedAnswerResources:
     models: RequestModelContext
     web_sources: WebSourceService | None
     registry: ResourceRegistry | None
-    resource_tools: list[AgentTool]
     resource_manifest: tuple[ResourceManifestEntry, ...]
     current_images: list[dict[str, Any]]
     current_image_count: int
@@ -331,7 +353,7 @@ class ResolvedAnswerResources:
 
 
 class AnswerResourceResolver:
-    """Resolve request resources, visual policy, and peer tools exactly once."""
+    """Resolve request resources and visual policy exactly once."""
 
     def __init__(
         self,
@@ -431,7 +453,6 @@ class AnswerResourceResolver:
         resources: list[ResourceInput] | None,
         *,
         models: RequestModelContext,
-        text_window_budget: TextWindowBudget,
         confirm_image_context: Callable[
             [RequestModelContext],
             Awaitable[tuple[RequestModelContext, AnswerImageCapability | None]],
@@ -440,7 +461,7 @@ class AnswerResourceResolver:
         resolved_mode: ResolvedMode,
         resource_scope: str | None = None,
     ) -> ResolvedAnswerResources:
-        """Resolve resource capabilities, manifests, tools, and image transport."""
+        """Resolve resource capabilities and image transport."""
         declared_image_count = sum(
             1
             for resource in resources or ()
@@ -475,12 +496,10 @@ class AnswerResourceResolver:
         )
 
         web_sources = self._models.web_sources()
-        registry, resource_tools = self.build_resource_context(
+        registry = self.build_resource_context(
             remaining_resources,
-            text_window_budget=text_window_budget,
             web_sources=web_sources,
             fetched_bytes_sink=fetched_bytes_sink,
-            vlm_profile=models.vlm,
             resource_scope=resource_scope,
         )
         try:
@@ -490,28 +509,20 @@ class AnswerResourceResolver:
                 else ()
             )
             resource_manifest = registry.manifest() if registry is not None else ()
-            image_budget: AnswerImageBudget | None = None
-            query_images: list[dict[str, Any]] | None = current_images or None
-            if resolved_mode == "research":
-                image_budget = self._capabilities.answer_image_policy(models.query).new_budget()
-                if image_capability is not None and image_capability.status == "supported":
-                    query_images = (
-                        await self.budget_agent_images(
-                            current_images,
-                            image_budget,
-                            current_image_resource_ids,
-                        )
-                        or None
-                    )
-                else:
-                    inspect_budget = self._capabilities.vlm_image_policy(models.vlm).new_budget()
-                    await self.budget_agent_images(current_images, inspect_budget)
-                    query_images = None
+            image_budget = self._capabilities.answer_image_policy(models.query).new_budget()
+            query_images = (
+                await self.budget_agent_images(
+                    current_images,
+                    image_budget,
+                    current_image_resource_ids if resolved_mode == "research" else (),
+                )
+                or None
+            )
+
             return ResolvedAnswerResources(
                 models=models,
                 web_sources=web_sources,
                 registry=registry,
-                resource_tools=resource_tools,
                 resource_manifest=resource_manifest,
                 current_images=current_images,
                 current_image_count=len(current_images),
@@ -610,11 +621,7 @@ class AnswerResourceResolver:
             image_count=image_count,
             configured_ceiling=capability.configured_ceiling,
         )
-        if resolved_mode == "fast" or not models.vlm.supports_images:
-            check_answer_image_capability(
-                image_count=image_count,
-                capability=capability,
-            )
+        check_answer_image_capability(image_count=image_count, capability=capability)
 
     async def materialize_link_image(self, url: str) -> bytes | None:
         """Fetch one current-image link under SSRF revalidation."""
@@ -633,13 +640,11 @@ class AnswerResourceResolver:
         self,
         resources: list[ResourceInput] | None,
         *,
-        text_window_budget: TextWindowBudget,
         web_sources: WebSourceService | None = None,
         fetched_bytes_sink: FetchedBytesSink | None = None,
-        vlm_profile: ModelProfile,
         resource_scope: str | None = None,
-    ) -> tuple[ResourceRegistry | None, list[AgentTool]]:
-        """Register resources and compose their text and visual peer tools.
+    ) -> ResourceRegistry:
+        """Register the admitted resources for read and view.
 
         The registry always exists in Research-capable composition so ``read(url=...)``
         does not depend on an Execution Environment or a configured provider.
@@ -659,24 +664,7 @@ class AnswerResourceResolver:
         except (ValueError, ResourceRegistryError) as exc:
             raise AnswerResourceAdmissionError() from exc
 
-        vlm_policy = self._capabilities.vlm_image_policy(vlm_profile)
-        visual_supported = vlm_profile.supports_images and vlm_policy.max_images > 0
-        inspector = (
-            ResourceInspector(
-                registry,
-                vlm_func=self._models.vlm_func(),
-                image_policy=vlm_policy,
-            )
-            if visual_supported
-            else None
-        )
-        tools = build_resource_tools(
-            registry,
-            text_window_budget=text_window_budget,
-            inspector=inspector,
-            visual_supported=visual_supported,
-        )
-        return registry, tools
+        return registry
 
     @staticmethod
     async def budget_agent_images(
@@ -801,7 +789,7 @@ class AnswerExecutor:
         """
         from dlightrag.engine.agent.environment import AccessScheduler
         from dlightrag.engine.agent.environment.local import LocalExecutionEnvironment
-        from dlightrag.engine.agent.tools.files import path_tools, read_tool
+        from dlightrag.engine.agent.tools.files import path_tools, read_tool, view_tool
         from dlightrag.engine.agent.tools.registry import ToolRegistry
         from dlightrag.engine.answer.tools.artifacts import attach_artifact_tool
         from dlightrag.engine.answer.tools.memory import (
@@ -820,6 +808,7 @@ class AnswerExecutor:
         # and later resource cursors have one stable accepted contract.
         tools: list[AgentTool] = [
             read_tool(None, access, resource_reader=unused_resource_reader),
+            view_tool(None, access),
         ]
         if self._execution_adapter is not None:
             tools.extend(
@@ -828,7 +817,7 @@ class AnswerExecutor:
                     LocalExecutionEnvironment(Path.cwd()),
                     scheduler=access,
                 )
-                if tool.name != "read"
+                if tool.name not in {"read", "view"}
             )
             tools.append(
                 attach_artifact_tool(
@@ -1240,9 +1229,14 @@ class AnswerExecutor:
                 owner_id=session.owner_id,
                 run_id=str(session.run_id),
             )
+        retained_snapshots = await self._restore_selected_attachments(session, selected_snapshot)
+        for resource_id, content in retained_snapshots.items():
+            if resource_id in attachment_snapshots and attachment_snapshots[resource_id] != content:
+                raise ValueError("retained attachment conflicts with current Run snapshot")
+            attachment_snapshots[resource_id] = content
         attachment_admissions = run.orchestrator.admit_durable_attachments(
             authoritative_messages,
-            attachment_snapshots,
+            retained_snapshots,
         )
         auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
         prepared_input = session.prepared_input or {}
@@ -1363,6 +1357,9 @@ class AnswerExecutor:
                         session=session,
                         fetched_buffer=fetched_buffer,
                         parent_session_id=session_id,
+                        restore_child_attachments=lambda child_id, context: (
+                            self._restore_child_attachments(session, child_id, context)
+                        ),
                         persist_child_runtime=persist_child_runtime,
                         claim_child=claim_child,
                         renew_child=renew_child,
@@ -1657,6 +1654,13 @@ class AnswerExecutor:
                     fast_compaction_trace.update(compaction_trace)
                     if compacted:
                         fast_boundaries.observe_session_progress()
+                    # Fast projection rebuilds history from durable Session entries,
+                    # so restore the already-budgeted transport pixels on that copy.
+                    run.orchestrator.hydrate_admitted_attachments(
+                        run.history.messages,
+                        retained_snapshots,
+                        attachment_admissions,
+                    )
                 await fast_boundaries.settle_planner()
 
             async with self._telemetry.observe(
@@ -1960,7 +1964,6 @@ class AnswerExecutor:
         resolved = await self._resources.resolve(
             resources,
             models=models,
-            text_window_budget=text_window_budget,
             confirm_image_context=self._capabilities.pinned_answer_context,
             fetched_bytes_sink=fetched_bytes_sink,
             resolved_mode=resolved_mode,
@@ -2055,11 +2058,7 @@ class AnswerExecutor:
                 ),
                 model_func=model_func,
                 stream_model_func=stream_model_func,
-                resource_tools=(
-                    [*resolved.resource_tools, *connection_tools]
-                    if resolved_mode == "research"
-                    else []
-                ),
+                injected_tools=list(connection_tools) if resolved_mode == "research" else [],
                 resource_manifest=resolved.resource_manifest,
                 register_web_source=(
                     resolved.registry.register_discovered_link
@@ -2089,6 +2088,9 @@ class AnswerExecutor:
                     MemoryHost()
                     if resolved_mode == "research" and self._memory_store is not None
                     else None
+                ),
+                resource_viewer=(
+                    make_resource_viewer(resolved.registry) if resolved.registry else None
                 ),
                 resource_reader=(
                     make_resource_reader(resolved.registry, text_window_budget)
@@ -2121,6 +2123,61 @@ class AnswerExecutor:
                 await resolved.registry.aclose()
             raise
 
+    async def _restore_child_attachments(
+        self, session: RunSession, child_id: SessionId, context: ChildContextSnapshot
+    ) -> dict[str, bytes]:
+        references = await self._store.load_child_attachment_occurrences(
+            owner_id=session.owner_id,
+            run_id=session.run_id,
+            worker_id=session.worker_id,
+            fencing_epoch=session.fencing_epoch,
+            child_session_id=child_id.value,
+            context_snapshot=context.canonical_payload(),
+        )
+        if len(references) != len(context.attachment_occurrences):
+            raise ValueError("Child attachment hydration returned incomplete references")
+        return await self._load_attachment_blobs(session, references)
+
+    async def _restore_selected_attachments(
+        self, session: RunSession, snapshot: Any
+    ) -> dict[str, bytes]:
+        selection = AttachmentReplaySelection.from_snapshot(snapshot)
+        if not selection.occurrences:
+            return {}
+        references = await self._store.retain_attachment_occurrences(
+            owner_id=session.owner_id,
+            run_id=session.run_id,
+            worker_id=session.worker_id,
+            fencing_epoch=session.fencing_epoch,
+            selection=selection,
+        )
+        if len(references) != len(selection.occurrences):
+            raise ValueError("selected attachment retention returned incomplete references")
+        return await self._load_attachment_blobs(session, references)
+
+    async def _load_attachment_blobs(
+        self, session: RunSession, references: Sequence[RunFetchedResource]
+    ) -> dict[str, bytes]:
+        content_by_resource: dict[str, bytes] = {}
+        for reference in references:
+            content = b"".join(
+                [
+                    chunk
+                    async for chunk in self._blob_store.stream(
+                        owner_id=session.owner_id, digest=reference.digest
+                    )
+                ]
+            )
+            if not content or hashlib.sha256(content).hexdigest() != reference.digest:
+                raise ValueError("retained attachment Blob is missing or has a mismatched digest")
+            if (
+                reference.resource_id in content_by_resource
+                and content_by_resource[reference.resource_id] != content
+            ):
+                raise ValueError("selected attachment resource identity conflict")
+            content_by_resource[reference.resource_id] = content
+        return content_by_resource
+
     async def _restore_registry_fetches(
         self,
         registry: ResourceRegistry,
@@ -2129,6 +2186,7 @@ class AnswerExecutor:
         run_id: str,
     ) -> dict[str, bytes]:
         attachment_snapshots: dict[str, bytes] = {}
+        conversions: list[tuple[str, bytes]] = []
         for resource in await self._store.list_fetched_resources(
             owner_id=owner_id,
             run_id=run_id,
@@ -2145,9 +2203,14 @@ class AnswerExecutor:
                     "A durable Web resource representation no longer exists.",
                 )
             content = b"".join(pieces)
+            if hashlib.sha256(content).hexdigest() != resource.digest:
+                raise ValueError("durable resource blob digest mismatch")
             capabilities = resource.capabilities
             attachment_snapshots[resource.resource_id] = content
-            if capabilities.get("resource_kind") == "tool_attachment":
+            if capabilities.get("resource_kind") == "conversion_snapshot":
+                conversions.append((resource.source_locator.decode(), content))
+                continue
+            if capabilities.get("resource_kind") in {"tool_attachment", "conversion_asset"}:
                 continue
             raw_aliases = capabilities.get("resource_aliases", [])
             if (
@@ -2188,6 +2251,16 @@ class AnswerExecutor:
                     "run_execution_failed",
                     "A durable Web resource catalog entry is invalid.",
                 ) from exc
+        for parent_id, encoded in conversions:
+            snapshot = ConversionSnapshot.restore(encoded, attachment_snapshots)
+            if snapshot.resource_id != parent_id:
+                raise ValueError("conversion snapshot parent mismatch")
+            # Recovery must verify durable source bytes, including lazy inputs.
+            # Registry adoption separately guards any already-materialized source.
+            original = await registry.materialize(parent_id)
+            if hashlib.sha256(original).hexdigest() != snapshot.input_digest:
+                raise ValueError("conversion snapshot input digest mismatch")
+            registry.adopt_conversion_snapshot(snapshot)
         return attachment_snapshots
 
     async def _answer_run_resources(

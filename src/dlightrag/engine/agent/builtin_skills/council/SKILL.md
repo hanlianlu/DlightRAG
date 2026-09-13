@@ -28,7 +28,7 @@ Completion: the declared plan is written, first-pass children are accepted, opti
 1. **Select investigations.** Choose two or three independent objectives that can change the answer. One child failure does not abort siblings; inspect the failure and decide whether to continue, replace the path, or cancel.
    Completion: each objective is unique, concrete, and inside the user's scope.
 
-2. **First pass, read-only.** Call `spawn_agent` and continue useful parent work. Omit `tools` or list only read-only names (`search_knowledge_base`, `search_web`, `read`, `inspect`, `grep`, `find`, `ls`, `recall_memory`, `load_skill`, `ask_parent`). Do not pass `write`, `edit`, `bash`, or `attach_artifact`. Host permission ceilings remain the real enforcement; this Skill cannot widen them.
+2. **First pass, read-only.** Call `spawn_agent` and continue useful parent work. Omit `tools` or list only read-only names (`search_knowledge_base`, `search_web`, `read`, `view`, `grep`, `find`, `ls`, `recall_memory`, `load_skill`, `ask_parent`). Do not pass `write`, `edit`, `bash`, or `attach_artifact`. Host permission ceilings remain the real enforcement; this Skill cannot widen them.
    Completion: `spawn_agent` returned stable `child_session_id` handles without waiting for every child to finish.
 
 3. **Optional cross-examination.** If a material dispute remains that child Evidence could settle, call `continue_subagent` on the original Child Sessions with a curated challenge packet. Do not dump peer transcripts. Do not spawn replacement children for a user-cancelled objective unless the user explicitly reauthorized that work.

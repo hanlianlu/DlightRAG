@@ -101,15 +101,10 @@ def _openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]
                         }
                     )
             if parts:
-                converted.append(
-                    {
-                        "role": "user",
-                        "content": parts,
-                        # Multimodal tool data is never instructions; providers
-                        # that lack the field ignore it.
-                        "untrusted_tool_data": True,
-                    }
-                )
+                # Tool pixels ride as ordinary user content after the tool
+                # result; they are not tool-role instructions and must not use
+                # repository-private wire fields.
+                converted.append({"role": "user", "content": parts})
     return converted
 
 
@@ -171,7 +166,7 @@ class OpenAICompatibleProvider(CompletionProvider):
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
     ) -> CompletionOutput:
-        call_kwargs: dict[str, Any] = {"model": model, "messages": messages}
+        call_kwargs: dict[str, Any] = {"model": model, "messages": _openai_tool_messages(messages)}
         if temperature is not None:
             call_kwargs["temperature"] = temperature
         if max_tokens is not None:
@@ -372,7 +367,7 @@ class OpenAICompatibleProvider(CompletionProvider):
         usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore[override]
         async for token in self.stream(
-            _openai_tool_messages(messages),
+            messages,
             model,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -413,7 +408,7 @@ class OpenAICompatibleProvider(CompletionProvider):
     ) -> AsyncGenerator[str]:  # type: ignore
         call_kwargs: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": _openai_tool_messages(messages),
             "stream": True,
         }
         if temperature is not None:

@@ -126,13 +126,19 @@ def _anthropic_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, A
                 "content": str(message.get("content") or ""),
                 "is_error": bool(message.get("is_error", False)),
             }
-            for attachment in message.get("attachments") or ():
-                if isinstance(attachment, dict) and attachment.get("data_url"):
-                    block["content"] = [
-                        {"type": "text", "text": str(message.get("content") or "")},
-                        _attachment_image_block(str(attachment["data_url"])),
-                    ]
-                    break
+            attachments = [
+                attachment
+                for attachment in message.get("attachments") or ()
+                if isinstance(attachment, dict) and attachment.get("data_url")
+            ]
+            if attachments:
+                block["content"] = [
+                    {"type": "text", "text": str(message.get("content") or "")},
+                    *(
+                        _attachment_image_block(str(attachment["data_url"]))
+                        for attachment in attachments
+                    ),
+                ]
             if (
                 converted
                 and converted[-1].get("role") == "user"
@@ -236,10 +242,7 @@ class AnthropicProvider(CompletionProvider):
 
         call_kwargs: dict[str, Any] = {
             "model": model,
-            "messages": [
-                {"role": m["role"], "content": _convert_content(m.get("content", ""))}
-                for m in non_system
-            ],
+            "messages": _anthropic_tool_messages(non_system),
             "max_tokens": max_tokens or 8192,
         }
         if system:
@@ -524,12 +527,8 @@ class AnthropicProvider(CompletionProvider):
         model_kwargs: dict[str, Any] | None = None,
         usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore[override]
-        system, non_system = _extract_system(messages)
-        normalized: list[dict[str, Any]] = _anthropic_tool_messages(non_system)
-        if system:
-            normalized.insert(0, {"role": "system", "content": system})
         async for token in self.stream(
-            normalized,
+            messages,
             model,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -553,10 +552,7 @@ class AnthropicProvider(CompletionProvider):
 
         call_kwargs: dict[str, Any] = {
             "model": model,
-            "messages": [
-                {"role": m["role"], "content": _convert_content(m.get("content", ""))}
-                for m in non_system
-            ],
+            "messages": _anthropic_tool_messages(non_system),
             "max_tokens": max_tokens or 8192,
             "stream": True,
         }

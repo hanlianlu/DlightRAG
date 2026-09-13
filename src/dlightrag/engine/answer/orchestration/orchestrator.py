@@ -57,6 +57,7 @@ from dlightrag.engine.agent.tools.files import (
     PreparedImageAttachment,
     ResourceReader,
     ResourceReadRequest,
+    ResourceViewer,
 )
 from dlightrag.engine.agent.tools.registry import DuplicateToolError, ToolRegistry
 from dlightrag.engine.ai.capacity import (
@@ -130,6 +131,7 @@ class PreparedRun:
     model_profile: ModelProfile
     attachment_snapshots: dict[str, bytes] = field(default_factory=dict)
     attachment_admissions: dict[str, int] = field(default_factory=dict)
+    inherited_attachment_admissions: dict[str, int] = field(default_factory=dict)
     model_role: str = "query"
     model_identity: Mapping[str, Any] | None = None
     agent_turn_count: int = 0
@@ -137,6 +139,20 @@ class PreparedRun:
     last_turn: ExecutedTurn | None = None
     compaction_overflow_retried: bool = False
     streamed_terminal_text: str | None = None
+
+
+@dataclass(slots=True)
+class ChildAttachmentAdmissions:
+    """One child session's attachment admission record.
+
+    ``inherited`` holds the parent-context occurrences admitted for this
+    child; ``cumulative`` adds the occurrences the child admitted while
+    working. The same record and dicts are handed back on retry/continuation,
+    so already-admitted occurrences are never reserved twice.
+    """
+
+    inherited: dict[str, int]
+    cumulative: dict[str, int]
 
 
 class AnswerOrchestrator:
@@ -150,7 +166,7 @@ class AnswerOrchestrator:
         search_web: WebSearch | None = None,
         model_func: ToolModel | None = None,
         stream_model_func: StreamModel | None = None,
-        resource_tools: list[AgentTool] | None = None,
+        injected_tools: list[AgentTool] | None = None,
         resource_manifest: tuple[ResourceManifestEntry, ...] = (),
         register_web_source: Callable[[str], str | None] | None = None,
         image_budget: AnswerImageBudget | None = None,
@@ -162,6 +178,7 @@ class AnswerOrchestrator:
         environment: ExecutionEnvironment | None = None,
         search_toolchain: SearchToolchain | None = None,
         resource_reader: ResourceReader | None = None,
+        resource_viewer: ResourceViewer | None = None,
         resolved_mode: ResolvedMode,
         subagent_host: SubagentHost | None = None,
         memory_host: MemoryHost | None = None,
@@ -175,10 +192,12 @@ class AnswerOrchestrator:
         self._search_web = search_web
         self._model_func = model_func
         self._stream_model_func = stream_model_func
-        self._resource_tools = list(resource_tools or [])
+        self._injected_tools = list(injected_tools or [])
         self._resource_manifest = tuple(resource_manifest)
         self._register_web_source = register_web_source
         self._image_budget = image_budget
+        self._attachment_snapshots: dict[str, bytes] = {}
+        self._child_attachment_admissions: dict[str, ChildAttachmentAdmissions] = {}
         self._text_window_budget = text_window_budget
         self._model_profile = model_profile
         self._context_policy = context_policy
@@ -187,6 +206,7 @@ class AnswerOrchestrator:
         self._environment = environment
         self._search_toolchain = search_toolchain
         self._resource_reader = resource_reader
+        self._resource_viewer = resource_viewer
         self._workspace: RunWorkspace | None = None
         self._resolved_mode: ResolvedMode = resolved_mode
         self._subagent_host = subagent_host
@@ -270,17 +290,15 @@ class AnswerOrchestrator:
             selected.tree.ancestry(runtime_context.lane_id),
             selected.active_projection,
         )
-        _hydrate_attachment_messages(
-            messages,
-            run.attachment_snapshots,
-            admissions=run.attachment_admissions,
-        )
+        from dlightrag.engine.answer.attachment_replay import AttachmentReplaySelection
+
         self._subagent_host.context_snapshot = ChildContextSnapshot.from_values(
             parent_session_id=runtime_context.session_id,
             parent_entry_id=parent_entry_id,
             depth=self._subagent_host.depth,
             messages=messages,
             evidence_state=run.evidence.durable_state(),
+            attachment_occurrences=AttachmentReplaySelection.from_snapshot(selected).occurrences,
         )
 
     def admit_durable_attachments(
@@ -289,10 +307,34 @@ class AnswerOrchestrator:
         snapshots: Mapping[str, bytes],
     ) -> dict[str, int]:
         """Reserve retained attachment payloads once in this run's shared budget."""
-        return _admit_durable_attachment_messages(
+        admissions = _admit_durable_attachment_messages(messages, snapshots, self._image_budget)
+        _hydrate_attachment_messages(messages, snapshots, admissions=admissions)
+        return admissions
+
+    def hydrate_admitted_attachments(
+        self,
+        messages: list[dict[str, Any]],
+        snapshots: Mapping[str, bytes],
+        admissions: Mapping[str, int],
+    ) -> None:
+        """Restore projected attachment pixels without reserving them a second time."""
+        _hydrate_attachment_messages(messages, snapshots, admissions=admissions)
+
+    def admit_child_history(self, run: PreparedRun, messages: list[dict[str, Any]]) -> None:
+        """Charge only child occurrences not already admitted in this live Host."""
+        admissions = _admit_durable_attachment_messages(
             messages,
-            snapshots,
+            run.attachment_snapshots,
             self._image_budget,
+            already_admitted=run.attachment_admissions,
+            initial_counts=run.inherited_attachment_admissions,
+        )
+        for resource_id, count in admissions.items():
+            run.attachment_admissions[resource_id] = max(
+                count, run.attachment_admissions.get(resource_id, 0)
+            )
+        _hydrate_attachment_messages(
+            messages, run.attachment_snapshots, admissions=run.attachment_admissions
         )
 
     def bind_memory(
@@ -389,6 +431,7 @@ class AnswerOrchestrator:
             conversation_history=conversation_history,
             memory_text=self._memory_text,
             current_images=query_images,
+            image_budget=self._image_budget,
         )
         if stream is not None:
             existing = getattr(stream, "trace", None)
@@ -557,6 +600,7 @@ class AnswerOrchestrator:
         if self._model_func is None:
             raise RuntimeError("Research answer requires a tool-capable model")
         self._parent_query = query
+        self._attachment_snapshots = dict(attachment_snapshots or {})
         self._parent_history = conversation_history or PriorTurns()
         evidence = EvidenceLedger(image_budget=self._image_budget)
         retained_tail_tokens = self._context_policy.retained_tail_target(self._model_profile)
@@ -587,7 +631,7 @@ class AnswerOrchestrator:
             working=WorkingContextProjection(retained_tail_tokens=retained_tail_tokens),
             registry=registry,
             trace=trace,
-            attachment_snapshots=dict(attachment_snapshots or {}),
+            attachment_snapshots=self._attachment_snapshots,
             attachment_admissions=dict(attachment_admissions or {}),
             model_func=self._model_func,
             stream_model_func=self._stream_model_func,
@@ -595,12 +639,21 @@ class AnswerOrchestrator:
             agent_turn_count=agent_turn_count,
         )
 
+    def restore_child_attachment_snapshots(self, snapshots: Mapping[str, bytes]) -> None:
+        """Install only Host-authorized pinned occurrence bytes, never registry handles."""
+        for resource_id, content in snapshots.items():
+            existing = self._attachment_snapshots.get(resource_id)
+            if existing is not None and existing != content:
+                raise ValueError("Child attachment conflicts with current Run snapshot")
+            self._attachment_snapshots[resource_id] = content
+
     def prepare_child_session(
         self,
         request: ChildRequest,
         *,
         context_snapshot: ChildContextSnapshot,
         child_session_id: str = "",
+        admit_images: bool = True,
     ) -> PreparedRun:
         """Build a bounded child with selected context and inherited tool subset."""
         if self._child_model_resolver is None:
@@ -613,10 +666,11 @@ class AnswerOrchestrator:
             child_model, child_stream, child_profile = self._child_model_resolver(
                 request.model_role
             )
-        if request.context == "parent" and not child_profile.supports_images:
-            if any(
+        inherited_messages = context_snapshot.messages if request.context == "parent" else []
+        if not child_profile.supports_images:
+            if any(message.get("attachments") for message in inherited_messages) or any(
                 isinstance(block, dict) and block.get("type") == "image_url"
-                for message in context_snapshot.messages
+                for message in inherited_messages
                 for block in (
                     message["content"] if isinstance(message.get("content"), list) else []
                 )
@@ -624,6 +678,27 @@ class AnswerOrchestrator:
                 raise ValueError(
                     f"child model {request.model_role} does not support inherited images"
                 )
+        inherited_admissions: dict[str, int] = {}
+        admissions: dict[str, int] = {}
+        if admit_images:
+            if child_session_id and (
+                record := self._child_attachment_admissions.get(child_session_id)
+            ):
+                inherited_admissions = record.inherited
+                admissions = record.cumulative
+                _hydrate_attachment_messages(
+                    inherited_messages, self._attachment_snapshots, admissions=inherited_admissions
+                )
+            else:
+                inherited_admissions = self.admit_durable_attachments(
+                    inherited_messages, self._attachment_snapshots
+                )
+                admissions = dict(inherited_admissions)
+                if child_session_id:
+                    self._child_attachment_admissions[child_session_id] = ChildAttachmentAdmissions(
+                        inherited=inherited_admissions,
+                        cumulative=admissions,
+                    )
         evidence = EvidenceLedger(image_budget=self._image_budget)
         if request.context == "parent" and context_snapshot.evidence_state:
             evidence.restore_ledger_state(context_snapshot.evidence_state)
@@ -639,10 +714,11 @@ class AnswerOrchestrator:
             skill_tools=[] if skills is None else skills.tools(child=True),
             tool_names=request.tools,
             child_session_id=child_session_id,
+            model_profile=child_profile,
         )
         history = PriorTurns()
         if request.context == "parent":
-            history = PriorTurns(context_snapshot.messages)
+            history = PriorTurns(inherited_messages)
         trace["child_depth"] = context_snapshot.depth + 1
         trace["parent_entry_id"] = context_snapshot.parent_entry_id.value
         return PreparedRun(
@@ -662,6 +738,9 @@ class AnswerOrchestrator:
             working=WorkingContextProjection(retained_tail_tokens=retained_tail_tokens),
             registry=None,
             trace=trace,
+            attachment_snapshots=self._attachment_snapshots,
+            attachment_admissions=admissions,
+            inherited_attachment_admissions=inherited_admissions,
             model_func=child_model,
             stream_model_func=child_stream,
             model_profile=child_profile,
@@ -716,6 +795,7 @@ class AnswerOrchestrator:
         skill_tools: list[AgentTool],
         tool_names: tuple[str, ...] | None = None,
         child_session_id: str = "",
+        model_profile: ModelProfile | None = None,
     ) -> list[AgentTool]:
         subagent_host = self._subagent_host
         if subagent_host is not None and not child:
@@ -748,13 +828,18 @@ class AnswerOrchestrator:
             trace=trace,
             retrieve_knowledge_base=self._retrieve_knowledge_base,
             search_web=self._search_web,
-            resource_tools=self._resource_tools,
+            injected_tools=self._injected_tools,
             register_web_source=self._register_web_source,
             resource_reader=self._resource_reader_for_run(),
+            resource_viewer=self._resource_viewer,
             environment=self._environment,
             scheduler=self._access,
             search_toolchain=self._search_toolchain,
-            image_preparer=self._prepare_local_image,
+            image_preparer=(
+                self._prepare_local_image
+                if (model_profile or self._model_profile).supports_images
+                else lambda _data, _label: None
+            ),
             spill=(None if self._workspace is None else self._spill_writer()),
             output_stage_factory=(
                 None if self._workspace is None else self._output_stage_factory()
@@ -784,7 +869,7 @@ class AnswerOrchestrator:
                 "search_knowledge_base",
                 "search_web",
                 "read",
-                "inspect",
+                "view",
                 "grep",
                 "find",
                 "ls",
@@ -923,29 +1008,50 @@ def _admit_durable_attachment_messages(
     messages: list[dict[str, Any]],
     snapshots: Mapping[str, bytes],
     budget: AnswerImageBudget | None,
+    *,
+    already_admitted: Mapping[str, int] | None = None,
+    initial_counts: Mapping[str, int] | None = None,
 ) -> dict[str, int]:
     """Rebuild one run's image budget from retained durable attachment occurrences."""
-    admitted: dict[str, int] = {}
+    admitted = dict(initial_counts or {})
     for message in messages:
+        blocks = message.get("content")
+        for block in blocks if isinstance(blocks, list) else ():
+            if not isinstance(block, dict) or block.get("type") != "image_url":
+                continue
+            image = block.get("image_url", {})
+            url = image.get("url", "") if isinstance(image, dict) else ""
+            if not isinstance(url, str) or not url.startswith("data:"):
+                raise ValueError("inherited image requires retained inline bytes")
+            content, _ = decode_image_base64(url)
+            if budget is None or not budget.reserve_prepared(content, label="inherited_image"):
+                raise AnswerInputOverflowError(
+                    "Inherited image exceeds the current model image budget"
+                )
         attachments = message.get("attachments")
         if not isinstance(attachments, list):
             continue
         for attachment in attachments:
             if not isinstance(attachment, dict):
-                continue
+                raise ValueError("invalid durable attachment")
             resource_id = str(attachment.get("resource_id") or "")
             content = snapshots.get(resource_id)
             if content is None:
-                continue
+                raise ValueError("durable visual evidence blob is missing")
             _validate_attachment_snapshot(attachment, content)
             media_type = str(attachment.get("media_type") or "application/octet-stream")
-            if media_type.startswith("image/"):
+            count = admitted.get(resource_id, 0) + 1
+            if media_type.startswith("image/") and count > (already_admitted or {}).get(
+                resource_id, 0
+            ):
                 if budget is None or not budget.reserve_prepared(
                     content,
                     label=f"durable_attachment:{resource_id}",
                 ):
-                    continue
-            admitted[resource_id] = admitted.get(resource_id, 0) + 1
+                    raise AnswerInputOverflowError(
+                        "Retained visual evidence exceeds the current model image budget"
+                    )
+            admitted[resource_id] = count
     return admitted
 
 
@@ -962,20 +1068,25 @@ def _hydrate_attachment_messages(
         if not isinstance(attachments, list):
             continue
         for attachment in attachments:
-            if not isinstance(attachment, dict) or attachment.get("data_url"):
-                continue
+            if not isinstance(attachment, dict):
+                raise ValueError("invalid durable attachment")
             resource_id = str(attachment.get("resource_id") or "")
             content = snapshots.get(resource_id)
             if content is None:
-                continue
+                raise ValueError("durable visual evidence blob is missing")
             occurrence = occurrences.get(resource_id, 0) + 1
             occurrences[resource_id] = occurrence
             if admissions is not None and occurrence > admissions.get(resource_id, 0):
-                continue
+                raise AnswerInputOverflowError(
+                    "Retained visual evidence was not admitted to the model image budget"
+                )
             _validate_attachment_snapshot(attachment, content)
             media_type = str(attachment.get("media_type") or "application/octet-stream")
             encoded = base64.b64encode(content).decode("ascii")
-            attachment["data_url"] = f"data:{media_type};base64,{encoded}"
+            data_url = f"data:{media_type};base64,{encoded}"
+            if attachment.get("data_url") not in (None, data_url):
+                raise ValueError("durable attachment inline bytes mismatch its snapshot")
+            attachment["data_url"] = data_url
 
 
 def _validate_attachment_snapshot(attachment: Mapping[str, Any], content: bytes) -> None:

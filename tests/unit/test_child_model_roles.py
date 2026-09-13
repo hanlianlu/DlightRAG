@@ -158,7 +158,7 @@ async def _prepared_executor(monkeypatch):
         return_value=SimpleNamespace(
             models=models,
             current_images=[],
-            resource_tools=[],
+            injected_tools=[],
             resource_manifest=(),
             web_sources=None,
             registry=None,
@@ -308,10 +308,26 @@ def test_parent_recovery_fails_closed_on_default_or_reasoning_drift(drift):
 
 async def test_nonvisual_selected_model_rejects_image_inputs_without_provider_io(monkeypatch):
     executor, orchestrator, provider, _ = await _prepared_executor(monkeypatch)
+    import base64
+    import io
+    import json
+
+    from PIL import Image
+
+    from tests.unit.conftest import answer_image_policy
+
+    pixels = io.BytesIO()
+    Image.new("RGB", (32, 32), "blue").save(pixels, format="PNG")
+    policy = answer_image_policy(max_images=1)
+    image = policy.new_budget().add_base64(
+        base64.b64encode(pixels.getvalue()).decode(), label="generated user image"
+    )
+    assert image is not None
+    orchestrator._image_budget = policy.new_budget()
     parent = SessionId.new()
     context = replace(
         _context_snapshot(parent),
-        messages_json='[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,eA=="}}]}]',
+        messages_json=json.dumps([{"role": "user", "content": [image]}]),
     )
     try:
         with pytest.raises(ValueError, match="inherited images"):
@@ -324,6 +340,14 @@ async def test_nonvisual_selected_model_rejects_image_inputs_without_provider_io
             context_snapshot=context,
         )
         assert visual.model_profile.supports_images
+        assert orchestrator._image_budget.count == 1
+        from dlightrag.engine.answer.errors import AnswerInputOverflowError
+
+        with pytest.raises(AnswerInputOverflowError, match="image budget"):
+            orchestrator.prepare_child_session(
+                ChildRequest(objective="View again", context="parent", model_role="vlm"),
+                context_snapshot=context,
+            )
         with pytest.raises(ModelCapabilityError, match="image inputs"):
             await executor._models.tool_model("default")(
                 messages=context.messages,
