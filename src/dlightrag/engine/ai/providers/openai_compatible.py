@@ -124,10 +124,15 @@ class OpenAICompatibleProvider(CompletionProvider):
     (DeepSeek thinking, Kimi partial, etc.).
 
     Tracks ``last_reasoning`` — the ``reasoning_content`` from the most
-    recent completion or stream call.  It is exposed for optional display
-    or observability only and is never fed back into conversation history:
-    re-injecting reasoning wastes context and some providers (DeepSeek's
-    legacy reasoner) reject a ``reasoning_content`` field in input.
+    recent completion or stream call, for optional display or observability.
+    That attribute is a read-only mirror, never the transport.
+
+    Reasoning that must survive a tool loop travels in ``provider_state``: a
+    tool turn stores the provider's own ``reasoning_content`` and
+    ``reasoning_details``, and :func:`_openai_tool_messages` echoes them back
+    verbatim, because signed or opaque reasoning state breaks a tool loop when
+    it is rebuilt or filtered.  Current thinking-mode endpoints require that
+    echo on tool turns; only non-tool turns may drop it.
     """
 
     def __init__(self, **kwargs: Any) -> None:
