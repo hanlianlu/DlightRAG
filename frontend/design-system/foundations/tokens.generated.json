@@ -326,6 +326,14 @@
     "$type": "color",
     "$value": "#574a24"
   },
+  "color-green-400": {
+    "$type": "color",
+    "$value": "#4ade80"
+  },
+  "color-green-700": {
+    "$type": "color",
+    "$value": "#15803d"
+  },
   "color-image-caption": {
     "$type": "color",
     "$value": "{color-text-tertiary}",
@@ -538,6 +546,24 @@
   "color-stone-950": {
     "$type": "color",
     "$value": "#0c0a09"
+  },
+  "color-success": {
+    "$type": "color",
+    "$value": "{color-green-400}",
+    "$extensions": {
+      "org.dlightrag.modes": {
+        "light": "{color-green-700}"
+      }
+    }
+  },
+  "color-success-surface": {
+    "$type": "color",
+    "$value": "rgb(74 222 128 / 15%)",
+    "$extensions": {
+      "org.dlightrag.modes": {
+        "light": "rgb(21 128 61 / 14%)"
+      }
+    }
   },
   "color-text-dim": {
     "$type": "color",
@@ -814,6 +840,26 @@
   "size-lightbox-nav-width": {
     "$type": "dimension",
     "$value": "clamp(44px, 6vw, 72px)"
+  },
+  "size-switch-height": {
+    "$type": "dimension",
+    "$value": "24px"
+  },
+  "size-switch-inset": {
+    "$type": "dimension",
+    "$value": "5px"
+  },
+  "size-switch-thumb": {
+    "$type": "dimension",
+    "$value": "14px"
+  },
+  "size-switch-travel": {
+    "$type": "dimension",
+    "$value": "calc(\n    var(--size-switch-width) - var(--size-switch-thumb) - 2 * var(--size-switch-inset)\n  )"
+  },
+  "size-switch-width": {
+    "$type": "dimension",
+    "$value": "40px"
   },
   "space-2xs": {
     "$type": "dimension",

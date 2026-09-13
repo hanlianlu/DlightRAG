@@ -87,6 +87,86 @@ a.dl-btn {
     color: var(--color-on-danger);
 }
 
+/* === Switch === */
+
+/* Applied to a native <button role="switch" aria-checked="true|false">. The product owns the
+ * state and the accessible name; the primitive owns the track, the thumb, the motion, and the
+ * focus ring. Geometry stays symmetric through the two foundation invariants:
+ * height = thumb + 2 * inset, and width = thumb + 2 * inset + travel. */
+
+.dl-switch {
+    align-items: center;
+    background: var(--color-control-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    box-sizing: border-box;
+    cursor: pointer;
+    display: inline-flex;
+    flex: none;
+    block-size: var(--size-switch-height);
+    inline-size: var(--size-switch-width);
+    padding: 0;
+    transition:
+        background var(--duration-control) var(--easing-standard),
+        border-color var(--duration-control) var(--easing-standard);
+}
+
+/* The 1px border sits outside the padding box, so the thumb inset loses exactly one pixel. */
+.dl-switch::after {
+    background: var(--color-text-dim);
+    block-size: var(--size-switch-thumb);
+    border-radius: var(--radius-circle);
+    content: '';
+    inline-size: var(--size-switch-thumb);
+    margin-inline-start: calc(var(--size-switch-inset) - 1px);
+    transition:
+        background var(--duration-control) var(--easing-standard),
+        transform var(--duration-control) var(--easing-standard);
+}
+
+.dl-switch:focus-visible {
+    outline: 2px solid var(--focus-ring-color);
+    outline-offset: 2px;
+}
+
+.dl-switch:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.dl-switch[aria-checked='true'] {
+    background: var(--color-action-bg);
+    border-color: var(--color-action-border);
+}
+
+.dl-switch[aria-checked='true']::after {
+    background: var(--color-on-action);
+    transform: translateX(var(--size-switch-travel));
+}
+
+.dl-switch:hover:not(:disabled) {
+    border-color: var(--color-control-border-hover);
+}
+
+@media (forced-colors: active) {
+    .dl-switch {
+        border-color: ButtonText;
+    }
+
+    .dl-switch::after {
+        background: ButtonText;
+    }
+
+    .dl-switch[aria-checked='true'] {
+        background: Highlight;
+        border-color: Highlight;
+    }
+
+    .dl-switch[aria-checked='true']::after {
+        background: HighlightText;
+    }
+}
+
 
 /* === Confirm Dialog === */
 

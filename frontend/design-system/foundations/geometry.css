@@ -22,6 +22,16 @@
   --size-button: clamp(28px, 2.8vw, 34px);
   --size-icon-sm: var(--space-xs);
   --size-icon-md: var(--space-s);
+
+  /* Switch track and thumb. The two derived invariants are what the primitive and its
+   * geometry test rely on: height = thumb + 2 * inset, and width = thumb + 2 * inset + travel. */
+  --size-switch-width: 40px;
+  --size-switch-height: 24px;
+  --size-switch-thumb: 14px;
+  --size-switch-inset: 5px;
+  --size-switch-travel: calc(
+    var(--size-switch-width) - var(--size-switch-thumb) - 2 * var(--size-switch-inset)
+  );
   --dl-icon-size-xs: 12px;
   --dl-icon-size-sm: 16px;
   --dl-icon-size-md: 20px;

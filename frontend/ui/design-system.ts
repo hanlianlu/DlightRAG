@@ -20,6 +20,7 @@ const TOKEN_NAMES = [
   'color-text-muted',
   'color-accent-action',
   'color-danger',
+  'color-success',
   'color-border-subtle',
   'focus-ring-color',
   'radius-control',
@@ -65,6 +66,12 @@ if (host) {
             <button class="dl-btn dl-btn-danger-text" type="button">Destructive</button>
             <label class="dl-dialog-checkbox"><input type="checkbox" checked> Checkbox</label>
             <label class="dl-dialog-checkbox"><input type="radio" checked> Radio</label>
+            <button class="dl-switch" type="button" role="switch" aria-checked="false"
+                    aria-label="Switch off specimen"></button>
+            <button class="dl-switch" type="button" role="switch" aria-checked="true"
+                    aria-label="Switch on specimen"></button>
+            <button class="dl-switch" type="button" role="switch" aria-checked="false" disabled
+                    aria-label="Switch disabled specimen"></button>
             <textarea class="dl-dialog-input" rows="2" placeholder="Text input"></textarea>
           </div>
         </section>

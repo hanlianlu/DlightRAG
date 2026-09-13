@@ -25,6 +25,8 @@
   --color-gold-500: #574a24;
   --color-red-400: #f87171;
   --color-red-700: #b91c1c;
+  --color-green-400: #4ade80;
+  --color-green-700: #15803d;
   --color-text-primary: var(--color-stone-100);
   --color-text-secondary: var(--color-stone-200);
   --color-text-tertiary: var(--color-stone-300);
@@ -43,6 +45,8 @@
   --color-divider: rgb(120 113 108 / 12%);
   --color-danger: var(--color-red-400);
   --color-danger-surface: rgb(248 113 113 / 15%);
+  --color-success: var(--color-green-400);
+  --color-success-surface: rgb(74 222 128 / 15%);
   --color-accent-text: rgb(210 182 97 / 78%);
   --color-accent-indicator: rgb(210 182 97 / 72%);
   --color-accent-border-strong: rgb(210 182 97 / 40%);
@@ -115,6 +119,8 @@
   --color-danger: var(--color-red-700);
   --color-danger-bg: var(--color-red-700);
   --color-danger-surface: rgb(185 28 28 / 14%);
+  --color-success: var(--color-green-700);
+  --color-success-surface: rgb(21 128 61 / 14%);
   --color-on-danger: #fff;
   --color-accent-text: rgb(126 108 55 / 85%);
   --color-accent-indicator: rgb(126 108 55 / 78%);

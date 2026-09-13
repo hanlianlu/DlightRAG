@@ -83,6 +83,65 @@ it('confirm-dialog checkbox input centers against its label line', () => {
   expect(Math.abs(inputCenter - labelCenter)).to.be.lessThanOrEqual(2);
 });
 
+it('switch foundations satisfy both symmetry invariants', () => {
+  const token = (name: string): number => Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue(name),
+  );
+  const width = token('--size-switch-width');
+  const height = token('--size-switch-height');
+  const thumb = token('--size-switch-thumb');
+  const inset = token('--size-switch-inset');
+
+  expect(height).to.equal(thumb + 2 * inset);
+
+  // The travel token is a calc() and stays uncomputed in getComputedStyle, so prove the rendered
+  // displacement against the same invariant instead of reading the token text.
+  const button = document.createElement('button');
+  button.className = 'dl-switch';
+  button.setAttribute('role', 'switch');
+  button.setAttribute('aria-checked', 'true');
+  document.body.appendChild(button);
+  const rendered = getComputedStyle(button, '::after').transform;
+  const travel = Number.parseFloat(/matrix\(1, 0, 0, 1, ([\d.]+),/.exec(rendered)?.[1] ?? 'NaN');
+
+  expect(travel).to.equal(width - thumb - 2 * inset);
+});
+
+it('a switch thumb sits at the same inset inside its track in both states', () => {
+  const control = (checked: boolean): HTMLButtonElement => {
+    const button = document.createElement('button');
+    button.className = 'dl-switch';
+    button.setAttribute('role', 'switch');
+    button.setAttribute('aria-checked', String(checked));
+    document.body.appendChild(button);
+    return button;
+  };
+  const off = control(false);
+  const on = control(true);
+  const track = off.getBoundingClientRect();
+  const settled = getComputedStyle(off);
+  const thumb = getComputedStyle(off, '::after');
+  const border = Number.parseFloat(settled.borderTopWidth);
+  const inset = border + Number.parseFloat(thumb.marginInlineStart);
+  const size = Number.parseFloat(thumb.width);
+
+  // `align-items: center` must place the thumb at the same inset the track reserves on its ends.
+  expect(Math.abs((track.height - 2 * border - size) / 2 - Number.parseFloat(thumb.marginInlineStart)))
+    .to.be.lessThanOrEqual(0.5);
+
+  const travel = (button: HTMLButtonElement): number => {
+    const transform = getComputedStyle(button, '::after').transform;
+    return Number.parseFloat(/matrix\(1, 0, 0, 1, ([\d.]+),/.exec(transform)?.[1] ?? '0');
+  };
+  const leftGap = (button: HTMLButtonElement): number => border
+    + Number.parseFloat(getComputedStyle(button, '::after').marginInlineStart) + travel(button);
+
+  expect(travel(off)).to.equal(0);
+  expect(Math.abs(leftGap(off) - inset)).to.be.lessThanOrEqual(0.5);
+  expect(travel(on)).to.be.greaterThan(0);
+  expect(Math.abs((track.width - leftGap(on) - size) - inset)).to.be.lessThanOrEqual(0.5);
+});
+
 it('dialog radio inputs use the active theme accent', () => {
   const dialog = fixture('confirm-dialog', `
     <label class="dl-dialog-checkbox"><input type="radio" checked /> Automatic</label>
