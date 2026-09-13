@@ -398,7 +398,7 @@
       "profile": {
         "context_window_tokens": 500000,
         "max_input_tokens": null,
-        "max_output_tokens": null,
+        "max_output_tokens": 450000,
         "supports_images": true,
         "reasoning": {
           "format": "openai",

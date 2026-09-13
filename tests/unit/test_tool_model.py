@@ -292,6 +292,7 @@ async def test_stream_text_reasoning_off_uses_profile_format_under_cap(
             reasoning="off",
             model_profile=ModelProfile(
                 context_window_tokens=100_000,
+                max_output_tokens=64_000,
                 reasoning=ReasoningProfile(
                     format="openrouter",
                     levels=ReasoningLevels(

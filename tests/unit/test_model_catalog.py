@@ -253,7 +253,7 @@ def test_packaged_catalog_revision_is_derived_from_models() -> None:
             "https://api.x.ai/v1",
             500_000,
             None,
-            None,
+            450_000,
             "openai",
             _GROK_LEVELS,
         ),

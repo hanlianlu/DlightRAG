@@ -193,3 +193,68 @@ def test_unknown_output_profile_still_reserves_and_caps_requested_output() -> No
 
     assert CONTEXT_POLICY.hard_input_limit(profile) == 82_592
     assert CONTEXT_POLICY.output_allowance(profile, input_tokens=80_000) == 16_384
+
+
+def test_reasoning_profile_must_state_its_output_allowance() -> None:
+    """Reasoning shares the output allowance, so an unstated cap bounds both."""
+    reasoning = resolve_model_profile(
+        ModelFingerprint(
+            provider="openai",
+            model="private-thinking-model",
+            endpoint_fingerprint=normalized_endpoint_fingerprint("https://private.example/v1"),
+        )
+    ).reasoning
+    assert reasoning is not None
+
+    with pytest.raises(ValueError, match="max_output_tokens must be stated"):
+        ModelProfile(context_window_tokens=200_000, reasoning=reasoning)
+
+    # Stating the cap is the whole fix, and the stated value is then the cap.
+    stated = ModelProfile(
+        context_window_tokens=200_000,
+        max_output_tokens=128_000,
+        reasoning=reasoning,
+    )
+    assert CONTEXT_POLICY.output_allowance(stated, input_tokens=10_000) == 128_000
+
+
+def test_output_allowance_ignores_the_compaction_gap() -> None:
+    """Context arithmetic gates input; it never becomes a turn's output cap."""
+    profile = ModelProfile(context_window_tokens=1_000_000, max_output_tokens=300_000)
+    narrow = ContextPolicy(dynamic_context_reserve_tokens=40_000)
+    wide = ContextPolicy(dynamic_context_reserve_tokens=400_000)
+
+    assert narrow.output_allowance(profile, input_tokens=120_000) == 300_000
+    assert wide.output_allowance(profile, input_tokens=120_000) == 300_000
+    # The reserve moves the input ceiling, which is the only thing it owns.
+    assert narrow.compaction_trigger(profile) > wide.compaction_trigger(profile)
+
+
+def test_operator_overlay_cannot_declare_reasoning_without_an_output_cap() -> None:
+    """A deployment overlay entry is rejected the same way a builtin would be."""
+    with pytest.raises(RuntimeError, match=r"profile\.max_output_tokens"):
+        parse_catalogue_entry(
+            {
+                "provider": "openai",
+                "model": "private-thinking-model",
+                "base_url": "https://private.example/v1",
+                "profile": {
+                    "context_window_tokens": 500_000,
+                    "max_input_tokens": None,
+                    "max_output_tokens": None,
+                    "supports_images": True,
+                    "reasoning": {
+                        "format": "openai",
+                        "levels": {
+                            "off": "none",
+                            "minimal": None,
+                            "low": "low",
+                            "medium": "medium",
+                            "high": "high",
+                            "xhigh": None,
+                            "max": None,
+                        },
+                    },
+                },
+            }
+        )

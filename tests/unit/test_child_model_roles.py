@@ -85,6 +85,7 @@ def _pins(roles):
             fingerprint=model_fingerprint(roles.resolve(role)),
             profile=ModelProfile(
                 context_window_tokens=100_000,
+                max_output_tokens=64_000,
                 supports_images=role == "vlm",
                 reasoning=best_effort_reasoning_profile("openrouter"),
             ),

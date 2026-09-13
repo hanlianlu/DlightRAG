@@ -375,6 +375,7 @@ def test_pinned_model_profile_preserves_unverified_reasoning_semantics() -> None
         fingerprint=_fingerprint("query"),
         profile=ModelProfile(
             context_window_tokens=10_000,
+            max_output_tokens=8_000,
             reasoning=best_effort_reasoning_profile("openrouter"),
         ),
     )

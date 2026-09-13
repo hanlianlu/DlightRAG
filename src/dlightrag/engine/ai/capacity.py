@@ -42,7 +42,14 @@ class ModelCapabilityError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ModelProfile:
-    """Capacity and capability facts for one resolved model endpoint."""
+    """Capacity and capability facts for one resolved model endpoint.
+
+    Two rules keep a turn from being cut off mid-thought.  A reasoning-capable
+    profile must state ``max_output_tokens``: reasoning and the answer share one
+    output allowance, so an unstated cap silently bounds both.  And context
+    arithmetic gates input only — a turn's output cap comes from here, never
+    from whatever room the compaction threshold has left over.
+    """
 
     context_window_tokens: int
     max_input_tokens: int | None = None
@@ -60,6 +67,11 @@ class ModelProfile:
                 raise ValueError("max_input_tokens cannot exceed the context window")
         if self.max_output_tokens is not None and self.max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive when provided")
+        if self.reasoning is not None and self.max_output_tokens is None:
+            raise ValueError(
+                "max_output_tokens must be stated when reasoning is enabled, because "
+                "reasoning and the answer share one output allowance"
+            )
 
 
 @dataclass(frozen=True, slots=True)
