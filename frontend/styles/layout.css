@@ -224,12 +224,27 @@ body.files-panel-open #files-btn {
     width: var(--space-tight);
 }
 
+/* Multi-select: one dot becomes three pips on the same centre line. Real elements, because the
+ * previous version drew the second mark with two stacked box-shadows and masked it in a colour
+ * that only matched the page background, never the pill it sits on. */
+
 .workspace-dot.multi {
+    align-items: center;
     background: transparent;
-    border: 1px solid var(--color-accent-indicator);
-    border-radius: var(--radius-pill);
-    box-shadow: 5px 0 0 -1px var(--color-bg-base), 6px 0 0 0 var(--color-accent-indicator);
-    width: var(--space-related);
+    display: flex;
+    width: auto;
+}
+
+.workspace-dot.multi .workspace-pip {
+    background: var(--color-accent-indicator);
+    border-radius: var(--radius-circle);
+    flex-shrink: 0;
+    height: 4px;
+    width: 4px;
+}
+
+.workspace-dot.multi .workspace-pip + .workspace-pip {
+    margin-inline-start: 2px;
 }
 
 .workspace-label {

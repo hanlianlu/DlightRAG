@@ -119,7 +119,9 @@ export class DlWorkspaceScope extends LightElement {
               aria-haspopup="dialog"
               aria-expanded=${this.open ? 'true' : 'false'} aria-controls="workspace-popover"
               @click=${this.#togglePopover}>
-        <span class="workspace-dot${multi ? ' multi' : ''}" id="workspace-dot"></span>
+        <span class="workspace-dot${multi ? ' multi' : ''}" id="workspace-dot">${multi
+          ? html`<span class="workspace-pip"></span><span class="workspace-pip"></span
+            ><span class="workspace-pip"></span>` : nothing}</span>
         <span class="workspace-label" id="workspace-label">${this.#label}</span>
         ${icon('chevron-down', {size: 'xs', className: 'workspace-caret'})}
       </button>
@@ -175,7 +177,7 @@ export class DlWorkspaceScope extends LightElement {
 
   #check(selected: boolean): TemplateResult {
     return html`<div class="${workspaceStyles.workspacePopoverCheck}${selected
-      ? ` ${workspaceStyles.on}` : ''}">${selected ? icon('check', {size: 'xs'}) : nothing}</div>`;
+      ? ` ${workspaceStyles.on}` : ''}"></div>`;
   }
 
   #popover(): TemplateResult {

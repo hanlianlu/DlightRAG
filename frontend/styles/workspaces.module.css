@@ -20,22 +20,32 @@
   min-width: 0;
 }
 
+/* One shape in both states: an empty ring, then the same ring with an accent dot inside it.
+
+ * Neither state moves, and no glyph has to fit inside a border. */
+
 .workspacePopoverCheck {
   align-items: center;
   border: 1.5px solid var(--color-text-subtle);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-circle);
   display: flex;
   flex-shrink: 0;
-  height: var(--size-icon-sm);
+  height: var(--size-icon-md);
   justify-content: center;
-  transition: all 0.15s;
-  width: var(--size-icon-sm);
+  transition: border-color var(--duration-control) var(--easing-standard);
+  width: var(--size-icon-md);
 }
 
 .workspacePopoverCheck.on {
-  background: var(--color-action-bg);
-  border-color: var(--color-action-bg);
-  color: var(--color-on-action);
+  border-color: var(--color-accent-action);
+}
+
+.workspacePopoverCheck.on::after {
+  background: var(--color-accent-action);
+  border-radius: var(--radius-circle);
+  content: '';
+  height: var(--space-tight);
+  width: var(--space-tight);
 }
 
 .on {
