@@ -170,7 +170,6 @@ def test_markdown_artifacts_keep_independent_citation_sources(tmp_path: Path) ->
         plan=plan,
         answer=plan.answer,
         contexts=contexts,
-        require_answer=True,
     )
 
     resource_by_filename = {

@@ -137,7 +137,6 @@ class PreparedRun:
     agent_turn_count: int = 0
     stop_reason: str = "model_stop"
     last_turn: ExecutedTurn | None = None
-    compaction_overflow_retried: bool = False
     streamed_terminal_text: str | None = None
 
 

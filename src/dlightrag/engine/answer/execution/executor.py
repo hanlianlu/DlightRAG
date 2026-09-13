@@ -1867,7 +1867,6 @@ class AnswerExecutor:
                     plan=publication,
                     answer=finalized.answer,
                     contexts=contexts,
-                    require_answer=getattr(prepared_early, "stop_reason", None) == "model_stop",
                 )
                 # Fast terminal settlement has no publication channel; Research
                 # leaves publication ownership with the coordinator.
@@ -2643,9 +2642,9 @@ def _stage_publications(
     plan: PublicationPlan,
     answer: str,
     contexts: RetrievalContexts,
-    require_answer: bool = False,
 ) -> tuple[list[PendingPublication], list[dict[str, Any]], dict[str, list[Any]]]:
-    if require_answer and is_empty_answer(answer=answer, has_artifacts=bool(plan.artifacts)):
+    """Stage one accepted answer's publications, or reject an answer-less run."""
+    if is_empty_answer(answer=answer, has_artifacts=bool(plan.artifacts)):
         raise RunExecutionError("empty_answer", "The run produced no answer.")
     publications: list[PendingPublication] = []
     artifact_sources: dict[str, list[Any]] = {}
