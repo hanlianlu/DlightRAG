@@ -259,6 +259,12 @@ async def test_json_object_folds_hint_into_system(monkeypatch) -> None:
     assert seen["response_format"] == {"type": "json_object"}
 
 
+_DEEPSEEK_JSON_SCHEMA_TYPE_ERROR = (
+    "Error code: 400 - {'error': {'message': 'This response_format type is unavailable now', "
+    "'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+)
+
+
 async def test_json_schema_failure_retries_json_object_with_system_hint(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
 
@@ -266,7 +272,7 @@ async def test_json_schema_failure_retries_json_object_with_system_hint(monkeypa
         async def complete(self, **kwargs: Any) -> str:
             calls.append(kwargs)
             if kwargs.get("response_format", {}).get("type") == "json_schema":
-                raise RuntimeError("schema unsupported")
+                raise RuntimeError(_DEEPSEEK_JSON_SCHEMA_TYPE_ERROR)
             return "{}"
 
         async def aclose(self) -> None:
@@ -293,3 +299,216 @@ async def test_json_schema_failure_retries_json_object_with_system_hint(monkeypa
     assert "json" not in calls[0]["messages"][0]["content"].casefold()
     assert calls[1]["response_format"] == {"type": "json_object"}
     assert "json" in calls[1]["messages"][0]["content"].casefold()
+
+
+async def test_json_schema_unrelated_failure_is_not_retried(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class Provider:
+        async def complete(self, **kwargs: Any) -> str:
+            calls.append(kwargs)
+            raise RuntimeError("context length exceeded")
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.completion.get_provider",
+        lambda *_args, **_kwargs: Provider(),
+    )
+    model = CompletionModel(
+        ModelSettings(
+            provider="openai",
+            model="compat",
+            base_url="https://openrouter.ai/api/v1",
+            structured_output="auto",
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+
+    with pytest.raises(RuntimeError, match="context length exceeded"):
+        await model(
+            messages=[{"role": "system", "content": "Pick a mode."}],
+            structured_output=_MODE_OUTPUT,
+        )
+
+    assert len(calls) == 1
+    assert calls[0]["response_format"]["type"] == "json_schema"
+
+
+async def test_stream_retries_json_object_when_json_schema_type_is_unavailable(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class Provider:
+        def stream(self, **kwargs: Any):
+            calls.append(kwargs)
+
+            async def tokens():
+                if kwargs.get("response_format", {}).get("type") == "json_schema":
+                    raise RuntimeError(_DEEPSEEK_JSON_SCHEMA_TYPE_ERROR)
+                yield "{"
+                yield "}"
+
+            return tokens()
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.completion.get_provider",
+        lambda *_args, **_kwargs: Provider(),
+    )
+    model = CompletionModel(
+        ModelSettings(
+            provider="openai",
+            model="compat",
+            base_url="https://openrouter.ai/api/v1",
+            structured_output="auto",
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    stream = await model(
+        messages=[{"role": "system", "content": "Pick a mode."}],
+        structured_output=_MODE_OUTPUT,
+        stream=True,
+    )
+    result = [token async for token in stream]
+
+    assert result == ["{", "}"]
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert calls[1]["response_format"] == {"type": "json_object"}
+    assert "json" in calls[1]["messages"][0]["content"].casefold()
+
+
+async def test_json_schema_type_rejection_does_not_poison_other_endpoints(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class Provider:
+        async def complete(self, **kwargs: Any) -> str:
+            calls.append((kwargs["model"], kwargs["response_format"]["type"]))
+            if kwargs.get("response_format", {}).get("type") == "json_schema":
+                if kwargs["model"] == "broken":
+                    raise RuntimeError(_DEEPSEEK_JSON_SCHEMA_TYPE_ERROR)
+            return "{}"
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.completion.get_provider",
+        lambda *_args, **_kwargs: Provider(),
+    )
+    broken = CompletionModel(
+        ModelSettings(
+            provider="openai",
+            model="broken",
+            base_url="https://api.deepseek.com",
+            structured_output="auto",
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    healthy = CompletionModel(
+        ModelSettings(
+            provider="openai",
+            model="healthy",
+            base_url="https://openrouter.ai/api/v1",
+            structured_output="auto",
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    messages = [{"role": "system", "content": "Pick a mode."}]
+
+    await broken(messages=messages, structured_output=_MODE_OUTPUT)
+    await healthy(messages=messages, structured_output=_MODE_OUTPUT)
+
+    assert calls == [
+        ("broken", "json_schema"),
+        ("broken", "json_object"),
+        ("healthy", "json_schema"),
+    ]
+
+
+async def test_schema_validation_rejection_retries_without_being_remembered(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class Provider:
+        async def complete(self, **kwargs: Any) -> str:
+            calls.append(kwargs)
+            if kwargs.get("response_format", {}).get("type") == "json_schema":
+                raise RuntimeError("Invalid schema for response_format 'answer_mode'")
+            return "{}"
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.completion.get_provider",
+        lambda *_args, **_kwargs: Provider(),
+    )
+    settings = ModelSettings(
+        provider="openai",
+        model="compat",
+        base_url="https://api.openai.com/v1",
+        structured_output="auto",
+    )
+    model = CompletionModel(settings, scheduler=ModelScheduler(max_concurrency=1))
+    messages = [{"role": "system", "content": "Pick a mode."}]
+
+    await model(messages=messages, structured_output=_MODE_OUTPUT)
+    await model(messages=messages, structured_output=_MODE_OUTPUT)
+
+    # A schema complaint earns one retry each time, but no standing capability
+    # verdict: the endpoint keeps getting a chance to serve the strict schema.
+    assert [call["response_format"]["type"] for call in calls] == [
+        "json_schema",
+        "json_object",
+        "json_schema",
+        "json_object",
+    ]
+
+
+async def test_remembered_rejection_is_reused_across_instances_and_modes(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class Provider:
+        async def complete(self, **kwargs: Any) -> str:
+            calls.append(kwargs)
+            if kwargs.get("response_format", {}).get("type") == "json_schema":
+                raise RuntimeError(_DEEPSEEK_JSON_SCHEMA_TYPE_ERROR)
+            return "{}"
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "dlightrag.engine.ai.completion.get_provider",
+        lambda *_args, **_kwargs: Provider(),
+    )
+    common = {"provider": "openai", "model": "compat", "base_url": "https://api.deepseek.com"}
+    auto = CompletionModel(
+        ModelSettings(**common, structured_output="auto"),  # type: ignore[arg-type]
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    explicit = CompletionModel(
+        ModelSettings(**common, structured_output="json_schema"),  # type: ignore[arg-type]
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
+    messages = [{"role": "system", "content": "Pick a mode."}]
+
+    await auto(messages=messages, structured_output=_MODE_OUTPUT)
+    await explicit(messages=messages, structured_output=_MODE_OUTPUT)
+
+    # The first call learns the endpoint's transport; later calls skip the 400.
+    assert [call["response_format"]["type"] for call in calls] == [
+        "json_schema",
+        "json_object",
+        "json_object",
+    ]

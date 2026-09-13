@@ -23,6 +23,11 @@ from dlightrag.engine.ai.replay import messages_for_model
 from dlightrag.engine.ai.scheduler import ModelScheduler
 from dlightrag.engine.ai.settings import ModelSettings
 from dlightrag.engine.ai.structured import StructuredOutput
+from dlightrag.engine.ai.structured_transport import (
+    JSON_SCHEMA_TRANSPORT_CACHE,
+    confirms_json_schema_unsupported,
+    rejects_json_schema,
+)
 from dlightrag.engine.ai.telemetry import (
     NOOP_TELEMETRY,
     Telemetry,
@@ -34,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 _JSON_OBJECT_HINT = "Respond with JSON."
+_JSON_OBJECT_FORMAT = {"type": "json_object"}
 
 
 def _content_mentions_json(content: Any) -> bool:
@@ -194,6 +200,15 @@ class CompletionModel:
                 self.settings,
                 provider=self._provider,
             )
+            if (
+                isinstance(response_format, dict)
+                and response_format.get("type") == "json_schema"
+                and JSON_SCHEMA_TRANSPORT_CACHE.rejected(self.fingerprint)
+            ):
+                # This endpoint already rejected the type; skip the known 400.
+                # The runtime downgrade below would have produced the same
+                # json_object request anyway.
+                response_format = _JSON_OBJECT_FORMAT
         raw = {**self.settings.model_kwargs_copy(), **request}
         return merge_reasoning_kwargs(raw, resolved), response_format, max_tokens, resolved
 
@@ -205,6 +220,51 @@ class CompletionModel:
             "reasoning_requested": resolved.requested,
             "reasoning_effective": resolved.effective,
         }
+
+    def _approve_json_object_retry(
+        self,
+        exc: BaseException,
+        *,
+        structured_output: object,
+        response_format: object,
+    ) -> bool:
+        """Decide, remember, and announce one json_object retry after a rejection."""
+        eligible = (
+            structured_output is not None
+            and self.settings.provider == "openai"
+            and isinstance(response_format, dict)
+            and response_format.get("type") == "json_schema"
+            and rejects_json_schema(exc)
+        )
+        if not eligible:
+            return False
+        if confirms_json_schema_unsupported(exc):
+            JSON_SCHEMA_TRANSPORT_CACHE.remember_rejected(self.fingerprint)
+        logger.warning(
+            "Strict structured output failed for %s; retrying with json_object: %s",
+            self.settings.model,
+            exc,
+        )
+        return True
+
+    def _provider_stream(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        response_format: dict[str, Any] | None,
+        max_tokens: Any,
+        model_kwargs: dict[str, Any],
+        usage_holder: dict[str, Any],
+    ) -> AsyncGenerator[str]:
+        return self._provider.stream(
+            messages=_messages_for_json_object(messages, response_format),
+            model=self.settings.model,
+            temperature=self.settings.temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            model_kwargs=model_kwargs,
+            usage_holder=usage_holder,
+        )
 
     async def _complete(
         self,
@@ -236,28 +296,21 @@ class CompletionModel:
                     model_kwargs=model_kwargs,
                 )
             except Exception as exc:
-                if (
-                    structured_output is not None
-                    and self.settings.provider == "openai"
-                    and isinstance(response_format, dict)
-                    and response_format.get("type") == "json_schema"
+                if self._approve_json_object_retry(
+                    exc,
+                    structured_output=structured_output,
+                    response_format=response_format,
                 ):
-                    logger.warning(
-                        "Strict structured output failed for %s; retrying with json_object",
-                        self.settings.model,
-                        exc_info=True,
-                    )
-                    json_object = {"type": "json_object"}
                     try:
                         result = await self._provider.complete(
                             messages=_messages_for_json_object(
                                 prepared,
-                                json_object,
+                                _JSON_OBJECT_FORMAT,
                             ),
                             model=self.settings.model,
                             temperature=self.settings.temperature,
                             max_tokens=max_tokens,
-                            response_format=json_object,
+                            response_format=_JSON_OBJECT_FORMAT,
                             model_kwargs=model_kwargs,
                         )
                     except Exception as fallback_exc:
@@ -297,45 +350,77 @@ class CompletionModel:
             messages,
             {**request, **self._reasoning_metadata(resolved)},
         )
+        structured_output = request.get("structured_output")
         active_usage_holder = usage_holder if usage_holder is not None else {}
         chunks: list[str] = []
         text_length = 0
         first_chunk = True
+        yielded = False
         async with self._telemetry.observe(
             f"llm_{self.settings.model}",
             **observation_kwargs,
         ) as observation:
+            prepared = messages_for_model(messages, self.fingerprint)
+
+            def _record_chunk(chunk: str) -> None:
+                nonlocal first_chunk, text_length
+                if first_chunk:
+                    observation.update(completion_start_time=datetime.now(UTC))
+                    first_chunk = False
+                text_length += len(chunk)
+                if self._telemetry.capture_sensitive_data:
+                    chunks.append(chunk)
+
             try:
-                prepared = messages_for_model(messages, self.fingerprint)
-                stream = self._provider.stream(
-                    messages=_messages_for_json_object(
-                        prepared,
-                        response_format,
-                    ),
-                    model=self.settings.model,
-                    temperature=self.settings.temperature,
-                    max_tokens=max_tokens,
+                stream = self._provider_stream(
+                    messages=prepared,
                     response_format=response_format,
+                    max_tokens=max_tokens,
                     model_kwargs=model_kwargs,
                     usage_holder=active_usage_holder,
                 )
                 async with aclosing(stream):
                     async for chunk in stream:
-                        if first_chunk:
-                            observation.update(completion_start_time=datetime.now(UTC))
-                            first_chunk = False
-                        text_length += len(chunk)
-                        if self._telemetry.capture_sensitive_data:
-                            chunks.append(chunk)
+                        yielded = True
+                        _record_chunk(chunk)
                         yield chunk
             except asyncio.CancelledError, GeneratorExit:
                 raise
             except BaseException as exc:
-                observation.update(
-                    level="ERROR",
-                    status_message=telemetry_error_message(self._telemetry, exc),
-                )
-                raise
+                if yielded or not self._approve_json_object_retry(
+                    exc,
+                    structured_output=structured_output,
+                    response_format=response_format,
+                ):
+                    observation.update(
+                        level="ERROR",
+                        status_message=telemetry_error_message(self._telemetry, exc),
+                    )
+                    raise
+                try:
+                    stream = self._provider_stream(
+                        messages=prepared,
+                        response_format=_JSON_OBJECT_FORMAT,
+                        max_tokens=max_tokens,
+                        model_kwargs=model_kwargs,
+                        usage_holder=active_usage_holder,
+                    )
+                    async with aclosing(stream):
+                        async for chunk in stream:
+                            yielded = True
+                            _record_chunk(chunk)
+                            yield chunk
+                except asyncio.CancelledError, GeneratorExit:
+                    raise
+                except BaseException as fallback_exc:
+                    observation.update(
+                        level="ERROR",
+                        status_message=telemetry_error_message(
+                            self._telemetry,
+                            fallback_exc,
+                        ),
+                    )
+                    raise
             finally:
                 output: dict[str, Any] = {"text_length": text_length}
                 if self._telemetry.capture_sensitive_data:

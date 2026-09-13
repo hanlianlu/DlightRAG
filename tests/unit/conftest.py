@@ -19,6 +19,7 @@ from dlightrag.engine.ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag.engine.ai.catalog import current_model_catalog_revision
 from dlightrag.engine.ai.fingerprints import ModelFingerprint
 from dlightrag.engine.ai.media import MODEL_IMAGE_MAX_PIXELS
+from dlightrag.engine.ai.structured_transport import JSON_SCHEMA_TRANSPORT_CACHE
 from dlightrag.engine.answer.capabilities import AnswerCapabilities
 from dlightrag.engine.answer.execution.input import (
     AnswerRunInput,
@@ -114,3 +115,11 @@ def _no_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in list(os.environ):
         if key.startswith("DLIGHTRAG_"):
             monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_json_schema_transport_cache():
+    """Keep the process-wide json_schema transport cache out of test verdicts."""
+    JSON_SCHEMA_TRANSPORT_CACHE.clear()
+    yield
+    JSON_SCHEMA_TRANSPORT_CACHE.clear()

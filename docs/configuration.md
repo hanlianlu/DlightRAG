@@ -364,6 +364,14 @@ with an OpenAI-compatible fallback to `json_object`. Set `json_object` only for
 an endpoint known not to support strict schemas. Anthropic native supports
 `auto`/`json_schema`, not the lower-confidence `json_object` mode.
 
+A compatible endpoint that rejects the `json_schema` transport type is learned
+once per process: the request retries with `json_object`, and later requests to
+that same provider/model/endpoint fingerprint skip the rejected attempt instead
+of paying the same 400 again, for both complete and streaming calls. Only an
+explicit "type unavailable" rejection is remembered; a schema-validation
+complaint retries once without becoming a permanent verdict. Restarting the
+process probes the endpoint again.
+
 ```yaml
 models:
   chat:
