@@ -1,11 +1,14 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Personal Connections behavior through the owner module and real PostgreSQL."""
 
+import uuid
+
 import pytest
 
 from dlightrag.adapters.postgres.connections import PGConnectionsStore
 from dlightrag.application.connections import ConnectionCommand, Connections, ConnectionsError
-from tests.integration.run_runtime_pg_harness import isolated_run_runtime
+from tests.integration.pg_conn import PG_CONN_KWARGS
+from tests.integration.run_runtime_pg_harness import drop_owned_database, isolated_run_runtime
 
 
 class FakeMcp:
@@ -16,6 +19,32 @@ class FakeMcp:
         return [
             {"name": "read", "description": "Read a fixture", "input_schema": {"type": "object"}}
         ]
+
+
+@pytest.mark.asyncio
+async def test_owned_database_drops_with_a_backend_of_this_role_attached():
+    """A connection still attached at teardown must not turn the drop into a permission error.
+
+    `DROP DATABASE ... WITH (FORCE)` needs `pg_signal_backend` for another role's backend, which
+    the development role lacks, so a listener or worker still detaching failed teardown with an
+    unrelated `InsufficientPrivilegeError`.
+    """
+    import asyncpg as _asyncpg
+
+    database = f"dlightrag_drop_probe_{uuid.uuid4().hex[:8]}"
+    admin = await _asyncpg.connect(**PG_CONN_KWARGS)
+    await admin.execute(f'CREATE DATABASE "{database}"')
+    attached = await _asyncpg.connect(**{**PG_CONN_KWARGS, "database": database})
+    try:
+        await drop_owned_database(admin, database)
+        remaining = await admin.fetchval(
+            "select count(*) from pg_database where datname = $1", database
+        )
+        assert remaining == 0, "the database must be gone even though a backend was attached"
+    finally:
+        await attached.close()
+        await admin.execute(f'DROP DATABASE IF EXISTS "{database}"')
+        await admin.close()
 
 
 async def stored_catalogue(store, owner_id: str = "a", index: int = 0):

@@ -9,7 +9,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 import asyncpg
 
@@ -21,6 +21,43 @@ from dlightrag.engine.runtime.records import (
     Succeeded,
 )
 from tests.integration.pg_conn import PG_CONN_KWARGS
+
+
+class DropAdmin(Protocol):
+    """The slice of a connection the drop needs, so a test can stand in for it."""
+
+    async def execute(self, query: str) -> str: ...
+
+    async def fetch(self, query: str, *args: Any) -> list[Any]: ...
+
+
+_DROP_ATTEMPTS = 5
+_DROP_RETRY_SECONDS = 0.2
+
+
+async def drop_owned_database(admin: DropAdmin, database: str) -> None:
+    """Drop one database this test run owns, without failing a test on an unrelated privilege.
+
+    `DROP DATABASE ... WITH (FORCE)` terminates whatever is still attached, but it needs
+    `pg_signal_backend` for another role's backend and refuses outright for a superuser-owned one,
+    such as the autovacuum worker that may start on the database a test has just created. That
+    backend always detaches on its own, so retry briefly and, if it never does, report what was
+    still attached instead of surfacing a bare `InsufficientPrivilegeError`.
+    """
+    for attempt in range(_DROP_ATTEMPTS):
+        try:
+            await admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+            return
+        except asyncpg.exceptions.InsufficientPrivilegeError:
+            if attempt + 1 == _DROP_ATTEMPTS:
+                break
+            await asyncio.sleep(_DROP_RETRY_SECONDS)
+    attached = await admin.fetch(
+        "select pid, state, coalesce(left(query, 60), '-') from pg_stat_activity"
+        " where datname = $1 and pid <> pg_backend_pid()",
+        database,
+    )
+    raise RuntimeError(f"cannot drop {database}: backends still attached: {attached}")
 
 
 async def require_postgres() -> None:
@@ -64,7 +101,7 @@ async def isolated_run_runtime(
         await pool.close()
         admin = await asyncpg.connect(**PG_CONN_KWARGS)
         try:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+            await drop_owned_database(admin, database)
         finally:
             await admin.close()
 

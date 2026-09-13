@@ -12,9 +12,34 @@ from pydantic import SecretStr
 from dlightrag.adapters.mcp.personal_http import PersonalMcpClient
 from dlightrag.application.connections import ConnectionPolicy, ConnectionsError
 
+_PINNED_PUBLIC_ADDRESS = "93.184.216.34"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", "::"})
+_REAL_GETADDRINFO = socket.getaddrinfo
 
-def public_dns(*args, **kwargs):
-    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+
+def public_dns(host: str, port: int, *args: Any, **kwargs: Any) -> list[Any]:
+    """Resolve a fixture host to one pinned public address, and leave every other host alone.
+
+    Callers install this on the process-wide ``socket.getaddrinfo``. A fake that answers lookups it
+    does not mean to fake redirects unrelated traffic: the integration tests that patch this helper
+    also open a real PostgreSQL connection on ``localhost``, which the fake would send to the
+    pinned public address, hanging until the client's connect timeout.
+    """
+    if host in _LOOPBACK_HOSTS:
+        return _REAL_GETADDRINFO(host, port, *args, **kwargs)
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_PINNED_PUBLIC_ADDRESS, 443))]
+
+
+def test_public_dns_leaves_loopback_to_the_real_resolver(monkeypatch):
+    """The fake is installed on the process-wide `socket.getaddrinfo`, so it must not hijack it.
+
+    Every integration test that patches this helper also opens a real PostgreSQL connection on
+    `localhost`; a fake that answers that lookup sends the connect to the public fixture address.
+    """
+    monkeypatch.setattr(socket, "getaddrinfo", public_dns)
+    infos = socket.getaddrinfo("localhost", 5432, type=socket.SOCK_STREAM)
+    assert infos, "localhost must still resolve"
+    assert infos[0][4][0] in {"127.0.0.1", "::1"}, "localhost must not be faked to a public address"
 
 
 @pytest.mark.asyncio
@@ -65,8 +90,9 @@ async def test_discovery_pins_dns_and_sends_only_connection_bearer(monkeypatch):
 async def test_mixed_private_dns_rejected_before_any_http(monkeypatch):
     monkeypatch.setattr(
         "dlightrag.engine.network_admission.socket.getaddrinfo",
-        lambda *args, **kwargs: (
-            public_dns() + [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
+        lambda host, port, *args, **kwargs: (
+            public_dns(host, port, *args, **kwargs)
+            + [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
         ),
     )
     requests = []
